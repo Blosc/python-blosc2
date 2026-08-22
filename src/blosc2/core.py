@@ -657,7 +657,7 @@ def is_fsspec_url(urlpath: object) -> bool:
 
     `http(s)://` included: a frame behind a plain web server is a frame like any
     other, and fsspec reads it in ranges wherever the server answers them.  A
-    Caterva2 subscriber is not reached this way -- its datasets are named by root
+    Caterva2 server is not reached this way -- its datasets are named by root
     and path rather than by URL, so :ref:`C2Array` is entered through
     :ref:`URLPath`, which `open` dispatches on before it ever gets here.
     """

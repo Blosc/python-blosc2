@@ -7,7 +7,7 @@ A Blosc2 array that lives on a server does not have to be downloaded to be used.
 | Where the array lives | How to open it |
 |---|---|
 | Any URL fsspec reaches — `s3://`, `gs://`, `https://`, `zip://`… | `blosc2.open(url, lazy=True)` |
-| A [Caterva2](https://ironarray.io/caterva2) subscriber | `blosc2.C2Array(path, urlbase=...)` |
+| A [Caterva2](https://ironarray.io/caterva2) server | `blosc2.C2Array(path, urlbase=...)` |
 | Anything else | A `read_range()` of your own — see [Your own transport](#your-own-transport) |
 
 ```python
@@ -16,7 +16,7 @@ import blosc2
 # An object store, a web server, a zip on either of them
 a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
 
-# A Caterva2 subscriber
+# A Caterva2 server
 b = blosc2.C2Array(
     "@public/examples/lung-jpeg2000_10x.b2nd", urlbase="https://cat2.cloud/demo"
 )
@@ -25,7 +25,7 @@ a.shape, a.dtype  # metadata only; nothing was downloaded
 a[100:110, :50]  # a NumPy array, fetched now
 ```
 
-`https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 subscriber is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array` (or `blosc2.URLPath` with {func}`blosc2.open`).
+`https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 server is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array` (or `blosc2.URLPath` with {func}`blosc2.open`).
 
 ## The cache
 
@@ -48,13 +48,13 @@ You do not ask for this; it happens when it pays:
 - On S3, block reads are **5–17x faster** on arrays with multi-megabyte chunks, and **2–5x** on 1 MB ones.
 - On cat2.cloud's `kevlar-tomo.b2nd`, a corner slice costs **0.031 MB instead of 2.723 MB**, and a slice touching ten chunks takes **0.14 s against 1.01 s**.
 
-It is never a loss. Two thresholds decide it — a chunk under a megabyte is one cheap request anyway, and wanting more than half a chunk's blocks is wanting the chunk — and both are answered from metadata already in hand. Where blocks are not available, the read falls back to whole chunks by itself: that happens for a dataset a Caterva2 subscriber *computes* rather than stores (a lazy expression, an HDF5 leaf, a `.b2z` member), and for a server that stops honouring ranges.
+It is never a loss. Two thresholds decide it — a chunk under a megabyte is one cheap request anyway, and wanting more than half a chunk's blocks is wanting the chunk — and both are answered from metadata already in hand. Where blocks are not available, the read falls back to whole chunks by itself: that happens for a dataset a Caterva2 server *computes* rather than stores (a lazy expression, an HDF5 leaf, a `.b2z` member), and for a server that stops honouring ranges.
 
 Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
 
 ## When the remote changes underneath
 
-A cache is only good while the bytes it was filled from are still there. Sources that can name their bytes — an fsspec URL by its token, a Caterva2 array by an identifier the subscriber keeps — are checked against what the cache recorded:
+A cache is only good while the bytes it was filled from are still there. Sources that can name their bytes — an fsspec URL by its token, a Caterva2 array by an identifier the server keeps — are checked against what the cache recorded:
 
 ```python
 p = blosc2.Proxy(src, urlpath="cache.b2nd", mode="a")
@@ -66,7 +66,7 @@ p = blosc2.Proxy(src, urlpath="cache.b2nd", mode="a")
 
 ## Filling an array from several writers
 
-A Caterva2 array can be *written*, one chunk at a time, by as many processes as it has chunks. Lay the array out empty first — {func}`blosc2.uninit` writes a couple of hundred bytes whatever the shape — upload it to the subscriber, then have each writer post the chunks it owns:
+A Caterva2 array can be *written*, one chunk at a time, by as many processes as it has chunks. Lay the array out empty first — {func}`blosc2.uninit` writes a couple of hundred bytes whatever the shape — upload it to the server, then have each writer post the chunks it owns:
 
 ```python
 import blosc2
@@ -121,7 +121,7 @@ for nchunk in np.flatnonzero(~written):
     ...  # the work still to do, after a crash
 ```
 
-What this buys: the subscriber serializes the writes themselves, so what overlaps is the round trip — which over a network is nearly all of the cost. Against a real subscriber, a fill went from **244 ms per chunk serially to 32 ms with 8 writers, 7.6x**. Over loopback, where there is no round trip to hide, it is 1.0x.
+What this buys: the server serializes the writes themselves, so what overlaps is the round trip — which over a network is nearly all of the cost. Against a real server, a fill went from **244 ms per chunk serially to 32 ms with 8 writers, 7.6x**. Over loopback, where there is no round trip to hide, it is 1.0x.
 
 ## Your own transport
 

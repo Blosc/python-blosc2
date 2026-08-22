@@ -548,7 +548,7 @@ class ByteRangeNDSource(ProxyNDSource):
     only has to say how to read bytes: :meth:`read_range` is the one abstract
     method, and the transport behind it decides nothing about the rest.
     :ref:`FsspecNDSource` reads them with fsspec, and :ref:`C2Array` reads them
-    over HTTP ranges from a Caterva2 subscriber, carrying its auth cookie.
+    over HTTP ranges from a Caterva2 server, carrying its auth cookie.
 
     A subclass sets its transport up first and then calls this constructor,
     which reads the frame's header through it -- one small read, and everything
@@ -583,7 +583,7 @@ class ByteRangeNDSource(ProxyNDSource):
 
     The frame is there to be read in pieces -- that is what an open of one
     settles -- so a :ref:`Proxy` over it goes straight to the block path.  A
-    source that only sometimes serves blocks (:ref:`C2Array`, whose subscriber
+    source that only sometimes serves blocks (:ref:`C2Array`, whose server
     may compute the dataset rather than store it) overrides this.
     """
 
@@ -591,7 +591,7 @@ class ByteRangeNDSource(ProxyNDSource):
     """How many ranges one request of this transport may carry.
 
     One means one request each, which is all any object store offers.  A
-    subscriber answering ``multipart/byteranges`` takes more -- see
+    server answering ``multipart/byteranges`` takes more -- see
     :meth:`read_ranges` -- and then a slice costs a couple of requests rather
     than a couple per chunk it touches.
     """

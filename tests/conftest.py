@@ -90,7 +90,7 @@ def pytest_configure(config):
 @pytest.fixture(scope="session")
 def cat2_context():
     # You may use the URL and credentials for an already existing user
-    # in a different Caterva2 subscriber.
+    # in a different Caterva2 server.
     urlbase = os.environ.get("BLOSC_C2URLBASE", "https://cat2.cloud/testing/")
     c2params = {"urlbase": urlbase, "username": None, "password": None}
     with blosc2.c2context(**c2params):

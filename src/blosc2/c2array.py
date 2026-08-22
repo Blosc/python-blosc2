@@ -32,11 +32,11 @@ from blosc2.proxy_source import (
     _is_transient,
 )
 
-_subscriber_data = {
+_server_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
     "auth_token": "",
 }
-"""Caterva2 subscriber data saved by context manager."""
+"""Caterva2 server data saved by context manager."""
 
 TIMEOUT = 15
 """Default timeout for HTTP requests."""
@@ -122,17 +122,17 @@ def c2context(
     auth_token: (str | None) = None,
 ) -> None:
     """
-    Context manager that sets parameters in Caterva2 subscriber requests.
+    Context manager that sets parameters in Caterva2 server requests.
 
     A parameter not specified or set to ``None`` will inherit the value from the
     previous context manager, defaulting to an environment variable (see
     below) if supported by that parameter.  Parameters set to an empty string
     will not be used in requests (without a default either).
 
-    If the subscriber requires authorization for requests, you can either
+    If the server requires authorization for requests, you can either
     provide an `auth_token` (which you should have obtained previously from the
-    subscriber), or both `username` and `password` to obtain the token by
-    logging in to the subscriber.  The token will be reused until it is explicitly
+    server), or both `username` and `password` to obtain the token by
+    logging in to the server.  The token will be reused until it is explicitly
     reset or requested again in a later context manager invocation.
 
     Please note that this manager is reentrant but not safe for concurrent use.
@@ -140,14 +140,14 @@ def c2context(
     Parameters
     ----------
     urlbase : str | None
-        The base URL to be used when a C2Array instance does not have a subscriber
+        The base URL to be used when a C2Array instance does not have a server
         URL base set. If not specified, it defaults to the value of the
         ``BLOSC_C2URLBASE`` environment variable.
     username : str | None
-        The username for logging in to the subscriber to obtain an authorization token.
+        The username for logging in to the server to obtain an authorization token.
         If not specified, it defaults to the value of the ``BLOSC_C2USERNAME`` environment variable.
     password : str | None
-        The password for logging in to the subscriber to obtain an authorization token.
+        The password for logging in to the server to obtain an authorization token.
         If not specified, it defaults to the value of the ``BLOSC_C2PASSWORD`` environment variable.
     auth_token : str | None
         The authorization token to be used when a C2Array instance does not have an
@@ -158,8 +158,8 @@ def c2context(
     out: None
 
     """
-    global _subscriber_data
-    print("_subscriber_data", _subscriber_data)
+    global _server_data
+    print("_server_data", _server_data)
 
     # Perform login to get an authorization token.
     if not auth_token:
@@ -171,23 +171,23 @@ def c2context(
         auth_token = login(username, password, urlbase)
 
     try:
-        old_sub_data = _subscriber_data
-        new_sub_data = old_sub_data.copy()  # inherit old values
+        old_server_data = _server_data
+        new_server_data = old_server_data.copy()  # inherit old values
         if urlbase is not None:
-            new_sub_data["urlbase"] = urlbase
-        elif old_sub_data["urlbase"] is None:
+            new_server_data["urlbase"] = urlbase
+        elif old_server_data["urlbase"] is None:
             # The variable may have gotten a value after program start.
-            new_sub_data["urlbase"] = os.environ.get("BLOSC_C2URLBASE")
+            new_server_data["urlbase"] = os.environ.get("BLOSC_C2URLBASE")
         if auth_token is not None:
-            new_sub_data["auth_token"] = auth_token
-        _subscriber_data = new_sub_data
+            new_server_data["auth_token"] = auth_token
+        _server_data = new_server_data
         yield
     finally:
-        _subscriber_data = old_sub_data
+        _server_data = old_server_data
 
 
 def _auth_headers(auth_token, headers=None):
-    auth_token = auth_token or _subscriber_data["auth_token"]
+    auth_token = auth_token or _server_data["auth_token"]
     if auth_token:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_token
@@ -202,7 +202,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 
 
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
-    auth_token = auth_token or _subscriber_data["auth_token"]
+    auth_token = auth_token or _server_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
     response = _sync_client().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
@@ -232,7 +232,7 @@ def _xpost_bytes(url, content, params=None, auth_token=None, timeout=TIMEOUT):
     """POST a body of bytes through the pooled client, and read what came back.
 
     `_xpost` sends JSON, which a compressed chunk is not: it goes as it is, and
-    the subscriber reads it as the chunk it will store.
+    the server reads it as the chunk it will store.
     """
     response = _sync_client().post(
         url, params=params, content=content, headers=_chunk_headers(auth_token), timeout=timeout
@@ -246,15 +246,15 @@ async def _axpost_bytes(client, url, content, params=None, auth_token=None):
     return _chunk_written(response, url, params and params.get("nchunk"))
 
 
-def _sub_url(urlbase, path):
-    urlbase = urlbase or _subscriber_data["urlbase"]
+def _server_url(urlbase, path):
+    urlbase = urlbase or _server_data["urlbase"]
     if not urlbase:
-        raise RuntimeError("No default Caterva2 subscriber set")
+        raise RuntimeError("No default Caterva2 server set")
     return f"{urlbase}{path}" if urlbase.endswith("/") else f"{urlbase}/{path}"
 
 
 def login(username, password, urlbase):
-    url = _sub_url(urlbase, "auth/jwt/login")
+    url = _server_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
     # Not the pooled client: this is the one request whose Set-Cookie matters,
     # and it belongs to the caller rather than to every later request
@@ -264,14 +264,14 @@ def login(username, password, urlbase):
 
 
 def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
-    url = _sub_url(urlbase, f"api/info/{path}")
+    url = _server_url(urlbase, f"api/info/{path}")
     response = _xget(url, params, headers, auth_token)
     json = response.json()
     return json if model is None else model(**json)
 
 
 def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False):
-    url = _sub_url(urlbase, f"api/fetch/{path}")
+    url = _server_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
     # Try different deserialization methods
@@ -311,7 +311,7 @@ _UNTRIED = object()
 """A block source that has not been asked for yet, as against one that failed."""
 
 MAX_RANGES_PER_REQUEST = 64
-"""How many byte ranges one request to a subscriber may ask for.
+"""How many byte ranges one request to a server may ask for.
 
 There is no limit in the protocol, and the saving grows with the count -- but a
 `Range` header is a header, which servers and proxies cap the length of (8 KB is
@@ -424,7 +424,7 @@ def _span_of(parts: list[tuple[int, bytes, int | None]], offset: int, size: int,
 class ChunkAlreadyWritten(ValueError):
     """A chunk was written to a slot of a remote array that already held content.
 
-    A subscriber that accepts chunk writes accepts each slot exactly once: the
+    A server that accepts chunk writes accepts each slot exactly once: the
     frame's own offsets say whether a slot was ever written, and a second write
     would move every chunk that came after it.  So a writer that finds this has
     lost a race, or is repeating work another writer already did; either way the
@@ -441,7 +441,7 @@ class C2NDSource(ByteRangeNDSource):
     cookie composes with it.  That is everything :ref:`ByteRangeNDSource` needs,
     so a slice costs the blocks it touches instead of the chunks they live in.
 
-    A dataset the subscriber *builds* -- a lazy expression, an HDF5 leaf, a
+    A dataset the server *builds* -- a lazy expression, an HDF5 leaf, a
     ``.b2z`` member -- is streamed instead, and a streamed response ignores the
     ``Range`` header and answers with the whole body.  :meth:`read_range` refuses
     such an answer without reading it off the socket, and :ref:`C2Array` then
@@ -453,7 +453,7 @@ class C2NDSource(ByteRangeNDSource):
     max_ranges = MAX_RANGES_PER_REQUEST
 
     def __init__(self, array: C2Array, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
-        self._url = _sub_url(array.urlbase, f"api/fetch/{array.path}")
+        self._url = _server_url(array.urlbase, f"api/fetch/{array.path}")
         self._auth_token = array.auth_token
         # Answers that did not carry their parts, in a row; see `read_ranges`
         self._misses = 0
@@ -551,7 +551,7 @@ class C2Array(blosc2.Operand):
             The path to the remote NDArray file (root + file path) as
             a posix path.
         urlbase: str
-            The base URL (slash-terminated) of the subscriber to query.
+            The base URL (slash-terminated) of the server to query.
         auth_token: str
             An optional token to authorize requests via HTTP.  Currently, it
             will be sent as an HTTP cookie.
@@ -798,7 +798,7 @@ class C2Array(blosc2.Operand):
             self._aclient = None
 
     # -- Writing chunks.  A pre-sized array is filled a chunk at a time, by as
-    # many writers as there are chunks to fill; the subscriber serializes them
+    # many writers as there are chunks to fill; the server serializes them
     # and refuses a slot that was already written.
 
     def update_chunk(self, nchunk: int, chunk: bytes) -> dict:
@@ -814,7 +814,7 @@ class C2Array(blosc2.Operand):
 
         The chunk must match the array's geometry -- its chunkshape, its typesize
         and its blocksize -- which is what compressing against
-        :attr:`cparams` and :attr:`blocks` gives; the subscriber checks it and
+        :attr:`cparams` and :attr:`blocks` gives; the server checks it and
         refuses anything else rather than storing a chunk the array cannot read.
 
         Parameters
@@ -829,7 +829,7 @@ class C2Array(blosc2.Operand):
         Returns
         -------
         out: dict
-            What the subscriber reports of the array's state now.  Carries
+            What the server reports of the array's state now.  Carries
             ``written`` and ``nchunks`` where it counts them, so a writer can see
             a fill finish without asking again.
 
@@ -852,13 +852,13 @@ class C2Array(blosc2.Operand):
 
         The blocksize is spelled out because :func:`blosc2.compress2` picks its
         own when it is not: left to choose it takes the whole chunk, and a chunk
-        blocked differently from the array is one the subscriber refuses.
+        blocked differently from the array is one the server refuses.
         """
         url = self._chunk_url()
         try:
             return _xpost_bytes(url, chunk, params={"nchunk": nchunk}, auth_token=self.auth_token)
         finally:
-            # However it went.  A refusal is the answer of a subscriber that has
+            # However it went.  A refusal is the answer of a server that has
             # already stored someone else's chunk in that slot, and a request that
             # failed on the way home may have stored this one; either way what
             # this handle read of the array is no longer what the array is
@@ -868,7 +868,7 @@ class C2Array(blosc2.Operand):
         """Write one compressed chunk asynchronously; see :meth:`update_chunk`.
 
         The same request, off the event loop, so a writer with many chunks to
-        send can have several in flight.  The subscriber serializes them at the
+        send can have several in flight.  The server serializes them at the
         far end regardless -- what overlaps is the round trip, which for a
         chunk-sized body is most of the cost.
         """
@@ -891,7 +891,7 @@ class C2Array(blosc2.Operand):
         :meth:`ByteRangeNDSource.written_chunks`.
 
         Read out of the frame's own offsets, which is where a fill records
-        itself: no endpoint of its own, and nothing for the subscriber to keep in
+        itself: no endpoint of its own, and nothing for the server to keep in
         step with the array.  Read afresh every time, since the point of asking
         is to see what other writers have done since -- which is a couple of
         range reads, the header first (a write moves the frame's length, and the
@@ -912,7 +912,7 @@ class C2Array(blosc2.Operand):
 
     def _chunk_url(self) -> str:
         """Where a chunk of this array is read from, and written to."""
-        return _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        return _server_url(self.urlbase, f"api/chunk/{self.path}")
 
     def _forget_index(self) -> None:
         """Drop what this handle read of a frame it has since written to."""
@@ -1004,7 +1004,7 @@ class C2Array(blosc2.Operand):
         Geometry cannot tell a dataset that was replaced from the one a cache was
         filled from: a shape and a partitioning survive a rewrite, while every
         cached chunk -- and, in block mode, every offset they were fetched by --
-        goes stale.  The subscriber's own mtime does tell, and `api/info` carries
+        goes stale.  The server's own mtime does tell, and `api/info` carries
         it, so this costs no request of its own; the compressed size goes in with
         it, since a rewrite within the same clock tick is what an mtime cannot
         see.  What it names is the array as this handle last looked at it --
@@ -1012,7 +1012,7 @@ class C2Array(blosc2.Operand):
         says so, and what a `Proxy` calls before judging a cache by it.
 
         Two questions, and they want different answers.  *Which array is this* is
-        answered by the nonce a subscriber writes into an array's vlmeta the first
+        answered by the nonce a server writes into an array's vlmeta the first
         time a chunk is written to it: a size and an mtime can both be repeated
         by a different array that came to sit at the same path, and a cache
         served against one of those is stale without ever saying so.  *Has it
@@ -1031,7 +1031,7 @@ class C2Array(blosc2.Operand):
         one it had; when a writer fills that slot, both are wrong, and nothing in
         the cache marks them apart from the chunks that are still good.
 
-        None when the subscriber reports no mtime and the array carries no nonce,
+        None when the server reports no mtime and the array carries no nonce,
         which leaves the cache checked on its geometry alone, as every source
         without a stamp is.
         """
@@ -1069,7 +1069,7 @@ class C2Array(blosc2.Operand):
         """Whether blocks are worth asking this dataset for, as far as info can say.
 
         What `api/info` already carries, and no request of its own: a dataset the
-        subscriber *computes* reports an expression where a stored one reports a
+        server *computes* reports an expression where a stored one reports a
         geometry, and a frame of small chunks would never have one taken apart --
         blosc2 declines to split a chunk below ``BLOCK_MIN_CBYTES``, so the block
         path would end in whole chunks anyway, by the longer road.
@@ -1112,7 +1112,7 @@ class C2Array(blosc2.Operand):
         """The frame reader behind the block methods, or None if there is none.
 
         Built on the first request for it and never rebuilt.  The fallback has to
-        be permanent: a subscriber that streams this dataset answers a range
+        be permanent: a server that streams this dataset answers a range
         request with the whole body, so retrying would pay a full download to
         rediscover the same answer.
 
@@ -1148,10 +1148,10 @@ class C2Array(blosc2.Operand):
         """Decide, at whatever cost it takes, whether this dataset serves ranges.
 
         None for a dataset that does not serve ranges, which is an answer for
-        good; `_UNTRIED` for a subscriber that could not say, which is not.
+        good; `_UNTRIED` for a server that could not say, which is not.
         """
         httpx = _httpx()
-        # A dataset the subscriber computes has no frame to read at all, and
+        # A dataset the server computes has no frame to read at all, and
         # `api/info` says so for free.  Whether its chunks are worth taking apart
         # is a separate judgement, made by whoever asks -- see `block_source`
         if not self._reports_geometry:
@@ -1169,7 +1169,7 @@ class C2Array(blosc2.Operand):
             # asking, and whole chunks read the dataset either way
             return _UNTRIED if exc.transient else None
         except httpx.HTTPStatusError as exc:
-            # A busy or broken subscriber said nothing about how this is served
+            # A busy or broken server said nothing about how this is served
             return _UNTRIED if _is_transient(exc.response.status_code) else None
         except httpx.TransportError:
             # Nothing was downloaded to find this out, so asking again is cheap
@@ -1214,7 +1214,7 @@ class C2Array(blosc2.Operand):
 
     @property
     def max_ranges(self) -> int:
-        """How many ranges one request to this subscriber may carry."""
+        """How many ranges one request to this server may carry."""
         source = self.block_source()
         return 1 if source is None else source.max_ranges
 
@@ -1239,7 +1239,7 @@ class C2Array(blosc2.Operand):
             return source.read_range(offset, size)
 
     def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
-        """The bytes of every span, in one request where the subscriber allows it."""
+        """The bytes of every span, in one request where the server allows it."""
         with self._ranged() as source:
             return source.read_ranges(spans)
 
@@ -1247,7 +1247,7 @@ class C2Array(blosc2.Operand):
     def _ranged(self, index_only: bool = False):
         """The block source, retired if it turns out to serve ranges no longer.
 
-        The subscriber can stop serving a dataset from a file between one fetch
+        The server can stop serving a dataset from a file between one fetch
         and the next -- replaced by a lazy expression, moved into a container it
         streams out of -- and the answer to a range request is where that shows.
         A refusal that says so for good puts the array back where it was before

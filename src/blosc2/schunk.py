@@ -2086,7 +2086,7 @@ def open(
     urlpath: str | pathlib.Path | :ref:`URLPath`
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
         is stored. If it is a remote Caterva2 array, a :ref:`URLPath` must be passed:
-        a subscriber names its datasets by root and path rather than by URL.
+        a server names its datasets by root and path rather than by URL.
         Any URL with a scheme (``s3://``, ``gs://``, ``https://``, ``zip://``,
         ``memory://``...) is opened through fsspec; see the `Notes` section for
         the limits.

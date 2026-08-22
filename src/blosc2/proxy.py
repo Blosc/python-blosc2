@@ -91,7 +91,7 @@ class Proxy(blosc2.Operand):
 
             A source that can name the exact bytes it reads, as
             :ref:`FsspecNDSource` does with its ``stamp`` (fsspec's token) and
-            :ref:`C2Array` with the subscriber's mtime, is checked against that
+            :ref:`C2Array` with the server's mtime, is checked against that
             too: a cache built from different bytes raises, even when the geometry
             still fits. For every other source geometry is all there is to check,
             so a source whose contents changed underneath while its geometry did
@@ -552,7 +552,7 @@ class Proxy(blosc2.Operand):
         chunks, whenever that is the cheaper way round -- see the thresholds in
         `blosc2.proxy_source`.  The chunks left in the cache then hold only those
         blocks, and read as zeros elsewhere until the rest are fetched.  A source
-        that stops answering range reads partway (a subscriber that now computes
+        that stops answering range reads partway (a server that now computes
         the dataset, or is too busy to serve it from its file) does not fail the
         fetch: the chunks it was asked for come whole instead.
 

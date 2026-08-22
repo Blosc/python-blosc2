@@ -5,14 +5,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Block-granular reads of a C2Array, against a stand-in for a subscriber.
+"""Block-granular reads of a C2Array, against a stand-in for a server.
 
 The server here answers the two endpoints the block path uses -- `api/info` for
 the geometry and `api/fetch` for the bytes -- the way Caterva2 does: a stored
 dataset comes back through a file response that honours `Range`, and one the
-subscriber would compute comes back as a stream that ignores it.  Which is the
+server would compute comes back as a stream that ignores it.  Which is the
 distinction the whole arrangement rests on, and the one thing a test against a
-live subscriber could not switch off at will.
+live server could not switch off at will.
 """
 
 import contextlib
@@ -28,13 +28,13 @@ import pytest
 
 import blosc2
 
-# The stand-in subscriber binds a real socket, and Pyodide has no listen(2):
+# The stand-in server binds a real socket, and Pyodide has no listen(2):
 # node asks for the `ws` module that is not there, and takes the runtime down
 # with it rather than raising
 pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
 
 
-class _Subscriber:
+class _Cat2Server:
     """A Caterva2-shaped server over one .b2nd file."""
 
     def __init__(
@@ -57,13 +57,13 @@ class _Subscriber:
         self.multipart = multipart  # False: answer only the first range asked for
         self.bad_parts = bad_parts  # ... and this many multi-range answers do too
         self.merge_ranges = merge_ranges  # as Starlette does with ranges that touch
-        self.geometry = geometry  # False: report a dataset the subscriber computes,
+        self.geometry = geometry  # False: report a dataset the server computes,
         # which has no chunks or blocks of its own to report
         self.log = []  # (endpoint, status, bytes served)
         self.reload()
 
     def reload(self):
-        """Pick up the file as it is now, as a subscriber would on the next request.
+        """Pick up the file as it is now, as a server would on the next request.
 
         A leaf is served out of its window in the container, which is what makes
         it look to a client exactly like a dataset of its own: byte 0 of what it
@@ -121,7 +121,7 @@ class _Handler(BaseHTTPRequestHandler):
             super().handle()
 
     def _send(self, status, body, headers=(), endpoint=""):
-        self.server.subscriber.log.append((endpoint, status, len(body)))
+        self.server.cat2.log.append((endpoint, status, len(body)))
         self.send_response(status)
         for name, value in headers:
             self.send_header(name, value)
@@ -130,55 +130,55 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        sub = self.server.subscriber
-        if sub.cookie and self.headers.get("Cookie") != sub.cookie:
+        srv = self.server.cat2
+        if srv.cookie and self.headers.get("Cookie") != srv.cookie:
             self._send(401, b"unauthorized", endpoint="auth")
             return
         endpoint = self.path.split("/")[2]
         if endpoint == "info":
-            self._send(200, json.dumps(sub.meta).encode(), endpoint="info")
+            self._send(200, json.dumps(srv.meta).encode(), endpoint="info")
         elif endpoint == "chunk":
             nchunk = int(self.path.split("nchunk=")[1])
-            self._send(200, sub.array.schunk.get_chunk(nchunk), endpoint="chunk")
+            self._send(200, srv.array.schunk.get_chunk(nchunk), endpoint="chunk")
         elif endpoint == "fetch":
-            self._fetch(sub)
+            self._fetch(srv)
         else:
             self._send(404, b"", endpoint=endpoint)
 
-    def _fetch(self, sub):
-        if sub.fetch_failures:
-            # A subscriber too busy to answer says nothing about how it serves
-            sub.fetch_failures -= 1
+    def _fetch(self, srv):
+        if srv.fetch_failures:
+            # A server too busy to answer says nothing about how it serves
+            srv.fetch_failures -= 1
             self._send(503, b"busy", endpoint="fetch")
             return
         wanted = self.headers.get("Range")
-        if not wanted or not sub.ranges:
+        if not wanted or not srv.ranges:
             # What a StreamingResponse does with a Range header: nothing at all
-            self._send(200, sub.frame, endpoint="fetch")
+            self._send(200, srv.frame, endpoint="fetch")
             return
         spans = []
         for span in wanted.removeprefix("bytes=").split(","):
             start, end = (int(n) for n in span.split("-"))
-            spans.append((start, min(end, len(sub.frame) - 1)))
+            spans.append((start, min(end, len(srv.frame) - 1)))
         # Starlette sorts the spans and merges the ones that touch, so a client
         # cannot count on getting a part per span, nor on the order it asked in
         spans.sort()
         merged = [spans[0]]
         for start, end in spans[1:]:
-            if start <= merged[-1][1] + 1 and sub.merge_ranges:
+            if start <= merged[-1][1] + 1 and srv.merge_ranges:
                 merged[-1] = (merged[-1][0], max(merged[-1][1], end))
             else:
                 merged.append((start, end))
-        partial = not sub.multipart
-        if len(merged) > 1 and sub.bad_parts:
-            sub.bad_parts -= 1  # an answer that carries only the first part, once
+        partial = not srv.multipart
+        if len(merged) > 1 and srv.bad_parts:
+            srv.bad_parts -= 1  # an answer that carries only the first part, once
             partial = True
         if len(merged) == 1 or partial:
             start, end = merged[0]  # ... and answers a plain 206 when one is left
             self._send(
                 206,
-                sub.frame[start : end + 1],
-                [("Content-Range", f"bytes {start}-{end}/{len(sub.frame)}"), ("Accept-Ranges", "bytes")],
+                srv.frame[start : end + 1],
+                [("Content-Range", f"bytes {start}-{end}/{len(srv.frame)}"), ("Accept-Ranges", "bytes")],
                 endpoint="fetch",
             )
             return
@@ -187,9 +187,9 @@ class _Handler(BaseHTTPRequestHandler):
         for start, end in merged:
             body += (
                 f"--{boundary}\r\nContent-Type: application/octet-stream\r\n"
-                f"Content-Range: bytes {start}-{end}/{len(sub.frame)}\r\n\r\n"
+                f"Content-Range: bytes {start}-{end}/{len(srv.frame)}\r\n\r\n"
             ).encode()
-            body += sub.frame[start : end + 1] + b"\r\n"
+            body += srv.frame[start : end + 1] + b"\r\n"
         body += f"--{boundary}--\r\n".encode()
         self._send(
             206,
@@ -203,10 +203,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _serve(tmp_path, data, chunks, blocks, name="ds.b2nd", key=None, **kwargs):
-    """A C2Array over *data*, served by a subscriber stand-in on localhost.
+    """A C2Array over *data*, served by a server stand-in on localhost.
 
     With *key*, the array is a leaf of a TreeStore container instead of a file
-    of its own, and the subscriber serves it from its window -- which is what
+    of its own, and the server serves it from its window -- which is what
     Caterva2 does, and what the client is meant not to notice.
     """
     urlpath = str(tmp_path / name)
@@ -215,33 +215,33 @@ def _serve(tmp_path, data, chunks, blocks, name="ds.b2nd", key=None, **kwargs):
     else:
         with blosc2.TreeStore(urlpath, mode="w") as tstore:
             tstore[key] = blosc2.asarray(data, chunks=chunks, blocks=blocks)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    server.subscriber = _Subscriber(urlpath, key=key, **kwargs)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    httpd.cat2 = _Cat2Server(urlpath, key=key, **kwargs)
     # A short poll interval, because `shutdown()` waits for one to elapse before
     # the serve loop notices: at the default 0.5 s that is half a second of doing
     # nothing per test, and this file has enough of them for that to be most of
     # what it costs
-    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
-    urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    urlbase = f"http://127.0.0.1:{httpd.server_address[1]}/"
     path = f"@public/{name}{key or ''}"
     array = blosc2.C2Array(path, urlbase=urlbase, auth_token=kwargs.get("cookie"))
-    return array, server.subscriber, server
+    return array, httpd.cat2, httpd
 
 
 @pytest.fixture
-def subscriber(tmp_path):
+def server(tmp_path):
     """Serve one array; the test parametrizes with `_serve`'s arguments."""
     servers = []
 
     def build(*args, **kwargs):
-        array, sub, server = _serve(tmp_path, *args, **kwargs)
-        servers.append(server)
-        return array, sub
+        array, srv, httpd = _serve(tmp_path, *args, **kwargs)
+        servers.append(httpd)
+        return array, srv
 
     yield build
-    for server in servers:
-        server.shutdown()
-        server.server_close()
+    for httpd in servers:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 @pytest.fixture
@@ -254,24 +254,24 @@ def _incompressible(shape, seed=0):
     return np.random.default_rng(seed).random(shape)
 
 
-def _bytes(sub, endpoint):
-    return sum(n for kind, _, n in sub.log if kind == endpoint)
+def _bytes(srv, endpoint):
+    return sum(n for kind, _, n in srv.log if kind == endpoint)
 
 
-def test_blocks_are_read_over_ranges(subscriber, any_chunk_wants_blocks):
+def test_blocks_are_read_over_ranges(server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
-    sub.log.clear()
+    srv.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     # The frame index (header, then offsets), one read for the chunk's block
     # offsets, and one for the block the slice lands in
-    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 4
-    assert {status for _, status, _ in sub.log} == {206}
-    assert not _bytes(sub, "chunk")
+    assert [kind for kind, _, _ in srv.log] == ["fetch"] * 4
+    assert {status for _, status, _ in srv.log} == {206}
+    assert not _bytes(srv, "chunk")
     # A block of a chunk, not the chunk: an eighth of it here, and never the frame
-    assert _bytes(sub, "fetch") < sub.array.schunk.cbytes / 8
+    assert _bytes(srv, "fetch") < srv.array.schunk.cbytes / 8
     # ... and the rest of the array still arrives correctly afterwards
     assert np.array_equal(p[...], data)
 
@@ -286,78 +286,78 @@ def test_blocks_are_read_over_ranges(subscriber, any_chunk_wants_blocks):
     ],
     ids=["1d", "2d", "3d", "point"],
 )
-def test_block_reads_are_correct(subscriber, any_chunk_wants_blocks, shape, chunks, blocks, item):
+def test_block_reads_are_correct(server, any_chunk_wants_blocks, shape, chunks, blocks, item):
     data = _incompressible(shape)
-    array, _ = subscriber(data, chunks=chunks, blocks=blocks)
+    array, _ = server(data, chunks=chunks, blocks=blocks)
     p = blosc2.Proxy(array, mode="w")
 
     assert np.array_equal(p[item], data[item])
     assert np.array_equal(p[...], data)
 
 
-def test_blocks_carry_the_auth_cookie(subscriber, any_chunk_wants_blocks):
+def test_blocks_carry_the_auth_cookie(server, any_chunk_wants_blocks):
     # fsspec's HTTP filesystem cannot carry this, which is why the block reads of
-    # a C2Array are its own rather than an fsspec URL pointed at the subscriber
+    # a C2Array are its own rather than an fsspec URL pointed at the server
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), cookie="token=sikrit")
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), cookie="token=sikrit")
     p = blosc2.Proxy(array, mode="w")
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is not None
-    assert not any(status == 401 for _, status, _ in sub.log)
+    assert not any(status == 401 for _, status, _ in srv.log)
 
 
-def test_a_streamed_dataset_falls_back_to_chunks(subscriber, any_chunk_wants_blocks):
+def test_a_streamed_dataset_falls_back_to_chunks(server, any_chunk_wants_blocks):
     # A lazy expression, an HDF5 leaf or a .b2z member is built rather than
     # stored, and the response that carries it ignores Range
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
     p = blosc2.Proxy(array, mode="w")
-    sub.log.clear()
+    srv.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is None
-    assert [kind for kind, _, _ in sub.log] == ["fetch", "chunk"]
+    assert [kind for kind, _, _ in srv.log] == ["fetch", "chunk"]
     # The probe must not read the body it refused: the whole dataset is what it
     # would have downloaded to find out that ranges are not served
-    assert _bytes(sub, "fetch") == len(sub.frame)  # served, but never read
+    assert _bytes(srv, "fetch") == len(srv.frame)  # served, but never read
 
     # And it is never probed again, whatever else is asked for
     assert np.array_equal(p[...], data)
-    assert sum(1 for kind, _, _ in sub.log if kind == "fetch") == 1
+    assert sum(1 for kind, _, _ in srv.log if kind == "fetch") == 1
 
 
-def test_a_computed_dataset_is_ruled_out_without_a_request(subscriber, any_chunk_wants_blocks):
-    # api/info tells a stored dataset from one the subscriber computes: the
+def test_a_computed_dataset_is_ruled_out_without_a_request(server, any_chunk_wants_blocks):
+    # api/info tells a stored dataset from one the server computes: the
     # latter reports `expression` and `operands` where this reports a geometry
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     del array.meta["chunks"]
-    sub.log.clear()
+    srv.log.clear()
 
     assert array.block_source() is None
-    assert not sub.log
+    assert not srv.log
 
 
-def test_small_chunks_are_fetched_whole(subscriber):
+def test_small_chunks_are_fetched_whole(server):
     # Below the threshold a chunk is one cheap request, so blocks would only add
     # a round trip: nothing goes looking for the frame index, let alone a block
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
-    sub.log.clear()
+    srv.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is None
-    assert [kind for kind, _, _ in sub.log] == ["chunk"]
+    assert [kind for kind, _, _ in srv.log] == ["chunk"]
 
 
-def test_a_dataset_that_serves_no_blocks_keeps_the_chunkwise_bitmap(tmp_path, subscriber):
+def test_a_dataset_that_serves_no_blocks_keeps_the_chunkwise_bitmap(tmp_path, server):
     # Nothing will ever ask this one for a block, so its cache records chunks:
     # the bitmap an older blosc2 also reads, and none of the per-block
     # bookkeeping that would be kept only to say `all of them` every time
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     assert not array.serves_blocks  # decided from api/info, without a request
     cache = str(tmp_path / "chunkwise-cache.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="w")
@@ -369,26 +369,26 @@ def test_a_dataset_that_serves_no_blocks_keeps_the_chunkwise_bitmap(tmp_path, su
     assert "proxy-fetched-blocks" not in kept
 
 
-def test_blocks_accumulate_in_a_chunk(subscriber, any_chunk_wants_blocks):
+def test_blocks_accumulate_in_a_chunk(server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    served = len(sub.log)
+    served = len(srv.log)
     # A different block of the same chunk: what is already cached stays cached
     assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
-    assert len(sub.log) > served
-    served = len(sub.log)
+    assert len(srv.log) > served
+    served = len(srv.log)
     # Both are now in the same cached chunk, and both are still right
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
-    assert len(sub.log) == served
+    assert len(srv.log) == served
 
 
-def test_blocks_survive_a_reopened_cache(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_blocks_survive_a_reopened_cache(tmp_path, server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "c2-cache.b2nd")
 
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
@@ -397,87 +397,87 @@ def test_blocks_survive_a_reopened_cache(tmp_path, subscriber, any_chunk_wants_b
 
     # A partly filled chunk survives, so the blocks in it do not travel again
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
-    served = len(sub.log)
+    served = len(srv.log)
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    assert len(sub.log) == served
+    assert len(srv.log) == served
     # ... and the ones missing from it still do
     assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
-    assert len(sub.log) > served
+    assert len(srv.log) > served
     assert np.array_equal(p[...], data)
 
 
-def test_a_cache_that_holds_the_slice_costs_no_request(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_cache_that_holds_the_slice_costs_no_request(tmp_path, server, any_chunk_wants_blocks):
     # Re-running a script over a cache that already covers the slice: `api/info`
     # is all it takes -- the one the proxy spends looking again at an array that
     # could have been written to since (see `refresh_stamp`).  Nothing opens the
     # frame, because opening it is what `block_source` puts off until a fetch
     # actually wants a chunk -- and this fetch wants none.
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "held.b2nd")
     item = (slice(0, 5), slice(0, 10))
     blosc2.Proxy(array, urlpath=cache, mode="a").fetch(item)
 
-    # A later run: its own array over the same subscriber, its own source
+    # A later run: its own array over the same server, its own source
     again = blosc2.C2Array(array.path, urlbase=array.urlbase)
-    sub.log.clear()
+    srv.log.clear()
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
     p.fetch(item)
     assert np.array_equal(p[item], data[item])
-    assert [kind for kind, _, _ in sub.log] == ["info"]
+    assert [kind for kind, _, _ in srv.log] == ["info"]
 
     # ... and a slice the cache does not hold opens the frame then: the header,
     # the layout of the chunk it lands in, and the blocks.  Not where the chunks
     # are -- the earlier run left that in the cache
     assert np.array_equal(p[100:105, 0:10], data[100:105, 0:10])
-    assert [kind for kind, _, _ in sub.log] == ["info"] + ["fetch"] * 3
+    assert [kind for kind, _, _ in srv.log] == ["info"] + ["fetch"] * 3
 
 
-def test_a_kept_index_halves_a_warm_fetch(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_kept_index_halves_a_warm_fetch(tmp_path, server, any_chunk_wants_blocks):
     # A later run wanting different blocks of chunks a previous one half filled:
     # where the chunks are and where those blocks are both came out of the cache,
     # so what travels is the header and the blocks, and nothing between
     data = _incompressible((400, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "kept.b2nd")
     blosc2.Proxy(array, urlpath=cache, mode="a").fetch((slice(None), slice(0, 10)))
 
     again = blosc2.C2Array(array.path, urlbase=array.urlbase)
-    sub.log.clear()
+    srv.log.clear()
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
     assert np.array_equal(p[:, 100:110], data[:, 100:110])
     # The proxy's look at the array, then the header and the blocks -- nothing between
-    assert [kind for kind, _, _ in sub.log] == ["info", "fetch", "fetch"]
+    assert [kind for kind, _, _ in srv.log] == ["info", "fetch", "fetch"]
     assert np.array_equal(p[...], data)  # ... and the rest still reads right
 
 
-def test_a_kept_index_does_not_open_the_frame_to_be_taken_up(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_kept_index_does_not_open_the_frame_to_be_taken_up(tmp_path, server, any_chunk_wants_blocks):
     # Handing the index to the source would build the source to receive it, and
     # building it reads the header -- a request, at the very moment of a run that
     # may go on to fetch nothing.  It waits with the array until there is a source
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "unopened.b2nd")
     item = (slice(0, 5), slice(0, 10))
     blosc2.Proxy(array, urlpath=cache, mode="a").fetch(item)
 
     again = blosc2.C2Array(array.path, urlbase=array.urlbase)
-    sub.log.clear()
+    srv.log.clear()
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
     assert again._pending_index is not None  # taken out of the cache, not yet used
-    assert [kind for kind, _, _ in sub.log] == ["info"]  # the proxy's look, and no frame read
+    assert [kind for kind, _, _ in srv.log] == ["info"]  # the proxy's look, and no frame read
     p.fetch(item)
-    assert [kind for kind, _, _ in sub.log] == ["info"]
+    assert [kind for kind, _, _ in srv.log] == ["info"]
 
 
-def test_a_whole_chunk_cache_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_whole_chunk_cache_is_adopted(tmp_path, server, any_chunk_wants_blocks):
     # A cache left by a run that fetched whole chunks (which is every run before
     # this existed) holds complete chunks, so nothing in it is fetched again
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "chunkwise.b2nd")
 
-    array._block_source = None  # as if the subscriber served no ranges
+    array._block_source = None  # as if the server served no ranges
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     del p
@@ -485,59 +485,59 @@ def test_a_whole_chunk_cache_is_adopted(tmp_path, subscriber, any_chunk_wants_bl
     # The same dataset, opened afresh: this one takes the blocks path
     array = blosc2.C2Array(array.path, urlbase=array.urlbase)
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
-    served = len(sub.log)
+    served = len(srv.log)
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    assert len(sub.log) == served
+    assert len(srv.log) == served
     assert np.array_equal(p[...], data)
 
 
-def test_blocks_per_chunk_costs_no_request(subscriber):
+def test_blocks_per_chunk_costs_no_request(server):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
-    sub.log.clear()
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    srv.log.clear()
 
     assert array.blocks_per_chunk == math.prod((100 // 10, 200 // 20))
-    assert not sub.log
+    assert not srv.log
 
 
-def test_read_range_says_so_when_there_are_no_ranges(subscriber, any_chunk_wants_blocks):
+def test_read_range_says_so_when_there_are_no_ranges(server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
-    array, _ = subscriber(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
+    array, _ = server(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
 
     with pytest.raises(ValueError, match="not served in byte ranges"):
         array.read_range(0, 32)
 
 
-def test_a_whole_wave_travels_in_one_request(subscriber, any_chunk_wants_blocks):
+def test_a_whole_wave_travels_in_one_request(server, any_chunk_wants_blocks):
     # A column through every chunk: each one wants a handful of blocks that lie
     # apart in the file, which without batching is a request each
     data = _incompressible((400, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     assert array.block_source() is not None  # the header, read once per array
-    sub.log.clear()
+    srv.log.clear()
 
     assert np.array_equal(p[:, 0:10], data[:, 0:10])
     # One request for where the four chunks are, one for the layouts of all of
     # them, one for all their blocks -- three waves, not three per chunk
-    assert [kind for kind, _, _ in sub.log] == ["fetch", "fetch", "fetch"]
-    assert {status for _, status, _ in sub.log} == {206}
-    assert _bytes(sub, "fetch") < sub.array.schunk.cbytes / 4
+    assert [kind for kind, _, _ in srv.log] == ["fetch", "fetch", "fetch"]
+    assert {status for _, status, _ in srv.log} == {206}
+    assert _bytes(srv, "fetch") < srv.array.schunk.cbytes / 4
 
     # Which is the whole of the difference: one request per range otherwise
-    other, sub2 = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="unbatched.b2nd")
+    other, sub2 = server(data, chunks=(100, 200), blocks=(10, 20), name="unbatched.b2nd")
     other.block_source().max_ranges = 1
     q = blosc2.Proxy(other, mode="w")
     sub2.log.clear()
     assert np.array_equal(q[:, 0:10], data[:, 0:10])
-    assert len(sub2.log) > 4 * len(sub.log)
+    assert len(sub2.log) > 4 * len(srv.log)
 
 
-def test_merged_and_reordered_parts_are_read_correctly(subscriber, any_chunk_wants_blocks):
+def test_merged_and_reordered_parts_are_read_correctly(server, any_chunk_wants_blocks):
     # The server sorts the spans and merges the ones that touch, so the answer
     # carries fewer parts than were asked for and in an order of its own
     data = _incompressible((400, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
 
     assert np.array_equal(p[:, 0:10], data[:, 0:10])
@@ -545,55 +545,55 @@ def test_merged_and_reordered_parts_are_read_correctly(subscriber, any_chunk_wan
     assert array.max_ranges > 1  # ... and it never had to stop batching
 
 
-def test_a_server_that_answers_one_range_stops_being_batched(subscriber, any_chunk_wants_blocks):
-    # A subscriber that takes the first span of a multi-range request and ignores
+def test_a_server_that_answers_one_range_stops_being_batched(server, any_chunk_wants_blocks):
+    # A server that takes the first span of a multi-range request and ignores
     # the rest: the answer does not cover what was asked for, which is noticed
     # and never repeated
     data = _incompressible((400, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), multipart=False)
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), multipart=False)
     p = blosc2.Proxy(array, mode="w")
 
     assert np.array_equal(p[:, 0:10], data[:, 0:10])
     assert array.max_ranges == 1
-    served = len(sub.log)
+    served = len(srv.log)
     assert np.array_equal(p[:, 100:110], data[:, 100:110])
     # One request per range from here on, and no second attempt at batching
-    assert len(sub.log) > served + 2
+    assert len(srv.log) > served + 2
     assert np.array_equal(p[...], data)
 
 
 # --- a cache is checked against the bytes it was filled from ----------------
 
 
-def _replace(sub, data, chunks, blocks):
+def _replace(srv, data, chunks, blocks):
     """Rewrite the served dataset, as an upload of new data would."""
-    blosc2.asarray(data, chunks=chunks, blocks=blocks, urlpath=sub.path, mode="w")
-    stat = pathlib.Path(sub.path).stat()
-    os.utime(sub.path, (stat.st_atime, stat.st_mtime + 10))  # a tick the clock cannot swallow
-    sub.reload()
+    blosc2.asarray(data, chunks=chunks, blocks=blocks, urlpath=srv.path, mode="w")
+    stat = pathlib.Path(srv.path).stat()
+    os.utime(srv.path, (stat.st_atime, stat.st_mtime + 10))  # a tick the clock cannot swallow
+    srv.reload()
 
 
-def test_a_cache_is_stamped_with_the_remote_mtime(subscriber):
+def test_a_cache_is_stamped_with_the_remote_mtime(server):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
 
-    assert array.stamp == f"{sub.mtime}:{sub.array.schunk.cbytes}"
+    assert array.stamp == f"{srv.mtime}:{srv.array.schunk.cbytes}"
     assert p.schunk.vlmeta["proxy-stamp"] == array.stamp
 
 
-def test_a_cache_from_other_bytes_is_refused(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_cache_from_other_bytes_is_refused(tmp_path, server, any_chunk_wants_blocks):
     # Same shape, same partitioning, different data: geometry cannot tell, and
     # every cached chunk (and the offsets it was fetched by) is stale
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "stamped.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     del p
 
     other = _incompressible((200, 200), seed=1)
-    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+    _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
     replaced = blosc2.C2Array(array.path, urlbase=array.urlbase)
     assert replaced.stamp != array.stamp
 
@@ -606,38 +606,38 @@ def test_a_cache_from_other_bytes_is_refused(tmp_path, subscriber, any_chunk_wan
     assert np.array_equal(p[...], other)
 
 
-def test_a_cache_of_bytes_that_were_replaced_is_emptied(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_cache_of_bytes_that_were_replaced_is_emptied(tmp_path, server, any_chunk_wants_blocks):
     # `blosc2.open` rebuilds the proxy over the cache as it stands, with no
     # `mode="a"` to refuse it by: the chunks in there were fetched from a frame
     # that is gone, so what the cache says it holds is dropped rather than served
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "emptied.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="w")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     del p
 
     other = _incompressible((200, 200), seed=1)
-    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+    _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
 
     reopened = blosc2.open(cache, mode="a")
     assert np.array_equal(reopened[0:5, 0:10], other[0:5, 0:10])
     assert np.array_equal(reopened[...], other)
 
 
-def test_a_cache_emptied_of_replaced_bytes_stays_emptied(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_cache_emptied_of_replaced_bytes_stays_emptied(tmp_path, server, any_chunk_wants_blocks):
     # The stamp is written on the way in, so the run after this one finds a cache
     # whose stamp fits and believes what it says it holds: emptying it has to
     # reach the file, not just the proxy that noticed
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "stillemptied.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="w")
     assert np.array_equal(p[...], data)  # every chunk of it, fetched and recorded
     del p
 
     other = _incompressible((200, 200), seed=1)
-    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+    _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
     noticed = blosc2.open(cache, mode="a")  # opened over the new bytes, dropped unread
     del noticed
 
@@ -646,19 +646,19 @@ def test_a_cache_emptied_of_replaced_bytes_stays_emptied(tmp_path, subscriber, a
     assert np.array_equal(again[...], other)
 
 
-def test_a_read_only_cache_of_replaced_bytes_reads_past_it(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_read_only_cache_of_replaced_bytes_reads_past_it(tmp_path, server, any_chunk_wants_blocks):
     # Nothing may be written to a cache opened read-only, so it cannot be emptied
     # either -- but nothing of it is believed either, and the read falls through
     # to the source rather than coming back with the bytes that are gone
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "readonlyreplaced.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="w")
     assert np.array_equal(p[...], data)
     del p
 
     other = _incompressible((200, 200), seed=1)
-    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+    _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
 
     reopened = blosc2.open(cache, mode="r")
     assert np.array_equal(reopened[:], other)  # read past the cache, off the source
@@ -666,9 +666,9 @@ def test_a_read_only_cache_of_replaced_bytes_reads_past_it(tmp_path, subscriber,
     assert reopened.schunk.vlmeta["proxy-stamp"] != blosc2.C2Array(array.path, urlbase=array.urlbase).stamp
 
 
-def test_a_cache_from_the_same_bytes_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):
+def test_a_cache_from_the_same_bytes_is_adopted(tmp_path, server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "unchanged.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
@@ -677,16 +677,16 @@ def test_a_cache_from_the_same_bytes_is_adopted(tmp_path, subscriber, any_chunk_
     again = blosc2.C2Array(array.path, urlbase=array.urlbase)
     assert again.stamp == array.stamp
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
-    served = len(sub.log)
+    served = len(srv.log)
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    assert len(sub.log) == served  # what it holds was not fetched again
+    assert len(srv.log) == served  # what it holds was not fetched again
 
 
-def test_no_stamp_when_the_subscriber_reports_no_mtime(tmp_path, subscriber):
+def test_no_stamp_when_the_server_reports_no_mtime(tmp_path, server):
     # Then the cache is checked on geometry alone, as every unstamped source is
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
-    sub.mtime = None  # the subscriber itself reports none, and goes on doing so
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    srv.mtime = None  # the server itself reports none, and goes on doing so
     array = blosc2.C2Array(array.path, urlbase=array.urlbase)
     assert array.stamp is None
 
@@ -698,11 +698,11 @@ def test_no_stamp_when_the_subscriber_reports_no_mtime(tmp_path, subscriber):
     assert blosc2.Proxy(array, urlpath=cache, mode="a") is not None
 
 
-def test_a_read_only_cache_is_not_stamped(tmp_path, subscriber):
+def test_a_read_only_cache_is_not_stamped(tmp_path, server):
     # `blosc2.open(path, mode="r")` rebuilds the proxy over a cache that may not
     # be written to; recording the stamp there raised instead of opening it
     data = _incompressible((200, 200))
-    array, _sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, _sub = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "readonly.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="w")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
@@ -712,35 +712,35 @@ def test_a_read_only_cache_is_not_stamped(tmp_path, subscriber):
     assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])
 
 
-def test_blocks_of_a_container_leaf(subscriber, any_chunk_wants_blocks):
-    """A leaf of a .b2z is a whole frame inside the container, and a subscriber
+def test_blocks_of_a_container_leaf(server, any_chunk_wants_blocks):
+    """A leaf of a .b2z is a whole frame inside the container, and a server
     serves it from that window -- so the client reads its blocks knowing nothing
     about containers, which is the whole of what it takes."""
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
     p = blosc2.Proxy(array, mode="w")
     assert array.block_source() is not None
-    sub.log.clear()
+    srv.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    assert not _bytes(sub, "chunk")
-    assert _bytes(sub, "fetch") < sub.array.schunk.cbytes / 8
+    assert not _bytes(srv, "chunk")
+    assert _bytes(srv, "fetch") < srv.array.schunk.cbytes / 8
     assert np.array_equal(p[...], data)
 
 
-def test_a_container_leaf_is_stamped_like_any_other(subscriber):
+def test_a_container_leaf_is_stamped_like_any_other(server):
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
     # A leaf has no mtime of its own: the container's is what says it changed
-    assert array.stamp == f"{sub.mtime}:{sub.array.schunk.cbytes}"
+    assert array.stamp == f"{srv.mtime}:{srv.array.schunk.cbytes}"
 
 
-def test_a_busy_subscriber_is_asked_again(subscriber, any_chunk_wants_blocks):
+def test_a_busy_server_is_asked_again(server, any_chunk_wants_blocks):
     # A 503 to the probe says nothing about whether the dataset is served from a
     # file, and cost no download to find out -- unlike the streamed 200 the
     # permanent fallback exists for, so this one is asked again on the next fetch
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), fetch_failures=1)
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), fetch_failures=1)
     p = blosc2.Proxy(array, mode="w")
 
     assert array.block_source() is None  # the probe was refused ...
@@ -749,90 +749,90 @@ def test_a_busy_subscriber_is_asked_again(subscriber, any_chunk_wants_blocks):
     assert np.array_equal(p[...], data)
 
 
-def test_a_streamed_dataset_is_not_asked_again(subscriber, any_chunk_wants_blocks):
+def test_a_streamed_dataset_is_not_asked_again(server, any_chunk_wants_blocks):
     # The other half of the same rule: a 200 is the dataset itself, and asking
     # again would pay for the whole of it to be told the same thing
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
     p = blosc2.Proxy(array, mode="w")
 
     assert array.block_source() is None
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is None
-    assert not any(status == 206 for _, status, _ in sub.log)
+    assert not any(status == 206 for _, status, _ in srv.log)
 
 
-def test_a_dataset_that_stops_being_stored_falls_back_to_chunks(subscriber, any_chunk_wants_blocks):
-    # A subscriber can stop serving a dataset from a file between one fetch and
+def test_a_dataset_that_stops_being_stored_falls_back_to_chunks(server, any_chunk_wants_blocks):
+    # A server can stop serving a dataset from a file between one fetch and
     # the next -- replaced by a lazy expression, moved into a container it
     # streams out of.  The fetch that runs into it reads the chunks it was after
     # whole rather than failing, and nothing asks for a range again
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is not None
 
-    sub.ranges = False
-    sub.log.clear()
+    srv.ranges = False
+    srv.log.clear()
     assert np.array_equal(p[50:55, 0:10], data[50:55, 0:10])
     assert array.block_source() is None  # retired: whole chunks read every dataset
-    assert _bytes(sub, "chunk")
+    assert _bytes(srv, "chunk")
     assert np.array_equal(p[...], data)
     # The one refused request is the whole of what the change cost: the body it
     # answered with was never read, and nothing asked for a range again
-    assert [status for kind, status, _ in sub.log if kind == "fetch"] == [200]
+    assert [status for kind, status, _ in srv.log if kind == "fetch"] == [200]
 
 
-def test_a_subscriber_too_busy_for_a_range_keeps_its_source(subscriber, any_chunk_wants_blocks):
+def test_a_server_too_busy_for_a_range_keeps_its_source(server, any_chunk_wants_blocks):
     # The other half of the rule that governs the probe: a 503 says nothing about
     # how the dataset is served, so the fetch falls back for now and the next one
     # asks for blocks again
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     source = array.block_source()
 
-    sub.fetch_failures = 1
-    sub.log.clear()
+    srv.fetch_failures = 1
+    srv.log.clear()
     assert np.array_equal(p[50:55, 0:10], data[50:55, 0:10])
-    assert _bytes(sub, "chunk")  # served whole, since the range was refused
+    assert _bytes(srv, "chunk")  # served whole, since the range was refused
     assert array.block_source() is source
 
-    sub.log.clear()
+    srv.log.clear()
     assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
-    assert not _bytes(sub, "chunk")  # ... and blocks are asked for again
+    assert not _bytes(srv, "chunk")  # ... and blocks are asked for again
 
 
 def test_a_proxy_over_a_cache_survives_a_dataset_that_became_computed(
-    tmp_path, subscriber, any_chunk_wants_blocks
+    tmp_path, server, any_chunk_wants_blocks
 ):
     # `blosc2.open` rebuilds the proxy over its own cache, and the source it
-    # rebuilds may by then be a dataset the subscriber computes -- which reports
+    # rebuilds may by then be a dataset the server computes -- which reports
     # no partitioning at all, so nothing may go asking one for it
     data = _incompressible((200, 200))
-    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "computed-cache.b2nd")
     blosc2.Proxy(array, urlpath=cache, mode="w").fetch((slice(0, 5), slice(0, 10)))
 
-    sub.geometry = False
+    srv.geometry = False
     assert not blosc2.C2Array(array.path, urlbase=array.urlbase).serves_blocks
     reopened = blosc2.open(cache)
     assert isinstance(reopened, blosc2.Proxy)
     assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])  # out of the cache
 
 
-def test_one_answer_that_misses_its_parts_does_not_end_batching(subscriber, any_chunk_wants_blocks):
+def test_one_answer_that_misses_its_parts_does_not_end_batching(server, any_chunk_wants_blocks):
     # Batching is worth an order of magnitude, so a single truncated answer is
     # worth retrying a range at a time rather than giving up the whole of it
     data = _incompressible((400, 400))
-    array, sub = subscriber(data, chunks=(200, 200), blocks=(10, 20), bad_parts=1)
+    array, srv = server(data, chunks=(200, 200), blocks=(10, 20), bad_parts=1)
     p = blosc2.Proxy(array, mode="w")
 
     item = (slice(190, 210), slice(190, 210))  # a corner of each of the four chunks
     assert np.array_equal(p[item], data[item])
-    assert not sub.bad_parts  # the answer that carried one part was asked for ...
+    assert not srv.bad_parts  # the answer that carried one part was asked for ...
     assert array.max_ranges > 1  # ... and cost the batching nothing
     assert np.array_equal(p[...], data)
 
@@ -906,17 +906,17 @@ def test_a_part_that_ends_where_the_frame_does_is_kept():
         blosc2.c2array._span_of([(100, b"12345", None)], 100, 6, "url")
 
 
-def test_a_small_frame_is_read_over_ranges(subscriber, any_chunk_wants_blocks):
+def test_a_small_frame_is_read_over_ranges(server, any_chunk_wants_blocks):
     # The whole of the frame arrives in the first read an open asks for, which
     # is the clipped answer above, and the dataset is served in blocks all the same
     data = np.arange(200, dtype="i4").reshape(20, 10)
-    array, sub = subscriber(data, chunks=(10, 10), blocks=(5, 10))
-    assert len(sub.frame) < blosc2.proxy_source._FRAME_PREFETCH
+    array, srv = server(data, chunks=(10, 10), blocks=(5, 10))
+    assert len(srv.frame) < blosc2.proxy_source._FRAME_PREFETCH
     p = blosc2.Proxy(array, mode="w")
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is not None
-    assert not _bytes(sub, "chunk")
+    assert not _bytes(srv, "chunk")
 
 
 def test_the_shared_client_keeps_no_cookies():
