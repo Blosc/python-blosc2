@@ -25,7 +25,7 @@ a.shape, a.dtype  # metadata only; nothing was downloaded
 a[100:110, :50]  # a NumPy array, fetched now
 ```
 
-`https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 server is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array` (or `blosc2.URLPath` with {func}`blosc2.open`).
+`https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 server is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array`.
 
 ## The cache
 
@@ -64,16 +64,18 @@ a[100:110, :50]  # no request
 
 A chunk is the unit a container is compressed in, and it can be several megabytes. Fetching a whole one to read a corner of it is most of the cost of a remote read, so Blosc2 fetches **blocks** — the smaller pieces a chunk is built from — whenever a slice lands in a small part of a large chunk.
 
-You do not ask for this; it happens when it pays:
+You do not ask for this; it happens when it pays. For example:
 
 - On S3, block reads are **5–17x faster** on arrays with multi-megabyte chunks, and **2–5x** on 1 MB ones.
 - On cat2.cloud's `kevlar-tomo.b2nd`, a corner slice costs **0.031 MB instead of 2.723 MB**, and a slice touching ten chunks takes **0.14 s against 1.01 s**.
 
-It is never a loss. Two thresholds decide it — a chunk under a megabyte is one cheap request anyway, and wanting more than half a chunk's blocks is wanting the chunk — and both are answered from metadata already in hand. Where blocks are not available, the read falls back to whole chunks by itself: that happens for a dataset a Caterva2 server *computes* rather than stores (a lazy expression, an HDF5 leaf, a `.b2z` member), and for a server that stops honouring ranges.
+It is never a loss. A slice wanting more than half a chunk's blocks is wanting the chunk, and a fetch that would skip too little to pay for the extra round trip is made whole — both answered from metadata already in hand, before anything is read. Where blocks are not available the read falls back to whole chunks by itself: that happens for a dataset a Caterva2 server *computes* rather than stores (a lazy expression, an HDF5 leaf, a `.b2z` member), and for a server that stops honouring ranges.
 
 Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
 
-### Seeing what it saved
+A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy, `[::-1]` costs what its forward twin does, and any other step reads the chunks it lands in whole.
+
+### Seeing byte savings
 
 Wall time will not show you any of this: on a fast link a block read and a whole-chunk read take about as long and differ by the compression ratio in *bytes*. Bytes are also what a metered link and a shared server uplink run out of, so they are counted for you. {ref}`C2Array` and {ref}`Proxy` each carry a {ref}`Traffic` under `traffic` — cumulative requests and bytes, tallied at the transport, so the frame index and block offsets are in it too:
 
@@ -93,6 +95,19 @@ print(p.traffic)  # Traffic(requests=0, nbytes=0)
 ```
 
 Take two readings and subtract, or `reset()` between them. `Proxy.traffic` is `None` over a local array — nothing crosses a wire there, and a zero would say the traffic was free rather than that it was never measured. `examples/c2array-traffic.py` runs the whole comparison against cat2.cloud's `kevlar-tomo.b2nd`: a 100x100 corner costs 0.055 MB against 1.296 MB for the chunk holding it — 23.5x — and nothing at all on the second read.
+
+## Scattered points
+
+A list of coordinates, or a boolean mask, is not a box — but every point it picks still lives in exactly one block, so it is placed on the block grid as exactly as a slice is:
+
+```python
+p[rows, :100]  # rows is an array of three indices: three blocks, not three chunks
+p[mask]  # a mask picks coordinates too, and costs the same
+```
+
+Nine scattered points of a 900³ array cost **236 KB in 19 requests** through a proxy, against 1.81 MB for the chunks holding them.
+
+However, a {ref}`C2Array` does better with no proxy at all: the coordinates go to the server, which gathers the points and sends back those alone — **271 bytes in one request** for the same nine. When you need efficient scattered retrievals, C2Array+Caterva2 is your best friend.
 
 ## When the remote changes underneath
 
