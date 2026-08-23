@@ -174,7 +174,7 @@ a = blosc2.Proxy(S3Source("bucket", "big.b2nd"), urlpath="cache.b2nd", mode="a")
 
 (For plain S3 you would just use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; this is the shape of the thing.)
 
-Three things to get right:
+Four things to get right:
 
 - **Set up the transport before `super().__init__()`.** The base constructor calls `read_range()` straight away to read the file's header.
 - **`read_range()` must be thread-safe.** It is called from a thread pool so fetches can overlap. A boto3 *client* is fine; a `Session` or resource is not.
