@@ -315,22 +315,30 @@ def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=
         return data[:]
 
 
+def _bound(value):
+    """A slice bound as the request spells it: nothing where there is none.
+
+    `or ""` cannot be used for this: it reads a bound of 0 as no bound, which
+    turns a slice selecting nothing into one selecting the whole axis.
+    """
+    return "" if value is None else str(value)
+
+
 def slice_to_string(slice_):
-    if slice_ is None or slice_ == () or slice_ == slice(None):
+    if slice_ is None or slice_ is Ellipsis or slice_ == slice(None):
         return ""
-    slice_parts = []
     if not isinstance(slice_, tuple):
         slice_ = (slice_,)
+    if slice_ == ():
+        return ""
+    slice_parts = []
     for index in slice_:
-        if isinstance(index, int):
-            slice_parts.append(str(index))
+        if isinstance(index, (int, np.integer)):
+            slice_parts.append(str(int(index)))
         elif isinstance(index, slice):
-            start = index.start or ""
-            stop = index.stop or ""
             if index.step not in (1, None):
                 raise IndexError("Only step=1 is supported")
-            # step = index.step or ''
-            slice_parts.append(f"{start}:{stop}")
+            slice_parts.append(f"{_bound(index.start)}:{_bound(index.stop)}")
         else:
             # Anything else has no spelling here, and dropping it would widen the
             # request rather than narrow it: a fancy index skipped this way asks
@@ -341,6 +349,43 @@ def slice_to_string(slice_):
                 "step-1 slices can be expressed in a fetch request"
             )
     return ", ".join(slice_parts)
+
+
+def _dims_consumed(entry):
+    """How many of the array's dimensions *entry* accounts for.
+
+    One each, as every index does, except a boolean mask laid over several: it
+    stands for one index array per dimension it covers.
+    """
+    if isinstance(entry, (list, np.ndarray)):
+        coords = np.asarray(entry)
+        if coords.dtype == np.bool_:
+            return coords.ndim
+    return 1
+
+
+def _expand_ellipsis(key, ndim):
+    """*key* with `...` written out as the full slices it stands for.
+
+    A fetch request names dimensions in order and has no spelling for "the rest
+    of them", so an ellipsis has to become the slices it abbreviates before the
+    key can be said at all.  A trailing one asks for nothing that leaving it out
+    would not, but it is expanded the same way: one rule is fewer than two.
+    """
+    entries = key if isinstance(key, tuple) else (key,)
+    ellipses = sum(1 for entry in entries if entry is Ellipsis)
+    if not ellipses:
+        return key
+    if ellipses > 1:
+        raise IndexError("An index can only have a single ellipsis ('...')")
+    rest = ndim - sum(_dims_consumed(e) for e in entries if e is not Ellipsis)
+    filled = []
+    for entry in entries:
+        if entry is Ellipsis:
+            filled.extend([slice(None)] * max(rest, 0))
+        else:
+            filled.append(entry)
+    return tuple(filled)
 
 
 def key_to_indices(key):
@@ -364,17 +409,23 @@ def key_to_indices(key):
             coords = np.asarray(entry)
             if coords.dtype == np.bool_:
                 # A mask is the coordinates it selects, said in as many bytes as
-                # the array is long; the coordinates themselves are what travels
-                coords = np.flatnonzero(coords)
+                # the array is long; the coordinates themselves are what travels.
+                # One laid over several dimensions selects points rather than
+                # rows, and becomes the index array per dimension numpy reads it as
+                out.extend([int(v) for v in axis] for axis in np.nonzero(coords))
+                continue
             if not np.issubdtype(coords.dtype, np.integer):
                 raise IndexError(f"Cannot index a remote array with {entry!r}")
-            out.append([int(v) for v in coords.reshape(-1)])
+            # Shape and all: an index array of two dimensions gathers into two,
+            # and flattening it here would ask for the right points and be handed
+            # them in the wrong shape
+            out.append(coords.tolist())
         elif isinstance(entry, (int, np.integer)):
             out.append(int(entry))
         elif isinstance(entry, slice):
             if entry.step not in (1, None):
                 raise IndexError("Only step=1 is supported")
-            out.append(None if entry == slice(None) else f"{entry.start or ''}:{entry.stop or ''}")
+            out.append(None if entry == slice(None) else f"{_bound(entry.start)}:{_bound(entry.stop)}")
         else:
             raise IndexError(f"Cannot index a remote array with {entry!r}")
     return json.dumps(out, separators=(",", ":"))
@@ -792,6 +843,7 @@ class C2Array(blosc2.Operand):
         block is nearly all waste for a point -- see :ref:`Proxy`, which does
         exactly that where there is no server to ask.
         """
+        key = _expand_ellipsis(key, len(self.shape))
         indices = key_to_indices(key)
         if indices is None:
             return {"slice_": slice_to_string(key)}

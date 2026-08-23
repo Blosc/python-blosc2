@@ -166,20 +166,48 @@ class _Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self._gather(srv, body["indices"])
 
+    @staticmethod
+    def _entry(e):
+        """One dimension of an `indices` key, as the thing numpy indexes with."""
+        if e is None:
+            return slice(None)
+        if isinstance(e, list):
+            return np.array(e)
+        if isinstance(e, str):  # a bounded slice travels as "start:stop"
+            first, _, last = e.partition(":")
+            return slice(int(first) if first else None, int(last) if last else None)
+        return e
+
     def _gather(self, srv, raw):
         # What Caterva2 does with a fancy key: gather the points and send those,
         # since there is no file to seek into for coordinates
-        key = tuple(
-            slice(None) if e is None else (np.array(e) if isinstance(e, list) else e)
-            for e in json.loads(raw)
-        )
+        key = tuple(self._entry(e) for e in json.loads(raw))
         data = blosc2.asarray(np.ascontiguousarray(srv.array[key])).to_cframe()
         self._send(200, data, endpoint="fetch")
+
+    @staticmethod
+    def _spelled(raw):
+        """A `slice_` string, read back the way `slice_to_string` wrote it."""
+        key = []
+        for part in (p.strip() for p in raw.split(",")):
+            first, colon, last = part.partition(":")
+            if colon:
+                key.append(slice(int(first) if first else None, int(last) if last else None))
+            else:
+                key.append(int(part))
+        return tuple(key)
 
     def _fetch(self, srv):
         if "indices=" in self.path:
             self._gather(srv, urllib.parse.unquote(self.path.split("indices=")[1].split("&")[0]))
             return
+        if "slice_=" in self.path and not self.headers.get("Range"):
+            # A box, which the server reads out of the array as any slice is read
+            raw = urllib.parse.unquote_plus(self.path.split("slice_=")[1].split("&")[0])
+            if raw:
+                data = srv.array[self._spelled(raw)]
+                self._send(200, blosc2.asarray(np.ascontiguousarray(data)).to_cframe(), endpoint="fetch")
+                return
         if srv.fetch_failures:
             # A server too busy to answer says nothing about how it serves
             srv.fetch_failures -= 1
@@ -417,6 +445,51 @@ def test_a_c2array_reads_the_coordinates_numpy_reads(server):
     mask[[4, 41]] = True
     for key in ([1, 5, 59], [0, -1], np.array([2, 4]), (([1, 5]), 7), (slice(None), [1, 2]), mask):
         np.testing.assert_array_equal(array[key], data[key])
+
+
+def test_a_c2array_reads_a_key_that_mixes_points_and_a_bounded_slice(server):
+    """The commonest mixed key: coordinates on one axis, a real slice on the next.
+
+    Both bounds travel in the same string, so a bound of 0 has to be told from no
+    bound at all -- an empty selection asked for as an open one comes back the
+    full width of the axis.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    for key in (
+        ([1, 2], slice(3, 5)),
+        ([1, 2], slice(None, 0)),
+        ([1, 2], slice(2, 0)),
+        ([1, 2], slice(0, 4)),
+        (slice(10, 12), [1, 2]),
+    ):
+        np.testing.assert_array_equal(array[key], data[key])
+
+
+def test_a_c2array_reads_an_ellipsis_and_a_numpy_integer(server):
+    # An ellipsis is the run of full slices it abbreviates, which a fetch request
+    # can say; refusing it made `array[...]` an error where it used to be the
+    # whole dataset
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    for key in (Ellipsis, (slice(0, 5), Ellipsis), (Ellipsis, 3), np.int64(3), (np.int64(3), [1, 2])):
+        np.testing.assert_array_equal(array[key], data[key])
+
+
+def test_a_c2array_gathers_a_two_dimensional_index_array(server):
+    """The points come back in the shape the index array asked them in.
+
+    Flattening it here would gather the right points and hand them back in the
+    wrong shape, which no error anywhere would catch.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    key = np.array([[0, 1], [2, 3]])
+    np.testing.assert_array_equal(array[key], data[key])
+
+    mask = np.zeros((60, 70), dtype=bool)  # one laid over both dimensions
+    mask[[4, 41], [5, 60]] = True
+    np.testing.assert_array_equal(array[mask], data[mask])
 
 
 def test_a_key_a_fetch_request_cannot_spell_is_refused(server):
