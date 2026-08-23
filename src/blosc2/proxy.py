@@ -678,14 +678,9 @@ class Proxy(blosc2.Operand):
             return self._cache
         # A transport that batches ranges pays the block path's fixed cost once
         # for the whole fetch, so what it wants asked is the wave rather than the
-        # chunk; see `ByteRangeNDSource._wave_saves`.  It is also the only kind of
-        # source this module hands the wave to, so one written to the two-argument
-        # protocol is never called with three.
-        if getattr(self.src, "max_ranges", 1) > 1:
-            wave = {n: len(bs) for n, bs in missing.items()}
-            asks = lambda n, nwanted: self.src.wants_blocks(n, nwanted, wave)  # noqa: E731
-        else:
-            asks = self.src.wants_blocks
+        # chunk; see `ByteRangeNDSource._wave_saves`.
+        wave = {n: len(bs) for n, bs in missing.items()} if getattr(self.src, "max_ranges", 1) > 1 else None
+        asks = _asks_blocks(self.src, wave)
         wanted = {n: bs for n, bs in missing.items() if asks(n, len(bs))}
         whole = [n for n in missing if n not in wanted]
 
@@ -1032,6 +1027,28 @@ class Proxy(blosc2.Operand):
 
 _UNMAPPABLE = object()
 """A key that selects something, but nothing this can reduce to cells of the grid."""
+
+
+def _asks_blocks(src, wave):
+    """*src*'s `wants_blocks`, carrying *wave* where it is written to take one.
+
+    A batching transport wants the whole fetch weighed rather than one chunk of
+    it, but `max_ranges` and the three-argument `wants_blocks` are separate
+    opt-ins (see :class:`ProxyNDSource`), and a source may well take the first
+    without the second.  So the signature is what decides: one written to the
+    two-argument protocol is called with two, whatever else it serves.
+    """
+    wants = src.wants_blocks
+    if wave is None:
+        return wants
+    try:
+        params = list(inspect.signature(wants).parameters.values())
+    except (TypeError, ValueError):
+        return wants  # a callable that cannot be read is taken as it was written
+    positional = sum(1 for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD))
+    if positional >= 3 or any(p.kind is p.VAR_POSITIONAL for p in params):
+        return lambda nchunk, nwanted: wants(nchunk, nwanted, wave)
+    return wants
 
 
 def _dim_cells(dim, lo, hi, chunks, blocks) -> set[tuple[int, int]]:

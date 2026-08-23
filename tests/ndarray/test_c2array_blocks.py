@@ -544,6 +544,31 @@ def test_a_reversed_slice_is_placed_on_the_span_it_covers(tmp_path, server, any_
         np.testing.assert_array_equal(p[key], data[key])
 
 
+def test_a_two_argument_wants_blocks_is_never_handed_the_wave():
+    """`max_ranges` and the three-argument `wants_blocks` are opt-ins of their own.
+
+    A source that batches ranges but was written to the two-argument protocol
+    used to be called with three, and raised `TypeError` on its first fetch.
+    """
+
+    class TwoArg:
+        max_ranges = 8
+
+        def wants_blocks(self, nchunk, nwanted):
+            return True
+
+    class ThreeArg:
+        max_ranges = 8
+
+        def wants_blocks(self, nchunk, nwanted, wave=None):
+            return wave is not None
+
+    wave = {0: 3}
+    assert blosc2.proxy._asks_blocks(TwoArg(), wave)(0, 3)
+    assert blosc2.proxy._asks_blocks(ThreeArg(), wave)(0, 3)
+    assert not blosc2.proxy._asks_blocks(ThreeArg(), None)(0, 3)
+
+
 def test_scattered_points_cost_blocks_and_not_chunks(tmp_path, server, any_chunk_wants_blocks):
     """An integer-array key is placed on the block grid, one block per point.
 

@@ -370,6 +370,10 @@ def request_plan(proxy, array, item):
     source = array.block_source()
     wanted = proxy._wanted_blocks(item)
     sizes = chunk_cbytes(source, list(wanted))
+    # The whole fetch is what a batching transport weighs, so the same wave the
+    # fetch judges by is what is asked here; judging chunk by chunk would report
+    # a plan the fetch below does not follow
+    wave = {n: len(bs) for n, bs in wanted.items()} if source.max_ranges > 1 else None
     layouts, runs, whole = [], [], []
     nblocks_wanted = 0
     for nchunk, nblocks in wanted.items():
@@ -377,7 +381,7 @@ def request_plan(proxy, array, item):
         nblocks_wanted += len(nblocks)
         if not sizes[nchunk]:  # a run-length chunk: free in every mode
             continue
-        if not array.wants_blocks(nchunk, len(nblocks)) or source.chunk_layout(nchunk) is None:
+        if not array.wants_blocks(nchunk, len(nblocks), wave) or source.chunk_layout(nchunk) is None:
             whole.append(nchunk)  # a chunk not worth taking apart, or with nothing to take apart
             continue
         layouts.append(CHUNK_HEADER + 4 * array.blocks_per_chunk)

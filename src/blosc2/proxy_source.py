@@ -205,10 +205,12 @@ class ProxyNDSource(ABC):
     A source whose transport can ask for several ranges at once says so with
     ``max_ranges`` and serves ``read_ranges(spans)`` and
     ``chunk_layouts(nchunks)`` as well; :ref:`Proxy` then sends a whole wave of
-    reads as one request, and asks ``wants_blocks(nchunk, nwanted, wave)`` with
-    the fetch that chunk belongs to, since a shared round trip is the wave's to
-    weigh and not the chunk's.  All are optional, and a source without them is
-    asked one range at a time, and two arguments at a time, exactly as before.
+    reads as one request.  A ``wants_blocks`` written to take a third argument is
+    also given the wave -- the fetch that chunk belongs to -- since a shared round
+    trip is the wave's to weigh and not the chunk's; one written to take two is
+    called with two, so the wave is an opt-in of its own and not something
+    ``max_ranges`` drags in.  All are optional, and a source without them is asked
+    one range at a time, exactly as before.
 
     A block read that the transport cannot answer raises ``NotRanged``, and
     :ref:`Proxy` then fetches the chunks it was after whole.
