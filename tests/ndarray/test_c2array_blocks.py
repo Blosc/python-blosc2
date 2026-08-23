@@ -509,6 +509,19 @@ def test_a_key_too_long_for_an_url_goes_in_a_body(server):
     np.testing.assert_array_equal(array[key], data[key])
 
 
+def test_a_key_an_url_only_holds_once_encoded_goes_in_a_body(server):
+    """The encoded length is what the client caps, and it is half again the raw one.
+
+    A key measured as written slips under the limit and is sent as a GET that the
+    client then refuses to build -- the very failure the POST route exists for.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    key = list(range(60)) * 300  # ~51,000 chars as written, ~87,000 encoded
+    assert len(blosc2.c2array.key_to_indices(key)) < blosc2.c2array._MAX_QUERY_CHARS
+    np.testing.assert_array_equal(array[key], data[key])
+
+
 def test_a_server_without_the_post_route_says_so(server):
     # 405 says which method, not which key, so it is turned into the sentence a
     # caller can act on -- batch the coordinates, or upgrade the server

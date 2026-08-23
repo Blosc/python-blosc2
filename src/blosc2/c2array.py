@@ -14,6 +14,7 @@ import math
 import os
 import struct
 import threading
+import urllib.parse
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -277,9 +278,7 @@ def _post_fetch(url, params, auth_token):
     heard of this answers 405, which says what it is rather than what went
     wrong, so it is turned into the sentence a caller can act on.
     """
-    auth_token = auth_token or _server_data["auth_token"]
-    headers = {"Cookie": auth_token} if auth_token else None
-    response = _sync_client().post(url, json=params, headers=headers, timeout=TIMEOUT)
+    response = _sync_client().post(url, json=params, headers=_auth_headers(auth_token), timeout=TIMEOUT)
     if response.status_code == 405:
         raise IndexError(
             "This many coordinates do not fit in an URL, and the server does not accept "
@@ -292,7 +291,11 @@ def _post_fetch(url, params, auth_token):
 
 def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=None):
     url = _server_url(urlbase, f"api/fetch/{path}")
-    if sum(len(str(v)) for v in params.values() if v is not None) > _MAX_QUERY_CHARS:
+    # What the client will actually put in the URL, not what was handed here: the
+    # coordinates of a fancy key grow by about half again under percent-encoding
+    # (`,` -> `%2C`, `[` -> `%5B`), and it is the encoded length that is capped
+    query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    if len(query) > _MAX_QUERY_CHARS:
         response = _post_fetch(url, params, auth_token)
     else:
         response = _xget(url, params=params, auth_token=auth_token)
@@ -432,12 +435,14 @@ def key_to_indices(key):
 
 
 _MAX_QUERY_CHARS = 60_000
-"""How long a query may be before the parameters go in a body instead.
+"""How long an encoded query may be before the parameters go in a body instead.
 
-A URL is not a body: past roughly this much the client library gives up, with
-an error about URL components rather than about coordinates.  `api/fetch`
-answers a POST carrying the same parameters for exactly this reason, so a key
-of more coordinates than a URL holds is a change of verb and nothing else.
+Measured after percent-encoding, which is the length the client library caps and
+about half again what the coordinates take as written -- `,` becomes `%2C` and
+`[` becomes `%5B`.  Past roughly this much the library gives up, with an error
+about URL components rather than about coordinates.  `api/fetch` answers a POST
+carrying the same parameters for exactly this reason, so a key of more
+coordinates than a URL holds is a change of verb and nothing else.
 
 Below it nothing changes, which is what keeps every server that ever served a
 GET serving one: a POST is spent only where a GET could not have been made.
