@@ -1070,11 +1070,6 @@ def _sort_dims(key):
     return advanced, basic
 
 
-def _cross_cells(paired, crossed, advanced, basic, shape, chunks, blocks):
-    """Every (chunk, block) the paired and crossed dimensions come to, as {chunk: {block}}."""
-    return _cross_cells(paired, crossed, advanced, basic, shape, chunks, blocks)
-
-
 def _fancy_cells(item, shape, chunks, blocks):
     """{chunk: {blocks}} a fancy key touches, exactly, or None where it is a plain box.
 
