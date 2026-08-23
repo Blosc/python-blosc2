@@ -160,7 +160,6 @@ def c2context(
 
     """
     global _server_data
-    print("_server_data", _server_data)
 
     # Perform login to get an authorization token.
     if not auth_token:
