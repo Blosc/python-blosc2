@@ -642,6 +642,22 @@ def test_a_peer_dataset_is_ruled_out_by_what_api_info_says(server, any_chunk_wan
     assert not srv.log  # ... and no request was spent learning it
 
 
+def test_a_peer_dataset_spares_the_index_read_too(server, any_chunk_wants_blocks):
+    """The shortcut belongs where every path passes, not only in `serves_blocks`.
+
+    Reading the frame's index is a different question from reading blocks of its
+    chunks, but it goes over the same refused range: `written_chunks` was still
+    paying the probe the header had already answered.
+    """
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), accept_ranges="none")
+    srv.log.clear()
+
+    with pytest.raises(blosc2.proxy_source.NotRanged):
+        array.written_chunks()
+    assert not srv.log  # the same answer the probe would reach, for nothing
+
+
 def test_a_server_that_names_nothing_is_asked_as_before(server, any_chunk_wants_blocks):
     # An older server names no Accept-Ranges at all, and then the probe is the
     # only way to know -- which is what was always done, and must keep working

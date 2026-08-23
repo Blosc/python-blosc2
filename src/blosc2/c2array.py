@@ -1278,13 +1278,22 @@ class C2Array(blosc2.Operand):
         the answer is no: a dataset this server mounts from a peer reports the
         peer's geometry, being stored there, but is fetched from its owner and
         re-serialized here, so a range read of it is refused.  Nothing else in
-        what `api/info` says can tell the two apart.  A server that reports
-        nothing is an older one, and then this asks as it always did.
+        what `api/info` says can tell the two apart.  That is asked here through
+        :attr:`_serves_ranges`, and again where the source is actually built, so
+        that reading the frame's *index* is spared it too.
+        """
+        return self._serves_ranges and self._reports_geometry
+
+    @property
+    def _serves_ranges(self) -> bool:
+        """Whether the server says a range read of this dataset is worth trying.
+
+        Read off `api/info`, which is where ``accept_ranges`` travels; a server
+        that reports nothing is an older one, and then this says yes and the
+        request itself gives the answer as it always did.
         """
         self._refresh_meta()  # `meta` is what carries it, so read it current
-        if self.meta.get("accept_ranges") == "none":
-            return False
-        return self._reports_geometry
+        return self.meta.get("accept_ranges") != "none"
 
     @property
     def _reports_geometry(self) -> bool:
@@ -1347,6 +1356,11 @@ class C2Array(blosc2.Operand):
         # `api/info` says so for free.  Whether its chunks are worth taking apart
         # is a separate judgement, made by whoever asks -- see `block_source`
         if not self._reports_geometry:
+            return None
+        # Nor has one the server has already said it will not serve ranges of:
+        # that is the same answer the request below would come back with, at the
+        # price of a full-dataset body from a server that answers 200 instead
+        if not self._serves_ranges:
             return None
         # Whether a dataset that reports a geometry is *served* from a file is
         # something only the answer to a range request can say: an HDF5 leaf or a
