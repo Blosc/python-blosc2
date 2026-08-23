@@ -1049,6 +1049,19 @@ def _dim_cells(dim, lo, hi, chunks, blocks) -> set[tuple[int, int]]:
     return cells
 
 
+def _strides(grid) -> list[int]:
+    """C-order strides of *grid*: what one step along each dimension counts for.
+
+    Numbering a cell is then a dot product, which can be done to a whole column
+    of coordinates at once -- where `np.ravel_multi_index` would be a call per
+    cell, and the planning of a large fancy key is nearly all such calls.
+    """
+    strides = [1] * len(grid)
+    for i in range(len(grid) - 2, -1, -1):
+        strides[i] = strides[i + 1] * grid[i + 1]
+    return strides
+
+
 def _sort_dims(key):
     """The dimensions of *key* indexed by an array, and those indexed plainly.
 
@@ -1108,17 +1121,28 @@ def _fancy_cells(item, shape, chunks, blocks):
     if not advanced:
         return None  # a box, which the caller has a cheaper way to intersect
 
-    def cell(dim, coord):
-        chunk, offset = divmod(int(coord), chunks[dim])
-        return chunk, offset // blocks[dim]
+    chunk_grid = [math.ceil(s / c) for s, c in zip(shape, chunks, strict=True)]
+    blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
+    chunk_strides = _strides(chunk_grid)
+    block_strides = _strides(blocks_in_chunk)
 
-    # The advanced dimensions are read together: one coordinate each, per element
+    # The advanced dimensions are read together: one coordinate each, per element.
+    # Located in bulk and numbered as they are located, since a mask may select
+    # millions of them and one divmod apiece is then what planning costs
     flat = [key[d].reshape(-1) for d in advanced]
     if flat[0].size == 0:
         return {}
-    paired = {
-        tuple(cell(d, v) for d, v in zip(advanced, vals, strict=True)) for vals in zip(*flat, strict=True)
-    }
+    part_chunk = np.zeros(flat[0].size, dtype=np.int64)
+    part_block = np.zeros(flat[0].size, dtype=np.int64)
+    for dim, coords in zip(advanced, flat, strict=True):
+        chunk, offset = np.divmod(coords.astype(np.int64, copy=False), chunks[dim])
+        part_chunk += chunk * chunk_strides[dim]
+        part_block += (offset // blocks[dim]) * block_strides[dim]
+    # What the advanced dimensions alone say about the cell, as one number so that
+    # the distinct cells are a single sort: the points sharing one are fetched by
+    # fetching it once, and there are far fewer cells than there are points
+    per_chunk = math.prod(blocks_in_chunk)
+    cell_chunk, cell_block = np.divmod(np.unique(part_chunk * per_chunk + part_block), per_chunk)
 
     crossed = []
     for dim in basic:
@@ -1127,24 +1151,24 @@ def _fancy_cells(item, shape, chunks, blocks):
             crossed.append(_dim_cells(dim, int(k), int(k), chunks, blocks))
             continue
         start, stop, step = k.indices(shape[dim])
-        if stop <= start:
-            return {}
         # A step is not followed: the span it lies in is a superset of it, and a
-        # superset is the one kind of wrong answer this may give
-        crossed.append(_dim_cells(dim, start, stop - 1, chunks, blocks))
+        # superset is the one kind of wrong answer this may give.  A reversed
+        # slice runs from stop + 1 up to start, and covers the same span its
+        # forward twin does -- reading it as empty would fetch nothing at all
+        lo, hi = (stop + 1, start) if step < 0 else (start, stop - 1)
+        if hi < lo:
+            return {}
+        crossed.append(_dim_cells(dim, lo, hi, chunks, blocks))
 
-    chunk_grid = [math.ceil(s / c) for s, c in zip(shape, chunks, strict=True)]
-    blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
     out = {}
-    for pair in paired:
-        for combo in itertools.product(*crossed):
-            coords = [None] * len(shape)
-            for i, dim in enumerate(advanced):
-                coords[dim] = pair[i]
-            for i, dim in enumerate(basic):
-                coords[dim] = combo[i]
-            nchunk = int(np.ravel_multi_index([c for c, _ in coords], chunk_grid))
-            nblock = int(np.ravel_multi_index([b for _, b in coords], blocks_in_chunk))
+    # A crossed dimension contributes the same offset to every paired cell, so a
+    # combination of them is one addition over the whole column of cells
+    for combo in itertools.product(*crossed):
+        at_chunk = sum(c * chunk_strides[d] for d, (c, _) in zip(basic, combo, strict=True))
+        at_block = sum(b * block_strides[d] for d, (_, b) in zip(basic, combo, strict=True))
+        nchunks = (cell_chunk + at_chunk).tolist()
+        nblocks = (cell_block + at_block).tolist()
+        for nchunk, nblock in zip(nchunks, nblocks, strict=True):
             out.setdefault(nchunk, set()).add(nblock)
     return out
 

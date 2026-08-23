@@ -531,6 +531,19 @@ def test_a_server_without_the_post_route_says_so(server):
         array[list(range(60)) * 400]
 
 
+def test_a_reversed_slice_is_placed_on_the_span_it_covers(tmp_path, server, any_chunk_wants_blocks):
+    """A fancy key next to a reversed slice fetches the blocks the slice names.
+
+    Read as an empty selection it fetched nothing at all, and a block that was
+    never fetched reads as zeros -- which nothing downstream can tell from data.
+    """
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "reversed.b2nd"), mode="w")
+    for key in ((np.array([1, 2]), slice(None, None, -1)), (np.array([1, 105]), slice(150, 10, -1))):
+        np.testing.assert_array_equal(p[key], data[key])
+
+
 def test_scattered_points_cost_blocks_and_not_chunks(tmp_path, server, any_chunk_wants_blocks):
     """An integer-array key is placed on the block grid, one block per point.
 
