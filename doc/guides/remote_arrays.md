@@ -32,12 +32,33 @@ a[100:110, :50]  # a NumPy array, fetched now
 Wrap either of those in a {ref}`Proxy` and what you read is kept:
 
 ```python
-p = blosc2.Proxy(b, urlpath="lung-cache.b2nd", mode="a")
-p[10:12, 500:600]  # fetched from the server, and written to the cache
+p = blosc2.Proxy(b)  # cache in memory, gone when the proxy is
+p[10:12, 500:600]  # fetched from the server, and kept
 p[10:12, 500:600]  # read from the cache, no request at all
 ```
 
-The cache is an ordinary Blosc2 file holding only the pieces you touched — a few hundred bytes for a freshly opened proxy over a 64 MB dataset. With `mode="a"` a later run picks up where the last one left off. `blosc2.open(url, lazy=True)` builds one for you; pass `cache_storage=` to say where it lives.
+Where that cache lives is yours to choose, and it is the one decision to make here. Say nothing and it is memory: fast, and it dies with the proxy, which is all a single process reading a slice twice needs. Name a file with `urlpath=` and the cache outlives the run:
+
+```python
+p = blosc2.Proxy(b, urlpath="lung-cache.b2nd", mode="a")
+p[10:12, 500:600]  # fetched from the server, and written to lung-cache.b2nd
+```
+
+That file is an ordinary Blosc2 array holding only the pieces you touched — a few hundred bytes for a freshly opened proxy over a 64 MB dataset, growing as you read. It is a normal `.b2nd`: copy it, ship it, open it with {func}`blosc2.open`. With `mode="a"` a later run picks up where the last one left off.
+
+{func}`blosc2.open` builds the proxy for you and offers the same choice under another name — `cache_storage=` a directory for a cache on disk, nothing for one in memory:
+
+```python
+url = "s3://bucket/big.b2nd"
+
+# First run: the slice is fetched, and lands under ./b2cache dir
+a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
+a[100:110, :50]
+
+# A later run, a different process: same call, served from ./b2cache
+a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
+a[100:110, :50]  # no request
+```
 
 ## Only what a slice touches
 
