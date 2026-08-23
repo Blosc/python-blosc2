@@ -16,4 +16,14 @@ under ``traffic``.  Take two readings and subtract, or
 
 .. autoclass:: Traffic
     :members:
+    :exclude-members: charge
     :member-order: groupwise
+
+``charge`` is left out of the members above: reading a counter is what a caller
+does with one.  It is not private, though -- a transport of your own calls it
+from ``read_range()`` so that its reads are counted; see :ref:`ByteRangeNDSource`
+and the *Your own transport* section of the remote-arrays guide.
+
+``examples/c2array-traffic.py`` is a runnable walkthrough -- what a corner slice
+of a remote array costs against the chunk holding it, and what the cache saves
+on the second read.

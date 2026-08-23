@@ -742,9 +742,20 @@ class C2Array(blosc2.Operand):
         self._meta_lock = threading.Lock()
         # An index a `Proxy` handed over before the source existed; see _adopt_index
         self._pending_index = None
-        # What this handle has read off the server, whichever endpoint it used;
-        # the block source built later is handed this same tally
         self.traffic = blosc2.proxy_source.Traffic()
+        """Bytes and requests this handle has read off the server; see :ref:`Traffic`.
+
+        Cumulative since the array was opened, counted at the transport, so the
+        frame index and the block offsets are in it as well as the data, and the
+        `api/info` call that opened this handle is not.  Whichever endpoint the
+        read used is in it too, and the block source built later is handed this
+        same tally, so one counter answers for the array however it is read.
+
+        What a slice cost is the difference between two readings, or one reading
+        after :meth:`Traffic.reset`.  `examples/c2array-traffic.py` is a runnable
+        walkthrough; :attr:`Proxy.traffic` is the same counter seen through a
+        proxy.
+        """
 
         # Try to 'open' the remote path
         try:

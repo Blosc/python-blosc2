@@ -121,7 +121,14 @@ class Traffic:
         self._lock = threading.Lock()
 
     def charge(self, nbytes: int) -> None:
-        """Record one request that carried *nbytes*."""
+        """Record one request that carried *nbytes*.
+
+        Called by the transport, at the point the bytes arrive: a
+        :class:`ByteRangeNDSource` subclass with a ``read_range()`` of its own
+        calls this on ``self.traffic`` so that its reads are counted like any
+        other.  A source that never calls it reports a tally of zero, which
+        reads as "this was free" rather than "this was never measured".
+        """
         with self._lock:
             self.requests += 1
             self.nbytes += nbytes

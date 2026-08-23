@@ -52,6 +52,27 @@ It is never a loss. Two thresholds decide it — a chunk under a megabyte is one
 
 Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
 
+### Seeing what it saved
+
+Wall time will not show you any of this: on a fast link a block read and a whole-chunk read take about as long and differ by the compression ratio in *bytes*. Bytes are also what a metered link and a shared server uplink run out of, so they are counted for you. {ref}`C2Array` and {ref}`Proxy` each carry a {ref}`Traffic` under `traffic` — cumulative requests and bytes, tallied at the transport, so the frame index and block offsets are in it too:
+
+```python
+b = blosc2.C2Array(
+    "@public/examples/kevlar-tomo.b2nd", urlbase="https://cat2.cloud/demo"
+)
+p = blosc2.Proxy(b)
+
+p.traffic.reset()
+corner = p[0, :100, :100]
+print(p.traffic)  # Traffic(requests=4, nbytes=57767)
+
+p.traffic.reset()
+p[0, :100, :100]  # the same slice, from the cache
+print(p.traffic)  # Traffic(requests=0, nbytes=0)
+```
+
+Take two readings and subtract, or `reset()` between them. `Proxy.traffic` is `None` over a local array — nothing crosses a wire there, and a zero would say the traffic was free rather than that it was never measured. `examples/c2array-traffic.py` runs the whole comparison against cat2.cloud's `kevlar-tomo.b2nd`: a 100x100 corner costs 0.055 MB against 1.296 MB for the chunk holding it — 23.5x — and nothing at all on the second read.
+
 ## When the remote changes underneath
 
 A cache is only good while the bytes it was filled from are still there. Sources that can name their bytes — an fsspec URL by its token, a Caterva2 array by an identifier the server keeps — are checked against what the cache recorded:
@@ -158,9 +179,11 @@ Three things to get right:
 - **Set up the transport before `super().__init__()`.** The base constructor calls `read_range()` straight away to read the file's header.
 - **`read_range()` must be thread-safe.** It is called from a thread pool so fetches can overlap. A boto3 *client* is fine; a `Session` or resource is not.
 - **Set `stamp` if you can.** It is what lets a cache tell that the remote has changed. Without it the cache is kept on geometry alone.
+- **Charge what you read.** End `read_range()` with `self.traffic.charge(len(data))` and your source is counted like the built-in ones — see [Seeing what it saved](#seeing-what-it-saved). Skip it and `traffic` reads zero forever, which looks like a free transport rather than an uncounted one.
 
 ## See also
 
 - {doc}`Tutorial 6 <../getting_started/tutorials/06.remote_proxy>` — the same ground at a slower pace, with output.
 - `examples/ndarray/rw-fsspec.py` — every way of reading and writing an fsspec URL, runnable.
-- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy` — the reference pages.
+- `examples/c2array-traffic.py` — what a remote slice costs in bytes, and what blocks and the cache save, runnable.
+- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`Traffic` — the reference pages.
