@@ -202,7 +202,9 @@ class S3Source(blosc2.ByteRangeNDSource):
             Key=self._key,
             Range=f"bytes={offset}-{offset + size - 1}",
         )
-        return answer["Body"].read()
+        data = answer["Body"].read()
+        self.traffic.charge(len(data))
+        return data
 
 
 a = blosc2.Proxy(S3Source("bucket", "big.b2nd"), urlpath="cache.b2nd", mode="a")
@@ -215,7 +217,7 @@ Four things to get right:
 - **Set up the transport before `super().__init__()`.** The base constructor calls `read_range()` straight away to read the file's header.
 - **`read_range()` must be thread-safe.** It is called from a thread pool so fetches can overlap. A boto3 *client* is fine; a `Session` or resource is not.
 - **Set `stamp` if you can.** It is what lets a cache tell that the remote has changed. Without it the cache is kept on geometry alone.
-- **Charge what you read.** End `read_range()` with `self.traffic.charge(len(data))` and your source is counted like the built-in ones — see [Seeing what it saved](#seeing-what-it-saved). Skip it and `traffic` reads zero forever, which looks like a free transport rather than an uncounted one.
+- **Charge what you read.** End `read_range()` with `self.traffic.charge(len(data))` and your source is counted like the built-in ones — see [Seeing byte savings](#seeing-byte-savings). Skip it and `traffic` reads zero forever, which looks like a free transport rather than an uncounted one.
 
 ## See also
 

@@ -52,13 +52,18 @@ proxy.traffic.reset()
 _ = proxy[0, :100, :100]
 print(f"the same slice again: {cost(proxy.traffic)}")
 
-# A slice spanning the whole chunk is the chunk, and there is nothing to save.
-proxy.traffic.reset()
-whole = proxy[1]
-whole_bytes = proxy.traffic.nbytes
-print(f"whole chunk {whole.shape}: {cost(proxy.traffic)}")
+# What that corner would have cost at chunk granularity: the very chunk holding
+# it, read whole.  By a proxy with an empty cache, and by the array's own
+# `chunks` rather than a guess at them -- the corner's chunk is already partly
+# in the cache above, and a dataset need not be chunked one row at a time.
+fresh = blosc2.Proxy(blosc2.C2Array(path, urlbase=urlbase), mode="w")
+fresh.traffic.reset()
+whole = fresh[tuple(slice(0, c) for c in array.chunks)]
+whole_bytes = fresh.traffic.nbytes
+print(f"the chunk holding it {whole.shape}: {cost(fresh.traffic)}")
 
-print(f"\nthe corner cost {whole_bytes / corner_bytes:.1f}x less than the chunk holding it")
+if corner_bytes:  # zero against a cache that already held it, and no ratio to give
+    print(f"\nthe corner cost {whole_bytes / corner_bytes:.1f}x less than the chunk holding it")
 
 # -- Without a proxy, a `C2Array` slice is one request the server answers with
 # just the box asked for; the same counter tallies it.

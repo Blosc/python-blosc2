@@ -136,6 +136,19 @@ class Traffic:
 
     __slots__ = ("_lock", "nbytes", "requests")
 
+    requests: int
+    """How many requests have carried data, cumulative.
+
+    One per range read and one per chunk, including the frame's header, its
+    index and the block offsets -- everything the transport went out for.
+    """
+
+    nbytes: int
+    """How many bytes those requests carried, cumulative.
+
+    Compressed bytes, as they crossed the wire, not what they decompress to.
+    """
+
     def __init__(self):
         self.requests = 0
         self.nbytes = 0

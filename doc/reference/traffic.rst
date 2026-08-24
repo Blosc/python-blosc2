@@ -19,6 +19,9 @@ under ``traffic``.  Take two readings and subtract, or
     :exclude-members: charge
     :member-order: groupwise
 
+    .. autoattribute:: requests
+    .. autoattribute:: nbytes
+
 ``charge`` is left out of the members above: reading a counter is what a caller
 does with one.  It is not private, though -- a transport of your own calls it
 from ``read_range()`` so that its reads are counted; see :ref:`ByteRangeNDSource`

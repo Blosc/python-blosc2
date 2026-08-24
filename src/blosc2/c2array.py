@@ -838,14 +838,17 @@ class C2Array(blosc2.Operand):
         kwargs["mode"] = "w"
         self._to_b2object_carrier(**kwargs)
 
-    def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
+    def __getitem__(self, slice_: int | slice | tuple | Sequence[int] | np.ndarray) -> np.ndarray:
         """
         Get a slice of the array (returning NumPy array).
 
         Parameters
         ----------
-        slice_ : int, slice, tuple of ints and slices, or None
-            The slice to fetch.
+        slice_ : int, slice, tuple of ints and slices, sequence of ints, or ndarray
+            The slice to fetch.  A sequence of integers or an integer or boolean
+            array gathers those coordinates, as numpy reads them.  A *list of
+            slices* is not a key -- numpy stopped reading one as a tuple -- and
+            raises `IndexError` rather than being read as something else.
 
         Returns
         -------
@@ -890,14 +893,17 @@ class C2Array(blosc2.Operand):
             return {"slice_": slice_to_string(key)}
         return {"indices": indices}
 
-    def slice(self, slice_: int | slice | Sequence[slice]) -> blosc2.NDArray:
+    def slice(self, slice_: int | slice | tuple | Sequence[int] | np.ndarray) -> blosc2.NDArray:
         """
         Get a slice of the array (returning blosc2 NDArray array).
 
         Parameters
         ----------
-        slice_ : int, slice, tuple of ints and slices, or None
-            The slice to fetch.
+        slice_ : int, slice, tuple of ints and slices, sequence of ints, or ndarray
+            The slice to fetch.  A sequence of integers or an integer or boolean
+            array gathers those coordinates, as numpy reads them.  A *list of
+            slices* is not a key -- numpy stopped reading one as a tuple -- and
+            raises `IndexError` rather than being read as something else.
 
         Returns
         -------
