@@ -1,9 +1,13 @@
 # -- Path setup --------------------------------------------------------------
+import importlib
 import inspect
 import os
+import re
 import sys
+from pathlib import Path
 
 import numpy as np
+from sphinx.util import logging as sphinx_logging
 
 import blosc2
 from blosc2.utils import elementwise_funcs, reducers
@@ -19,6 +23,8 @@ def genbody(f, func_list, lib="blosc2"):
 
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(blosc2.__file__)))
+
+logger = sphinx_logging.getLogger(__name__)
 
 project = "Python-Blosc2"
 copyright = "2019-present, The Blosc Developers"
@@ -269,8 +275,127 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
     return (signature, return_annotation)
 
 
+# -- Undocumented public API tripwire ------------------------------------------
+#
+# Every name in ``blosc2.__all__`` should either be documented on some reference
+# page or be listed in ``undocumented_members`` below.  We check that at the end
+# of the build and warn about the difference, so a newly added public object
+# cannot slip in without someone deciding where it belongs.  Build the docs with
+# ``-W`` (as CI does) to turn that warning into a failure.
+
+_AUTODOC_DIRECTIVE = re.compile(
+    r"^\s*\.\.\s+(?:autoclass|autofunction|autodata|autoexception|autodecorator)::"
+    r"\s*([\w.]+)"
+)
+_CURRENTMODULE = re.compile(r"^\s*\.\.\s+(?:currentmodule|module)::\s*([\w.]+)")
+_AUTOSUMMARY = re.compile(r"^(\s*)\.\.\s+autosummary::")
+_AUTOSUMMARY_ENTRY = re.compile(r"^\s*~?([\w.]+)\s*$")
+
+# Public members deliberately left undocumented, so that the check below only
+# ever flags genuine omissions.  Trimming this set is a standing invitation.
+undocumented_members = {
+    # Array-API constants, self-explanatory and documented upstream.
+    "e",
+    "inf",
+    "nan",
+    "newaxis",
+    "pi",
+    "DEFAULT_COMPLEX",
+    "DEFAULT_FLOAT",
+    "DEFAULT_INDEX",
+    "DEFAULT_INT",
+    "DEFAULT_NULL_POLICY",
+    "DSLKernel",
+    "DictionarySpec",
+    "LazyUDF",
+    "NDArraySpec",
+    "are_partitions_aligned",
+    "are_partitions_behaved",
+    "array_from_ffi_ptr",
+    "as_simpleproxy",
+    "get_cpu_info",
+    "linalg_funcs_list",
+}
+
+documented_members = set()
+
+
+def _in_blosc2(dotted_name):
+    """True if ``dotted_name`` names an attribute of ``blosc2`` or a submodule."""
+    parent, _, attr = dotted_name.rpartition(".")
+    if parent == "blosc2":
+        return attr
+    if not parent.startswith("blosc2."):
+        return None
+    try:
+        importlib.import_module(parent)
+    except ImportError:
+        return None
+    return attr
+
+
+def collect_documented_members(docdir):
+    """Names carrying an autodoc directive somewhere under ``docdir``."""
+    documented = set()
+    for path in sorted(Path(docdir).rglob("*.rst")):
+        module = None
+        summary_indent = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = _CURRENTMODULE.match(line)
+            if match:
+                module, summary_indent = match.group(1), None
+                continue
+            match = _AUTOSUMMARY.match(line)
+            if match:
+                summary_indent = len(match.group(1))
+                continue
+            match = _AUTODOC_DIRECTIVE.match(line)
+            if match:
+                summary_indent, name = None, match.group(1)
+            elif summary_indent is not None:
+                # Inside an autosummary block: one bare (possibly dotted) name
+                # per line, more indented than the directive itself.
+                if not line.strip():
+                    continue
+                entry = _AUTOSUMMARY_ENTRY.match(line)
+                if entry is None or len(line) - len(line.lstrip()) <= summary_indent:
+                    summary_indent = None
+                    continue
+                name = entry.group(1)
+            else:
+                continue
+            if "." not in name:
+                if module is None:
+                    continue
+                name = f"{module}.{name}"
+            attr = _in_blosc2(name)
+            if attr:
+                documented.add(attr)
+    return documented
+
+
+def gather_documented(app):
+    documented_members.update(collect_documented_members(app.srcdir))
+
+
+def check_undocumented(app, exception):
+    """Warn about public ``blosc2`` names that no reference page documents."""
+    if exception is not None:
+        return
+    unclassified = set(blosc2.__all__) - documented_members - undocumented_members
+    if unclassified:
+        logger.warning(
+            "these public blosc2 members are not documented on any reference "
+            "page: %s.  Add them to the appropriate page under doc/reference/, "
+            "or to undocumented_members in doc/conf.py.",
+            ", ".join(sorted(unclassified)),
+        )
+
+
 def setup(app):
     app.connect("autodoc-process-signature", process_sig)
+    app.connect("builder-inited", gather_documented)
+    app.connect("build-finished", check_undocumented)
 
 
 # Allow errors (e.g. with numba asking for a specific numpy version)

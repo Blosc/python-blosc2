@@ -76,4 +76,6 @@ For the full DSL syntax, see the `DSL syntax reference <dsl_syntax.html>`_.
 
 .. autofunction:: validate_dsl
 
+.. autofunction:: validate_dsl_jit
+
 .. autoclass:: DSLSyntaxError

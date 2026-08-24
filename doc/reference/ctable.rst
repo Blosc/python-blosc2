@@ -79,10 +79,12 @@ it is not the physical storage position.
     CTable.to_string
     set_printoptions
     get_printoptions
+    printoptions
 
 .. automethod:: CTable.to_string
 .. autofunction:: set_printoptions
 .. autofunction:: get_printoptions
+.. autofunction:: printoptions
 
 
 Construction
@@ -1127,6 +1129,7 @@ Text & binary
     string
     utf8
     utf8_array
+    UTF8Array
     from_utf8
     to_utf8
     bytes
@@ -1138,6 +1141,7 @@ Text & binary
 .. autofunction:: utf8_array
 .. autofunction:: from_utf8
 .. autofunction:: to_utf8
+.. autoclass:: UTF8Array
 .. automethod:: UTF8Array.astype
 .. autoclass:: bytes
 .. autofunction:: vlstring
