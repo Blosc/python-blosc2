@@ -290,6 +290,7 @@ _AUTODOC_DIRECTIVE = re.compile(
 _CURRENTMODULE = re.compile(r"^\s*\.\.\s+(?:currentmodule|module)::\s*([\w.]+)")
 _AUTOSUMMARY = re.compile(r"^(\s*)\.\.\s+autosummary::")
 _AUTOSUMMARY_ENTRY = re.compile(r"^\s*~?([\w.]+)\s*$")
+_AUTOSUMMARY_OPTION = re.compile(r"^\s*:[\w-]+:")
 
 # Public members deliberately left undocumented, so that the check below only
 # ever flags genuine omissions.  Trimming this set is a standing invitation.
@@ -355,7 +356,7 @@ def collect_documented_members(docdir):
             elif summary_indent is not None:
                 # Inside an autosummary block: one bare (possibly dotted) name
                 # per line, more indented than the directive itself.
-                if not line.strip():
+                if not line.strip() or _AUTOSUMMARY_OPTION.match(line):
                     continue
                 entry = _AUTOSUMMARY_ENTRY.match(line)
                 if entry is None or len(line) - len(line.lstrip()) <= summary_indent:
