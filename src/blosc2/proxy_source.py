@@ -91,6 +91,29 @@ _INDEX_PREFETCH = 1 << 16
 BLOCK_HOT_CHUNKS = 8
 
 
+def blocks_could_ever_pay(shape, chunks, blocks, itemsize: int) -> bool:
+    """Whether any slice of a frame this shape could save :data:`BLOCK_MIN_CBYTES`.
+
+    A frame small enough that reading *all* of it in blocks saves less than the
+    budget has no slice that would ever be worth taking apart, and that is
+    geometry -- no request, and no dependence on what is fetched.  So a `Proxy`
+    over it can keep to whole chunks from the start, rather than paying the range
+    probe and the frame's index to be told what the shape already said.
+
+    This is not the test `C2Array.serves_blocks` used to make, which weighed one
+    chunk against the budget and so ruled out datasets whose chunks were small
+    but many -- a wide enough slice saves the budget out of chunks of any size.
+    The bound here is over the whole frame, and a chunk compresses to no more
+    than it measures, so what it rules out no slice could have won.
+    """
+    nblocks = math.prod(math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True))
+    if nblocks <= 1:
+        return False  # a chunk of one block is its own block; there is nothing to split
+    nchunks = math.prod(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
+    cap = math.prod(chunks) * itemsize + blosc2.MAX_OVERHEAD
+    return nchunks * cap * (nblocks - 1) // nblocks >= BLOCK_MIN_CBYTES
+
+
 class Traffic:
     """What crossed the wire, counted where it crossed.
 
@@ -212,12 +235,13 @@ class ProxyNDSource(ABC):
     A source whose transport can ask for several ranges at once says so with
     ``max_ranges`` and serves ``read_ranges(spans)`` and
     ``chunk_layouts(nchunks)`` as well; :ref:`Proxy` then sends a whole wave of
-    reads as one request.  A ``wants_blocks`` written to take a third argument is
-    also given the wave -- the fetch that chunk belongs to -- since a shared round
-    trip is the wave's to weigh and not the chunk's; one written to take two is
-    called with two, so the wave is an opt-in of its own and not something
-    ``max_ranges`` drags in.  All are optional, and a source without them is asked
-    one range at a time, exactly as before.
+    reads as one request.  Setting ``wants_wave`` says that ``wants_blocks``
+    takes a third argument and is to be given the wave -- the fetch that chunk
+    belongs to -- since a shared round trip is the wave's to weigh and not the
+    chunk's.  It is an opt-in of its own, in the same shape as ``max_ranges``
+    and read the same way, so a two-argument ``wants_blocks`` keeps being called
+    with two.  All are optional, and a source without them is asked one range at
+    a time, exactly as before.
 
     A block read that the transport cannot answer raises ``NotRanged``, and
     :ref:`Proxy` then fetches the chunks it was after whole.
@@ -652,6 +676,14 @@ class ByteRangeNDSource(ProxyNDSource):
     than a couple per chunk it touches.
     """
 
+    wants_wave = True
+    """That :meth:`wants_blocks` takes the wave, and wants to be given it.
+
+    The implementation here does, and weighs a shared round trip against what
+    the whole fetch skips.  A subclass that overrides `wants_blocks` with a
+    two-argument one sets this back to False, and is then called with two.
+    """
+
     def __init__(
         self,
         urlpath: str,
@@ -949,14 +981,55 @@ class ByteRangeNDSource(ProxyNDSource):
         which a transport that batches ranges is asked with; see
         :meth:`_wave_saves` for what it is used for and why.
         """
+        if nwanted > self.blocks_per_chunk * BLOCK_MAX_FRACTION:
+            return False
+        # Geometry answers before the frame's index is read, and reading it is a
+        # request: a dataset whose chunks are too small for any slice to save the
+        # budget's worth is refused for what it measures, without one
+        if not self._budget_reachable(wave):
+            return False
         offsets, extents = self._frame_index()  # once, rather than twice under the lock
         if int(offsets[nchunk]) < 0:
             return False  # a run-length chunk has no bytes in the file to skip
-        if nwanted > self.blocks_per_chunk * BLOCK_MAX_FRACTION:
-            return False
         if wave is None or self.max_ranges <= 1:
             return int(extents[nchunk]) >= BLOCK_MIN_CBYTES
         return self._wave_saves(wave) >= BLOCK_MIN_CBYTES
+
+    def _chunk_cap(self) -> int:
+        """The most one chunk of this frame can weigh, without reading any of it.
+
+        A chunk compresses to no more than it measures, plus the frame overhead
+        it carries; the shape and the dtype say that much and cost nothing.
+        """
+        return math.prod(self.chunks) * self.dtype.itemsize + blosc2.MAX_OVERHEAD
+
+    def _budget_reachable(self, wave: Mapping[int, int] | None) -> bool:
+        """Whether any answer the frame's index could give would clear the budget.
+
+        The same comparison :meth:`wants_blocks` makes, against an upper bound on
+        the bytes rather than the bytes.  It exists because the real comparison
+        needs the offsets, and reading the offsets is the round trip the refusal
+        is about: `serves_blocks` used to rule a dataset out for the average size
+        of its chunks, which was wrong -- a wide enough slice saves the budget out
+        of chunks of any size -- but dropping it left a small-chunked dataset
+        paying an index read per proxy to be told what its geometry already said.
+
+        Over-estimating is the safe direction: this only ever refuses a fetch
+        that the exact test would have refused too, so no slice loses blocks it
+        would have been given.
+        """
+        cap = self._chunk_cap()
+        if wave is None or self.max_ranges <= 1:
+            return cap >= BLOCK_MIN_CBYTES
+        nblocks = self.blocks_per_chunk
+        # The wave's own sum, with every chunk weighed at the cap; a chunk this
+        # would not take apart is not the wave's to spend, exactly as there
+        bound = sum(
+            cap * (nblocks - nwanted) // nblocks
+            for nwanted in wave.values()
+            if nwanted <= nblocks * BLOCK_MAX_FRACTION
+        )
+        return bound >= BLOCK_MIN_CBYTES
 
     def _wave_saves(self, wave: Mapping[int, int]) -> int:
         """Bytes a whole fetch skips by taking its chunks apart, blocks against chunks.
@@ -987,6 +1060,12 @@ class ByteRangeNDSource(ProxyNDSource):
         Blocks of a chunk are close enough in size to weigh what is wanted by
         counting them, the same approximation :data:`BLOCK_MAX_FRACTION` makes,
         so this needs no more read than the offsets already in hand.
+
+        A chunk with nothing to take apart -- memcpyed, or holding a dictionary --
+        is counted here and fetched whole later, because only its header says so
+        and the headers are read after this.  `Proxy._fetch_by_block` weighs the
+        wave again once it has them, so what that costs is the offsets read and
+        never a wave of block reads that could not pay for itself.
         """
         if self._wave_saved is not None and self._wave_saved[0] is wave:
             return self._wave_saved[1]  # one fetch asks once per chunk; count once

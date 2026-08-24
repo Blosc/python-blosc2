@@ -704,6 +704,19 @@ class Proxy(blosc2.Operand):
             # requests; only the handful already running are waited for
             pool.shutdown(cancel_futures=True)
 
+    def _asking_blocks(self, missing: dict, wave: dict | None) -> dict:
+        """The chunks of *missing* the source wants taken apart, in order.
+
+        The wave goes with the question only to a source that says it takes one
+        (``wants_wave``), which is an opt-in in the same shape as ``max_ranges``
+        and read the same way: a `wants_blocks` written to the two-argument
+        protocol raises `TypeError` on being handed a third.
+        """
+        wants = self.src.wants_blocks
+        if wave is not None and getattr(self.src, "wants_wave", False):
+            return {n: bs for n, bs in missing.items() if wants(n, len(bs), wave)}
+        return {n: bs for n, bs in missing.items() if wants(n, len(bs))}
+
     def _fetch_by_block(self, item, max_concurrency: int | None):
         """`fetch()` against a source that can serve single blocks.
 
@@ -723,9 +736,9 @@ class Proxy(blosc2.Operand):
         # A transport that batches ranges pays the block path's fixed cost once
         # for the whole fetch, so what it wants asked is the wave rather than the
         # chunk; see `ByteRangeNDSource._wave_saves`.
-        wave = {n: len(bs) for n, bs in missing.items()} if getattr(self.src, "max_ranges", 1) > 1 else None
-        asks = _asks_blocks(self.src, wave)
-        wanted = {n: bs for n, bs in missing.items() if asks(n, len(bs))}
+        batches = getattr(self.src, "max_ranges", 1) > 1
+        wave = {n: len(bs) for n, bs in missing.items()} if batches else None
+        wanted = self._asking_blocks(missing, wave)
         whole = [n for n in missing if n not in wanted]
 
         layouts = dict(zip(wanted, self._chunk_layouts(list(wanted), max_concurrency), strict=True))
@@ -733,6 +746,13 @@ class Proxy(blosc2.Operand):
         # only once its header is read
         whole += [n for n, layout in layouts.items() if layout is None]
         wanted = {n: bs for n, bs in wanted.items() if layouts[n] is not None}
+        if wave is not None and len(wanted) < len(wave):
+            # Those chunks were counted in the wave that was weighed, and are not
+            # in it any more.  The offsets read is spent either way, but the block
+            # reads are still ahead, so what is left is weighed before they go out
+            kept = self._asking_blocks(wanted, {n: len(bs) for n, bs in wanted.items()})
+            whole += [n for n in wanted if n not in kept]
+            wanted = kept
 
         # Each task is what one request will carry: a whole chunk on its own, or
         # a batch of range reads (of one, for a transport that takes one)
@@ -1070,6 +1090,7 @@ class Proxy(blosc2.Operand):
 
 
 _UNMAPPABLE = object()
+"""A key that selects something, but nothing this can reduce to cells of the grid."""
 
 
 def _whole_array(item) -> bool:
@@ -1079,31 +1100,6 @@ def _whole_array(item) -> bool:
     an array asked whether it equals a tuple compares elementwise and raises.
     """
     return isinstance(item, tuple) and len(item) == 0
-
-
-"""A key that selects something, but nothing this can reduce to cells of the grid."""
-
-
-def _asks_blocks(src, wave):
-    """*src*'s `wants_blocks`, carrying *wave* where it is written to take one.
-
-    A batching transport wants the whole fetch weighed rather than one chunk of
-    it, but `max_ranges` and the three-argument `wants_blocks` are separate
-    opt-ins (see :class:`ProxyNDSource`), and a source may well take the first
-    without the second.  So the signature is what decides: one written to the
-    two-argument protocol is called with two, whatever else it serves.
-    """
-    wants = src.wants_blocks
-    if wave is None:
-        return wants
-    try:
-        params = list(inspect.signature(wants).parameters.values())
-    except (TypeError, ValueError):
-        return wants  # a callable that cannot be read is taken as it was written
-    positional = sum(1 for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD))
-    if positional >= 3 or any(p.kind is p.VAR_POSITIONAL for p in params):
-        return lambda nchunk, nwanted: wants(nchunk, nwanted, wave)
-    return wants
 
 
 def _dim_cells(dim, lo, hi, chunks, blocks) -> set[tuple[int, int]]:

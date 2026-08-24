@@ -494,15 +494,15 @@ def test_a_handle_that_writes_stamps_what_it_wrote(server):
 def test_asking_about_blocks_does_not_close_the_door_on_the_index(server):
     """Two questions, one source, and the answer to one must not answer the other.
 
-    `serves_blocks` asks only whether the server has a frame to read ranges of,
-    which a pre-sized array does before anything is written to it.  Whether a
-    given chunk is worth splitting is `wants_blocks`, asked per fetch; neither
-    answer may stand in for the other, and neither may shut the index path down.
+    Reading a frame's *index* is not the same question as reading blocks of its
+    chunks: a pre-sized array has a frame to read either way, and this one is far
+    too small for blocks ever to pay (48 KB in all, against a 1 MiB budget), so
+    `serves_blocks` says no.  That must not shut the index path down with it.
     """
     array, srv = server
-    assert array.serves_blocks  # a stored frame, however little it holds
-    assert array.block_source() is not None  # the block path, asked first
-    assert not array.wants_blocks(0, 1)  # ... and declining, for this chunk
+    assert array._reports_geometry  # a stored frame, however little it holds
+    assert not array.serves_blocks  # ... and one no slice of could pay to split
+    assert array._index_source() is not None  # the index, asked all the same
     assert list(array.written_chunks()) == [False] * NCHUNKS  # still answerable
 
 

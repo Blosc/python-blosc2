@@ -1291,17 +1291,39 @@ class C2Array(blosc2.Operand):
         re-serialized here, so a range read of it is refused.  Nothing else in
         what `api/info` says can tell the two apart.  That is asked here through
         :attr:`_serves_ranges`, and again where the source is actually built, so
-        that reading the frame's *index* is spared it too.
+        that reading the frame's *index* is spared it too -- but no released
+        Caterva2 answers it yet, so today every dataset pays the one request.
+
+        A dataset too small for blocks to pay *anywhere in it* is ruled out from
+        `api/info` alone, and pays neither -- see
+        :func:`~blosc2.proxy_source.blocks_could_ever_pay`, which is a bound over
+        the whole frame and not the one-chunk judgement described above.
         """
-        return self._serves_ranges and self._reports_geometry
+        return (
+            self._serves_ranges
+            and self._reports_geometry
+            and blosc2.proxy_source.blocks_could_ever_pay(
+                self.shape, self.chunks, self.blocks, self.dtype.itemsize
+            )
+        )
 
     @property
     def _serves_ranges(self) -> bool:
         """Whether the server says a range read of this dataset is worth trying.
 
-        Read off `api/info`, which is where ``accept_ranges`` travels; a server
-        that reports nothing is an older one, and then this says yes and the
-        request itself gives the answer as it always did.
+        Read off the `api/info` body, which is the only thing a client holds
+        before it has asked for any bytes.  `Accept-Ranges` is an HTTP header,
+        but the header that matters is the one on the *fetch* response, and
+        having that means having made the request this exists to avoid; the
+        header on `api/info` describes `api/info`.
+
+        No Caterva2 sends this field today -- checked against cat2.cloud, whose
+        `api/info` carries shape, chunks, blocks, dtype, mtime and schunk and
+        nothing else -- so this presently says yes for every dataset and the
+        request itself gives the answer as it always did, which is also what an
+        older server will always get.  It costs one `dict.get`, and the day a
+        server does report it the peer-mounted datasets stop paying a full body
+        to find out they cannot be ranged.
         """
         self._refresh_meta()  # `meta` is what carries it, so read it current
         return self.meta.get("accept_ranges") != "none"

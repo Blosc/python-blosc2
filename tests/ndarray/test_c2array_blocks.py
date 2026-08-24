@@ -402,19 +402,36 @@ def test_a_computed_dataset_is_ruled_out_without_a_request(server, any_chunk_wan
 
 
 def test_small_chunks_are_fetched_whole(server):
-    # A point read of a chunk this small saves fewer bytes than the round trip
-    # that would find them costs, so `wants_blocks` refuses it and the chunk
-    # comes whole -- the judgement the dataset no longer makes for every slice
-    # at once, only for the slice in hand
+    # Read whole, this dataset is 320 KB: no slice of it could save the 1 MiB a
+    # round trip is budgeted against, so blocks can never pay anywhere in it.
+    # `api/info` says that much, so nothing goes looking for the frame's header,
+    # let alone its index or a block -- the read costs the one request it always did
     data = _incompressible((200, 200))
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     srv.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    assert array.block_source() is not None  # a stored frame is readable in ranges
-    assert not array.wants_blocks(0, 1)  # ... and this one is not worth splitting
-    assert [kind for kind, _, _ in srv.log][-1] == "chunk"
+    assert not array.serves_blocks
+    assert array.block_source() is None
+    assert [kind for kind, _, _ in srv.log] == ["chunk"]
+
+
+def test_small_chunks_are_still_split_where_there_are_enough_of_them(server):
+    """The bound is over the frame, not over one chunk of it.
+
+    `serves_blocks` used to weigh a single chunk against the budget, and so ruled
+    out every dataset of small chunks however many it held -- though a slice wide
+    enough saves the budget out of chunks of any size.  This frame has chunks of
+    the same size as the one above and thirty-two times as many, and is asked.
+    """
+    data = _incompressible((3200, 400))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    assert array.serves_blocks
+    p = blosc2.Proxy(array, mode="w")
+    srv.log.clear()
+    np.testing.assert_array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert "fetch" in [kind for kind, _, _ in srv.log]  # read in ranges, not whole
 
 
 def test_a_c2array_gathers_its_points_at_the_server(server):
@@ -596,7 +613,7 @@ def test_a_mask_over_a_whole_array_is_a_key_and_not_a_comparison(tmp_path, serve
 
 
 def test_a_two_argument_wants_blocks_is_never_handed_the_wave():
-    """`max_ranges` and the three-argument `wants_blocks` are opt-ins of their own.
+    """`max_ranges` and `wants_wave` are opt-ins of their own.
 
     A source that batches ranges but was written to the two-argument protocol
     used to be called with three, and raised `TypeError` on its first fetch.
@@ -608,16 +625,21 @@ def test_a_two_argument_wants_blocks_is_never_handed_the_wave():
         def wants_blocks(self, nchunk, nwanted):
             return True
 
-    class ThreeArg:
-        max_ranges = 8
+    class ThreeArg(TwoArg):
+        wants_wave = True
 
         def wants_blocks(self, nchunk, nwanted, wave=None):
             return wave is not None
 
+    def asking(src, wave):
+        proxy = blosc2.Proxy.__new__(blosc2.Proxy)
+        proxy.src = src
+        return proxy._asking_blocks({0: [1, 2, 3]}, wave)
+
     wave = {0: 3}
-    assert blosc2.proxy._asks_blocks(TwoArg(), wave)(0, 3)
-    assert blosc2.proxy._asks_blocks(ThreeArg(), wave)(0, 3)
-    assert not blosc2.proxy._asks_blocks(ThreeArg(), None)(0, 3)
+    assert asking(TwoArg(), wave)  # never handed the wave, and says yes anyway
+    assert asking(ThreeArg(), wave)
+    assert not asking(ThreeArg(), None)  # no wave to weigh, so nothing to say yes to
 
 
 def test_scattered_points_cost_blocks_and_not_chunks(tmp_path, server, any_chunk_wants_blocks):
