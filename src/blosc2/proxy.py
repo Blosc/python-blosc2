@@ -1224,17 +1224,42 @@ def _fancy_cells(item, shape, chunks, blocks):
             return {}
         crossed.append(_dim_cells(dim, lo, hi, chunks, blocks))
 
-    out = {}
-    # A crossed dimension contributes the same offset to every paired cell, so a
-    # combination of them is one addition over the whole column of cells
-    for combo in itertools.product(*crossed):
-        at_chunk = sum(c * chunk_strides[d] for d, (c, _) in zip(basic, combo, strict=True))
-        at_block = sum(b * block_strides[d] for d, (_, b) in zip(basic, combo, strict=True))
-        nchunks = (cell_chunk + at_chunk).tolist()
-        nblocks = (cell_block + at_block).tolist()
-        for nchunk, nblock in zip(nchunks, nblocks, strict=True):
-            out.setdefault(nchunk, set()).add(nblock)
-    return out
+    # A crossed dimension contributes the same offset to every paired cell, so the
+    # whole cross product is one broadcast sum rather than a loop over
+    # combinations: the paired cells lie along one axis and each crossed
+    # dimension adds an axis of its own, which is `itertools.product` done by
+    # numpy.  For a mask over a large array the crossing, not the divmod above,
+    # is nearly all of what planning costs.
+    axes = [cell_chunk], [cell_block]
+    for i, dim in enumerate(basic):
+        at = np.asarray(sorted(crossed[i]), dtype=np.int64)
+        shape_i = [1] * (len(basic) + 1)
+        shape_i[i + 1] = -1
+        axes[0].append((at[:, 0] * chunk_strides[dim]).reshape(shape_i))
+        axes[1].append((at[:, 1] * block_strides[dim]).reshape(shape_i))
+    grid = [1] * (len(basic) + 1)
+    grid[0] = -1
+    nchunks = sum(axes[0][1:], axes[0][0].reshape(grid)).reshape(-1)
+    nblocks = sum(axes[1][1:], axes[1][0].reshape(grid)).reshape(-1)
+
+    return _group_cells(nchunks, nblocks)
+
+
+def _group_cells(nchunks: np.ndarray, nblocks: np.ndarray) -> dict[int, set]:
+    """``{chunk: {block}}`` out of two flat columns naming one cell each.
+
+    One sort and one split, rather than a dict lookup per cell: the grouping then
+    costs an entry per *chunk*, where a large fancy key names cells in the
+    millions.  Duplicates go the same way -- several coordinates of a mask share
+    a block, which is the whole reason blocks are worth naming.
+    """
+    order = np.lexsort((nblocks, nchunks))
+    nchunks, nblocks = nchunks[order], nblocks[order]
+    starts = np.flatnonzero(np.concatenate(([True], nchunks[1:] != nchunks[:-1])))
+    return {
+        int(n): set(group.tolist())
+        for n, group in zip(nchunks[starts], np.split(nblocks, starts[1:]), strict=True)
+    }
 
 
 def _item_spans(item, shape) -> list[tuple[int, int]] | None:
