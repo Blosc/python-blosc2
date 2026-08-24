@@ -398,26 +398,64 @@ class Proxy(blosc2.Operand):
                 self._fetched[n // 8] &= ~(1 << (n % 8))
             self._hot_payloads.pop(info.nchunk, None)
 
+    def _plan(self, item):
+        """Where *item* lands on the cache's grid, read once for a fetch.
+
+        Reading a key is not free -- `process_key` normalizes it, and for a
+        boolean mask :func:`_fancy_cells` then divmods every coordinate it
+        selects -- so a fetch works it out once and both the chunks and the
+        blocks it wants come from that.  One of:
+
+        ``("cells", {chunk: {block}})``
+            Placed exactly, by :func:`_fancy_cells`.
+        ``("box", spans)``
+            A half-open run per dimension, for the caller to intersect with the
+            grid.  A step is covered by the run it lies in rather than followed.
+        ``("chunks", nchunks)``
+            Every chunk, whole: a key nothing here can place, which is the
+            granularity the proxy had before blocks and always a superset.
+        ``("opaque", item)``
+            An SChunk cache has no grid to place a key on; only
+            `get_slice_nchunks` reads one.
+        """
+        everything = ("chunks", list(range(self._schunk_cache.nchunks)))
+        if not isinstance(self._cache, blosc2.NDArray):
+            return everything if _whole_array(item) else ("opaque", item)
+        shape, chunks, blocks = self._cache.shape, self._cache.chunks, self._cache.blocks
+        if _whole_array(item):  # full realization
+            return "box", [(0, s) for s in shape]
+        cells = _fancy_cells(item, shape, chunks, blocks)
+        if cells is _UNMAPPABLE:
+            return everything
+        if cells is not None:
+            return "cells", cells
+        spans = _item_spans(item, shape)
+        return ("box", spans) if spans is not None else everything
+
     def _wanted_chunks(self, item) -> list[int]:
         """The chunks *item* touches."""
         self._sync_evictions()
-        if item == ():  # full realization
-            return list(range(self._schunk_cache.nchunks))
-        cells = self._cells(item)
-        if cells is _UNMAPPABLE:
-            # Not a key that can be placed on the grid, and `get_slice_nchunks`
-            # reads it as slices and trips over it: every chunk, which is what
-            # the proxy fetched for anything it could not narrow down anyway
-            return list(range(self._schunk_cache.nchunks))
-        if cells is not None:
-            return sorted(cells)
-        return [int(n) for n in blosc2.get_slice_nchunks(self._cache, item)]
+        return self._chunks_of(self._plan(item))
 
-    def _cells(self, item):
-        """:func:`_fancy_cells` for this proxy's grid; None where *item* is a box."""
-        if not isinstance(self._cache, blosc2.NDArray):
-            return None
-        return _fancy_cells(item, self._cache.shape, self._cache.chunks, self._cache.blocks)
+    def _chunks_of(self, plan) -> list[int]:
+        """The chunks a :meth:`_plan` touches."""
+        kind, payload = plan
+        if kind == "chunks":
+            return payload
+        if kind == "cells":
+            return sorted(payload)
+        if kind == "opaque":
+            return [int(n) for n in blosc2.get_slice_nchunks(self._cache, payload)]
+        chunks = self._cache.chunks
+        ranges = []
+        for (lo, hi), csize in zip(payload, chunks, strict=True):
+            # Ahead of the grid, which a zero-length dimension has no chunk size
+            # to divide by: a run selecting nothing selects it in every dimension
+            if hi <= lo:
+                return []
+            ranges.append(range(lo // csize, (hi - 1) // csize + 1))
+        grid = [math.ceil(s / c) for s, c in zip(self._cache.shape, chunks, strict=True)]
+        return [int(np.ravel_multi_index(c, grid)) for c in itertools.product(*ranges)]
 
     def _missing_chunks(self, item) -> list[int]:
         """The chunks *item* touches that the cache does not hold in full."""
@@ -439,23 +477,29 @@ class Proxy(blosc2.Operand):
         A key of integer arrays or boolean masks is placed on the grid exactly,
         by :func:`_fancy_cells`: each selected coordinate lives in one block, so
         scattered points cost blocks and not the chunks holding them.  Anything
-        left that this cannot reduce to a box -- a step, a key nobody has thought
-        about -- asks for every block of the chunks it touches, which is the
-        granularity the proxy had before blocks and always a superset of the
-        right answer.
+        left that this cannot reduce to a box -- a key nobody has thought about --
+        asks for every block of the chunks it touches, which is the granularity
+        the proxy had before blocks and always a superset of the right answer.
+        A step is a box: the run it lies in, which is a superset too, and a much
+        smaller one than the chunks that run crosses.
         """
-        chunks, blocks = self._cache.chunks, self._cache.blocks
+        self._sync_evictions()
         every = range(self._blocks_per_chunk)
-        cells = self._cells(item)
-        if cells is not None and cells is not _UNMAPPABLE:
-            return {n: sorted(b) for n, b in cells.items()}
-        spans = _item_spans(item, self._cache.shape)
-        if spans is None:
-            return dict.fromkeys(self._wanted_chunks(item), every)
+        kind, payload = plan = self._plan(item)
+        if kind != "box":
+            if kind == "cells":
+                # A key that happens to cover a chunk whole says so as cheaply as
+                # a slice does; see the same shortcut on the box path below
+                return {
+                    n: every if len(b) == self._blocks_per_chunk else sorted(b) for n, b in payload.items()
+                }
+            return dict.fromkeys(self._chunks_of(plan), every)
+        chunks, blocks = self._cache.chunks, self._cache.blocks
+        spans = payload
         chunk_grid = [math.ceil(s / c) for s, c in zip(self._cache.shape, chunks, strict=True)]
         blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
         wanted = {}
-        for nchunk in self._wanted_chunks(item):
+        for nchunk in self._chunks_of(plan):
             coords = np.unravel_index(nchunk, chunk_grid)
             ranges = []
             for dim, (start, stop) in enumerate(spans):
@@ -1026,6 +1070,17 @@ class Proxy(blosc2.Operand):
 
 
 _UNMAPPABLE = object()
+
+
+def _whole_array(item) -> bool:
+    """True where *item* is the empty tuple, the key that asks for everything.
+
+    Written out rather than `item == ()` because a key can be a numpy array, and
+    an array asked whether it equals a tuple compares elementwise and raises.
+    """
+    return isinstance(item, tuple) and len(item) == 0
+
+
 """A key that selects something, but nothing this can reduce to cells of the grid."""
 
 
@@ -1084,8 +1139,8 @@ def _sort_dims(key):
 
     `_UNMAPPABLE` for anything else.  Everything `process_key` hands back is one
     of these today -- a mask has already become an integer array by the time it
-    arrives -- so this is what keeps a key nobody has thought about from being
-    read as one that was.
+    arrives, and an integer a slice of one -- so this is what keeps a key nobody
+    has thought about from being read as one that was.
     """
     advanced, basic = [], []
     for dim, k in enumerate(key):
@@ -1093,7 +1148,7 @@ def _sort_dims(key):
             if not np.issubdtype(k.dtype, np.integer):
                 return _UNMAPPABLE  # coordinates, or this cannot place it
             advanced.append(dim)
-        elif isinstance(k, (slice, int, np.integer)):
+        elif isinstance(k, slice):
             basic.append(dim)
         else:
             return _UNMAPPABLE
@@ -1163,11 +1218,7 @@ def _fancy_cells(item, shape, chunks, blocks):
 
     crossed = []
     for dim in basic:
-        k = key[dim]
-        if isinstance(k, (int, np.integer)):
-            crossed.append(_dim_cells(dim, int(k), int(k), chunks, blocks))
-            continue
-        start, stop, step = k.indices(shape[dim])
+        start, stop, step = key[dim].indices(shape[dim])
         # A step is not followed: the span it lies in is a superset of it, and a
         # superset is the one kind of wrong answer this may give.  A reversed
         # slice runs from stop + 1 up to start, and covers the same span its
@@ -1191,19 +1242,31 @@ def _fancy_cells(item, shape, chunks, blocks):
 
 
 def _item_spans(item, shape) -> list[tuple[int, int]] | None:
-    """The (start, stop) of *item* along every dimension, or None if it is no box.
+    """The half-open run *item* covers along every dimension, or None if it is no box.
 
-    Fancy indexing and strided slices have no box to intersect with the block
-    grid; the caller falls back to whole chunks for those.
+    A step is covered rather than followed: the run it lies in holds every
+    coordinate it selects and some it does not, and a superset is the one kind of
+    wrong answer a fetch may give.  So `[::2]` reads the same blocks its unstepped
+    twin does, and a reversed slice reads what its forward twin does -- rather
+    than either of them falling through to every chunk of the array, which is
+    what a `None` here costs.  Fancy indexing has no run to give; the caller has
+    already placed it exactly by then.
     """
-    if item == ():
+    if _whole_array(item):
         return [(0, s) for s in shape]
     from blosc2.utils import process_key
 
     key, _ = process_key(item, shape)
-    if not all(isinstance(k, slice) and k.step in (None, 1) for k in key):
+    if not all(isinstance(k, slice) for k in key):
         return None
-    return [(k.start, k.stop) for k in key]
+    spans = []
+    for dim, k in enumerate(key):
+        start, stop, step = k.indices(shape[dim])
+        # A negative step runs from stop + 1 up to start; reading it as its own
+        # bounds would make it empty and fetch nothing at all
+        lo, hi = (stop + 1, start + 1) if step < 0 else (start, stop)
+        spans.append((lo, max(hi, lo)))
+    return spans
 
 
 class ProxyNDField(blosc2.Operand):

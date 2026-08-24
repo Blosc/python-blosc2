@@ -73,7 +73,7 @@ It is never a loss. A slice wanting more than half a chunk's blocks is wanting t
 
 Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
 
-A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy, `[::-1]` costs what its forward twin does, and any other step reads the chunks it lands in whole.
+A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy a step is not followed but covered: `p[::2]` reads the blocks of the run it lies in, which is what `p[:]` over that run would read, and `[::-1]` costs what its forward twin does. So a step buys the bounds it is written with, and nothing beyond them.
 
 ### Seeing byte savings
 

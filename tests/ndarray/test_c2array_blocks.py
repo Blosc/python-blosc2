@@ -544,6 +544,57 @@ def test_a_reversed_slice_is_placed_on_the_span_it_covers(tmp_path, server, any_
         np.testing.assert_array_equal(p[key], data[key])
 
 
+def test_a_stepped_slice_reads_the_run_it_lies_in(tmp_path, server, any_chunk_wants_blocks):
+    """A step is covered by its run, not refused and not fetched as every chunk.
+
+    `_fancy_cells` calls a key with no advanced index a box, and the box path
+    used to hand a step to `get_slice_nchunks`, which raised `IndexError: Step
+    parameter is not supported yet` -- so `p[::2]` did not work at all.
+    """
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "stepped.b2nd"), mode="w")
+    for key in (np.s_[::2], np.s_[::-1], np.s_[0:10, ::-1], np.s_[5:150:7, ::3], np.s_[199:0:-2]):
+        np.testing.assert_array_equal(p[key], data[key])
+
+
+def test_a_step_costs_its_run_and_not_the_whole_array(tmp_path, server, any_chunk_wants_blocks):
+    """A stepped slice bounded to one corner reads that corner, not every chunk.
+
+    Falling back to "every chunk, whole" would also be correct, and is what a key
+    this cannot place gets; the run a step lies in is a far smaller superset.
+    """
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "corner.b2nd"), mode="w")
+    p.traffic.reset()
+    np.testing.assert_array_equal(p[0:20:2, 0:20:2], data[0:20:2, 0:20:2])
+    corner = p.traffic.nbytes
+
+    whole = blosc2.Proxy(
+        blosc2.C2Array(array.path, urlbase=array.urlbase),
+        urlpath=str(tmp_path / "corner-whole.b2nd"),
+        mode="w",
+    )
+    whole.traffic.reset()
+    whole.fetch(())
+    assert corner < whole.traffic.nbytes
+
+
+def test_a_mask_over_a_whole_array_is_a_key_and_not_a_comparison(tmp_path, server):
+    """`item == ()` asks a numpy key whether it equals a tuple, which raises.
+
+    A one-dimensional boolean mask is exactly such a key, so the whole-array
+    shortcut has to recognise the empty tuple without comparing against it.
+    """
+    data = _incompressible((60, 40))
+    array, srv = server(data, chunks=(30, 40), blocks=(10, 20))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "mask.b2nd"), mode="w")
+    mask = np.zeros(60, dtype=bool)
+    mask[[3, 44]] = True
+    np.testing.assert_array_equal(p[mask], data[mask])
+
+
 def test_a_two_argument_wants_blocks_is_never_handed_the_wave():
     """`max_ranges` and the three-argument `wants_blocks` are opt-ins of their own.
 
