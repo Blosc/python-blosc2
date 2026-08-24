@@ -160,10 +160,14 @@ class _Handler(BaseHTTPRequestHandler):
         if srv.cookie and self.headers.get("Cookie") != srv.cookie:
             self._send(401, b"unauthorized", endpoint="auth")
             return
+        raw = self.rfile.read(int(self.headers["Content-Length"]))  # drained either way
         if not srv.post_fetch:  # a server old enough not to know the route
+            # Answering without reading the body would leave it on the connection
+            # for the next request to read as a request line, which is a thing
+            # this stand-in does and a real server does not
             self._send(405, b"method not allowed", endpoint="fetch")
             return
-        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        body = json.loads(raw)
         self._gather(srv, body["indices"])
 
     @staticmethod
@@ -534,7 +538,7 @@ def test_a_key_an_url_only_holds_once_encoded_goes_in_a_body(server):
     """
     data = _incompressible((60, 70))
     array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
-    key = list(range(60)) * 300  # ~51,000 chars as written, ~87,000 encoded
+    key = list(range(60)) * 16  # 2,723 chars as written, 4,656 encoded
     assert len(blosc2.c2array.key_to_indices(key)) < blosc2.c2array._MAX_QUERY_CHARS
     np.testing.assert_array_equal(array[key], data[key])
 
@@ -546,6 +550,21 @@ def test_a_server_without_the_post_route_says_so(server):
     array, srv = server(data, chunks=(20, 25), blocks=(7, 9), post_fetch=False)
     with pytest.raises(IndexError, match="request body"):
         array[list(range(60)) * 400]
+
+
+def test_a_mid_sized_key_falls_back_to_a_get_where_there_is_no_post_route(server):
+    """Below what a client can build, a 405 is worth one GET rather than an error.
+
+    The threshold is set by what a *server* will carry in a request line -- 8 KB
+    on nginx -- not by what httpx will build, which is far more.  So keys now
+    take the POST route that a GET would have carried, and an older server
+    answering 405 must not turn those into a failure.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9), post_fetch=False)
+    key = list(range(60)) * 16  # over the query threshold, under what httpx builds
+    assert len(blosc2.c2array.key_to_indices(key)) < blosc2.c2array._MAX_URL_CHARS
+    np.testing.assert_array_equal(array[key], data[key])
 
 
 def test_a_reversed_slice_is_placed_on_the_span_it_covers(tmp_path, server, any_chunk_wants_blocks):

@@ -271,14 +271,17 @@ def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
     return json if model is None else model(**json)
 
 
-def _post_fetch(url, params, auth_token):
+def _post_fetch(url, params, auth_token, retry_as_get=False):
     """`api/fetch` again, with the parameters in the body.
 
     For a key too long to be a query and nothing else.  A server that has never
     heard of this answers 405, which says what it is rather than what went
-    wrong, so it is turned into the sentence a caller can act on.
+    wrong: None where the caller has a GET left to try, and otherwise the
+    sentence a caller can act on.
     """
     response = _sync_client().post(url, json=params, headers=_auth_headers(auth_token), timeout=TIMEOUT)
+    if response.status_code == 405 and retry_as_get:
+        return None
     if response.status_code == 405:
         raise IndexError(
             "This many coordinates do not fit in an URL, and the server does not accept "
@@ -295,10 +298,17 @@ def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=
     # coordinates of a fancy key grow by about half again under percent-encoding
     # (`,` -> `%2C`, `[` -> `%5B`), and it is the encoded length that is capped
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-    if len(query) > _MAX_QUERY_CHARS:
-        response = _post_fetch(url, params, auth_token)
-    else:
+    if len(query) <= _MAX_QUERY_CHARS:
         response = _xget(url, params=params, auth_token=auth_token)
+    else:
+        # A query no front end will carry, so the parameters go in a body.  A
+        # server without that route answers 405, and then a GET is worth trying
+        # after all where the client can still build one: it may be that nothing
+        # sits in front of this server, and a request that might work beats an
+        # error that certainly does not
+        response = _post_fetch(url, params, auth_token, retry_as_get=len(query) <= _MAX_URL_CHARS)
+        if response is None:
+            response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
     if traffic is not None:
         # A slice or a gather is data crossing the wire like any chunk, and the
@@ -434,18 +444,33 @@ def key_to_indices(key):
     return json.dumps(out, separators=(",", ":"))
 
 
-_MAX_QUERY_CHARS = 60_000
+_MAX_QUERY_CHARS = 4_000
 """How long an encoded query may be before the parameters go in a body instead.
 
-Measured after percent-encoding, which is the length the client library caps and
-about half again what the coordinates take as written -- `,` becomes `%2C` and
-`[` becomes `%5B`.  Past roughly this much the library gives up, with an error
-about URL components rather than about coordinates.  `api/fetch` answers a POST
-carrying the same parameters for exactly this reason, so a key of more
-coordinates than a URL holds is a change of verb and nothing else.
+Measured after percent-encoding, which is what actually travels and about half
+again what the coordinates take as written -- `,` becomes `%2C` and `[` becomes
+`%5B`.
+
+The binding limit is not the client's but the server's, and it is far lower than
+it looks: nginx caps a request *line* at one `large_client_header_buffers`
+entry, 8 KB by default, and uvicorn's h11 at `max_incomplete_event_size`, 16 KB.
+Past either, the answer is 414 or 431 or a dropped connection -- an error about
+URLs, from a request that could have been a body.  So the threshold sits well
+under the smaller of them, with the scheme, host and path counted in.
 
 Below it nothing changes, which is what keeps every server that ever served a
-GET serving one: a POST is spent only where a GET could not have been made.
+GET serving one: a POST is spent only where a GET was a bad bet.  Above it, a
+server too old for `POST api/fetch` answers 405 and the GET is tried anyway
+while :data:`_MAX_URL_CHARS` says a client could build one -- nothing may be in
+front of that server, and a request that might work beats an error that will not.
+"""
+
+_MAX_URL_CHARS = 60_000
+"""How long an encoded query may be before no GET is worth attempting.
+
+Roughly where httpx gives up building the URL, with an error about URL
+components rather than about coordinates.  Past this a key has to travel in a
+body, and a server without that route can only be told so.
 """
 
 _UNTRIED = object()
