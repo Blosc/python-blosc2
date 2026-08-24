@@ -73,7 +73,7 @@ It is never a loss. A slice wanting more than half a chunk's blocks is wanting t
 
 Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
 
-A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy a step is not followed but covered: `p[::2]` reads the blocks of the run it lies in, which is what `p[:]` over that run would read, and `[::-1]` costs what its forward twin does. So a step buys the bounds it is written with, and nothing beyond them.
+A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy it is placed on the block grid like any other key: `p[::2]` reads the blocks holding the coordinates it selects and no others, and `[::-1]` costs what its forward twin does. What that saves is `min(step, block extent along that axis)`, so it is nothing where blocks already span the axis whole — a step along the last dimension, usually — and the step's own factor where they do not. On `kevlar-tomo.b2nd`, whose blocks are one row deep, `[::2]` halves the read and `[::5]` cuts it fivefold.
 
 ### Seeing byte savings
 

@@ -594,12 +594,40 @@ def test_a_stepped_slice_reads_the_run_it_lies_in(tmp_path, server, any_chunk_wa
         np.testing.assert_array_equal(p[key], data[key])
 
 
-def test_a_step_costs_its_run_and_not_the_whole_array(tmp_path, server, any_chunk_wants_blocks):
-    """A stepped slice bounded to one corner reads that corner, not every chunk.
+def test_a_step_is_placed_on_the_blocks_it_selects(tmp_path, server, any_chunk_wants_blocks):
+    """A step reads the blocks holding its coordinates, not the run they lie in.
 
-    Falling back to "every chunk, whole" would also be correct, and is what a key
-    this cannot place gets; the run a step lies in is a far smaller superset.
+    With blocks of extent 1 along the stepped axis -- which is how an image stack
+    or a tomography volume is chunked, `kevlar-tomo.b2nd` included -- the run a
+    step lies in is the whole array, and covering it over-fetches by the step.
     """
+    data = _incompressible((60, 200))
+    array, srv = server(data, chunks=(1, 200), blocks=(1, 20))
+    blocks_per_chunk = 10
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "stepped-exact.b2nd"), mode="w")
+    for step in (2, 3, 5):
+        key = np.s_[::step]
+        wanted = p._wanted_blocks(key)
+        assert sum(len(bs) for bs in wanted.values()) == len(range(0, 60, step)) * blocks_per_chunk
+        assert sorted(wanted) == list(range(0, 60, step))  # and nothing in between
+        np.testing.assert_array_equal(p[key], data[key])
+
+
+def test_an_unstepped_box_still_says_every_rather_than_counting(tmp_path, server):
+    """The exact path is for steps only; a plain slice keeps the cheaper one.
+
+    Naming a covered chunk's blocks one by one is the expensive way to say
+    `every`, and that shortcut is what keeps a large box cheap to plan.
+    """
+    data = _incompressible((60, 200))
+    array, srv = server(data, chunks=(1, 200), blocks=(1, 20))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "unstepped.b2nd"), mode="w")
+    assert p._plan(np.s_[0:10])[0] == "box"
+    assert isinstance(next(iter(p._wanted_blocks(np.s_[0:10]).values())), range)
+
+
+def test_a_step_costs_its_run_and_not_the_whole_array(tmp_path, server, any_chunk_wants_blocks):
+    """A stepped slice bounded to one corner reads that corner, not every chunk."""
     data = _incompressible((200, 200))
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, urlpath=str(tmp_path / "corner.b2nd"), mode="w")

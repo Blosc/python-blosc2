@@ -410,7 +410,8 @@ class Proxy(blosc2.Operand):
             Placed exactly, by :func:`_fancy_cells`.
         ``("box", spans)``
             A half-open run per dimension, for the caller to intersect with the
-            grid.  A step is covered by the run it lies in rather than followed.
+            grid.  Only for a key of plain slices: a step is placed exactly, as
+            cells, since the run it lies in holds blocks it selects nothing from.
         ``("chunks", nchunks)``
             Every chunk, whole: a key nothing here can place, which is the
             granularity the proxy had before blocks and always a superset.
@@ -429,8 +430,16 @@ class Proxy(blosc2.Operand):
             return everything
         if cells is not None:
             return "cells", cells
+        # A box, which the span path intersects with the grid more cheaply than
+        # naming its cells would -- a chunk it covers whole says `every` rather
+        # than counting its blocks out.  Unless it steps: then the run is a
+        # superset by the step's own factor, and the cells are worth naming
         spans = _item_spans(item, shape)
-        return ("box", spans) if spans is not None else everything
+        if spans is None:
+            return everything
+        if _stepped(item, shape):
+            return "cells", _box_cells(item, shape, chunks, blocks)
+        return "box", spans
 
     def _wanted_chunks(self, item) -> list[int]:
         """The chunks *item* touches."""
@@ -1102,18 +1111,34 @@ def _whole_array(item) -> bool:
     return isinstance(item, tuple) and len(item) == 0
 
 
-def _dim_cells(dim, lo, hi, chunks, blocks) -> set[tuple[int, int]]:
+def _dim_cells(dim, lo, hi, chunks, blocks, step=1, anchor=0) -> set[tuple[int, int]]:
     """The (chunk, block) pairs along *dim* that coordinates lo..hi inclusive fall in.
 
     Blocks partition a chunk and restart at every chunk boundary -- a chunk need
     not be a whole number of blocks -- so a block is located by where it sits
     inside its chunk, never by a running count across the array.
+
+    With a *step*, only the cells actually holding a selected coordinate: those
+    are the ones congruent to *anchor* modulo *step*, whichever way the slice
+    runs, so a cell is wanted exactly when the lowest such coordinate at or after
+    its start falls at or before its end.  Which needs the cell's *extent*, and
+    that is where this is easy to get wrong: the last block of a chunk that is
+    not a whole number of blocks is shorter than the rest, so a block ends where
+    its chunk does when that comes first.
     """
+    exact = step > 1
     cells = set()
     for c in range(lo // chunks[dim], hi // chunks[dim] + 1):
         first = max(lo - c * chunks[dim], 0) // blocks[dim]
         last = min(hi - c * chunks[dim], chunks[dim] - 1) // blocks[dim]
-        cells |= {(c, b) for b in range(first, last + 1)}
+        if not exact:
+            cells |= {(c, b) for b in range(first, last + 1)}
+            continue
+        for b in range(first, last + 1):
+            start = max(c * chunks[dim] + b * blocks[dim], lo)
+            end = min(c * chunks[dim] + min((b + 1) * blocks[dim], chunks[dim]) - 1, hi)
+            if anchor + -((anchor - start) // step) * step <= end:
+                cells.add((c, b))
     return cells
 
 
@@ -1215,14 +1240,12 @@ def _fancy_cells(item, shape, chunks, blocks):
     crossed = []
     for dim in basic:
         start, stop, step = key[dim].indices(shape[dim])
-        # A step is not followed: the span it lies in is a superset of it, and a
-        # superset is the one kind of wrong answer this may give.  A reversed
-        # slice runs from stop + 1 up to start, and covers the same span its
-        # forward twin does -- reading it as empty would fetch nothing at all
+        # A reversed slice runs from stop + 1 up to start, and covers the same
+        # run its forward twin does -- reading it as empty would fetch nothing
         lo, hi = (stop + 1, start) if step < 0 else (start, stop - 1)
         if hi < lo:
             return {}
-        crossed.append(_dim_cells(dim, lo, hi, chunks, blocks))
+        crossed.append(_dim_cells(dim, lo, hi, chunks, blocks, abs(step), start))
 
     # A crossed dimension contributes the same offset to every paired cell, so the
     # whole cross product is one broadcast sum rather than a loop over
@@ -1260,6 +1283,45 @@ def _group_cells(nchunks: np.ndarray, nblocks: np.ndarray) -> dict[int, set]:
         int(n): set(group.tolist())
         for n, group in zip(nchunks[starts], np.split(nblocks, starts[1:]), strict=True)
     }
+
+
+def _stepped(item, shape) -> bool:
+    """Whether *item* is a box that steps, and so is worth placing exactly."""
+    from blosc2.utils import process_key
+
+    key, _ = process_key(item, shape)
+    return any(isinstance(k, slice) and abs(k.indices(shape[d])[2]) > 1 for d, k in enumerate(key))
+
+
+def _box_cells(item, shape, chunks, blocks) -> dict[int, set]:
+    """``{chunk: {block}}`` a stepped box touches, exactly.
+
+    The cells of a box are the cross product of what each dimension selects,
+    because a box is: a cell holds a selected coordinate exactly when every one
+    of its dimensions does.  So this is :func:`_fancy_cells`'s crossing with
+    nothing paired to cross against, and :func:`_dim_cells` following the step
+    is what makes each dimension's answer exact rather than the run it lies in.
+    """
+    from blosc2.utils import process_key
+
+    key, _ = process_key(item, shape)
+    chunk_grid = [math.ceil(s / c) for s, c in zip(shape, chunks, strict=True)]
+    blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
+    chunk_strides, block_strides = _strides(chunk_grid), _strides(blocks_in_chunk)
+
+    at_chunk, at_block = [], []
+    for dim, k in enumerate(key):
+        start, stop, step = k.indices(shape[dim])
+        lo, hi = (stop + 1, start) if step < 0 else (start, stop - 1)
+        if hi < lo:
+            return {}
+        cells = np.array(sorted(_dim_cells(dim, lo, hi, chunks, blocks, abs(step), start)), dtype=np.int64)
+        axis = [1] * len(shape)
+        axis[dim] = -1
+        at_chunk.append((cells[:, 0] * chunk_strides[dim]).reshape(axis))
+        at_block.append((cells[:, 1] * block_strides[dim]).reshape(axis))
+
+    return _group_cells(sum(at_chunk).reshape(-1), sum(at_block).reshape(-1))
 
 
 def _item_spans(item, shape) -> list[tuple[int, int]] | None:
