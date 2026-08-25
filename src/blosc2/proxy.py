@@ -716,15 +716,15 @@ class Proxy(blosc2.Operand):
     def _asking_blocks(self, missing: dict, wave: dict | None) -> dict:
         """The chunks of *missing* the source wants taken apart, in order.
 
-        The wave goes with the question only to a source that says it takes one
-        (``wants_wave``), which is an opt-in in the same shape as ``max_ranges``
-        and read the same way: a `wants_blocks` written to the two-argument
-        protocol raises `TypeError` on being handed a third.
+        The wave and the run count go with the question only to a source that
+        says it takes them (``wants_wave``), which is an opt-in in the same shape
+        as ``max_ranges`` and read the same way: a `wants_blocks` written to the
+        two-argument protocol raises `TypeError` on being handed more.
         """
         wants = self.src.wants_blocks
-        if wave is not None and getattr(self.src, "wants_wave", False):
-            return {n: bs for n, bs in missing.items() if wants(n, len(bs), wave)}
-        return {n: bs for n, bs in missing.items() if wants(n, len(bs))}
+        if not getattr(self.src, "wants_wave", False):
+            return {n: bs for n, bs in missing.items() if wants(n, len(bs))}
+        return {n: bs for n, bs in missing.items() if wants(n, len(bs), wave, _runs(sorted(bs)))}
 
     def _fetch_by_block(self, item, max_concurrency: int | None):
         """`fetch()` against a source that can serve single blocks.
@@ -1100,6 +1100,16 @@ class Proxy(blosc2.Operand):
 
 _UNMAPPABLE = object()
 """A key that selects something, but nothing this can reduce to cells of the grid."""
+
+
+def _runs(nblocks: Sequence[int]) -> int:
+    """How many ranges *nblocks* will coalesce into, near enough to price them.
+
+    Blocks land in the frame roughly in index order, so consecutive indices are
+    the runs `block_plan` merges; this counts them without reading the layout
+    that would say exactly.  What they cost is `ByteRangeNDSource._runs_pay`.
+    """
+    return 1 + sum(later != earlier + 1 for earlier, later in itertools.pairwise(nblocks))
 
 
 def _whole_array(item) -> bool:

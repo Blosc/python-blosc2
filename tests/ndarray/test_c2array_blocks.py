@@ -663,7 +663,7 @@ def test_a_two_argument_wants_blocks_is_never_handed_the_wave():
     """`max_ranges` and `wants_wave` are opt-ins of their own.
 
     A source that batches ranges but was written to the two-argument protocol
-    used to be called with three, and raised `TypeError` on its first fetch.
+    used to be called with more, and raised `TypeError` on its first fetch.
     """
 
     class TwoArg:
@@ -675,7 +675,7 @@ def test_a_two_argument_wants_blocks_is_never_handed_the_wave():
     class ThreeArg(TwoArg):
         wants_wave = True
 
-        def wants_blocks(self, nchunk, nwanted, wave=None):
+        def wants_blocks(self, nchunk, nwanted, wave=None, nruns=None):
             return wave is not None
 
     def asking(src, wave):

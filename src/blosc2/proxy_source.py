@@ -982,7 +982,13 @@ class ByteRangeNDSource(ProxyNDSource):
         """
         return [self.read_range(offset, size) for offset, size in spans]
 
-    def wants_blocks(self, nchunk: int, nwanted: int, wave: Mapping[int, int] | None = None) -> bool:
+    def wants_blocks(
+        self,
+        nchunk: int,
+        nwanted: int,
+        wave: Mapping[int, int] | None = None,
+        nruns: int | None = None,
+    ) -> bool:
         """Whether fetching *nwanted* blocks of a chunk beats fetching all of it.
 
         Answered without reading anything, so a chunk that says no costs exactly
@@ -992,7 +998,9 @@ class ByteRangeNDSource(ProxyNDSource):
 
         *wave* is the whole fetch this chunk belongs to, ``{nchunk: nwanted}``,
         which a transport that batches ranges is asked with; see
-        :meth:`_wave_saves` for what it is used for and why.
+        :meth:`_wave_saves` for what it is used for and why.  *nruns* is how many
+        ranges those blocks will coalesce into, which is what they cost where
+        every range is its own request.
         """
         if nwanted > self.blocks_per_chunk * BLOCK_MAX_FRACTION:
             return False
@@ -1005,8 +1013,30 @@ class ByteRangeNDSource(ProxyNDSource):
         if int(offsets[nchunk]) < 0:
             return False  # a run-length chunk has no bytes in the file to skip
         if wave is None or self.max_ranges <= 1:
+            if not self._runs_pay(int(extents[nchunk]), nruns):
+                return False
             return int(extents[nchunk]) >= BLOCK_MIN_CBYTES
         return self._wave_saves(wave) >= BLOCK_MIN_CBYTES
+
+    def _runs_pay(self, cbytes: int, nruns: int | None) -> bool:
+        """Whether a chunk is worth splitting into *nruns* separate requests.
+
+        Where each range is its own request, a chunk split into R of them pays R
+        round trips against one, so it has to be worth R times what one costs --
+        the same :data:`BLOCK_MIN_CBYTES` the test below spends, once per
+        request rather than once per chunk.
+
+        A scattered key fragments; a step past a block's extent fragments by the
+        step.  Measured against S3 with 3.22 MB chunks, block mode ran 0.54x on
+        such a key in-region (15 ms, 90 MB/s) and 1.35x from Europe (240 ms,
+        3.5 MB/s), so no single answer is right for both networks and this takes
+        the one that is never worse than reading the chunks whole.  Transports
+        that carry many ranges per request never come here: Caterva2 collapses
+        the same 111 ranges into 4 requests, and wants the split.
+        """
+        if nruns is None or self.max_ranges > 1 or BLOCK_MIN_CBYTES <= 0:
+            return True  # a budget of zero prices nothing, and forbids nothing
+        return nruns <= max(1, cbytes // BLOCK_MIN_CBYTES)
 
     def _chunk_cap(self) -> int:
         """The most one chunk of this frame can weigh, without reading any of it.
@@ -1068,7 +1098,8 @@ class ByteRangeNDSource(ProxyNDSource):
         then two requests per chunk against one, both sides scale with the
         chunks touched, and a dataset of 193 KB chunks measured 0.70x against S3
         out to 121 of them.  Hence the ``max_ranges`` gate above, which leaves
-        that path deciding exactly as it did.
+        that path deciding exactly as it did -- and :meth:`_runs_pay`, which
+        prices the requests a fragmented chunk costs it.
 
         Blocks of a chunk are close enough in size to weigh what is wanted by
         counting them, the same approximation :data:`BLOCK_MAX_FRACTION` makes,
