@@ -53,6 +53,24 @@ redirects = {
     "getting_started/parquet_to_blosc2": "../guides/parquet_to_blosc2.html",
     "getting_started/sharing_across_processes": "../guides/sharing_across_processes.html",
     "getting_started/dsl_syntax": "../reference/dsl_syntax.html",
+    "getting_started/tutorials": "../tutorials/index.html",
+    "getting_started/tutorials/01.ndarray-basics": "../../tutorials/01.ndarray-basics.html",
+    "getting_started/tutorials/02.lazyarray-expressions": "../../tutorials/02.lazyarray-expressions.html",
+    "getting_started/tutorials/03.lazyarray-udf": "../../tutorials/03.lazyarray-udf.html",
+    "getting_started/tutorials/03.lazyarray-udf-kernels": "../../tutorials/03.lazyarray-udf-kernels.html",
+    "getting_started/tutorials/04.reductions": "../../tutorials/04.reductions.html",
+    "getting_started/tutorials/05.persistent-reductions": "../../tutorials/05.persistent-reductions.html",
+    "getting_started/tutorials/06.remote_proxy": "../../tutorials/06.remote_proxy.html",
+    "getting_started/tutorials/07.schunk-basics": "../../tutorials/07.schunk-basics.html",
+    "getting_started/tutorials/08.schunk-slicing_and_beyond": "../../tutorials/08.schunk-slicing_and_beyond.html",
+    "getting_started/tutorials/09.ucodecs-ufilters": "../../tutorials/09.ucodecs-ufilters.html",
+    "getting_started/tutorials/10.prefilters": "../../tutorials/10.prefilters.html",
+    "getting_started/tutorials/11.containers": "../../tutorials/11.containers.html",
+    "getting_started/tutorials/11.objectarray": "../../tutorials/11.objectarray.html",
+    "getting_started/tutorials/12.batcharray": "../../tutorials/12.batcharray.html",
+    "getting_started/tutorials/13.ctable-basics": "../../tutorials/13.ctable-basics.html",
+    "getting_started/tutorials/14.indexing-arrays": "../../tutorials/14.indexing-arrays.html",
+    "getting_started/tutorials/15.indexing-ctables": "../../tutorials/15.indexing-ctables.html",
 }
 html_theme = "furo"
 html_static_path = ["_static"]
@@ -93,7 +111,7 @@ html_theme_options = {
     ],
 }
 
-exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints"]
+exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints", "tutorials/images/**"]
 
 html_show_sourcelink = False
 

@@ -221,7 +221,7 @@ Four things to get right:
 
 ## See also
 
-- {doc}`Tutorial 6 <../getting_started/tutorials/06.remote_proxy>` — the same ground at a slower pace, with output.
+- {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — the same ground at a slower pace, with output.
 - `examples/ndarray/rw-fsspec.py` — every way of reading and writing an fsspec URL, runnable.
 - `examples/c2array-traffic.py` — what a remote slice costs in bytes, and what blocks and the cache save, runnable.
 - {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`Traffic` — the reference pages.

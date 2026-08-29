@@ -6,4 +6,3 @@ Getting Started
 
     overview
     installation
-    tutorials
