@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.12.0 to 4.13.0
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.11.0 to 4.12.0
 
 This release focuses on efficient remote arrays. Blosc2 containers can now be
