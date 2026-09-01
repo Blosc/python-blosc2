@@ -36,7 +36,7 @@ a = blosc2.linspace(0, 10, 10_000_000)
 b = blosc2.linspace(10, 20, 10_000_000)
 
 # Construct a lazy expression (no computation or memory allocation yet)
-expr = (a ** 2 + blosc2.sin(b)) > 5
+expr = (a**2 + blosc2.sin(b)) > 5
 
 # Evaluate chunk-by-chunk across threads
 out = expr.compute()
@@ -49,11 +49,13 @@ Working with structured columnar data is equally straightforward with `CTable`:
 from dataclasses import dataclass
 import blosc2
 
+
 @dataclass
 class Record:
     id: int = blosc2.field(blosc2.int64())
     temperature: float = blosc2.field(blosc2.float32())
     active: bool = blosc2.field(blosc2.bool())
+
 
 # Create a table and query it in a single pass over compressed columns
 t = blosc2.CTable(Record, expected_size=1_000_000)
