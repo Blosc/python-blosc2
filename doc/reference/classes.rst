@@ -33,6 +33,7 @@ without chunk caching.
     ProxySource
     ProxyNDSource
     SimpleProxy
+    Traffic
 
 
 General Data Stores
@@ -142,6 +143,7 @@ container APIs above.
     byterangendsource
     fsspecndsource
     simpleproxy
+    traffic
     embed_store
     dict_store
     tree_store

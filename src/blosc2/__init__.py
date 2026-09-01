@@ -593,6 +593,7 @@ from .proxy_source import (
     ProxyNDSource,
     ByteRangeNDSource,
     FsspecNDSource,
+    Traffic,
 )
 from .indexing import Index
 
@@ -889,6 +890,7 @@ __all__ = [  # noqa : RUF022
     "Operand",
     "ByteRangeNDSource",
     "FsspecNDSource",
+    "Traffic",
     "Proxy",
     "ProxyNDField",
     "ProxyNDSource",

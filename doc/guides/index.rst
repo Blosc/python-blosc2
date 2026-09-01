@@ -11,6 +11,7 @@ Topics
 .. toctree::
     :maxdepth: 1
 
+    benchmarks
     optimization_tips
     remote_arrays
     sharing_across_processes

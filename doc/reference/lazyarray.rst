@@ -7,10 +7,10 @@ This is an API interface for computing an expression or a Python user defined fu
 
 You can get an object following the LazyArray API in any of the following ways:
 
-* Any expression that involves one or more NDArray objects, e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see `the lazyarray expressions tutorial <../getting_started/tutorials/02.lazyarray-expressions.html>`_).
+* Any expression that involves one or more NDArray objects, e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see `the lazyarray expressions tutorial <../tutorials/02.lazyarray-expressions.html>`_).
 * Using the ``lazyexpr`` constructor.
-* Using the ``lazyudf`` constructor (see `a tutorial <../getting_started/tutorials/03.lazyarray-udf.html>`_).
-* Using ``@dsl_kernel`` and ``lazyudf`` for miniexpr-backed DSL kernels (see `the DSL kernels tutorial <../getting_started/tutorials/03.lazyarray-udf-kernels.html>`_).
+* Using the ``lazyudf`` constructor (see `a tutorial <../tutorials/03.lazyarray-udf.html>`_).
+* Using ``@dsl_kernel`` and ``lazyudf`` for miniexpr-backed DSL kernels (see `the DSL kernels tutorial <../tutorials/03.lazyarray-udf-kernels.html>`_).
 
 The LazyArray object is a thin wrapper around the expression or user-defined function that allows for lazy computation. This means that the expression is not computed until the ``compute`` or ``__getitem__`` methods are called. The ``compute`` method will return a new NDArray object with the result of the expression evaluation. The ``__getitem__`` method will return a NumPy object instead.
 
@@ -47,7 +47,7 @@ See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 LazyExpr
 --------
 
-An expression like ``a + sum(b)``, where there is at least one NDArray object in operands ``a`` and ``b``, `returns a LazyExpr object <../getting_started/tutorials/02.lazyarray-expressions.html>`_. You can also get a LazyExpr object using the ``lazyexpr`` constructor (see below).
+An expression like ``a + sum(b)``, where there is at least one NDArray object in operands ``a`` and ``b``, `returns a LazyExpr object <../tutorials/02.lazyarray-expressions.html>`_. You can also get a LazyExpr object using the ``lazyexpr`` constructor (see below).
 
 This object follows the `LazyArray`_ API for computation and storage.
 
@@ -58,7 +58,7 @@ This object follows the `LazyArray`_ API for computation and storage.
 LazyUDF
 -------
 
-For getting a LazyUDF object (which is LazyArray-compliant) from a user-defined Python function, you can use the lazyudf constructor below. See  `a tutorial on how this works <../getting_started/tutorials/03.lazyarray-udf.html>`_.
+For getting a LazyUDF object (which is LazyArray-compliant) from a user-defined Python function, you can use the lazyudf constructor below. See  `a tutorial on how this works <../tutorials/03.lazyarray-udf.html>`_.
 
 This object follows the `LazyArray`_ API for computation and storage.
 
@@ -69,11 +69,13 @@ This object follows the `LazyArray`_ API for computation and storage.
 DSL Kernels
 -----------
 
-For miniexpr-backed kernels, see `the dedicated tutorial <../getting_started/tutorials/03.lazyarray-udf-kernels.html>`_.
+For miniexpr-backed kernels, see `the dedicated tutorial <../tutorials/03.lazyarray-udf-kernels.html>`_.
 For the full DSL syntax, see the `DSL syntax reference <dsl_syntax.html>`_.
 
 .. autofunction:: dsl_kernel
 
 .. autofunction:: validate_dsl
+
+.. autofunction:: validate_dsl_jit
 
 .. autoclass:: DSLSyntaxError

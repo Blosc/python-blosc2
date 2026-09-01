@@ -91,7 +91,7 @@ class Proxy(blosc2.Operand):
 
             A source that can name the exact bytes it reads, as
             :ref:`FsspecNDSource` does with its ``stamp`` (fsspec's token) and
-            :ref:`C2Array` with the subscriber's mtime, is checked against that
+            :ref:`C2Array` with the server's mtime, is checked against that
             too: a cache built from different bytes raises, even when the geometry
             still fits. For every other source geometry is all there is to check,
             so a source whose contents changed underneath while its geometry did
@@ -227,6 +227,35 @@ class Proxy(blosc2.Operand):
         self._fetched = self._adopt_cache(fresh, self._schunk_cache.nchunks)
         for key in vlmeta or ():
             self._schunk_cache.vlmeta[key] = vlmeta[key]
+
+    @property
+    def traffic(self) -> "blosc2.proxy_source.Traffic | None":
+        """What this proxy has read off its source, or None for a local one.
+
+        Cumulative bytes and requests since the source was opened, counted at the
+        transport, so the frame index and the block offsets are in it as well as
+        the data, and the metadata call that opened the handle is not.  What a
+        slice cost in traffic is the difference between two readings of this, or
+        one reading after :meth:`Traffic.reset`.
+
+        It is what says whether block granularity is doing anything for a given
+        dataset and access pattern: whole chunks and blocks of them take similar
+        time on a fast link and differ by the compression ratio in bytes, and
+        bytes are what a shared uplink runs out of.
+
+        None where nothing crosses a wire -- a proxy over a local array -- since
+        a counter that only ever reads zero would say the traffic was free rather
+        than that it was never measured.
+
+        Examples
+        --------
+        >>> proxy = blosc2.open(url, lazy=True)  # doctest: +SKIP
+        >>> proxy.traffic.reset()  # doctest: +SKIP
+        >>> _ = proxy[0, 0, 0]  # doctest: +SKIP
+        >>> proxy.traffic  # doctest: +SKIP
+        Traffic(requests=2, nbytes=20480)
+        """
+        return getattr(self.src, "traffic", None)
 
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""
@@ -369,12 +398,73 @@ class Proxy(blosc2.Operand):
                 self._fetched[n // 8] &= ~(1 << (n % 8))
             self._hot_payloads.pop(info.nchunk, None)
 
+    def _plan(self, item):
+        """Where *item* lands on the cache's grid, read once for a fetch.
+
+        Reading a key is not free -- `process_key` normalizes it, and for a
+        boolean mask :func:`_fancy_cells` then divmods every coordinate it
+        selects -- so a fetch works it out once and both the chunks and the
+        blocks it wants come from that.  One of:
+
+        ``("cells", {chunk: {block}})``
+            Placed exactly, by :func:`_fancy_cells`.
+        ``("box", spans)``
+            A half-open run per dimension, for the caller to intersect with the
+            grid.  Only for a key of plain slices: a step is placed exactly, as
+            cells, since the run it lies in holds blocks it selects nothing from.
+        ``("chunks", nchunks)``
+            Every chunk, whole: a key nothing here can place, which is the
+            granularity the proxy had before blocks and always a superset.
+        ``("opaque", item)``
+            An SChunk cache has no grid to place a key on; only
+            `get_slice_nchunks` reads one.
+        """
+        everything = ("chunks", list(range(self._schunk_cache.nchunks)))
+        if not isinstance(self._cache, blosc2.NDArray):
+            return everything if _whole_array(item) else ("opaque", item)
+        shape, chunks, blocks = self._cache.shape, self._cache.chunks, self._cache.blocks
+        if _whole_array(item):  # full realization
+            return "box", [(0, s) for s in shape]
+        cells = _fancy_cells(item, shape, chunks, blocks)
+        if cells is _UNMAPPABLE:
+            return everything
+        if cells is not None:
+            return "cells", cells
+        # A box, which the span path intersects with the grid more cheaply than
+        # naming its cells would -- a chunk it covers whole says `every` rather
+        # than counting its blocks out.  Unless it steps: then the run is a
+        # superset by the step's own factor, and the cells are worth naming
+        spans = _item_spans(item, shape)
+        if spans is None:
+            return everything
+        if _stepped(item, shape):
+            return "cells", _box_cells(item, shape, chunks, blocks)
+        return "box", spans
+
     def _wanted_chunks(self, item) -> list[int]:
         """The chunks *item* touches."""
         self._sync_evictions()
-        if item == ():  # full realization
-            return list(range(self._schunk_cache.nchunks))
-        return [int(n) for n in blosc2.get_slice_nchunks(self._cache, item)]
+        return self._chunks_of(self._plan(item))
+
+    def _chunks_of(self, plan) -> list[int]:
+        """The chunks a :meth:`_plan` touches."""
+        kind, payload = plan
+        if kind == "chunks":
+            return payload
+        if kind == "cells":
+            return sorted(payload)
+        if kind == "opaque":
+            return [int(n) for n in blosc2.get_slice_nchunks(self._cache, payload)]
+        chunks = self._cache.chunks
+        ranges = []
+        for (lo, hi), csize in zip(payload, chunks, strict=True):
+            # Ahead of the grid, which a zero-length dimension has no chunk size
+            # to divide by: a run selecting nothing selects it in every dimension
+            if hi <= lo:
+                return []
+            ranges.append(range(lo // csize, (hi - 1) // csize + 1))
+        grid = [math.ceil(s / c) for s, c in zip(self._cache.shape, chunks, strict=True)]
+        return [int(np.ravel_multi_index(c, grid)) for c in itertools.product(*ranges)]
 
     def _missing_chunks(self, item) -> list[int]:
         """The chunks *item* touches that the cache does not hold in full."""
@@ -393,19 +483,32 @@ class Proxy(blosc2.Operand):
     def _wanted_blocks(self, item) -> dict[int, Sequence[int]]:
         """{chunk: blocks} that *item* touches, by intersecting it with the block grid.
 
-        Anything this cannot reduce to a box -- fancy indexing, a step -- asks for
-        every block of the chunks it touches, which is the granularity the proxy
-        had before blocks and always a superset of the right answer.
+        A key of integer arrays or boolean masks is placed on the grid exactly,
+        by :func:`_fancy_cells`: each selected coordinate lives in one block, so
+        scattered points cost blocks and not the chunks holding them.  Anything
+        left that this cannot reduce to a box -- a key nobody has thought about --
+        asks for every block of the chunks it touches, which is the granularity
+        the proxy had before blocks and always a superset of the right answer.
+        A step is a box: the run it lies in, which is a superset too, and a much
+        smaller one than the chunks that run crosses.
         """
-        chunks, blocks = self._cache.chunks, self._cache.blocks
+        self._sync_evictions()
         every = range(self._blocks_per_chunk)
-        spans = _item_spans(item, self._cache.shape)
-        if spans is None:
-            return dict.fromkeys(self._wanted_chunks(item), every)
+        kind, payload = plan = self._plan(item)
+        if kind != "box":
+            if kind == "cells":
+                # A key that happens to cover a chunk whole says so as cheaply as
+                # a slice does; see the same shortcut on the box path below
+                return {
+                    n: every if len(b) == self._blocks_per_chunk else sorted(b) for n, b in payload.items()
+                }
+            return dict.fromkeys(self._chunks_of(plan), every)
+        chunks, blocks = self._cache.chunks, self._cache.blocks
+        spans = payload
         chunk_grid = [math.ceil(s / c) for s, c in zip(self._cache.shape, chunks, strict=True)]
         blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
         wanted = {}
-        for nchunk in self._wanted_chunks(item):
+        for nchunk in self._chunks_of(plan):
             coords = np.unravel_index(nchunk, chunk_grid)
             ranges = []
             for dim, (start, stop) in enumerate(spans):
@@ -552,7 +655,7 @@ class Proxy(blosc2.Operand):
         chunks, whenever that is the cheaper way round -- see the thresholds in
         `blosc2.proxy_source`.  The chunks left in the cache then hold only those
         blocks, and read as zeros elsewhere until the rest are fetched.  A source
-        that stops answering range reads partway (a subscriber that now computes
+        that stops answering range reads partway (a server that now computes
         the dataset, or is too busy to serve it from its file) does not fail the
         fetch: the chunks it was asked for come whole instead.
 
@@ -610,6 +713,19 @@ class Proxy(blosc2.Operand):
             # requests; only the handful already running are waited for
             pool.shutdown(cancel_futures=True)
 
+    def _asking_blocks(self, missing: dict, wave: dict | None) -> dict:
+        """The chunks of *missing* the source wants taken apart, in order.
+
+        The wave and the run count go with the question only to a source that
+        says it takes them (``wants_wave``), which is an opt-in in the same shape
+        as ``max_ranges`` and read the same way: a `wants_blocks` written to the
+        two-argument protocol raises `TypeError` on being handed more.
+        """
+        wants = self.src.wants_blocks
+        if not getattr(self.src, "wants_wave", False):
+            return {n: bs for n, bs in missing.items() if wants(n, len(bs))}
+        return {n: bs for n, bs in missing.items() if wants(n, len(bs), wave, _runs(sorted(bs)))}
+
     def _fetch_by_block(self, item, max_concurrency: int | None):
         """`fetch()` against a source that can serve single blocks.
 
@@ -626,7 +742,12 @@ class Proxy(blosc2.Operand):
         missing = self._missing_blocks(item)
         if not missing:
             return self._cache
-        wanted = {n: bs for n, bs in missing.items() if self.src.wants_blocks(n, len(bs))}
+        # A transport that batches ranges pays the block path's fixed cost once
+        # for the whole fetch, so what it wants asked is the wave rather than the
+        # chunk; see `ByteRangeNDSource._wave_saves`.
+        batches = getattr(self.src, "max_ranges", 1) > 1
+        wave = {n: len(bs) for n, bs in missing.items()} if batches else None
+        wanted = self._asking_blocks(missing, wave)
         whole = [n for n in missing if n not in wanted]
 
         layouts = dict(zip(wanted, self._chunk_layouts(list(wanted), max_concurrency), strict=True))
@@ -634,6 +755,13 @@ class Proxy(blosc2.Operand):
         # only once its header is read
         whole += [n for n, layout in layouts.items() if layout is None]
         wanted = {n: bs for n, bs in wanted.items() if layouts[n] is not None}
+        if wave is not None and len(wanted) < len(wave):
+            # Those chunks were counted in the wave that was weighed, and are not
+            # in it any more.  The offsets read is spent either way, but the block
+            # reads are still ahead, so what is left is weighed before they go out
+            kept = self._asking_blocks(wanted, {n: len(bs) for n, bs in wanted.items()})
+            whole += [n for n in wanted if n not in kept]
+            wanted = kept
 
         # Each task is what one request will carry: a whole chunk on its own, or
         # a batch of range reads (of one, for a transport that takes one)
@@ -970,20 +1098,268 @@ class Proxy(blosc2.Operand):
         return {key: ProxyNDField(self, key) for key in _fields}
 
 
-def _item_spans(item, shape) -> list[tuple[int, int]] | None:
-    """The (start, stop) of *item* along every dimension, or None if it is no box.
+_UNMAPPABLE = object()
+"""A key that selects something, but nothing this can reduce to cells of the grid."""
 
-    Fancy indexing and strided slices have no box to intersect with the block
-    grid; the caller falls back to whole chunks for those.
+
+def _runs(nblocks: Sequence[int]) -> int:
+    """How many ranges *nblocks* will coalesce into, near enough to price them.
+
+    Blocks land in the frame roughly in index order, so consecutive indices are
+    the runs `block_plan` merges; this counts them without reading the layout
+    that would say exactly.  What they cost is `ByteRangeNDSource._runs_pay`.
     """
-    if item == ():
+    return 1 + sum(later != earlier + 1 for earlier, later in itertools.pairwise(nblocks))
+
+
+def _whole_array(item) -> bool:
+    """True where *item* is the empty tuple, the key that asks for everything.
+
+    Written out rather than `item == ()` because a key can be a numpy array, and
+    an array asked whether it equals a tuple compares elementwise and raises.
+    """
+    return isinstance(item, tuple) and len(item) == 0
+
+
+def _dim_cells(dim, lo, hi, chunks, blocks, step=1, anchor=0) -> set[tuple[int, int]]:
+    """The (chunk, block) pairs along *dim* that coordinates lo..hi inclusive fall in.
+
+    Blocks partition a chunk and restart at every chunk boundary -- a chunk need
+    not be a whole number of blocks -- so a block is located by where it sits
+    inside its chunk, never by a running count across the array.
+
+    With a *step*, only the cells actually holding a selected coordinate: those
+    are the ones congruent to *anchor* modulo *step*, whichever way the slice
+    runs, so a cell is wanted exactly when the lowest such coordinate at or after
+    its start falls at or before its end.  Which needs the cell's *extent*, and
+    that is where this is easy to get wrong: the last block of a chunk that is
+    not a whole number of blocks is shorter than the rest, so a block ends where
+    its chunk does when that comes first.
+    """
+    exact = step > 1
+    cells = set()
+    for c in range(lo // chunks[dim], hi // chunks[dim] + 1):
+        first = max(lo - c * chunks[dim], 0) // blocks[dim]
+        last = min(hi - c * chunks[dim], chunks[dim] - 1) // blocks[dim]
+        if not exact:
+            cells |= {(c, b) for b in range(first, last + 1)}
+            continue
+        for b in range(first, last + 1):
+            start = max(c * chunks[dim] + b * blocks[dim], lo)
+            end = min(c * chunks[dim] + min((b + 1) * blocks[dim], chunks[dim]) - 1, hi)
+            if anchor + -((anchor - start) // step) * step <= end:
+                cells.add((c, b))
+    return cells
+
+
+def _strides(grid) -> list[int]:
+    """C-order strides of *grid*: what one step along each dimension counts for.
+
+    Numbering a cell is then a dot product, which can be done to a whole column
+    of coordinates at once -- where `np.ravel_multi_index` would be a call per
+    cell, and the planning of a large fancy key is nearly all such calls.
+    """
+    strides = [1] * len(grid)
+    for i in range(len(grid) - 2, -1, -1):
+        strides[i] = strides[i + 1] * grid[i + 1]
+    return strides
+
+
+def _sort_dims(key):
+    """The dimensions of *key* indexed by an array, and those indexed plainly.
+
+    `_UNMAPPABLE` for anything else.  Everything `process_key` hands back is one
+    of these today -- a mask has already become an integer array by the time it
+    arrives, and an integer a slice of one -- so this is what keeps a key nobody
+    has thought about from being read as one that was.
+    """
+    advanced, basic = [], []
+    for dim, k in enumerate(key):
+        if isinstance(k, np.ndarray):
+            if not np.issubdtype(k.dtype, np.integer):
+                return _UNMAPPABLE  # coordinates, or this cannot place it
+            advanced.append(dim)
+        elif isinstance(k, slice):
+            basic.append(dim)
+        else:
+            return _UNMAPPABLE
+    return advanced, basic
+
+
+def _fancy_cells(item, shape, chunks, blocks):
+    """{chunk: {blocks}} a fancy key touches, exactly, or None where it is a plain box.
+
+    A slice reduces to a box and the caller intersects that with the block grid;
+    an integer array does not, and used to fall back to every block of every
+    chunk it touched -- which for scattered points is the whole of each of them,
+    the granularity blocks exist to avoid.  Here each selected coordinate is
+    located in its own block, so N points cost N blocks and not N chunks.
+
+    `process_key` has already broadcast the advanced indices against each other,
+    which is numpy's own rule for how they pair up, so the arrays arrive with one
+    shape and reading them elementwise is reading the coordinates selected.
+    Dimensions indexed by a slice are crossed with those, since every selected
+    coordinate is taken at every position of the slice.
+
+    A boolean mask arrives here already an integer array, and one per dimension
+    it spanned: `process_key` turns it into the coordinates it selects, paired
+    the way a mask's own dimensions pair.  So masks are placed as exactly as
+    lists are, and nothing here has to know which it was given.
+
+    `_UNMAPPABLE` for a key that selects something this cannot place, and the
+    caller then asks for whole chunks, which is a superset and so always safe.
+    Never a smaller answer than the truth: a block that should have been fetched
+    and was not reads as zeros, which nothing downstream could tell from data.
+    A key `process_key` refuses is not one of those -- the cache cannot index it
+    either, so it raises here rather than fetching an array's worth of blocks for
+    an answer that is never going to be returned.
+    """
+    from blosc2.utils import process_key
+
+    key, _ = process_key(item, shape)
+    sorted_dims = _sort_dims(key)
+    if sorted_dims is _UNMAPPABLE:
+        return _UNMAPPABLE
+    advanced, basic = sorted_dims
+    if not advanced:
+        return None  # a box, which the caller has a cheaper way to intersect
+
+    chunk_grid = [math.ceil(s / c) for s, c in zip(shape, chunks, strict=True)]
+    blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
+    chunk_strides = _strides(chunk_grid)
+    block_strides = _strides(blocks_in_chunk)
+
+    # The advanced dimensions are read together: one coordinate each, per element.
+    # Located in bulk and numbered as they are located, since a mask may select
+    # millions of them and one divmod apiece is then what planning costs
+    flat = [key[d].reshape(-1) for d in advanced]
+    if flat[0].size == 0:
+        return {}
+    part_chunk = np.zeros(flat[0].size, dtype=np.int64)
+    part_block = np.zeros(flat[0].size, dtype=np.int64)
+    for dim, coords in zip(advanced, flat, strict=True):
+        chunk, offset = np.divmod(coords.astype(np.int64, copy=False), chunks[dim])
+        part_chunk += chunk * chunk_strides[dim]
+        part_block += (offset // blocks[dim]) * block_strides[dim]
+    # What the advanced dimensions alone say about the cell, as one number so that
+    # the distinct cells are a single sort: the points sharing one are fetched by
+    # fetching it once, and there are far fewer cells than there are points
+    per_chunk = math.prod(blocks_in_chunk)
+    cell_chunk, cell_block = np.divmod(np.unique(part_chunk * per_chunk + part_block), per_chunk)
+
+    crossed = []
+    for dim in basic:
+        start, stop, step = key[dim].indices(shape[dim])
+        # A reversed slice runs from stop + 1 up to start, and covers the same
+        # run its forward twin does -- reading it as empty would fetch nothing
+        lo, hi = (stop + 1, start) if step < 0 else (start, stop - 1)
+        if hi < lo:
+            return {}
+        crossed.append(_dim_cells(dim, lo, hi, chunks, blocks, abs(step), start))
+
+    # A crossed dimension contributes the same offset to every paired cell, so the
+    # whole cross product is one broadcast sum rather than a loop over
+    # combinations: the paired cells lie along one axis and each crossed
+    # dimension adds an axis of its own, which is `itertools.product` done by
+    # numpy.  For a mask over a large array the crossing, not the divmod above,
+    # is nearly all of what planning costs.
+    axes = [cell_chunk], [cell_block]
+    for i, dim in enumerate(basic):
+        at = np.asarray(sorted(crossed[i]), dtype=np.int64)
+        shape_i = [1] * (len(basic) + 1)
+        shape_i[i + 1] = -1
+        axes[0].append((at[:, 0] * chunk_strides[dim]).reshape(shape_i))
+        axes[1].append((at[:, 1] * block_strides[dim]).reshape(shape_i))
+    grid = [1] * (len(basic) + 1)
+    grid[0] = -1
+    nchunks = sum(axes[0][1:], axes[0][0].reshape(grid)).reshape(-1)
+    nblocks = sum(axes[1][1:], axes[1][0].reshape(grid)).reshape(-1)
+
+    return _group_cells(nchunks, nblocks)
+
+
+def _group_cells(nchunks: np.ndarray, nblocks: np.ndarray) -> dict[int, set]:
+    """``{chunk: {block}}`` out of two flat columns naming one cell each.
+
+    One sort and one split, rather than a dict lookup per cell: the grouping then
+    costs an entry per *chunk*, where a large fancy key names cells in the
+    millions.  Duplicates go the same way -- several coordinates of a mask share
+    a block, which is the whole reason blocks are worth naming.
+    """
+    order = np.lexsort((nblocks, nchunks))
+    nchunks, nblocks = nchunks[order], nblocks[order]
+    starts = np.flatnonzero(np.concatenate(([True], nchunks[1:] != nchunks[:-1])))
+    return {
+        int(n): set(group.tolist())
+        for n, group in zip(nchunks[starts], np.split(nblocks, starts[1:]), strict=True)
+    }
+
+
+def _stepped(item, shape) -> bool:
+    """Whether *item* is a box that steps, and so is worth placing exactly."""
+    from blosc2.utils import process_key
+
+    key, _ = process_key(item, shape)
+    return any(isinstance(k, slice) and abs(k.indices(shape[d])[2]) > 1 for d, k in enumerate(key))
+
+
+def _box_cells(item, shape, chunks, blocks) -> dict[int, set]:
+    """``{chunk: {block}}`` a stepped box touches, exactly.
+
+    The cells of a box are the cross product of what each dimension selects,
+    because a box is: a cell holds a selected coordinate exactly when every one
+    of its dimensions does.  So this is :func:`_fancy_cells`'s crossing with
+    nothing paired to cross against, and :func:`_dim_cells` following the step
+    is what makes each dimension's answer exact rather than the run it lies in.
+    """
+    from blosc2.utils import process_key
+
+    key, _ = process_key(item, shape)
+    chunk_grid = [math.ceil(s / c) for s, c in zip(shape, chunks, strict=True)]
+    blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
+    chunk_strides, block_strides = _strides(chunk_grid), _strides(blocks_in_chunk)
+
+    at_chunk, at_block = [], []
+    for dim, k in enumerate(key):
+        start, stop, step = k.indices(shape[dim])
+        lo, hi = (stop + 1, start) if step < 0 else (start, stop - 1)
+        if hi < lo:
+            return {}
+        cells = np.array(sorted(_dim_cells(dim, lo, hi, chunks, blocks, abs(step), start)), dtype=np.int64)
+        axis = [1] * len(shape)
+        axis[dim] = -1
+        at_chunk.append((cells[:, 0] * chunk_strides[dim]).reshape(axis))
+        at_block.append((cells[:, 1] * block_strides[dim]).reshape(axis))
+
+    return _group_cells(sum(at_chunk).reshape(-1), sum(at_block).reshape(-1))
+
+
+def _item_spans(item, shape) -> list[tuple[int, int]] | None:
+    """The half-open run *item* covers along every dimension, or None if it is no box.
+
+    A step is covered rather than followed: the run it lies in holds every
+    coordinate it selects and some it does not, and a superset is the one kind of
+    wrong answer a fetch may give.  So `[::2]` reads the same blocks its unstepped
+    twin does, and a reversed slice reads what its forward twin does -- rather
+    than either of them falling through to every chunk of the array, which is
+    what a `None` here costs.  Fancy indexing has no run to give; the caller has
+    already placed it exactly by then.
+    """
+    if _whole_array(item):
         return [(0, s) for s in shape]
     from blosc2.utils import process_key
 
     key, _ = process_key(item, shape)
-    if not all(isinstance(k, slice) and k.step in (None, 1) for k in key):
+    if not all(isinstance(k, slice) for k in key):
         return None
-    return [(k.start, k.stop) for k in key]
+    spans = []
+    for dim, k in enumerate(key):
+        start, stop, step = k.indices(shape[dim])
+        # A negative step runs from stop + 1 up to start; reading it as its own
+        # bounds would make it empty and fetch nothing at all
+        lo, hi = (stop + 1, start + 1) if step < 0 else (start, stop)
+        spans.append((lo, max(hi, lo)))
+    return spans
 
 
 class ProxyNDField(blosc2.Operand):

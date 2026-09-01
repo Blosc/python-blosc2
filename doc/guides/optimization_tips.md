@@ -42,7 +42,7 @@ a = (rows + cols).compute(chunks=(CHUNK, COLS), urlpath="big.b2nd", mode="w")
 
 Both produce bit-identical files. For a 200,000x500 float64 array (~800 MiB uncompressed), the broadcast expression used **~26x less peak memory** — the peak is a handful of chunks, not the whole array — at essentially the same speed. Memory is the point here: the naive path is O(N) and stops working when the array outgrows RAM, while the broadcast path doesn't care how big the result is.
 
-This works for any expression over operands blosc2 can broadcast, not just two `arange()`s: an existing on-disk {class}`~blosc2.NDArray` times a per-column scale vector, a 2D field plus a 1D offset, and so on. The shape rules are NumPy's; the {doc}`lazy expressions tutorial <../getting_started/tutorials/02.lazyarray-expressions>` has a worked example.
+This works for any expression over operands blosc2 can broadcast, not just two `arange()`s: an existing on-disk {class}`~blosc2.NDArray` times a per-column scale vector, a 2D field plus a 1D offset, and so on. The shape rules are NumPy's; the {doc}`lazy expressions tutorial <../tutorials/02.lazyarray-expressions>` has a worked example.
 
 *Benchmark for this tip: [`tip_12_broadcast_build.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_12_broadcast_build.py)*
 

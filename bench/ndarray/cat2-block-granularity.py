@@ -14,10 +14,10 @@ request, through ``api/chunk``.  A chunk is made of blocks, which blosc2
 compresses and decompresses independently, and Caterva2 serves a *stored*
 dataset straight from its file, so ``api/fetch`` honours a ``Range`` header and
 a slice can fetch only the blocks it touches.  Whether that pays depends on
-three things this script measures against a subscriber of your choosing:
+three things this script measures against a server of your choosing:
 
 - whether the dataset **serves ranges at all**.  One stored from a file does;
-  one the subscriber computes -- a lazy expression, an HDF5 leaf, a ``.b2z``
+  one the server computes -- a lazy expression, an HDF5 leaf, a ``.b2z``
   member -- is streamed, cannot honour a range, and keeps to whole chunks;
 - the **request plan**: how many requests each mode issues and how many bytes
   they carry, read from the frame's own chunk headers for a few hundred bytes;
@@ -26,7 +26,7 @@ three things this script measures against a subscriber of your choosing:
 
 Usage
 -----
-    # a local array, served by a stand-in subscriber over loopback
+    # a local array, served by a stand-in server over loopback
     python cat2-block-granularity.py mydata.b2nd
 
     # ... with a network put back in front of every request
@@ -35,7 +35,7 @@ Usage
     # ... served the way a computed dataset is, which is what the fallback costs
     python cat2-block-granularity.py mydata.b2nd --streamed
 
-    # against a real subscriber
+    # against a real server
     python cat2-block-granularity.py @public/examples/kevlar-tomo.b2nd \\
         --urlbase https://cat2.cloud/demo
 
@@ -57,17 +57,17 @@ Three modes are timed, each of them the shipped code with one thing changed:
   RFC 7233 lets one ``Range`` header name many spans, and Caterva2 answers
   ``multipart/byteranges``.  No object store offers this.
 
-The stand-in subscriber answers ``api/info``, ``api/fetch`` and ``api/chunk``
+The stand-in server answers ``api/info``, ``api/fetch`` and ``api/chunk``
 the way Caterva2 does, ranges and multipart included (it sorts and merges the
 spans it is given, as Starlette does, which is what the client has to survive).
-Its request and byte counts are exact.  Its *times* are not a subscriber's:
-loopback answers in a fraction of a millisecond, where a subscriber over a WAN
+Its request and byte counts are exact.  Its *times* are not a server's:
+loopback answers in a fraction of a millisecond, where a server over a WAN
 takes tens of milliseconds, which is the regime the whole trade lives in.
 ``--latency-ms`` and ``--bandwidth-mbs`` put a stated network back in front of
 each request; cat2.cloud from Europe measures about ``--latency-ms 45
 --bandwidth-mbs 10``.  The simulated bandwidth is *per request*, so eight
 parallel ones get eight times as much of it -- which is about right for an
-object store and about wrong for one subscriber, and is why ``multipart`` can
+object store and about wrong for one server, and is why ``multipart`` can
 come out behind ``blocks`` there while it wins against the real thing.
 
 ``--write`` measures the other direction: an array is laid out empty and filled
@@ -75,7 +75,7 @@ a chunk at a time, which is how several writers fill one array at once.  Three
 things, and the first is the only one that goes over the wire:
 
 - the **fill**, serial and then ``--concurrency`` writers at once.  The
-  subscriber serializes the writes themselves -- each takes the frame's
+  server serializes the writes themselves -- each takes the frame's
   exclusive lock -- so what overlaps is the round trip, and the gain is whatever
   share of a write that was.  Over loopback it is almost none; put a network in
   front with ``--latency-ms`` and it is most of it;
@@ -88,7 +88,7 @@ things, and the first is the only one that goes over the wire:
   its chunks.  The offsets are one decompress whatever the count; the walk is a
   read per chunk, so the two cross over as an array grows.
 
-Against a real subscriber ``--write`` needs ``--write-target``: an empty
+Against a real server ``--write`` needs ``--write-target``: an empty
 pre-sized array to fill, since laying one out is not this script's business on
 someone else's server.  Only the serial fill runs there -- a slot is written
 once, so a second timed fill needs a second array.
@@ -118,7 +118,7 @@ CHUNK_HEADER = blosc2.proxy_source._CHUNK_HEADER_LEN
 
 
 #
-# A stand-in subscriber, so this runs with no service to point at
+# A stand-in server, so this runs with no service to point at
 #
 
 
@@ -126,7 +126,7 @@ UNINIT = 0x4
 """What a frame codes in a chunk's flags byte for a slot never written to."""
 
 
-class Subscriber:
+class Cat2Server:
     """Caterva2's read endpoints over one local .b2nd file, and its write one."""
 
     def __init__(self, urlpath, streamed=False, writable=False):
@@ -139,14 +139,14 @@ class Subscriber:
         self.writable = writable
         self.array = blosc2.open(str(self.path), mode="a" if writable else "r", locking=writable)
         self.lock = threading.Lock()
-        # A dataset the subscriber would compute rather than store: served by a
+        # A dataset the server would compute rather than store: served by a
         # body builder, which has no way to honour a Range
         self.streamed = streamed
 
     def close(self):
         """Let go of the file this held open, so the scratch tree can be removed.
 
-        A writable subscriber keeps one handle for its whole life, and a run that
+        A writable server keeps one handle for its whole life, and a run that
         fills several arrays leaves one behind per array otherwise -- still
         holding files that `shutil.rmtree` then unlinks under them.
         """
@@ -222,49 +222,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
         target = getattr(self.server, "target", None)
         if target is not None and self.path.split("?")[0].endswith(target.name):
             return target
-        return self.server.subscriber
+        return self.server.cat2
 
     def do_POST(self):  # BaseHTTPRequestHandler's own spelling
-        sub = self._dataset()
+        srv = self._dataset()
         endpoint = self.path.split("/")[2].split("?")[0]
-        if endpoint != "chunk" or not sub.writable:
+        if endpoint != "chunk" or not srv.writable:
             self._send(404, b"")
             return
         nchunk = int(self.path.split("nchunk=")[1])
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        status, answer = sub.write_chunk(nchunk, body)
+        status, answer = srv.write_chunk(nchunk, body)
         self._send(status, json.dumps(answer).encode())
 
     def do_GET(self):  # BaseHTTPRequestHandler's own spelling
-        sub = self._dataset()
+        srv = self._dataset()
         endpoint = self.path.split("/")[2]
         if endpoint == "info":
-            self._send(200, json.dumps(sub.meta()).encode())
+            self._send(200, json.dumps(srv.meta()).encode())
         elif endpoint == "chunk":
             nchunk = int(self.path.split("nchunk=")[1])
-            self._send(200, sub.array.schunk.get_chunk(nchunk))
+            self._send(200, srv.array.schunk.get_chunk(nchunk))
         elif endpoint == "fetch":
-            self._fetch(sub)
+            self._fetch(srv)
         else:
             self._send(404, b"")
 
-    def _fetch(self, sub):
+    def _fetch(self, srv):
         wanted = self.headers.get("Range")
-        if sub.streamed:
+        if srv.streamed:
             # What the streaming paths answer since they were made honest: a 416
             # instead of the whole body with a 200 that no client could notice
             if wanted:
                 self._send(416, b"", [("Accept-Ranges", "none")])
             else:
-                self._send(200, sub.read(0, sub.size - 1), [("Accept-Ranges", "none")])
+                self._send(200, srv.read(0, srv.size - 1), [("Accept-Ranges", "none")])
             return
         if not wanted:
-            self._send(200, sub.read(0, sub.size - 1), [("Accept-Ranges", "bytes")])
+            self._send(200, srv.read(0, srv.size - 1), [("Accept-Ranges", "bytes")])
             return
         spans = []
         for span in wanted.removeprefix("bytes=").split(","):
             start, end = (int(n) for n in span.split("-"))
-            spans.append((start, min(end, sub.size - 1)))
+            spans.append((start, min(end, srv.size - 1)))
         # Starlette sorts the spans and merges the ones that touch, and answers a
         # plain 206 when only one is left, so a client cannot count on a part per
         # span nor on the order it asked in
@@ -279,17 +279,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             start, end = merged[0]
             self._send(
                 206,
-                sub.read(start, end),
-                [("Content-Range", f"bytes {start}-{end}/{sub.size}"), ("Accept-Ranges", "bytes")],
+                srv.read(start, end),
+                [("Content-Range", f"bytes {start}-{end}/{srv.size}"), ("Accept-Ranges", "bytes")],
             )
             return
         body = b""
         for start, end in merged:
             body += (
                 f"--{self.BOUNDARY}\r\nContent-Type: application/octet-stream\r\n"
-                f"Content-Range: bytes {start}-{end}/{sub.size}\r\n\r\n"
+                f"Content-Range: bytes {start}-{end}/{srv.size}\r\n\r\n"
             ).encode()
-            body += sub.read(start, end) + b"\r\n"
+            body += srv.read(start, end) + b"\r\n"
         body += f"--{self.BOUNDARY}--\r\n".encode()
         self._send(
             206,
@@ -309,7 +309,7 @@ def stand_in(urlpath, streamed=False):
     here.
     """
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.subscriber = Subscriber(urlpath, streamed)
+    server.cat2 = Cat2Server(urlpath, streamed)
     server.target = None
     threading.Thread(target=server.serve_forever, daemon=True).start()
     urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
@@ -348,7 +348,7 @@ def chunk_cbytes(source, nchunks):
 
     Read rather than guessed at: the distance to the next chunk is an upper
     bound only, and a frame with a hole in it would make the chunk mode look
-    dearer than it is.  One request for the lot where the subscriber takes
+    dearer than it is.  One request for the lot where the server takes
     several ranges, which is the same trick the fetch path uses.
     """
     live = [n for n in nchunks if int(source._offsets[n]) >= 0]
@@ -360,7 +360,7 @@ def chunk_cbytes(source, nchunks):
 
 
 def request_plan(proxy, array, item):
-    """What each mode asks the subscriber for, to serve *item*.
+    """What each mode asks the server for, to serve *item*.
 
     Follows `Proxy._fetch_by_block` step for step -- which chunks the slice
     touches, which of those are worth taking apart, one read for the block
@@ -370,6 +370,10 @@ def request_plan(proxy, array, item):
     source = array.block_source()
     wanted = proxy._wanted_blocks(item)
     sizes = chunk_cbytes(source, list(wanted))
+    # The whole fetch is what a batching transport weighs, so the same wave the
+    # fetch judges by is what is asked here; judging chunk by chunk would report
+    # a plan the fetch below does not follow
+    wave = {n: len(bs) for n, bs in wanted.items()} if source.max_ranges > 1 else None
     layouts, runs, whole = [], [], []
     nblocks_wanted = 0
     for nchunk, nblocks in wanted.items():
@@ -377,7 +381,7 @@ def request_plan(proxy, array, item):
         nblocks_wanted += len(nblocks)
         if not sizes[nchunk]:  # a run-length chunk: free in every mode
             continue
-        if not array.wants_blocks(nchunk, len(nblocks)) or source.chunk_layout(nchunk) is None:
+        if not array.wants_blocks(nchunk, len(nblocks), wave) or source.chunk_layout(nchunk) is None:
             whole.append(nchunk)  # a chunk not worth taking apart, or with nothing to take apart
             continue
         layouts.append(CHUNK_HEADER + 4 * array.blocks_per_chunk)
@@ -485,7 +489,7 @@ def timed_fill(open_array, chunks, writers, latency, bandwidth):
     """Write *chunks* into a pre-sized array, and say what it cost.
 
     One `C2Array` per writer, as separate processes would have.  What overlaps
-    is the round trip: the subscriber serializes the writes themselves, since
+    is the round trip: the server serializes the writes themselves, since
     each one takes the frame's exclusive lock.
     """
     tally = {"requests": 0, "bytes": 0}
@@ -561,7 +565,7 @@ def connection_setup(urlbase, path, token, reps):
     """
     import httpx
 
-    url = c2array._sub_url(urlbase, f"api/info/{path}")
+    url = c2array._server_url(urlbase, f"api/info/{path}")
     headers = c2array._auth_headers(token)
     pooled = c2array._sync_client()
 
@@ -581,8 +585,8 @@ def connection_setup(urlbase, path, token, reps):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("dataset", help="a remote dataset path with --urlbase, else a local .b2nd")
-    parser.add_argument("--urlbase", help="a Caterva2 subscriber; without it, one is stood in")
-    parser.add_argument("--username", help="log in to the subscriber as this user")
+    parser.add_argument("--urlbase", help="a Caterva2 server; without it, one is stood in")
+    parser.add_argument("--username", help="log in to the server as this user")
     parser.add_argument("--password", help="the password to log in with")
     parser.add_argument("--token", help="an authorization cookie, instead of logging in")
     parser.add_argument(
@@ -617,7 +621,7 @@ def main():
     if args.urlbase:
         urlbase, path = args.urlbase, args.dataset
         if args.write and not args.write_target:
-            parser.error("--write against a subscriber needs --write-target: an empty array to fill")
+            parser.error("--write against a server needs --write-target: an empty array to fill")
     else:
         server, urlbase, path = stand_in(args.dataset, args.streamed)
     token = args.token
@@ -654,7 +658,7 @@ def make_presize(source_path, scratch, server):
         if serve:
             if server.target is not None:
                 server.target.close()  # its handle is done with; the next array gets its own
-            server.target = Subscriber(path, writable=True)
+            server.target = Cat2Server(path, writable=True)
         return path
 
     return presize

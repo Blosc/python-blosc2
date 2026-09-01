@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import json
 import math
 import os
 import struct
 import threading
+import urllib.parse
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -32,11 +34,11 @@ from blosc2.proxy_source import (
     _is_transient,
 )
 
-_subscriber_data = {
+_server_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
     "auth_token": "",
 }
-"""Caterva2 subscriber data saved by context manager."""
+"""Caterva2 server data saved by context manager."""
 
 TIMEOUT = 15
 """Default timeout for HTTP requests."""
@@ -122,17 +124,17 @@ def c2context(
     auth_token: (str | None) = None,
 ) -> None:
     """
-    Context manager that sets parameters in Caterva2 subscriber requests.
+    Context manager that sets parameters in Caterva2 server requests.
 
     A parameter not specified or set to ``None`` will inherit the value from the
     previous context manager, defaulting to an environment variable (see
     below) if supported by that parameter.  Parameters set to an empty string
     will not be used in requests (without a default either).
 
-    If the subscriber requires authorization for requests, you can either
+    If the server requires authorization for requests, you can either
     provide an `auth_token` (which you should have obtained previously from the
-    subscriber), or both `username` and `password` to obtain the token by
-    logging in to the subscriber.  The token will be reused until it is explicitly
+    server), or both `username` and `password` to obtain the token by
+    logging in to the server.  The token will be reused until it is explicitly
     reset or requested again in a later context manager invocation.
 
     Please note that this manager is reentrant but not safe for concurrent use.
@@ -140,14 +142,14 @@ def c2context(
     Parameters
     ----------
     urlbase : str | None
-        The base URL to be used when a C2Array instance does not have a subscriber
+        The base URL to be used when a C2Array instance does not have a server
         URL base set. If not specified, it defaults to the value of the
         ``BLOSC_C2URLBASE`` environment variable.
     username : str | None
-        The username for logging in to the subscriber to obtain an authorization token.
+        The username for logging in to the server to obtain an authorization token.
         If not specified, it defaults to the value of the ``BLOSC_C2USERNAME`` environment variable.
     password : str | None
-        The password for logging in to the subscriber to obtain an authorization token.
+        The password for logging in to the server to obtain an authorization token.
         If not specified, it defaults to the value of the ``BLOSC_C2PASSWORD`` environment variable.
     auth_token : str | None
         The authorization token to be used when a C2Array instance does not have an
@@ -158,8 +160,7 @@ def c2context(
     out: None
 
     """
-    global _subscriber_data
-    print("_subscriber_data", _subscriber_data)
+    global _server_data
 
     # Perform login to get an authorization token.
     if not auth_token:
@@ -171,23 +172,23 @@ def c2context(
         auth_token = login(username, password, urlbase)
 
     try:
-        old_sub_data = _subscriber_data
-        new_sub_data = old_sub_data.copy()  # inherit old values
+        old_server_data = _server_data
+        new_server_data = old_server_data.copy()  # inherit old values
         if urlbase is not None:
-            new_sub_data["urlbase"] = urlbase
-        elif old_sub_data["urlbase"] is None:
+            new_server_data["urlbase"] = urlbase
+        elif old_server_data["urlbase"] is None:
             # The variable may have gotten a value after program start.
-            new_sub_data["urlbase"] = os.environ.get("BLOSC_C2URLBASE")
+            new_server_data["urlbase"] = os.environ.get("BLOSC_C2URLBASE")
         if auth_token is not None:
-            new_sub_data["auth_token"] = auth_token
-        _subscriber_data = new_sub_data
+            new_server_data["auth_token"] = auth_token
+        _server_data = new_server_data
         yield
     finally:
-        _subscriber_data = old_sub_data
+        _server_data = old_server_data
 
 
 def _auth_headers(auth_token, headers=None):
-    auth_token = auth_token or _subscriber_data["auth_token"]
+    auth_token = auth_token or _server_data["auth_token"]
     if auth_token:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_token
@@ -202,7 +203,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 
 
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
-    auth_token = auth_token or _subscriber_data["auth_token"]
+    auth_token = auth_token or _server_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
     response = _sync_client().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
@@ -232,7 +233,7 @@ def _xpost_bytes(url, content, params=None, auth_token=None, timeout=TIMEOUT):
     """POST a body of bytes through the pooled client, and read what came back.
 
     `_xpost` sends JSON, which a compressed chunk is not: it goes as it is, and
-    the subscriber reads it as the chunk it will store.
+    the server reads it as the chunk it will store.
     """
     response = _sync_client().post(
         url, params=params, content=content, headers=_chunk_headers(auth_token), timeout=timeout
@@ -246,15 +247,15 @@ async def _axpost_bytes(client, url, content, params=None, auth_token=None):
     return _chunk_written(response, url, params and params.get("nchunk"))
 
 
-def _sub_url(urlbase, path):
-    urlbase = urlbase or _subscriber_data["urlbase"]
+def _server_url(urlbase, path):
+    urlbase = urlbase or _server_data["urlbase"]
     if not urlbase:
-        raise RuntimeError("No default Caterva2 subscriber set")
+        raise RuntimeError("No default Caterva2 server set")
     return f"{urlbase}{path}" if urlbase.endswith("/") else f"{urlbase}/{path}"
 
 
 def login(username, password, urlbase):
-    url = _sub_url(urlbase, "auth/jwt/login")
+    url = _server_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
     # Not the pooled client: this is the one request whose Set-Cookie matters,
     # and it belongs to the caller rather than to every later request
@@ -264,16 +265,55 @@ def login(username, password, urlbase):
 
 
 def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
-    url = _sub_url(urlbase, f"api/info/{path}")
+    url = _server_url(urlbase, f"api/info/{path}")
     response = _xget(url, params, headers, auth_token)
     json = response.json()
     return json if model is None else model(**json)
 
 
-def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False):
-    url = _sub_url(urlbase, f"api/fetch/{path}")
-    response = _xget(url, params=params, auth_token=auth_token)
+def _post_fetch(url, params, auth_token, retry_as_get=False):
+    """`api/fetch` again, with the parameters in the body.
+
+    For a key too long to be a query and nothing else.  A server that has never
+    heard of this answers 405, which says what it is rather than what went
+    wrong: None where the caller has a GET left to try, and otherwise the
+    sentence a caller can act on.
+    """
+    response = _sync_client().post(url, json=params, headers=_auth_headers(auth_token), timeout=TIMEOUT)
+    if response.status_code == 405 and retry_as_get:
+        return None
+    if response.status_code == 405:
+        raise IndexError(
+            "This many coordinates do not fit in an URL, and the server does not accept "
+            "them in a request body (it predates `POST api/fetch`). Ask in batches, or "
+            "upgrade the server."
+        )
+    response.raise_for_status()
+    return response
+
+
+def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=None):
+    url = _server_url(urlbase, f"api/fetch/{path}")
+    # What the client will actually put in the URL, not what was handed here: the
+    # coordinates of a fancy key grow by about half again under percent-encoding
+    # (`,` -> `%2C`, `[` -> `%5B`), and it is the encoded length that is capped
+    query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    if len(query) <= _MAX_QUERY_CHARS:
+        response = _xget(url, params=params, auth_token=auth_token)
+    else:
+        # A query no front end will carry, so the parameters go in a body.  A
+        # server without that route answers 405, and then a GET is worth trying
+        # after all where the client can still build one: it may be that nothing
+        # sits in front of this server, and a request that might work beats an
+        # error that certainly does not
+        response = _post_fetch(url, params, auth_token, retry_as_get=len(query) <= _MAX_URL_CHARS)
+        if response is None:
+            response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
+    if traffic is not None:
+        # A slice or a gather is data crossing the wire like any chunk, and the
+        # one a caller asking for coordinates most wants counted
+        traffic.charge(len(data))
     # Try different deserialization methods
     try:
         data = blosc2.ndarray_from_cframe(data)
@@ -288,30 +328,156 @@ def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False):
         return data[:]
 
 
+def _bound(value):
+    """A slice bound as the request spells it: nothing where there is none.
+
+    `or ""` cannot be used for this: it reads a bound of 0 as no bound, which
+    turns a slice selecting nothing into one selecting the whole axis.
+    """
+    return "" if value is None else str(value)
+
+
 def slice_to_string(slice_):
-    if slice_ is None or slice_ == () or slice_ == slice(None):
+    if slice_ is None or slice_ is Ellipsis or slice_ == slice(None):
         return ""
-    slice_parts = []
     if not isinstance(slice_, tuple):
         slice_ = (slice_,)
+    if slice_ == ():
+        return ""
+    slice_parts = []
     for index in slice_:
-        if isinstance(index, int):
-            slice_parts.append(str(index))
+        if isinstance(index, (int, np.integer)):
+            slice_parts.append(str(int(index)))
         elif isinstance(index, slice):
-            start = index.start or ""
-            stop = index.stop or ""
             if index.step not in (1, None):
                 raise IndexError("Only step=1 is supported")
-            # step = index.step or ''
-            slice_parts.append(f"{start}:{stop}")
+            slice_parts.append(f"{_bound(index.start)}:{_bound(index.stop)}")
+        else:
+            # Anything else has no spelling here, and dropping it would widen the
+            # request rather than narrow it: a fancy index skipped this way asks
+            # `api/fetch` for the whole dataset and hands back all of it, which
+            # is neither what was asked for nor a smaller answer
+            raise IndexError(
+                f"Cannot ask a Caterva2 server for {index!r}: only integers and "
+                "step-1 slices can be expressed in a fetch request"
+            )
     return ", ".join(slice_parts)
 
+
+def _dims_consumed(entry):
+    """How many of the array's dimensions *entry* accounts for.
+
+    One each, as every index does, except a boolean mask laid over several: it
+    stands for one index array per dimension it covers.
+    """
+    if isinstance(entry, (list, np.ndarray)):
+        coords = np.asarray(entry)
+        if coords.dtype == np.bool_:
+            return coords.ndim
+    return 1
+
+
+def _expand_ellipsis(key, ndim):
+    """*key* with `...` written out as the full slices it stands for.
+
+    A fetch request names dimensions in order and has no spelling for "the rest
+    of them", so an ellipsis has to become the slices it abbreviates before the
+    key can be said at all.  A trailing one asks for nothing that leaving it out
+    would not, but it is expanded the same way: one rule is fewer than two.
+    """
+    entries = key if isinstance(key, tuple) else (key,)
+    ellipses = sum(1 for entry in entries if entry is Ellipsis)
+    if not ellipses:
+        return key
+    if ellipses > 1:
+        raise IndexError("An index can only have a single ellipsis ('...')")
+    rest = ndim - sum(_dims_consumed(e) for e in entries if e is not Ellipsis)
+    filled = []
+    for entry in entries:
+        if entry is Ellipsis:
+            filled.extend([slice(None)] * max(rest, 0))
+        else:
+            filled.append(entry)
+    return tuple(filled)
+
+
+def key_to_indices(key):
+    """*key* as the `indices` parameter names it, or None if it needs no such thing.
+
+    `api/fetch` takes a fancy key as JSON, one entry per dimension, because a
+    list of coordinates has no unambiguous reading as the comma-separated string
+    `slice_` is.  None where the key is a plain box, which `slice_` says more
+    cheaply and which every server understands.
+
+    The key goes over as it was written, not as numpy would expand it: the server
+    indexes a real array with it, so its reading is numpy's own and there is no
+    second interpretation here to disagree with that one.
+    """
+    entries = key if isinstance(key, tuple) else (key,)
+    if not any(isinstance(k, (list, np.ndarray)) for k in entries):
+        return None
+    out = []
+    for entry in entries:
+        if isinstance(entry, (list, np.ndarray)):
+            coords = np.asarray(entry)
+            if coords.dtype == np.bool_:
+                # A mask is the coordinates it selects, said in as many bytes as
+                # the array is long; the coordinates themselves are what travels.
+                # One laid over several dimensions selects points rather than
+                # rows, and becomes the index array per dimension numpy reads it as
+                out.extend([int(v) for v in axis] for axis in np.nonzero(coords))
+                continue
+            if not np.issubdtype(coords.dtype, np.integer):
+                raise IndexError(f"Cannot index a remote array with {entry!r}")
+            # Shape and all: an index array of two dimensions gathers into two,
+            # and flattening it here would ask for the right points and be handed
+            # them in the wrong shape
+            out.append(coords.tolist())
+        elif isinstance(entry, (int, np.integer)):
+            out.append(int(entry))
+        elif isinstance(entry, slice):
+            if entry.step not in (1, None):
+                raise IndexError("Only step=1 is supported")
+            out.append(None if entry == slice(None) else f"{_bound(entry.start)}:{_bound(entry.stop)}")
+        else:
+            raise IndexError(f"Cannot index a remote array with {entry!r}")
+    return json.dumps(out, separators=(",", ":"))
+
+
+_MAX_QUERY_CHARS = 4_000
+"""How long an encoded query may be before the parameters go in a body instead.
+
+Measured after percent-encoding, which is what actually travels and about half
+again what the coordinates take as written -- `,` becomes `%2C` and `[` becomes
+`%5B`.
+
+The binding limit is not the client's but the server's, and it is far lower than
+it looks: nginx caps a request *line* at one `large_client_header_buffers`
+entry, 8 KB by default, and uvicorn's h11 at `max_incomplete_event_size`, 16 KB.
+Past either, the answer is 414 or 431 or a dropped connection -- an error about
+URLs, from a request that could have been a body.  So the threshold sits well
+under the smaller of them, with the scheme, host and path counted in.
+
+Below it nothing changes, which is what keeps every server that ever served a
+GET serving one: a POST is spent only where a GET was a bad bet.  Above it, a
+server too old for `POST api/fetch` answers 405 and the GET is tried anyway
+while :data:`_MAX_URL_CHARS` says a client could build one -- nothing may be in
+front of that server, and a request that might work beats an error that will not.
+"""
+
+_MAX_URL_CHARS = 60_000
+"""How long an encoded query may be before no GET is worth attempting.
+
+Roughly where httpx gives up building the URL, with an error about URL
+components rather than about coordinates.  Past this a key has to travel in a
+body, and a server without that route can only be told so.
+"""
 
 _UNTRIED = object()
 """A block source that has not been asked for yet, as against one that failed."""
 
 MAX_RANGES_PER_REQUEST = 64
-"""How many byte ranges one request to a subscriber may ask for.
+"""How many byte ranges one request to a server may ask for.
 
 There is no limit in the protocol, and the saving grows with the count -- but a
 `Range` header is a header, which servers and proxies cap the length of (8 KB is
@@ -424,7 +590,7 @@ def _span_of(parts: list[tuple[int, bytes, int | None]], offset: int, size: int,
 class ChunkAlreadyWritten(ValueError):
     """A chunk was written to a slot of a remote array that already held content.
 
-    A subscriber that accepts chunk writes accepts each slot exactly once: the
+    A server that accepts chunk writes accepts each slot exactly once: the
     frame's own offsets say whether a slot was ever written, and a second write
     would move every chunk that came after it.  So a writer that finds this has
     lost a race, or is repeating work another writer already did; either way the
@@ -441,7 +607,7 @@ class C2NDSource(ByteRangeNDSource):
     cookie composes with it.  That is everything :ref:`ByteRangeNDSource` needs,
     so a slice costs the blocks it touches instead of the chunks they live in.
 
-    A dataset the subscriber *builds* -- a lazy expression, an HDF5 leaf, a
+    A dataset the server *builds* -- a lazy expression, an HDF5 leaf, a
     ``.b2z`` member -- is streamed instead, and a streamed response ignores the
     ``Range`` header and answers with the whole body.  :meth:`read_range` refuses
     such an answer without reading it off the socket, and :ref:`C2Array` then
@@ -453,11 +619,13 @@ class C2NDSource(ByteRangeNDSource):
     max_ranges = MAX_RANGES_PER_REQUEST
 
     def __init__(self, array: C2Array, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
-        self._url = _sub_url(array.urlbase, f"api/fetch/{array.path}")
+        self._url = _server_url(array.urlbase, f"api/fetch/{array.path}")
         self._auth_token = array.auth_token
         # Answers that did not carry their parts, in a row; see `read_ranges`
         self._misses = 0
-        super().__init__(self._url, max_concurrency)
+        # The array's own tally, so that what it reads through `api/chunk` and
+        # what this reads through `api/fetch` add up to what the dataset cost
+        super().__init__(self._url, max_concurrency, traffic=array.traffic)
         # A `Proxy` mixes the two: the block grid and the fetched bitmap come from
         # the array's `api/info`, while the header sections and `bstarts` come from
         # this frame.  They have to be the same dataset for that to mean anything,
@@ -521,6 +689,7 @@ class C2NDSource(ByteRangeNDSource):
                     response.status_code,
                 )
             response.read()
+            self.traffic.charge(len(response.content))
             parts = _byteranges(response)
         return [_span_of(parts, offset, size, self._url) for offset, size in spans]
 
@@ -551,7 +720,7 @@ class C2Array(blosc2.Operand):
             The path to the remote NDArray file (root + file path) as
             a posix path.
         urlbase: str
-            The base URL (slash-terminated) of the subscriber to query.
+            The base URL (slash-terminated) of the server to query.
         auth_token: str
             An optional token to authorize requests via HTTP.  Currently, it
             will be sent as an HTTP cookie.
@@ -598,6 +767,20 @@ class C2Array(blosc2.Operand):
         self._meta_lock = threading.Lock()
         # An index a `Proxy` handed over before the source existed; see _adopt_index
         self._pending_index = None
+        self.traffic = blosc2.proxy_source.Traffic()
+        """Bytes and requests this handle has read off the server; see :ref:`Traffic`.
+
+        Cumulative since the array was opened, counted at the transport, so the
+        frame index and the block offsets are in it as well as the data, and the
+        `api/info` call that opened this handle is not.  Whichever endpoint the
+        read used is in it too, and the block source built later is handed this
+        same tally, so one counter answers for the array however it is read.
+
+        What a slice cost is the difference between two readings, or one reading
+        after :meth:`Traffic.reset`.  `examples/c2array-traffic.py` is a runnable
+        walkthrough; :attr:`Proxy.traffic` is the same counter seen through a
+        proxy.
+        """
 
         # Try to 'open' the remote path
         try:
@@ -655,14 +838,17 @@ class C2Array(blosc2.Operand):
         kwargs["mode"] = "w"
         self._to_b2object_carrier(**kwargs)
 
-    def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
+    def __getitem__(self, slice_: int | slice | tuple | Sequence[int] | np.ndarray) -> np.ndarray:
         """
         Get a slice of the array (returning NumPy array).
 
         Parameters
         ----------
-        slice_ : int, slice, tuple of ints and slices, or None
-            The slice to fetch.
+        slice_ : int, slice, tuple of ints and slices, sequence of ints, or ndarray
+            The slice to fetch.  A sequence of integers or an integer or boolean
+            array gathers those coordinates, as numpy reads them.  A *list of
+            slices* is not a key -- numpy stopped reading one as a tuple -- and
+            raises `IndexError` rather than being read as something else.
 
         Returns
         -------
@@ -682,19 +868,42 @@ class C2Array(blosc2.Operand):
         array([[61, 62, 63],
                [81, 82, 83]], dtype=uint16)
         """
-        slice_ = slice_to_string(slice_)
+        params = self._fetch_params(slice_)
         return fetch_data(
-            self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token, as_blosc2=False
+            self.path,
+            self.urlbase,
+            params,
+            auth_token=self.auth_token,
+            as_blosc2=False,
+            traffic=self.traffic,
         )
 
-    def slice(self, slice_: int | slice | Sequence[slice]) -> blosc2.NDArray:
+    def _fetch_params(self, key) -> dict:
+        """What `api/fetch` is to be asked for *key*: coordinates, or a box.
+
+        A fancy key is gathered by the server, which reads the points out of the
+        chunks they land in and sends those and nothing else.  Reading it here
+        would mean fetching whole blocks to pick single values out of them, and a
+        block is nearly all waste for a point -- see :ref:`Proxy`, which does
+        exactly that where there is no server to ask.
+        """
+        key = _expand_ellipsis(key, len(self.shape))
+        indices = key_to_indices(key)
+        if indices is None:
+            return {"slice_": slice_to_string(key)}
+        return {"indices": indices}
+
+    def slice(self, slice_: int | slice | tuple | Sequence[int] | np.ndarray) -> blosc2.NDArray:
         """
         Get a slice of the array (returning blosc2 NDArray array).
 
         Parameters
         ----------
-        slice_ : int, slice, tuple of ints and slices, or None
-            The slice to fetch.
+        slice_ : int, slice, tuple of ints and slices, sequence of ints, or ndarray
+            The slice to fetch.  A sequence of integers or an integer or boolean
+            array gathers those coordinates, as numpy reads them.  A *list of
+            slices* is not a key -- numpy stopped reading one as a tuple -- and
+            raises `IndexError` rather than being read as something else.
 
         Returns
         -------
@@ -713,9 +922,14 @@ class C2Array(blosc2.Operand):
         >>> type(data_slice)
         blosc2.ndarray.NDArray
         """
-        slice_ = slice_to_string(slice_)
+        params = self._fetch_params(slice_)
         return fetch_data(
-            self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token, as_blosc2=True
+            self.path,
+            self.urlbase,
+            params,
+            auth_token=self.auth_token,
+            as_blosc2=True,
+            traffic=self.traffic,
         )
 
     def __len__(self) -> int:
@@ -759,6 +973,7 @@ class C2Array(blosc2.Operand):
         url = self._chunk_url()
         params = {"nchunk": nchunk}
         response = _xget(url, params=params, auth_token=self.auth_token)
+        self.traffic.charge(len(response.content))
         return response.content
 
     async def aget_chunk(self, nchunk: int) -> bytes:
@@ -789,6 +1004,7 @@ class C2Array(blosc2.Operand):
             self._aclient = _httpx().AsyncClient(timeout=TIMEOUT)
         response = await self._aclient.get(url, params=params, headers=headers)
         response.raise_for_status()
+        self.traffic.charge(len(response.content))
         return response.content
 
     async def aclose(self) -> None:
@@ -798,7 +1014,7 @@ class C2Array(blosc2.Operand):
             self._aclient = None
 
     # -- Writing chunks.  A pre-sized array is filled a chunk at a time, by as
-    # many writers as there are chunks to fill; the subscriber serializes them
+    # many writers as there are chunks to fill; the server serializes them
     # and refuses a slot that was already written.
 
     def update_chunk(self, nchunk: int, chunk: bytes) -> dict:
@@ -814,7 +1030,7 @@ class C2Array(blosc2.Operand):
 
         The chunk must match the array's geometry -- its chunkshape, its typesize
         and its blocksize -- which is what compressing against
-        :attr:`cparams` and :attr:`blocks` gives; the subscriber checks it and
+        :attr:`cparams` and :attr:`blocks` gives; the server checks it and
         refuses anything else rather than storing a chunk the array cannot read.
 
         Parameters
@@ -829,7 +1045,7 @@ class C2Array(blosc2.Operand):
         Returns
         -------
         out: dict
-            What the subscriber reports of the array's state now.  Carries
+            What the server reports of the array's state now.  Carries
             ``written`` and ``nchunks`` where it counts them, so a writer can see
             a fill finish without asking again.
 
@@ -852,13 +1068,13 @@ class C2Array(blosc2.Operand):
 
         The blocksize is spelled out because :func:`blosc2.compress2` picks its
         own when it is not: left to choose it takes the whole chunk, and a chunk
-        blocked differently from the array is one the subscriber refuses.
+        blocked differently from the array is one the server refuses.
         """
         url = self._chunk_url()
         try:
             return _xpost_bytes(url, chunk, params={"nchunk": nchunk}, auth_token=self.auth_token)
         finally:
-            # However it went.  A refusal is the answer of a subscriber that has
+            # However it went.  A refusal is the answer of a server that has
             # already stored someone else's chunk in that slot, and a request that
             # failed on the way home may have stored this one; either way what
             # this handle read of the array is no longer what the array is
@@ -868,7 +1084,7 @@ class C2Array(blosc2.Operand):
         """Write one compressed chunk asynchronously; see :meth:`update_chunk`.
 
         The same request, off the event loop, so a writer with many chunks to
-        send can have several in flight.  The subscriber serializes them at the
+        send can have several in flight.  The server serializes them at the
         far end regardless -- what overlaps is the round trip, which for a
         chunk-sized body is most of the cost.
         """
@@ -891,7 +1107,7 @@ class C2Array(blosc2.Operand):
         :meth:`ByteRangeNDSource.written_chunks`.
 
         Read out of the frame's own offsets, which is where a fill records
-        itself: no endpoint of its own, and nothing for the subscriber to keep in
+        itself: no endpoint of its own, and nothing for the server to keep in
         step with the array.  Read afresh every time, since the point of asking
         is to see what other writers have done since -- which is a couple of
         range reads, the header first (a write moves the frame's length, and the
@@ -912,7 +1128,7 @@ class C2Array(blosc2.Operand):
 
     def _chunk_url(self) -> str:
         """Where a chunk of this array is read from, and written to."""
-        return _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        return _server_url(self.urlbase, f"api/chunk/{self.path}")
 
     def _forget_index(self) -> None:
         """Drop what this handle read of a frame it has since written to."""
@@ -1004,7 +1220,7 @@ class C2Array(blosc2.Operand):
         Geometry cannot tell a dataset that was replaced from the one a cache was
         filled from: a shape and a partitioning survive a rewrite, while every
         cached chunk -- and, in block mode, every offset they were fetched by --
-        goes stale.  The subscriber's own mtime does tell, and `api/info` carries
+        goes stale.  The server's own mtime does tell, and `api/info` carries
         it, so this costs no request of its own; the compressed size goes in with
         it, since a rewrite within the same clock tick is what an mtime cannot
         see.  What it names is the array as this handle last looked at it --
@@ -1012,7 +1228,7 @@ class C2Array(blosc2.Operand):
         says so, and what a `Proxy` calls before judging a cache by it.
 
         Two questions, and they want different answers.  *Which array is this* is
-        answered by the nonce a subscriber writes into an array's vlmeta the first
+        answered by the nonce a server writes into an array's vlmeta the first
         time a chunk is written to it: a size and an mtime can both be repeated
         by a different array that came to sit at the same path, and a cache
         served against one of those is stale without ever saying so.  *Has it
@@ -1031,7 +1247,7 @@ class C2Array(blosc2.Operand):
         one it had; when a writer fills that slot, both are wrong, and nothing in
         the cache marks them apart from the chunks that are still good.
 
-        None when the subscriber reports no mtime and the array carries no nonce,
+        None when the server reports no mtime and the array carries no nonce,
         which leaves the cache checked on its geometry alone, as every source
         without a stamp is.
         """
@@ -1069,32 +1285,79 @@ class C2Array(blosc2.Operand):
         """Whether blocks are worth asking this dataset for, as far as info can say.
 
         What `api/info` already carries, and no request of its own: a dataset the
-        subscriber *computes* reports an expression where a stored one reports a
-        geometry, and a frame of small chunks would never have one taken apart --
-        blosc2 declines to split a chunk below ``BLOCK_MIN_CBYTES``, so the block
-        path would end in whole chunks anyway, by the longer road.
+        server *computes* reports an expression where a stored one reports a
+        geometry, and only a stored one has a frame to read ranges of.  That is
+        the whole question here.  Whether taking a particular chunk apart pays is
+        a different one, and it is asked per fetch by
+        :meth:`ByteRangeNDSource.wants_blocks`, which knows what the slice
+        touches; this cannot, since it is read before any slice exists.
+
+        It used to answer no as well for a frame whose chunks averaged under
+        ``BLOCK_MIN_CBYTES``, which decided from one number, once, that no future
+        slice of that dataset would ever be worth taking apart.  That forfeited
+        the bytes the block path exists to save: measured against a Caterva2
+        server, a dataset of 193 KB chunks reads a slab of 81 of them in 6.4 MB
+        against 13.3 MB whole, and one of 650 KB chunks a slab of 36 in 6.4 MB
+        against 23.3 MB -- 2.1x and 3.6x the traffic, on every such read, for the
+        life of the dataset.  Where the link is what is scarce, and a server's
+        uplink is shared by everyone reading through it, those are the bytes that
+        decide how many readers it can hold.  The judgement was never wrong, only
+        made too early and too widely: a point read of a small chunk really does
+        cost more than it saves, and `wants_blocks` still refuses it.
 
         Read off `api/info` again where this handle has written since it last
-        looked, which is the one case where the answer moves under it: a pre-sized
-        array holds almost nothing until it is filled, and a writer that took the
-        open-time figure would go on calling its own filled array too small to
-        take apart.  That is one request to a handle that has just written, and
-        none at all to a reader -- which is what the promise below needs.
+        looked, which is the one case where the answer moves under it: a dataset
+        may be laid out before it is stored.  That is one request to a handle that
+        has just written, and none at all to a reader -- which is what the promise
+        below needs.
 
         False is the whole answer; True is only that it is worth one request to
         find out, which :meth:`block_source` spends.  A :ref:`Proxy` reads this
         when it is built, to decide whether its cache records blocks or chunks,
         so it must cost nothing and must not depend on what has been fetched.
+
+        A server that reports ``accept_ranges`` spares even that request where
+        the answer is no: a dataset this server mounts from a peer reports the
+        peer's geometry, being stored there, but is fetched from its owner and
+        re-serialized here, so a range read of it is refused.  Nothing else in
+        what `api/info` says can tell the two apart.  That is asked here through
+        :attr:`_serves_ranges`, and again where the source is actually built, so
+        that reading the frame's *index* is spared it too -- but no released
+        Caterva2 answers it yet, so today every dataset pays the one request.
+
+        A dataset too small for blocks to pay *anywhere in it* is ruled out from
+        `api/info` alone, and pays neither -- see
+        :func:`~blosc2.proxy_source.blocks_could_ever_pay`, which is a bound over
+        the whole frame and not the one-chunk judgement described above.
         """
-        if not self._reports_geometry:
-            return False
-        try:
-            nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
-            return bool(nchunks) and self.cbytes / nchunks >= blosc2.proxy_source.BLOCK_MIN_CBYTES
-        except (KeyError, TypeError, ValueError, ZeroDivisionError):
-            # An `api/info` without the fields these read describes a dataset
-            # whole chunks work for, as they do for every dataset there is
-            return False
+        return (
+            self._serves_ranges
+            and self._reports_geometry
+            and blosc2.proxy_source.blocks_could_ever_pay(
+                self.shape, self.chunks, self.blocks, self.dtype.itemsize
+            )
+        )
+
+    @property
+    def _serves_ranges(self) -> bool:
+        """Whether the server says a range read of this dataset is worth trying.
+
+        Read off the `api/info` body, which is the only thing a client holds
+        before it has asked for any bytes.  `Accept-Ranges` is an HTTP header,
+        but the header that matters is the one on the *fetch* response, and
+        having that means having made the request this exists to avoid; the
+        header on `api/info` describes `api/info`.
+
+        No Caterva2 sends this field today -- checked against cat2.cloud, whose
+        `api/info` carries shape, chunks, blocks, dtype, mtime and schunk and
+        nothing else -- so this presently says yes for every dataset and the
+        request itself gives the answer as it always did, which is also what an
+        older server will always get.  It costs one `dict.get`, and the day a
+        server does report it the peer-mounted datasets stop paying a full body
+        to find out they cannot be ranged.
+        """
+        self._refresh_meta()  # `meta` is what carries it, so read it current
+        return self.meta.get("accept_ranges") != "none"
 
     @property
     def _reports_geometry(self) -> bool:
@@ -1112,15 +1375,16 @@ class C2Array(blosc2.Operand):
         """The frame reader behind the block methods, or None if there is none.
 
         Built on the first request for it and never rebuilt.  The fallback has to
-        be permanent: a subscriber that streams this dataset answers a range
+        be permanent: a server that streams this dataset answers a range
         request with the whole body, so retrying would pay a full download to
         rediscover the same answer.
 
-        A frame whose chunks are too small to be worth taking apart says no here
-        without building anything, and without remembering that it said so: the
-        judgement is about *blocks*, and the same frame's index is still worth
-        reading.  Deciding it at the call rather than caching it is what keeps
-        the two questions from answering each other.
+        Every stored frame says yes: whether a given chunk of it is worth taking
+        apart is decided per fetch, by `wants_blocks`, and not here.  So this and
+        :meth:`_index_source` now come to the same answer, and both remain because
+        they ask for different reasons -- one for the blocks of a chunk, one for
+        the offsets that say where the chunks are.  Neither remembers a no, since
+        a dataset laid out empty becomes a stored one as it is filled.
         """
         return self._source() if self.serves_blocks else None
 
@@ -1128,9 +1392,10 @@ class C2Array(blosc2.Operand):
         """The same reader, built for any stored frame however small its chunks.
 
         Reading the frame's index is not the same question as reading blocks of
-        its chunks: a frame of chunks too small to take apart still has offsets,
-        and they still say which chunks hold anything.  Whatever is built here is
-        the source the block path uses too -- there is only ever one.
+        its chunks, though a stored frame now answers yes to both: the offsets
+        say which chunks hold anything, which is worth knowing whatever is done
+        with them.  Whatever is built here is the source the block path uses too
+        -- there is only ever one.
         """
         return self._source() if self._reports_geometry else None
 
@@ -1148,13 +1413,18 @@ class C2Array(blosc2.Operand):
         """Decide, at whatever cost it takes, whether this dataset serves ranges.
 
         None for a dataset that does not serve ranges, which is an answer for
-        good; `_UNTRIED` for a subscriber that could not say, which is not.
+        good; `_UNTRIED` for a server that could not say, which is not.
         """
         httpx = _httpx()
-        # A dataset the subscriber computes has no frame to read at all, and
+        # A dataset the server computes has no frame to read at all, and
         # `api/info` says so for free.  Whether its chunks are worth taking apart
         # is a separate judgement, made by whoever asks -- see `block_source`
         if not self._reports_geometry:
+            return None
+        # Nor has one the server has already said it will not serve ranges of:
+        # that is the same answer the request below would come back with, at the
+        # price of a full-dataset body from a server that answers 200 instead
+        if not self._serves_ranges:
             return None
         # Whether a dataset that reports a geometry is *served* from a file is
         # something only the answer to a range request can say: an HDF5 leaf or a
@@ -1169,7 +1439,7 @@ class C2Array(blosc2.Operand):
             # asking, and whole chunks read the dataset either way
             return _UNTRIED if exc.transient else None
         except httpx.HTTPStatusError as exc:
-            # A busy or broken subscriber said nothing about how this is served
+            # A busy or broken server said nothing about how this is served
             return _UNTRIED if _is_transient(exc.response.status_code) else None
         except httpx.TransportError:
             # Nothing was downloaded to find this out, so asking again is cheap
@@ -1207,14 +1477,14 @@ class C2Array(blosc2.Operand):
             return self._pending_index
         return source._index_state(keep)
 
-    def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
+    def wants_blocks(self, nchunk: int, nwanted: int, wave=None) -> bool:
         """Whether fetching *nwanted* blocks of a chunk beats fetching all of it."""
         source = self.block_source()
-        return source is not None and source.wants_blocks(nchunk, nwanted)
+        return source is not None and source.wants_blocks(nchunk, nwanted, wave)
 
     @property
     def max_ranges(self) -> int:
-        """How many ranges one request to this subscriber may carry."""
+        """How many ranges one request to this server may carry."""
         source = self.block_source()
         return 1 if source is None else source.max_ranges
 
@@ -1239,7 +1509,7 @@ class C2Array(blosc2.Operand):
             return source.read_range(offset, size)
 
     def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
-        """The bytes of every span, in one request where the subscriber allows it."""
+        """The bytes of every span, in one request where the server allows it."""
         with self._ranged() as source:
             return source.read_ranges(spans)
 
@@ -1247,7 +1517,7 @@ class C2Array(blosc2.Operand):
     def _ranged(self, index_only: bool = False):
         """The block source, retired if it turns out to serve ranges no longer.
 
-        The subscriber can stop serving a dataset from a file between one fetch
+        The server can stop serving a dataset from a file between one fetch
         and the next -- replaced by a lazy expression, moved into a container it
         streams out of -- and the answer to a range request is where that shows.
         A refusal that says so for good puts the array back where it was before
