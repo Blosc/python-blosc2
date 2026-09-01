@@ -23,7 +23,7 @@ one (see [Non-goals](#non-goals)).
 
 ## What was verified
 
-Measured on this machine (Apple M4 Pro, APFS, python-blosc2 4.11.1.dev0 against
+Measured on this machine (Apple M4 Pro, APFS, python-blosc2 4.12.0.dev0 against
 c-blosc2 3.3.2), on local files.  Code references: c-blosc2 at
 `/Users/faltet/blosc/c-blosc2` (`main`), Caterva2 at
 `/Users/faltet/ironArray/Caterva2` (`range-honesty`).

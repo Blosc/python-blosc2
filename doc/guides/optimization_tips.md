@@ -402,7 +402,7 @@ t.where("title == 'some exact title'")  # looks it up, no scan
 
 A `utf8()` column is indexed by *alphabetical rank*: the query literal is located by bisecting the index's vocabulary, and the rows that match are a contiguous run of the sorted-positions sidecar. None of that depends on how many different values the column holds, so the index is worth having at either cardinality — a scan costs tens of milliseconds, a lookup a few. The first lookup of a session is the dearer one only because it opens the sidecars; later ones reuse them.
 
-```{versionchanged} 4.11.1
+```{versionchanged} 4.12.0
 The literal is bisected out of the vocabulary sidecar. Earlier versions materialized the whole vocabulary on the first lookup, which on the near-unique column here cost ~62 ms and 739 MiB of peak memory instead of the new ~12 ms and 5.5 MiB.
 ```
 

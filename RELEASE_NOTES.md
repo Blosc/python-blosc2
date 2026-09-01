@@ -1,27 +1,23 @@
 # Release notes
 
-## Changes from 4.11.0 to 4.11.1
+## Changes from 4.11.0 to 4.12.0
 
-XXX version-specific blurb XXX
+This release focuses on efficient remote arrays. Blosc2 containers can now be
+read and written through fsspec URLs, while lazy proxies fetch only the required
+blocks, overlap requests and reuse validated caches. Caterva2 arrays gain
+block-range reads and concurrent chunk writers. UTF-8 FULL-index lookups also
+use substantially less memory by bisecting their vocabulary on disk.
 
 ### Improvements
 
 * New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and `save_tensor()`
   accept any [fsspec](https://filesystem-spec.readthedocs.io) URL — `s3://`,
-  `gs://`, `https://`, `zip://`, chained ones like
-  `zip://inner.b2nd::s3://bucket/a.zip`.
-  `open()` reads the container whole, or through a staleness-checked local copy
-  with `cache_storage=` (which is what covers `.b2d` stores, sparse frames,
-  `offset` and `mmap_mode`), or a piece at a time with `lazy=True`, which
-  leaves a huge frame where it is and fetches only what a slice touches
-  through the new `blosc2.FsspecNDSource`. The two combine: `lazy=True` with a
-  `cache_storage=` keeps what was fetched there, so a later run starts from
-  it. Protocol drivers (`s3fs`, `gcsfs`...) and credentials stay the caller's
-  business. On the write side `NDArray.save()` and `blosc2.save()` upload the
-  whole array as one object; containers cannot be *backed* by a URL while they
-  are written (the C layer rewrites a frame's header and offsets as chunks land,
-  which an object store has no way to serve), so constructors given a URL now say
-  that instead of failing deep in C.
+  `gs://`, `https://`, `zip://` and chained URLs. `open()` can download the
+  container, keep a validated local copy with `cache_storage=`, or fetch only
+  requested slices with `lazy=True` and the new `blosc2.FsspecNDSource`; lazy
+  reads can also use a persistent cache. Saves upload one complete object, but
+  URL-backed mutable containers are not supported. Protocol drivers and
+  credentials remain the caller's responsibility.
 
 * A `C2Array` can be written to a chunk at a time, which is how several
   processes fill one remote array at once: `update_chunk()` (and its async
@@ -70,49 +66,13 @@ XXX version-specific blurb XXX
   with the traffic, since a fetch in flight is now a block rather than a chunk.
   `bench/ndarray/fsspec-block-granularity.py` measures both on any array.
 
-* A `Proxy` over a `C2Array` reads **blocks** too, straight out of the stored
-  frame over HTTP byte ranges. Caterva2 serves a stored dataset from a file, so
-  the `Range` header is honoured and composes with the auth cookie; no new
-  endpoint is involved. On cat2.cloud's `kevlar-tomo.b2nd` a corner slice costs
-  0.031 MB instead of 2.723 MB, and a slice touching ten chunks takes 0.14 s
-  against 1.01 s. Three things add up to it: one pooled HTTP client instead of a
-  connection per request (0.162 s → 0.046 s each), fetches that overlap by
-  default as `afetch()` already did, and one request carrying the whole wave of
-  ranges (`multipart/byteranges`, which no object store offers). A dataset the
-  subscriber *computes* — a lazy expression, an HDF5 leaf, a `.b2z` member — is
-  fetched a whole chunk at a time as before; which it is costs at most one small
-  request to find out, and is not asked again -- unless the subscriber could not
-  say, which a busy or unreachable one cannot: a 5xx or a connection that failed
-  is asked again on the next fetch rather than written off, since neither
-  downloaded anything to find out. The same holds once blocks are being read: a
-  dataset that stops being served from a file, or a subscriber too busy to serve
-  it, costs the granularity and not the fetch — whatever is still missing comes
-  as whole chunks, which every dataset can be read as. `blosc2.ByteRangeNDSource` is
-  the frame reader `FsspecNDSource` and the new `C2NDSource` share: subclass it
-  with a `read_range(offset, size)` to give any transport the same treatment.
-  Opening a remote frame through either of them now costs two requests instead
-  of four (0.237 s → 0.138 s against cat2.cloud), and one for a frame small
-  enough to arrive whole in the first read: the two reads that only measured the
-  next one are guessed at generously instead, since over a network a few hundred
-  bytes and a few kilobytes cost the same. Of those two, only the header is read
-  when the frame is opened — it is what says the frame can be read this way at
-  all — and where the chunks are waits for the first chunk anything asks about.
-  So `blosc2.open(url, lazy=True)` reads once, and so does a whole run over a
-  `cache_storage=` that already holds the slice wanted: it fetches nothing, and
-  now asks for no index either. `FsspecNDSource` also asks the filesystem for
-  the object's metadata, which is where its `stamp` comes from, so its floor is
-  that call plus the header read; `C2Array` gets geometry and stamp together
-  from `api/info`, and its floor is that one request. A persisted cache keeps
-  what the source read about *where* things are — the frame's chunk offsets, and
-  the block offsets of the chunks it holds only part of — so a later run over it
-  starts from those instead of reading them again. A warm fetch of blocks missing
-  from a chunk already half held goes from 4 requests to 2 against a subscriber,
-  and drops the offsets read and one layout read per chunk touched against an
-  object store. Only for a source that can name the bytes it read: positions in a
-  frame are worth nothing against a frame that was replaced, so an unstamped
-  source keeps none of this and reads as before.
-  `bench/ndarray/cat2-block-granularity.py` measures all of it on any dataset,
-  against a real subscriber or a stand-in it starts itself.
+* A `Proxy` over a `C2Array` now reads only the required compressed blocks from
+  file-backed datasets using concurrent, batched HTTP byte ranges. On
+  cat2.cloud's `kevlar-tomo.b2nd`, this reduced a corner slice from 2.723 MB to
+  0.031 MB and a ten-chunk slice from 1.01 s to 0.14 s. Computed datasets fall
+  back to whole-chunk reads. `blosc2.ByteRangeNDSource` provides the same frame
+  reader to `FsspecNDSource`, `C2NDSource` and custom transports, with lazy,
+  persistent caching of frame layout metadata.
 
 * `DictStore.member_window(key)` says where a leaf's frame lies inside a `.b2z`,
   as `(offset, nbytes)`. A zip store keeps each external leaf uncompressed, so
@@ -126,20 +86,10 @@ XXX version-specific blurb XXX
   output it is, and said plainly when it is the store's own super-chunk.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
-  earlier run instead of failing on the existing file, so a proxy's cache can
-  outlive the process. The cache must come from a proxy over a source of the same
-  shape and dtype; anything else at that path raises. A cache that holds only
-  some blocks of a chunk keeps them across runs too. Sources that can name the
-  bytes they read are held to that as well, so a remote array *replaced* while
-  keeping its shape is noticed rather than served stale: `FsspecNDSource` uses
-  fsspec's token and `C2Array` the subscriber's mtime, both free with metadata
-  they already fetch. A proxy that `blosc2.open` rebuilds over its own cache
-  gets the same treatment without the raise -- there is no `mode="w"` to offer
-  it -- so a cache whose stamp no longer matches starts as though nothing had
-  been fetched and fills again from the bytes served now; opened read-only there
-  is nothing to empty, and every read falls through to the source. Caches from
-  earlier 4.11.1 development builds are not adopted (the stamp moved to a
-  `proxy-stamp` entry); pass `mode="w"` once.
+  earlier run, including partially fetched chunks. It validates the cache's
+  shape, dtype and source stamp, refetching stale data if the remote array was
+  replaced and raising for incompatible caches. Caches from pre-release 4.12.0
+  builds require one fresh open with `mode="w"`.
 
 * The source protocol moved to its own module, `blosc2.proxy_source`:
   `ProxySource`, `ProxyNDSource`, `ByteRangeNDSource`, `FsspecNDSource` and the

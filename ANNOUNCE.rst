@@ -1,45 +1,27 @@
-Announcing Python-Blosc2 4.11.0
+Announcing Python-Blosc2 4.12.0
 ===============================
 
-Nullability in ``CTable`` is rebuilt on Arrow's own model: a nullable column
-keeps its nulls in a validity sidecar instead of reserving a value from its own
-range. That makes it lossless, and everything above it — predicates, indexes,
-Arrow/Parquet/CSV round-trips — follows. Wheels become a single Stable ABI
-build per platform.
+This release makes remote Blosc2 arrays faster and easier to use, from object
+stores and plain HTTP servers to Caterva2.
 
-- **Mask-based nullable columns, and they are the default.** A bare
-  ``nullable=True`` no longer steals a value from the dtype, so an ``int8``
-  column can hold ``-128``, a ``utf8`` one can hold ``""``, a ``float64`` one
-  can tell ``NaN`` from missing, and ``complex128`` is nullable at all for the
-  first time. ``None`` is how you write a null. Note that a table with a
-  mask column records schema version 3, which readers older than 4.11.0 refuse
-  to open.
+- **Read and write through fsspec URLs.** ``blosc2.open()``, ``save_array()``
+  and ``save_tensor()`` support URLs such as ``s3://``, ``gs://``, ``https://``
+  and chained filesystems via the new ``blosc2[fsspec]`` extra.
 
-- **Predicates over nulls follow three-valued (Kleene) logic.** A comparison
-  against a null is now *unknown* rather than ``False``, so ``~(t.price > 10)``
-  returns the rows definitely not above 10 instead of every null row, and
-  ``~((a > 10) & (b == 999))`` stops dropping rows that qualify. Both the
-  operator and the string query form agree with SQL. A predicate can also be
-  asked about its unknown rows: ``p.is_null()``, ``p.null_count()``,
-  ``p.fillna(True)``.
+- **Fetch only the bytes a slice needs.** Lazy remote proxies read individual
+  compressed blocks, overlap requests and can reuse a validated on-disk cache.
+  This cuts traffic, latency and peak memory for small remote slices.
 
-- **Column indexes are null-aware.** Per-segment ``min``/``max`` are taken over
-  the rows that carry a value, so ``Column.min``/``Column.max`` answer from the
-  index for a nullable column instead of scanning, and ``where()`` with an ``OR``
-  over a nullable indexed column no longer falls back to a full scan (**1.6x**).
-  ``rebuild_index()`` promotes indexes written by an earlier release.
+- **Improved Caterva2 access.** Stored arrays and leaves inside ``.b2z``
+  containers use HTTP byte ranges. Pre-sized remote arrays can also be filled
+  concurrently with ``C2Array.update_chunk()`` and ``aupdate_chunk()``.
 
-- **A single Stable ABI (abi3) wheel per platform**, serving CPython 3.11 and
-  every later version — so a new CPython is installable from a wheel without
-  waiting for a blosc2 release. Free-threaded 3.14 and 3.15 ship alongside as
-  version-specific wheels. No measurable performance cost.
+- **Lean UTF-8 index lookups.** FULL-index queries bisect the vocabulary on
+  disk instead of materializing it, greatly reducing memory use for
+  high-cardinality string columns.
 
-- **Plus a long list of fixes** around nullable columns: CSV import/export,
-  ``extend()`` between storages, sorted-view reductions, descending sorts of
-  the widest integers, timestamp writes through ``col[key] = value``, scalar
-  broadcast on mask columns, nested columns surviving ``convert_nulls()`` and a
-  save/reopen cycle, and more. Outside ``CTable``, ``asarray()`` no longer
-  corrupts arrays whose chunks overhang the shape.
+- **Bundled C-Blosc2 3.3.3**, together with expanded remote-array documentation
+  and benchmarks.
 
 Install it with::
 
