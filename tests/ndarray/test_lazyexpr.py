@@ -7,6 +7,7 @@
 
 import math
 import pathlib
+import warnings
 
 import numpy as np
 import pytest
@@ -2340,3 +2341,18 @@ def test_getitem_int_with_broadcast_operand(shape, bshape, item):
     result = blosc2.lazyexpr("a + b", {"a": a, "b": b})[item]
     assert result.shape == expected.shape
     np.testing.assert_array_equal(result, expected)
+
+
+def test_lazyexpr_subscript_slice_and_shape_inference():
+    npa = np.arange(1000, dtype="int64").reshape(10, 10, 10)
+    a = blosc2.asarray(npa)
+    # Ensure no warnings are emitted when inferring shapes with slice subscripts
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        lexpr = blosc2.lazyexpr("a[2:5, 1:4, 0:3].sum()", {"a": a})
+        assert lexpr.shape == ()
+        assert lexpr.compute()[()] == npa[2:5, 1:4, 0:3].sum()
+
+        lexpr2 = blosc2.lazyexpr("a[2:5, 1:4, 0:3]", {"a": a})
+        assert lexpr2.shape == (3, 3, 3)
+        np.testing.assert_array_equal(lexpr2.compute()[:], npa[2:5, 1:4, 0:3])

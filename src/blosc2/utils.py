@@ -531,7 +531,11 @@ class ShapeInferencer(ast.NodeVisitor):
     def visit_Attribute(self, node):
         obj_shape = self.visit(node.value)
         attr = node.attr
-        if attr == "reshape":
+        if attr in ("size", "ndim", "itemsize"):
+            return ()
+        elif attr == "shape":
+            return (len(obj_shape),) if obj_shape is not None else ()
+        elif attr == "reshape":
             if node.args:
                 shape_arg = node.args[-1]
                 if isinstance(shape_arg, ast.Tuple):
@@ -539,7 +543,21 @@ class ShapeInferencer(ast.NodeVisitor):
             return ()
         elif attr in ("T", "mT"):
             return linalg_shape(attr, (obj_shape,), {})
+        elif attr in ("astype", "copy", "squeeze"):
+            return obj_shape
         return None
+
+    def visit_Subscript(self, node):
+        """Infer shape for slice subscript indexing: arr[slice1, slice2, ...]"""
+        obj_shape = self.visit(node.value)
+        if obj_shape is None:
+            return None
+        slice_node = node.slice
+        if isinstance(slice_node, ast.Tuple):
+            slices = [self._eval_slice(s) for s in slice_node.elts]
+        else:
+            slices = [self._eval_slice(slice_node)]
+        return slice_shape(obj_shape, slices)
 
     def visit_Call(self, node):  # noqa : C901
         # Extract full function name (support np.func, blosc2.func)
@@ -572,6 +590,27 @@ class ShapeInferencer(ast.NodeVisitor):
         kwargs = {}
         for kw in node.keywords:
             kwargs[kw.arg] = self._lookup_value(kw.value)
+
+        # --- Special-case .slice((slice(...), ...)) method ---
+        if obj_shape is not None and attr_name == "slice":
+            if not node.args:
+                raise ValueError(".slice() requires an argument")
+            slice_arg = node.args[0]
+            if isinstance(slice_arg, ast.Tuple):
+                slices = [self._eval_slice(s) for s in slice_arg.elts]
+            else:
+                slices = [self._eval_slice(slice_arg)]
+            return slice_shape(obj_shape, slices)
+
+        # --- Handle common chained methods on array objects ---
+        if attr_name in ("astype", "copy"):
+            return obj_shape
+        elif attr_name in ("flatten", "ravel"):
+            return (math.prod(obj_shape),) if obj_shape is not None else ((),)
+
+        # --- Handle builtins that return scalars or slices ---
+        if base_name in ("slice", "len"):
+            return ()
 
         # ------- handle linear algebra ---------------
         if base_name in linalg_funcs:
@@ -656,17 +695,6 @@ class ShapeInferencer(ast.NodeVisitor):
             else:
                 raise ValueError(f"Unrecognized constructor or missing shape argument for {func_name}")
 
-        # --- Special-case .slice((slice(...), ...)) ---
-        if attr_name == "slice":
-            if not node.args:
-                raise ValueError(".slice() requires an argument")
-            slice_arg = node.args[0]
-            if isinstance(slice_arg, ast.Tuple):
-                slices = [self._eval_slice(s) for s in slice_arg.elts]
-            else:
-                slices = [self._eval_slice(slice_arg)]
-            return slice_shape(obj_shape, slices)
-
         if base_name in REDUCTIONS:
             return REDUCTIONS[base_name](*args, **kwargs)
 
@@ -702,17 +730,20 @@ class ShapeInferencer(ast.NodeVisitor):
     def _eval_slice(self, node):
         if isinstance(node, ast.Slice):
             return slice(
-                node.lower.value if node.lower else None,
-                node.upper.value if node.upper else None,
-                node.step.value if node.step else None,
+                self._lookup_value(node.lower) if node.lower else None,
+                self._lookup_value(node.upper) if node.upper else None,
+                self._lookup_value(node.step) if node.step else None,
             )
         elif isinstance(node, ast.Call) and getattr(node.func, "id", None) == "slice":
             # handle explicit slice() constructor
-            args = [a.value if isinstance(a, ast.Constant) else None for a in node.args]
+            args = [self._lookup_value(a) for a in node.args]
             return slice(*args)
         elif isinstance(node, ast.Constant):
             return node.value
         else:
+            val = self._lookup_value(node)
+            if val is not None:
+                return val
             raise ValueError(f"Unsupported slice expression: {ast.dump(node)}")
 
     def _lookup_value(self, node):  # noqa : C901
