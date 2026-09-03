@@ -29,6 +29,11 @@ a[100:110, :50]  # a NumPy array, fetched now
 
 `https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 server is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array`.
 
+A lazy HTTP(S) open takes its frame metadata and remote identity from the same
+initial range response, using `ETag` when the server provides one and falling
+back to `Last-Modified` and object size. Thus opening needs one network round
+trip, and a persistent cache can still detect when the object is replaced.
+
 ## The cache
 
 Wrap either of those in a {ref}`Proxy` and what you read is kept:

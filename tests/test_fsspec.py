@@ -8,6 +8,7 @@
 
 import contextlib
 import functools
+import hashlib
 import http.server
 import os
 import pathlib
@@ -548,15 +549,51 @@ def test_http_url_is_read_through_fsspec(tmp_path):
     root.mkdir()
     blosc2.asarray(data, chunks=(50, 200), blocks=(10, 100), urlpath=str(root / "big.b2nd"))
 
-    with _ranged_server(root) as urlbase:
+    with _ranged_server(root) as (urlbase, requests):
         whole = blosc2.open(f"{urlbase}/big.b2nd")  # fetched in one go, as s3:// is
         assert np.array_equal(whole[:], data)
 
+        requests.clear()
         lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_storage=str(tmp_path / "cs"))
         assert isinstance(lazy, blosc2.Proxy)
         assert isinstance(lazy.src, blosc2.FsspecNDSource)
-        assert lazy.src.stamp is not None  # so a cache of it can tell it has moved
+        assert ":etag:" in lazy.src.stamp
+        assert requests == ["bytes=0-8191"]  # metadata and identity, one round trip
         assert np.array_equal(lazy[3:5, 100:120], data[3:5, 100:120])
+
+
+def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
+    pytest.importorskip("aiohttp")
+    path = tmp_path / "www"
+    path.mkdir()
+    frame = path / "changing.b2nd"
+    first = np.arange(40_000, dtype="i4").reshape(200, 200)
+    second = first + 1
+    blosc2.asarray(first, chunks=(50, 200), blocks=(10, 100), urlpath=frame)
+
+    with _ranged_server(path) as (urlbase, _):
+        url = f"{urlbase}/{frame.name}"
+        cache = tmp_path / "cache"
+        lazy = blosc2.open(url, lazy=True, cache_storage=cache)
+        assert np.array_equal(lazy[3:5, 100:120], first[3:5, 100:120])
+        del lazy
+
+        blosc2.asarray(second, chunks=(50, 200), blocks=(10, 100), urlpath=frame, mode="w")
+        lazy = blosc2.open(url, lazy=True, cache_storage=cache)
+        assert np.array_equal(lazy[3:5, 100:120], second[3:5, 100:120])
+
+
+def test_http_stamp_prefers_etag_and_falls_back_to_modified_size():
+    stamp = blosc2.proxy_source._http_stamp(
+        "url",
+        {"etag": '"abc"', "last-modified": "yesterday", "content-range": "bytes 0-7/100"},
+    )
+    assert stamp == 'url:etag:"abc"'
+
+    stamp = blosc2.proxy_source._http_stamp(
+        "url", {"last-modified": "yesterday", "content-range": "bytes 0-7/100"}
+    )
+    assert stamp == "url:modified:yesterday:size:100"
 
 
 @contextlib.contextmanager
@@ -571,6 +608,7 @@ def _ranged_server(root):
 
         def do_GET(self):
             span = self.headers.get("Range")
+            self.server.requests.append(span)
             if not span:
                 return super().do_GET()
             body = (root / self.path.lstrip("/")).read_bytes()
@@ -581,15 +619,17 @@ def _ranged_server(root):
             self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(len(part)))
+            self.send_header("ETag", hashlib.sha256(body).hexdigest())
             self.end_headers()
             self.wfile.write(part)
             return None
 
     handler = functools.partial(Ranged, directory=str(root))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
+        yield f"http://127.0.0.1:{server.server_address[1]}", server.requests
     finally:
         server.shutdown()
         server.server_close()

@@ -1280,7 +1280,9 @@ class FsspecNDSource(ByteRangeNDSource):
 
         fsspec = _import_fsspec(urlpath)
         fs, path = fsspec.url_to_fs(urlpath)
-        if fs.isdir(path):
+        protocols = (fs.protocol,) if isinstance(fs.protocol, str) else fs.protocol
+        self._http = bool({"http", "https"} & set(protocols))
+        if not self._http and fs.isdir(path):
             raise NotImplementedError(
                 f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
                 "chunk by chunk; open it with cache_storage= instead"
@@ -1290,13 +1292,65 @@ class FsspecNDSource(ByteRangeNDSource):
         # has gone stale -- and chunk offsets from a replaced frame are garbage.
         # fsspec's own token, rather than a tuple of the metadata fields we guess
         # a backend exposes: memory:// has no mtime, which left it size-only.
-        self.stamp = fs.ukey(path)
+        # HTTPFileSystem.isdir() sends a GET before the range read below, making
+        # a lazy open pay two serial network round trips.  Its ukey is only a
+        # hash of the URL and options, so it needs no request either.  Capture
+        # ETag/Last-Modified from the first range response instead: one request
+        # supplies both the frame header and a stronger identity for the cache.
+        if self._http:
+            from fsspec.utils import tokenize
+
+            self.stamp = tokenize(path, fs.kwargs, fs.protocol)
+        else:
+            self.stamp = fs.ukey(path)
+        self._capture_http_headers = self._http
         super().__init__(urlpath, max_concurrency)
 
     def read_range(self, offset: int, size: int) -> bytes:
-        data = self._fs.cat_file(self._path, start=offset, end=offset + size)
+        if self._capture_http_headers:
+            from fsspec.asyn import sync
+
+            data, headers = sync(
+                self._fs.loop,
+                _http_cat_file_with_headers,
+                self._fs,
+                self._path,
+                offset,
+                offset + size,
+            )
+            self.stamp = _http_stamp(self.stamp, headers)
+            self._capture_http_headers = False
+        else:
+            data = self._fs.cat_file(self._path, start=offset, end=offset + size)
         self.traffic.charge(len(data))
         return data
+
+
+async def _http_cat_file_with_headers(fs, url: str, start: int, end: int):
+    """HTTPFileSystem.cat_file(), returning the response headers as well."""
+    kwargs = fs.kwargs.copy()
+    headers = kwargs.pop("headers", {}).copy()
+    headers["Range"] = await fs._process_limits(url, start, end)
+    kwargs["headers"] = headers
+    session = await fs.set_session()
+    async with session.get(fs.encode_url(url), **kwargs) as response:
+        data = await response.read()
+        fs._raise_not_found_for_status(response, url)
+        response_headers = {key.lower(): value for key, value in response.headers.items()}
+    return data, response_headers
+
+
+def _http_stamp(url_stamp: str, headers: Mapping[str, str]) -> str:
+    """Combine a URL identity with the strongest validators on an HTTP response."""
+    if etag := headers.get("etag"):
+        return f"{url_stamp}:etag:{etag}"
+
+    modified = headers.get("last-modified", "")
+    content_range = headers.get("content-range", "")
+    size = content_range.rpartition("/")[2] if "/" in content_range else headers.get("content-length", "")
+    if modified or size:
+        return f"{url_stamp}:modified:{modified}:size:{size}"
+    return url_stamp
 
 
 def convert_dtype(dt: str | DTypeLike):
