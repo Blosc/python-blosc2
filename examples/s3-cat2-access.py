@@ -1,0 +1,108 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
+"""Compare lazy access to the same array through fsspec and Caterva2.
+
+The HTTPS path needs the fsspec HTTP dependencies.  Install them with:
+
+    pip install "blosc2[fsspec]" aiohttp
+
+By default, caches are kept under ``./s3-cat2-cache``. Run the example again to
+see the first data access served by the cache left by the previous process.
+"""
+
+import argparse
+from pathlib import Path
+from time import perf_counter
+
+import numpy as np
+
+import blosc2
+
+CATERVA2_URL = blosc2.URLPath(
+    "@public/examples/cube-1k-1k-1k.b2nd",
+    urlbase="https://cat2.cloud/demo",
+)
+# The same contents are published in this bucket with a ``-2`` suffix.
+FSSPEC_URL = "https://blosc2.s3.us-west-001.backblazeb2.com/cube-1k-1k-1k-2.b2nd"
+SLICE = np.s_[100:110, 200:300, 400:500]
+
+
+def traffic_text(traffic: blosc2.Traffic | None) -> str:
+    if traffic is None:
+        return "traffic unavailable"
+    return f"{traffic.requests} requests, {traffic.nbytes / 2**20:.3f} MiB"
+
+
+def size_text(size: int) -> str:
+    return f"{size / 2**20:.3f} MiB"
+
+
+def benchmark(label: str, urlpath, cache_storage: Path) -> np.ndarray:
+    cache_existed = cache_storage.is_dir() and any(cache_storage.glob("*.b2nd"))
+
+    start = perf_counter()
+    array = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    open_time = perf_counter() - start
+
+    metadata = (array.shape, array.dtype, array.chunks, array.blocks)
+    cache_path = Path(array.urlpath).resolve()
+
+    array.traffic.reset()
+    start = perf_counter()
+    data = array[SLICE]
+    first_read_time = perf_counter() - start
+    first_traffic = traffic_text(array.traffic)
+    cache_size = cache_path.stat().st_size
+
+    # Open a fresh remote handle over the same on-disk cache. This demonstrates
+    # that cached data survives the Proxy object, not merely one array access.
+    del array
+    start = perf_counter()
+    reopened = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    reopen_time = perf_counter() - start
+
+    reopened.traffic.reset()
+    start = perf_counter()
+    cached = reopened[SLICE]
+    cached_read_time = perf_counter() - start
+    cached_traffic = traffic_text(reopened.traffic)
+    np.testing.assert_array_equal(cached, data)
+
+    print(f"\n{label}")
+    print(f"  metadata: shape={metadata[0]}, dtype={metadata[1]}")
+    print(f"            chunks={metadata[2]}, blocks={metadata[3]}")
+    print(f"  persistent cache: {cache_path} ({'existing' if cache_existed else 'new'})")
+    print(f"  open and remote metadata setup: {open_time:.6f} s")
+    print(f"  first data slice this run:      {first_read_time:.6f} s ({first_traffic})")
+    print(f"  cache size after slice:         {size_text(cache_size)}")
+    print(f"  reopen persistent cache:        {reopen_time:.6f} s")
+    print(f"  same slice after reopen:        {cached_read_time:.6f} s ({cached_traffic})")
+    return data
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("s3-cat2-cache"),
+        help="persistent cache root (default: ./s3-cat2-cache)",
+    )
+    args = parser.parse_args()
+    root = args.cache_dir
+
+    print(f"Persistent cache root: {root.resolve()}")
+    print("Run this command again to reuse these cache files.")
+    cat2_data = benchmark("Caterva2", CATERVA2_URL, root / "caterva2")
+    fsspec_data = benchmark("fsspec over HTTPS", FSSPEC_URL, root / "fsspec")
+    np.testing.assert_array_equal(cat2_data, fsspec_data)
+    print("\nBoth services returned identical data.")
+
+
+if __name__ == "__main__":
+    main()

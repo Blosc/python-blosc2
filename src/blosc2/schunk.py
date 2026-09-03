@@ -1987,17 +1987,51 @@ def _lazy_fsspec_proxy(
     # None leaves the default where it belongs, on the source itself
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
     src = blosc2.FsspecNDSource(urlpath, **kwargs)
+    return _lazy_remote_proxy(src, urlpath, cache_storage)
+
+
+def _lazy_remote_proxy(src, identity: str, cache_storage: str | pathlib.Path | None):
+    """Wrap a remote source in a memory or persistent cache."""
     if cache_storage is None:
         return blosc2.Proxy(src)
 
-    path = fsspec_cache_path(urlpath, cache_storage, ".b2nd")
-    if os.path.exists(path) and _cache_stamp(path) != src.stamp:
+    path = fsspec_cache_path(identity, cache_storage, ".b2nd")
+    stamp = getattr(src, "stamp", None)
+    if os.path.exists(path) and _cache_stamp(path) != stamp:
         # The remote frame was replaced, which makes every cached chunk -- and
         # every offset they were fetched by -- meaningless
         blosc2.remove_urlpath(path)
     # Proxy stamps the cache with src.stamp itself, and refuses one built against
     # other bytes; removing it above is what turns that refusal into a refetch
     return blosc2.Proxy(src, urlpath=path, mode="a")
+
+
+def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
+    """Open a Caterva2 array directly, or through the same lazy cache API as fsspec."""
+    if mode != "r":
+        raise NotImplementedError(f"Caterva2 arrays can only be opened with mode='r', not {mode!r}")
+    if offset != 0:
+        raise NotImplementedError("offset is not supported for Caterva2 arrays")
+
+    cache_storage = kwargs.pop("cache_storage", None)
+    max_concurrency = kwargs.pop("max_concurrency", None)
+    lazy = kwargs.pop("lazy", False)
+    requested = [key for key, value in kwargs.items() if value is not None]
+    if requested:
+        raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
+
+    if not lazy:
+        if cache_storage is not None:
+            raise NotImplementedError("cache_storage for a Caterva2 array requires lazy=True")
+        if max_concurrency is not None:
+            raise NotImplementedError("max_concurrency is only supported with lazy=True")
+        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+
+    src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+    if max_concurrency is not None:
+        src.max_concurrency = max_concurrency
+    identity = f"caterva2:{blosc2.c2array._server_url(src.urlbase, src.path)}"
+    return _lazy_remote_proxy(src, identity, cache_storage)
 
 
 def _cache_stamp(path: str):
@@ -2098,8 +2132,9 @@ def open(
 
         Open modes also define the allowed persistence side effects:
 
-        - ``'r'`` never writes to the persistent object or any sidecar/cache file.
-          Query acceleration and other execution caches remain process-local only.
+        - ``'r'`` never writes to the persistent object. It writes a local cache
+          only when ``cache_storage`` explicitly requests one; query acceleration
+          and other implicit execution caches remain process-local only.
         - ``'a'`` and ``'w'`` may persist explicit user-visible changes such as data,
           metadata, and index maintenance, but execution caches and query memoization
           still remain process-local only.
@@ -2108,7 +2143,8 @@ def open(
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
         lazy: bool, optional
-            Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
+            For fsspec URLs and Caterva2 :ref:`URLPath` objects, return a
+            :ref:`Proxy` that leaves the container
             where it is and reads what a slice touches, in range requests,
             instead of transferring the whole thing. Contiguous frames holding an
             :ref:`NDArray` only. A slice landing in a small part of a large chunk
@@ -2125,7 +2161,8 @@ def open(
             hide, where the pool costs about 10 microseconds per chunk and saves
             nothing.
         cache_storage: str | pathlib.Path, optional
-            Only for fsspec URLs: a directory holding this container's local
+            For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory
+            holding this container's local
             copy — the whole thing, or just the chunks and blocks ``lazy`` has
             fetched so far. Either way a later run starts from what is already
             there, and the copy is discarded when the remote no longer matches
@@ -2157,7 +2194,8 @@ def open(
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`Proxy`,
+        :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
         The object found in the path.
 
     Notes
@@ -2169,7 +2207,10 @@ def open(
       :class:`LazyArray`, exiting the context is currently a no-op.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
-      must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+      must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
+      returns a :ref:`C2Array`; with ``lazy=True`` it returns a :ref:`Proxy`,
+      optionally persisted under ``cache_storage``. Authenticated users sharing
+      a machine must use separate cache directories.
 
     * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
       the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
@@ -2234,11 +2275,7 @@ def open(
     True
     """
     if isinstance(urlpath, blosc2.URLPath):
-        if mode != "r" or offset != 0 or kwargs != {}:
-            raise NotImplementedError(
-                "Cannot open a C2Array with mode != 'r', or offset != 0 or some kwargs"
-            )
-        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+        return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)

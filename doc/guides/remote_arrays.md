@@ -7,7 +7,7 @@ A Blosc2 array that lives on a server does not have to be downloaded to be used.
 | Where the array lives | How to open it |
 |---|---|
 | Any URL fsspec reaches — `s3://`, `gs://`, `https://`, `zip://`… | `blosc2.open(url, lazy=True)` |
-| A [Caterva2](https://ironarray.io/caterva2) server | `blosc2.C2Array(path, urlbase=...)` |
+| A [Caterva2](https://ironarray.io/caterva2) server | `blosc2.open(blosc2.URLPath(path, urlbase=...), lazy=True)` |
 | Anything else | A `read_range()` of your own — see [Your own transport](#your-own-transport) |
 
 ```python
@@ -16,9 +16,11 @@ import blosc2
 # An object store, a web server, a zip on either of them
 a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
 
-# A Caterva2 server
-b = blosc2.C2Array(
-    "@public/examples/lung-jpeg2000_10x.b2nd", urlbase="https://cat2.cloud/demo"
+# A Caterva2 server; add lazy=True for an automatic Proxy cache
+b = blosc2.open(
+    blosc2.URLPath(
+        "@public/examples/lung-jpeg2000_10x.b2nd", urlbase="https://cat2.cloud/demo"
+    )
 )
 
 a.shape, a.dtype  # metadata only; nothing was downloaded
@@ -46,7 +48,9 @@ p[10:12, 500:600]  # fetched from the server, and written to lung-cache.b2nd
 
 That file is an ordinary Blosc2 array holding only the pieces you touched — a few hundred bytes for a freshly opened proxy over a 64 MB dataset, growing as you read. It is a normal `.b2nd`: copy it, ship it, open it with {func}`blosc2.open`. With `mode="a"` a later run picks up where the last one left off.
 
-{func}`blosc2.open` builds the proxy for you and offers the same choice under another name — `cache_storage=` a directory for a cache on disk, nothing for one in memory:
+{func}`blosc2.open` builds the proxy for either kind of remote source and offers
+the same choice under another name — `cache_storage=` for a cache on disk,
+nothing for one in memory:
 
 ```python
 url = "s3://bucket/big.b2nd"
@@ -59,6 +63,25 @@ a[100:110, :50]
 a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
 a[100:110, :50]  # no request
 ```
+
+The same interface works for Caterva2:
+
+```python
+url = blosc2.URLPath("@personal/run.b2nd")
+
+with blosc2.c2context(
+    urlbase="https://cat2.cloud/demo",
+    username="me@example.com",
+    password="secret",
+):
+    a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
+    a[100:110, :50]
+```
+
+For authenticated Caterva2 datasets, `cache_storage` must be private to the
+current user. Applications serving multiple users must use a separate cache
+directory for each user; sharing one between users is not supported. Reopen a
+private cache inside an equivalent authenticated {func}`c2context`.
 
 ## Only what a slice touches
 
@@ -223,5 +246,6 @@ Four things to get right:
 
 - {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — the same ground at a slower pace, with output.
 - `examples/ndarray/rw-fsspec.py` — every way of reading and writing an fsspec URL, runnable.
+- `examples/s3-cat2-access.py` — the same dataset and cache API through HTTPS/fsspec and Caterva2, with timings.
 - `examples/c2array-traffic.py` — what a remote slice costs in bytes, and what blocks and the cache save, runnable.
 - {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`Traffic` — the reference pages.

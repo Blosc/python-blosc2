@@ -324,6 +324,88 @@ def _bytes(srv, endpoint):
     return sum(n for kind, _, n in srv.log if kind == endpoint)
 
 
+def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+
+    proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3)
+
+    assert isinstance(proxy, blosc2.Proxy)
+    assert isinstance(proxy.src, blosc2.C2Array)
+    assert proxy.src.max_concurrency == 3
+    assert proxy.urlpath is None
+
+    result = proxy[0:5, 0:10]
+    served = len(srv.log)
+    assert np.array_equal(result, data[0:5, 0:10])
+    assert np.array_equal(proxy[0:5, 0:10], result)
+    assert len(srv.log) == served
+
+
+def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+    cache_storage = tmp_path / "cache"
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    fetches = sum(endpoint == "fetch" for endpoint, _, _ in srv.log)
+    del proxy
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    assert sum(endpoint == "fetch" for endpoint, _, _ in srv.log) == fetches
+    assert len(list(cache_storage.glob("*.b2nd"))) == 1
+
+
+def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, server):
+    token = "session=secret"
+    data = _incompressible((20, 20))
+    array, _ = server(data, chunks=(10, 20), blocks=(5, 10), cookie=token)
+    urlpath = blosc2.URLPath(array.path)
+    cache_storage = tmp_path / "cache"
+
+    with blosc2.c2context(urlbase=array.urlbase, auth_token=token):
+        proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+        assert np.array_equal(proxy[0:5, 0:5], data[0:5, 0:5])
+        assert proxy.schunk.meta["proxy-source"]["urlpath"][2] is None
+
+        cache = next(cache_storage.glob("*.b2nd"))
+        reopened = blosc2.open(cache, mode="a")
+        assert np.array_equal(reopened[0:5, 0:5], data[0:5, 0:5])
+
+
+def test_open_urlpath_lazy_rebuilds_stale_cache(tmp_path, server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+    cache_storage = tmp_path / "cache"
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    del proxy
+
+    other = _incompressible((200, 200), seed=1)
+    _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    assert np.array_equal(proxy[0:5, 0:10], other[0:5, 0:10])
+
+
+def test_open_urlpath_cache_options_need_lazy(tmp_path, server):
+    data = _incompressible((20, 20))
+    array, _ = server(data, chunks=(10, 20), blocks=(5, 10))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+
+    assert isinstance(blosc2.open(urlpath), blosc2.C2Array)
+    with pytest.raises(NotImplementedError, match=r"cache_storage.*lazy=True"):
+        blosc2.open(urlpath, cache_storage=tmp_path)
+    with pytest.raises(NotImplementedError, match=r"max_concurrency.*lazy=True"):
+        blosc2.open(urlpath, max_concurrency=2)
+
+
 def test_blocks_are_read_over_ranges(server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
