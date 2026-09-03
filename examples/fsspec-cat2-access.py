@@ -7,11 +7,11 @@
 
 """Compare lazy access to the same array through fsspec and Caterva2.
 
-The HTTPS path needs the fsspec HTTP dependencies.  Install them with:
+The HTTPS path needs the fsspec extra.  Install it with:
 
-    pip install "blosc2[fsspec]" aiohttp
+    pip install "blosc2[fsspec]"
 
-By default, caches are kept under ``./s3-cat2-cache``. Run the example again to
+By default, caches are kept under ``./fsspec-cat2-cache``. Run the example again to
 see the first data access served by the cache left by the previous process.
 """
 
@@ -27,8 +27,8 @@ CATERVA2_URL = blosc2.URLPath(
     "@public/examples/cube-1k-1k-1k.b2nd",
     urlbase="https://cat2.cloud/demo",
 )
-# The same contents are published in this bucket with a ``-2`` suffix.
-FSSPEC_URL = "https://blosc2.s3.us-west-001.backblazeb2.com/cube-1k-1k-1k-2.b2nd"
+# The same contents are published in this Backblaze B2 bucket with a ``-2`` suffix.
+FSSPEC_URL = "https://f001.backblazeb2.com/file/blosc2/cube-1k-1k-1k-2.b2nd"
 SLICE = np.s_[100:110, 200:300, 400:500]
 
 
@@ -90,8 +90,8 @@ def main() -> None:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("s3-cat2-cache"),
-        help="persistent cache root (default: ./s3-cat2-cache)",
+        default=Path("fsspec-cat2-cache"),
+        help="persistent cache root (default: ./fsspec-cat2-cache)",
     )
     args = parser.parse_args()
     root = args.cache_dir

@@ -59,10 +59,11 @@ tui = ["textual", "textual-plotext"]
 # Adds the high-res 'h' view on top of [tui], rendering a real matplotlib image
 # (kitty/iTerm2/sixel, or half-cells elsewhere) — matplotlib is the heavy part.
 hires = ["blosc2[tui]", "textual-image", "matplotlib"]
-# Read/write single-file containers through any fsspec URL (s3://, gs://, zip://,
-# memory://...).  The protocol backends (s3fs, gcsfs, adlfs...) are the caller's
-# install: `pip install "blosc2[fsspec]" s3fs`.
-fsspec = ["fsspec"]
+# Read/write single-file containers through any fsspec URL (https://, s3://,
+# gs://, zip://, memory://...).  HTTP support is included; the other protocol
+# backends (s3fs, gcsfs, adlfs...) are the caller's install:
+# `pip install "blosc2[fsspec]" s3fs`.
+fsspec = ["fsspec[http]"]
 
 [project.scripts]
 parquet-to-blosc2 = "blosc2.cli.parquet_to_blosc2:main"
