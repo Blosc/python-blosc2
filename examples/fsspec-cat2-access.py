@@ -23,12 +23,16 @@ import numpy as np
 
 import blosc2
 
+# Using the Caterva2 API
 CATERVA2_URL = blosc2.URLPath(
     "@public/examples/cube-1k-1k-1k.b2nd",
     urlbase="https://cat2.cloud/demo",
 )
+# ...and also using the fsspec path via fetch URL in Caterva2
+FSSPEC_URL = "https://cat2.cloud/demo/api/fetch/@public/examples/cube-1k-1k-1k.b2nd"
 # The same contents are published in this Backblaze B2 bucket with a ``-2`` suffix.
-FSSPEC_URL = "https://f001.backblazeb2.com/file/blosc2/cube-1k-1k-1k-2.b2nd"
+# FSSPEC_URL = "https://f001.backblazeb2.com/file/blosc2/cube-1k-1k-1k-2.b2nd"
+
 SLICE = np.s_[100:110, 200:300, 400:500]
 
 

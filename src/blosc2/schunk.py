@@ -1990,10 +1990,12 @@ def _lazy_fsspec_proxy(
     return _lazy_remote_proxy(src, urlpath, cache_storage)
 
 
-def _lazy_remote_proxy(src, identity: str, cache_storage: str | pathlib.Path | None):
+def _lazy_remote_proxy(
+    src, identity: str, cache_storage: str | pathlib.Path | None, *, source_fresh: bool = False
+):
     """Wrap a remote source in a memory or persistent cache."""
     if cache_storage is None:
-        return blosc2.Proxy(src)
+        return blosc2.Proxy(src, _refresh_source=not source_fresh)
 
     path = fsspec_cache_path(identity, cache_storage, ".b2nd")
     stamp = getattr(src, "stamp", None)
@@ -2003,7 +2005,7 @@ def _lazy_remote_proxy(src, identity: str, cache_storage: str | pathlib.Path | N
         blosc2.remove_urlpath(path)
     # Proxy stamps the cache with src.stamp itself, and refuses one built against
     # other bytes; removing it above is what turns that refusal into a refetch
-    return blosc2.Proxy(src, urlpath=path, mode="a")
+    return blosc2.Proxy(src, urlpath=path, mode="a", _refresh_source=not source_fresh)
 
 
 def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
@@ -2031,7 +2033,10 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     if max_concurrency is not None:
         src.max_concurrency = max_concurrency
     identity = f"caterva2:{blosc2.c2array._server_url(src.urlbase, src.path)}"
-    return _lazy_remote_proxy(src, identity, cache_storage)
+    # C2Array's constructor has just read api/info.  That response supplies both
+    # the geometry and the stamp against which the cache is checked, so asking
+    # for it again in Proxy.__init__ only adds a second serial round trip.
+    return _lazy_remote_proxy(src, identity, cache_storage, source_fresh=True)
 
 
 def _cache_stamp(path: str):

@@ -329,8 +329,10 @@ def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
 
+    srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3)
 
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert isinstance(proxy, blosc2.Proxy)
     assert isinstance(proxy.src, blosc2.C2Array)
     assert proxy.src.max_concurrency == 3
@@ -349,14 +351,17 @@ def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_bl
     urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
     cache_storage = tmp_path / "cache"
 
+    srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    fetches = sum(endpoint == "fetch" for endpoint, _, _ in srv.log)
     del proxy
 
+    srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    assert sum(endpoint == "fetch" for endpoint, _, _ in srv.log) == fetches
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert len(list(cache_storage.glob("*.b2nd"))) == 1
 
 

@@ -68,7 +68,13 @@ class Proxy(blosc2.Operand):
     """
 
     def __init__(
-        self, src: ProxySource or ProxyNDSource, urlpath: str | None = None, mode="a", **kwargs: dict
+        self,
+        src: ProxySource or ProxyNDSource,
+        urlpath: str | None = None,
+        mode="a",
+        *,
+        _refresh_source: bool = True,
+        **kwargs: dict,
     ):
         """
         Create a new :ref:`Proxy` to serve as a cache to save accessed chunks locally.
@@ -146,9 +152,10 @@ class Proxy(blosc2.Operand):
         # that has outlived someone else's writes would hand over a stamp the
         # cache still matches and a set of bytes it no longer does.  Sources whose
         # bytes cannot move underneath them do not offer this and are not asked
-        refresh = getattr(self.src, "refresh_stamp", None)
-        if refresh is not None:
-            refresh()
+        if _refresh_source:
+            refresh = getattr(self.src, "refresh_stamp", None)
+            if refresh is not None:
+                refresh()
 
         if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
             # Reuse the cache left by an earlier run: whatever was fetched then is
