@@ -493,12 +493,14 @@ def test_lazy_with_cache_dir(tmp_path, monkeypatch):
     )
 
     p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert p.cache_status == "created"
     assert np.array_equal(p[0:100], a[0:100])
     assert fetched == [0]
     del p
 
     # A later run starts from the chunks the previous one pulled
     p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert p.cache_status == "reused"
     assert np.array_equal(p[0:100], a[0:100])
     assert fetched == [0]
     assert np.array_equal(p[500:600], a[500:600])
@@ -577,6 +579,7 @@ def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     # they were fetched by, so the cache must be thrown away rather than reused
     _put("lazystale.b2nd", b)
     p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert p.cache_status == "invalidated/rebuilt"
     assert np.array_equal(p[0:100], b[0:100])
 
 

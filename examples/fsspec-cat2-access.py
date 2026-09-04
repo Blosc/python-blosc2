@@ -48,8 +48,6 @@ def size_text(size: int) -> str:
 
 
 def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
-    cache_existed = cache_dir.is_dir() and any(cache_dir.glob("*.b2nd"))
-
     start = perf_counter()
     array = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
     open_time = perf_counter() - start
@@ -57,6 +55,7 @@ def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
 
     metadata = (array.shape, array.dtype, array.chunks, array.blocks)
     cache_path = Path(array.urlpath).resolve()
+    cache_status = array.cache_status
 
     array.traffic.reset()
     start = perf_counter()
@@ -83,7 +82,7 @@ def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
     print(f"\n{label}")
     print(f"  metadata: shape={metadata[0]}, dtype={metadata[1]}")
     print(f"            chunks={metadata[2]}, blocks={metadata[3]}")
-    print(f"  persistent cache: {cache_path} ({'existing' if cache_existed else 'new'})")
+    print(f"  persistent cache: {cache_path} ({cache_status})")
     print(f"  {'open + remote metadata:':<27}{open_time * 1000:.0f} ms ({open_traffic})")
     print(f"  {'first data slice:':<27}{first_read_time * 1000:.0f} ms ({first_traffic})")
     print(f"  {'cache after slice:':<27}{size_text(cache_size)}")

@@ -128,6 +128,7 @@ class Proxy(blosc2.Operand):
         """
         self.src = src
         self.urlpath = urlpath
+        self._cache_status = None
         if kwargs is None:
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
@@ -273,6 +274,16 @@ class Proxy(blosc2.Operand):
         Traffic(requests=2, nbytes=20480)
         """
         return getattr(self.src, "traffic", None)
+
+    @property
+    def cache_status(self) -> str | None:
+        """How the persistent cache was handled when this proxy was opened.
+
+        This is ``"created"``, ``"reused"``, or ``"invalidated/rebuilt"`` for
+        a remote proxy opened with ``cache_dir`` or ``cache_path``.  It is
+        ``None`` for proxies without a managed persistent cache.
+        """
+        return self._cache_status
 
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""

@@ -1896,9 +1896,7 @@ def process_opened_object(res):
             src = blosc2.FsspecNDSource(proxy_src["urlpath"])
             return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         if source_kind == "caterva2":
-            src = blosc2.C2Array(
-                proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2]
-            )
+            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
             return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         if proxy_src["local_abspath"] is not None:
             source_path = proxy_src["local_abspath"]
@@ -2049,13 +2047,20 @@ def _lazy_remote_proxy(
     else:
         path = fsspec_cache_path(identity, cache_dir, ".b2nd")
     stamp = getattr(src, "stamp", None)
-    if os.path.exists(path) and _cache_stamp(path) != stamp:
-        # The remote frame was replaced, which makes every cached chunk -- and
-        # every offset they were fetched by -- meaningless
-        blosc2.remove_urlpath(path)
+    cache_status = "created"
+    if os.path.exists(path):
+        if _cache_stamp(path) != stamp:
+            # The remote frame was replaced, which makes every cached chunk -- and
+            # every offset they were fetched by -- meaningless
+            blosc2.remove_urlpath(path)
+            cache_status = "invalidated/rebuilt"
+        else:
+            cache_status = "reused"
     # Proxy stamps the cache with src.stamp itself, and refuses one built against
     # other bytes; removing it above is what turns that refusal into a refetch
-    return blosc2.Proxy(src, urlpath=path, mode="a", _refresh_source=not source_fresh)
+    proxy = blosc2.Proxy(src, urlpath=path, mode="a", _refresh_source=not source_fresh)
+    proxy._cache_status = cache_status
+    return proxy
 
 
 def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
