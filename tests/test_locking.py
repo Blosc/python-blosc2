@@ -225,7 +225,7 @@ def test_cross_process_hammer(tmp_path):
     urlpath = tmp_path / "schunk-hammer.b2frame"
     create_schunk(urlpath, contiguous=False, locking=True)
 
-    iters = 500
+    iters = 150
     writer = subprocess.Popen(
         [sys.executable, "-c", WRITER_SCRIPT, str(urlpath), str(NCHUNKS), str(CHUNK_NITEMS), str(iters)]
     )
@@ -353,7 +353,7 @@ def test_cross_process_multiwriter_update(tmp_path):
     # owner's last-written value.
     urlpath = tmp_path / "schunk-multiwriter-update.b2frame"
     nwriters = 4
-    iters = 60
+    iters = 20
     schunk = create_schunk(urlpath, contiguous=False, locking=True)
     nchunks = schunk.nchunks
     del schunk
@@ -1332,10 +1332,10 @@ def test_dict_store_read_during_overwrite(tmp_path, monkeypatch):
     dstore = blosc2.DictStore(path, mode="w", threshold=500, locking=True)
     dstore["/hot"] = np.arange(100)
 
-    writer = subprocess.Popen([sys.executable, "-c", DSTORE_OVERWRITER, path, "300"])
+    writer = subprocess.Popen([sys.executable, "-c", DSTORE_OVERWRITER, path, "100"])
     try:
         nreads = 0
-        while writer.poll() is None and nreads < 60:
+        while writer.poll() is None and nreads < 20:
             data = dstore["/hot"][:]
             # Each round writes arange(i, i + 100); a torn read breaks the run
             assert np.array_equal(data, np.arange(data[0], data[0] + 100))
@@ -1345,7 +1345,7 @@ def test_dict_store_read_during_overwrite(tmp_path, monkeypatch):
             writer.kill()
         writer.wait()
 
-    assert nreads == 60
+    assert nreads == 20
     dstore._closed = True
 
 

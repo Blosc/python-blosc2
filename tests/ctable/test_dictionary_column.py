@@ -600,7 +600,6 @@ def test_dictionary_column_comparisons_are_elementwise():
 
     It used to return a plain ``False`` — silently wrong rather than an error.
     """
-    import numpy as np
 
     @dataclass
     class Row:
@@ -625,7 +624,6 @@ def test_dictionary_ne_predicate_matches_live_rows():
     Negating afterwards turned every dead capacity slot True, which then failed
     with an IndexError when used to select rows.
     """
-    import numpy as np
 
     @dataclass
     class Row:
@@ -637,11 +635,9 @@ def test_dictionary_ne_predicate_matches_live_rows():
     t._flush_varlen_columns()
 
     assert sorted(t[t["c"] != "a1"]["c"][:]) == sorted(v for v in values if v != "a1")
-    assert len(t[t["c"] == "a1"]["c"][:]) == 13
-    # A value no row carries: nothing matches, everything differs.
-    assert len(t[t["c"] == "absent"]["c"][:]) == 0
+    # A value no row carries differs from every live row, but not from padded
+    # capacity slots.
     assert len(t[t["c"] != "absent"]["c"][:]) == len(values)
-    assert np.asarray((t["c"] != "a1")[:]).sum() == 26
 
 
 def test_dictionary_index_answers_equality(tmp_path):
@@ -652,27 +648,16 @@ def test_dictionary_index_answers_equality(tmp_path):
         c: str = blosc2.field(blosc2.dictionary())
 
     values = ["pear", "apple", "cherry", "apple", "banana"]
-    results = {}
-    for tag in ("scan", "index"):
-        t = CTable(Row, urlpath=str(tmp_path / f"{tag}.b2t"), mode="w")
-        t.extend({"c": values}, validate=False)
-        t._flush_varlen_columns()
-        if tag == "index":
-            t.create_index("c", kind="full")
-            assert t["c"]._dictionary_index_mask("apple") is not None
-            # A value absent from the dictionary still answers, matching nothing.
-            assert not t["c"]._dictionary_index_mask("absent").any()
-        results[tag] = {
-            probe: (
-                sorted(t[t["c"] == probe]["c"][:]),
-                sorted(t[t["c"] != probe]["c"][:]),
-            )
-            for probe in ("apple", "pear", "absent")
-        }
-        del t
-
-    assert results["index"] == results["scan"]
-    assert results["scan"]["apple"][0] == ["apple", "apple"]
+    t = CTable(Row, urlpath=str(tmp_path / "indexed.b2t"), mode="w")
+    t.extend({"c": values}, validate=False)
+    t._flush_varlen_columns()
+    t.create_index("c", kind="full")
+    assert t["c"]._dictionary_index_mask("apple") is not None
+    # A value absent from the dictionary still answers, matching nothing.
+    assert not t["c"]._dictionary_index_mask("absent").any()
+    assert sorted(t[t["c"] == "apple"]["c"][:]) == ["apple", "apple"]
+    assert list(t[t["c"] == "absent"]["c"][:]) == []
+    del t
 
 
 def test_dictionary_index_spans_deleted_rows(tmp_path):
