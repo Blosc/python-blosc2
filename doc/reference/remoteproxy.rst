@@ -20,6 +20,23 @@ or credentials.
     )
     remote.save("dataset-reference.b2nd")
 
+A Caterva2 dataset is named with :class:`blosc2.URLPath` rather than an fsspec
+URL:
+
+.. code-block:: python
+
+    remote = blosc2.RemoteProxy(
+        blosc2.URLPath(
+            "@public/dataset.b2nd",
+            urlbase="https://example.org/caterva2",
+        )
+    )
+
+References are floating: before each data operation, ``RemoteProxy`` checks the
+source identity and verifies that shape, dtype, chunks, and blocks still match
+the captured geometry. A replacement with different geometry is rejected;
+runtime memory or disk cache data is discarded when the source identity moves.
+
 Runtime caching is available through :attr:`blosc2.CachePolicy.MEMORY` and
 :attr:`blosc2.CachePolicy.DISK`. Memory caches retain at most 256 MiB of
 compressed payload by default. Disk caches are unlimited by default, but both
@@ -39,8 +56,13 @@ returned NumPy array.
 Regardless of its runtime policy, :meth:`RemoteProxy.save
 <blosc2.RemoteProxy.save>` and :meth:`RemoteProxy.to_cframe
 <blosc2.RemoteProxy.to_cframe>` produce a reference-only object that reopens
-with :attr:`blosc2.CachePolicy.NONE`. Local cache paths and authentication data are not
-serialized.
+with :attr:`blosc2.CachePolicy.NONE`. Local cache paths and authentication data
+are not serialized.
+
+Authentication supplied to a live Caterva2 source is deliberately omitted from
+the carrier. A receiving server resolves private sources with credentials from
+its own administrator-controlled destination mapping; client credentials never
+travel with the reference.
 
 To cache again after reopening a reference, opt into a runtime policy when
 constructing a new proxy from its source:

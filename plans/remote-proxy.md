@@ -69,6 +69,14 @@ RemoteProxy design and the first four implementation phases:
   ObjectArray/BatchArray msgpack round trips are implemented and documented.
 - Client-side URL safety checks reject local filesystem URLs, chained fsspec
   URLs, user information, fragments, and credential-like query parameters.
+- Floating references refresh their source identity before data operations,
+  reject geometry changes that happen after a carrier is opened, and discard
+  memory or disk cache state when the object at a source URL is replaced.
+- Caterva2 now discovers direct `remote_proxy` carriers without resolving them
+  and denies data access by default. Its initial opt-in resolver is limited to
+  credential-free HTTPS destinations on an exact administrator allowlist; it
+  pins public DNS results, disables redirects, and bounds time, geometry, chunk
+  count, and concurrency.
 
 The following remain future work or deliberate follow-ups:
 
@@ -78,9 +86,10 @@ The following remain future work or deliberate follow-ups:
   the current explicit opt-in.
 - Cache-oriented `fetch()`/`afetch()` methods are not exposed on `RemoteProxy`
   under `NONE`; a separate materialization API can be designed later.
-- Caterva2 server-side discovery, default-deny protocol/destination policy,
-  credential selection, SSRF protection, resource limits, reference-cycle
-  handling, and tenant isolation remain to be implemented in Caterva2.
+- Caterva2 credential selection, S3 support, cumulative fetched-byte budgets,
+  reference-chain resolution/cycle handling, and authenticated tenant-scoped
+  sessions remain to be implemented. Remote references embedded inside stored
+  expressions are rejected until they can use the same secure resolver.
 - Pinned reference semantics, broader fsspec/server protocol allowlists, and
   any `C2Array.save(as_remote_proxy=True)` convenience are future decisions.
 

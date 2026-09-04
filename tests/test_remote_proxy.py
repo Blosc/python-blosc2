@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import fsspec
@@ -215,6 +216,37 @@ def test_reference_rejects_changed_source_geometry(tmp_path):
         blosc2.open(path, mode="r")
 
 
+def test_open_reference_rejects_geometry_changed_before_read(tmp_path):
+    url, _ = _remote_array("changed-after-open.b2nd", nchunks=1, chunk_size=100)
+    path = tmp_path / "changed-after-open-reference.b2nd"
+    blosc2.RemoteProxy(url).save(path)
+    restored = blosc2.open(path, mode="r")
+
+    replacement = blosc2.arange(200, dtype=np.uint8, chunks=(100,), blocks=(100,))
+    fsspec.filesystem("memory").pipe_file("changed-after-open.b2nd", replacement.to_cframe())
+
+    with pytest.raises(ValueError, match="geometry no longer matches"):
+        restored[:]
+
+
+@pytest.mark.parametrize("policy", [blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK])
+def test_runtime_cache_is_invalidated_after_same_geometry_replacement(tmp_path, policy):
+    url, data = _remote_array(f"same-geometry-{policy.value}.b2nd", nchunks=1, chunk_size=100)
+    kwargs = (
+        {"cache_path": tmp_path / f"{policy.value}-cache.b2nd"} if policy is blosc2.CachePolicy.DISK else {}
+    )
+    proxy = blosc2.RemoteProxy(url, cache_policy=policy, **kwargs)
+    traffic = proxy.traffic
+    np.testing.assert_array_equal(proxy[:], data)
+
+    replacement = np.arange(100, dtype=np.uint8)
+    array = blosc2.asarray(replacement, chunks=(100,), blocks=(100,))
+    fsspec.filesystem("memory").pipe_file(f"same-geometry-{policy.value}.b2nd", array.to_cframe())
+
+    np.testing.assert_array_equal(proxy[:], replacement)
+    assert proxy.traffic is traffic
+
+
 def test_reference_rejects_runtime_cache_policy_in_payload():
     url, _ = _remote_array("bad-persisted-policy.b2nd", nchunks=1, chunk_size=100)
     carrier = blosc2.ndarray_from_cframe(blosc2.RemoteProxy(url).to_cframe())
@@ -222,6 +254,23 @@ def test_reference_rejects_runtime_cache_policy_in_payload():
     payload["cache_policy"] = "memory"
 
     with pytest.raises(ValueError, match="must use cache policy 'none'"):
+        decode_b2object_payload(payload, carrier=carrier)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("kind", "unknown", "unsupported RemoteProxy source kind"),
+        ("version", 2, "unsupported RemoteProxy source descriptor"),
+    ],
+)
+def test_reference_rejects_unknown_source_descriptor(field, value, error):
+    url, _ = _remote_array(f"bad-source-{field}.b2nd", nchunks=1, chunk_size=100)
+    carrier = blosc2.ndarray_from_cframe(blosc2.RemoteProxy(url).to_cframe())
+    payload = dict(carrier.schunk.vlmeta["b2o"])
+    payload["source"] = dict(payload["source"], **{field: value})
+
+    with pytest.raises(ValueError, match=error):
         decode_b2object_payload(payload, carrier=carrier)
 
 
@@ -301,6 +350,46 @@ def test_caterva2_no_cache_keeps_native_indexing(monkeypatch):
     assert calls == [{"slice_": "2:5"}]
 
 
+@pytest.mark.parametrize("policy", [blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK])
+def test_caterva2_runtime_caches_reuse_chunks(monkeypatch, tmp_path, policy):
+    data = np.arange(10, dtype=np.int32)
+    local = blosc2.asarray(data, chunks=(5,), blocks=(5,))
+    compressed = [local.schunk.get_chunk(i) for i in range(2)]
+    calls = []
+
+    def fake_info(path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None):
+        return {
+            "shape": [10],
+            "chunks": [5],
+            "blocks": [5],
+            "dtype": data.dtype.str,
+            "mtime": 1,
+            "accept_ranges": "none",
+            "schunk": {
+                "cparams": dict(blosc2.cparams_dflts),
+                "cbytes": sum(map(len, compressed)),
+                "vlmeta": {},
+            },
+        }
+
+    def fake_get_chunk(self, nchunk):
+        calls.append(nchunk)
+        return compressed[nchunk]
+
+    monkeypatch.setattr(blosc2_c2array, "info", fake_info)
+    monkeypatch.setattr(blosc2.C2Array, "get_chunk", fake_get_chunk)
+    kwargs = {"cache_path": tmp_path / "caterva2-cache.b2nd"} if policy is blosc2.CachePolicy.DISK else {}
+    remote = blosc2.RemoteProxy(
+        blosc2.URLPath("@public/cache.b2nd", urlbase="https://example.org/c2"),
+        cache_policy=policy,
+        **kwargs,
+    )
+
+    np.testing.assert_array_equal(remote[:5], data[:5])
+    np.testing.assert_array_equal(remote[:5], data[:5])
+    assert calls == [0]
+
+
 def test_remote_proxy_is_a_persistable_lazyexpr_operand():
     url, data = _remote_array("operand.b2nd", nchunks=1, chunk_size=100)
     remote = blosc2.RemoteProxy(url)
@@ -322,6 +411,73 @@ def test_objectarray_msgpack_supports_remote_proxy():
     assert isinstance(restored, blosc2.RemoteProxy)
     assert restored.cache_policy is blosc2.CachePolicy.NONE
     np.testing.assert_array_equal(restored[:], data)
+
+
+def test_batcharray_msgpack_supports_remote_proxy():
+    url, data = _remote_array("batcharray-remote-proxy.b2nd", nchunks=1, chunk_size=100)
+    batches = blosc2.BatchArray()
+    batches.append([blosc2.RemoteProxy(url)])
+
+    restored = batches[0][0]
+    assert isinstance(restored, blosc2.RemoteProxy)
+    assert restored.cache_policy is blosc2.CachePolicy.NONE
+    np.testing.assert_array_equal(restored[:], data)
+
+
+@pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
+def test_get_chunk_for_each_policy(tmp_path, policy):
+    url, data = _remote_array(f"get-chunk-{policy.value}.b2nd", nchunks=2, chunk_size=100)
+    kwargs = {"cache_path": tmp_path / "get-chunk-cache.b2nd"} if policy is blosc2.CachePolicy.DISK else {}
+    proxy = blosc2.RemoteProxy(url, cache_policy=policy, **kwargs)
+
+    chunk = proxy.get_chunk(1)
+    np.testing.assert_array_equal(np.frombuffer(blosc2.decompress2(chunk), dtype=np.uint8), data[100:])
+
+
+@pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
+def test_aget_chunk_for_each_policy(tmp_path, policy):
+    url, data = _remote_array(f"aget-chunk-{policy.value}.b2nd", nchunks=2, chunk_size=100)
+    kwargs = {"cache_path": tmp_path / "aget-chunk-cache.b2nd"} if policy is blosc2.CachePolicy.DISK else {}
+    proxy = blosc2.RemoteProxy(url, cache_policy=policy, **kwargs)
+
+    chunk = asyncio.run(proxy.aget_chunk(1))
+    np.testing.assert_array_equal(np.frombuffer(blosc2.decompress2(chunk), dtype=np.uint8), data[100:])
+
+
+def test_disk_cache_survives_reopen_without_remote_data_traffic(tmp_path):
+    url, data = _remote_array("disk-reuse.b2nd", nchunks=2, chunk_size=100_000)
+    cache_path = tmp_path / "disk-reuse-cache.b2nd"
+    first = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK, cache_path=cache_path)
+    np.testing.assert_array_equal(first[:100_000], data[:100_000])
+
+    reopened = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK, cache_path=cache_path)
+    reopened.traffic.reset()
+    np.testing.assert_array_equal(reopened[:100_000], data[:100_000])
+    assert reopened.traffic.requests == 0
+
+
+def test_save_after_disk_cache_use_remains_reference_only(tmp_path):
+    url, data = _remote_array("save-after-disk.b2nd", nchunks=2, chunk_size=100_000)
+    proxy = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.DISK,
+        cache_path=tmp_path / "runtime-cache.b2nd",
+    )
+    np.testing.assert_array_equal(proxy[:100_000], data[:100_000])
+
+    reference_path = tmp_path / "saved-reference.b2nd"
+    proxy.save(reference_path)
+    carrier = blosc2.ndarray_from_cframe(reference_path.read_bytes())
+    assert carrier.schunk.vlmeta["b2o"]["cache_policy"] == "none"
+    assert "proxy-source" not in carrier.schunk.meta
+
+
+def test_reference_size_is_independent_of_remote_payload(tmp_path):
+    url, _ = _remote_array("metadata-sized.b2nd", nchunks=20, chunk_size=100_000)
+    path = tmp_path / "metadata-sized-reference.b2nd"
+    blosc2.RemoteProxy(url).save(path)
+
+    assert path.stat().st_size < 10_000
 
 
 @pytest.mark.parametrize(

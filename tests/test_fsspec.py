@@ -641,6 +641,27 @@ def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
         assert np.array_equal(lazy[3:5, 100:120], second[3:5, 100:120])
 
 
+def test_http_remote_proxy_checks_identity_without_refetching_cached_data(tmp_path):
+    pytest.importorskip("aiohttp")
+    path = tmp_path / "www"
+    path.mkdir()
+    data = np.arange(40_000, dtype="i4").reshape(200, 200)
+    blosc2.asarray(data, chunks=(50, 200), blocks=(10, 100), urlpath=path / "stable.b2nd")
+
+    with _ranged_server(path) as (urlbase, requests):
+        remote = blosc2.RemoteProxy(
+            f"{urlbase}/stable.b2nd",
+            cache_policy=blosc2.CachePolicy.MEMORY,
+        )
+        np.testing.assert_array_equal(remote[3:5, 100:120], data[3:5, 100:120])
+
+        requests.clear()
+        remote.traffic.reset()
+        np.testing.assert_array_equal(remote[3:5, 100:120], data[3:5, 100:120])
+        assert requests == []
+        assert remote.traffic.requests == 0
+
+
 def test_http_stamp_prefers_etag_and_falls_back_to_modified_size():
     stamp = blosc2.proxy_source._http_stamp(
         "url",
@@ -681,6 +702,14 @@ def _ranged_server(root):
             self.end_headers()
             self.wfile.write(part)
             return None
+
+        def do_HEAD(self):
+            body = (root / self.path.lstrip("/")).read_bytes()
+            self.send_response(200)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", hashlib.sha256(body).hexdigest())
+            self.end_headers()
 
     handler = functools.partial(Ranged, directory=str(root))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from urllib.parse import parse_qsl, urlsplit
 
 import numpy as np
@@ -141,23 +142,48 @@ class RemoteProxy(blosc2.Operand):
 
         self._cache_policy = cache_policy
         self._cache_limit = _normalize_limit(cache_policy, max_cache_bytes)
-        max_concurrency = _validate_max_concurrency(max_concurrency)
-        self.src, self._source = self._open_source(urlpath, max_concurrency)
+        self._max_concurrency = _validate_max_concurrency(max_concurrency)
+        self.src, self._source = self._open_source(urlpath, self._max_concurrency)
+        self._runtime_urlpath = self._runtime_source(urlpath)
+        self._expected_geometry = self._geometry(self.src)
+        self._expected_cparams = self.src.cparams
+        self._refresh_lock = threading.Lock()
         self._proxy = None
 
         if cache_policy is not blosc2.CachePolicy.NONE:
-            identity = self._source_identity()
-            self._proxy = blosc2.schunk._lazy_remote_proxy(
-                self.src,
-                identity,
-                cache_dir,
-                cache_path,
-                source_fresh=True,
-                max_cache_bytes=self._cache_limit,
+            self._proxy = self._make_cache_proxy(cache_dir, cache_path)
+
+    def _runtime_source(self, original):
+        """Keep credentials in live process state, outside the descriptor."""
+        if isinstance(self.src, blosc2.C2Array):
+            return blosc2.URLPath(
+                self.src.path,
+                urlbase=self.src.urlbase,
+                auth_token=self.src.auth_token,
             )
+        return original
 
     @staticmethod
-    def _open_source(urlpath, max_concurrency):
+    def _geometry(src):
+        return (
+            tuple(src.shape),
+            np.dtype(src.dtype),
+            tuple(src.chunks),
+            tuple(src.blocks),
+        )
+
+    def _make_cache_proxy(self, cache_dir, cache_path):
+        return blosc2.schunk._lazy_remote_proxy(
+            self.src,
+            self._source_identity(),
+            cache_dir,
+            cache_path,
+            source_fresh=True,
+            max_cache_bytes=self._cache_limit,
+        )
+
+    @staticmethod
+    def _open_source(urlpath, max_concurrency, *, traffic=None):
         if isinstance(urlpath, blosc2.C2Array):
             src = urlpath
             if src.urlbase is not None:
@@ -171,7 +197,12 @@ class RemoteProxy(blosc2.Operand):
         elif isinstance(urlpath, blosc2.URLPath):
             if urlpath.urlbase is not None:
                 _validate_persistable_url(urlpath.urlbase)
-            src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+            src = blosc2.C2Array(
+                urlpath.path,
+                urlbase=urlpath.urlbase,
+                auth_token=urlpath.auth_token,
+                _traffic=traffic,
+            )
             source = {
                 "kind": "caterva2",
                 "version": 1,
@@ -181,7 +212,7 @@ class RemoteProxy(blosc2.Operand):
         elif isinstance(urlpath, str):
             _validate_persistable_url(urlpath)
             kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
-            src = blosc2.FsspecNDSource(urlpath, **kwargs)
+            src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
             source = {"kind": "fsspec", "version": 1, "urlpath": urlpath}
         else:
             raise TypeError("RemoteProxy requires a URL string, URLPath, or C2Array")
@@ -195,15 +226,10 @@ class RemoteProxy(blosc2.Operand):
             return self._source["urlpath"]
         return f"caterva2:{blosc2.c2array._server_url(self.src.urlbase, self.src.path)}"
 
-    def _validate_geometry(self, expected) -> None:
+    def _validate_geometry(self, expected, *, src=None) -> None:
         if expected is None:
             return
-        actual = (
-            tuple(self.src.shape),
-            np.dtype(self.src.dtype),
-            tuple(self.src.chunks),
-            tuple(self.src.blocks),
-        )
+        actual = self._geometry(self.src if src is None else src)
         normalized = (
             tuple(expected[0]),
             np.dtype(expected[1]),
@@ -216,13 +242,59 @@ class RemoteProxy(blosc2.Operand):
                 f"carrier={normalized}, source={actual}"
             )
 
+    def _prepare_read(self):
+        """Refresh source identity and return the backend for one operation."""
+        with self._refresh_lock:
+            previous_stamp = getattr(self.src, "stamp", None)
+            refresh = getattr(self.src, "refresh_identity", None)
+            if refresh is None:
+                refresh = getattr(self.src, "refresh_stamp", None)
+            if refresh is not None:
+                if isinstance(self.src, blosc2.C2Array):
+                    refresh(force=True)
+                else:
+                    refresh()
+
+            self._validate_geometry(self._expected_geometry)
+            current_stamp = getattr(self.src, "stamp", None)
+            source_changed = (
+                previous_stamp is None or current_stamp is None or current_stamp != previous_stamp
+            )
+            if source_changed:
+                cache_path = self.cache_path
+                if (
+                    current_stamp is None
+                    and self.cache_policy is blosc2.CachePolicy.DISK
+                    and cache_path is not None
+                    and os.path.exists(cache_path)
+                ):
+                    # With no source identity, an on-disk cache cannot prove
+                    # that its payload belongs to what the URL serves now.
+                    blosc2.remove_urlpath(cache_path)
+                fresh, _ = self._open_source(
+                    self._runtime_urlpath,
+                    self._max_concurrency,
+                    traffic=self.traffic,
+                )
+                if current_stamp is None and not isinstance(fresh, blosc2.C2Array):
+                    # No stable validator means cached bytes cannot safely be
+                    # carried from one independent operation to the next.
+                    fresh.stamp = None
+                self._validate_geometry(self._expected_geometry, src=fresh)
+                self.src = fresh
+                if self.cache_policy is not blosc2.CachePolicy.NONE:
+                    cache_dir = None
+                    self._proxy = self._make_cache_proxy(cache_dir, cache_path)
+
+            return self.src if self._proxy is None else self._proxy
+
     @property
     def shape(self):
-        return tuple(self.src.shape)
+        return self._expected_geometry[0]
 
     @property
     def dtype(self):
-        return np.dtype(self.src.dtype)
+        return self._expected_geometry[1]
 
     @property
     def ndim(self) -> int:
@@ -231,11 +303,11 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def chunks(self):
-        return tuple(self.src.chunks)
+        return self._expected_geometry[2]
 
     @property
     def blocks(self):
-        return tuple(self.src.blocks)
+        return self._expected_geometry[3]
 
     @property
     def cache_policy(self) -> blosc2.CachePolicy:
@@ -249,7 +321,7 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def cparams(self):
-        return self.src.cparams
+        return self._expected_cparams
 
     @property
     def traffic(self):
@@ -317,17 +389,18 @@ class RemoteProxy(blosc2.Operand):
         return self._proxy._retained_cache_bytes()
 
     def __getitem__(self, item):
-        if self._proxy is not None:
-            return self._proxy[item]
-        if isinstance(self.src, blosc2.C2Array):
+        backend = self._prepare_read()
+        if isinstance(backend, blosc2.Proxy):
+            return backend[item]
+        if isinstance(backend, blosc2.C2Array):
             # Caterva2 can evaluate slices and fancy indices server-side.  In
             # particular, do not turn a no-cache C2 read into a chunk-by-chunk
             # client assembly operation just to satisfy the fsspec backend.
-            return self.src[item]
+            return backend[item]
         # fsspec exposes chunk/range reads rather than NumPy indexing.  Use an
         # operation-scoped Proxy so its temporary assembly state is discarded
         # as soon as this result is returned.
-        proxy = blosc2.Proxy(self.src, _refresh_source=False)
+        proxy = blosc2.Proxy(backend, _refresh_source=False)
         return proxy[item]
 
     def __len__(self) -> int:
@@ -348,24 +421,26 @@ class RemoteProxy(blosc2.Operand):
         )
 
     def get_chunk(self, nchunk: int) -> bytes:
-        if self._proxy is None:
-            return self.src.get_chunk(nchunk)
+        backend = self._prepare_read()
+        if not isinstance(backend, blosc2.Proxy):
+            return backend.get_chunk(nchunk)
         item = self._chunk_slice(nchunk)
-        self._proxy.fetch(item)
-        chunk = self._proxy.schunk.get_chunk(nchunk)
-        self._proxy._enforce_cache_limit(item)
+        backend.fetch(item)
+        chunk = backend.schunk.get_chunk(nchunk)
+        backend._enforce_cache_limit(item)
         return chunk
 
     async def aget_chunk(self, nchunk: int) -> bytes:
-        if self._proxy is None:
-            method = getattr(self.src, "aget_chunk", None)
+        backend = self._prepare_read()
+        if not isinstance(backend, blosc2.Proxy):
+            method = getattr(backend, "aget_chunk", None)
             if method is None:
                 raise NotImplementedError("the remote source does not provide asynchronous chunk reads")
             return await method(nchunk)
         item = self._chunk_slice(nchunk)
-        await self._proxy.afetch(item)
-        chunk = self._proxy.schunk.get_chunk(nchunk)
-        self._proxy._enforce_cache_limit(item)
+        await backend.afetch(item)
+        chunk = backend.schunk.get_chunk(nchunk)
+        backend._enforce_cache_limit(item)
         return chunk
 
     def _payload(self):

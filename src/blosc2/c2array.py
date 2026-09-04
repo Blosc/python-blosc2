@@ -709,7 +709,15 @@ class C2Array(blosc2.Operand):
     thread-safe: they share one pooled HTTP client and hold no state of their own.
     """
 
-    def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
+    def __init__(
+        self,
+        path: str,
+        /,
+        urlbase: str | None = None,
+        auth_token: str | None = None,
+        *,
+        _traffic=None,
+    ):
         """Create an instance of a remote NDArray.
 
         Remote NDArrays can be accessed via HTTP from a Caterva2 server
@@ -769,7 +777,7 @@ class C2Array(blosc2.Operand):
         self._meta_lock = threading.Lock()
         # An index a `Proxy` handed over before the source existed; see _adopt_index
         self._pending_index = None
-        self.traffic = blosc2.proxy_source.Traffic()
+        self.traffic = _traffic if _traffic is not None else blosc2.proxy_source.Traffic()
         """Bytes and requests this handle has read off the server; see :ref:`Traffic`.
 
         Cumulative since the array was opened, counted at the transport, so the
@@ -1205,7 +1213,7 @@ class C2Array(blosc2.Operand):
         vlmeta = self.meta.get("schunk", {}).get("vlmeta") or {}
         return vlmeta.get("fill_nonce") is not None and vlmeta.get("fill_state", "filling") != "filling"
 
-    def refresh_stamp(self) -> None:
+    def refresh_stamp(self, *, force: bool = False) -> None:
         """Look at the array again, so that :attr:`stamp` speaks for it now.
 
         `meta` is read when the handle is opened and, of itself, never again: a
@@ -1216,8 +1224,10 @@ class C2Array(blosc2.Operand):
 
         One `api/info`, and none at all for an array already known to be complete
         -- nothing can write to one of those, so nothing it reports can move.
+        ``force=True`` is for a durable reference whose path may have been
+        replaced with another object after this handle was opened.
         """
-        if self._meta_stale or not self._meta_complete:
+        if force or self._meta_stale or not self._meta_complete:
             self._reread_meta()
 
     # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a

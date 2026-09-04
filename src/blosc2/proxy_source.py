@@ -1275,11 +1275,22 @@ class FsspecNDSource(ByteRangeNDSource):
         As in :ref:`ByteRangeNDSource`.
     """
 
-    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
+    def __init__(
+        self,
+        urlpath: str,
+        max_concurrency: int = REMOTE_MAX_CONCURRENCY,
+        *,
+        _filesystem=None,
+        _traffic=None,
+    ):
         from blosc2.core import _import_fsspec
 
         fsspec = _import_fsspec(urlpath)
-        fs, path = fsspec.url_to_fs(urlpath)
+        if _filesystem is None:
+            fs, path = fsspec.url_to_fs(urlpath)
+        else:
+            fs = _filesystem
+            path = fs._strip_protocol(urlpath)
         protocols = (fs.protocol,) if isinstance(fs.protocol, str) else fs.protocol
         self._http = bool({"http", "https"} & set(protocols))
         if not self._http and fs.isdir(path):
@@ -1300,11 +1311,38 @@ class FsspecNDSource(ByteRangeNDSource):
         if self._http:
             from fsspec.utils import tokenize
 
-            self.stamp = tokenize(path, fs.kwargs, fs.protocol)
+            self._base_stamp = tokenize(path, fs.kwargs, fs.protocol)
+            self.stamp = self._base_stamp
         else:
+            self._base_stamp = None
             self.stamp = fs.ukey(path)
         self._capture_http_headers = self._http
-        super().__init__(urlpath, max_concurrency)
+        super().__init__(urlpath, max_concurrency, traffic=_traffic)
+
+    def refresh_identity(self) -> None:
+        """Refresh the identity of the object currently stored at this URL.
+
+        Object-store implementations expose this through ``ukey``. HTTP needs
+        an explicit metadata request because its fsspec ukey identifies only
+        the URL and options, not the response currently available there.
+        ``None`` means that the HTTP server supplied no validator strong enough
+        to justify retaining cached data across operations.
+        """
+        if not self._http:
+            self.stamp = self._fs.ukey(self._path)
+            return
+
+        info = self._fs.info(self._path)
+        etag = info.get("etag", info.get("ETag"))
+        if etag:
+            self.stamp = f"{self._base_stamp}:etag:{etag}"
+            return
+        modified = info.get("mtime", info.get("LastModified", info.get("last_modified")))
+        size = info.get("size")
+        if modified is not None and size is not None:
+            self.stamp = f"{self._base_stamp}:modified:{modified}:size:{size}"
+            return
+        self.stamp = None
 
     def read_range(self, offset: int, size: int) -> bytes:
         if self._capture_http_headers:
