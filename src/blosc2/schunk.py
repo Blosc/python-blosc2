@@ -2010,6 +2010,31 @@ def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str 
     return (cache_dir if cache_dir is not None else cache_storage), cache_path
 
 
+def _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency):
+    """Return explicit RemoteProxy options, or None for the legacy lazy Proxy path."""
+    policy_present = "cache_policy" in kwargs
+    limit_present = "max_cache_bytes" in kwargs
+    if not policy_present and not limit_present:
+        return None
+    policy = kwargs.pop("cache_policy", None)
+    limit = kwargs.pop("max_cache_bytes", None)
+    if not policy_present:
+        policy = (
+            blosc2.CachePolicy.DISK
+            if cache_dir is not None or cache_path is not None
+            else blosc2.CachePolicy.MEMORY
+        )
+    options = {
+        "cache_policy": policy,
+        "cache_dir": cache_dir,
+        "cache_path": cache_path,
+        "max_concurrency": max_concurrency,
+    }
+    if limit_present:
+        options["max_cache_bytes"] = limit
+    return options
+
+
 def _lazy_fsspec_proxy(
     urlpath: str,
     cache_dir: str | pathlib.Path | None,
@@ -2035,10 +2060,15 @@ def _lazy_remote_proxy(
     cache_path: str | pathlib.Path | None,
     *,
     source_fresh: bool = False,
+    max_cache_bytes: int | None = None,
 ):
     """Wrap a remote source in a memory or persistent cache."""
     if cache_dir is None and cache_path is None:
-        return blosc2.Proxy(src, _refresh_source=not source_fresh)
+        return blosc2.Proxy(
+            src,
+            _refresh_source=not source_fresh,
+            _max_cache_bytes=max_cache_bytes,
+        )
 
     if cache_path is not None:
         path = os.fspath(cache_path)
@@ -2058,7 +2088,13 @@ def _lazy_remote_proxy(
             cache_status = "reused"
     # Proxy stamps the cache with src.stamp itself, and refuses one built against
     # other bytes; removing it above is what turns that refusal into a refetch
-    proxy = blosc2.Proxy(src, urlpath=path, mode="a", _refresh_source=not source_fresh)
+    proxy = blosc2.Proxy(
+        src,
+        urlpath=path,
+        mode="a",
+        _refresh_source=not source_fresh,
+        _max_cache_bytes=max_cache_bytes,
+    )
     proxy._cache_status = cache_status
     return proxy
 
@@ -2073,16 +2109,22 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     cache_dir, cache_path = _remote_cache_options(kwargs)
     max_concurrency = kwargs.pop("max_concurrency", None)
     lazy = kwargs.pop("lazy", False)
+    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency)
     requested = [key for key, value in kwargs.items() if value is not None]
     if requested:
         raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
 
     if not lazy:
+        if remote_proxy_options is not None:
+            raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
         if cache_dir is not None or cache_path is not None:
             raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
         if max_concurrency is not None:
             raise NotImplementedError("max_concurrency is only supported with lazy=True")
         return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+
+    if remote_proxy_options is not None:
+        return blosc2.RemoteProxy(urlpath, **remote_proxy_options)
 
     src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
     if max_concurrency is not None:
@@ -2123,13 +2165,20 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
     max_concurrency = kwargs.pop("max_concurrency", None)
-    if kwargs.pop("lazy", False):
+    lazy = kwargs.pop("lazy", False)
+    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency)
+    if lazy:
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
+        if remote_proxy_options is not None:
+            return blosc2.RemoteProxy(urlpath, **remote_proxy_options)
         return _lazy_fsspec_proxy(urlpath, cache_dir, cache_path, max_concurrency)
+
+    if remote_proxy_options is not None:
+        raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
 
     if cache_path is not None:
         raise NotImplementedError("cache_path is only supported with lazy=True")
@@ -2167,6 +2216,7 @@ def open(
     | blosc2.BatchArray
     | blosc2.ObjectArray
     | blosc2.C2Array
+    | blosc2.RemoteProxy
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -2174,7 +2224,8 @@ def open(
     | blosc2.EmbedStore
 ):
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
-    a :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`.
+    :ref:`RemoteProxy`, :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or
+    :ref:`TreeStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
 
@@ -2239,6 +2290,17 @@ def open(
         cache_storage: str | pathlib.Path, optional
             Deprecated alias for ``cache_dir``. Mutually exclusive with
             ``cache_dir`` and ``cache_path``.
+        cache_policy: CachePolicy, optional
+            With ``lazy=True`` on a remote source, return a :ref:`RemoteProxy`
+            using the requested retention policy. ``NONE`` retains no data
+            between operations, ``MEMORY`` retains compressed data in memory,
+            and ``DISK`` requires ``cache_dir`` or ``cache_path``. When omitted,
+            the existing :ref:`Proxy` behavior is preserved.
+        max_cache_bytes: int or None, optional
+            With ``lazy=True``, enable a :ref:`RemoteProxy` and bound retained
+            compressed cache payload after each operation. The memory-policy
+            default is 256 MiB; disk is unlimited unless this is explicitly set.
+            This does not bound the current operation's working set or result.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2265,8 +2327,8 @@ def open(
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`Proxy`,
-        :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`RemoteProxy`,
+        :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
         The object found in the path.
 
     Notes
@@ -2274,13 +2336,16 @@ def open(
     * Returned objects can be used as context managers for API consistency.
       For objects with an explicit ``close()`` implementation, exiting the
       context will close/flush them; for logical handles such as regular
-      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, :class:`Proxy`, and
-      :class:`LazyArray`, exiting the context is currently a no-op.
+      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, :class:`RemoteProxy`,
+      :class:`Proxy`, and :class:`LazyArray`, exiting the context is currently a
+      no-op.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
       returns a :ref:`C2Array`; with ``lazy=True`` it returns a :ref:`Proxy`,
-      optionally persisted under ``cache_dir`` or at ``cache_path``.
+      optionally persisted under ``cache_dir`` or at ``cache_path``. Supplying
+      ``cache_policy`` or ``max_cache_bytes`` explicitly selects a
+      :ref:`RemoteProxy` instead.
       Authenticated users sharing a machine must use separate caches.
 
     * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and

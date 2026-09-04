@@ -159,7 +159,7 @@ class Array(Protocol):
 
     This protocol describes the basic interface required by blosc2 arrays.
     It is implemented by blosc2 classes (:ref:`NDArray`, :ref:`NDField`,
-    :ref:`LazyArray`, :ref:`C2Array`, :ref:`ProxyNDSource`...)
+    :ref:`LazyArray`, :ref:`C2Array`, :ref:`RemoteProxy`, :ref:`ProxyNDSource`...)
     and is compatible with NumPy arrays and other array-like containers
     (e.g., PyTorch, TensorFlow, Dask, Zarr, ...).
     """

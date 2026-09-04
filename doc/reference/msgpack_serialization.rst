@@ -22,6 +22,7 @@ The following objects are serialized by value using
 - ``ObjectArray``
 - ``BatchArray``
 - ``EmbedStore``
+- ``RemoteProxy``
 
 Structured objects
 ------------------
@@ -40,12 +41,14 @@ Currently implemented structured kinds are:
 
 - ``"ref"``
 - ``"c2array"``
+- ``"remote_proxy"``
+- ``"fsspec"``
 - ``"urlpath"``
 - ``"dictstore_key"``
 - ``"lazyexpr"``
 - ``"lazyudf"``
 
-The ``"urlpath"``, ``"dictstore_key"``, and ``"c2array"`` reference forms map
+The ``"urlpath"``, ``"dictstore_key"``, ``"c2array"``, and ``"fsspec"`` reference forms map
 directly onto the public :class:`blosc2.Ref` type.
 
 ``C2Array``
@@ -57,6 +60,16 @@ Remote arrays are serialized as lightweight references with:
 - ``urlbase``
 
 Authentication data is intentionally not serialized.
+
+``RemoteProxy``
+---------------
+
+Remote proxies use a metadata-only carrier containing a versioned Caterva2 or
+fsspec source descriptor. Saving a live proxy is reference-only: its carrier
+reopens with :attr:`blosc2.CachePolicy.NONE`, regardless of whether the live
+proxy used ``MEMORY`` or ``DISK`` caching. The policy is encoded on disk as the
+stable string ``"none"``; runtime cache contents, local cache paths, fetched
+data, and credentials are intentionally not serialized.
 
 Persistent local operands
 -------------------------
@@ -93,6 +106,7 @@ Only durable reference-style operands are supported:
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
+- ``RemoteProxy`` operands for fsspec or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Purely in-memory operands are intentionally rejected. This keeps msgpack
@@ -119,6 +133,7 @@ Supported operands are the same durable reference-style operands used for
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
+- ``RemoteProxy`` operands for fsspec or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Plain Python ``LazyUDF`` callables are intentionally not serialized by

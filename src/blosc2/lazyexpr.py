@@ -709,7 +709,8 @@ class LazyArray(ABC, blosc2.Operand):
         * All the operands of the LazyArray must be Python scalars, or :class:`blosc2.Array` objects.
         * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
-          section for more info).
+          section for more info). A :ref:`RemoteProxy` is persisted as its
+          reference-only source descriptor.
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
           (including kernels decorated with :func:`blosc2.dsl_kernel`).
         * User metadata can be attached via :attr:`vlmeta`. For in-memory LazyArrays
@@ -4700,10 +4701,19 @@ class LazyExpr(LazyArray):
         items = []
         items += [("type", f"{self.__class__.__name__}")]
         items += [("expression", self.expression)]
-        opsinfo = {
-            key: str(value) if value.schunk.urlpath is None else value.schunk.urlpath
-            for key, value in self.operands.items()
-        }
+        opsinfo = {}
+        for key, value in self.operands.items():
+            if isinstance(value, blosc2.RemoteProxy):
+                urlpath = value.urlpath
+                opsinfo[key] = urlpath if isinstance(urlpath, str) else str(value)
+                continue
+            schunk = getattr(value, "schunk", None)
+            if schunk is not None:
+                urlpath = getattr(schunk, "urlpath", None)
+                opsinfo[key] = str(value) if urlpath is None else urlpath
+            else:
+                # C2Array is a remote reference without a local SChunk.
+                opsinfo[key] = getattr(value, "urlpath", str(value))
         items += [("operands", opsinfo)]
         items += [("shape", self.shape)]
         items += [("dtype", self.dtype)]
@@ -4732,6 +4742,9 @@ class LazyExpr(LazyArray):
             if isinstance(value, blosc2.C2Array):
                 payload["operands"][key] = encode_b2object_payload(value)
                 continue
+            if isinstance(value, blosc2.RemoteProxy):
+                payload["operands"][key] = blosc2.Ref.from_object(value).to_dict()
+                continue
             if isinstance(value, blosc2.Proxy):
                 value = value._cache
             ref = getattr(value, "_blosc2_ref", None)
@@ -4739,9 +4752,7 @@ class LazyExpr(LazyArray):
                 payload["operands"][key] = ref.to_dict()
                 continue
             if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                )
+                raise ValueError("To save a LazyArray, all operands must be persistent Blosc2 array objects")
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operand_urlpath = Path(value.schunk.urlpath)

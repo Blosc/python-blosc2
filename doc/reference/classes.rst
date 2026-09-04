@@ -108,6 +108,7 @@ codecs, filters, and remote paths.
     SpecialValue
     Tuner
     FPAccuracy
+    CachePolicy
     URLPath
 
 
@@ -138,6 +139,7 @@ container APIs above.
     list_array
     objectarray
     proxy
+    remoteproxy
     proxysource
     proxyndsource
     byterangendsource

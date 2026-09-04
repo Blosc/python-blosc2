@@ -83,6 +83,45 @@ In both cases, the cache is an ordinary `.b2nd` array that starts small and grow
 
 Authenticated Caterva2 caches must be private to one user. Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
 
+### Persist a reference instead of a cache
+
+Use {ref}`RemoteProxy` when the `.b2nd` file itself should remain a small,
+immutable reference to the remote array rather than become its cache:
+
+```python
+remote = blosc2.RemoteProxy(
+    "s3://bucket/big.b2nd",
+    cache_policy=blosc2.CachePolicy.NONE,
+)
+remote.save("big-reference.b2nd")
+```
+
+The saved object contains source and geometry metadata but no fetched chunks or
+credentials. It reopens with `CachePolicy.NONE`, so repeated reads contact the
+source again and never mutate the reference file. This is also true when a
+`RemoteProxy` using `MEMORY` or `DISK` caching is saved: those runtime caches
+are not part of the portable reference.
+
+`RemoteProxy` also supports bounded runtime caching. Memory caches retain at
+most 256 MiB of compressed payload by default; disk caches are unlimited unless
+an explicit bound is supplied:
+
+```python
+remote = blosc2.RemoteProxy(
+    "s3://bucket/big.b2nd",
+    cache_policy=blosc2.CachePolicy.DISK,
+    cache_path="big-cache.b2nd",
+    max_cache_bytes=2 * 2**30,
+)
+```
+
+Opening the saved reference itself returns `CachePolicy.NONE`. Runtime caching
+must be selected again explicitly from its `urlpath`; it is never inferred from
+the reference carrier.
+
+The bound is applied after each operation. It does not limit the temporary
+working set or a NumPy result requested by the caller.
+
 ### Reopen a cache file independently
 
 A persistent cache records enough information to reconstruct built-in fsspec and Caterva2 sources. When its filename is known, it can therefore be opened without repeating the original remote URL:
@@ -248,4 +287,4 @@ For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; th
 - `examples/ndarray/rw-fsspec.py` — fsspec reading and writing examples.
 - `examples/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
 - `examples/c2array-traffic.py` — block, chunk, and cached transfer sizes.
-- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.
+- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`RemoteProxy`, and {ref}`Traffic` — API reference pages.

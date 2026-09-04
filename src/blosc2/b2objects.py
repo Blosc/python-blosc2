@@ -116,7 +116,7 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
     return None
 
 
-def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None):
+def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carrier=None):
     kind = payload.get("kind")
     version = payload.get("version")
     if version != _B2OBJECT_VERSION:
@@ -124,6 +124,10 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None):
     if kind == "c2array":
         ref = blosc2.Ref.from_dict(payload)
         return ref.open()
+    if kind == "remote_proxy":
+        if carrier is None:
+            raise ValueError("A persisted RemoteProxy requires its B2ND carrier")
+        return blosc2.RemoteProxy._from_payload(payload, carrier)
     if kind == "lazyexpr":
         return decode_structured_lazyexpr(payload, carrier_path=carrier_path)
     if kind == "lazyudf":
@@ -227,7 +231,7 @@ def open_b2object(obj):
     schunk = getattr(obj, "schunk", obj)
     if getattr(schunk, "urlpath", None) is not None:
         carrier_path = pathlib.Path(schunk.urlpath).parent
-    opened = decode_b2object_payload(payload, carrier_path=carrier_path)
+    opened = decode_b2object_payload(payload, carrier_path=carrier_path, carrier=obj)
     if isinstance(opened, blosc2.LazyExpr | blosc2.LazyUDF):
         opened.array = obj
         opened.schunk = schunk

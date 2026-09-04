@@ -59,7 +59,13 @@ def _encode_msgpack_ext(obj):
     import blosc2
 
     if isinstance(
-        obj, blosc2.NDArray | blosc2.SChunk | blosc2.ObjectArray | blosc2.BatchArray | blosc2.EmbedStore
+        obj,
+        blosc2.NDArray
+        | blosc2.SChunk
+        | blosc2.ObjectArray
+        | blosc2.BatchArray
+        | blosc2.EmbedStore
+        | blosc2.RemoteProxy,
     ):
         return ExtType(_BLOSC2_EXT_CODE, obj.to_cframe())
     structured = _encode_structured_reference(obj)

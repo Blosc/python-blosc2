@@ -14,6 +14,7 @@ Currently supported reference kinds are:
 - ``"urlpath"`` for persistent local objects
 - ``"dictstore_key"`` for members inside ``.b2d`` / ``.b2z`` ``DictStore`` containers
 - ``"c2array"`` for remote ``C2Array`` objects
+- ``"fsspec"`` for fsspec sources used by ``RemoteProxy`` objects
 
 Use :meth:`Ref.open` to resolve a reference back into a live object.
 

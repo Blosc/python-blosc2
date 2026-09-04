@@ -36,7 +36,8 @@ class ObjectArray:
     Entries are serialized with msgpack before compression. Standard Python
     objects are supported, and Blosc2 containers such as
     :class:`blosc2.NDArray`, :class:`blosc2.SChunk`, :class:`blosc2.ObjectArray`,
-    :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore` are serialized
+    :class:`blosc2.BatchArray`, :class:`blosc2.EmbedStore`, and
+    :class:`blosc2.RemoteProxy` are serialized
     transparently via :meth:`to_cframe` / :func:`blosc2.from_cframe`.
 
     Msgpack also supports structured Blosc2 reference objects. Currently this
@@ -44,8 +45,9 @@ class ObjectArray:
     :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`. Lazy
     expressions and supported lazy UDFs are serialized as recipes plus durable
     operand references, so only persistent local operands,
-    :class:`blosc2.C2Array` operands, and :class:`blosc2.DictStore` members are
-    supported. Purely in-memory operands are intentionally rejected. Plain
+    :class:`blosc2.C2Array` and :class:`blosc2.RemoteProxy` operands, and
+    :class:`blosc2.DictStore` members are supported. Purely in-memory operands
+    are intentionally rejected. Plain
     Python :class:`blosc2.LazyUDF` callables are not serialized by msgpack.
     """
 

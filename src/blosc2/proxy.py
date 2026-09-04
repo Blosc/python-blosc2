@@ -12,6 +12,7 @@ import itertools
 import math
 import os
 import textwrap
+from collections import OrderedDict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,7 +42,14 @@ from blosc2.schunk import _set_default_dparams
 # vlmeta entries the proxy keeps its own state in: what it has fetched, and which
 # remote bytes the cache was filled from. A caller cannot write these.
 _RESERVED_VLMETA = frozenset(
-    {"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "proxy-stamp", "proxy-index"}
+    {
+        "proxy-cache-sizes",
+        "proxy-fetched",
+        "proxy-fetched-blocks",
+        "proxy-fetched-bpc",
+        "proxy-stamp",
+        "proxy-index",
+    }
 )
 
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
@@ -50,6 +58,16 @@ _RESERVED_VLMETA = frozenset(
 # an NDArray -- wanting a faster JIT backend has nothing to do with wanting a
 # compressed/persisted container back.
 _JIT_EXECUTION_TUNING_KWARGS = frozenset({"jit", "jit_backend", "fp_accuracy"})
+
+
+def _validate_max_cache_bytes(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("max_cache_bytes must be a positive integer or None")
+    if value <= 0:
+        raise ValueError("max_cache_bytes must be a positive integer or None")
+    return value
 
 
 class Proxy(blosc2.Operand):
@@ -132,6 +150,7 @@ class Proxy(blosc2.Operand):
         if kwargs is None:
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
+        self._max_cache_bytes = _validate_max_cache_bytes(kwargs.pop("_max_cache_bytes", None))
         vlmeta = kwargs.pop("vlmeta", None)
         caterva2_env = kwargs.pop("caterva2_env", False)
         # Before anything is built or emptied: a call that is going to be refused
@@ -244,6 +263,9 @@ class Proxy(blosc2.Operand):
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
         self._fetched = self._adopt_cache(fresh, self._schunk_cache.nchunks)
+        self._cache_sizes: dict[int, int] = {}
+        self._cache_lru = OrderedDict()
+        self._restore_cache_accounting()
         for key in vlmeta or ():
             self._schunk_cache.vlmeta[key] = vlmeta[key]
 
@@ -425,6 +447,64 @@ class Proxy(blosc2.Operand):
             for n in range(base, base + self._blocks_per_chunk):
                 self._fetched[n // 8] &= ~(1 << (n % 8))
             self._hot_payloads.pop(info.nchunk, None)
+            self._cache_sizes.pop(info.nchunk, None)
+            self._cache_lru.pop(info.nchunk, None)
+
+    def _restore_cache_accounting(self) -> None:
+        """Restore compressed-byte accounting for a bounded cache."""
+        if self._max_cache_bytes is None:
+            return
+        stored = self._schunk_cache.vlmeta.get("proxy-cache-sizes", {})
+        if not isinstance(stored, dict):
+            stored = {}
+        for nchunk in range(self._schunk_cache.nchunks):
+            base = nchunk * self._blocks_per_chunk
+            if not any(
+                self._fetched[n // 8] >> (n % 8) & 1 for n in range(base, base + self._blocks_per_chunk)
+            ):
+                continue
+            size = stored.get(nchunk, stored.get(str(nchunk)))
+            if not isinstance(size, int) or size < 0:
+                # Only legacy caches lack this metadata. Opting such a cache into
+                # a bound pays one compressed-chunk read per populated chunk once.
+                size = len(self._schunk_cache.get_chunk(nchunk))
+            self._cache_sizes[nchunk] = size
+            self._cache_lru[nchunk] = None
+
+    def _remember_cached(self, nchunk: int, size: int) -> None:
+        """Record the current compressed size and recency of one cached chunk."""
+        if self._max_cache_bytes is None:
+            return
+        self._cache_sizes[nchunk] = size
+        self._cache_lru.pop(nchunk, None)
+        self._cache_lru[nchunk] = None
+
+    def _retained_cache_bytes(self) -> int:
+        """Compressed bytes retained by a bounded cache, including hot duplicates."""
+        hot = sum(len(payload) for blocks in self._hot_payloads.values() for payload in blocks.values())
+        return sum(self._cache_sizes.values()) + hot
+
+    def _enforce_cache_limit(self, item) -> None:
+        """Touch *item* and evict whole LRU chunks after its result is assembled."""
+        if self._max_cache_bytes is None:
+            return
+        for nchunk in self._wanted_chunks(item):
+            if nchunk in self._cache_sizes:
+                self._cache_lru.move_to_end(nchunk)
+
+        evicted = False
+        while self._retained_cache_bytes() > self._max_cache_bytes and self._cache_lru:
+            nchunk, _ = self._cache_lru.popitem(last=False)
+            self._cache_sizes.pop(nchunk, None)
+            self._hot_payloads.pop(nchunk, None)
+            self._schunk_cache.update_special(nchunk, blosc2.SpecialValue.UNINIT)
+            base = nchunk * self._blocks_per_chunk
+            for n in range(base, base + self._blocks_per_chunk):
+                self._fetched[n // 8] &= ~(1 << (n % 8))
+            evicted = True
+        if evicted:
+            self._specialized = getattr(self._schunk_cache, "nspecialized", self._specialized)
+            self._save_fetched()
 
     def _plan(self, item):
         """Where *item* lands on the cache's grid, read once for a fetch.
@@ -565,6 +645,10 @@ class Proxy(blosc2.Operand):
         self._schunk_cache.vlmeta[self._fetched_key] = bytes(self._fetched)
         if self._blocks_per_chunk > 1:
             self._schunk_cache.vlmeta["proxy-fetched-bpc"] = self._blocks_per_chunk
+        if self._max_cache_bytes is not None:
+            self._schunk_cache.vlmeta["proxy-cache-sizes"] = {
+                str(nchunk): size for nchunk, size in self._cache_sizes.items()
+            }
         # Where the source read things to be, so the next run over this cache need
         # not ask again.  Only for a source that can name the bytes it read: an
         # unstamped one cannot tell a replaced frame from the one these positions
@@ -867,7 +951,9 @@ class Proxy(blosc2.Operand):
         # the whole chunk, and it cannot be deferred or batched further, since the
         # cache is what the next read comes out of. Removing it needs the cache to
         # hold blocks apart from their chunk, which is a different container.
-        self._schunk_cache.update_chunk(nchunk, _splice_chunk(header, nblocks, kept))
+        chunk = _splice_chunk(header, nblocks, kept)
+        self._schunk_cache.update_chunk(nchunk, chunk)
+        self._remember_cached(nchunk, len(chunk))
         for nblock in payloads:
             self._mark_fetched(nchunk, nblock)
         if len(kept) < nblocks:  # a chunk that is now complete will never be rewritten
@@ -878,6 +964,7 @@ class Proxy(blosc2.Operand):
     def _store_chunk(self, nchunk: int, chunk: bytes) -> None:
         """Put a whole chunk in the cache, dropping anything held about its blocks."""
         self._schunk_cache.update_chunk(nchunk, chunk)
+        self._remember_cached(nchunk, len(chunk))
         self._mark_fetched(nchunk)
         self._hot_payloads.pop(nchunk, None)
 
@@ -1034,7 +1121,9 @@ class Proxy(blosc2.Operand):
             if getattr(self._schunk_cache, "mode", None) != "r" or "reading mode" not in str(exc):
                 raise
             return self.src[item]
-        return self._cache[item]
+        result = self._cache[item]
+        self._enforce_cache_limit(item)
+        return result
 
     @property
     def dtype(self) -> np.dtype:

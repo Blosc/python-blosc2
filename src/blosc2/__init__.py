@@ -230,6 +230,14 @@ class IndexKind(Enum):
     OPSI = "opsi"
 
 
+class CachePolicy(Enum):
+    """Retention policy for data read through a remote proxy."""
+
+    NONE = "none"
+    MEMORY = "memory"
+    DISK = "disk"
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
@@ -608,6 +616,7 @@ from .proxy import (
     jit,
     as_simpleproxy,
 )
+from .remote_proxy import RemoteProxy
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
@@ -873,6 +882,7 @@ __all__ = [  # noqa : RUF022
     "BatchArray",
     # Enums
     "Codec",
+    "CachePolicy",
     "DParams",
     "DictStore",
     "EmbedStore",
@@ -896,6 +906,7 @@ __all__ = [  # noqa : RUF022
     "ProxyNDSource",
     "ProxySource",
     "Ref",
+    "RemoteProxy",
     "SChunk",
     "SimpleProxy",
     "SpecialValue",
