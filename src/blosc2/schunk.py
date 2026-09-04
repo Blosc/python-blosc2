@@ -1891,9 +1891,25 @@ def process_opened_object(res):
     if "proxy-source" in meta:
         proxy_cache = res
         proxy_src = meta["proxy-source"]
+        source_kind = proxy_src.get("source_kind")
+        if source_kind == "fsspec":
+            src = blosc2.FsspecNDSource(proxy_src["urlpath"])
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+        if source_kind == "caterva2":
+            src = blosc2.C2Array(
+                proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2]
+            )
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"], mode="r")
-            return blosc2.Proxy(src, _cache=proxy_cache)
+            source_path = proxy_src["local_abspath"]
+            # Older FsspecNDSource caches recorded their URL in the field that
+            # otherwise names a local source. Preserve those caches while
+            # restoring their lazy byte-range behavior.
+            if source_kind is None and is_fsspec_url(source_path):
+                src = blosc2.FsspecNDSource(source_path)
+            else:
+                src = blosc2.open(source_path, mode="r")
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
             return blosc2.Proxy(src, _cache=proxy_cache)
@@ -2279,11 +2295,10 @@ def open(
         caller; runtime caches are not serialized back to disk.
 
     * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
-      this function will only return a :ref:`Proxy` if its source is a local
-      :ref:`SChunk`, :ref:`NDArray` or a remote :ref:`C2Array`. Otherwise,
-      it will return the Python-Blosc2 container used to cache the data which
-      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data
-      initialized (e.g. if the user has not accessed to it yet).
+      this function reconstructs sources backed by a persistent local
+      :ref:`SChunk` or :ref:`NDArray`, an fsspec URL, or a remote
+      :ref:`C2Array`. Custom proxy sources must be recreated explicitly because
+      their Python class and runtime state are not stored in the cache.
 
     * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 

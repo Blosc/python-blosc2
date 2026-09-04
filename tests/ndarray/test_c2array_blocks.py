@@ -374,12 +374,17 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
     proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert proxy.urlpath == str(cache_path)
+    assert proxy.schunk.meta["proxy-source"]["source_kind"] == "caterva2"
     del proxy
 
     srv.log.clear()
-    proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path)
+    proxy = blosc2.open(cache_path, mode="a")
+    assert isinstance(proxy, blosc2.Proxy)
+    assert isinstance(proxy.src, blosc2.C2Array)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert np.array_equal(proxy[100:105, 0:10], data[100:105, 0:10])
+    assert len(srv.log) > 1
 
 
 def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, server):

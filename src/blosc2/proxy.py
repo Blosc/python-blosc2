@@ -172,15 +172,26 @@ class Proxy(blosc2.Operand):
         fresh = self._cache is None
         if fresh:
             meta_val = {
+                "source_kind": None,
                 "local_abspath": None,
                 "urlpath": None,
                 "caterva2_env": caterva2_env,
             }
             container = getattr(self.src, "schunk", self.src)
-            if hasattr(container, "urlpath"):
-                meta_val["local_abspath"] = container.urlpath
+            if isinstance(self.src, blosc2.FsspecNDSource):
+                meta_val["source_kind"] = "fsspec"
+                meta_val["urlpath"] = self.src.urlpath
+                # Keep the legacy field populated so older readers still
+                # reopen this cache, albeit through their eager URL path.
+                meta_val["local_abspath"] = self.src.urlpath
             elif isinstance(self.src, blosc2.C2Array):
-                meta_val["urlpath"] = (self.src.path, self.src.urlbase, self.src.auth_token)
+                meta_val["source_kind"] = "caterva2"
+                # Authentication belongs to the reopening process, not to a
+                # portable cache file. C2Array resolves it again from c2context.
+                meta_val["urlpath"] = (self.src.path, self.src.urlbase, None)
+            elif hasattr(container, "urlpath"):
+                meta_val["source_kind"] = "local"
+                meta_val["local_abspath"] = container.urlpath
             meta = {"proxy-source": meta_val}
             if hasattr(self.src, "shape"):
                 self._cache = blosc2.empty(

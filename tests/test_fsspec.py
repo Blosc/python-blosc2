@@ -519,6 +519,34 @@ def test_lazy_with_exact_cache_path(tmp_path):
     assert np.array_equal(q[0:100], a[0:100])
 
 
+def test_exact_cache_path_reopens_as_lazy_fsspec_proxy(tmp_path, monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("independentcache.b2nd", a)
+    cache_path = tmp_path / "independent.b2nd"
+    p = blosc2.open(url, lazy=True, cache_path=cache_path)
+    assert np.array_equal(p[0:100], a[0:100])
+    source_meta = p.schunk.meta["proxy-source"]
+    assert source_meta["source_kind"] == "fsspec"
+    assert source_meta["urlpath"] == url
+    del p
+
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    reopened = blosc2.open(cache_path, mode="a")
+    assert isinstance(reopened, blosc2.Proxy)
+    assert isinstance(reopened.src, blosc2.FsspecNDSource)
+    assert np.array_equal(reopened[0:100], a[0:100])
+    assert fetched == []
+    assert np.array_equal(reopened[500:600], a[500:600])
+    assert fetched == [5]
+
+
 def test_remote_cache_options_are_mutually_exclusive(tmp_path):
     url = _put("exclusivecache.b2nd", blosc2.arange(0, 10))
     with pytest.raises(ValueError, match="mutually exclusive"):

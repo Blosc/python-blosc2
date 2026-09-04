@@ -83,6 +83,24 @@ In both cases, the cache is an ordinary `.b2nd` array that starts small and grow
 
 Authenticated Caterva2 caches must be private to one user. Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
 
+### Reopen a cache file independently
+
+A persistent cache records enough information to reconstruct built-in fsspec and Caterva2 sources. When its filename is known, it can therefore be opened without repeating the original remote URL:
+
+```python
+# Created earlier with cache_path="big-cache.b2nd"
+a = blosc2.open("big-cache.b2nd", mode="a")
+
+a[100:110, :50]  # cached data stays local
+a[500:510, :50]  # missing data is fetched from the recorded source and cached
+```
+
+This cache is operational, but not necessarily self-contained. Regions not fetched previously still require the original source. Opening with `mode="a"` lets newly fetched regions extend the cache; the default `mode="r"` keeps the cache file unchanged.
+
+Independent reopening works for fsspec URLs, Caterva2 datasets, and persistent local Blosc2 sources. The required runtime environment must still be available: fsspec backends and their configuration must be installed, local source paths must remain valid, and authenticated Caterva2 caches must be reopened inside an equivalent {func}`blosc2.c2context`. Caterva2 credentials are not stored in the cache file.
+
+An arbitrary custom {ref}`ProxyNDSource` cannot be reconstructed because its Python class and runtime state are not serialized. In that case, recreate the source explicitly and attach the existing cache with `blosc2.Proxy(source, urlpath="big-cache.b2nd", mode="a")`.
+
 ## Only what a slice touches
 
 Blosc2 arrays are compressed in chunks, which are divided into smaller blocks. For a small slice, fetching only its blocks can avoid transferring most of a large chunk.
