@@ -39,7 +39,8 @@ SLICE = np.s_[100:110, 200:300, 400:500]
 def traffic_text(traffic: blosc2.Traffic | None) -> str:
     if traffic is None:
         return "traffic unavailable"
-    return f"{traffic.requests} requests, {traffic.nbytes / 2**20:.3f} MiB"
+    request_word = "request" if traffic.requests == 1 else "requests"
+    return f"{traffic.requests} {request_word}, {traffic.nbytes / 2**20:.3f} MiB"
 
 
 def size_text(size: int) -> str:
@@ -52,6 +53,7 @@ def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
     start = perf_counter()
     array = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
     open_time = perf_counter() - start
+    open_traffic = traffic_text(array.traffic)
 
     metadata = (array.shape, array.dtype, array.chunks, array.blocks)
     cache_path = Path(array.urlpath).resolve()
@@ -69,6 +71,7 @@ def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
     start = perf_counter()
     reopened = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
     reopen_time = perf_counter() - start
+    reopen_traffic = traffic_text(reopened.traffic)
 
     reopened.traffic.reset()
     start = perf_counter()
@@ -81,11 +84,11 @@ def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
     print(f"  metadata: shape={metadata[0]}, dtype={metadata[1]}")
     print(f"            chunks={metadata[2]}, blocks={metadata[3]}")
     print(f"  persistent cache: {cache_path} ({'existing' if cache_existed else 'new'})")
-    print(f"  open and remote metadata setup: {open_time:.6f} s")
-    print(f"  first data slice this run:      {first_read_time:.6f} s ({first_traffic})")
-    print(f"  cache size after slice:         {size_text(cache_size)}")
-    print(f"  reopen persistent cache:        {reopen_time:.6f} s")
-    print(f"  same slice after reopen:        {cached_read_time:.6f} s ({cached_traffic})")
+    print(f"  {'open + remote metadata:':<27}{open_time * 1000:.0f} ms ({open_traffic})")
+    print(f"  {'first data slice:':<27}{first_read_time * 1000:.0f} ms ({first_traffic})")
+    print(f"  {'cache after slice:':<27}{size_text(cache_size)}")
+    print(f"  {'reopen + remote metadata:':<27}{reopen_time * 1000:.0f} ms ({reopen_traffic})")
+    print(f"  {'same slice after reopen:':<27}{cached_read_time * 1000:.0f} ms ({cached_traffic})")
     return data
 
 

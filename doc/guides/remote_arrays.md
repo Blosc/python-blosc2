@@ -115,7 +115,7 @@ Stepped slices also use the block grid. For example, `p[::5]` can reduce transfe
 
 ### Measure network traffic
 
-{ref}`C2Array` and remote {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`:
+{ref}`C2Array` and remote {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`. The count starts when the remote source is opened, so it includes metadata as well as array data:
 
 ```python
 source = blosc2.C2Array(

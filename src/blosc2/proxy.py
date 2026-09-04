@@ -251,10 +251,9 @@ class Proxy(blosc2.Operand):
         """What this proxy has read off its source, or None for a local one.
 
         Cumulative bytes and requests since the source was opened, counted at the
-        transport, so the frame index and the block offsets are in it as well as
-        the data, and the metadata call that opened the handle is not.  What a
-        slice cost in traffic is the difference between two readings of this, or
-        one reading after :meth:`Traffic.reset`.
+        transport, including metadata, frame indexes, block offsets, and data.
+        What a slice cost in traffic is the difference between two readings of
+        this, or one reading after :meth:`Traffic.reset`.
 
         It is what says whether block granularity is doing anything for a given
         dataset and access pattern: whole chunks and blocks of them take similar

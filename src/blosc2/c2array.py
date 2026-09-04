@@ -264,9 +264,11 @@ def login(username, password, urlbase):
     return "=".join(list(resp.cookies.items())[0])
 
 
-def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
+def info(path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None):
     url = _server_url(urlbase, f"api/info/{path}")
     response = _xget(url, params, headers, auth_token)
+    if traffic is not None:
+        traffic.charge(len(response.content))
     json = response.json()
     return json if model is None else model(**json)
 
@@ -771,10 +773,9 @@ class C2Array(blosc2.Operand):
         """Bytes and requests this handle has read off the server; see :ref:`Traffic`.
 
         Cumulative since the array was opened, counted at the transport, so the
-        frame index and the block offsets are in it as well as the data, and the
-        `api/info` call that opened this handle is not.  Whichever endpoint the
-        read used is in it too, and the block source built later is handed this
-        same tally, so one counter answers for the array however it is read.
+        opening `api/info` response, frame index, block offsets, and data are all
+        included. Whichever endpoint serves a read uses this same tally, so one
+        counter answers for the array however it is read.
 
         What a slice cost is the difference between two readings, or one reading
         after :meth:`Traffic.reset`.  `examples/c2array-traffic.py` is a runnable
@@ -784,7 +785,12 @@ class C2Array(blosc2.Operand):
 
         # Try to 'open' the remote path
         try:
-            self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
+            self.meta = info(
+                self.path,
+                self.urlbase,
+                auth_token=self.auth_token,
+                traffic=self.traffic,
+            )
         except _httpx().HTTPStatusError as err:
             # HTTPStatusError only (not the broader HTTPError, which also covers
             # connection-level failures): a 404 means "not found", a connection
@@ -1163,7 +1169,12 @@ class C2Array(blosc2.Operand):
         """
         with self._meta_lock:
             seen = self._meta_epoch
-        meta = info(self.path, self.urlbase, auth_token=self.auth_token)
+        meta = info(
+            self.path,
+            self.urlbase,
+            auth_token=self.auth_token,
+            traffic=self.traffic,
+        )
         with self._meta_lock:
             if self._meta_epoch != seen:
                 return

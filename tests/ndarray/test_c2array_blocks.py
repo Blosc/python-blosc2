@@ -955,14 +955,16 @@ def test_traffic_counts_what_crossed_the_wire(server, any_chunk_wants_blocks):
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     assert p.traffic is array.traffic  # the array's tally, not a second one
+    info_requests = sum(kind == "info" for kind, _, _ in srv.log)
+    assert p.traffic.requests == info_requests
+    assert p.traffic.nbytes == _bytes(srv, "info")
 
     p.traffic.reset()
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     blocks = (p.traffic.requests, p.traffic.nbytes)
     assert blocks[0] > 0
     assert blocks[1] > 0
-    # What the server logged for the data endpoints is what was counted; the
-    # `api/info` that opened the handle is metadata and is deliberately not
+    # After the reset, what the server logged for the data endpoints is what was counted.
     served = [(kind, nbytes) for kind, _, nbytes in srv.log if kind != "info"]
     assert blocks[0] == len(served)
     assert blocks[1] <= sum(nbytes for _, nbytes in served)
