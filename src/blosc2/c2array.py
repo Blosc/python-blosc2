@@ -1672,7 +1672,7 @@ class URLPath:
 
         Passing this object to :func:`blosc2.open` returns a :ref:`C2Array`. With
         ``lazy=True`` it instead returns a :ref:`Proxy`, using an in-memory cache
-        by default or a persistent cache when ``cache_storage`` is provided.
+        by default or a persistent cache when ``cache_dir`` is provided.
         Authenticated users sharing a machine must use separate cache directories.
 
         The parameters are the same as for the :meth:`C2Array.__init__`.

@@ -734,7 +734,7 @@ class ByteRangeNDSource(ProxyNDSource):
         except KeyError:
             raise NotImplementedError(
                 f"{urlpath} has no b2nd metalayer, so it is a plain SChunk rather than an "
-                "NDArray; read it whole or with cache_storage= instead"
+                "NDArray; read it whole or with cache_dir= instead"
             ) from None
         if dtype_format != 0:
             raise NotImplementedError(f"unsupported dtype format {dtype_format} in {urlpath}")
@@ -1262,7 +1262,7 @@ class FsspecNDSource(ByteRangeNDSource):
 
     This is what ``blosc2.open(url, lazy=True)`` builds; wrap it in a
     :ref:`Proxy` by hand when the cache belongs at a path of your choosing
-    rather than inside ``cache_storage``::
+    rather than inside ``cache_dir``::
 
         src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
         a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
@@ -1285,7 +1285,7 @@ class FsspecNDSource(ByteRangeNDSource):
         if not self._http and fs.isdir(path):
             raise NotImplementedError(
                 f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
-                "chunk by chunk; open it with cache_storage= instead"
+                "chunk by chunk; open it with cache_dir= instead"
             )
         self._fs, self._path = fs, path
         # Identifies the remote bytes, so a cache built against them can tell it

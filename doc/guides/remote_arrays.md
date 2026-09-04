@@ -1,163 +1,156 @@
 # Working with Remote Arrays
 
-A Blosc2 array that lives on a server does not have to be downloaded to be used. Blosc2 opens it where it is, fetches only the pieces a slice touches, and keeps those in a local cache so the next run starts from them.
+Blosc2 can open an array without downloading it first. Metadata is read at open time; array data is fetched only when a slice needs it and is then kept in a local cache.
 
-## Three ways in
+## Choose a remote route
 
-| Where the array lives | How to open it |
-|---|---|
-| Any URL fsspec reaches — `s3://`, `gs://`, `https://`, `zip://`… | `blosc2.open(url, lazy=True)` |
-| A [Caterva2](https://ironarray.io/caterva2) server | `blosc2.open(blosc2.URLPath(path, urlbase=...), lazy=True)` |
-| Anything else | A `read_range()` of your own — see [Your own transport](#your-own-transport) |
+The argument passed to {func}`blosc2.open` selects the route:
+
+| Argument | Route | What it names |
+|---|---|---|
+| A URL string such as `s3://...` or `https://...` | fsspec | A byte-addressable, standalone `.b2nd` file |
+| A {ref}`URLPath` | Caterva2 | One array-like dataset on a Caterva2 server |
 
 ```python
 import blosc2
 
-# An object store, a web server, a zip on either of them
+# fsspec: an object store or plain web server
 a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
 
-# A Caterva2 server; add lazy=True for an automatic Proxy cache
+# Caterva2: a dataset identified by root and path
 b = blosc2.open(
     blosc2.URLPath(
-        "@public/examples/lung-jpeg2000_10x.b2nd", urlbase="https://cat2.cloud/demo"
-    )
+        "@public/examples/lung-jpeg2000_10x.b2nd",
+        urlbase="https://cat2.cloud/demo",
+    ),
+    lazy=True,
 )
 
-a.shape, a.dtype  # metadata only; nothing was downloaded
-a[100:110, :50]  # a NumPy array, fetched now
+a.shape, a.dtype  # metadata is available immediately
+a[100:110, :50]  # data is fetched now
 ```
 
-`https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 server is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array`.
+A `URLPath` always means Caterva2. If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`. Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
 
-A lazy HTTP(S) open takes its frame metadata and remote identity from the same
-initial range response, using `ETag` when the server provides one and falling
-back to `Last-Modified` and object size. Thus opening needs one network round
-trip, and a persistent cache can still detect when the object is replaced.
+### What each route supports
 
-## The cache
+Both routes return a {ref}`Proxy` when opened with `lazy=True`, so slicing and caching work the same way. Their sources differ:
 
-Wrap either of those in a {ref}`Proxy` and what you read is kept:
+| Remote object | fsspec URL | Caterva2 `URLPath` |
+|---|---|---|
+| Standalone contiguous `.b2nd` | Yes | Yes |
+| HDF5 dataset | No | Yes |
+| NDArray leaf inside `.b2z` | No | Yes |
+| Lazy or computed array | No | Yes |
+| Whole `.b2z` `TreeStore` or `DictStore` | No | No; open one array-like leaf |
+
+fsspec supplies byte ranges. Python-Blosc2 parses the `.b2nd` frame to discover its geometry and chunk offsets, making this route direct and efficient for standalone arrays.
+
+Caterva2 understands dataset paths, array metadata, and slicing. It can therefore expose array-like data that is not stored as a standalone Blosc2 frame, as well as apply authentication or server-side computation. Use Caterva2's navigation API to find a leaf in a remote hierarchy, then open that leaf with a `URLPath`.
+
+`lazy=True` changes when data is fetched; it does not expand the formats supported by either route.
+
+## Choose a cache
+
+Every lazy open creates a cache. By default it lives in memory and disappears with the proxy:
 
 ```python
-p = blosc2.Proxy(b)  # cache in memory, gone when the proxy is
-p[10:12, 500:600]  # fetched from the server, and kept
-p[10:12, 500:600]  # read from the cache, no request at all
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+a[10:12, 500:600]  # fetched and cached
+a[10:12, 500:600]  # served from memory
 ```
 
-Where that cache lives is yours to choose, and it is the one decision to make here. Say nothing and it is memory: fast, and it dies with the proxy, which is all a single process reading a slice twice needs. Name a file with `urlpath=` and the cache outlives the run:
-
-```python
-p = blosc2.Proxy(b, urlpath="lung-cache.b2nd", mode="a")
-p[10:12, 500:600]  # fetched from the server, and written to lung-cache.b2nd
-```
-
-That file is an ordinary Blosc2 array holding only the pieces you touched — a few hundred bytes for a freshly opened proxy over a 64 MB dataset, growing as you read. It is a normal `.b2nd`: copy it, ship it, open it with {func}`blosc2.open`. With `mode="a"` a later run picks up where the last one left off.
-
-{func}`blosc2.open` builds the proxy for either kind of remote source and offers
-the same choice under another name — `cache_storage=` for a cache on disk,
-nothing for one in memory:
+Set `cache_dir` to let Blosc2 manage a cache file inside a directory:
 
 ```python
 url = "s3://bucket/big.b2nd"
 
-# First run: the slice is fetched, and lands under ./b2cache dir
-a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
-a[100:110, :50]
+a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
+a[100:110, :50]  # fetched and stored under ./b2cache
 
-# A later run, a different process: same call, served from ./b2cache
-a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
+# A later process can reuse the same cache.
+a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
 a[100:110, :50]  # no request
 ```
 
-The same interface works for Caterva2:
+Use `cache_path` instead when the cache should have an exact filename:
 
 ```python
-url = blosc2.URLPath("@personal/run.b2nd")
-
-with blosc2.c2context(
-    urlbase="https://cat2.cloud/demo",
-    username="me@example.com",
-    password="secret",
-):
-    a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
-    a[100:110, :50]
+a = blosc2.open(url, lazy=True, cache_path="big-cache.b2nd")
 ```
 
-For authenticated Caterva2 datasets, `cache_storage` must be private to the
-current user. Applications serving multiple users must use a separate cache
-directory for each user; sharing one between users is not supported. Reopen a
-private cache inside an equivalent authenticated {func}`c2context`.
+In both cases, the cache is an ordinary `.b2nd` array that starts small and grows as regions are read. `cache_dir` and `cache_path` are mutually exclusive.
+
+Authenticated Caterva2 caches must be private to one user. Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
 
 ## Only what a slice touches
 
-A chunk is the unit a container is compressed in, and it can be several megabytes. Fetching a whole one to read a corner of it is most of the cost of a remote read, so Blosc2 fetches **blocks** — the smaller pieces a chunk is built from — whenever a slice lands in a small part of a large chunk.
+Blosc2 arrays are compressed in chunks, which are divided into smaller blocks. For a small slice, fetching only its blocks can avoid transferring most of a large chunk.
 
-You do not ask for this; it happens when it pays. For example:
+![A proxy fetches missing regions from the remote array into its local cache. The fetch method returns the cache container, while indexing returns only the requested values.](../tutorials/images/remote_proxy.png)
 
-- On S3, block reads are **5–17x faster** on arrays with multi-megabyte chunks, and **2–5x** on 1 MB ones.
-- On cat2.cloud's `kevlar-tomo.b2nd`, a corner slice costs **0.031 MB instead of 2.723 MB**, and a slice touching ten chunks takes **0.14 s against 1.01 s**.
+Purple regions are cached; red regions are still remote. The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk. `fetch()` fills and returns the cache container, whereas indexing returns only the requested values.
 
-It is never a loss. A slice wanting more than half a chunk's blocks is wanting the chunk, and a fetch that would skip too little to pay for the extra round trip is made whole — both answered from metadata already in hand, before anything is read. Where blocks are not available the read falls back to whole chunks by itself: that happens for a dataset a Caterva2 server *computes* rather than stores (a lazy expression, an HDF5 leaf, a `.b2z` member), and for a server that stops honouring ranges.
+The proxy chooses blocks or whole chunks automatically. It fetches a whole chunk when most of its blocks are needed or when the source cannot expose block ranges, as with computed Caterva2 datasets. Independent reads overlap, with up to eight concurrent requests by default; use `max_concurrency=1` when concurrency does not help.
 
-Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
+Stepped slices also use the block grid. For example, `p[::5]` can reduce transfers along an axis whose blocks do not already span that axis. A bare {ref}`C2Array` does not accept stepped slices; its proxy does.
 
-A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy it is placed on the block grid like any other key: `p[::2]` reads the blocks holding the coordinates it selects and no others, and `[::-1]` costs what its forward twin does. What that saves is `min(step, block extent along that axis)`, so it is nothing where blocks already span the axis whole — a step along the last dimension, usually — and the step's own factor where they do not. On `kevlar-tomo.b2nd`, whose blocks are one row deep, `[::2]` halves the read and `[::5]` cuts it fivefold.
+### Measure network traffic
 
-### Seeing byte savings
-
-Wall time will not show you any of this: on a fast link a block read and a whole-chunk read take about as long and differ by the compression ratio in *bytes*. Bytes are also what a metered link and a shared server uplink run out of, so they are counted for you. {ref}`C2Array` and {ref}`Proxy` each carry a {ref}`Traffic` under `traffic` — cumulative requests and bytes, tallied at the transport, so the frame index and block offsets are in it too:
+{ref}`C2Array` and remote {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`:
 
 ```python
-b = blosc2.C2Array(
-    "@public/examples/kevlar-tomo.b2nd", urlbase="https://cat2.cloud/demo"
+source = blosc2.C2Array(
+    "@public/examples/kevlar-tomo.b2nd",
+    urlbase="https://cat2.cloud/demo",
 )
-p = blosc2.Proxy(b)
+p = blosc2.Proxy(source)
 
 p.traffic.reset()
 corner = p[0, :100, :100]
-print(p.traffic)  # Traffic(requests=4, nbytes=57767)
+print(p.traffic)  # requests and bytes fetched
 
 p.traffic.reset()
-p[0, :100, :100]  # the same slice, from the cache
+p[0, :100, :100]
 print(p.traffic)  # Traffic(requests=0, nbytes=0)
 ```
 
-Take two readings and subtract, or `reset()` between them. `Proxy.traffic` is `None` over a local array — nothing crosses a wire there, and a zero would say the traffic was free rather than that it was never measured. `examples/c2array-traffic.py` runs the whole comparison against cat2.cloud's `kevlar-tomo.b2nd`: a 100x100 corner costs 0.055 MB against 1.296 MB for the chunk holding it — 23.5x — and nothing at all on the second read.
+Use `reset()` or subtract two readings to measure one operation. `Proxy.traffic` is `None` for a local source because no network transport exists.
 
-## Scattered points
+`examples/c2array-traffic.py` compares block, chunk, and cached reads against a live Caterva2 dataset.
 
-A list of coordinates, or a boolean mask, is not a box — but every point it picks still lives in exactly one block, so it is placed on the block grid as exactly as a slice is:
+## Retrieve scattered points
 
-```python
-p[rows, :100]  # rows is an array of three indices: three blocks, not three chunks
-p[mask]  # a mask picks coordinates too, and costs the same
-```
-
-Nine scattered points of a 900³ array cost **236 KB in 19 requests** through a proxy, against 1.81 MB for the chunks holding them.
-
-However, a {ref}`C2Array` does better with no proxy at all: the coordinates go to the server, which gathers the points and sends back those alone — **271 bytes in one request** for the same nine. When you need efficient scattered retrievals, C2Array+Caterva2 is your best friend.
-
-## When the remote changes underneath
-
-A cache is only good while the bytes it was filled from are still there. Sources that can name their bytes — an fsspec URL by its token, a Caterva2 array by an identifier the server keeps — are checked against what the cache recorded:
+A proxy maps coordinate arrays and boolean masks to the blocks that contain their selected points:
 
 ```python
-p = blosc2.Proxy(src, urlpath="cache.b2nd", mode="a")
-# ValueError: the cache at cache.b2nd was built against different remote bytes;
-#             pass mode='w' to fetch them anew
+p[rows, :100]
+p[mask]
 ```
 
-`mode="w"` starts the cache empty and refetches. For a source that cannot name its bytes, the cache is adopted on geometry alone — same shape, dtype and partitioning — so an array rewritten in place while its geometry stayed the same is served from the cache as it was. Use `mode="w"` when that is a possibility.
+For Caterva2, a bare {ref}`C2Array` can be substantially more efficient: it sends the coordinates to the server, which returns only the selected values. Prefer direct `C2Array` indexing for sparse, one-off point retrieval; prefer a proxy when reuse through a local cache matters.
 
-## Filling an array from several writers
+## Handle remote changes
 
-A Caterva2 array can be *written*, one chunk at a time, by as many processes as it has chunks. Lay the array out empty first — {func}`blosc2.uninit` writes a couple of hundred bytes whatever the shape — upload it to the server, then have each writer post the chunks it owns:
+A persistent cache records the source identity when one is available. On a later `blosc2.open()` with the same `cache_dir` or `cache_path`, a mismatched cache is discarded and rebuilt automatically.
+
+When constructing a proxy directly in append mode, a mismatch is reported instead:
+
+```python
+p = blosc2.Proxy(source, urlpath="cache.b2nd", mode="a")
+# ValueError if cache.b2nd belongs to different remote bytes
+```
+
+Use `mode="w"` to start that cache again. If a source cannot provide an identity, compatibility is checked only from shape, dtype, chunks, and blocks. Use a fresh cache when such a source may have changed without changing its geometry.
+
+## Fill a Caterva2 array concurrently
+
+Several writers can fill one Caterva2 array when each chunk is written at most once. First create and upload an uninitialized array with its final geometry:
 
 ```python
 import blosc2
 import numpy as np
 
-# Once, before the writers start: an empty array of the final geometry
 blosc2.uninit(
     (1_000_000,),
     dtype=np.float64,
@@ -167,50 +160,39 @@ blosc2.uninit(
 )
 ```
 
-Upload it with the client that comes with Caterva2:
-
 ```sh
 cat2-client upload run.b2nd @personal/run.b2nd
 ```
 
-Then each writer opens it and posts its own chunks:
+Each writer compresses and posts the chunks it owns:
 
 ```python
 import math
 
-import blosc2
-
 a = blosc2.C2Array("@personal/run.b2nd", urlbase="https://cat2.cloud/demo")
-itemsize = a.dtype.itemsize
 chunk = blosc2.compress2(
-    data, typesize=itemsize, blocksize=math.prod(a.blocks) * itemsize
+    data,
+    typesize=a.dtype.itemsize,
+    blocksize=math.prod(a.blocks) * a.dtype.itemsize,
 )
-a.update_chunk(nchunk, chunk)
-```
 
-Each slot is written once. A second write to the same slot raises {class}`blosc2.ChunkAlreadyWritten`, and that refusal is the whole of the coordination — two writers that both think they own a chunk are sorted out by the array, with no lease, lock or registry between them. The loser drops its chunk and moves on:
-
-```python
 try:
     a.update_chunk(nchunk, chunk)
 except blosc2.ChunkAlreadyWritten:
-    pass  # someone else got there first
+    pass  # another writer completed this slot
 ```
 
-Writing into an empty slot appends to the file and moves no other chunk, which is what makes a fill cheap and lets a reader follow one without its cached positions going wrong. {meth}`C2Array.written_chunks() <blosc2.C2Array.written_chunks>` says how far it has got, straight out of the file's own index — no endpoint of its own, about 2.5 ms over HTTP:
+The server serializes updates, and {meth}`C2Array.written_chunks() <blosc2.C2Array.written_chunks>` reports progress from the array's index:
 
 ```python
-written = a.written_chunks()  # one bool per chunk
-print(f"{written.sum()}/{written.size} chunks in")
+written = a.written_chunks()
 for nchunk in np.flatnonzero(~written):
-    ...  # the work still to do, after a crash
+    ...  # chunks still missing after a restart
 ```
 
-What this buys: the server serializes the writes themselves, so what overlaps is the round trip — which over a network is nearly all of the cost. Against a real server, a fill went from **244 ms per chunk serially to 32 ms with 8 writers, 7.6x**. Over loopback, where there is no round trip to hide, it is 1.0x.
+## Use your own transport
 
-## Your own transport
-
-If your frames live somewhere fsspec does not reach — per-request credentials, a signing proxy, a database column, an in-house gateway — supply one method and you get everything above:
+Subclass {ref}`ByteRangeNDSource` when the frame lives behind a transport that fsspec cannot use:
 
 ```python
 import boto3
@@ -219,18 +201,18 @@ import blosc2
 
 class S3Source(blosc2.ByteRangeNDSource):
     def __init__(self, bucket, key):
-        self._s3 = boto3.client("s3")
-        self._bucket, self._key = bucket, key
-        self.stamp = self._s3.head_object(Bucket=bucket, Key=key)["ETag"]
+        self.s3 = boto3.client("s3")
+        self.bucket, self.key = bucket, key
+        self.stamp = self.s3.head_object(Bucket=bucket, Key=key)["ETag"]
         super().__init__(f"s3://{bucket}/{key}")
 
     def read_range(self, offset, size):
-        answer = self._s3.get_object(
-            Bucket=self._bucket,
-            Key=self._key,
+        response = self.s3.get_object(
+            Bucket=self.bucket,
+            Key=self.key,
             Range=f"bytes={offset}-{offset + size - 1}",
         )
-        data = answer["Body"].read()
+        data = response["Body"].read()
         self.traffic.charge(len(data))
         return data
 
@@ -238,19 +220,14 @@ class S3Source(blosc2.ByteRangeNDSource):
 a = blosc2.Proxy(S3Source("bucket", "big.b2nd"), urlpath="cache.b2nd", mode="a")
 ```
 
-(For plain S3 you would just use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; this is the shape of the thing.)
+Initialize the transport before `super().__init__()`, because the base constructor immediately reads the frame header. Make `read_range()` thread-safe, set `stamp` so persistent caches can detect changes, and charge the bytes read so traffic measurements remain accurate.
 
-Four things to get right:
-
-- **Set up the transport before `super().__init__()`.** The base constructor calls `read_range()` straight away to read the file's header.
-- **`read_range()` must be thread-safe.** It is called from a thread pool so fetches can overlap. A boto3 *client* is fine; a `Session` or resource is not.
-- **Set `stamp` if you can.** It is what lets a cache tell that the remote has changed. Without it the cache is kept on geometry alone.
-- **Charge what you read.** End `read_range()` with `self.traffic.charge(len(data))` and your source is counted like the built-in ones — see [Seeing byte savings](#seeing-byte-savings). Skip it and `traffic` reads zero forever, which looks like a free transport rather than an uncounted one.
+For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; the custom class only illustrates the transport contract.
 
 ## See also
 
-- {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — the same ground at a slower pace, with output.
-- `examples/ndarray/rw-fsspec.py` — every way of reading and writing an fsspec URL, runnable.
-- `examples/fsspec-cat2-access.py` — the same dataset and cache API through HTTPS/fsspec and Caterva2, with timings.
-- `examples/c2array-traffic.py` — what a remote slice costs in bytes, and what blocks and the cache save, runnable.
-- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`Traffic` — the reference pages.
+- {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — a step-by-step introduction with output.
+- `examples/ndarray/rw-fsspec.py` — fsspec reading and writing examples.
+- `examples/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
+- `examples/c2array-traffic.py` — block, chunk, and cached transfer sizes.
+- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.

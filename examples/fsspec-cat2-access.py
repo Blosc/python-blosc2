@@ -46,11 +46,11 @@ def size_text(size: int) -> str:
     return f"{size / 2**20:.3f} MiB"
 
 
-def benchmark(label: str, urlpath, cache_storage: Path) -> np.ndarray:
-    cache_existed = cache_storage.is_dir() and any(cache_storage.glob("*.b2nd"))
+def benchmark(label: str, urlpath, cache_dir: Path) -> np.ndarray:
+    cache_existed = cache_dir.is_dir() and any(cache_dir.glob("*.b2nd"))
 
     start = perf_counter()
-    array = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    array = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
     open_time = perf_counter() - start
 
     metadata = (array.shape, array.dtype, array.chunks, array.blocks)
@@ -67,7 +67,7 @@ def benchmark(label: str, urlpath, cache_storage: Path) -> np.ndarray:
     # that cached data survives the Proxy object, not merely one array access.
     del array
     start = perf_counter()
-    reopened = blosc2.open(urlpath, lazy=True, cache_storage=cache_storage)
+    reopened = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
     reopen_time = perf_counter() - start
 
     reopened.traffic.reset()
