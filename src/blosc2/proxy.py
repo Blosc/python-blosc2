@@ -68,7 +68,13 @@ class Proxy(blosc2.Operand):
     """
 
     def __init__(
-        self, src: ProxySource or ProxyNDSource, urlpath: str | None = None, mode="a", **kwargs: dict
+        self,
+        src: ProxySource or ProxyNDSource,
+        urlpath: str | None = None,
+        mode="a",
+        *,
+        _refresh_source: bool = True,
+        **kwargs: dict,
     ):
         """
         Create a new :ref:`Proxy` to serve as a cache to save accessed chunks locally.
@@ -122,6 +128,7 @@ class Proxy(blosc2.Operand):
         """
         self.src = src
         self.urlpath = urlpath
+        self._cache_status = None
         if kwargs is None:
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
@@ -146,9 +153,10 @@ class Proxy(blosc2.Operand):
         # that has outlived someone else's writes would hand over a stamp the
         # cache still matches and a set of bytes it no longer does.  Sources whose
         # bytes cannot move underneath them do not offer this and are not asked
-        refresh = getattr(self.src, "refresh_stamp", None)
-        if refresh is not None:
-            refresh()
+        if _refresh_source:
+            refresh = getattr(self.src, "refresh_stamp", None)
+            if refresh is not None:
+                refresh()
 
         if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
             # Reuse the cache left by an earlier run: whatever was fetched then is
@@ -165,15 +173,26 @@ class Proxy(blosc2.Operand):
         fresh = self._cache is None
         if fresh:
             meta_val = {
+                "source_kind": None,
                 "local_abspath": None,
                 "urlpath": None,
                 "caterva2_env": caterva2_env,
             }
             container = getattr(self.src, "schunk", self.src)
-            if hasattr(container, "urlpath"):
-                meta_val["local_abspath"] = container.urlpath
+            if isinstance(self.src, blosc2.FsspecNDSource):
+                meta_val["source_kind"] = "fsspec"
+                meta_val["urlpath"] = self.src.urlpath
+                # Keep the legacy field populated so older readers still
+                # reopen this cache, albeit through their eager URL path.
+                meta_val["local_abspath"] = self.src.urlpath
             elif isinstance(self.src, blosc2.C2Array):
-                meta_val["urlpath"] = (self.src.path, self.src.urlbase, self.src.auth_token)
+                meta_val["source_kind"] = "caterva2"
+                # Authentication belongs to the reopening process, not to a
+                # portable cache file. C2Array resolves it again from c2context.
+                meta_val["urlpath"] = (self.src.path, self.src.urlbase, None)
+            elif hasattr(container, "urlpath"):
+                meta_val["source_kind"] = "local"
+                meta_val["local_abspath"] = container.urlpath
             meta = {"proxy-source": meta_val}
             if hasattr(self.src, "shape"):
                 self._cache = blosc2.empty(
@@ -233,10 +252,9 @@ class Proxy(blosc2.Operand):
         """What this proxy has read off its source, or None for a local one.
 
         Cumulative bytes and requests since the source was opened, counted at the
-        transport, so the frame index and the block offsets are in it as well as
-        the data, and the metadata call that opened the handle is not.  What a
-        slice cost in traffic is the difference between two readings of this, or
-        one reading after :meth:`Traffic.reset`.
+        transport, including metadata, frame indexes, block offsets, and data.
+        What a slice cost in traffic is the difference between two readings of
+        this, or one reading after :meth:`Traffic.reset`.
 
         It is what says whether block granularity is doing anything for a given
         dataset and access pattern: whole chunks and blocks of them take similar
@@ -256,6 +274,16 @@ class Proxy(blosc2.Operand):
         Traffic(requests=2, nbytes=20480)
         """
         return getattr(self.src, "traffic", None)
+
+    @property
+    def cache_status(self) -> str | None:
+        """How the persistent cache was handled when this proxy was opened.
+
+        This is ``"created"``, ``"reused"``, or ``"invalidated/rebuilt"`` for
+        a remote proxy opened with ``cache_dir`` or ``cache_path``.  It is
+        ``None`` for proxies without a managed persistent cache.
+        """
+        return self._cache_status
 
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""

@@ -8,6 +8,7 @@
 
 import contextlib
 import functools
+import hashlib
 import http.server
 import os
 import pathlib
@@ -121,26 +122,26 @@ def test_chained_url(tmp_path):
 @pytest.mark.parametrize("mode", ["a", "w"])
 def test_mode_not_supported(mode):
     with pytest.raises(NotImplementedError):
-        blosc2.open("memory://x.b2nd", mode=mode, cache_storage="/tmp/nope")
+        blosc2.open("memory://x.b2nd", mode=mode, cache_dir="/tmp/nope")
 
 
 def test_offset_needs_cache():
-    with pytest.raises(NotImplementedError, match="cache_storage"):
+    with pytest.raises(NotImplementedError, match="cache_dir"):
         blosc2.open("memory://x.b2nd", offset=32)
 
 
 def test_mmap_needs_cache():
-    with pytest.raises(NotImplementedError, match="cache_storage"):
+    with pytest.raises(NotImplementedError, match="cache_dir"):
         blosc2.open("memory://x.b2nd", mmap_mode="r")
 
 
 def test_dir_container_needs_cache():
-    with pytest.raises(NotImplementedError, match="cache_storage"):
+    with pytest.raises(NotImplementedError, match="cache_dir"):
         blosc2.open("memory://store.b2d")
 
 
 def test_dir_container_with_query_needs_cache():
-    with pytest.raises(NotImplementedError, match="cache_storage"):
+    with pytest.raises(NotImplementedError, match="cache_dir"):
         blosc2.open("memory://store.b2d?version=1")
 
 
@@ -149,7 +150,7 @@ def test_cached_open(tmp_path):
     with fsspec.open("memory://c.b2nd", "wb") as f:
         f.write(a.to_cframe())
 
-    b = blosc2.open("memory://c.b2nd", cache_storage=tmp_path)
+    b = blosc2.open("memory://c.b2nd", cache_dir=tmp_path)
     assert np.array_equal(b[:], a[:])
     assert any(tmp_path.iterdir())
 
@@ -160,7 +161,7 @@ def test_cached_open_is_local(tmp_path):
     with fsspec.open("memory://m.b2nd", "wb") as f:
         f.write(a.to_cframe())
 
-    b = blosc2.open("memory://m.b2nd", cache_storage=tmp_path, mmap_mode="r")
+    b = blosc2.open("memory://m.b2nd", cache_dir=tmp_path, mmap_mode="r")
     assert np.array_equal(b[:], a[:])
 
 
@@ -176,20 +177,20 @@ def test_cache_hit_avoids_refetch(tmp_path, monkeypatch):
         memfs, "_open", lambda self, path, *a, **kw: (fetches.append(path), orig(self, path, *a, **kw))[1]
     )
 
-    blosc2.open("memory://h.b2nd", cache_storage=tmp_path)
+    blosc2.open("memory://h.b2nd", cache_dir=tmp_path)
     assert len(fetches) == 1
-    blosc2.open("memory://h.b2nd", cache_storage=tmp_path)
+    blosc2.open("memory://h.b2nd", cache_dir=tmp_path)
     assert len(fetches) == 1
 
 
 def test_cache_refetches_when_remote_changes(tmp_path):
     with fsspec.open("memory://s.b2nd", "wb") as f:
         f.write(blosc2.arange(10, dtype="i4").to_cframe())
-    assert blosc2.open("memory://s.b2nd", cache_storage=tmp_path).shape == (10,)
+    assert blosc2.open("memory://s.b2nd", cache_dir=tmp_path).shape == (10,)
 
     with fsspec.open("memory://s.b2nd", "wb") as f:
         f.write(blosc2.arange(20, dtype="i4").to_cframe())
-    assert blosc2.open("memory://s.b2nd", cache_storage=tmp_path).shape == (20,)
+    assert blosc2.open("memory://s.b2nd", cache_dir=tmp_path).shape == (20,)
 
 
 def test_cached_dict_store(tmp_path):
@@ -200,7 +201,7 @@ def test_cached_dict_store(tmp_path):
         dstore["/b"] = blosc2.arange(5, dtype="f8")
     fsspec.filesystem("memory").put(localstore, "memory://store.b2d", recursive=True)
 
-    with blosc2.open("memory://store.b2d", cache_storage=tmp_path / "cache") as dstore:
+    with blosc2.open("memory://store.b2d", cache_dir=tmp_path / "cache") as dstore:
         assert sorted(dstore.keys()) == ["/a", "/b"]
         assert np.array_equal(dstore["/a"][:], np.arange(10, dtype="i4"))
 
@@ -212,14 +213,14 @@ def test_cached_dir_refetches_when_remote_changes(tmp_path):
     with blosc2.DictStore(localstore, mode="w") as dstore:
         dstore["/a"] = blosc2.arange(10, dtype="i4")
     memfs.put(localstore, "memory://d.b2d", recursive=True)
-    with blosc2.open("memory://d.b2d", cache_storage=cache) as dstore:
+    with blosc2.open("memory://d.b2d", cache_dir=cache) as dstore:
         assert list(dstore.keys()) == ["/a"]
 
     with blosc2.DictStore(localstore, mode="a") as dstore:
         dstore["/b"] = blosc2.arange(5, dtype="i4")
     memfs.rm("/d.b2d", recursive=True)
     memfs.put(localstore, "memory://d.b2d", recursive=True)
-    with blosc2.open("memory://d.b2d", cache_storage=cache) as dstore:
+    with blosc2.open("memory://d.b2d", cache_dir=cache) as dstore:
         assert sorted(dstore.keys()) == ["/a", "/b"]
 
 
@@ -228,7 +229,7 @@ def test_cached_sparse_frame(tmp_path):
     a = blosc2.arange(1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
     fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
 
-    b = blosc2.open("memory://sparse.b2nd", cache_storage=tmp_path / "cache")
+    b = blosc2.open("memory://sparse.b2nd", cache_dir=tmp_path / "cache")
     assert np.array_equal(b[:], a[:])
 
 
@@ -469,7 +470,7 @@ def test_lazy_rejects_directories(tmp_path):
     localpath = str(tmp_path / "sparse.b2nd")
     blosc2.arange(0, 1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
     fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
-    with pytest.raises(NotImplementedError, match="cache_storage"):
+    with pytest.raises(NotImplementedError, match="cache_dir"):
         blosc2.open("memory://sparse.b2nd", lazy=True)
 
 
@@ -479,7 +480,7 @@ def test_lazy_not_a_frame():
         blosc2.open("memory://junk.b2nd", lazy=True)
 
 
-def test_lazy_with_cache_storage(tmp_path, monkeypatch):
+def test_lazy_with_cache_dir(tmp_path, monkeypatch):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
     url = _put("lazycache.b2nd", a)
 
@@ -491,17 +492,74 @@ def test_lazy_with_cache_storage(tmp_path, monkeypatch):
         lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
     )
 
-    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert p.cache_status == "created"
     assert np.array_equal(p[0:100], a[0:100])
     assert fetched == [0]
     del p
 
     # A later run starts from the chunks the previous one pulled
-    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert p.cache_status == "reused"
     assert np.array_equal(p[0:100], a[0:100])
     assert fetched == [0]
     assert np.array_equal(p[500:600], a[500:600])
     assert fetched == [0, 5]
+
+
+def test_lazy_with_exact_cache_path(tmp_path):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("exactcache.b2nd", a)
+    cache_path = tmp_path / "chosen.b2nd"
+
+    p = blosc2.open(url, lazy=True, cache_path=cache_path)
+    assert np.array_equal(p[0:100], a[0:100])
+    assert p.urlpath == str(cache_path)
+    assert cache_path.is_file()
+
+    q = blosc2.open(url, lazy=True, cache_path=cache_path)
+    assert np.array_equal(q[0:100], a[0:100])
+
+
+def test_exact_cache_path_reopens_as_lazy_fsspec_proxy(tmp_path, monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("independentcache.b2nd", a)
+    cache_path = tmp_path / "independent.b2nd"
+    p = blosc2.open(url, lazy=True, cache_path=cache_path)
+    assert np.array_equal(p[0:100], a[0:100])
+    source_meta = p.schunk.meta["proxy-source"]
+    assert source_meta["source_kind"] == "fsspec"
+    assert source_meta["urlpath"] == url
+    del p
+
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    reopened = blosc2.open(cache_path, mode="a")
+    assert isinstance(reopened, blosc2.Proxy)
+    assert isinstance(reopened.src, blosc2.FsspecNDSource)
+    assert np.array_equal(reopened[0:100], a[0:100])
+    assert fetched == []
+    assert np.array_equal(reopened[500:600], a[500:600])
+    assert fetched == [5]
+
+
+def test_remote_cache_options_are_mutually_exclusive(tmp_path):
+    url = _put("exclusivecache.b2nd", blosc2.arange(0, 10))
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        blosc2.open(url, lazy=True, cache_dir=tmp_path, cache_path=tmp_path / "cache.b2nd")
+
+
+def test_cache_storage_is_deprecated(tmp_path):
+    url = _put("legacycache.b2nd", blosc2.arange(0, 10))
+    with pytest.warns(DeprecationWarning, match="use cache_dir"):
+        p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    assert np.array_equal(p[:], np.arange(10))
 
 
 def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
@@ -513,14 +571,15 @@ def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     assert len(a.to_cframe()) == len(b.to_cframe())
 
     url = _put("lazystale.b2nd", a)
-    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
     assert np.array_equal(p[0:100], a[0:100])
     del p
 
     # Replacing the frame invalidates both the cached chunks and the offsets
     # they were fetched by, so the cache must be thrown away rather than reused
     _put("lazystale.b2nd", b)
-    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert p.cache_status == "invalidated/rebuilt"
     assert np.array_equal(p[0:100], b[0:100])
 
 
@@ -548,15 +607,51 @@ def test_http_url_is_read_through_fsspec(tmp_path):
     root.mkdir()
     blosc2.asarray(data, chunks=(50, 200), blocks=(10, 100), urlpath=str(root / "big.b2nd"))
 
-    with _ranged_server(root) as urlbase:
+    with _ranged_server(root) as (urlbase, requests):
         whole = blosc2.open(f"{urlbase}/big.b2nd")  # fetched in one go, as s3:// is
         assert np.array_equal(whole[:], data)
 
-        lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_storage=str(tmp_path / "cs"))
+        requests.clear()
+        lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_dir=str(tmp_path / "cs"))
         assert isinstance(lazy, blosc2.Proxy)
         assert isinstance(lazy.src, blosc2.FsspecNDSource)
-        assert lazy.src.stamp is not None  # so a cache of it can tell it has moved
+        assert ":etag:" in lazy.src.stamp
+        assert requests == ["bytes=0-8191"]  # metadata and identity, one round trip
         assert np.array_equal(lazy[3:5, 100:120], data[3:5, 100:120])
+
+
+def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
+    pytest.importorskip("aiohttp")
+    path = tmp_path / "www"
+    path.mkdir()
+    frame = path / "changing.b2nd"
+    first = np.arange(40_000, dtype="i4").reshape(200, 200)
+    second = first + 1
+    blosc2.asarray(first, chunks=(50, 200), blocks=(10, 100), urlpath=frame)
+
+    with _ranged_server(path) as (urlbase, _):
+        url = f"{urlbase}/{frame.name}"
+        cache = tmp_path / "cache"
+        lazy = blosc2.open(url, lazy=True, cache_dir=cache)
+        assert np.array_equal(lazy[3:5, 100:120], first[3:5, 100:120])
+        del lazy
+
+        blosc2.asarray(second, chunks=(50, 200), blocks=(10, 100), urlpath=frame, mode="w")
+        lazy = blosc2.open(url, lazy=True, cache_dir=cache)
+        assert np.array_equal(lazy[3:5, 100:120], second[3:5, 100:120])
+
+
+def test_http_stamp_prefers_etag_and_falls_back_to_modified_size():
+    stamp = blosc2.proxy_source._http_stamp(
+        "url",
+        {"etag": '"abc"', "last-modified": "yesterday", "content-range": "bytes 0-7/100"},
+    )
+    assert stamp == 'url:etag:"abc"'
+
+    stamp = blosc2.proxy_source._http_stamp(
+        "url", {"last-modified": "yesterday", "content-range": "bytes 0-7/100"}
+    )
+    assert stamp == "url:modified:yesterday:size:100"
 
 
 @contextlib.contextmanager
@@ -571,6 +666,7 @@ def _ranged_server(root):
 
         def do_GET(self):
             span = self.headers.get("Range")
+            self.server.requests.append(span)
             if not span:
                 return super().do_GET()
             body = (root / self.path.lstrip("/")).read_bytes()
@@ -581,15 +677,17 @@ def _ranged_server(root):
             self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(len(part)))
+            self.send_header("ETag", hashlib.sha256(body).hexdigest())
             self.end_headers()
             self.wfile.write(part)
             return None
 
     handler = functools.partial(Ranged, directory=str(root))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
+        yield f"http://127.0.0.1:{server.server_address[1]}", server.requests
     finally:
         server.shutdown()
         server.server_close()
@@ -605,7 +703,7 @@ def test_zip_store_needs_cache(tmp_path):
 
     with pytest.raises(RuntimeError):
         blosc2.open("memory://t.b2z")
-    with blosc2.open("memory://t.b2z", cache_storage=tmp_path / "cache") as tstore:
+    with blosc2.open("memory://t.b2z", cache_dir=tmp_path / "cache") as tstore:
         assert np.array_equal(tstore["/a"][:], np.arange(10, dtype="i4"))
 
 
@@ -689,7 +787,7 @@ def test_cached_container_keeps_its_extension(tmp_path):
     del estore
     fsspec.filesystem("memory").pipe_file("/e.b2e", pathlib.Path(localpath).read_bytes())
 
-    opened = blosc2.open("memory://e.b2e", cache_storage=tmp_path / "cache")
+    opened = blosc2.open("memory://e.b2e", cache_dir=tmp_path / "cache")
     assert isinstance(opened, blosc2.EmbedStore)
     assert np.array_equal(opened["/a"][:], np.arange(10, dtype="i4"))
 
@@ -707,23 +805,23 @@ def test_lazy_empty_array(tmp_path):
 
 def test_lazy_cache_rebuilt_when_corrupt(tmp_path):
     # An interrupted run can leave a half-written cache behind; the whole point of
-    # cache_storage is surviving across runs, so it has to be discarded, not fatal
+    # cache_dir is surviving across runs, so it has to be discarded, not fatal
     a = blosc2.arange(100, dtype="i4", chunks=(10,))
     fsspec.filesystem("memory").pipe_file("/c.b2nd", a.to_cframe())
 
-    with blosc2.open("memory://c.b2nd", lazy=True, cache_storage=tmp_path) as b:
+    with blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path) as b:
         assert np.array_equal(b[:10], a[:10])
     cache = next(p for p in tmp_path.iterdir() if p.suffix == ".b2nd")
     cache.write_bytes(cache.read_bytes()[:50])
 
-    with blosc2.open("memory://c.b2nd", lazy=True, cache_storage=tmp_path) as b:
+    with blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path) as b:
         assert np.array_equal(b[:], a[:])
 
 
 def test_max_concurrency_needs_lazy(tmp_path):
     fsspec.filesystem("memory").pipe_file("/m.b2nd", blosc2.arange(10, dtype="i4").to_cframe())
     with pytest.raises(NotImplementedError, match="max_concurrency"):
-        blosc2.open("memory://m.b2nd", cache_storage=tmp_path, max_concurrency=4)
+        blosc2.open("memory://m.b2nd", cache_dir=tmp_path, max_concurrency=4)
 
 
 def test_storage_mapping_is_normalized(tmp_path):
@@ -1297,13 +1395,13 @@ def test_lazy_eviction_survives_a_reopen(tmp_path, monkeypatch, any_chunk_wants_
     cache = str(tmp_path / "evicted-cache")
     reads, _ = _traffic(monkeypatch)
 
-    p = blosc2.open(url, lazy=True, cache_storage=cache)
+    p = blosc2.open(url, lazy=True, cache_dir=cache)
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     fetched = len(reads)
     p.schunk.update_special(0, blosc2.SpecialValue.UNINIT)
     del p
 
-    q = blosc2.open(url, lazy=True, cache_storage=cache)
+    q = blosc2.open(url, lazy=True, cache_dir=cache)
     assert np.array_equal(q[0:5, 0:10], data[0:5, 0:10])
     assert len(reads) > fetched
 

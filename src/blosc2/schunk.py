@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import os
 import pathlib
+import warnings
 import weakref
 import zipfile
 from collections import namedtuple
@@ -1890,9 +1891,23 @@ def process_opened_object(res):
     if "proxy-source" in meta:
         proxy_cache = res
         proxy_src = meta["proxy-source"]
+        source_kind = proxy_src.get("source_kind")
+        if source_kind == "fsspec":
+            src = blosc2.FsspecNDSource(proxy_src["urlpath"])
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+        if source_kind == "caterva2":
+            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"], mode="r")
-            return blosc2.Proxy(src, _cache=proxy_cache)
+            source_path = proxy_src["local_abspath"]
+            # Older FsspecNDSource caches recorded their URL in the field that
+            # otherwise names a local source. Preserve those caches while
+            # restoring their lazy byte-range behavior.
+            if source_kind is None and is_fsspec_url(source_path):
+                src = blosc2.FsspecNDSource(source_path)
+            else:
+                src = blosc2.open(source_path, mode="r")
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
             return blosc2.Proxy(src, _cache=proxy_cache)
@@ -1975,29 +1990,108 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
+def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str | pathlib.Path | None]:
+    """Pop the public remote-cache options, including the deprecated alias."""
+    legacy_present = "cache_storage" in kwargs
+    cache_storage = kwargs.pop("cache_storage", None)
+    cache_dir = kwargs.pop("cache_dir", None)
+    cache_path = kwargs.pop("cache_path", None)
+
+    if legacy_present:
+        warnings.warn(
+            "cache_storage is deprecated; use cache_dir instead",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+
+    selected = [value for value in (cache_storage, cache_dir, cache_path) if value is not None]
+    if len(selected) > 1:
+        raise ValueError("cache_storage, cache_dir, and cache_path are mutually exclusive")
+    return (cache_dir if cache_dir is not None else cache_storage), cache_path
+
+
 def _lazy_fsspec_proxy(
-    urlpath: str, cache_storage: str | pathlib.Path | None, max_concurrency: int | None = None
+    urlpath: str,
+    cache_dir: str | pathlib.Path | None,
+    cache_path: str | pathlib.Path | None,
+    max_concurrency: int | None = None,
 ):
     """Wrap a remote frame in a Proxy that fetches chunks on demand.
 
-    Without `cache_storage` the fetched chunks live in memory and die with the
-    proxy; with it they go to a container under that directory, so a later run
-    starts from what this one pulled.
+    Without a cache location the fetched chunks live in memory and die with the
+    proxy. Otherwise they go to `cache_path`, or to a derived name under
+    `cache_dir`, so a later run starts from what this one pulled.
     """
     # None leaves the default where it belongs, on the source itself
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
     src = blosc2.FsspecNDSource(urlpath, **kwargs)
-    if cache_storage is None:
-        return blosc2.Proxy(src)
+    return _lazy_remote_proxy(src, urlpath, cache_dir, cache_path)
 
-    path = fsspec_cache_path(urlpath, cache_storage, ".b2nd")
-    if os.path.exists(path) and _cache_stamp(path) != src.stamp:
-        # The remote frame was replaced, which makes every cached chunk -- and
-        # every offset they were fetched by -- meaningless
-        blosc2.remove_urlpath(path)
+
+def _lazy_remote_proxy(
+    src,
+    identity: str,
+    cache_dir: str | pathlib.Path | None,
+    cache_path: str | pathlib.Path | None,
+    *,
+    source_fresh: bool = False,
+):
+    """Wrap a remote source in a memory or persistent cache."""
+    if cache_dir is None and cache_path is None:
+        return blosc2.Proxy(src, _refresh_source=not source_fresh)
+
+    if cache_path is not None:
+        path = os.fspath(cache_path)
+        if os.path.isdir(path):
+            raise ValueError("cache_path must name a file, not a directory")
+    else:
+        path = fsspec_cache_path(identity, cache_dir, ".b2nd")
+    stamp = getattr(src, "stamp", None)
+    cache_status = "created"
+    if os.path.exists(path):
+        if _cache_stamp(path) != stamp:
+            # The remote frame was replaced, which makes every cached chunk -- and
+            # every offset they were fetched by -- meaningless
+            blosc2.remove_urlpath(path)
+            cache_status = "invalidated/rebuilt"
+        else:
+            cache_status = "reused"
     # Proxy stamps the cache with src.stamp itself, and refuses one built against
     # other bytes; removing it above is what turns that refusal into a refetch
-    return blosc2.Proxy(src, urlpath=path, mode="a")
+    proxy = blosc2.Proxy(src, urlpath=path, mode="a", _refresh_source=not source_fresh)
+    proxy._cache_status = cache_status
+    return proxy
+
+
+def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
+    """Open a Caterva2 array directly, or through the same lazy cache API as fsspec."""
+    if mode != "r":
+        raise NotImplementedError(f"Caterva2 arrays can only be opened with mode='r', not {mode!r}")
+    if offset != 0:
+        raise NotImplementedError("offset is not supported for Caterva2 arrays")
+
+    cache_dir, cache_path = _remote_cache_options(kwargs)
+    max_concurrency = kwargs.pop("max_concurrency", None)
+    lazy = kwargs.pop("lazy", False)
+    requested = [key for key, value in kwargs.items() if value is not None]
+    if requested:
+        raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
+
+    if not lazy:
+        if cache_dir is not None or cache_path is not None:
+            raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
+        if max_concurrency is not None:
+            raise NotImplementedError("max_concurrency is only supported with lazy=True")
+        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+
+    src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+    if max_concurrency is not None:
+        src.max_concurrency = max_concurrency
+    identity = f"caterva2:{blosc2.c2array._server_url(src.urlbase, src.path)}"
+    # C2Array's constructor has just read api/info.  That response supplies both
+    # the geometry and the stamp against which the cache is checked, so asking
+    # for it again in Proxy.__init__ only adds a second serial round trip.
+    return _lazy_remote_proxy(src, identity, cache_dir, cache_path, source_fresh=True)
 
 
 def _cache_stamp(path: str):
@@ -2017,9 +2111,9 @@ def _cache_stamp(path: str):
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
-    Without `cache_storage`, the whole object is fetched in one go and rebuilt in
+    Without `cache_dir`, the whole object is fetched in one go and rebuilt in
     memory, which is the right thing for a one-shot read of a small container but
-    only works for single-file ones.  With `cache_storage`, the container is
+    only works for single-file ones.  With `cache_dir`, the container is
     materialized under that directory and opened as an ordinary local path, so
     every format, `mmap_mode` and `offset` work.  With `lazy`, nothing is fetched
     up front and each slice pulls just the chunks it needs.
@@ -2027,7 +2121,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     if mode != "r":
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
 
-    cache_storage = kwargs.pop("cache_storage", None)
+    cache_dir, cache_path = _remote_cache_options(kwargs)
     max_concurrency = kwargs.pop("max_concurrency", None)
     if kwargs.pop("lazy", False):
         if offset != 0:
@@ -2035,25 +2129,28 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        return _lazy_fsspec_proxy(urlpath, cache_storage, max_concurrency)
+        return _lazy_fsspec_proxy(urlpath, cache_dir, cache_path, max_concurrency)
+
+    if cache_path is not None:
+        raise NotImplementedError("cache_path is only supported with lazy=True")
 
     if max_concurrency is not None:
         # Nothing is fetched chunk by chunk here, so there is nothing to overlap
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
 
-    if cache_storage is not None:
-        return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
+    if cache_dir is not None:
+        return open(localize_fsspec_url(urlpath, cache_dir), mode, offset, **kwargs)
 
     if offset != 0:
-        raise NotImplementedError("offset on an fsspec URL requires passing cache_storage=")
+        raise NotImplementedError("offset on an fsspec URL requires passing cache_dir=")
     # Unset options (dparams=None and friends) are not a request for anything
     requested = [k for k, v in kwargs.items() if v is not None]
     if requested:
-        raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_storage=")
+        raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_dir=")
     if urlpath.split("?", 1)[0].split("#", 1)[0].endswith(".b2d"):
         raise NotImplementedError(
             "directory containers (.b2d, sparse frames) on an fsspec URL require "
-            "passing cache_storage= to fetch them locally first"
+            "passing cache_dir= to fetch them locally first"
         )
     with fsspec_open(urlpath, "rb") as f:
         return blosc2.from_cframe(f.read())
@@ -2085,8 +2182,10 @@ def open(
     ----------
     urlpath: str | pathlib.Path | :ref:`URLPath`
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
-        is stored. If it is a remote Caterva2 array, a :ref:`URLPath` must be passed:
-        a server names its datasets by root and path rather than by URL.
+        is stored. :ref:`URLPath` is exclusively a Caterva2 dataset reference,
+        including when its ``urlbase`` is omitted and inherited from
+        :func:`c2context`; a server names its datasets by root and path rather
+        than by URL.
         Any URL with a scheme (``s3://``, ``gs://``, ``https://``, ``zip://``,
         ``memory://``...) is opened through fsspec; see the `Notes` section for
         the limits.
@@ -2098,8 +2197,9 @@ def open(
 
         Open modes also define the allowed persistence side effects:
 
-        - ``'r'`` never writes to the persistent object or any sidecar/cache file.
-          Query acceleration and other execution caches remain process-local only.
+        - ``'r'`` never writes to the persistent object. It writes a local cache
+          only when ``cache_dir`` or ``cache_path`` explicitly requests one; query acceleration
+          and other implicit execution caches remain process-local only.
         - ``'a'`` and ``'w'`` may persist explicit user-visible changes such as data,
           metadata, and index maintenance, but execution caches and query memoization
           still remain process-local only.
@@ -2108,15 +2208,17 @@ def open(
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
         lazy: bool, optional
-            Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
-            where it is and reads what a slice touches, in range requests,
-            instead of transferring the whole thing. Contiguous frames holding an
-            :ref:`NDArray` only. A slice landing in a small part of a large chunk
-            costs only the *blocks* it touches, which for the partitions
-            :func:`blosc2.asarray` picks by default can be a hundredth of the
-            chunk; chunks small enough to be one cheap request are still fetched
-            whole. What arrives is kept in memory, or in ``cache_storage`` when
-            that is given as well.
+            For an fsspec URL, return a :ref:`Proxy` over a standalone,
+            contiguous :ref:`NDArray` frame and read the byte ranges a slice
+            touches. For a Caterva2 :ref:`URLPath`, return a :ref:`Proxy` over
+            one array-like dataset; stored ``.b2nd`` arrays use byte ranges when
+            available, while HDF5 datasets, ``.b2z`` leaves, and computed arrays
+            fall back to semantic chunk requests. Neither form opens a whole
+            remote store hierarchy. A slice landing in a small part of a large
+            chunk costs only the *blocks* it touches when ranges are available;
+            chunks small enough to be one cheap request are still fetched whole.
+            What arrives is kept in memory, under ``cache_dir``, or at the exact
+            ``cache_path`` when either is given.
         max_concurrency: int, optional
             Only with ``lazy``: how many fetches to run at once, in a thread
             pool. A slice against an object store is almost entirely round-trip
@@ -2124,13 +2226,19 @@ def open(
             bearable. Defaults to 8; pass 1 for a protocol with no latency to
             hide, where the pool costs about 10 microseconds per chunk and saves
             nothing.
-        cache_storage: str | pathlib.Path, optional
-            Only for fsspec URLs: a directory holding this container's local
+        cache_dir: str | pathlib.Path, optional
+            For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's local
             copy — the whole thing, or just the chunks and blocks ``lazy`` has
             fetched so far. Either way a later run starts from what is already
             there, and the copy is discarded when the remote no longer matches
             it. There is no default on purpose, so nothing writes to a disk you
             did not name.
+        cache_path: str | pathlib.Path, optional
+            With ``lazy=True``, the exact file to use for the remote array's
+            persistent proxy cache. Mutually exclusive with ``cache_dir``.
+        cache_storage: str | pathlib.Path, optional
+            Deprecated alias for ``cache_dir``. Mutually exclusive with
+            ``cache_dir`` and ``cache_path``.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2157,7 +2265,8 @@ def open(
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`Proxy`,
+        :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
         The object found in the path.
 
     Notes
@@ -2169,7 +2278,10 @@ def open(
       :class:`LazyArray`, exiting the context is currently a no-op.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
-      must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+      must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
+      returns a :ref:`C2Array`; with ``lazy=True`` it returns a :ref:`Proxy`,
+      optionally persisted under ``cache_dir`` or at ``cache_path``.
+      Authenticated users sharing a machine must use separate caches.
 
     * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
       the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
@@ -2177,8 +2289,8 @@ def open(
       ``mode != 'r'`` always raises, as object stores have no rename and no locks.
       A plain URL read rebuilds the object from a cframe held in memory, so it
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
-      archive rather than a cframe, and needs ``cache_storage`` like the
-      directory formats do.  ``cache_storage`` and ``lazy`` above lift that, each
+      archive rather than a cframe, and needs ``cache_dir`` like the directory
+      formats do. ``cache_dir`` and ``lazy`` above lift that, each
       in its own way.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
@@ -2188,11 +2300,10 @@ def open(
         caller; runtime caches are not serialized back to disk.
 
     * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
-      this function will only return a :ref:`Proxy` if its source is a local
-      :ref:`SChunk`, :ref:`NDArray` or a remote :ref:`C2Array`. Otherwise,
-      it will return the Python-Blosc2 container used to cache the data which
-      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data
-      initialized (e.g. if the user has not accessed to it yet).
+      this function reconstructs sources backed by a persistent local
+      :ref:`SChunk` or :ref:`NDArray`, an fsspec URL, or a remote
+      :ref:`C2Array`. Custom proxy sources must be recreated explicitly because
+      their Python class and runtime state are not stored in the cache.
 
     * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
@@ -2234,11 +2345,7 @@ def open(
     True
     """
     if isinstance(urlpath, blosc2.URLPath):
-        if mode != "r" or offset != 0 or kwargs != {}:
-            raise NotImplementedError(
-                "Cannot open a C2Array with mode != 'r', or offset != 0 or some kwargs"
-            )
-        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+        return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)

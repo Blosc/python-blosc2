@@ -203,8 +203,7 @@ def test_persistent_b2z_roundtrip():
 
     p = pathlib.Path(tempfile.mkdtemp()) / "t.b2z"
     t = blosc2.CTable(R, urlpath=str(p), mode="w", compact=True)
-    for i in range(50):
-        t.append((i, f"n{i}"))
+    t.extend([(i, f"n{i}") for i in range(50)])
     t.close()
     t = blosc2.open(p)
     cf = t.to_cframe()

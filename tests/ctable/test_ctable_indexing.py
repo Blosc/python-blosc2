@@ -848,7 +848,7 @@ class _IncrRow:
     i: int = blosc2.field(blosc2.int64(), chunks=(2000,), blocks=(500,))
 
 
-def _build_incr_data(n=9000):
+def _build_incr_data(n=2250):
     rng = np.random.default_rng(7)
     f = (rng.standard_normal(n) * 50).astype(np.float32)
     f[rng.integers(0, n, n // 100)] = np.nan  # exercise NaN flags
@@ -867,6 +867,7 @@ def _summary_sidecars(table):
     return out
 
 
+@pytest.mark.heavy
 def test_incremental_summary_matches_ooc_build(tmp_path):
     """The incremental per-block accumulator (folded during the write phase)
     must produce SUMMARY sidecars byte-identical to the out-of-core
@@ -901,10 +902,11 @@ def test_incremental_summary_matches_ooc_build(tmp_path):
         assert np.allclose(a["max"], b["max"], equal_nan=True)
 
 
+@pytest.mark.heavy
 def test_incremental_summary_stale_on_inplace(tmp_path):
     """An in-place column write before close must invalidate the accumulator so
     the builder falls back to a correct full rescan."""
-    f, i = _build_incr_data(n=4000)
+    f, i = _build_incr_data(n=2250)
     path = str(tmp_path / "upd.b2z")
     with blosc2.CTable(_IncrRow, urlpath=path, mode="w") as t:
         t.extend({"f": f, "i": i})

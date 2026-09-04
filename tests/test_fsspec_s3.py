@@ -81,9 +81,9 @@ def test_save_and_open_whole(stored):
     assert np.array_equal(blosc2.open(urlpath)[:], a[:])
 
 
-def test_cache_storage(stored, tmp_path):
+def test_cache_dir(stored, tmp_path):
     urlpath, a = stored
-    b = blosc2.open(urlpath, cache_storage=tmp_path, mmap_mode="r")
+    b = blosc2.open(urlpath, cache_dir=tmp_path, mmap_mode="r")
     assert np.array_equal(b[:], a[:])
 
 

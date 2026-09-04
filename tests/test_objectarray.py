@@ -58,7 +58,7 @@ def _make_nested_blosc2_objects():
 
 
 def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
-    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None):
+    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None, traffic=None):
         return {"schunk": {"cparams": dict(blosc2.cparams_dflts)}}
 
     monkeypatch.setattr(blosc2_c2array, "info", fake_info)

@@ -11,7 +11,7 @@
 # the whole chunk: on a fast link the two take about as long, and differ by the
 # compression ratio in bytes.  Bytes are also what a metered link and a shared
 # server uplink actually run out of, so they are what `Traffic` counts -- at the
-# transport, so the frame index and block offsets are in the tally too.
+# transport, so metadata, the frame index, and block offsets are in the tally too.
 
 import blosc2
 
@@ -27,9 +27,8 @@ def cost(traffic):
 array = blosc2.C2Array(path, urlbase=urlbase)
 print(f"{path}: shape={array.shape} chunks={array.chunks} blocks={array.blocks}")
 
-# Opening a handle costs one `api/info` call, which is metadata rather than data
-# and is deliberately not counted -- no slice can avoid it, and no choice of
-# granularity changes it.
+# Opening a handle costs one `api/info` call, included so this is a complete
+# account of everything that crossed the wire.
 print(f"after opening:      {array.traffic}")
 
 # -- A proxy reads through the block path, so it pays for what a slice touches.
