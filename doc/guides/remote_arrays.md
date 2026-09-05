@@ -83,10 +83,10 @@ In both cases, the cache is an ordinary `.b2nd` array that starts small and grow
 
 Authenticated Caterva2 caches must be private to one user. Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
 
-### Persist a reference instead of a cache
+### Persist a self-caching remote proxy
 
-Use {ref}`RemoteProxy` when the `.b2nd` file itself should remain a small,
-immutable reference to the remote array rather than become its cache:
+Use {ref}`RemoteProxy` when the `.b2nd` file should carry a portable remote
+descriptor and, optionally, its own bounded persistent cache:
 
 ```python
 remote = blosc2.RemoteProxy(
@@ -96,15 +96,13 @@ remote = blosc2.RemoteProxy(
 remote.save("big-reference.b2nd")
 ```
 
-The saved object contains source and geometry metadata but no fetched chunks or
-credentials. It reopens with `CachePolicy.NONE`, so repeated reads contact the
-source again and never mutate the reference file. This is also true when a
-`RemoteProxy` using `MEMORY` or `DISK` caching is saved: those runtime caches
-are not part of the portable reference.
+The saved object contains source and geometry metadata but no credentials. With
+`CachePolicy.NONE`, repeated reads contact the source and do not mutate the
+carrier.
 
-`RemoteProxy` also supports bounded runtime caching. Memory caches retain at
-most 256 MiB of compressed payload by default; disk caches are unlimited unless
-an explicit bound is supplied:
+`RemoteProxy` also supports bounded disk caching. The proxy carrier itself is
+the cache, with a finite 256 MiB compressed-payload bound by default or an
+explicit bound:
 
 ```python
 remote = blosc2.RemoteProxy(
@@ -115,9 +113,10 @@ remote = blosc2.RemoteProxy(
 )
 ```
 
-Opening the saved reference itself returns `CachePolicy.NONE`. Runtime caching
-must be selected again explicitly from its `urlpath`; it is never inferred from
-the reference carrier.
+Saving and serializing preserve valid warm chunks by default. Pass
+`include_cache=False` to `save()` or `to_cframe()` to export a cold copy without
+mutating the warm carrier. A saved disk proxy opened with `mode="a"` retains
+misses in itself; `mode="r"` can use warm chunks but does not retain misses.
 
 The bound is applied after each operation. It does not limit the temporary
 working set or a NumPy result requested by the caller.

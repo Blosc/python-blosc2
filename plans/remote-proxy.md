@@ -1,5 +1,9 @@
 # Plan: Persistable `RemoteProxy`
 
+> **Superseded:** The self-caching carrier design in
+> [`remote-proxy-v2.md`](remote-proxy-v2.md) is the authoritative implementation
+> plan. This document records the earlier immutable-reference design.
+
 ## Motivation
 
 Python-Blosc2 can already access remote B2ND arrays lazily:
@@ -86,12 +90,97 @@ The following remain future work or deliberate follow-ups:
   the current explicit opt-in.
 - Cache-oriented `fetch()`/`afetch()` methods are not exposed on `RemoteProxy`
   under `NONE`; a separate materialization API can be designed later.
-- Caterva2 credential selection, S3 support, cumulative fetched-byte budgets,
-  reference-chain resolution/cycle handling, and authenticated tenant-scoped
-  sessions remain to be implemented. Remote references embedded inside stored
+- Caterva2 operation-wide request budgets and reference-chain resolution/cycle
+  handling remain to be implemented. Remote references embedded inside stored
   expressions are rejected until they can use the same secure resolver.
 - Pinned reference semantics, broader fsspec/server protocol allowlists, and
   any `C2Array.save(as_remote_proxy=True)` convenience are future decisions.
+
+## Open Work Queue And Decisions
+
+The remaining server work should be tackled in the following order. The server
+scope stays limited to public, credential-free HTTPS while resource controls
+and recursive resolution are completed.
+
+### 1. Operation-wide resource budgets
+
+**Recommended next implementation.** The current Caterva2 policy bounds source
+geometry, chunk count, concurrency, and each HTTP request's timeout. It does not
+yet bound the aggregate work caused by one client operation.
+
+Add one request-scoped budget object shared by metadata discovery and all range
+reads. It should account for:
+
+- total upstream response bytes, including metadata and unsuccessful responses
+- range-request count and retry count
+- elapsed wall-clock time, with the remaining deadline passed to each request
+- live upstream tasks, with cancellation when the downstream request ends
+
+Exhaustion must abort the operation with a deterministic, non-sensitive error.
+The budget should be enforced below `FsspecNDSource`, at the authorized
+filesystem/transport boundary, so every request is charged independently of
+the slice assembly strategy. Initial limits should be server-wide configuration
+defaults; per-user limits can be added independently of remote credentials.
+
+Open implementation question: fsspec does not expose all transport accounting
+through a stable public hook. Prefer a narrow Caterva2 HTTP filesystem wrapper
+that charges opened responses and retries rather than adding server policy to
+Python-Blosc2's general-purpose `Traffic` diagnostics.
+
+### 2. Public-only source boundary
+
+**Decision:** Caterva2 RemoteProxy resolution supports only remote arrays that
+are publicly readable without credentials. The server does not select, store,
+or forward credentials and does not accept credential profile names, provider
+settings, endpoint overrides, headers, cookies, signed query parameters, or
+arbitrary fsspec storage options from a carrier.
+
+The server protocol is HTTPS. Public S3 objects are supported through their
+ordinary public HTTPS URLs. Native `s3://` resolution is deliberately out of
+scope, even for anonymous buckets, so Caterva2 does not need provider-specific
+filesystem configuration, endpoints, or bucket policy logic.
+
+Exact administrator host allowlists, public-address validation, DNS pinning,
+disabled redirects, and rejection of descriptor-provided options remain
+mandatory. Private sources, native object-store protocols, authenticated
+upstream sessions, and tenant-scoped remote credentials are non-goals. Adding
+any of them later requires a separate security design and must not weaken the
+public HTTPS path by default.
+
+### 3. Nested references and stored expressions
+
+Direct `RemoteProxy` carriers are supported. Remote references inside persisted
+`LazyExpr`/`LazyUDF` objects are intentionally rejected before generic Blosc2
+decoding, because decoding currently resolves operands without a Caterva2
+policy context.
+
+Supporting them requires a resolver/context injection point in Python-Blosc2,
+then a Caterva2 graph traversal that carries one operation budget, records
+normalized source identities, rejects cycles/self-reference, and enforces a
+small maximum depth and hop count. Arbitrary nesting in other container types
+must remain denied or unresolved until it goes through the same traversal.
+
+Open design question: make authorized resolution an explicit argument/context
+to the B2 object decoder rather than installing a process-global resolver. A
+process-global callback cannot safely represent concurrent requests or policy
+contexts.
+
+### 4. Compatibility and release floor
+
+Caterva2 currently refuses to enable remote resolution when its installed
+Python-Blosc2 lacks `RemoteProxy`. Before releasing the Caterva2 feature, raise
+its declared minimum Python-Blosc2 version to the first release containing the
+carrier format and secure filesystem-injection hooks. Keep the runtime check for
+clear diagnostics in mixed deployments.
+
+### 5. End-to-end transport validation
+
+Add a controlled HTTPS integration fixture with real TLS, DNS resolution, and
+range responses. It should exercise successful reads, byte/range budget
+exhaustion, timeout/cancellation, changed ETag/geometry, and attempts to redirect
+or resolve to a denied address. External public services should remain optional
+network tests; the security assertions need a deterministic local harness whose
+address classification is explicitly test-configurable.
 
 ## Goals
 
@@ -99,7 +188,7 @@ The first implementation should allow this workflow:
 
 ```python
 proxy = blosc2.RemoteProxy(
-    "s3://example/dataset.b2nd",
+    "https://datasets.example.org/dataset.b2nd",
     cache_policy=blosc2.CachePolicy.NONE,
 )
 proxy.save("dataset-proxy.b2nd")
@@ -362,9 +451,23 @@ Suggested descriptors:
 {
     "kind": "fsspec",
     "version": 1,
+    "urlpath": "https://datasets.example.org/dataset.b2nd",
+}
+```
+
+The Python client may still use a public S3 descriptor directly when its local
+fsspec environment is configured for anonymous access:
+
+```python
+{
+    "kind": "fsspec",
+    "version": 1,
     "urlpath": "s3://public-bucket/dataset.b2nd",
 }
 ```
+
+This source form is not accepted by Caterva2; an uploaded reference must use
+the public object's HTTPS URL.
 
 The source reference must contain only location and format information.  It
 must not include headers, bearer tokens, passwords, signed query parameters,
@@ -391,7 +494,7 @@ Example payload:
     "source": {
         "kind": "fsspec",
         "version": 1,
-        "urlpath": "s3://public-bucket/dataset.b2nd",
+        "urlpath": "https://datasets.example.org/dataset.b2nd",
     },
     "cache_policy": "none",
 }
@@ -541,20 +644,19 @@ Caterva2 should:
 Support for fsspec protocol chaining such as archive-over-network URLs should
 be out of scope initially because every layer expands the policy surface.
 
-### Credentials
+### Credential-free boundary
 
 - Never serialize client credentials in the B2 object.
 - Strip or reject user-info, sensitive query parameters, custom headers,
   cookies, tokens, and arbitrary `storage_options` at creation and upload.
-- Configure server credentials out of band.
-- Scope credentials to the smallest allowed host, bucket, and prefix.
-- Select credentials from the validated destination, never from untrusted
-  descriptor-provided provider names.
+- Do not configure or select upstream credentials in the RemoteProxy resolver.
+- Do not add authentication headers, cookies, signed queries, endpoint
+  overrides, or provider-specific storage options.
 - Avoid reflecting secrets or sensitive internal response bodies in errors.
 
-Public Caterva2 references should continue to work without a persisted auth
-token.  Private references require credentials available to the resolving
-server; client credentials cannot make an uploaded proxy portable safely.
+Only publicly readable HTTPS references are supported by Caterva2. Private
+references are rejected; client credentials cannot make an uploaded proxy
+portable safely.
 
 ### Resource limits
 
@@ -581,14 +683,13 @@ original object.  The server must enforce:
 - rejection of direct or indirect self-references
 - one cumulative resource budget across the entire reference chain
 
-### Tenant isolation and observability
+### Request isolation and observability
 
-- Never share authenticated sessions or memory caches across security
-  principals unless the cache key includes the full authorization context.
+- Do not share operation-scoped assembly state across client requests.
 - Log descriptor identity, resolved destination, bytes, request count, timing,
   and policy decision without logging secrets.
 - Expose actionable but non-sensitive failures for denied destinations,
-  unavailable credentials, stale geometry, and exhausted limits.
+  unavailable sources, stale geometry, and exhausted limits.
 
 ## Compatibility And Migration
 
@@ -697,11 +798,18 @@ and enum values are the compatibility surface, not its physical module.
 
 ### Phase 5: Caterva2 support
 
-- Add `remote_proxy` discovery and read dispatch to Caterva2.
-- Implement default-deny protocol and destination configuration.
-- Add credential selection outside the descriptor.
-- Add SSRF, redirect, DNS, resource-limit, cycle, and tenant-isolation tests.
-- Confirm the uploaded carrier is never mutated.
+- **Completed baseline:** direct `remote_proxy` discovery and read dispatch,
+  default-deny configuration, exact HTTPS host allowlists, public-address
+  validation, DNS pinning, disabled redirects, structural limits, and immutable
+  carrier handling.
+- **5a:** add operation-wide byte, request, retry, deadline, and cancellation
+  budgets with enforcement at the authorized transport boundary.
+- **5b:** add request-scoped observability and optional per-client rate limits
+  without introducing upstream credentials or retained cross-request state.
+- **5c:** add policy-aware nested-reference decoding, graph depth/hop limits,
+  cycle detection, and one cumulative budget across the graph.
+- Extend the security suite alongside each subphase; unsupported protocols and
+  embedded references remain denied until their corresponding subphase lands.
 
 This phase may live in the Caterva2 repository, but the feature should not be
 presented as safe for arbitrary uploads until both sides are complete.
@@ -710,9 +818,9 @@ presented as safe for arbitrary uploads until both sides are complete.
 
 - Add a `RemoteProxy` API page and include it in the reference toctree.
 - Document the three cache policies and their lifetime guarantees.
-- Add examples for a public Caterva2 source and an allowed fsspec HTTPS/S3
-  source.
-- Document that private sources use server-side credentials.
+- Add examples for a public Caterva2 source and an allowed fsspec HTTPS source;
+  add anonymous S3 if its server adapter is included.
+- Document that private and credential-bearing sources are unsupported.
 - Add a Caterva2 administrator guide for the security policy and operational
   limits.
 
@@ -773,8 +881,8 @@ presented as safe for arbitrary uploads until both sides are complete.
 - Cycles and excessive reference depth are rejected.
 - Byte, range, concurrency, timeout, decompression, and allocation limits are
   enforced.
-- One tenant cannot observe or reuse another tenant's authenticated cache or
-  session.
+- One request cannot observe or reuse another request's temporary assembly
+  state.
 
 ## Acceptance Criteria
 
@@ -791,17 +899,20 @@ The feature is ready when all of the following hold:
    256 MiB for memory and unlimited for disk.
 5. `RemoteProxy.save()` never serializes fetched data or credentials.
 6. Legacy C2Array and persistent cache-proxy files keep their behavior.
-7. Caterva2 rejects remote proxies by default and resolves them only through an
-   administrator-controlled destination and credential policy.
-8. Geometry changes, unavailable credentials, denied destinations, and
-   resource-limit failures produce clear errors.
+7. Caterva2 rejects remote proxies by default and resolves only public,
+   credential-free HTTPS sources allowed by administrator destination policy.
+8. Geometry changes, denied destinations, and resource-limit failures produce
+   clear errors.
 9. API and administrator documentation explain both caching semantics and the
    outbound-request security boundary.
 
 ## Future Considerations
 
-- Which fsspec schemes should a Caterva2 server implementation support?  A
-  narrow starting set such as HTTPS and S3 is preferable to arbitrary plugins.
+- Native `s3://` support is out of scope for Caterva2; public S3 objects use
+  their HTTPS URLs. Reconsidering native object-store protocols requires a
+  separate proposal.
+- Reconsidering authenticated sources requires a separate security plan; it is
+  not an incremental configuration switch.
 - When should pinned references be added, and what exact mismatch exception
   should they raise?
 - Should a future `C2Array.save(as_remote_proxy=True)` convenience exist, or is
@@ -822,5 +933,6 @@ The smallest end-to-end path was implemented as follows:
    not reuse data.
 
 Caterva2-source support and memory/disk policy integration are also implemented
-in the Python client.  Caterva2 server resolution remains a separate follow-up
-behind a default-deny configuration, as described in Phase 5.
+in the Python client. Caterva2 implements the default-deny, public HTTPS server
+baseline described in Phase 5. The remaining server work is ordered in
+`Open Work Queue And Decisions` and the Phase 5 subphases above.

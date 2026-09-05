@@ -3,14 +3,13 @@
 RemoteProxy
 ===========
 
-``RemoteProxy`` is a persistable reference to one remote B2ND array. It accepts
-an fsspec URL or a Caterva2 :ref:`URLPath` and separates the portable reference
-from any runtime data cache.
+``RemoteProxy`` is a persistable proxy for one remote B2ND array. It accepts an
+fsspec URL or a Caterva2 :ref:`URLPath`. With disk caching enabled, its B2ND
+carrier is both the portable descriptor and the bounded compressed-data cache.
 
 The default policy is :attr:`blosc2.CachePolicy.NONE`: each operation reads the
-remote data it needs and no fetched data is retained afterwards. Saving the
-object writes only its source descriptor and array geometry, never fetched data
-or credentials.
+remote data it needs and no fetched data is retained afterwards. Saving such an
+object writes only its source descriptor and array geometry.
 
 .. code-block:: python
 
@@ -35,12 +34,11 @@ URL:
 References are floating: before each data operation, ``RemoteProxy`` checks the
 source identity and verifies that shape, dtype, chunks, and blocks still match
 the captured geometry. A replacement with different geometry is rejected;
-runtime memory or disk cache data is discarded when the source identity moves.
+cached disk data is invalidated when the source identity moves.
 
-Runtime caching is available through :attr:`blosc2.CachePolicy.MEMORY` and
-:attr:`blosc2.CachePolicy.DISK`. Memory caches retain at most 256 MiB of
-compressed payload by default. Disk caches are unlimited by default, but both
-can take an explicit ``max_cache_bytes`` bound. The bound is enforced after an
+Persistent caching is available through :attr:`blosc2.CachePolicy.DISK`.
+Disk caches have a finite 256 MiB compressed-payload bound by default and can
+take an explicit ``max_cache_bytes`` bound. The bound is enforced after an
 operation completes and therefore does not limit its temporary working set or
 returned NumPy array.
 
@@ -53,27 +51,23 @@ returned NumPy array.
         max_cache_bytes=2 * 2**30,
     )
 
-Regardless of its runtime policy, :meth:`RemoteProxy.save
-<blosc2.RemoteProxy.save>` and :meth:`RemoteProxy.to_cframe
-<blosc2.RemoteProxy.to_cframe>` produce a reference-only object that reopens
-with :attr:`blosc2.CachePolicy.NONE`. Local cache paths and authentication data
-are not serialized.
+By default, :meth:`RemoteProxy.save <blosc2.RemoteProxy.save>` and
+:meth:`RemoteProxy.to_cframe <blosc2.RemoteProxy.to_cframe>` include valid warm
+chunks. Pass ``include_cache=False`` for a cold carrier without changing the
+warm original. The cache policy and limit remain in both forms; local paths and
+authentication data are not serialized.
 
 Authentication supplied to a live Caterva2 source is deliberately omitted from
-the carrier. A receiving server resolves private sources with credentials from
-its own administrator-controlled destination mapping; client credentials never
-travel with the reference.
+the carrier. Caterva2's first server implementation resolves public HTTPS
+sources only; client credentials never travel with the proxy.
 
-To cache again after reopening a reference, opt into a runtime policy when
-constructing a new proxy from its source:
+Open a disk-caching carrier in append mode to let misses populate that same
+file. Read-only mode can use warm chunks but does not retain misses:
 
 .. code-block:: python
 
-    reference = blosc2.open("dataset-reference.b2nd")
-    cached = blosc2.RemoteProxy(
-        reference.urlpath,
-        cache_policy=blosc2.CachePolicy.MEMORY,
-    )
+    cached = blosc2.open("dataset-cache.b2nd", mode="a")
+    cached[100:200]
 
 .. warning::
 

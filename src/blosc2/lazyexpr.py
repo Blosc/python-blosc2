@@ -710,7 +710,7 @@ class LazyArray(ABC, blosc2.Operand):
         * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
           section for more info). A :ref:`RemoteProxy` is persisted as its
-          reference-only source descriptor.
+          portable source descriptor rather than embedding its carrier cache.
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
           (including kernels decorated with :func:`blosc2.dsl_kernel`).
         * User metadata can be attached via :attr:`vlmeta`. For in-memory LazyArrays

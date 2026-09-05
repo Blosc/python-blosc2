@@ -651,7 +651,8 @@ def test_http_remote_proxy_checks_identity_without_refetching_cached_data(tmp_pa
     with _ranged_server(path) as (urlbase, requests):
         remote = blosc2.RemoteProxy(
             f"{urlbase}/stable.b2nd",
-            cache_policy=blosc2.CachePolicy.MEMORY,
+            cache_policy=blosc2.CachePolicy.DISK,
+            cache_path=tmp_path / "stable-proxy.b2nd",
         )
         np.testing.assert_array_equal(remote[3:5, 100:120], data[3:5, 100:120])
 

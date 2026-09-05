@@ -234,7 +234,6 @@ class CachePolicy(Enum):
     """Retention policy for data read through a remote proxy."""
 
     NONE = "none"
-    MEMORY = "memory"
     DISK = "disk"
 
 

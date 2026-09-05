@@ -64,12 +64,12 @@ Authentication data is intentionally not serialized.
 ``RemoteProxy``
 ---------------
 
-Remote proxies use a metadata-only carrier containing a versioned Caterva2 or
-fsspec source descriptor. Saving a live proxy is reference-only: its carrier
-reopens with :attr:`blosc2.CachePolicy.NONE`, regardless of whether the live
-proxy used ``MEMORY`` or ``DISK`` caching. The policy is encoded on disk as the
-stable string ``"none"``; runtime cache contents, local cache paths, fetched
-data, and credentials are intentionally not serialized.
+Remote proxies use a B2ND carrier containing a versioned Caterva2 or fsspec
+source descriptor, a ``"none"`` or ``"disk"`` cache policy, and the finite
+disk-cache limit. A disk-caching carrier may also contain fetched compressed
+chunks and its cache bookkeeping. Saving includes valid warm chunks by default;
+``include_cache=False`` produces a cold carrier. Local paths, live filesystem
+objects, and credentials are intentionally not serialized.
 
 Persistent local operands
 -------------------------

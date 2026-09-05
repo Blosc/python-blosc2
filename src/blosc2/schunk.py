@@ -2019,11 +2019,7 @@ def _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency):
     policy = kwargs.pop("cache_policy", None)
     limit = kwargs.pop("max_cache_bytes", None)
     if not policy_present:
-        policy = (
-            blosc2.CachePolicy.DISK
-            if cache_dir is not None or cache_path is not None
-            else blosc2.CachePolicy.MEMORY
-        )
+        policy = blosc2.CachePolicy.DISK if cache_dir is not None or cache_path is not None else blosc2.CachePolicy.NONE
     options = {
         "cache_policy": policy,
         "cache_dir": cache_dir,
@@ -2293,14 +2289,14 @@ def open(
         cache_policy: CachePolicy, optional
             With ``lazy=True`` on a remote source, return a :ref:`RemoteProxy`
             using the requested retention policy. ``NONE`` retains no data
-            between operations, ``MEMORY`` retains compressed data in memory,
-            and ``DISK`` requires ``cache_dir`` or ``cache_path``. When omitted,
-            the existing :ref:`Proxy` behavior is preserved.
-        max_cache_bytes: int or None, optional
+            and ``DISK`` retains compressed chunks in its carrier and requires
+            ``cache_dir`` or ``cache_path`` when creating one from a remote URL.
+            When omitted, the existing :ref:`Proxy` behavior is preserved.
+        max_cache_bytes: int, optional
             With ``lazy=True``, enable a :ref:`RemoteProxy` and bound retained
-            compressed cache payload after each operation. The memory-policy
-            default is 256 MiB; disk is unlimited unless this is explicitly set.
-            This does not bound the current operation's working set or result.
+            compressed cache payload after each operation. ``DISK`` defaults to
+            256 MiB and always has a finite bound. This does not bound the
+            current operation's working set or result.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2358,11 +2354,13 @@ def open(
       formats do. ``cache_dir`` and ``lazy`` above lift that, each
       in its own way.
 
-    * Persistent data handling follows a strict no-hidden-writes rule:
+    * Persistent data handling follows a no-hidden-writes rule except for an
+      explicitly self-caching :ref:`RemoteProxy`:
 
       - ``mode='r'`` is observational only and never mutates the opened object.
-      - ``mode='a'`` / ``mode='w'`` only persist explicit mutations requested by the
-        caller; runtime caches are not serialized back to disk.
+      - ``mode='a'`` permits a ``DISK`` RemoteProxy to retain remote chunks in
+        its own carrier. Other execution caches are not serialized implicitly.
+      - ``mode='w'`` persists explicit mutations requested by the caller.
 
     * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
       this function reconstructs sources backed by a persistent local

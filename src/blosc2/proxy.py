@@ -1120,7 +1120,9 @@ class Proxy(blosc2.Operand):
         except ValueError as exc:
             if getattr(self._schunk_cache, "mode", None) != "r" or "reading mode" not in str(exc):
                 raise
-            return self.src[item]
+            # A range-backed source need not implement NumPy indexing itself.
+            # Assemble this one result in an ephemeral cache instead.
+            return blosc2.Proxy(self.src, _refresh_source=False)[item]
         result = self._cache[item]
         self._enforce_cache_limit(item)
         return result

@@ -20,7 +20,7 @@ import blosc2
 from blosc2.b2objects import make_b2object_carrier, write_b2object_payload
 from blosc2.info import InfoReporter, format_nbytes_info
 
-DEFAULT_MEMORY_CACHE_BYTES = 256 * 2**20
+DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
 
 
 class _PolicyDefault:
@@ -70,13 +70,11 @@ def _normalize_limit(policy, value):
             raise ValueError("max_cache_bytes is not applicable to CachePolicy.NONE")
         return None
     if value is _POLICY_DEFAULT:
-        return DEFAULT_MEMORY_CACHE_BYTES if policy is blosc2.CachePolicy.MEMORY else None
-    if value is None:
-        return None
+        return DEFAULT_DISK_CACHE_BYTES
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError("max_cache_bytes must be a positive integer or None")
+        raise TypeError("max_cache_bytes must be a positive integer")
     if value <= 0:
-        raise ValueError("max_cache_bytes must be a positive integer or None")
+        raise ValueError("max_cache_bytes must be a positive integer")
     return value
 
 
@@ -91,12 +89,10 @@ def _validate_max_concurrency(value: int | None) -> int | None:
 
 
 class RemoteProxy(blosc2.Operand):
-    """A persistable reference to a Caterva2 or fsspec remote array.
+    """A persistable, optionally self-caching reference to a remote array.
 
-    Unlike :class:`Proxy`, the object serialized by :meth:`save` is never the
-    data cache. It is a metadata-only carrier which reopens with
-    :attr:`CachePolicy.NONE`, regardless of the live proxy's runtime policy.
-    Memory and disk caches are runtime choices and are not serialized.
+    With :attr:`CachePolicy.DISK`, the persisted B2ND carrier is itself the
+    bounded cache. With :attr:`CachePolicy.NONE`, reads retain no data.
 
     Parameters
     ----------
@@ -104,9 +100,8 @@ class RemoteProxy(blosc2.Operand):
         A single-file B2ND URL opened through fsspec, or a Caterva2 array
         reference.
     cache_policy: CachePolicy
-        ``NONE`` retains no array data between operations. ``MEMORY`` retains
-        compressed data in memory. ``DISK`` retains it in ``cache_path`` or
-        under ``cache_dir``.
+        ``NONE`` retains no array data. ``DISK`` retains compressed chunks in
+        the RemoteProxy carrier at ``cache_path`` or under ``cache_dir``.
     cache_path: str or path-like, optional
         Exact persistent cache filename. Only valid with ``DISK`` and mutually
         exclusive with ``cache_dir``.
@@ -115,8 +110,7 @@ class RemoteProxy(blosc2.Operand):
         Only valid with ``DISK``.
     max_cache_bytes: int or None, optional
         Post-operation compressed-payload bound. It defaults to 256 MiB for
-        ``MEMORY`` and unlimited for ``DISK``; explicit ``None`` means
-        unlimited. It is not applicable to ``NONE``.
+        ``DISK`` and must always be finite. It is not applicable to ``NONE``.
     max_concurrency: int, optional
         Maximum number of independent remote fetches in flight.
     """
@@ -130,6 +124,7 @@ class RemoteProxy(blosc2.Operand):
         cache_dir=None,
         max_cache_bytes=_POLICY_DEFAULT,
         max_concurrency: int | None = None,
+        _carrier=None,
     ):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
@@ -137,7 +132,12 @@ class RemoteProxy(blosc2.Operand):
             raise ValueError("cache_dir and cache_path are mutually exclusive")
         if cache_policy is not blosc2.CachePolicy.DISK and (cache_dir is not None or cache_path is not None):
             raise ValueError("cache_dir and cache_path require CachePolicy.DISK")
-        if cache_policy is blosc2.CachePolicy.DISK and cache_dir is None and cache_path is None:
+        if (
+            cache_policy is blosc2.CachePolicy.DISK
+            and cache_dir is None
+            and cache_path is None
+            and _carrier is None
+        ):
             raise ValueError("CachePolicy.DISK requires cache_dir or cache_path")
 
         self._cache_policy = cache_policy
@@ -149,9 +149,13 @@ class RemoteProxy(blosc2.Operand):
         self._expected_cparams = self.src.cparams
         self._refresh_lock = threading.Lock()
         self._proxy = None
+        self._carrier = _carrier
+        self._cache_status = None
 
-        if cache_policy is not blosc2.CachePolicy.NONE:
-            self._proxy = self._make_cache_proxy(cache_dir, cache_path)
+        if cache_policy is blosc2.CachePolicy.DISK:
+            if self._carrier is None:
+                self._carrier, self._cache_status = self._open_or_create_carrier(cache_dir, cache_path)
+            self._attach_carrier_cache()
 
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
@@ -172,14 +176,40 @@ class RemoteProxy(blosc2.Operand):
             tuple(src.blocks),
         )
 
-    def _make_cache_proxy(self, cache_dir, cache_path):
-        return blosc2.schunk._lazy_remote_proxy(
+    def _open_or_create_carrier(self, cache_dir, cache_path):
+        if cache_path is not None:
+            path = os.fspath(cache_path)
+            if os.path.isdir(path):
+                raise ValueError("cache_path must name a file, not a directory")
+        else:
+            path = blosc2.schunk.fsspec_cache_path(self._source_identity(), cache_dir, ".b2nd")
+        if os.path.exists(path):
+            kwargs = {"dparams": blosc2.DParams(nthreads=1)}
+            carrier = blosc2.blosc2_ext.open(path, "a", 0, **kwargs)
+            payload = carrier.schunk.vlmeta.get("b2o")
+            if payload != self._payload():
+                raise ValueError(f"the RemoteProxy carrier at {path} has a different specification")
+            stored = carrier.schunk.vlmeta.get("proxy-stamp")
+            current = getattr(self.src, "stamp", None)
+            status = "invalidated/rebuilt" if stored is not None and current is not None and stored != current else "reused"
+            return carrier, status
+        carrier = self._to_b2object_carrier(urlpath=path, contiguous=True, mode="w")
+        return carrier, "created"
+
+    def _attach_carrier_cache(self):
+        if self._carrier is None or self.cache_policy is not blosc2.CachePolicy.DISK:
+            self._proxy = None
+            return
+        if getattr(self.src, "stamp", None) is None:
+            # Without a stable validator, cached bytes cannot be trusted across
+            # independent opens. Reads still work, but misses are not retained.
+            self._proxy = None
+            return
+        self._proxy = blosc2.Proxy(
             self.src,
-            self._source_identity(),
-            cache_dir,
-            cache_path,
-            source_fresh=True,
-            max_cache_bytes=self._cache_limit,
+            _cache=self._carrier,
+            _refresh_source=False,
+            _max_cache_bytes=self._cache_limit,
         )
 
     @staticmethod
@@ -261,16 +291,6 @@ class RemoteProxy(blosc2.Operand):
                 previous_stamp is None or current_stamp is None or current_stamp != previous_stamp
             )
             if source_changed:
-                cache_path = self.cache_path
-                if (
-                    current_stamp is None
-                    and self.cache_policy is blosc2.CachePolicy.DISK
-                    and cache_path is not None
-                    and os.path.exists(cache_path)
-                ):
-                    # With no source identity, an on-disk cache cannot prove
-                    # that its payload belongs to what the URL serves now.
-                    blosc2.remove_urlpath(cache_path)
                 fresh, _ = self._open_source(
                     self._runtime_urlpath,
                     self._max_concurrency,
@@ -282,9 +302,7 @@ class RemoteProxy(blosc2.Operand):
                     fresh.stamp = None
                 self._validate_geometry(self._expected_geometry, src=fresh)
                 self.src = fresh
-                if self.cache_policy is not blosc2.CachePolicy.NONE:
-                    cache_dir = None
-                    self._proxy = self._make_cache_proxy(cache_dir, cache_path)
+                self._attach_carrier_cache()
 
             return self.src if self._proxy is None else self._proxy
 
@@ -311,12 +329,12 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def cache_policy(self) -> blosc2.CachePolicy:
-        """The immutable runtime retention policy."""
+        """The persisted retention policy."""
         return self._cache_policy
 
     @property
     def max_cache_bytes(self) -> int | None:
-        """The immutable post-operation retained-cache bound."""
+        """The persisted post-operation retained-cache bound."""
         return self._cache_limit
 
     @property
@@ -367,17 +385,15 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def cache_path(self):
-        """The runtime disk cache path, or ``None`` for other policies."""
-        if self._proxy is None or self.cache_policy is not blosc2.CachePolicy.DISK:
+        """The self-caching carrier path, or ``None`` for other policies."""
+        if self._carrier is None or self.cache_policy is not blosc2.CachePolicy.DISK:
             return None
-        return self._proxy.urlpath
+        return getattr(self._carrier.schunk, "urlpath", None)
 
     @property
     def cache_status(self):
         """How a persistent disk cache was handled, or ``None`` otherwise."""
-        if self._proxy is None:
-            return None
-        return self._proxy.cache_status
+        return self._cache_status
 
     @property
     def cache_bytes(self) -> int:
@@ -448,9 +464,8 @@ class RemoteProxy(blosc2.Operand):
             "kind": "remote_proxy",
             "version": 1,
             "source": dict(self._source),
-            # Persistence is intentionally reference-only. Runtime cache state
-            # and local cache paths never cross this boundary.
-            "cache_policy": blosc2.CachePolicy.NONE.value,
+            "cache_policy": self.cache_policy.value,
+            "max_cache_bytes": self.max_cache_bytes,
         }
 
     def _to_b2object_carrier(self, **kwargs):
@@ -466,23 +481,48 @@ class RemoteProxy(blosc2.Operand):
         write_b2object_payload(array, self._payload())
         return array
 
-    def to_cframe(self) -> bytes:
-        """Serialize this reference, without cached array data, as a CFrame."""
-        return self._to_b2object_carrier().to_cframe()
+    def _export_carrier(self, include_cache: bool):
+        if not isinstance(include_cache, bool):
+            raise TypeError("include_cache must be a boolean")
+        if include_cache and self._carrier is not None:
+            return self._carrier
+        return self._to_b2object_carrier()
 
-    def save(self, urlpath: str | os.PathLike, contiguous: bool = True, **kwargs) -> None:
-        """Persist this reference without its runtime cache or credentials."""
+    def to_cframe(self, *, include_cache: bool = True) -> bytes:
+        """Serialize the carrier, including valid cached chunks by default."""
+        return self._export_carrier(include_cache).to_cframe()
+
+    def save(
+        self,
+        urlpath: str | os.PathLike,
+        contiguous: bool = True,
+        *,
+        include_cache: bool = True,
+        **kwargs,
+    ) -> None:
+        """Persist the carrier, including valid cached chunks by default."""
         urlpath = os.fspath(urlpath)
+        carrier = self._export_carrier(include_cache)
+        source_path = getattr(carrier.schunk, "urlpath", None)
+        if source_path is not None and os.path.abspath(source_path) == os.path.abspath(urlpath):
+            return
         blosc2.blosc2_ext.check_access_mode(urlpath, "w")
-        kwargs.update(urlpath=urlpath, contiguous=contiguous, mode="w")
-        self._to_b2object_carrier(**kwargs)
+        carrier.save(urlpath, contiguous=contiguous, **kwargs)
 
     @classmethod
     def _from_payload(cls, payload, carrier):
-        if set(payload) != {"kind", "version", "source", "cache_policy"}:
+        if set(payload) != {"kind", "version", "source", "cache_policy", "max_cache_bytes"}:
             raise ValueError("persisted RemoteProxy payload contains unsupported fields")
-        if payload.get("cache_policy") != blosc2.CachePolicy.NONE.value:
-            raise ValueError("persisted RemoteProxy objects must use cache policy 'none'")
+        try:
+            policy = blosc2.CachePolicy(payload.get("cache_policy"))
+        except ValueError as exc:
+            raise ValueError("persisted RemoteProxy has an unsupported cache policy") from exc
+        limit = payload.get("max_cache_bytes")
+        if policy is blosc2.CachePolicy.NONE:
+            if limit is not None:
+                raise ValueError("persisted NONE RemoteProxy cannot have max_cache_bytes")
+        elif isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("persisted DISK RemoteProxy requires positive max_cache_bytes")
         source = payload.get("source")
         if not isinstance(source, dict) or source.get("version") != 1:
             raise ValueError("unsupported RemoteProxy source descriptor")
@@ -504,7 +544,8 @@ class RemoteProxy(blosc2.Operand):
         else:
             raise ValueError(f"unsupported RemoteProxy source kind: {source_kind!r}")
         expected = (carrier.shape, carrier.dtype, carrier.chunks, carrier.blocks)
-        obj = cls(urlpath, cache_policy=blosc2.CachePolicy.NONE)
+        kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
+        obj = cls(urlpath, cache_policy=policy, _carrier=carrier, **kwargs)
         obj._validate_geometry(expected)
         return obj
 
