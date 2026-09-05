@@ -649,6 +649,11 @@ class Proxy(blosc2.Operand):
             self._schunk_cache.vlmeta["proxy-cache-sizes"] = {
                 str(nchunk): size for nchunk, size in self._cache_sizes.items()
             }
+        elif "proxy-cache-sizes" in self._schunk_cache.vlmeta:
+            # A cache may previously have been bounded (for example by a server
+            # quota). Unbounded writes do not maintain this table, so remove it
+            # before a future bounded reader can mistake old sizes for current ones.
+            del self._schunk_cache.vlmeta["proxy-cache-sizes"]
         # Where the source read things to be, so the next run over this cache need
         # not ask again.  Only for a source that can name the bytes it read: an
         # unstamped one cannot tell a replaced frame from the one these positions

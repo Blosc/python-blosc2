@@ -18,6 +18,24 @@ import blosc2.c2array as blosc2_c2array
 from blosc2.b2objects import decode_b2object_payload
 
 
+def test_bounded_unbounded_cache_accounting_transition(tmp_path):
+    url, data = _remote_array("accounting-transition.b2nd", nchunks=3, chunk_size=10_000)
+    path = tmp_path / "transition.b2nd"
+    creator = blosc2.RemoteProxy(
+        url, cache_policy=blosc2.CachePolicy.DISK, cache_path=path, max_cache_bytes=None
+    )
+    bounded = blosc2.Proxy(creator.src, _cache=creator._carrier, _max_cache_bytes=20_000)
+    np.testing.assert_array_equal(bounded[:10_000], data[:10_000])
+    assert creator.schunk.vlmeta.get("proxy-cache-sizes")
+    unbounded = blosc2.open(path, mode="a")
+    np.testing.assert_array_equal(unbounded[:], data)
+    assert "proxy-cache-sizes" not in unbounded.schunk.vlmeta
+    bounded = blosc2.Proxy(unbounded.src, _cache=unbounded._carrier, _max_cache_bytes=20_000)
+    assert bounded._retained_cache_bytes() == unbounded.schunk.cbytes
+    np.testing.assert_array_equal(bounded[:], data)
+    assert bounded._retained_cache_bytes() <= 20_000
+
+
 def _remote_array(name="remote-proxy.b2nd", *, nchunks=4, chunk_size=100_000):
     data = np.random.default_rng(1).integers(0, 256, nchunks * chunk_size, dtype=np.uint8)
     array = blosc2.asarray(data, chunks=(chunk_size,), blocks=(chunk_size,))

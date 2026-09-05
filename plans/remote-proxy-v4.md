@@ -14,8 +14,8 @@ existing HTTPS security boundary.
 2. Support `max_cache_bytes=None` for `CachePolicy.DISK` in both Python-Blosc2 and
    Caterva2. Passing `None` disables LRU cache eviction (unbounded cache size).
    On Caterva2, an unbounded DISK cache operates without eviction when no server
-   customer quota is set, and is clamped to remaining capacity (`retained + available`)
-   when a customer storage quota is configured.
+   customer quota is set. With a customer storage quota, carriers are read-only:
+   valid warm chunks are reused and misses are served without retention.
 
 No server memory-cache registry, aggregate memory-cache quota, new configuration
 knob, carrier format version, or Python-Blosc2 runtime-construction hook is needed.
@@ -94,8 +94,8 @@ downloads required by this proposal.
 | --- | --- | --- | --- | --- |
 | NONE | null | NONE | None | NONE |
 | MEMORY | positive integer; default 268435456 | NONE | None between operations | MEMORY with original limit |
-| DISK | positive integer | DISK | Carrier cache within cap and quota | DISK with positive limit |
-| DISK | null (unbounded) | DISK | Carrier cache within customer quota (unbounded if no quota) | DISK with unbounded cache (no eviction) |
+| DISK | positive integer | DISK | Bounded fills without quota; read-only cache with quota | DISK with positive limit |
+| DISK | null (unbounded) | DISK | Unbounded fills without quota; read-only cache with quota | DISK with unbounded cache (no eviction) |
 
 For a MEMORY carrier:
 
@@ -123,13 +123,13 @@ For an unbounded DISK carrier (`max_cache_bytes=None`):
 - In Python-Blosc2, chunks fetched into the carrier are retained without LRU
   eviction (`proxy.cache_bytes` reflects `carrier.schunk.cbytes`).
 - In Caterva2, `_validated_source()` accepts `max_cache_bytes: null` for `disk`.
-- When server customer storage quota is enabled, `remote_proxy_cache_limit()` clamps
-  the effective limit to remaining capacity (`retained + available`), preventing
-  the unbounded carrier from exceeding server quota. When quota is disabled, the
-  proxy operates without a limit (`None`).
-- `ServerRemoteProxy.current_cache_bytes()` falls back to `carrier.schunk.cbytes`
-  when `proxy-cache-sizes` is not present, since `blosc2.Proxy` does not maintain
-  an LRU size table for unbounded caches.
+- When customer quota is enabled, `remote_proxy_cache_limit()` returns zero:
+  disk caches are consumed read-only and misses use temporary assembly. Payload
+  limits cannot reserve physical metadata growth across all writers and workers.
+  With quota disabled, the proxy operates without a limit (`None`).
+- `ServerRemoteProxy.current_cache_bytes()` uses `carrier.schunk.cbytes`, not
+  potentially stale or user-supplied size tables. Unbounded Proxy writes remove
+  old `proxy-cache-sizes` metadata so later bounded readers rebuild accounting.
 - Exporting a DISK proxy to DISK preserves `max_cache_bytes=None`; exporting to
   MEMORY falls back to `DEFAULT_DISK_CACHE_BYTES` (since MEMORY requires a finite
   positive integer limit); exporting to NONE sets `max_cache_bytes=None`.
@@ -141,8 +141,8 @@ For an unbounded DISK carrier (`max_cache_bytes=None`):
 In `_validated_source()`:
 
 - Keep the exact field, version, source-kind, and default-deny checks.
-- Validate both `"memory"` and `"disk"` using the same positive-integer rule.
-  Reject missing/null limits, booleans, floats, strings, zero, and negatives.
+- MEMORY requires a positive integer; DISK accepts a positive integer or null.
+  Reject missing fields, booleans, floats, strings, zero, and negatives.
 - Keep `"none"` restricted to a null limit and reject unknown policy strings.
 - Update denial messages so MEMORY is recognized rather than described as an
   unsupported policy.
@@ -255,14 +255,13 @@ In Caterva2:
   `max_cache_bytes: null` for `disk`, while rejecting invalid types (booleans,
   strings, non-positive numbers). Keep `memory` strictly requiring positive integers.
 - In `caterva2/services/remote_proxy.py::ServerRemoteProxy`:
-  - In `current_cache_bytes()`: check if `proxy-cache-sizes` is present in `vlmeta`;
-    if absent (as is the case when `blosc2.Proxy` runs with `max_cache_bytes=None`),
-    fall back to `carrier.schunk.cbytes`.
+  - In `current_cache_bytes()`: use physical compressed payload (`schunk.cbytes`)
+    rather than trusting persisted accounting tables.
   - In `_backend()`: handle `self.max_cache_bytes is None` when applying `cache_limit`,
     avoiding `TypeError` in `min()`.
 - In `caterva2/services/server.py::remote_proxy_cache_limit()`: when
   `proxy.max_cache_bytes is None`, return `None` if no customer quota is configured;
-  if customer storage quota is enabled, clamp to available quota (`retained + available`).
+  if customer storage quota is enabled, return zero and reuse disk carriers read-only.
 - Update docs and sample config (`doc/utilities/cat2-server.md`, `caterva2-server.sample.toml`).
 - Add tests in `caterva2/tests/test_remote_proxy.py` and `caterva2/tests/test_api.py`.
 
@@ -309,6 +308,19 @@ Extend `caterva2/tests/test_api.py`:
   unchanged range-advertisement behavior.
 
 ### Verification results
+
+The results below record the original v4 implementation. Review follow-up replaces
+approximate quota clamping with read-only disk caches on quota-enabled servers,
+invalidates stale size tables during unbounded writes, and restores test globals
+using monkeypatch. Strict automatic growth under quota remains deferred until all
+writers share physical-storage reservations; it is not delivered by payload LRU
+limits. Follow-up regressions cover transitions, stale tables, warm read-only hits,
+misses, and concurrent reads of different carriers.
+
+Follow-up verification in the blosc2 environment: 133 passed, 1 skipped in the
+combined targeted client/resolver/API run; 213 passed in the broader Python
+proxy/fsspec/expression regression run. Ruff lint and formatting checks pass in
+each repository using its own working directory and configuration.
 
 The implementation is verified across both repositories in the `blosc2` conda environment:
 

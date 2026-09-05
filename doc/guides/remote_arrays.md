@@ -201,7 +201,7 @@ a = blosc2.open("https://datasets.example.org/big.b2nd", lazy=True)
 a.save("portable.b2nd", cache_policy=blosc2.CachePolicy.NONE)
 ```
 
-Caterva2 servers accept persisted `MEMORY` carriers (under opt-in policy) but execute them without retained caching (identical to `NONE`), repeatedly fetching required regions from the remote source while preserving the requested limit for downloads; older Caterva2 servers reject `MEMORY` resolution entirely. Use `DISK` if you want Caterva2 to retain compressed chunks on the server within its configured quota. Policy-changing or cold exports must use a different destination from the live disk cache.
+Caterva2 servers accept persisted `MEMORY` carriers (under opt-in policy) but execute them without retained caching (identical to `NONE`), repeatedly fetching required regions from the remote source while preserving the requested limit for downloads; older Caterva2 servers reject `MEMORY` resolution entirely. `DISK` retains compressed chunks when no customer quota is configured. On quota-enabled servers, valid warm disk chunks are reused but misses are served without retention; automatic fills await a shared physical-storage reservation mechanism. Policy-changing or cold exports must use a different destination from the live disk cache.
 
 Memory-only access accepts runtime URLs such as signed URLs and fsspec chains. Such URLs cannot be exported or obtained as portable `.source` descriptors; disk caching and reference-only construction continue to require persistable URLs.
 
