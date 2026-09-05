@@ -2010,16 +2010,21 @@ def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str 
     return (cache_dir if cache_dir is not None else cache_storage), cache_path
 
 
-def _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency):
+def _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, *, lazy=False):
     """Return explicit RemoteProxy options, or None for the legacy lazy Proxy path."""
     policy_present = "cache_policy" in kwargs
     limit_present = "max_cache_bytes" in kwargs
-    if not policy_present and not limit_present:
+    if not lazy and not policy_present and not limit_present:
         return None
     policy = kwargs.pop("cache_policy", None)
     limit = kwargs.pop("max_cache_bytes", None)
     if not policy_present:
-        policy = blosc2.CachePolicy.DISK if cache_dir is not None or cache_path is not None else blosc2.CachePolicy.NONE
+        if cache_dir is not None or cache_path is not None:
+            policy = blosc2.CachePolicy.DISK
+        elif lazy:
+            policy = blosc2.CachePolicy.MEMORY
+        else:
+            policy = blosc2.CachePolicy.NONE
     options = {
         "cache_policy": policy,
         "cache_dir": cache_dir,
@@ -2105,7 +2110,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     cache_dir, cache_path = _remote_cache_options(kwargs)
     max_concurrency = kwargs.pop("max_concurrency", None)
     lazy = kwargs.pop("lazy", False)
-    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency)
+    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy)
     requested = [key for key, value in kwargs.items() if value is not None]
     if requested:
         raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
@@ -2162,7 +2167,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     cache_dir, cache_path = _remote_cache_options(kwargs)
     max_concurrency = kwargs.pop("max_concurrency", None)
     lazy = kwargs.pop("lazy", False)
-    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency)
+    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy)
     if lazy:
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
@@ -2255,17 +2260,13 @@ def open(
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
         lazy: bool, optional
-            For an fsspec URL, return a :ref:`Proxy` over a standalone,
-            contiguous :ref:`NDArray` frame and read the byte ranges a slice
-            touches. For a Caterva2 :ref:`URLPath`, return a :ref:`Proxy` over
-            one array-like dataset; stored ``.b2nd`` arrays use byte ranges when
-            available, while HDF5 datasets, ``.b2z`` leaves, and computed arrays
-            fall back to semantic chunk requests. Neither form opens a whole
-            remote store hierarchy. A slice landing in a small part of a large
+            For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteProxy` over
+            the remote dataset and read the byte ranges a slice touches. Neither form opens
+            a whole remote store hierarchy. A slice landing in a small part of a large
             chunk costs only the *blocks* it touches when ranges are available;
             chunks small enough to be one cheap request are still fetched whole.
-            What arrives is kept in memory, under ``cache_dir``, or at the exact
-            ``cache_path`` when either is given.
+            What arrives is kept in memory (defaulting to :attr:`CachePolicy.MEMORY`),
+            under ``cache_dir``, or at the exact ``cache_path`` (as :attr:`CachePolicy.DISK`).
         max_concurrency: int, optional
             Only with ``lazy``: how many fetches to run at once, in a thread
             pool. A slice against an object store is almost entirely round-trip
@@ -2274,29 +2275,28 @@ def open(
             hide, where the pool costs about 10 microseconds per chunk and saves
             nothing.
         cache_dir: str | pathlib.Path, optional
-            For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's local
-            copy — the whole thing, or just the chunks and blocks ``lazy`` has
-            fetched so far. Either way a later run starts from what is already
-            there, and the copy is discarded when the remote no longer matches
-            it. There is no default on purpose, so nothing writes to a disk you
-            did not name.
+            For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's
+            local copy — either the whole thing, or just the chunks and blocks ``lazy`` has fetched so far
+            (as a persistent :ref:`RemoteProxy` with :attr:`CachePolicy.DISK`). Either way a later run
+            starts from what is already there, and the copy is discarded when the remote no longer matches
+            it. There is no default on purpose, so nothing writes to a disk you did not name.
         cache_path: str | pathlib.Path, optional
             With ``lazy=True``, the exact file to use for the remote array's
-            persistent proxy cache. Mutually exclusive with ``cache_dir``.
+            persistent :ref:`RemoteProxy` cache (:attr:`CachePolicy.DISK`). Mutually exclusive with
+            ``cache_dir``.
         cache_storage: str | pathlib.Path, optional
             Deprecated alias for ``cache_dir``. Mutually exclusive with
             ``cache_dir`` and ``cache_path``.
         cache_policy: CachePolicy, optional
             With ``lazy=True`` on a remote source, return a :ref:`RemoteProxy`
-            using the requested retention policy. ``NONE`` retains no data
-            and ``DISK`` retains compressed chunks in its carrier and requires
-            ``cache_dir`` or ``cache_path`` when creating one from a remote URL.
-            When omitted, the existing :ref:`Proxy` behavior is preserved.
+            using the requested retention policy (``NONE``, ``MEMORY``, or ``DISK``).
+            When omitted, passing ``cache_dir`` or ``cache_path`` defaults to
+            ``CachePolicy.DISK``, while omitting them defaults to ``CachePolicy.MEMORY``.
         max_cache_bytes: int, optional
-            With ``lazy=True``, enable a :ref:`RemoteProxy` and bound retained
-            compressed cache payload after each operation. ``DISK`` defaults to
-            256 MiB and always has a finite bound. This does not bound the
-            current operation's working set or result.
+            With ``lazy=True``, bound retained compressed cache payload for a
+            :ref:`RemoteProxy` after each operation. Defaults to 256 MiB for both
+            ``DISK`` and ``MEMORY``, and always has a finite bound. This does not bound
+            the current operation's working set or result.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2338,10 +2338,9 @@ def open(
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
-      returns a :ref:`C2Array`; with ``lazy=True`` it returns a :ref:`Proxy`,
-      optionally persisted under ``cache_dir`` or at ``cache_path``. Supplying
-      ``cache_policy`` or ``max_cache_bytes`` explicitly selects a
-      :ref:`RemoteProxy` instead.
+      returns a :ref:`C2Array`. With ``lazy=True``, it returns a :ref:`RemoteProxy`
+      (defaulting to ``CachePolicy.DISK`` when ``cache_dir`` or ``cache_path`` is
+      provided, and ``CachePolicy.MEMORY`` otherwise).
       Authenticated users sharing a machine must use separate caches.
 
     * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
@@ -2351,8 +2350,9 @@ def open(
       A plain URL read rebuilds the object from a cframe held in memory, so it
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
       archive rather than a cframe, and needs ``cache_dir`` like the directory
-      formats do. ``cache_dir`` and ``lazy`` above lift that, each
-      in its own way.
+      formats do. With ``lazy=True``, it returns a :ref:`RemoteProxy` (using
+      ``CachePolicy.DISK`` with ``cache_dir`` or ``cache_path``, and
+      ``CachePolicy.MEMORY`` otherwise).
 
     * Persistent data handling follows a no-hidden-writes rule except for an
       explicitly self-caching :ref:`RemoteProxy`:
@@ -2362,9 +2362,9 @@ def open(
         its own carrier. Other execution caches are not serialized implicitly.
       - ``mode='w'`` persists explicit mutations requested by the caller.
 
-    * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
-      this function reconstructs sources backed by a persistent local
-      :ref:`SChunk` or :ref:`NDArray`, an fsspec URL, or a remote
+    * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`
+      or a :ref:`RemoteProxy`, this function reconstructs sources backed by a
+      persistent local :ref:`SChunk` or :ref:`NDArray`, an fsspec URL, or a remote
       :ref:`C2Array`. Custom proxy sources must be recreated explicitly because
       their Python class and runtime state are not stored in the cache.
 

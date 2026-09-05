@@ -71,30 +71,38 @@ def test_remote_proxy_array_operand_interface():
     assert url in dict(expression.info_items)["operands"].values()
 
 
-def test_open_selects_remote_proxy_only_for_explicit_policy(tmp_path):
+def test_open_lazy_selects_remote_proxy(tmp_path):
     url, data = _remote_array("open-policy.b2nd")
 
-    legacy = blosc2.open(url, lazy=True)
-    assert isinstance(legacy, blosc2.Proxy)
-    assert not isinstance(legacy, blosc2.RemoteProxy)
+    mem = blosc2.open(url, lazy=True)
+    assert isinstance(mem, blosc2.RemoteProxy)
+    assert mem.cache_policy is blosc2.CachePolicy.MEMORY
+    assert mem.cache_path is None
+    assert mem.max_cache_bytes == 256 * 2**20
+    np.testing.assert_array_equal(mem[:100_000], data[:100_000])
 
     none = blosc2.open(url, lazy=True, cache_policy=blosc2.CachePolicy.NONE)
     assert isinstance(none, blosc2.RemoteProxy)
     assert none.cache_policy is blosc2.CachePolicy.NONE
     np.testing.assert_array_equal(none[:100_000], data[:100_000])
 
-    with pytest.raises(ValueError, match="not applicable"):
-        blosc2.open(url, lazy=True, max_cache_bytes=120_000)
+    mem_bounded = blosc2.open(url, lazy=True, max_cache_bytes=120_000)
+    assert isinstance(mem_bounded, blosc2.RemoteProxy)
+    assert mem_bounded.cache_policy is blosc2.CachePolicy.MEMORY
+    assert mem_bounded.max_cache_bytes == 120_000
 
     disk = blosc2.open(
         url,
         lazy=True,
-        cache_policy=blosc2.CachePolicy.DISK,
         cache_path=tmp_path / "open-cache.b2nd",
         max_cache_bytes=120_000,
     )
     assert isinstance(disk, blosc2.RemoteProxy)
     assert disk.cache_policy is blosc2.CachePolicy.DISK
+    assert disk.max_cache_bytes == 120_000
+
+    with pytest.raises(NotImplementedError, match="require lazy=True"):
+        blosc2.open(url, lazy=False, max_cache_bytes=120_000)
 
 
 def test_none_does_not_retain_remote_data():
@@ -260,13 +268,24 @@ def test_runtime_cache_is_invalidated_after_same_geometry_replacement(tmp_path):
     assert proxy.traffic is traffic
 
 
-def test_reference_rejects_runtime_cache_policy_in_payload():
+def test_reference_rejects_unknown_cache_policy_in_payload():
     url, _ = _remote_array("bad-persisted-policy.b2nd", nchunks=1, chunk_size=100)
     carrier = blosc2.ndarray_from_cframe(blosc2.RemoteProxy(url).to_cframe())
     payload = dict(carrier.schunk.vlmeta["b2o"])
-    payload["cache_policy"] = "memory"
+    payload["cache_policy"] = "unknown_policy"
 
     with pytest.raises(ValueError, match="unsupported cache policy"):
+        decode_b2object_payload(payload, carrier=carrier)
+
+
+def test_reference_rejects_memory_policy_without_positive_limit_in_payload():
+    url, _ = _remote_array("bad-memory-policy.b2nd", nchunks=1, chunk_size=100)
+    carrier = blosc2.ndarray_from_cframe(blosc2.RemoteProxy(url).to_cframe())
+    payload = dict(carrier.schunk.vlmeta["b2o"])
+    payload["cache_policy"] = "memory"
+    payload["max_cache_bytes"] = None
+
+    with pytest.raises(ValueError, match="persisted MEMORY RemoteProxy requires positive max_cache_bytes"):
         decode_b2object_payload(payload, carrier=carrier)
 
 
@@ -521,3 +540,72 @@ def test_persistence_rejects_credentials_and_chained_urls(url):
 def test_fsspec_refs_reject_credentials(url):
     with pytest.raises(ValueError):
         blosc2.Ref.fsspec_ref(url)
+
+
+def test_memory_cache_eviction_and_retention():
+    url, data = _remote_array("mem-evict.b2nd", nchunks=5, chunk_size=20_000)
+    proxy = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.MEMORY,
+        max_cache_bytes=50_000,
+    )
+    assert proxy.cache_policy is blosc2.CachePolicy.MEMORY
+    assert proxy.max_cache_bytes == 50_000
+    assert proxy.cache_path is None
+    assert proxy.cache is not None
+
+    proxy.traffic.reset()
+    np.testing.assert_array_equal(proxy[:20_000], data[:20_000])
+    assert proxy.traffic.requests > 0
+
+    proxy.traffic.reset()
+    np.testing.assert_array_equal(proxy[:20_000], data[:20_000])
+    assert proxy.traffic.requests == 0
+
+    np.testing.assert_array_equal(proxy[:], data)
+    assert proxy.cache_bytes <= 50_000
+
+
+def test_memory_cache_fetch_and_afetch():
+    url, _ = _remote_array("mem-fetch.b2nd", nchunks=3, chunk_size=10_000)
+    proxy = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.MEMORY,
+    )
+    cached_container = proxy.fetch(slice(0, 10_000))
+    assert cached_container is proxy.cache
+    assert proxy.cache_bytes > 0
+
+    async_container = asyncio.run(proxy.afetch(slice(10_000, 20_000)))
+    assert async_container is proxy.cache
+
+
+def test_memory_proxy_save_and_reopen(tmp_path):
+    url, data = _remote_array("mem-save.b2nd", nchunks=2, chunk_size=10_000)
+    proxy = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.MEMORY,
+        max_cache_bytes=100_000,
+    )
+    save_path = tmp_path / "saved_memory_proxy.b2nd"
+    proxy.save(save_path)
+
+    reopened = blosc2.open(save_path, mode="r")
+    assert isinstance(reopened, blosc2.RemoteProxy)
+    assert reopened.cache_policy is blosc2.CachePolicy.MEMORY
+    assert reopened.max_cache_bytes == 100_000
+    assert reopened.cache_path is None
+    np.testing.assert_array_equal(reopened[:], data)
+
+
+def test_remote_proxy_fetch_rejects_none_policy():
+    url, _ = _remote_array("none-fetch.b2nd", nchunks=1, chunk_size=100)
+    proxy = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.NONE)
+    with pytest.raises(
+        NotImplementedError, match=r"fetch requires CachePolicy\.DISK or CachePolicy\.MEMORY"
+    ):
+        proxy.fetch()
+    with pytest.raises(
+        NotImplementedError, match=r"afetch requires CachePolicy\.DISK or CachePolicy\.MEMORY"
+    ):
+        asyncio.run(proxy.afetch())

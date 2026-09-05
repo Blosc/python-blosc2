@@ -36,6 +36,10 @@ source identity and verifies that shape, dtype, chunks, and blocks still match
 the captured geometry. A replacement with different geometry is rejected;
 cached disk data is invalidated when the source identity moves.
 
+Ephemeral in-memory caching is available through :attr:`blosc2.CachePolicy.MEMORY`.
+Fetched chunks are kept in RAM, bounded by a finite 256 MiB compressed-payload limit by default
+(customizable via ``max_cache_bytes``) with automatic LRU eviction.
+
 Persistent caching is available through :attr:`blosc2.CachePolicy.DISK`.
 Disk caches have a finite 256 MiB compressed-payload bound by default and can
 take an explicit ``max_cache_bytes`` bound. The bound is enforced after an
@@ -50,6 +54,11 @@ returned NumPy array.
         cache_path="dataset-cache.b2nd",
         max_cache_bytes=2 * 2**30,
     )
+
+When opening a remote array via :func:`blosc2.open` with ``lazy=True``, a :class:`RemoteProxy`
+is always returned: specifying ``cache_dir`` or ``cache_path`` configures it with
+:attr:`blosc2.CachePolicy.DISK`, while omitting them configures it with
+:attr:`blosc2.CachePolicy.MEMORY`.
 
 By default, :meth:`RemoteProxy.save <blosc2.RemoteProxy.save>` and
 :meth:`RemoteProxy.to_cframe <blosc2.RemoteProxy.to_cframe>` include valid warm
@@ -81,6 +90,8 @@ file. Read-only mode can use warm chunks but does not retain misses:
 
     .. automethod:: __init__
     .. automethod:: __getitem__
+    .. automethod:: fetch
+    .. automethod:: afetch
     .. automethod:: get_chunk
     .. automethod:: aget_chunk
     .. automethod:: save
@@ -93,11 +104,13 @@ file. Read-only mode can use warm chunks but does not retain misses:
     .. autoattribute:: cparams
     .. autoattribute:: nbytes
     .. autoattribute:: info
+    .. autoattribute:: cache
     .. autoattribute:: cache_bytes
     .. autoattribute:: cache_policy
     .. autoattribute:: max_cache_bytes
     .. autoattribute:: cache_path
     .. autoattribute:: cache_status
+    .. autoattribute:: schunk
     .. autoattribute:: source
     .. autoattribute:: traffic
     .. autoattribute:: urlpath

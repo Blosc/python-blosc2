@@ -1,6 +1,8 @@
 # Working with Remote Arrays
 
-Blosc2 can open an array without downloading it first. Metadata is read at open time; array data is fetched only when a slice needs it and is then kept in a local cache.
+Blosc2 can open remote arrays without downloading them first. Metadata is read instantly at open time; array data is fetched only when a slice needs it and is then kept in a local cache.
+
+All lazy remote array access in Python-Blosc2 is unified under {ref}`RemoteProxy`.
 
 ## Choose a remote route
 
@@ -34,7 +36,7 @@ A `URLPath` always means Caterva2. If its `urlbase` is omitted, the server comes
 
 ### What each route supports
 
-Both routes return a {ref}`Proxy` when opened with `lazy=True`, so slicing and caching work the same way. Their sources differ:
+When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing an identical user interface for slicing, caching, and introspection. What differs is the types of remote objects each backend can open:
 
 | Remote object | fsspec URL | Caterva2 `URLPath` |
 |---|---|---|
@@ -44,33 +46,46 @@ Both routes return a {ref}`Proxy` when opened with `lazy=True`, so slicing and c
 | Lazy or computed array | No | Yes |
 | Whole `.b2z` `TreeStore` or `DictStore` | No | No; open one array-like leaf |
 
-fsspec supplies byte ranges. Python-Blosc2 parses the `.b2nd` frame to discover its geometry and chunk offsets, making this route direct and efficient for standalone arrays.
+- **fsspec** supplies byte ranges. Python-Blosc2 parses the remote `.b2nd` frame to discover its geometry and chunk offsets, making this route direct and efficient for standalone arrays.
+- **Caterva2** understands dataset paths, array metadata, and slicing. It can therefore expose array-like data that is not stored as a standalone Blosc2 frame, as well as apply authentication or server-side computation. Use Caterva2's navigation API to find a leaf in a remote hierarchy, then open that leaf with a `URLPath`.
 
-Caterva2 understands dataset paths, array metadata, and slicing. It can therefore expose array-like data that is not stored as a standalone Blosc2 frame, as well as apply authentication or server-side computation. Use Caterva2's navigation API to find a leaf in a remote hierarchy, then open that leaf with a `URLPath`.
+`lazy=True` changes *when* data is fetched; it does not expand the underlying storage formats supported by either route.
 
-`lazy=True` changes when data is fetched; it does not expand the formats supported by either route.
+## Cache policies and memory management
 
-## Choose a cache
+Every lazy open uses a cache policy. By default, fetched data is cached in memory and bounded to prevent excessive RAM consumption.
 
-Every lazy open creates a cache. By default it lives in memory and disappears with the proxy:
+### In-memory caching (`CachePolicy.MEMORY` — Default)
+
+When opened without disk options, `blosc2.open(..., lazy=True)` retains fetched chunks in RAM as a {ref}`RemoteProxy` with {attr}`CachePolicy.MEMORY <blosc2.CachePolicy.MEMORY>`:
 
 ```python
 a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
-a[10:12, 500:600]  # fetched and cached
-a[10:12, 500:600]  # served from memory
+a[10:12, 500:600]  # fetched and cached in RAM
+a[10:12, 500:600]  # served from memory cache (no network traffic)
 ```
 
-Set `cache_dir` to let Blosc2 manage a cache file inside a directory:
+To prevent memory leaks or out-of-memory errors on massive datasets, in-memory caches are bounded by `max_cache_bytes` (defaults to 256 MiB) with automatic LRU eviction:
+
+```python
+# Custom in-memory limit (e.g. 512 MiB):
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True, max_cache_bytes=512 * 2**20)
+```
+
+### Persistent disk caching (`CachePolicy.DISK`)
+
+Set `cache_dir` or `cache_path` to persist fetched data across sessions. Providing either option with `lazy=True` configures the {ref}`RemoteProxy` to use persistent disk caching ({attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`):
 
 ```python
 url = "s3://bucket/big.b2nd"
 
+# Blosc2 manages a cache file inside a directory:
 a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
 a[100:110, :50]  # fetched and stored under ./b2cache
 
-# A later process can reuse the same cache.
+# A later process can reuse the same cache:
 a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
-a[100:110, :50]  # no request
+a[100:110, :50]  # served from local disk (no network traffic)
 ```
 
 Use `cache_path` instead when the cache should have an exact filename:
@@ -79,14 +94,78 @@ Use `cache_path` instead when the cache should have an exact filename:
 a = blosc2.open(url, lazy=True, cache_path="big-cache.b2nd")
 ```
 
-In both cases, the cache is an ordinary `.b2nd` array that starts small and grows as regions are read. `cache_dir` and `cache_path` are mutually exclusive.
+In both cases, the cache is an ordinary `.b2nd` carrier file managed as a {ref}`RemoteProxy` with {attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`. It starts small and retains compressed chunks up to a finite bound (256 MiB by default, or customized via `max_cache_bytes`). `cache_dir` and `cache_path` are mutually exclusive.
 
 Authenticated Caterva2 caches must be private to one user. Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
 
+### Stateless streaming (`CachePolicy.NONE`)
+
+To stream data without retaining any chunks after each operation, specify {attr}`CachePolicy.NONE <blosc2.CachePolicy.NONE>`:
+
+```python
+stream = blosc2.open(
+    "s3://bucket/big.b2nd",
+    lazy=True,
+    cache_policy=blosc2.CachePolicy.NONE,
+)
+```
+
+Each read pulls only the bytes required for the slice and retains no cache payload.
+
+> [!NOTE]
+> `max_cache_bytes` is applied after each operation completes. It bounds the retained compressed cache payload; it does not limit the temporary working set or the decompressed NumPy array requested by the caller.
+
+## Only what a slice touches
+
+Blosc2 arrays are compressed in chunks, which are divided into smaller blocks. For a small slice, fetching only its blocks can avoid transferring most of a large chunk.
+
+![A proxy fetches missing regions from the remote array into its local cache. The fetch method returns the cache container, while indexing returns only the requested values.](../tutorials/images/remote_proxy.png)
+
+Purple regions are cached; red regions are still remote. The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk. `fetch()` fills and returns the cache container, whereas indexing returns only the requested values.
+
+The proxy chooses blocks or whole chunks automatically. It fetches a whole chunk when most of its blocks are needed or when the source cannot expose block ranges, as with computed Caterva2 datasets. Independent reads overlap, with up to eight concurrent requests by default; use `max_concurrency=1` when concurrency does not help.
+
+Stepped slices also use the block grid. For example, `a[::5]` can reduce transfers along an axis whose blocks do not already span that axis.
+
+### Explicit cache pre-fetching
+
+You can warm the cache proactively using `fetch()` or `afetch()`:
+
+```python
+# Synchronously pre-fetch a region into the cache:
+cached_container = a.fetch(slice(0, 10_000))
+
+# Or asynchronously in an async event loop:
+cached_container = await a.afetch(slice(10_000, 20_000))
+```
+
+The underlying local cache container (an `NDArray`) can also be accessed directly via `a.cache`.
+
+## Measure network traffic
+
+{ref}`RemoteProxy`, {ref}`C2Array`, and {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`. The count starts when the remote source is opened, so it includes metadata as well as array data:
+
+```python
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+
+a.traffic.reset()
+corner = a[0, :100, :100]
+print(a.traffic)  # requests and bytes fetched
+
+a.traffic.reset()
+corner = a[0, :100, :100]
+print(a.traffic)  # Traffic(requests=0, nbytes=0) -> cache hit!
+```
+
+Use `reset()` or subtract two readings to measure one operation. `traffic` is `None` for a local source because no network transport exists.
+
+`examples/c2array-traffic.py` compares block, chunk, and cached reads against a live Caterva2 dataset.
+
+## Persist and reopen remote references
+
 ### Persist a self-caching remote proxy
 
-Use {ref}`RemoteProxy` when the `.b2nd` file should carry a portable remote
-descriptor and, optionally, its own bounded persistent cache:
+Use {ref}`RemoteProxy` directly when a `.b2nd` file should carry a portable remote descriptor and, optionally, its own bounded persistent cache:
 
 ```python
 remote = blosc2.RemoteProxy(
@@ -96,13 +175,9 @@ remote = blosc2.RemoteProxy(
 remote.save("big-reference.b2nd")
 ```
 
-The saved object contains source and geometry metadata but no credentials. With
-`CachePolicy.NONE`, repeated reads contact the source and do not mutate the
-carrier.
+The saved object contains source and geometry metadata but no credentials. With `CachePolicy.NONE`, repeated reads contact the source and do not mutate the carrier.
 
-`RemoteProxy` also supports bounded disk caching. The proxy carrier itself is
-the cache, with a finite 256 MiB compressed-payload bound by default or an
-explicit bound:
+With `CachePolicy.DISK`, the proxy carrier itself is the cache:
 
 ```python
 remote = blosc2.RemoteProxy(
@@ -113,13 +188,7 @@ remote = blosc2.RemoteProxy(
 )
 ```
 
-Saving and serializing preserve valid warm chunks by default. Pass
-`include_cache=False` to `save()` or `to_cframe()` to export a cold copy without
-mutating the warm carrier. A saved disk proxy opened with `mode="a"` retains
-misses in itself; `mode="r"` can use warm chunks but does not retain misses.
-
-The bound is applied after each operation. It does not limit the temporary
-working set or a NumPy result requested by the caller.
+Saving and serializing preserve valid warm chunks by default. Pass `include_cache=False` to `save()` or `to_cframe()` to export a cold reference copy without mutating the warm carrier.
 
 ### Reopen a cache file independently
 
@@ -133,58 +202,22 @@ a[100:110, :50]  # cached data stays local
 a[500:510, :50]  # missing data is fetched from the recorded source and cached
 ```
 
-This cache is operational, but not necessarily self-contained. Regions not fetched previously still require the original source. Opening with `mode="a"` lets newly fetched regions extend the cache; the default `mode="r"` keeps the cache file unchanged.
+Opening an on-disk carrier with `mode="a"` returns a {ref}`RemoteProxy` and lets newly fetched regions extend the cache; opening with `mode="r"` keeps the cache file unchanged. Legacy proxy caches created by older Blosc2 versions are also detected and reopened as a {ref}`Proxy`.
 
 Independent reopening works for fsspec URLs, Caterva2 datasets, and persistent local Blosc2 sources. The required runtime environment must still be available: fsspec backends and their configuration must be installed, local source paths must remain valid, and authenticated Caterva2 caches must be reopened inside an equivalent {func}`blosc2.c2context`. Caterva2 credentials are not stored in the cache file.
 
 An arbitrary custom {ref}`ProxyNDSource` cannot be reconstructed because its Python class and runtime state are not serialized. In that case, recreate the source explicitly and attach the existing cache with `blosc2.Proxy(source, urlpath="big-cache.b2nd", mode="a")`.
-
-## Only what a slice touches
-
-Blosc2 arrays are compressed in chunks, which are divided into smaller blocks. For a small slice, fetching only its blocks can avoid transferring most of a large chunk.
-
-![A proxy fetches missing regions from the remote array into its local cache. The fetch method returns the cache container, while indexing returns only the requested values.](../tutorials/images/remote_proxy.png)
-
-Purple regions are cached; red regions are still remote. The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk. `fetch()` fills and returns the cache container, whereas indexing returns only the requested values.
-
-The proxy chooses blocks or whole chunks automatically. It fetches a whole chunk when most of its blocks are needed or when the source cannot expose block ranges, as with computed Caterva2 datasets. Independent reads overlap, with up to eight concurrent requests by default; use `max_concurrency=1` when concurrency does not help.
-
-Stepped slices also use the block grid. For example, `p[::5]` can reduce transfers along an axis whose blocks do not already span that axis. A bare {ref}`C2Array` does not accept stepped slices; its proxy does.
-
-### Measure network traffic
-
-{ref}`C2Array` and remote {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`. The count starts when the remote source is opened, so it includes metadata as well as array data:
-
-```python
-source = blosc2.C2Array(
-    "@public/examples/kevlar-tomo.b2nd",
-    urlbase="https://cat2.cloud/demo",
-)
-p = blosc2.Proxy(source)
-
-p.traffic.reset()
-corner = p[0, :100, :100]
-print(p.traffic)  # requests and bytes fetched
-
-p.traffic.reset()
-p[0, :100, :100]
-print(p.traffic)  # Traffic(requests=0, nbytes=0)
-```
-
-Use `reset()` or subtract two readings to measure one operation. `Proxy.traffic` is `None` for a local source because no network transport exists.
-
-`examples/c2array-traffic.py` compares block, chunk, and cached reads against a live Caterva2 dataset.
 
 ## Retrieve scattered points
 
 A proxy maps coordinate arrays and boolean masks to the blocks that contain their selected points:
 
 ```python
-p[rows, :100]
-p[mask]
+a[rows, :100]
+a[mask]
 ```
 
-For Caterva2, a bare {ref}`C2Array` can be substantially more efficient: it sends the coordinates to the server, which returns only the selected values. Prefer direct `C2Array` indexing for sparse, one-off point retrieval; prefer a proxy when reuse through a local cache matters.
+For Caterva2, a bare {ref}`C2Array` can be substantially more efficient for one-off point queries: it sends coordinates to the server, which evaluates the selection and returns only the selected values. Prefer direct `C2Array` indexing for sparse, one-off point retrieval; prefer a proxy when reuse through a local cache matters.
 
 ## Handle remote changes
 
@@ -286,4 +319,4 @@ For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; th
 - `examples/ndarray/rw-fsspec.py` — fsspec reading and writing examples.
 - `examples/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
 - `examples/c2array-traffic.py` — block, chunk, and cached transfer sizes.
-- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`RemoteProxy`, and {ref}`Traffic` — API reference pages.
+- {ref}`RemoteProxy`, {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.

@@ -514,7 +514,7 @@ def test_lazy_with_exact_cache_path(tmp_path):
 
     p = blosc2.open(url, lazy=True, cache_path=cache_path)
     assert np.array_equal(p[0:100], a[0:100])
-    assert p.urlpath == str(cache_path)
+    assert p.cache_path == str(cache_path)
     assert cache_path.is_file()
 
     q = blosc2.open(url, lazy=True, cache_path=cache_path)
@@ -527,9 +527,35 @@ def test_exact_cache_path_reopens_as_lazy_fsspec_proxy(tmp_path, monkeypatch):
     cache_path = tmp_path / "independent.b2nd"
     p = blosc2.open(url, lazy=True, cache_path=cache_path)
     assert np.array_equal(p[0:100], a[0:100])
-    source_meta = p.schunk.meta["proxy-source"]
-    assert source_meta["source_kind"] == "fsspec"
-    assert source_meta["urlpath"] == url
+    assert p.source["kind"] == "fsspec"
+    assert p.source["urlpath"] == url
+    del p
+
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    reopened = blosc2.open(cache_path, mode="a")
+    assert isinstance(reopened, blosc2.RemoteProxy)
+    assert isinstance(reopened.src, blosc2.FsspecNDSource)
+    assert np.array_equal(reopened[0:100], a[0:100])
+    assert fetched == []
+    assert np.array_equal(reopened[500:600], a[500:600])
+    assert fetched == [5]
+
+
+def test_legacy_proxy_cache_reopens_as_proxy(tmp_path, monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("legacycache.b2nd", a)
+    cache_path = tmp_path / "legacy.b2nd"
+    src = blosc2.FsspecNDSource(url)
+    p = blosc2.Proxy(src, urlpath=cache_path, mode="a")
+    assert np.array_equal(p[0:100], a[0:100])
+    assert "proxy-source" in p.schunk.meta
     del p
 
     fetched = []
@@ -613,7 +639,7 @@ def test_http_url_is_read_through_fsspec(tmp_path):
 
         requests.clear()
         lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_dir=str(tmp_path / "cs"))
-        assert isinstance(lazy, blosc2.Proxy)
+        assert isinstance(lazy, blosc2.RemoteProxy)
         assert isinstance(lazy.src, blosc2.FsspecNDSource)
         assert ":etag:" in lazy.src.stamp
         assert requests == ["bytes=0-8191"]  # metadata and identity, one round trip

@@ -333,16 +333,17 @@ def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
     proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3)
 
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
-    assert isinstance(proxy, blosc2.Proxy)
+    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert proxy.cache_policy is blosc2.CachePolicy.MEMORY
     assert isinstance(proxy.src, blosc2.C2Array)
     assert proxy.src.max_concurrency == 3
-    assert proxy.urlpath is None
+    assert proxy.cache_path is None
 
     result = proxy[0:5, 0:10]
     served = len(srv.log)
     assert np.array_equal(result, data[0:5, 0:10])
     assert np.array_equal(proxy[0:5, 0:10], result)
-    assert len(srv.log) == served
+    assert [endpoint for endpoint, _, _ in srv.log[served:]] == ["info"]
 
 
 def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_blocks):
@@ -353,15 +354,17 @@ def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_bl
 
     srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    assert isinstance(proxy, blosc2.RemoteProxy)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     del proxy
 
     srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    assert isinstance(proxy, blosc2.RemoteProxy)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info", "info"]
     assert len(list(cache_dir.glob("*.b2nd"))) == 1
 
 
@@ -372,19 +375,20 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
     cache_path = tmp_path / "chosen.b2nd"
 
     proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path)
+    assert isinstance(proxy, blosc2.RemoteProxy)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    assert proxy.urlpath == str(cache_path)
-    assert proxy.schunk.meta["proxy-source"]["source_kind"] == "caterva2"
+    assert proxy.cache_path == str(cache_path)
+    assert proxy.source["kind"] == "caterva2"
     del proxy
 
     srv.log.clear()
     proxy = blosc2.open(cache_path, mode="a")
-    assert isinstance(proxy, blosc2.Proxy)
+    assert isinstance(proxy, blosc2.RemoteProxy)
     assert isinstance(proxy.src, blosc2.C2Array)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info", "info"]
     assert np.array_equal(proxy[100:105, 0:10], data[100:105, 0:10])
-    assert len(srv.log) > 1
+    assert any(endpoint != "info" for endpoint, _, _ in srv.log)
 
 
 def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, server):
@@ -397,7 +401,8 @@ def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, ser
     with blosc2.c2context(urlbase=array.urlbase, auth_token=token):
         proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
         assert np.array_equal(proxy[0:5, 0:5], data[0:5, 0:5])
-        assert proxy.schunk.meta["proxy-source"]["urlpath"][2] is None
+        assert proxy.source["kind"] == "caterva2"
+        assert "auth_token" not in proxy.source
 
         cache = next(cache_dir.glob("*.b2nd"))
         reopened = blosc2.open(cache, mode="a")
