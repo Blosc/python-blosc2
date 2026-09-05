@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 
-import fsspec
 import numpy as np
 import pytest
 
 import blosc2
 import blosc2.c2array as blosc2_c2array
 from blosc2.b2objects import decode_b2object_payload
+
+fsspec = pytest.importorskip("fsspec")
 
 
 def test_bounded_unbounded_cache_accounting_transition(tmp_path):
