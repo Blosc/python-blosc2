@@ -2292,11 +2292,12 @@ def open(
             using the requested retention policy (``NONE``, ``MEMORY``, or ``DISK``).
             When omitted, passing ``cache_dir`` or ``cache_path`` defaults to
             ``CachePolicy.DISK``, while omitting them defaults to ``CachePolicy.MEMORY``.
-        max_cache_bytes: int, optional
+        max_cache_bytes: int or None, optional
             With ``lazy=True``, bound retained compressed cache payload for a
             :ref:`RemoteProxy` after each operation. Defaults to 256 MiB for both
-            ``DISK`` and ``MEMORY``, and always has a finite bound. This does not bound
-            the current operation's working set or result.
+            ``DISK`` and ``MEMORY``. Passing ``None`` with ``DISK`` disables cache
+            eviction (unbounded cache). This does not bound the current operation's
+            working set or result.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.

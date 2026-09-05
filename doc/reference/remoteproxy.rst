@@ -42,7 +42,8 @@ Fetched chunks are kept in RAM, bounded by a finite 256 MiB compressed-payload l
 
 Persistent caching is available through :attr:`blosc2.CachePolicy.DISK`.
 Disk caches have a finite 256 MiB compressed-payload bound by default and can
-take an explicit ``max_cache_bytes`` bound. The bound is enforced after an
+take an explicit ``max_cache_bytes`` bound, or ``max_cache_bytes=None`` for an
+unbounded cache that never evicts chunks. When bounded, the limit is enforced after an
 operation completes and therefore does not limit its temporary working set or
 returned NumPy array.
 
@@ -62,9 +63,26 @@ is always returned: specifying ``cache_dir`` or ``cache_path`` configures it wit
 
 By default, :meth:`RemoteProxy.save <blosc2.RemoteProxy.save>` and
 :meth:`RemoteProxy.to_cframe <blosc2.RemoteProxy.to_cframe>` include valid warm
-chunks. Pass ``include_cache=False`` for a cold carrier without changing the
+chunks for DISK proxies; MEMORY proxies always export cold carriers.
+Pass ``include_cache=False`` for a cold carrier without changing the
 warm original. The cache policy and limit remain in both forms; local paths and
 authentication data are not serialized.
+
+Pass ``cache_policy=blosc2.CachePolicy.NONE`` (or another policy) to either
+export method to produce a cold carrier with an explicit policy, leaving the
+live proxy unchanged. Caterva2 servers accept persisted MEMORY carriers under
+opt-in policy but execute them without retained caching (identical to NONE);
+older Caterva2 servers reject MEMORY resolution. Use DISK for retained carrier
+caching on Caterva2. Cold exports must not overwrite the live disk carrier.
+
+``fetch()`` and ``afetch()`` prefetch and return the proxy. Eviction may discard
+requested chunks; ``materialize(item)`` returns an independent complete NDArray.
+The raw ``cache`` is incomplete storage for inspection, not a materialized array.
+
+Reads and exports on one handle are serialized. Async methods use worker threads;
+cancelling an await does not stop a running operation. Separate handles and
+processes sharing a carrier need external locking. Unreadable cache files are
+preserved and their opening errors are propagated.
 
 Authentication supplied to a live Caterva2 source is deliberately omitted from
 the carrier. Caterva2's first server implementation resolves public HTTPS
@@ -95,6 +113,7 @@ file. Read-only mode can use warm chunks but does not retain misses:
     .. automethod:: get_chunk
     .. automethod:: aget_chunk
     .. automethod:: save
+    .. automethod:: materialize
     .. automethod:: to_cframe
     .. autoattribute:: shape
     .. autoattribute:: dtype

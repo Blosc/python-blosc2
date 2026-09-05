@@ -2,11 +2,21 @@
 
 ## Status
 
-Planned for implementation in Python-Blosc2.
+Implemented in Python-Blosc2. This document supersedes v2 for the client API.
+
+Review follow-up: fetch/afetch return the proxy after prefetching; materialize
+returns an independent NDArray. Reads and exports on one handle are serialized,
+and async methods use worker threads (cancellation does not interrupt a running
+fetch). Independent handles/processes require external carrier locking.
+Floating Caterva2 references force identity refresh, including completed arrays.
+Failed cache opens preserve existing files. Explicit export cache_policy selects
+a cold NONE, MEMORY, or DISK carrier without changing the live policy.
+Memory-only runtime URLs need not be portable, but export and source descriptor
+access validate portability. Cache limits exclude peak working memory and results.
 
 ## Purpose
 
-Unify all lazy remote dataset access under `RemoteProxy`. Previously, `blosc2.open(url, lazy=True)` returned a legacy `blosc2.Proxy` when opened without disk storage options, and a `blosc2.RemoteProxy` when `cache_dir` or `cache_path` was specified.
+Unify all lazy remote dataset access under `RemoteProxy`. Previously, lazy opens returned a legacy `Proxy` unless `cache_policy` or `max_cache_bytes` explicitly selected `RemoteProxy`, including when disk storage options were supplied.
 
 In v3, `blosc2.open(url, lazy=True)` **always** returns a `RemoteProxy`. To achieve this cleanly while maintaining the fast, ephemeral in-memory caching behavior users expect, `CachePolicy.MEMORY` is reinstated as a first-class policy alongside `CachePolicy.DISK` and `CachePolicy.NONE`.
 
@@ -42,10 +52,12 @@ Users interact with a single, consistent API (`.source`, `.info`, `.traffic`, `.
    - Requires `cache_dir` or `cache_path` when creating from a remote URL.
 
 ### 3. Server-Side Protection in Caterva2
+*(Updated in v4: Caterva2 accepts persisted `MEMORY` carriers under opt-in policy but executes them using the same no-retention path as `NONE`, avoiding unmanaged server RAM caching while preserving the requested limit for downloads; older Caterva2 servers still reject `MEMORY` resolution).*
 
 Caterva2 maintains its strict server-side gate in `caterva2/services/remote_proxy.py`:
-- Carriers uploaded to Caterva2 with `cache_policy` other than `"none"` or `"disk"` raise `RemoteProxyDenied` (HTTP 403).
-- Caterva2 servers are therefore immune to memory-hogging exploits from crafted carriers, without requiring artificial restrictions on Python-Blosc2 client code.
+- Carriers uploaded to Caterva2 with `cache_policy` other than `"none"`, `"memory"`, or `"disk"` raise `RemoteProxyDenied` (HTTP 403).
+- MEMORY carriers execute without retained array-data caching across operations.
+- Server resource controls, default-deny policy, and secure filesystem restrictions remain in effect.
 
 ### 4. Direct Carrier Export & Deserialization
 
@@ -61,7 +73,7 @@ Caterva2 maintains its strict server-side gate in `caterva2/services/remote_prox
 ### 5. `fetch()` and `afetch()` Support on `RemoteProxy`
 
 `RemoteProxy` exposes `fetch(item=None)` and `afetch(item=None)`:
-- When caching is enabled (`MEMORY` or `DISK`), delegates to the internal cache engine and returns the cache container.
+- When caching is enabled (`MEMORY` or `DISK`), prefetches through the cache engine and returns the proxy. Requested chunks may already have been evicted; materialize() returns an independent complete array when needed.
 - When `cache_policy` is `NONE`, raises `NotImplementedError`.
 - Exposes `cache` property returning the cache container or `None`.
 

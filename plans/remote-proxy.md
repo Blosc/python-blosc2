@@ -1,7 +1,7 @@
 # Plan: Persistable `RemoteProxy`
 
 > **Superseded:** The self-caching carrier design in
-> [`remote-proxy-v2.md`](remote-proxy-v2.md) is the authoritative implementation
+> [`remote-proxy-v3.md`](remote-proxy-v3.md) is the authoritative client implementation
 > plan. This document records the earlier immutable-reference design.
 
 ## Motivation

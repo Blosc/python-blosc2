@@ -859,9 +859,8 @@ def test_lazy_empty_array(tmp_path):
     assert np.array_equal(b[:], np.zeros((0,), dtype="i4"))
 
 
-def test_lazy_cache_rebuilt_when_corrupt(tmp_path):
-    # An interrupted run can leave a half-written cache behind; the whole point of
-    # cache_dir is surviving across runs, so it has to be discarded, not fatal
+def test_lazy_cache_preserved_when_corrupt(tmp_path):
+    # An unreadable file cannot safely be identified as a disposable cache.
     a = blosc2.arange(100, dtype="i4", chunks=(10,))
     fsspec.filesystem("memory").pipe_file("/c.b2nd", a.to_cframe())
 
@@ -870,8 +869,10 @@ def test_lazy_cache_rebuilt_when_corrupt(tmp_path):
     cache = next(p for p in tmp_path.iterdir() if p.suffix == ".b2nd")
     cache.write_bytes(cache.read_bytes()[:50])
 
-    with blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path) as b:
-        assert np.array_equal(b[:], a[:])
+    before = cache.read_bytes()
+    with pytest.raises(RuntimeError):
+        blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path)
+    assert cache.read_bytes() == before
 
 
 def test_max_concurrency_needs_lazy(tmp_path):

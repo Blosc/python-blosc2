@@ -53,7 +53,7 @@ When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing
 
 ## Cache policies and memory management
 
-Every lazy open uses a cache policy. By default, fetched data is cached in memory and bounded to prevent excessive RAM consumption.
+Every lazy open uses a cache policy. By default, fetched data is cached in memory with a bound on retained compressed payload.
 
 ### In-memory caching (`CachePolicy.MEMORY` — Default)
 
@@ -65,7 +65,7 @@ a[10:12, 500:600]  # fetched and cached in RAM
 a[10:12, 500:600]  # served from memory cache (no network traffic)
 ```
 
-To prevent memory leaks or out-of-memory errors on massive datasets, in-memory caches are bounded by `max_cache_bytes` (defaults to 256 MiB) with automatic LRU eviction:
+In-memory caches use `max_cache_bytes` (defaults to 256 MiB) with automatic LRU eviction after operations, including failed fetches. This is not a peak RAM limit: metadata, in-flight transfers, decompression buffers, and results are excluded. Large operations can exceed it substantially.
 
 ```python
 # Custom in-memory limit (e.g. 512 MiB):
@@ -94,7 +94,7 @@ Use `cache_path` instead when the cache should have an exact filename:
 a = blosc2.open(url, lazy=True, cache_path="big-cache.b2nd")
 ```
 
-In both cases, the cache is an ordinary `.b2nd` carrier file managed as a {ref}`RemoteProxy` with {attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`. It starts small and retains compressed chunks up to a finite bound (256 MiB by default, or customized via `max_cache_bytes`). `cache_dir` and `cache_path` are mutually exclusive.
+In both cases, the cache is an ordinary `.b2nd` carrier file managed as a {ref}`RemoteProxy` with {attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`. It starts small and retains compressed chunks up to a finite bound (256 MiB by default, or customized via `max_cache_bytes`; pass `max_cache_bytes=None` for an unbounded disk cache that never evicts). `cache_dir` and `cache_path` are mutually exclusive.
 
 Authenticated Caterva2 caches must be private to one user. Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
 
@@ -119,9 +119,9 @@ Each read pulls only the bytes required for the slice and retains no cache paylo
 
 Blosc2 arrays are compressed in chunks, which are divided into smaller blocks. For a small slice, fetching only its blocks can avoid transferring most of a large chunk.
 
-![A proxy fetches missing regions from the remote array into its local cache. The fetch method returns the cache container, while indexing returns only the requested values.](../tutorials/images/remote_proxy.png)
+![A proxy fetches missing regions from the remote array into its local cache. Indexing returns the requested values.](../tutorials/images/remote_proxy.png)
 
-Purple regions are cached; red regions are still remote. The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk. `fetch()` fills and returns the cache container, whereas indexing returns only the requested values.
+Purple regions are cached; red regions are still remote. The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk. `fetch()` warms the cache and returns the proxy, whereas indexing returns the requested values.
 
 The proxy chooses blocks or whole chunks automatically. It fetches a whole chunk when most of its blocks are needed or when the source cannot expose block ranges, as with computed Caterva2 datasets. Independent reads overlap, with up to eight concurrent requests by default; use `max_concurrency=1` when concurrency does not help.
 
@@ -133,13 +133,17 @@ You can warm the cache proactively using `fetch()` or `afetch()`:
 
 ```python
 # Synchronously pre-fetch a region into the cache:
-cached_container = a.fetch(slice(0, 10_000))
+a.fetch(slice(0, 10_000))
 
 # Or asynchronously in an async event loop:
-cached_container = await a.afetch(slice(10_000, 20_000))
+await a.afetch(slice(10_000, 20_000))
 ```
 
-The underlying local cache container (an `NDArray`) can also be accessed directly via `a.cache`.
+Both methods return `a`. Prefetched data may be evicted to satisfy the cache limit; later indexing fetches it again as needed. Use `a.materialize(item)` for an independent, complete `NDArray`. Its output and temporary buffer are outside the cache limit.
+
+`a.cache` exposes the underlying cache for inspection. It may contain missing or evicted chunks and must not be treated as a complete array or mutated by callers.
+
+Operations on a single handle are serialized through fetching, result assembly, eviction, and export. Async methods run synchronous operations in a worker thread; cancelling the await does not stop an already running fetch. Separate handles or processes sharing a disk carrier require external locking.
 
 ## Measure network traffic
 
@@ -188,7 +192,20 @@ remote = blosc2.RemoteProxy(
 )
 ```
 
-Saving and serializing preserve valid warm chunks by default. Pass `include_cache=False` to `save()` or `to_cframe()` to export a cold reference copy without mutating the warm carrier.
+Disk proxies preserve warm chunks by default. Memory proxies always export cold carriers. Pass `include_cache=False` to export a cold copy without mutating the warm carrier.
+
+An explicit export policy produces a cold carrier with that policy, leaving the live proxy unchanged:
+
+```python
+a = blosc2.open("https://datasets.example.org/big.b2nd", lazy=True)
+a.save("portable.b2nd", cache_policy=blosc2.CachePolicy.NONE)
+```
+
+Caterva2 servers accept persisted `MEMORY` carriers (under opt-in policy) but execute them without retained caching (identical to `NONE`), repeatedly fetching required regions from the remote source while preserving the requested limit for downloads; older Caterva2 servers reject `MEMORY` resolution entirely. Use `DISK` if you want Caterva2 to retain compressed chunks on the server within its configured quota. Policy-changing or cold exports must use a different destination from the live disk cache.
+
+Memory-only access accepts runtime URLs such as signed URLs and fsspec chains. Such URLs cannot be exported or obtained as portable `.source` descriptors; disk caching and reference-only construction continue to require persistable URLs.
+
+Existing files are never automatically deleted when opening or validating a cache fails. Open legacy caches directly with `blosc2.open(cache_path)`, or choose a new cache path for `RemoteProxy`. Preserve or explicitly remove corrupt files before recreating their cache.
 
 ### Reopen a cache file independently
 

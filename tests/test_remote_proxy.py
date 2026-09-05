@@ -45,12 +45,25 @@ def test_cache_policy_validation(tmp_path):
         blosc2.RemoteProxy(url, cache_policy="memory")
     with pytest.raises(ValueError, match="not applicable"):
         blosc2.RemoteProxy(url, max_cache_bytes=1)
+    disk_unlimited = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.DISK,
+        cache_path=tmp_path / "unlimited.b2nd",
+        max_cache_bytes=None,
+    )
+    assert disk_unlimited.max_cache_bytes is None
     with pytest.raises(TypeError, match="positive integer"):
         blosc2.RemoteProxy(
             url,
-            cache_policy=blosc2.CachePolicy.DISK,
-            cache_path=tmp_path / "unlimited.b2nd",
+            cache_policy=blosc2.CachePolicy.MEMORY,
             max_cache_bytes=None,
+        )
+    with pytest.raises(ValueError, match="positive integer"):
+        blosc2.RemoteProxy(
+            url,
+            cache_policy=blosc2.CachePolicy.DISK,
+            cache_path=tmp_path / "neg.b2nd",
+            max_cache_bytes=-1,
         )
     with pytest.raises(ValueError, match="requires cache_dir or cache_path"):
         blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK)
@@ -286,6 +299,43 @@ def test_reference_rejects_memory_policy_without_positive_limit_in_payload():
     payload["max_cache_bytes"] = None
 
     with pytest.raises(ValueError, match="persisted MEMORY RemoteProxy requires positive max_cache_bytes"):
+        decode_b2object_payload(payload, carrier=carrier)
+
+
+def test_reference_accepts_disk_policy_with_none_limit_in_payload(tmp_path):
+    url, data = _remote_array("unlimited-payload.b2nd", nchunks=2, chunk_size=50)
+    cache_path = tmp_path / "unlimited-carrier.b2nd"
+    proxy = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.DISK,
+        cache_path=cache_path,
+        max_cache_bytes=None,
+    )
+    assert proxy.max_cache_bytes is None
+    carrier_raw = blosc2.ndarray_from_cframe(proxy.to_cframe())
+    payload = dict(carrier_raw.schunk.vlmeta["b2o"])
+    decoded_carrier = decode_b2object_payload(payload, carrier=carrier_raw)
+    assert payload["max_cache_bytes"] is None
+    assert decoded_carrier.max_cache_bytes is None
+
+    reopened = blosc2.open(cache_path)
+    assert isinstance(reopened, blosc2.RemoteProxy)
+    assert reopened.cache_policy is blosc2.CachePolicy.DISK
+    assert reopened.max_cache_bytes is None
+    np.testing.assert_array_equal(reopened[:], data)
+
+
+@pytest.mark.parametrize("invalid_limit", [False, True, 0, -10, "1000"])
+def test_reference_rejects_invalid_disk_limit_in_payload(invalid_limit):
+    url, _ = _remote_array("bad-disk-limit.b2nd", nchunks=1, chunk_size=100)
+    carrier = blosc2.ndarray_from_cframe(blosc2.RemoteProxy(url).to_cframe())
+    payload = dict(carrier.schunk.vlmeta["b2o"])
+    payload["cache_policy"] = "disk"
+    payload["max_cache_bytes"] = invalid_limit
+
+    with pytest.raises(
+        ValueError, match="persisted DISK RemoteProxy requires positive max_cache_bytes or None"
+    ):
         decode_b2object_payload(payload, carrier=carrier)
 
 
@@ -573,11 +623,11 @@ def test_memory_cache_fetch_and_afetch():
         cache_policy=blosc2.CachePolicy.MEMORY,
     )
     cached_container = proxy.fetch(slice(0, 10_000))
-    assert cached_container is proxy.cache
+    assert cached_container is proxy
     assert proxy.cache_bytes > 0
 
     async_container = asyncio.run(proxy.afetch(slice(10_000, 20_000)))
-    assert async_container is proxy.cache
+    assert async_container is proxy
 
 
 def test_memory_proxy_save_and_reopen(tmp_path):
@@ -609,3 +659,182 @@ def test_remote_proxy_fetch_rejects_none_policy():
         NotImplementedError, match=r"afetch requires CachePolicy\.DISK or CachePolicy\.MEMORY"
     ):
         asyncio.run(proxy.afetch())
+
+
+def test_prefetch_over_limit_and_materialize():
+    url, data = _remote_array("prefetch-limit.b2nd", nchunks=3, chunk_size=10_000)
+    proxy = blosc2.open(url, lazy=True, max_cache_bytes=12_000)
+    assert proxy.fetch() is proxy
+    assert proxy.cache_bytes <= 12_000
+    assert asyncio.run(proxy.afetch()) is proxy
+    np.testing.assert_array_equal(proxy.materialize()[:], data)
+    assert proxy.cache_bytes <= 12_000
+
+
+def test_open_error_preserves_existing_file(tmp_path, monkeypatch):
+    url, _ = _remote_array("open-error.b2nd", nchunks=1, chunk_size=100)
+    path = tmp_path / "existing.b2nd"
+    blosc2.arange(100).save(path)
+    before = path.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("transient open failure")
+
+    monkeypatch.setattr(blosc2.blosc2_ext, "open", fail)
+    with pytest.raises(OSError, match="transient"):
+        blosc2.open(url, lazy=True, cache_path=path)
+    assert path.read_bytes() == before
+
+
+def test_completed_caterva2_reference_refreshes_identity(monkeypatch):
+    state = {"nonce": "old"}
+
+    def info(*args, **kwargs):
+        return {
+            "shape": [10],
+            "chunks": [5],
+            "blocks": [5],
+            "dtype": "<i4",
+            "schunk": {
+                "cparams": dict(blosc2.cparams_dflts),
+                "cbytes": 40,
+                "vlmeta": {"fill_nonce": state["nonce"], "fill_state": "complete"},
+            },
+        }
+
+    monkeypatch.setattr(blosc2_c2array, "info", info)
+    proxy = blosc2.RemoteProxy(blosc2.URLPath("@public/a.b2nd", urlbase="https://example.org"))
+    old = proxy.src.stamp
+    state["nonce"] = "replacement"
+    proxy._prepare_read()
+    assert proxy.src.stamp != old
+
+
+@pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
+def test_memory_export_policy(tmp_path, policy):
+    url, data = _remote_array("export-policy.b2nd", nchunks=1, chunk_size=100)
+    proxy = blosc2.open(url, lazy=True)
+    proxy[:]
+    frame = proxy.to_cframe(cache_policy=policy)
+    carrier = blosc2.ndarray_from_cframe(frame)
+    assert not carrier.schunk.vlmeta.get("proxy-fetched")
+    assert not carrier.schunk.vlmeta.get("proxy-cache-sizes")
+    path = tmp_path / "export.b2nd"
+    proxy.save(path, cache_policy=policy)
+    reopened = blosc2.open(path)
+    assert reopened.cache_policy is policy
+    np.testing.assert_array_equal(reopened[:], data)
+    assert proxy.cache_policy is blosc2.CachePolicy.MEMORY
+    assert proxy.cache_bytes > 0
+
+
+def test_runtime_signed_url_is_not_exportable():
+    url, data = _remote_array("signed.b2nd?token=secret", nchunks=1, chunk_size=100)
+    proxy = blosc2.open(url, lazy=True)
+    np.testing.assert_array_equal(proxy[:], data)
+    with pytest.raises(ValueError, match="credential-like"):
+        proxy.to_cframe()
+    with pytest.raises(ValueError, match="credential-like"):
+        _ = proxy.source
+
+
+def test_interrupted_memory_fetch_enforces_limit(monkeypatch):
+    url, _ = _remote_array("interrupted-memory.b2nd", nchunks=3, chunk_size=10_000)
+    proxy = blosc2.open(url, lazy=True, max_cache_bytes=100)
+    original = proxy.src.get_chunk
+
+    def interrupted(nchunk):
+        if nchunk == 1:
+            raise RuntimeError("interrupted")
+        return original(nchunk)
+
+    monkeypatch.setattr(proxy.src, "get_chunk", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        proxy.fetch(max_concurrency=1)
+    assert proxy.cache_bytes <= 100
+
+
+def test_concurrent_reads_with_eviction():
+    from concurrent.futures import ThreadPoolExecutor
+
+    url, data = _remote_array("concurrent-memory.b2nd", nchunks=3, chunk_size=10_000)
+    proxy = blosc2.open(url, lazy=True, max_cache_bytes=100)
+    slices = [slice(0, 20_000), slice(10_000, 30_000)] * 4
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(proxy.__getitem__, slices))
+    for item, result in zip(slices, results, strict=True):
+        np.testing.assert_array_equal(result, data[item])
+    assert proxy.cache_bytes <= 100
+
+
+def test_legacy_cache_url_open_preserves_file(tmp_path):
+    url, data = _remote_array("legacy-preserve.b2nd", nchunks=1, chunk_size=100)
+    path = tmp_path / "legacy.b2nd"
+    legacy = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=path, mode="a")
+    np.testing.assert_array_equal(legacy[:], data)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="open legacy Proxy caches directly"):
+        blosc2.open(url, lazy=True, cache_path=path)
+    assert path.read_bytes() == before
+    np.testing.assert_array_equal(blosc2.open(path)[:], data)
+
+
+def test_memory_warm_export_is_cold():
+    url, _ = _remote_array("warm-memory.b2nd", nchunks=1, chunk_size=100)
+    proxy = blosc2.open(url, lazy=True)
+    proxy[:]
+    carrier = blosc2.ndarray_from_cframe(proxy.to_cframe())
+    assert carrier.schunk.vlmeta["b2o"]["cache_policy"] == "memory"
+    assert not carrier.schunk.vlmeta.get("proxy-fetched")
+    assert proxy.cache_bytes > 0
+
+
+def test_cold_export_cannot_overwrite_live_carrier(tmp_path):
+    url, _ = _remote_array("same-export.b2nd", nchunks=1, chunk_size=100)
+    path = tmp_path / "live.b2nd"
+    proxy = blosc2.open(url, lazy=True, cache_path=path)
+    proxy[:]
+    before = path.read_bytes()
+    for kwargs in ({"include_cache": False}, {"cache_policy": blosc2.CachePolicy.NONE}):
+        with pytest.raises(ValueError, match="different destination"):
+            proxy.save(path, **kwargs)
+        assert path.read_bytes() == before
+
+
+def test_unlimited_disk_cache_does_not_evict(tmp_path):
+    url, data = _remote_array("unlimited-disk.b2nd", nchunks=5, chunk_size=20)
+    carrier_path = tmp_path / "unlimited.b2nd"
+    proxy = blosc2.open(url, lazy=True, cache_path=carrier_path, max_cache_bytes=None)
+    assert proxy.max_cache_bytes is None
+
+    # Read all chunks
+    np.testing.assert_array_equal(proxy[:], data)
+    assert proxy.cache_bytes > 0
+    initial_cache_bytes = proxy.cache_bytes
+
+    # Access individual chunks again, verify no eviction occurred
+    for i in range(5):
+        np.testing.assert_array_equal(proxy[i * 20 : (i + 1) * 20], data[i * 20 : (i + 1) * 20])
+    assert proxy.cache_bytes == initial_cache_bytes
+
+    # Carrier has all chunks warm
+    carrier = blosc2.ndarray_from_cframe(proxy.to_cframe())
+    assert carrier.schunk.cbytes == initial_cache_bytes
+    assert carrier.schunk.vlmeta.get("proxy-fetched") == b"\x1f"
+    assert carrier.schunk.vlmeta["b2o"]["max_cache_bytes"] is None
+
+    # Export tests
+    # 1. Exporting with cache_policy=DISK preserves None limit
+    disk_export = blosc2.ndarray_from_cframe(proxy.to_cframe(cache_policy=blosc2.CachePolicy.DISK))
+    assert disk_export.schunk.vlmeta["b2o"]["cache_policy"] == "disk"
+    assert disk_export.schunk.vlmeta["b2o"]["max_cache_bytes"] is None
+
+    # 2. Exporting with cache_policy=MEMORY falls back to default limit
+    mem_export = blosc2.ndarray_from_cframe(proxy.to_cframe(cache_policy=blosc2.CachePolicy.MEMORY))
+    assert mem_export.schunk.vlmeta["b2o"]["cache_policy"] == "memory"
+    assert mem_export.schunk.vlmeta["b2o"]["max_cache_bytes"] == blosc2.remote_proxy.DEFAULT_DISK_CACHE_BYTES
+
+    # 3. Exporting with cache_policy=NONE sets limit to None
+    none_export = blosc2.ndarray_from_cframe(proxy.to_cframe(cache_policy=blosc2.CachePolicy.NONE))
+    assert none_export.schunk.vlmeta["b2o"]["cache_policy"] == "none"
+    assert none_export.schunk.vlmeta["b2o"]["max_cache_bytes"] is None

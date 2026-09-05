@@ -2,6 +2,8 @@
 
 ## Status
 
+Superseded by remote-proxy-v3.md for the Python client API and cache policies.
+
 Implemented and validated in Python-Blosc2 and Caterva2. The product and
 persistence contracts are settled; the phase checklist and test matrix below
 describe the delivered version-1 behavior.
