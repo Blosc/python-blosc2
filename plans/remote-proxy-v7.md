@@ -706,8 +706,8 @@ release candidate:
   power failure.
 - Tune staging estimates and warm-export reservations instead of reserving the
   full work budget for one export.
-- Remove the internal contiguous compatibility path after the v5 comparison
-  benchmark is no longer needed. It is not a supported Caterva2 deployment mode.
+- Retain the internal contiguous compatibility path for deterministic comparison
+  and explicit rollback tests; it is not a public Caterva2 deployment setting.
 
 ## Caterva2 module map
 
