@@ -181,18 +181,14 @@ def test_disk_bound_shrinks_self_caching_carrier(tmp_path):
 def test_server_sparse_cache_reopens_and_exports_portable_carriers(tmp_path):
     url, data = _remote_array("server-sparse.b2nd", nchunks=3, chunk_size=100_000)
     runtime_path = tmp_path / "private-runtime"
-    proxy = blosc2.RemoteProxy.with_sparse_cache(
-        url, runtime_path, max_cache_bytes=120_000
-    )
+    proxy = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path, max_cache_bytes=120_000)
 
     assert runtime_path.is_dir()
     assert proxy.runtime_cache_path == str(runtime_path)
     assert proxy.cache_path is None
     np.testing.assert_array_equal(proxy[:100_000], data[:100_000])
 
-    reopened = blosc2.RemoteProxy.with_sparse_cache(
-        url, runtime_path, max_cache_bytes=120_000
-    )
+    reopened = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path, max_cache_bytes=120_000)
     reopened.traffic.reset()
     np.testing.assert_array_equal(reopened[:100_000], data[:100_000])
     assert reopened.traffic.requests == 0
@@ -309,9 +305,7 @@ def test_server_sparse_rejects_a_seed_from_another_source(tmp_path):
 
     runtime_path = tmp_path / "wrong-seed-runtime"
     with pytest.raises(ValueError, match="different remote source"):
-        blosc2.RemoteProxy.with_sparse_cache(
-            second_url, runtime_path, carrier=seed._carrier
-        )
+        blosc2.RemoteProxy.with_sparse_cache(second_url, runtime_path, carrier=seed._carrier)
     assert not runtime_path.exists()
 
 
@@ -994,3 +988,48 @@ def test_unlimited_disk_cache_does_not_evict(tmp_path):
     none_export = blosc2.ndarray_from_cframe(proxy.to_cframe(cache_policy=blosc2.CachePolicy.NONE))
     assert none_export.schunk.vlmeta["b2o"]["cache_policy"] == "none"
     assert none_export.schunk.vlmeta["b2o"]["max_cache_bytes"] is None
+
+
+def test_authorized_sparse_snapshot_never_reopens(tmp_path, monkeypatch):
+    url, data = _remote_array("authorized-sparse.b2nd", nchunks=3, chunk_size=10000)
+    source = blosc2.FsspecNDSource(url)
+    descriptor = {"kind": "fsspec", "version": 1, "urlpath": url}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("authorized transport was reopened or refreshed")
+
+    monkeypatch.setattr(blosc2.RemoteProxy, "_open_source", forbidden)
+    monkeypatch.setattr(source, "refresh_stamp", forbidden, raising=False)
+    monkeypatch.setattr(source, "refresh_identity", forbidden, raising=False)
+    path = tmp_path / "authorized"
+    proxy = blosc2.RemoteProxy.with_sparse_cache(
+        source, path, source_descriptor=descriptor, max_cache_bytes=None
+    )
+    assert proxy.src is source
+    assert proxy.read_cached(slice(0, 10000)) == (False, None)
+    np.testing.assert_array_equal(proxy[:10000], data[:10000])
+    hit, result = proxy.read_cached(slice(0, 10000))
+    assert hit
+    np.testing.assert_array_equal(result, data[:10000])
+    assert proxy.cached_payload_bytes >= 10000
+    assert proxy.trim_cache(0, max_chunks=1) == (0,)
+    assert not proxy.cache_contains(nchunk=0)
+    np.testing.assert_array_equal(proxy[:], data)
+    del proxy
+    evicted, remaining = blosc2.RemoteProxy.trim_sparse_cache(path, 0, max_chunks=1)
+    assert len(evicted) == 1
+    assert remaining >= 20000
+    with pytest.raises(ValueError, match="does not match"):
+        blosc2.RemoteProxy.with_sparse_cache(
+            source, path, source_descriptor=dict(descriptor, urlpath="memory://other")
+        )
+
+
+def test_sparse_seed_with_dirty_marker_is_not_imported(tmp_path):
+    url, data = _remote_array("dirty-seed.b2nd", nchunks=2, chunk_size=10000)
+    seed = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK, cache_path=tmp_path / "seed.b2nd")
+    np.testing.assert_array_equal(seed[:10000], data[:10000])
+    seed.schunk.vlmeta["proxy-dirty"] = {"version": 1}
+    runtime = blosc2.RemoteProxy.with_sparse_cache(url, tmp_path / "runtime", carrier=seed.cache)
+    assert not runtime.cache_contains(nchunk=0)
+    np.testing.assert_array_equal(runtime[:], data)

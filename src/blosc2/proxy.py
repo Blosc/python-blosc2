@@ -12,6 +12,7 @@ import itertools
 import math
 import os
 import textwrap
+import time
 from collections import OrderedDict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -48,6 +49,8 @@ _RESERVED_VLMETA = frozenset(
         "proxy-fetched-blocks",
         "proxy-fetched-bpc",
         "proxy-dirty",
+        "proxy-lru",
+        "proxy-lru-time",
         "proxy-stamp",
         "proxy-index",
     }
@@ -494,7 +497,7 @@ class Proxy(blosc2.Operand):
 
     def _restore_cache_accounting(self) -> None:
         """Restore compressed-byte accounting for a bounded cache."""
-        if self._max_cache_bytes is None:
+        if self._max_cache_bytes is None and not self._persistent_dirty:
             return
         stored = self._schunk_cache.vlmeta.get("proxy-cache-sizes", {})
         if not isinstance(stored, dict):
@@ -512,10 +515,13 @@ class Proxy(blosc2.Operand):
                 size = len(self._schunk_cache.get_chunk(nchunk))
             self._cache_sizes[nchunk] = size
             self._cache_lru[nchunk] = None
+        for nchunk in self._schunk_cache.vlmeta.get("proxy-lru", ()):
+            if nchunk in self._cache_lru:
+                self._cache_lru.move_to_end(nchunk)
 
     def _remember_cached(self, nchunk: int, size: int) -> None:
         """Record the current compressed size and recency of one cached chunk."""
-        if self._max_cache_bytes is None:
+        if self._max_cache_bytes is None and not self._persistent_dirty:
             return
         self._cache_sizes[nchunk] = size
         self._cache_lru.pop(nchunk, None)
@@ -528,17 +534,33 @@ class Proxy(blosc2.Operand):
 
     def _enforce_cache_limit(self, item) -> None:
         """Touch *item* and evict whole LRU chunks after its result is assembled."""
-        if self._max_cache_bytes is None:
+        if self._max_cache_bytes is None and not self._persistent_dirty:
             return
         for nchunk in self._wanted_chunks(item):
             if nchunk in self._cache_sizes:
                 self._cache_lru.move_to_end(nchunk)
 
-        evicted = False
-        if self._retained_cache_bytes() > self._max_cache_bytes and self._cache_lru:
+        if self._max_cache_bytes is not None:
+            self._trim_cache(self._max_cache_bytes)
+        if self._persistent_dirty and self._cache_lru:
+            vlmeta = self._schunk_cache.vlmeta
+            now = time.time()
+            if now - vlmeta.get("proxy-lru-time", 0) >= 10:
+                # Recency is advisory: a lost touch cannot validate payload.
+                vlmeta["proxy-lru"] = list(self._cache_lru)
+                vlmeta["proxy-lru-time"] = now
+
+    def _trim_cache(self, target_bytes, *, max_chunks=None):
+        """Caller holds the shared frame guard; return evicted logical IDs."""
+        evicted = []
+        if self._retained_cache_bytes() > target_bytes and self._cache_lru and max_chunks != 0:
             self._begin_persistent_mutation()
         try:
-            while self._retained_cache_bytes() > self._max_cache_bytes and self._cache_lru:
+            while (
+                self._retained_cache_bytes() > target_bytes
+                and self._cache_lru
+                and (max_chunks is None or len(evicted) < max_chunks)
+            ):
                 nchunk, _ = self._cache_lru.popitem(last=False)
                 self._cache_sizes.pop(nchunk, None)
                 self._hot_payloads.pop(nchunk, None)
@@ -546,7 +568,7 @@ class Proxy(blosc2.Operand):
                 base = nchunk * self._blocks_per_chunk
                 for n in range(base, base + self._blocks_per_chunk):
                     self._fetched[n // 8] &= ~(1 << (n % 8))
-                evicted = True
+                evicted.append(nchunk)
             if evicted:
                 self._specialized = getattr(self._schunk_cache, "nspecialized", self._specialized)
                 self._save_fetched()
@@ -557,6 +579,7 @@ class Proxy(blosc2.Operand):
         else:
             if evicted:
                 self._end_persistent_mutation()
+        return tuple(evicted)
 
     def _plan(self, item):
         """Where *item* lands on the cache's grid, read once for a fetch.
@@ -697,10 +720,13 @@ class Proxy(blosc2.Operand):
         self._schunk_cache.vlmeta[self._fetched_key] = bytes(self._fetched)
         if self._blocks_per_chunk > 1:
             self._schunk_cache.vlmeta["proxy-fetched-bpc"] = self._blocks_per_chunk
-        if self._max_cache_bytes is not None:
+        if self._max_cache_bytes is not None or self._persistent_dirty:
             self._schunk_cache.vlmeta["proxy-cache-sizes"] = {
                 str(nchunk): size for nchunk, size in self._cache_sizes.items()
             }
+            if self._persistent_dirty:
+                self._schunk_cache.vlmeta["proxy-lru"] = list(self._cache_lru)
+                self._schunk_cache.vlmeta["proxy-lru-time"] = time.time()
         elif "proxy-cache-sizes" in self._schunk_cache.vlmeta:
             # A cache may previously have been bounded (for example by a server
             # quota). Unbounded writes do not maintain this table, so remove it
