@@ -13,6 +13,7 @@ import asyncio
 import math
 import os
 import threading
+from contextlib import nullcontext
 from functools import wraps
 from urllib.parse import parse_qsl, urlsplit
 
@@ -48,11 +49,19 @@ def _serialized_operation(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
         with self._operation_lock:
-            try:
-                return method(self, *args, **kwargs)
-            finally:
-                if self._proxy is not None:
-                    self._proxy._enforce_cache_limit(tuple(slice(0, 0) for _ in self.shape))
+            cache_lock = (
+                self._runtime_cache.holding_lock()
+                if self._shared_runtime_cache and self._runtime_cache is not None
+                else nullcontext()
+            )
+            with cache_lock:
+                if self._shared_runtime_cache and self._proxy is not None:
+                    self._proxy._refresh_shared_cache()
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    if self._proxy is not None:
+                        self._proxy._enforce_cache_limit(tuple(slice(0, 0) for _ in self.shape))
 
     return locked
 
@@ -121,10 +130,12 @@ def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
 class RemoteProxy(blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
-    With :attr:`CachePolicy.DISK`, the persisted B2ND carrier is itself the
-    bounded cache. With :attr:`CachePolicy.MEMORY`, chunks are retained in
-    process memory up to a bounded size. With :attr:`CachePolicy.NONE`, reads
-    retain no data.
+    With :attr:`CachePolicy.DISK`, the public constructor uses the persisted
+    B2ND carrier itself as the bounded cache.  Server code can instead use
+    :meth:`with_sparse_cache` to keep a private directory-backed runtime cache
+    beside a portable carrier. With :attr:`CachePolicy.MEMORY`, chunks are
+    retained in process memory up to a bounded size. With
+    :attr:`CachePolicy.NONE`, reads retain no data.
 
     Parameters
     ----------
@@ -160,6 +171,7 @@ class RemoteProxy(blosc2.Operand):
         max_cache_bytes=_POLICY_DEFAULT,
         max_concurrency: int | None = None,
         _carrier=None,
+        _runtime_cache_path=None,
     ):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
@@ -172,6 +184,7 @@ class RemoteProxy(blosc2.Operand):
             and cache_dir is None
             and cache_path is None
             and _carrier is None
+            and _runtime_cache_path is None
         ):
             raise ValueError("CachePolicy.DISK requires cache_dir or cache_path")
 
@@ -188,12 +201,23 @@ class RemoteProxy(blosc2.Operand):
         self._operation_lock = threading.RLock()
         self._proxy = None
         self._carrier = _carrier
+        self._runtime_cache = _carrier if cache_policy is blosc2.CachePolicy.DISK else None
+        self._shared_runtime_cache = _runtime_cache_path is not None
         self._cache_status = None
 
         if cache_policy is blosc2.CachePolicy.DISK:
-            if self._carrier is None:
+            if _runtime_cache_path is not None:
+                self._runtime_cache, self._cache_status = self._open_or_create_sparse_cache(
+                    _runtime_cache_path
+                )
+            elif self._carrier is None:
                 self._carrier, self._cache_status = self._open_or_create_carrier(cache_dir, cache_path)
-            self._attach_carrier_cache()
+                self._runtime_cache = self._carrier
+            cache_lock = (
+                self._runtime_cache.holding_lock() if self._shared_runtime_cache else nullcontext()
+            )
+            with cache_lock:
+                self._attach_carrier_cache()
         elif cache_policy is blosc2.CachePolicy.MEMORY:
             self._attach_carrier_cache()
 
@@ -244,9 +268,124 @@ class RemoteProxy(blosc2.Operand):
         carrier = self._to_b2object_carrier(urlpath=path, contiguous=True, mode="w")
         return carrier, "created"
 
+    def _open_or_create_sparse_cache(self, cache_path):
+        """Open a server-owned sparse runtime cache or create it cold.
+
+        This is deliberately separate from ``cache_path`` in the public
+        constructor: portable RemoteProxy carriers remain contiguous files.
+        """
+        path = os.fspath(cache_path)
+        if os.path.exists(path):
+            if not os.path.isdir(path):
+                raise ValueError("runtime_cache_path must name a sparse frame directory")
+            runtime = blosc2.blosc2_ext.open(
+                path, "a", 0, dparams=blosc2.DParams(nthreads=1), locking=True
+            )
+            if runtime.schunk.vlmeta.get("b2o") != self._payload():
+                raise ValueError(f"the sparse runtime cache at {path} has a different specification")
+            self._validate_geometry(
+                (runtime.shape, runtime.dtype, runtime.chunks, runtime.blocks), src=self.src
+            )
+            stored = runtime.schunk.vlmeta.get("proxy-stamp")
+            current = getattr(self.src, "stamp", None)
+            status = (
+                "invalidated/rebuilt"
+                if stored is not None and current is not None and stored != current
+                else "reused"
+            )
+            return runtime, status
+
+        if self._carrier is not None:
+            self._validate_warm_seed(self._carrier)
+
+        runtime = self._to_b2object_carrier(
+            urlpath=path, contiguous=False, mode="w", locking=True
+        )
+        if self._carrier is not None:
+            self._import_warm_seed(self._carrier, runtime)
+        return runtime, "created"
+
+    def _import_warm_seed(self, seed, runtime) -> None:
+        """Migrate valid warm chunks once into a newly-created runtime cache."""
+        seed = self._validate_warm_seed(seed)
+        seed_schunk = getattr(seed, "schunk", seed)
+        stamp = getattr(self.src, "stamp", None)
+        if stamp is None or seed_schunk.vlmeta.get("proxy-stamp") != stamp:
+            return
+
+        bpc = seed_schunk.vlmeta.get("proxy-fetched-bpc", 1)
+        if not isinstance(bpc, int) or bpc <= 0:
+            return
+        key = "proxy-fetched-blocks" if bpc > 1 else "proxy-fetched"
+        fetched = seed_schunk.vlmeta.get(key)
+        expected_size = (seed_schunk.nchunks * bpc + 7) // 8
+        if not isinstance(fetched, bytes) or len(fetched) != expected_size:
+            return
+        for nchunk in range(seed_schunk.nchunks):
+            start = nchunk * bpc
+            if any(fetched[n // 8] >> (n % 8) & 1 for n in range(start, start + bpc)):
+                runtime.schunk.update_chunk(nchunk, seed_schunk.get_chunk(nchunk))
+        for name in (
+            "proxy-cache-sizes",
+            "proxy-fetched",
+            "proxy-fetched-blocks",
+            "proxy-fetched-bpc",
+            "proxy-index",
+            "proxy-stamp",
+        ):
+            value = seed_schunk.vlmeta.get(name)
+            if value is not None:
+                runtime.schunk.vlmeta[name] = value
+
+    def _validate_warm_seed(self, seed):
+        seed = getattr(seed, "cache", seed)
+        seed_schunk = getattr(seed, "schunk", seed)
+        self._validate_geometry((seed.shape, seed.dtype, seed.chunks, seed.blocks))
+        seed_payload = seed_schunk.vlmeta.get("b2o")
+        if (
+            not isinstance(seed_payload, dict)
+            or seed_payload.get("kind") != "remote_proxy"
+            or seed_payload.get("source") != self._source
+        ):
+            raise ValueError("the warm carrier belongs to a different remote source")
+        return seed
+
+    @classmethod
+    def with_sparse_cache(
+        cls,
+        urlpath,
+        runtime_cache_path,
+        *,
+        carrier=None,
+        max_cache_bytes=_POLICY_DEFAULT,
+        max_concurrency: int | None = None,
+    ):
+        """Attach an authorized remote source to a private sparse disk cache.
+
+        This server-facing constructor keeps the portable carrier separate from
+        the mutable directory-backed runtime cache.  All processes using the
+        directory must construct it through this method so frame locking and
+        interrupted-mutation recovery remain enabled.
+
+        ``carrier`` is the portable RemoteProxy carrier.  If it contains valid
+        warm chunks when the sparse runtime cache is first created, those chunks
+        are copied into the runtime cache.  Both copies continue to exist until
+        the server replaces the portable carrier with a cold descriptor.  After
+        migration, only the runtime cache is consulted for cached data, so an
+        evicted chunk cannot be resurrected from the carrier.
+        """
+        return cls(
+            urlpath,
+            cache_policy=blosc2.CachePolicy.DISK,
+            max_cache_bytes=max_cache_bytes,
+            max_concurrency=max_concurrency,
+            _carrier=carrier,
+            _runtime_cache_path=runtime_cache_path,
+        )
+
     def _attach_carrier_cache(self):
         if self.cache_policy is blosc2.CachePolicy.DISK:
-            if self._carrier is None:
+            if self._runtime_cache is None:
                 self._proxy = None
                 return
             if getattr(self.src, "stamp", None) is None:
@@ -256,9 +395,10 @@ class RemoteProxy(blosc2.Operand):
                 return
             self._proxy = blosc2.Proxy(
                 self.src,
-                _cache=self._carrier,
+                _cache=self._runtime_cache,
                 _refresh_source=False,
                 _max_cache_bytes=self._cache_limit,
+                _persistent_dirty=self._shared_runtime_cache,
             )
         elif self.cache_policy is blosc2.CachePolicy.MEMORY:
             self._proxy = blosc2.Proxy(
@@ -439,10 +579,12 @@ class RemoteProxy(blosc2.Operand):
     @property
     def schunk(self):
         """The underlying carrier's or cache's :class:`SChunk`, or None if unattached."""
-        if self._carrier is not None:
-            return getattr(self._carrier, "schunk", self._carrier)
         if self._proxy is not None:
             return self._proxy.schunk
+        if self._runtime_cache is not None:
+            return getattr(self._runtime_cache, "schunk", self._runtime_cache)
+        if self._carrier is not None:
+            return getattr(self._carrier, "schunk", self._carrier)
         return None
 
     @property
@@ -450,7 +592,7 @@ class RemoteProxy(blosc2.Operand):
         """The local container used as cache, or None if caching is disabled."""
         if self._proxy is not None:
             return getattr(self._proxy, "cache", getattr(self._proxy, "_cache", None))
-        return self._carrier
+        return self._runtime_cache
 
     @property
     def urlpath(self):
@@ -465,6 +607,13 @@ class RemoteProxy(blosc2.Operand):
         if self._carrier is None or self.cache_policy is not blosc2.CachePolicy.DISK:
             return None
         return getattr(self._carrier.schunk, "urlpath", None)
+
+    @property
+    def runtime_cache_path(self):
+        """The mutable sparse cache directory, when one is attached."""
+        if not self._shared_runtime_cache or self._runtime_cache is None:
+            return None
+        return getattr(self._runtime_cache.schunk, "urlpath", None)
 
     @property
     def cache_status(self):
@@ -606,8 +755,8 @@ class RemoteProxy(blosc2.Operand):
                 payload["max_cache_bytes"] = self.max_cache_bytes or DEFAULT_DISK_CACHE_BYTES
             write_b2object_payload(carrier, payload)
             return carrier
-        if include_cache and self._carrier is not None:
-            return self._carrier
+        if include_cache and self._runtime_cache is not None:
+            return self._runtime_cache
         return self._to_b2object_carrier()
 
     @_serialized_operation
@@ -632,8 +781,10 @@ class RemoteProxy(blosc2.Operand):
         urlpath = os.fspath(urlpath)
         if (
             (cache_policy is not None or not include_cache)
-            and self.cache_path is not None
-            and os.path.abspath(self.cache_path) == os.path.abspath(urlpath)
+            and any(
+                path is not None and os.path.abspath(path) == os.path.abspath(urlpath)
+                for path in (self.cache_path, self.runtime_cache_path)
+            )
         ):
             raise ValueError("cold or policy-changing export requires a different destination")
         carrier = self._export_carrier(include_cache, cache_policy)

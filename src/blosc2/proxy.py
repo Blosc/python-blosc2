@@ -47,6 +47,7 @@ _RESERVED_VLMETA = frozenset(
         "proxy-fetched",
         "proxy-fetched-blocks",
         "proxy-fetched-bpc",
+        "proxy-dirty",
         "proxy-stamp",
         "proxy-index",
     }
@@ -151,6 +152,7 @@ class Proxy(blosc2.Operand):
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
         self._max_cache_bytes = _validate_max_cache_bytes(kwargs.pop("_max_cache_bytes", None))
+        self._persistent_dirty = bool(kwargs.pop("_persistent_dirty", False))
         vlmeta = kwargs.pop("vlmeta", None)
         caterva2_env = kwargs.pop("caterva2_env", False)
         # Before anything is built or emptied: a call that is going to be refused
@@ -262,6 +264,7 @@ class Proxy(blosc2.Operand):
         self._specialized = getattr(self._schunk_cache, "nspecialized", 0)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
+        self._recover_interrupted_mutation()
         self._fetched = self._adopt_cache(fresh, self._schunk_cache.nchunks)
         self._cache_sizes: dict[int, int] = {}
         self._cache_lru = OrderedDict()
@@ -423,6 +426,45 @@ class Proxy(blosc2.Operand):
         for n in blocks:
             self._fetched[(base + n) // 8] |= 1 << ((base + n) % 8)
 
+    def _recover_interrupted_mutation(self) -> None:
+        """Forget cache state left behind by a process that died while writing.
+
+        Chunk payloads are disposable and may remain on disk, but clearing the
+        fetched maps makes every one of them unreachable until it has been
+        fetched and published again.  This is deliberately conservative because
+        a dirty marker cannot identify the exact instruction at which its owner
+        stopped.
+        """
+        vlmeta = self._schunk_cache.vlmeta
+        if not self._persistent_dirty or vlmeta.get("proxy-dirty") is None:
+            return
+        if getattr(self._schunk_cache, "mode", None) == "r":
+            return
+        self._forget_fetched(self._schunk_cache.nchunks)
+        if vlmeta.get("proxy-cache-sizes") is not None:
+            del vlmeta["proxy-cache-sizes"]
+        del vlmeta["proxy-dirty"]
+
+    def _begin_persistent_mutation(self) -> None:
+        if self._persistent_dirty:
+            self._schunk_cache.vlmeta["proxy-dirty"] = {"pid": os.getpid(), "version": 1}
+
+    def _end_persistent_mutation(self) -> None:
+        if self._persistent_dirty and self._schunk_cache.vlmeta.get("proxy-dirty") is not None:
+            del self._schunk_cache.vlmeta["proxy-dirty"]
+
+    def _refresh_shared_cache(self) -> None:
+        """Reload proxy bookkeeping after taking a shared cache's frame lock."""
+        if not self._persistent_dirty:
+            return
+        self._recover_interrupted_mutation()
+        self._fetched = self._load_fetched(self._schunk_cache.nchunks)
+        self._cache_sizes.clear()
+        self._cache_lru.clear()
+        self._hot_payloads.clear()
+        self._restore_cache_accounting()
+        self._specialized = getattr(self._schunk_cache, "nspecialized", 0)
+
     def _is_fetched(self, nchunk: int, nblock: int = 0) -> bool:
         n = nchunk * self._blocks_per_chunk + nblock
         return bool(self._fetched[n // 8] >> (n % 8) & 1)
@@ -493,18 +535,28 @@ class Proxy(blosc2.Operand):
                 self._cache_lru.move_to_end(nchunk)
 
         evicted = False
-        while self._retained_cache_bytes() > self._max_cache_bytes and self._cache_lru:
-            nchunk, _ = self._cache_lru.popitem(last=False)
-            self._cache_sizes.pop(nchunk, None)
-            self._hot_payloads.pop(nchunk, None)
-            self._schunk_cache.update_special(nchunk, blosc2.SpecialValue.UNINIT)
-            base = nchunk * self._blocks_per_chunk
-            for n in range(base, base + self._blocks_per_chunk):
-                self._fetched[n // 8] &= ~(1 << (n % 8))
-            evicted = True
-        if evicted:
-            self._specialized = getattr(self._schunk_cache, "nspecialized", self._specialized)
-            self._save_fetched()
+        if self._retained_cache_bytes() > self._max_cache_bytes and self._cache_lru:
+            self._begin_persistent_mutation()
+        try:
+            while self._retained_cache_bytes() > self._max_cache_bytes and self._cache_lru:
+                nchunk, _ = self._cache_lru.popitem(last=False)
+                self._cache_sizes.pop(nchunk, None)
+                self._hot_payloads.pop(nchunk, None)
+                self._schunk_cache.update_special(nchunk, blosc2.SpecialValue.UNINIT)
+                base = nchunk * self._blocks_per_chunk
+                for n in range(base, base + self._blocks_per_chunk):
+                    self._fetched[n // 8] &= ~(1 << (n % 8))
+                evicted = True
+            if evicted:
+                self._specialized = getattr(self._schunk_cache, "nspecialized", self._specialized)
+                self._save_fetched()
+        except Exception:
+            # Keep the dirty marker: the next locked operation will discard the
+            # generation's fetched state before serving from it.
+            raise
+        else:
+            if evicted:
+                self._end_persistent_mutation()
 
     def _plan(self, item):
         """Where *item* lands on the cache's grid, read once for a fetch.
@@ -800,12 +852,15 @@ class Proxy(blosc2.Operand):
                 pass
 
         missing = self._missing_chunks(item)
+        if missing:
+            self._begin_persistent_mutation()
         try:
             for nchunk, chunk in self._get_chunks(missing, max_concurrency):
                 self._store_chunk(nchunk, chunk)
         finally:
             if missing:
                 self._save_fetched()
+                self._end_persistent_mutation()
 
         return self._cache
 
@@ -859,6 +914,7 @@ class Proxy(blosc2.Operand):
         missing = self._missing_blocks(item)
         if not missing:
             return self._cache
+        self._begin_persistent_mutation()
         # A transport that batches ranges pays the block path's fixed cost once
         # for the whole fetch, so what it wants asked is the wave rather than the
         # chunk; see `ByteRangeNDSource._wave_saves`.
@@ -914,6 +970,7 @@ class Proxy(blosc2.Operand):
                         self._write_blocks(nchunk, pending.pop(nchunk), layouts[nchunk][0])
         finally:
             self._save_fetched()
+            self._end_persistent_mutation()
 
         return self._cache
 

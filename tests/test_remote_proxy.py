@@ -178,6 +178,143 @@ def test_disk_bound_shrinks_self_caching_carrier(tmp_path):
     assert reopened.cache_bytes <= 120_000
 
 
+def test_server_sparse_cache_reopens_and_exports_portable_carriers(tmp_path):
+    url, data = _remote_array("server-sparse.b2nd", nchunks=3, chunk_size=100_000)
+    runtime_path = tmp_path / "private-runtime"
+    proxy = blosc2.RemoteProxy.with_sparse_cache(
+        url, runtime_path, max_cache_bytes=120_000
+    )
+
+    assert runtime_path.is_dir()
+    assert proxy.runtime_cache_path == str(runtime_path)
+    assert proxy.cache_path is None
+    np.testing.assert_array_equal(proxy[:100_000], data[:100_000])
+
+    reopened = blosc2.RemoteProxy.with_sparse_cache(
+        url, runtime_path, max_cache_bytes=120_000
+    )
+    reopened.traffic.reset()
+    np.testing.assert_array_equal(reopened[:100_000], data[:100_000])
+    assert reopened.traffic.requests == 0
+
+    warm = blosc2.ndarray_from_cframe(reopened.to_cframe())
+    cold = blosc2.ndarray_from_cframe(reopened.to_cframe(include_cache=False))
+    assert warm.schunk.vlmeta.get("proxy-fetched")
+    assert not cold.schunk.vlmeta.get("proxy-fetched")
+    assert warm.schunk.vlmeta["b2o"] == cold.schunk.vlmeta["b2o"]
+
+
+def test_server_sparse_handles_refresh_shared_fetched_state(tmp_path):
+    url, data = _remote_array("server-shared.b2nd", nchunks=2, chunk_size=100)
+    runtime_path = tmp_path / "shared-runtime"
+    first = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    second = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+
+    np.testing.assert_array_equal(first[:100], data[:100])
+    second.traffic.reset()
+    np.testing.assert_array_equal(second[:100], data[:100])
+    assert second.traffic.requests == 0
+
+    np.testing.assert_array_equal(second[100:], data[100:])
+    first.traffic.reset()
+    np.testing.assert_array_equal(first[100:], data[100:])
+    assert first.traffic.requests == 0
+    assert first.schunk.vlmeta["proxy-fetched"] == b"\x03"
+
+
+def test_server_sparse_cache_recovers_a_dirty_generation(tmp_path):
+    url, data = _remote_array("server-dirty.b2nd", nchunks=2, chunk_size=100)
+    runtime_path = tmp_path / "dirty-runtime"
+    proxy = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    np.testing.assert_array_equal(proxy[:100], data[:100])
+    proxy.schunk.vlmeta["proxy-dirty"] = {"pid": -1, "version": 1}
+    del proxy
+
+    recovered = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    recovered.traffic.reset()
+    np.testing.assert_array_equal(recovered[:100], data[:100])
+    assert recovered.traffic.requests > 0
+    assert "proxy-dirty" not in recovered.schunk.vlmeta
+
+
+def test_server_sparse_cache_reuses_partial_blocks(tmp_path):
+    data = np.random.default_rng(2).integers(0, 256, 200, dtype=np.uint8)
+    array = blosc2.asarray(data, chunks=(100,), blocks=(10,))
+    url = "memory://server-partial-blocks.b2nd"
+    fsspec.filesystem("memory").pipe_file("server-partial-blocks.b2nd", array.to_cframe())
+    runtime_path = tmp_path / "partial-runtime"
+
+    proxy = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    np.testing.assert_array_equal(proxy[:10], data[:10])
+    assert proxy.schunk.vlmeta.get("proxy-fetched-blocks")
+    assert proxy.schunk.vlmeta["proxy-fetched-bpc"] == 10
+
+    reopened = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    reopened.traffic.reset()
+    np.testing.assert_array_equal(reopened[:10], data[:10])
+    assert reopened.traffic.requests == 0
+
+
+def test_server_sparse_cache_invalidates_same_geometry_replacement(tmp_path):
+    url, data = _remote_array("server-replaced.b2nd", nchunks=2, chunk_size=100)
+    runtime_path = tmp_path / "replaced-runtime"
+    proxy = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    np.testing.assert_array_equal(proxy[:100], data[:100])
+
+    replacement = np.arange(200, dtype=np.uint8)
+    array = blosc2.asarray(replacement, chunks=(100,), blocks=(100,))
+    fsspec.filesystem("memory").pipe_file("server-replaced.b2nd", array.to_cframe())
+
+    proxy.traffic.reset()
+    np.testing.assert_array_equal(proxy[:100], replacement[:100])
+    assert proxy.traffic.requests > 0
+
+
+def test_server_sparse_warm_seed_is_migrated_only_once(tmp_path):
+    url, data = _remote_array("server-seed.b2nd", nchunks=2, chunk_size=100)
+    seed = blosc2.RemoteProxy(
+        url,
+        cache_policy=blosc2.CachePolicy.DISK,
+        cache_path=tmp_path / "seed.b2nd",
+        max_cache_bytes=None,
+    )
+    np.testing.assert_array_equal(seed[:100], data[:100])
+
+    runtime_path = tmp_path / "seed-runtime"
+    runtime = blosc2.RemoteProxy.with_sparse_cache(
+        url, runtime_path, carrier=seed._carrier, max_cache_bytes=1
+    )
+    runtime.traffic.reset()
+    np.testing.assert_array_equal(runtime[:100], data[:100])
+    assert runtime.traffic.requests == 0
+    assert runtime.cache_bytes == 0
+    del runtime
+
+    reopened = blosc2.RemoteProxy.with_sparse_cache(
+        url, runtime_path, carrier=seed._carrier, max_cache_bytes=1
+    )
+    reopened.traffic.reset()
+    np.testing.assert_array_equal(reopened[:100], data[:100])
+    assert reopened.traffic.requests > 0
+
+
+def test_server_sparse_rejects_a_seed_from_another_source(tmp_path):
+    first_url, _ = _remote_array("server-first-seed.b2nd", nchunks=1, chunk_size=100)
+    second_url, _ = _remote_array("server-second-seed.b2nd", nchunks=1, chunk_size=100)
+    seed = blosc2.RemoteProxy(
+        first_url,
+        cache_policy=blosc2.CachePolicy.DISK,
+        cache_path=tmp_path / "other-seed.b2nd",
+    )
+
+    runtime_path = tmp_path / "wrong-seed-runtime"
+    with pytest.raises(ValueError, match="different remote source"):
+        blosc2.RemoteProxy.with_sparse_cache(
+            second_url, runtime_path, carrier=seed._carrier
+        )
+    assert not runtime_path.exists()
+
+
 def test_interrupted_fetch_leaves_a_reusable_carrier(tmp_path):
     url, data = _remote_array("interrupted.b2nd", nchunks=3, chunk_size=100_000)
     cache_path = tmp_path / "interrupted-proxy.b2nd"
