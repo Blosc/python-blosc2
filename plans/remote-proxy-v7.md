@@ -634,6 +634,7 @@ the operational tuning settings that are implemented:
 
 ```toml
 [server.remote_proxy]
+cache_maintenance_seconds = 60
 cache_low_watermark = 0.90
 cache_reconcile_seconds = 300
 cache_prune_chunks = 64
