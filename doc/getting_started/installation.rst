@@ -40,6 +40,9 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
    * - ``parquet``
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
        :doc:`../guides/parquet_to_blosc2`.
+   * - ``zarr``
+     - The ``b2nd-to-zarr`` (or ``blosc2-to-zarr``) converter (``zarr``); converts
+       Blosc2 NDArrays into Zarr arrays.
    * - ``fsspec``
      - Reading and writing single-file containers through any `fsspec
        <https://filesystem-spec.readthedocs.io>`_ URL.  The HTTP(S) driver is
