@@ -574,7 +574,9 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int | None = None, **kw
     return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
+def load_array(
+    urlpath: str, dparams: dict | None = None, *, storage_options: dict | None = None
+) -> np.ndarray:
     """Load a serialized NumPy array from a file.
 
     Parameters
@@ -584,6 +586,9 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     dparams: dict, optional
         A dictionary with the decompression parameters, which can
         be used in the :func:`~blosc2.decompress2` function.
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem when opening
+        an fsspec URL.
 
     Returns
     -------
@@ -616,7 +621,7 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     :func:`~blosc2.pack_tensor`
     """
     # May we raise a DeprecationWarning here in the future?
-    return load_tensor(urlpath, dparams=dparams)
+    return load_tensor(urlpath, dparams=dparams, storage_options=storage_options)
 
 
 def normalize_urlpath(urlpath: object) -> object:
@@ -676,9 +681,9 @@ def _import_fsspec(urlpath: str):
     return fsspec
 
 
-def fsspec_open(urlpath: str, mode: str):
+def fsspec_open(urlpath: str, mode: str, storage_options: dict | None = None):
     """`fsspec.open()`, but complaining properly when fsspec is missing."""
-    return _import_fsspec(urlpath).open(urlpath, mode)
+    return _import_fsspec(urlpath).open(urlpath, mode, **(storage_options or {}))
 
 
 def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: str = "") -> str:
@@ -704,7 +709,9 @@ def _suffixed_cache_mapper():
     return SuffixedCacheMapper()
 
 
-def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
+def localize_fsspec_url(
+    urlpath: str, cache_storage: str | pathlib.Path, storage_options: dict | None = None
+) -> str:
     """Materialize the container at *urlpath* under *cache_storage*, return its local path.
 
     Single-file containers go through fsspec's ``filecache``, which downloads
@@ -717,7 +724,7 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
     from fsspec.utils import tokenize
 
     cache_storage = str(cache_storage)
-    fs, path = fsspec.url_to_fs(urlpath)
+    fs, path = fsspec.url_to_fs(urlpath, **(storage_options or {}))
 
     if not fs.isdir(path):
         # check_files is off by default in fsspec, which would happily serve a
@@ -728,7 +735,7 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
             "check_files": True,
             "cache_mapper": _suffixed_cache_mapper(),
         }
-        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts) as f:
+        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts, **(storage_options or {})) as f:
             return f.name
 
     localdir = fsspec_cache_path(urlpath, cache_storage)
@@ -793,10 +800,13 @@ def pack_tensor(
     # Object stores cannot be written incrementally, so build the whole cframe in
     # memory and PUT it in one go.
     remote_urlpath = kwargs.get("urlpath") if is_fsspec_url(kwargs.get("urlpath")) else None
+    storage_options = kwargs.pop("storage_options", None)
     if remote_urlpath is not None:
         del kwargs["urlpath"]
         # A remote write always replaces, but reading mode still forbids one
         blosc2_ext.check_access_mode(remote_urlpath, kwargs.pop("mode", "a"))
+    elif storage_options is not None:
+        raise ValueError("storage_options is only supported for fsspec URLs")
 
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
 
@@ -818,7 +828,7 @@ def pack_tensor(
 
     if remote_urlpath is not None:
         cframe = schunk.to_cframe()
-        with fsspec_open(remote_urlpath, "wb") as f:
+        with fsspec_open(remote_urlpath, "wb", storage_options=storage_options) as f:
             f.write(cframe)
         return len(cframe)
 
@@ -944,7 +954,9 @@ def save_tensor(
     return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
+def load_tensor(
+    urlpath: str, dparams: dict | None = None, *, storage_options: dict | None = None
+) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
     """Load a serialized PyTorch or TensorFlow  tensor or NumPy array from a file.
 
     Parameters
@@ -955,6 +967,10 @@ def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor 
     dparams: dict, optional
         A dictionary with the decompression parameters, which are the same as those
         used in the :func:`~blosc2.decompress2` function.
+
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem when opening
+        an fsspec URL.
 
     Returns
     -------
@@ -985,7 +1001,7 @@ def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor 
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath, mode="r", dparams=dparams)
+    schunk = blosc2.open(urlpath, mode="r", dparams=dparams, storage_options=storage_options)
     return _unpack_tensor(schunk)
 
 

@@ -51,6 +51,50 @@ When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing
 
 `lazy=True` changes *when* data is fetched; it does not expand the underlying storage formats supported by either route.
 
+## Access S3 and cloud object stores
+
+For arrays stored on Amazon S3 or S3-compatible cloud object stores (Backblaze B2, MinIO, Cloudflare R2, Ceph, Wasabi, etc.), open the `s3://` URL with `lazy=True`:
+
+```python
+import blosc2
+
+# Using default credentials from environment or ~/.aws/credentials
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+```
+
+### Storage options and authentication
+
+Pass a `storage_options` dictionary to configure credentials, AWS profiles, or custom S3 endpoint URLs:
+
+```python
+storage_options = {
+    "profile": "blosc2",  # named profile from ~/.aws/credentials
+    "endpoint_url": "https://s3.us-west-001.backblazeb2.com",  # custom endpoint
+    # Or explicit keys:
+    # "key": "AWS_ACCESS_KEY_ID",
+    # "secret": "AWS_SECRET_ACCESS_KEY",
+    # Or anonymous public access:
+    # "anon": True,
+}
+
+a = blosc2.open(
+    "s3://bucket/big.b2nd",
+    lazy=True,
+    storage_options=storage_options,
+)
+```
+
+The options in `storage_options` are forwarded directly to `fsspec` (and `s3fs`).
+
+### S3 performance: latency, caching, and concurrency
+
+Object stores typically incur 20–100 ms of latency per HTTP range request. Python-Blosc2 addresses this in two ways:
+
+1. **Caching**: Chunks and blocks fetched for a slice are kept in the local cache (in RAM by default, or persisted to disk with `cache_dir=` or `cache_path=`). Re-fetching previously read regions requires zero network round trips and zero bytes transferred.
+2. **Concurrent fetches**: Independent range requests for required chunks and blocks are issued concurrently in a thread pool (configured via `max_concurrency=`, default 8).
+
+The runnable script `examples/remote/s3-access.py` demonstrates opening `.b2nd` and `.zarr` datasets from S3, timing metadata discovery vs. slice fetching, measuring network traffic with {ref}`Traffic`, and showing the impact of chunk caching.
+
 ## Cache policies and memory management
 
 Every lazy open uses a cache policy. By default, fetched data is cached in memory with a bound on retained compressed payload.
@@ -163,7 +207,7 @@ print(a.traffic)  # Traffic(requests=0, nbytes=0) -> cache hit!
 
 Use `reset()` or subtract two readings to measure one operation. `traffic` is `None` for a local source because no network transport exists.
 
-`examples/c2array-traffic.py` compares block, chunk, and cached reads against a live Caterva2 dataset.
+`examples/remote/c2array-traffic.py` compares block, chunk, and cached reads against a live Caterva2 dataset.
 
 ## Persist and reopen remote references
 
@@ -333,7 +377,12 @@ For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; th
 ## See also
 
 - {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — a step-by-step introduction with output.
-- `examples/ndarray/rw-fsspec.py` — fsspec reading and writing examples.
-- `examples/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
-- `examples/c2array-traffic.py` — block, chunk, and cached transfer sizes.
+- `examples/remote/s3-access.py` — S3 access comparing Blosc2 and Zarr with timing and network traffic metering.
+- `examples/remote/c2array-get-slice.py` — opening and reading remote Caterva2 arrays via URLPath.
+- `examples/remote/c2array-traffic.py` — block, chunk, and cached transfer sizes against Caterva2.
+- `examples/remote/c2array_expr.py` — lazy expression evaluation on remote Caterva2 arrays.
+- `examples/remote/concurrent-fsspec.py` — concurrent chunk fetching (`max_concurrency`) on high-latency stores.
+- `examples/remote/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
+- `examples/remote/proxy-carray.py` — creating a persistent local disk proxy of a remote Caterva2 array.
+- `examples/remote/rw-fsspec.py` — fsspec reading and writing examples.
 - {ref}`RemoteProxy`, {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.

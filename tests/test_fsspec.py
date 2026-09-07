@@ -1476,3 +1476,26 @@ def test_lazy_blocks_with_a_repeated_value_chunk(monkeypatch, any_chunk_wants_bl
     assert np.array_equal(p[0:5, 0:10], np.full((5, 10), 3.5))
     assert len(chunks) == 1
     assert np.array_equal(p[...], np.full((400, 500), 3.5))
+
+
+def test_open_memory_url_with_storage_options():
+    a = blosc2.arange(10, dtype="i4")
+    a.save("memory://so_test.b2nd", storage_options={})
+    b = blosc2.open("memory://so_test.b2nd", storage_options={})
+    assert isinstance(b, blosc2.NDArray)
+    assert np.array_equal(b[:], a[:])
+
+    lazy_b = blosc2.open("memory://so_test.b2nd", lazy=True, storage_options={})
+    assert isinstance(lazy_b, blosc2.RemoteProxy)
+    assert np.array_equal(lazy_b[:], a[:])
+
+
+def test_fsspec_ndsource_and_remote_proxy_storage_options():
+    a = blosc2.arange(20, dtype="i4")
+    a.save("memory://so_source.b2nd")
+
+    src = blosc2.FsspecNDSource("memory://so_source.b2nd", storage_options={})
+    assert src.storage_options == {}
+
+    proxy = blosc2.RemoteProxy("memory://so_source.b2nd", storage_options={})
+    assert np.array_equal(proxy[:], a[:])

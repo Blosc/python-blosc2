@@ -2010,7 +2010,9 @@ def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str 
     return (cache_dir if cache_dir is not None else cache_storage), cache_path
 
 
-def _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, *, lazy=False):
+def _remote_proxy_options(
+    kwargs, cache_dir, cache_path, max_concurrency, *, lazy=False, storage_options=None
+):
     """Return explicit RemoteProxy options, or None for the legacy lazy Proxy path."""
     policy_present = "cache_policy" in kwargs
     limit_present = "max_cache_bytes" in kwargs
@@ -2033,6 +2035,8 @@ def _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, *, laz
     }
     if limit_present:
         options["max_cache_bytes"] = limit
+    if storage_options is not None:
+        options["storage_options"] = storage_options
     return options
 
 
@@ -2041,6 +2045,7 @@ def _lazy_fsspec_proxy(
     cache_dir: str | pathlib.Path | None,
     cache_path: str | pathlib.Path | None,
     max_concurrency: int | None = None,
+    storage_options: dict | None = None,
 ):
     """Wrap a remote frame in a Proxy that fetches chunks on demand.
 
@@ -2050,6 +2055,8 @@ def _lazy_fsspec_proxy(
     """
     # None leaves the default where it belongs, on the source itself
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
+    if storage_options is not None:
+        kwargs["storage_options"] = storage_options
     src = blosc2.FsspecNDSource(urlpath, **kwargs)
     return _lazy_remote_proxy(src, urlpath, cache_dir, cache_path)
 
@@ -2165,9 +2172,12 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
+    storage_options = kwargs.pop("storage_options", None)
     max_concurrency = kwargs.pop("max_concurrency", None)
     lazy = kwargs.pop("lazy", False)
-    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy)
+    remote_proxy_options = _remote_proxy_options(
+        kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, storage_options=storage_options
+    )
     if lazy:
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
@@ -2176,7 +2186,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
         if remote_proxy_options is not None:
             return blosc2.RemoteProxy(urlpath, **remote_proxy_options)
-        return _lazy_fsspec_proxy(urlpath, cache_dir, cache_path, max_concurrency)
+        return _lazy_fsspec_proxy(
+            urlpath, cache_dir, cache_path, max_concurrency, storage_options=storage_options
+        )
 
     if remote_proxy_options is not None:
         raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
@@ -2189,7 +2201,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
 
     if cache_dir is not None:
-        return open(localize_fsspec_url(urlpath, cache_dir), mode, offset, **kwargs)
+        return open(
+            localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options), mode, offset, **kwargs
+        )
 
     if offset != 0:
         raise NotImplementedError("offset on an fsspec URL requires passing cache_dir=")
@@ -2202,7 +2216,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
             "directory containers (.b2d, sparse frames) on an fsspec URL require "
             "passing cache_dir= to fetch them locally first"
         )
-    with fsspec_open(urlpath, "rb") as f:
+    with fsspec_open(urlpath, "rb", storage_options=storage_options) as f:
         return blosc2.from_cframe(f.read())
 
 
@@ -2321,6 +2335,9 @@ def open(
         dparams: dict
             A dictionary with the decompression parameters, which are the same that can
             be used in the :func:`~blosc2.decompress2` function.
+        storage_options: dict, optional
+            Parameters passed to the underlying ``fsspec`` filesystem when opening
+            an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
 
     Returns
     -------
@@ -2346,7 +2363,8 @@ def open(
 
     * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
       the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
-      by name when it is missing; credentials are configured there, not here.
+      by name when it is missing. Driver and protocol parameters (credentials,
+      endpoint URL, region, etc.) can be passed directly via ``storage_options``.
       ``mode != 'r'`` always raises, as object stores have no rename and no locks.
       A plain URL read rebuilds the object from a cframe held in memory, so it
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
@@ -2417,6 +2435,10 @@ def open(
 
     if is_fsspec_url(urlpath):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)
+
+    if "storage_options" in kwargs and kwargs["storage_options"] is not None:
+        raise ValueError("storage_options is only supported for fsspec URLs")
+    kwargs.pop("storage_options", None)
 
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the

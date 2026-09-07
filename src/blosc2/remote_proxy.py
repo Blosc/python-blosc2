@@ -160,6 +160,9 @@ class RemoteProxy(blosc2.Operand):
         It is not applicable to ``NONE``.
     max_concurrency: int, optional
         Maximum number of independent remote fetches in flight.
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem when opening
+        an fsspec URL.
     """
 
     def __init__(
@@ -171,6 +174,7 @@ class RemoteProxy(blosc2.Operand):
         cache_dir=None,
         max_cache_bytes=_POLICY_DEFAULT,
         max_concurrency: int | None = None,
+        storage_options: dict | None = None,
         _carrier=None,
         _runtime_cache_path=None,
         _source_descriptor=None,
@@ -195,6 +199,8 @@ class RemoteProxy(blosc2.Operand):
         self._max_concurrency = _validate_max_concurrency(max_concurrency)
         self._authorized_source = _source_descriptor is not None
         if self._authorized_source:
+            if storage_options is not None:
+                raise ValueError("storage_options cannot be used with an authorized source")
             if not isinstance(urlpath, blosc2.FsspecNDSource):
                 raise TypeError("source_descriptor requires an authorized FsspecNDSource")
             expected = {"kind": "fsspec", "version": 1, "urlpath": urlpath.urlpath}
@@ -204,7 +210,10 @@ class RemoteProxy(blosc2.Operand):
             self.src, self._source = urlpath, dict(expected)
         else:
             self.src, self._source = self._open_source(
-                urlpath, self._max_concurrency, persistable=cache_policy is not blosc2.CachePolicy.MEMORY
+                urlpath,
+                self._max_concurrency,
+                persistable=cache_policy is not blosc2.CachePolicy.MEMORY,
+                storage_options=storage_options,
             )
         self._runtime_urlpath = self._runtime_source(urlpath)
         self._expected_geometry = self._geometry(self.src)
@@ -504,8 +513,17 @@ class RemoteProxy(blosc2.Operand):
             self._proxy = None
 
     @staticmethod
-    def _open_source(urlpath, max_concurrency, *, traffic=None, persistable=True):
+    def _open_source(
+        urlpath,
+        max_concurrency,
+        *,
+        traffic=None,
+        persistable=True,
+        storage_options: dict | None = None,
+    ):
         if isinstance(urlpath, blosc2.C2Array):
+            if storage_options is not None:
+                raise ValueError("storage_options is only supported for fsspec URLs")
             src = urlpath
             if persistable and src.urlbase is not None:
                 _validate_persistable_url(src.urlbase)
@@ -516,8 +534,8 @@ class RemoteProxy(blosc2.Operand):
                 "urlbase": src.urlbase,
             }
         elif isinstance(urlpath, blosc2.URLPath):
-            if persistable and urlpath.urlbase is not None:
-                _validate_persistable_url(urlpath.urlbase)
+            if storage_options is not None:
+                raise ValueError("storage_options is only supported for fsspec URLs")
             src = blosc2.C2Array(
                 urlpath.path,
                 urlbase=urlpath.urlbase,
@@ -534,6 +552,8 @@ class RemoteProxy(blosc2.Operand):
             if persistable:
                 _validate_persistable_url(urlpath)
             kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
+            if storage_options is not None:
+                kwargs["storage_options"] = storage_options
             src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
             source = {"kind": "fsspec", "version": 1, "urlpath": urlpath}
         else:

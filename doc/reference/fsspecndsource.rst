@@ -14,9 +14,9 @@ For the Caterva2 alternative and a capability comparison, see
 :doc:`Working with Remote Arrays <../guides/remote_arrays>`.
 For other sources, see :ref:`ProxyNDSource` and :ref:`ProxySource`.
 
-``examples/ndarray/rw-fsspec.py`` is a runnable walkthrough of this and the
+``examples/remote/rw-fsspec.py`` is a runnable walkthrough of this and the
 other two ways to read an fsspec URL, and of writing one back.
-``examples/ndarray/concurrent-fsspec.py`` measures ``max_concurrency`` against a
+``examples/remote/concurrent-fsspec.py`` measures ``max_concurrency`` against a
 filesystem with a simulated round trip, since no protocol that runs offline has
 latency for the thread pool to hide.
 

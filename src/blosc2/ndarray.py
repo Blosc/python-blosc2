@@ -5084,13 +5084,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 raise NotImplementedError(
                     "a sparse frame is a directory, so it cannot be saved to an fsspec URL"
                 )
+            storage_options = kwargs.pop("storage_options", None)
             # An object store takes the whole thing at once, and always replaces,
             # but reading mode still forbids a write
             blosc2_ext.check_access_mode(urlpath, kwargs.pop("mode", "w"))
             array = self.copy(**kwargs) if kwargs else self
-            with fsspec_open(urlpath, "wb") as f:
+            with fsspec_open(urlpath, "wb", storage_options=storage_options) as f:
                 f.write(array.to_cframe())
             return
+
+        if "storage_options" in kwargs and kwargs["storage_options"] is not None:
+            raise ValueError("storage_options is only supported for fsspec URLs")
+        kwargs.pop("storage_options", None)
 
         blosc2_ext.check_access_mode(urlpath, "w")
         # Add urlpath to kwargs

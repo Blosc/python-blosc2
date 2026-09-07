@@ -1273,6 +1273,8 @@ class FsspecNDSource(ByteRangeNDSource):
         The fsspec URL of the frame.
     max_concurrency: int, optional
         As in :ref:`ByteRangeNDSource`.
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem.
     """
 
     def __init__(
@@ -1280,6 +1282,7 @@ class FsspecNDSource(ByteRangeNDSource):
         urlpath: str,
         max_concurrency: int = REMOTE_MAX_CONCURRENCY,
         *,
+        storage_options: dict | None = None,
         _filesystem=None,
         _traffic=None,
     ):
@@ -1287,7 +1290,7 @@ class FsspecNDSource(ByteRangeNDSource):
 
         fsspec = _import_fsspec(urlpath)
         if _filesystem is None:
-            fs, path = fsspec.url_to_fs(urlpath)
+            fs, path = fsspec.url_to_fs(urlpath, **(storage_options or {}))
         else:
             fs = _filesystem
             path = fs._strip_protocol(urlpath)
@@ -1299,6 +1302,7 @@ class FsspecNDSource(ByteRangeNDSource):
                 "chunk by chunk; open it with cache_dir= instead"
             )
         self._fs, self._path = fs, path
+        self.storage_options = storage_options or {}
         # Identifies the remote bytes, so a cache built against them can tell it
         # has gone stale -- and chunk offsets from a replaced frame are garbage.
         # fsspec's own token, rather than a tuple of the metadata fields we guess
