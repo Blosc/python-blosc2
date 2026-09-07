@@ -51,7 +51,7 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [project.optional-dependencies]
 parquet = ["pyarrow"]
-zarr = ["zarr"]
+zarr = ["zarr>=3.0.9"]
 # The b2view terminal viewer (the `b2view` script) is opt-in: most users want
 # blosc2 only as a compression library, and the TUI stack has no use under
 # wasm32 (no TTY).  Install with `pip install "blosc2[tui]"`.  This also pulls

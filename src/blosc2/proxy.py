@@ -64,6 +64,12 @@ _RESERVED_VLMETA = frozenset(
 _JIT_EXECUTION_TUNING_KWARGS = frozenset({"jit", "jit_backend", "fp_accuracy"})
 
 
+def _source_urlpath(src):
+    if src.urlpath is None:
+        raise ValueError("persistent Proxy caches require a path-backed source")
+    return src.urlpath
+
+
 def _validate_max_cache_bytes(value: int | None) -> int | None:
     if value is None:
         return None
@@ -203,9 +209,9 @@ class Proxy(blosc2.Operand):
                 "caterva2_env": caterva2_env,
             }
             container = getattr(self.src, "schunk", self.src)
-            if isinstance(self.src, blosc2.FsspecNDSource):
-                meta_val["source_kind"] = "fsspec"
-                meta_val["urlpath"] = self.src.urlpath
+            if isinstance(self.src, (blosc2.FsspecNDSource, blosc2.ZarrNDSource)):
+                meta_val["source_kind"] = "zarr" if isinstance(self.src, blosc2.ZarrNDSource) else "fsspec"
+                meta_val["urlpath"] = _source_urlpath(self.src)
                 # Keep the legacy field populated so older readers still
                 # reopen this cache, albeit through their eager URL path.
                 meta_val["local_abspath"] = self.src.urlpath

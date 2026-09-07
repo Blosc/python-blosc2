@@ -343,7 +343,7 @@ def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
     served = len(srv.log)
     assert np.array_equal(result, data[0:5, 0:10])
     assert np.array_equal(proxy[0:5, 0:10], result)
-    assert [endpoint for endpoint, _, _ in srv.log[served:]] == ["info"]
+    assert [endpoint for endpoint, _, _ in srv.log[served:]] == []
 
 
 def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_blocks):
@@ -364,7 +364,7 @@ def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_bl
     assert isinstance(proxy, blosc2.RemoteProxy)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    assert [endpoint for endpoint, _, _ in srv.log] == ["info", "info"]
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert len(list(cache_dir.glob("*.b2nd"))) == 1
 
 
@@ -386,7 +386,7 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
     assert isinstance(proxy, blosc2.RemoteProxy)
     assert isinstance(proxy.src, blosc2.C2Array)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
-    assert [endpoint for endpoint, _, _ in srv.log] == ["info", "info"]
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[100:105, 0:10], data[100:105, 0:10])
     assert any(endpoint != "info" for endpoint, _, _ in srv.log)
 

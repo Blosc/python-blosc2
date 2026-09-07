@@ -106,7 +106,7 @@ Only durable reference-style operands are supported:
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
-- ``RemoteProxy`` operands for fsspec or Caterva2 references
+- ``RemoteProxy`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Purely in-memory operands are intentionally rejected. This keeps msgpack
@@ -133,7 +133,7 @@ Supported operands are the same durable reference-style operands used for
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
-- ``RemoteProxy`` operands for fsspec or Caterva2 references
+- ``RemoteProxy`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Plain Python ``LazyUDF`` callables are intentionally not serialized by

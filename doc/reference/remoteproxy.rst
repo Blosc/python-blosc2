@@ -3,9 +3,10 @@
 RemoteProxy
 ===========
 
-``RemoteProxy`` is a persistable proxy for one remote B2ND array. It accepts an
-fsspec URL or a Caterva2 :ref:`URLPath`. With disk caching enabled, its B2ND
-carrier is both the portable descriptor and the bounded compressed-data cache.
+``RemoteProxy`` is a persistable proxy for one remote B2ND or Zarr array. It
+accepts an fsspec URL or a Caterva2 :ref:`URLPath`. With disk caching enabled,
+its B2ND carrier is both the portable descriptor and the bounded compressed-data
+cache.
 
 The default policy is :attr:`blosc2.CachePolicy.NONE`: each operation reads the
 remote data it needs and no fetched data is retained afterwards. Saving such an
@@ -31,10 +32,25 @@ URL:
         )
     )
 
-References are floating: before each data operation, ``RemoteProxy`` checks the
-source identity and verifies that shape, dtype, chunks, and blocks still match
-the captured geometry. A replacement with different geometry is rejected;
-cached disk data is invalidated when the source identity moves.
+By default, ``RemoteProxy`` assumes its source is immutable and skips remote
+identity checks before reads. For a replaceable single-file or Caterva2 source,
+pass ``assume_immutable=False`` to refresh its identity and invalidate stale
+cached data before each operation.
+
+Zarr URLs use a different contract: a ``.zarr`` path component selects
+:ref:`ZarrNDSource`, or pass ``source_format="zarr"`` for a suffix-free path.
+The URL names one array, including its path inside a hierarchy. Zarr sources are
+assumed immutable for the lifetime of every cache; replacing data beneath the
+same URL may mix stale and new chunks. Use a new URL or replace the cache when
+publishing a new dataset. Mutable Zarr stores are not supported.
+
+.. code-block:: python
+
+    remote = blosc2.open(
+        "s3://public-bucket/hierarchy.zarr/d0/a1",
+        lazy=True,
+        storage_options={"anon": True},
+    )
 
 Ephemeral in-memory caching is available through :attr:`blosc2.CachePolicy.MEMORY`.
 Fetched chunks are kept in RAM, bounded by a finite 256 MiB compressed-payload limit by default

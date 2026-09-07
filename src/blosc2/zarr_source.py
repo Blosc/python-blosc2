@@ -1,0 +1,193 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
+"""A :class:`ProxyNDSource` backed by an immutable Zarr array."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+from urllib.parse import urlsplit
+
+import numpy as np
+
+import blosc2
+from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
+
+
+def _counting_store(zarr, store, traffic):
+    class CountingStore(zarr.storage.WrapperStore):
+        async def get(self, key, prototype, byte_range=None):
+            value = await super().get(key, prototype, byte_range)
+            if value is not None:
+                traffic.charge(len(value))
+            return value
+
+        async def get_partial_values(self, prototype, key_ranges):
+            values = await super().get_partial_values(prototype, key_ranges)
+            received = sum(len(value) for value in values if value is not None)
+            if received:
+                traffic.charge(received)
+            return values
+
+    return CountingStore(store)
+
+
+class ZarrNDSource(ProxyNDSource):
+    """Read an immutable Zarr array as Blosc2-compressed logical chunks.
+
+    Replacing data beneath the same store identity violates this adapter's
+    contract and may leave previously converted chunks stale.  Peak working
+    memory includes concurrently decoded Zarr chunks and their Blosc2
+    conversion buffers; ``max_cache_bytes`` only limits retained compressed
+    chunks.
+    """
+
+    serves_blocks = False
+    encoding_version = 1
+
+    def __init__(
+        self,
+        store,
+        *,
+        storage_options: dict | None = None,
+        max_concurrency: int = REMOTE_MAX_CONCURRENCY,
+        blocks=None,
+        cparams=None,
+        _traffic: Traffic | None = None,
+        _urlpath: str | None = None,
+    ):
+        try:
+            import zarr
+        except ImportError as exc:
+            raise ImportError(
+                "ZarrNDSource requires Zarr-Python; install it with 'pip install blosc2[zarr]'"
+            ) from exc
+
+        if isinstance(store, os.PathLike):
+            store = os.fspath(store)
+        self.urlpath = _urlpath if _urlpath is not None else store if isinstance(store, str) else None
+        self.max_concurrency = max_concurrency
+        remote = isinstance(store, str) and bool(urlsplit(store).scheme)
+        self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
+        open_store = store
+        if remote:
+            try:
+                import fsspec
+            except ImportError as exc:
+                raise ImportError(
+                    "remote Zarr sources require fsspec; install with 'pip install blosc2[zarr,fsspec]'"
+                ) from exc
+
+            source = zarr.storage.FsspecStore.from_mapper(
+                fsspec.get_mapper(store, **(storage_options or {})), read_only=True
+            )
+            open_store = source
+        if self.traffic is not None:
+            open_store = _counting_store(zarr, open_store, self.traffic)
+        try:
+            self.array = zarr.open_array(
+                store=open_store,
+                mode="r",
+            )
+        except Exception as exc:
+            if type(exc).__name__ in {"ContainsGroupError", "NodeTypeValidationError"}:
+                raise ValueError(f"{store!r} is a Zarr group; pass the path of an array") from exc
+            raise
+
+        self._shape = tuple(int(value) for value in self.array.shape)
+        self._chunks = tuple(int(value) for value in self.array.chunks)
+        try:
+            self._dtype = np.dtype(self.array.dtype)
+        except TypeError as exc:
+            raise TypeError(
+                f"ZarrNDSource only supports fixed-size boolean and numeric dtypes, got {self.array.dtype}"
+            ) from exc
+        self._validate_metadata()
+        _, computed_blocks = blosc2.compute_chunks_blocks(
+            self._shape, chunks=self._chunks, blocks=blocks, dtype=self._dtype, cparams=cparams
+        )
+        self._blocks = tuple(computed_blocks)
+        self._cparams = (
+            blosc2.CParams(typesize=self._dtype.itemsize)
+            if cparams is None
+            else blosc2.CParams(**cparams)
+            if isinstance(cparams, dict)
+            else cparams
+        )
+        identity = {
+            "encoding_version": self.encoding_version,
+            "urlpath": self.urlpath,
+            "shape": self._shape,
+            "chunks": self._chunks,
+            "blocks": self._blocks,
+            "dtype": self._dtype.str,
+        }
+        self.stamp = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def _validate_metadata(self) -> None:
+        if not self._shape:
+            raise ValueError("ZarrNDSource does not support scalar arrays")
+        if len(self._shape) > blosc2.MAX_DIM:
+            raise ValueError(f"Zarr arrays may have at most {blosc2.MAX_DIM} dimensions")
+        if any(size == 0 for size in self._shape):
+            raise ValueError("ZarrNDSource does not support zero-length dimensions")
+        if len(self._chunks) != len(self._shape) or any(size <= 0 for size in self._chunks):
+            raise ValueError("Zarr chunk extents must be positive and match the array dimensions")
+        if (
+            self._dtype.fields is not None
+            or self._dtype.subdtype is not None
+            or self._dtype.kind not in "buifc"
+        ):
+            raise TypeError(
+                f"ZarrNDSource only supports fixed-size boolean and numeric dtypes, got {self._dtype}"
+            )
+        chunk_nbytes = math.prod(self._chunks) * self._dtype.itemsize
+        if chunk_nbytes > blosc2.MAX_BUFFERSIZE:
+            raise ValueError(
+                f"Zarr chunks must be at most {blosc2.MAX_BUFFERSIZE} bytes, got {chunk_nbytes}"
+            )
+
+    @property
+    def shape(self) -> tuple:
+        return self._shape
+
+    @property
+    def chunks(self) -> tuple:
+        return self._chunks
+
+    @property
+    def blocks(self) -> tuple:
+        return self._blocks
+
+    @property
+    def dtype(self) -> np.dtype:
+        return self._dtype
+
+    @property
+    def cparams(self):
+        return self._cparams
+
+    def get_chunk(self, nchunk: int) -> bytes:
+        grid = tuple(math.ceil(size / chunk) for size, chunk in zip(self.shape, self.chunks, strict=True))
+        total = math.prod(grid)
+        if isinstance(nchunk, bool) or not isinstance(nchunk, int) or nchunk < 0 or nchunk >= total:
+            raise IndexError(f"nchunk must be in range [0, {total}), got {nchunk}")
+        coords = np.unravel_index(nchunk, grid)
+        selection = tuple(
+            slice(int(coord) * chunk, min((int(coord) + 1) * chunk, size))
+            for coord, chunk, size in zip(coords, self.chunks, self.shape, strict=True)
+        )
+        values = np.ascontiguousarray(self.array[selection], dtype=self.dtype)
+        buffer = np.zeros(self.chunks, dtype=self.dtype)
+        buffer[tuple(slice(0, size) for size in values.shape)] = values
+        converted = blosc2.asarray(buffer, chunks=self.chunks, blocks=self.blocks, cparams=self.cparams)
+        return converted.schunk.get_chunk(0)

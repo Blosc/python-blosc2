@@ -603,6 +603,7 @@ from .proxy_source import (
     FsspecNDSource,
     Traffic,
 )
+from .zarr_source import ZarrNDSource
 from .indexing import Index
 
 from .schunk import SChunk, load, open
@@ -901,6 +902,7 @@ __all__ = [  # noqa : RUF022
     "ByteRangeNDSource",
     "FsspecNDSource",
     "Traffic",
+    "ZarrNDSource",
     "Proxy",
     "ProxyNDField",
     "ProxyNDSource",

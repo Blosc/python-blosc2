@@ -1895,6 +1895,11 @@ def process_opened_object(res):
         if source_kind == "fsspec":
             src = blosc2.FsspecNDSource(proxy_src["urlpath"])
             return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+        if source_kind == "zarr":
+            src = blosc2.ZarrNDSource(
+                proxy_src["urlpath"], blocks=proxy_cache.blocks, cparams=proxy_cache.cparams
+            )
+            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
         if source_kind == "caterva2":
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
             return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
@@ -2010,8 +2015,23 @@ def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str 
     return (cache_dir if cache_dir is not None else cache_storage), cache_path
 
 
+def _validate_fsspec_source_format(source_format, lazy):
+    if source_format not in {None, "blosc2", "zarr"}:
+        raise ValueError("source_format must be None, 'blosc2', or 'zarr'")
+    if source_format == "zarr" and not lazy:
+        raise NotImplementedError("Zarr sources require lazy=True")
+
+
 def _remote_proxy_options(
-    kwargs, cache_dir, cache_path, max_concurrency, *, lazy=False, storage_options=None
+    kwargs,
+    cache_dir,
+    cache_path,
+    max_concurrency,
+    *,
+    lazy=False,
+    storage_options=None,
+    source_format=None,
+    assume_immutable=True,
 ):
     """Return explicit RemoteProxy options, or None for the legacy lazy Proxy path."""
     policy_present = "cache_policy" in kwargs
@@ -2032,11 +2052,14 @@ def _remote_proxy_options(
         "cache_dir": cache_dir,
         "cache_path": cache_path,
         "max_concurrency": max_concurrency,
+        "assume_immutable": assume_immutable,
     }
     if limit_present:
         options["max_cache_bytes"] = limit
     if storage_options is not None:
         options["storage_options"] = storage_options
+    if source_format is not None:
+        options["source_format"] = source_format
     return options
 
 
@@ -2116,13 +2139,24 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
     max_concurrency = kwargs.pop("max_concurrency", None)
+    immutable_present = "assume_immutable" in kwargs
+    assume_immutable = kwargs.pop("assume_immutable", True)
+    source_format = kwargs.pop("source_format", None)
+    if source_format not in {None, "blosc2", "zarr"}:
+        raise ValueError("source_format must be None, 'blosc2', or 'zarr'")
+    if source_format is not None:
+        raise ValueError("source_format is not supported for Caterva2 URLPath inputs")
     lazy = kwargs.pop("lazy", False)
-    remote_proxy_options = _remote_proxy_options(kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy)
+    remote_proxy_options = _remote_proxy_options(
+        kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, assume_immutable=assume_immutable
+    )
     requested = [key for key, value in kwargs.items() if value is not None]
     if requested:
         raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
 
     if not lazy:
+        if immutable_present:
+            raise NotImplementedError("assume_immutable requires lazy=True")
         if remote_proxy_options is not None:
             raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
         if cache_dir is not None or cache_path is not None:
@@ -2173,10 +2207,21 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
     storage_options = kwargs.pop("storage_options", None)
+    source_format = kwargs.pop("source_format", None)
     max_concurrency = kwargs.pop("max_concurrency", None)
+    immutable_present = "assume_immutable" in kwargs
+    assume_immutable = kwargs.pop("assume_immutable", True)
     lazy = kwargs.pop("lazy", False)
+    _validate_fsspec_source_format(source_format, lazy)
     remote_proxy_options = _remote_proxy_options(
-        kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, storage_options=storage_options
+        kwargs,
+        cache_dir,
+        cache_path,
+        max_concurrency,
+        lazy=lazy,
+        storage_options=storage_options,
+        source_format=source_format,
+        assume_immutable=assume_immutable,
     )
     if lazy:
         if offset != 0:
@@ -2189,6 +2234,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         return _lazy_fsspec_proxy(
             urlpath, cache_dir, cache_path, max_concurrency, storage_options=storage_options
         )
+
+    if immutable_present:
+        raise NotImplementedError("assume_immutable requires lazy=True")
 
     if remote_proxy_options is not None:
         raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
@@ -2338,6 +2386,12 @@ def open(
         storage_options: dict, optional
             Parameters passed to the underlying ``fsspec`` filesystem when opening
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
+        source_format: {None, "blosc2", "zarr"}, optional
+            Format of a lazy remote source. A ``.zarr`` URL path component selects
+            Zarr automatically; an explicit value supports suffix-free array paths.
+        assume_immutable: bool, optional
+            With ``lazy=True``, skip remote identity checks before reads. Defaults
+            to ``True``; set to ``False`` when the remote object may be replaced.
 
     Returns
     -------

@@ -88,6 +88,31 @@ def test_cache_policy_validation(tmp_path):
         blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK)
     with pytest.raises(ValueError, match="max_concurrency"):
         blosc2.RemoteProxy(url, max_concurrency=0)
+    with pytest.raises(TypeError, match="assume_immutable"):
+        blosc2.RemoteProxy(url, assume_immutable=1)
+
+
+def test_assume_immutable_controls_identity_refresh(monkeypatch):
+    url, _ = _remote_array("immutable-option.b2nd", nchunks=1, chunk_size=100)
+    immutable = blosc2.RemoteProxy(url)
+    mutable = blosc2.open(url, lazy=True, assume_immutable=False)
+    refreshed = []
+
+    monkeypatch.setattr(
+        immutable.src,
+        "refresh_identity",
+        lambda: (_ for _ in ()).throw(AssertionError("immutable source was refreshed")),
+    )
+    monkeypatch.setattr(mutable.src, "refresh_identity", lambda: refreshed.append(True))
+
+    immutable._prepare_read()
+    mutable._prepare_read()
+
+    assert immutable.assume_immutable is True
+    assert mutable.assume_immutable is False
+    assert immutable.source["assume_immutable"] is True
+    assert mutable.source["assume_immutable"] is False
+    assert refreshed == [True]
 
 
 def test_remote_proxy_array_operand_interface():
@@ -254,7 +279,7 @@ def test_server_sparse_cache_reuses_partial_blocks(tmp_path):
 def test_server_sparse_cache_invalidates_same_geometry_replacement(tmp_path):
     url, data = _remote_array("server-replaced.b2nd", nchunks=2, chunk_size=100)
     runtime_path = tmp_path / "replaced-runtime"
-    proxy = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path)
+    proxy = blosc2.RemoteProxy.with_sparse_cache(url, runtime_path, assume_immutable=False)
     np.testing.assert_array_equal(proxy[:100], data[:100])
 
     replacement = np.arange(200, dtype=np.uint8)
@@ -353,7 +378,12 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
     assert carrier.schunk.vlmeta["b2o"] == {
         "kind": "remote_proxy",
         "version": 1,
-        "source": {"kind": "fsspec", "version": 1, "urlpath": url},
+        "source": {
+            "kind": "fsspec",
+            "version": 1,
+            "urlpath": url,
+            "assume_immutable": True,
+        },
         "cache_policy": "disk",
         "max_cache_bytes": 120_000,
     }
@@ -392,7 +422,7 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
 def test_reference_rejects_changed_source_geometry(tmp_path):
     url, _ = _remote_array("changed-geometry.b2nd", nchunks=1, chunk_size=100)
     path = tmp_path / "changed-reference.b2nd"
-    blosc2.RemoteProxy(url).save(path)
+    blosc2.RemoteProxy(url, assume_immutable=False).save(path)
 
     replacement = blosc2.arange(200, dtype=np.uint8, chunks=(100,), blocks=(100,))
     fsspec.filesystem("memory").pipe_file("changed-geometry.b2nd", replacement.to_cframe())
@@ -403,7 +433,7 @@ def test_reference_rejects_changed_source_geometry(tmp_path):
 def test_open_reference_rejects_geometry_changed_before_read(tmp_path):
     url, _ = _remote_array("changed-after-open.b2nd", nchunks=1, chunk_size=100)
     path = tmp_path / "changed-after-open-reference.b2nd"
-    blosc2.RemoteProxy(url).save(path)
+    blosc2.RemoteProxy(url, assume_immutable=False).save(path)
     restored = blosc2.open(path, mode="r")
 
     replacement = blosc2.arange(200, dtype=np.uint8, chunks=(100,), blocks=(100,))
@@ -419,6 +449,7 @@ def test_runtime_cache_is_invalidated_after_same_geometry_replacement(tmp_path):
         url,
         cache_policy=blosc2.CachePolicy.DISK,
         cache_path=tmp_path / "same-geometry-cache.b2nd",
+        assume_immutable=False,
     )
     traffic = proxy.traffic
     np.testing.assert_array_equal(proxy[:], data)
@@ -548,6 +579,7 @@ def test_caterva2_reference_does_not_persist_auth(monkeypatch):
         "version": 1,
         "path": "@personal/private.b2nd",
         "urlbase": "https://example.org/caterva2/",
+        "assume_immutable": True,
     }
 
     restored = blosc2.from_cframe(remote.to_cframe())
@@ -853,7 +885,9 @@ def test_completed_caterva2_reference_refreshes_identity(monkeypatch):
         }
 
     monkeypatch.setattr(blosc2_c2array, "info", info)
-    proxy = blosc2.RemoteProxy(blosc2.URLPath("@public/a.b2nd", urlbase="https://example.org"))
+    proxy = blosc2.RemoteProxy(
+        blosc2.URLPath("@public/a.b2nd", urlbase="https://example.org"), assume_immutable=False
+    )
     old = proxy.src.stamp
     state["nonce"] = "replacement"
     proxy._prepare_read()
@@ -993,7 +1027,7 @@ def test_unlimited_disk_cache_does_not_evict(tmp_path):
 def test_authorized_sparse_snapshot_never_reopens(tmp_path, monkeypatch):
     url, data = _remote_array("authorized-sparse.b2nd", nchunks=3, chunk_size=10000)
     source = blosc2.FsspecNDSource(url)
-    descriptor = {"kind": "fsspec", "version": 1, "urlpath": url}
+    descriptor = {"kind": "fsspec", "version": 1, "urlpath": url, "assume_immutable": True}
 
     def forbidden(*args, **kwargs):
         raise AssertionError("authorized transport was reopened or refreshed")

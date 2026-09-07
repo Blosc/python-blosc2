@@ -11,6 +11,7 @@ The argument passed to {func}`blosc2.open` selects the route:
 | Argument | Route | What it names |
 |---|---|---|
 | A URL string such as `s3://...` or `https://...` | fsspec | A byte-addressable, standalone `.b2nd` file |
+| A URL containing a `.zarr` path component | Zarr | One immutable Zarr v2 or v3 array |
 | A {ref}`URLPath` | Caterva2 | One array-like dataset on a Caterva2 server |
 
 ```python
@@ -32,6 +33,17 @@ a.shape, a.dtype  # metadata is available immediately
 a[100:110, :50]  # data is fetched now
 ```
 
+Remote Zarr needs `pip install "blosc2[zarr,fsspec]"` plus the protocol driver
+(`s3fs` for S3). The URL names the array itself; nested array paths work, while
+opening a group asks for an array path. For a suffix-free URL, pass
+`source_format="zarr"`. Converted Blosc2 chunks are cached under an immutable
+source contract, so publish changed data at a new URL or replace its cache.
+
+`RemoteProxy` assumes remote sources are immutable by default, avoiding a
+metadata request before every read. For a replaceable `.b2nd` or Caterva2
+source, pass `assume_immutable=False` to refresh its identity and invalidate
+stale cached chunks before each operation.
+
 A `URLPath` always means Caterva2. If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`. Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
 
 ### What each route supports
@@ -41,6 +53,7 @@ When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing
 | Remote object | fsspec URL | Caterva2 `URLPath` |
 |---|---|---|
 | Standalone contiguous `.b2nd` | Yes | Yes |
+| Zarr v2/v3 array | Yes, with `source_format="zarr"` | No |
 | HDF5 dataset | No | Yes |
 | NDArray leaf inside `.b2z` | No | Yes |
 | Lazy or computed array | No | Yes |

@@ -46,6 +46,28 @@ _SENSITIVE_QUERY_PARTS = (
 )
 
 
+def _normalize_source_format(urlpath, source_format):
+    if source_format not in {None, "blosc2", "zarr"}:
+        raise ValueError("source_format must be None, 'blosc2', or 'zarr'")
+    if source_format is not None:
+        return source_format
+    if isinstance(urlpath, blosc2.ZarrNDSource):
+        return "zarr"
+    if (
+        isinstance(urlpath, str)
+        and "::" not in urlpath
+        and any(part.endswith(".zarr") for part in urlsplit(urlpath).path.split("/"))
+    ):
+        return "zarr"
+    return "blosc2"
+
+
+def _validate_assume_immutable(value, name="assume_immutable"):
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool")
+    return value
+
+
 def _serialized_operation(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
@@ -163,6 +185,12 @@ class RemoteProxy(blosc2.Operand):
     storage_options: dict, optional
         Parameters passed to the underlying ``fsspec`` filesystem when opening
         an fsspec URL.
+    source_format: {None, "blosc2", "zarr"}, optional
+        Format of a URL source. A ``.zarr`` path component selects Zarr when
+        omitted.
+    assume_immutable: bool, optional
+        Skip remote identity checks before reads. Defaults to ``True``. Set to
+        ``False`` when the object at the URL may be replaced.
     """
 
     def __init__(
@@ -175,12 +203,17 @@ class RemoteProxy(blosc2.Operand):
         max_cache_bytes=_POLICY_DEFAULT,
         max_concurrency: int | None = None,
         storage_options: dict | None = None,
+        source_format: str | None = None,
+        assume_immutable: bool = True,
         _carrier=None,
         _runtime_cache_path=None,
         _source_descriptor=None,
+        _source_blocks=None,
+        _source_cparams=None,
     ):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
+        assume_immutable = _validate_assume_immutable(assume_immutable)
         if cache_dir is not None and cache_path is not None:
             raise ValueError("cache_dir and cache_path are mutually exclusive")
         if cache_policy is not blosc2.CachePolicy.DISK and (cache_dir is not None or cache_path is not None):
@@ -197,13 +230,24 @@ class RemoteProxy(blosc2.Operand):
         self._cache_policy = cache_policy
         self._cache_limit = _normalize_limit(cache_policy, max_cache_bytes)
         self._max_concurrency = _validate_max_concurrency(max_concurrency)
+        if isinstance(urlpath, (blosc2.URLPath, blosc2.C2Array)) and source_format is not None:
+            raise ValueError("source_format is not supported for Caterva2 inputs")
+        self._source_format = _normalize_source_format(urlpath, source_format)
         self._authorized_source = _source_descriptor is not None
         if self._authorized_source:
             if storage_options is not None:
                 raise ValueError("storage_options cannot be used with an authorized source")
-            if not isinstance(urlpath, blosc2.FsspecNDSource):
-                raise TypeError("source_descriptor requires an authorized FsspecNDSource")
-            expected = {"kind": "fsspec", "version": 1, "urlpath": urlpath.urlpath}
+            if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource)):
+                raise TypeError("source_descriptor requires an authorized FsspecNDSource or ZarrNDSource")
+            assume_immutable = _validate_assume_immutable(
+                _source_descriptor.get("assume_immutable"), "source_descriptor assume_immutable"
+            )
+            expected = {
+                "kind": "zarr" if isinstance(urlpath, blosc2.ZarrNDSource) else "fsspec",
+                "version": 1,
+                "urlpath": urlpath.urlpath,
+                "assume_immutable": assume_immutable,
+            }
             if _source_descriptor != expected:
                 raise ValueError("source_descriptor does not match the supplied source")
             _validate_persistable_url(urlpath.urlpath)
@@ -214,7 +258,13 @@ class RemoteProxy(blosc2.Operand):
                 self._max_concurrency,
                 persistable=cache_policy is not blosc2.CachePolicy.MEMORY,
                 storage_options=storage_options,
+                source_format=self._source_format,
+                assume_immutable=assume_immutable,
+                blocks=_source_blocks,
+                cparams=_source_cparams,
             )
+        self._assume_immutable = assume_immutable
+        self._storage_options = storage_options
         self._runtime_urlpath = self._runtime_source(urlpath)
         self._expected_geometry = self._geometry(self.src)
         self._expected_cparams = self.src.cparams
@@ -377,6 +427,7 @@ class RemoteProxy(blosc2.Operand):
         source_descriptor=None,
         max_cache_bytes=_POLICY_DEFAULT,
         max_concurrency: int | None = None,
+        assume_immutable: bool = True,
     ):
         """Attach an authorized remote source to a private sparse disk cache.
 
@@ -402,6 +453,7 @@ class RemoteProxy(blosc2.Operand):
             cache_policy=blosc2.CachePolicy.DISK,
             max_cache_bytes=max_cache_bytes,
             max_concurrency=max_concurrency,
+            assume_immutable=assume_immutable,
             _carrier=carrier,
             _runtime_cache_path=runtime_cache_path,
             _source_descriptor=source_descriptor,
@@ -520,8 +572,14 @@ class RemoteProxy(blosc2.Operand):
         traffic=None,
         persistable=True,
         storage_options: dict | None = None,
+        source_format: str | None = None,
+        assume_immutable: bool = True,
+        blocks=None,
+        cparams=None,
     ):
         if isinstance(urlpath, blosc2.C2Array):
+            if source_format not in {None, "blosc2"}:
+                raise ValueError("source_format is not supported for Caterva2 inputs")
             if storage_options is not None:
                 raise ValueError("storage_options is only supported for fsspec URLs")
             src = urlpath
@@ -532,8 +590,11 @@ class RemoteProxy(blosc2.Operand):
                 "version": 1,
                 "path": src.path,
                 "urlbase": src.urlbase,
+                "assume_immutable": assume_immutable,
             }
         elif isinstance(urlpath, blosc2.URLPath):
+            if source_format not in {None, "blosc2"}:
+                raise ValueError("source_format is not supported for Caterva2 URLPath inputs")
             if storage_options is not None:
                 raise ValueError("storage_options is only supported for fsspec URLs")
             src = blosc2.C2Array(
@@ -547,6 +608,7 @@ class RemoteProxy(blosc2.Operand):
                 "version": 1,
                 "path": src.path,
                 "urlbase": src.urlbase,
+                "assume_immutable": assume_immutable,
             }
         elif isinstance(urlpath, str):
             if persistable:
@@ -554,8 +616,27 @@ class RemoteProxy(blosc2.Operand):
             kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
             if storage_options is not None:
                 kwargs["storage_options"] = storage_options
-            src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
-            source = {"kind": "fsspec", "version": 1, "urlpath": urlpath}
+            source_format = _normalize_source_format(urlpath, source_format)
+            if source_format == "zarr":
+                if not assume_immutable:
+                    raise NotImplementedError("mutable Zarr sources are not supported")
+                src = blosc2.ZarrNDSource(
+                    urlpath, _traffic=traffic, blocks=blocks, cparams=cparams, **kwargs
+                )
+                source = {
+                    "kind": "zarr",
+                    "version": 1,
+                    "urlpath": urlpath,
+                    "assume_immutable": assume_immutable,
+                }
+            else:
+                src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
+                source = {
+                    "kind": "fsspec",
+                    "version": 1,
+                    "urlpath": urlpath,
+                    "assume_immutable": assume_immutable,
+                }
         else:
             raise TypeError("RemoteProxy requires a URL string, URLPath, or C2Array")
 
@@ -564,7 +645,7 @@ class RemoteProxy(blosc2.Operand):
         return src, source
 
     def _source_identity(self) -> str:
-        if self._source["kind"] == "fsspec":
+        if self._source["kind"] in {"fsspec", "zarr"}:
             return self._source["urlpath"]
         return f"caterva2:{blosc2.c2array._server_url(self.src.urlbase, self.src.path)}"
 
@@ -586,7 +667,7 @@ class RemoteProxy(blosc2.Operand):
 
     def _prepare_read(self):
         """Refresh source identity and return the backend for one operation."""
-        if self._authorized_source:
+        if self._authorized_source or self._assume_immutable:
             return self._proxy if self._proxy is not None else self.src
         with self._refresh_lock:
             previous_stamp = getattr(self.src, "stamp", None)
@@ -610,6 +691,9 @@ class RemoteProxy(blosc2.Operand):
                     self._max_concurrency,
                     traffic=self.traffic,
                     persistable=self.cache_policy is not blosc2.CachePolicy.MEMORY,
+                    storage_options=self._storage_options,
+                    source_format=self._source_format,
+                    assume_immutable=self._assume_immutable,
                 )
                 if current_stamp is None and not isinstance(fresh, blosc2.C2Array):
                     # No stable validator means cached bytes cannot safely be
@@ -693,6 +777,11 @@ class RemoteProxy(blosc2.Operand):
         return dict(self._source)
 
     @property
+    def assume_immutable(self) -> bool:
+        """Whether reads skip remote identity checks."""
+        return self._assume_immutable
+
+    @property
     def schunk(self):
         """The underlying carrier's or cache's :class:`SChunk`, or None if unattached."""
         if self._proxy is not None:
@@ -713,7 +802,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def urlpath(self):
         """The remote fsspec URL or credential-free Caterva2 URLPath."""
-        if self._source["kind"] == "fsspec":
+        if self._source["kind"] in {"fsspec", "zarr"}:
             return self._source["urlpath"]
         return blosc2.URLPath(self._source["path"], urlbase=self._source["urlbase"])
 
@@ -931,25 +1020,41 @@ class RemoteProxy(blosc2.Operand):
             raise ValueError("unsupported RemoteProxy source descriptor")
         source_kind = source.get("kind")
         if source_kind == "fsspec":
-            if set(source) != {"kind", "version", "urlpath"}:
+            if set(source) != {"kind", "version", "urlpath", "assume_immutable"}:
                 raise ValueError("fsspec RemoteProxy source descriptors contain unsupported fields")
             urlpath = source.get("urlpath")
             if not isinstance(urlpath, str):
                 raise TypeError("fsspec RemoteProxy sources require a string 'urlpath'")
         elif source_kind == "caterva2":
-            if set(source) != {"kind", "version", "path", "urlbase"}:
+            if set(source) != {"kind", "version", "path", "urlbase", "assume_immutable"}:
                 raise ValueError("Caterva2 RemoteProxy source descriptors contain unsupported fields")
             path = source.get("path")
             urlbase = source.get("urlbase")
             if not isinstance(path, str) or (urlbase is not None and not isinstance(urlbase, str)):
                 raise TypeError("Caterva2 RemoteProxy sources require string 'path' and 'urlbase' fields")
             urlpath = blosc2.URLPath(path, urlbase=urlbase)
+        elif source_kind == "zarr":
+            if set(source) != {"kind", "version", "urlpath", "assume_immutable"}:
+                raise ValueError("Zarr RemoteProxy source descriptors contain unsupported fields")
+            urlpath = source.get("urlpath")
+            if not isinstance(urlpath, str):
+                raise TypeError("Zarr RemoteProxy sources require a string 'urlpath'")
         else:
             raise ValueError(f"unsupported RemoteProxy source kind: {source_kind!r}")
+        _validate_assume_immutable(source.get("assume_immutable"), "source assume_immutable")
         expected = (carrier.shape, carrier.dtype, carrier.chunks, carrier.blocks)
         kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
         carrier_arg = carrier if policy is blosc2.CachePolicy.DISK else None
-        obj = cls(urlpath, cache_policy=policy, _carrier=carrier_arg, **kwargs)
+        obj = cls(
+            urlpath,
+            cache_policy=policy,
+            source_format="zarr" if source_kind == "zarr" else None,
+            assume_immutable=source["assume_immutable"],
+            _carrier=carrier_arg,
+            _source_blocks=carrier.blocks if source_kind == "zarr" else None,
+            _source_cparams=carrier.cparams if source_kind == "zarr" else None,
+            **kwargs,
+        )
         obj._validate_geometry(expected)
         return obj
 

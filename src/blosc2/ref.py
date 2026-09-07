@@ -20,7 +20,7 @@ class Ref:
     - a persistent local Blosc2 object reopenable from ``urlpath``
     - a member inside a :class:`blosc2.DictStore`
     - a remote :class:`blosc2.C2Array`
-    - an fsspec URL used by a :class:`blosc2.RemoteProxy`
+    - an fsspec or Zarr URL used by a :class:`blosc2.RemoteProxy`
 
     Instances can be created directly, from dictionaries via :meth:`from_dict`,
     or from supported objects via :meth:`from_object`. Use :meth:`open` to
@@ -34,12 +34,12 @@ class Ref:
     urlbase: str | None = None
 
     def __post_init__(self) -> None:
-        if self.kind in {"urlpath", "fsspec"}:
+        if self.kind in {"urlpath", "fsspec", "zarr"}:
             if not isinstance(self.urlpath, str):
                 raise TypeError(f"Ref(kind={self.kind!r}) requires a string 'urlpath'")
             if self.key is not None or self.path is not None or self.urlbase is not None:
                 raise ValueError(f"Ref(kind={self.kind!r}) only supports the 'urlpath' field")
-            if self.kind == "fsspec":
+            if self.kind in {"fsspec", "zarr"}:
                 # Keep structured references subject to the same credential and
                 # portability checks as an explicit RemoteProxy.  The import is
                 # local because Ref is imported before the public proxy module.
@@ -82,6 +82,10 @@ class Ref:
         return cls(kind="fsspec", urlpath=urlpath)
 
     @classmethod
+    def zarr_ref(cls, urlpath: str) -> Ref:
+        return cls(kind="zarr", urlpath=urlpath)
+
+    @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Ref:
         if not isinstance(payload, dict):
             raise TypeError("Ref payload must be a mapping")
@@ -106,6 +110,8 @@ class Ref:
             source = obj.source
             if source["kind"] == "caterva2":
                 return cls.c2array_ref(source["path"], source["urlbase"])
+            if source["kind"] == "zarr":
+                return cls.zarr_ref(source["urlpath"])
             return cls.fsspec_ref(source["urlpath"])
         if isinstance(obj, blosc2.Proxy):
             obj = obj._cache
@@ -121,7 +127,7 @@ class Ref:
 
     def to_dict(self) -> dict[str, Any]:
         payload = {"kind": self.kind, "version": 1}
-        if self.kind in {"urlpath", "fsspec"}:
+        if self.kind in {"urlpath", "fsspec", "zarr"}:
             payload["urlpath"] = self.urlpath
         elif self.kind == "dictstore_key":
             payload["urlpath"] = self.urlpath
@@ -144,4 +150,6 @@ class Ref:
             return blosc2.C2Array(self.path, urlbase=self.urlbase)
         if self.kind == "fsspec":
             return blosc2.RemoteProxy(self.urlpath)
+        if self.kind == "zarr":
+            return blosc2.RemoteProxy(self.urlpath, source_format="zarr")
         raise ValueError(f"Unsupported Ref kind: {self.kind!r}")

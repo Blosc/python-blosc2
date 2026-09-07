@@ -15,6 +15,7 @@ Examples:
     python s3-access.py s3://blosc2/cube-1k-1k-1k.b2nd
     python s3-access.py s3://blosc2/cube-1k-1k-1k.zarr
     python s3-access.py s3://blosc2/cube-1k-1k-1k-1shard.zarr
+    python s3-access.py s3://blosc2/hierarchy.zarr/d0/d1/a2
 """
 
 from __future__ import annotations
@@ -23,9 +24,6 @@ import argparse
 import sys
 import time
 from typing import Any
-
-import fsspec
-import zarr
 
 import blosc2
 
@@ -85,40 +83,6 @@ class TrackingFile:
         return getattr(self._f, name)
 
 
-def _instrument_store(store: Any, traffic: Traffic) -> None:
-    """Instrument an async Zarr store to record network byte traffic."""
-    orig_get = store.get
-
-    async def tracked_get(*args: Any, **kwargs: Any) -> Any:
-        val = await orig_get(*args, **kwargs)
-        if val is not None:
-            traffic.charge(len(val))
-        return val
-
-    orig_get_partial = store.get_partial_values
-
-    async def tracked_get_partial(*args: Any, **kwargs: Any) -> Any:
-        vals = await orig_get_partial(*args, **kwargs)
-        for buf in vals:
-            if buf is not None:
-                traffic.charge(len(buf))
-        return vals
-
-    store.get = tracked_get
-    store.get_partial_values = tracked_get_partial
-
-    if hasattr(store, "get_sync"):
-        orig_get_sync = store.get_sync
-
-        def tracked_get_sync(*args: Any, **kwargs: Any) -> Any:
-            val = orig_get_sync(*args, **kwargs)
-            if val is not None:
-                traffic.charge(len(val))
-            return val
-
-        store.get_sync = tracked_get_sync
-
-
 def open_remote_array(
     url: str,
     profile: str = DEFAULT_PROFILE,
@@ -139,6 +103,8 @@ def open_remote_array(
         return "Blosc2 (Lazy RemoteProxy)", arr
 
     if clean_url.endswith((".zarr.zip", ".zip")):
+        import fsspec
+        import zarr
         from zarr.storage import ZipStore
 
         traffic = Traffic()
@@ -149,29 +115,9 @@ def open_remote_array(
         arr.traffic = traffic
         return "Zarr (Zip)", arr
 
-    if clean_url.endswith(".zarr") or clean_url.endswith(".zarr/"):
-        from zarr.storage import FsspecStore
-
-        traffic = Traffic()
-        store = FsspecStore.from_url(url, storage_options=storage_options, read_only=True)
-        _instrument_store(store, traffic)
-        arr = zarr.open(store=store, mode="r")
-        arr.traffic = traffic
-        return "Zarr", arr
-
-    # Fallback / heuristic: try zarr first, then blosc2
-    try:
-        from zarr.storage import FsspecStore
-
-        traffic = Traffic()
-        store = FsspecStore.from_url(url, storage_options=storage_options, read_only=True)
-        _instrument_store(store, traffic)
-        arr = zarr.open(store=store, mode="r")
-        arr.traffic = traffic
-        return "Zarr", arr
-    except Exception:
-        arr = blosc2.open(url, lazy=True, storage_options=storage_options)
-        return "Blosc2 (Lazy RemoteProxy)", arr
+    arr = blosc2.open(url, lazy=True, storage_options=storage_options)
+    label = "Zarr" if arr.source["kind"] == "zarr" else "Blosc2"
+    return f"{label} (Lazy RemoteProxy)", arr
 
 
 def main() -> int:
