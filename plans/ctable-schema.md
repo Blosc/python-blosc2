@@ -882,12 +882,12 @@ from .schema import bool, bytes, field, float64, int64, string
 And in `__all__`:
 
 ```python
-"bool",
-"bytes",
-"field",
-"float64",
-"int64",
-"string",
+("bool",)
+("bytes",)
+("field",)
+("float64",)
+("int64",)
+("string",)
 ```
 
 Notes:
