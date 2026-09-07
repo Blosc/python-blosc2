@@ -106,9 +106,7 @@ class ZarrNDSource(ProxyNDSource):
         try:
             self._dtype = np.dtype(self.array.dtype)
         except TypeError as exc:
-            raise TypeError(
-                f"ZarrNDSource only supports fixed-size boolean and numeric dtypes, got {self.array.dtype}"
-            ) from exc
+            raise TypeError(f"ZarrNDSource only supports fixed-size dtypes, got {self.array.dtype}") from exc
         self._validate_metadata()
         _, computed_blocks = blosc2.compute_chunks_blocks(
             self._shape, chunks=self._chunks, blocks=blocks, dtype=self._dtype, cparams=cparams
@@ -142,14 +140,8 @@ class ZarrNDSource(ProxyNDSource):
             raise ValueError("ZarrNDSource does not support zero-length dimensions")
         if len(self._chunks) != len(self._shape) or any(size <= 0 for size in self._chunks):
             raise ValueError("Zarr chunk extents must be positive and match the array dimensions")
-        if (
-            self._dtype.fields is not None
-            or self._dtype.subdtype is not None
-            or self._dtype.kind not in "buifc"
-        ):
-            raise TypeError(
-                f"ZarrNDSource only supports fixed-size boolean and numeric dtypes, got {self._dtype}"
-            )
+        if self._dtype.hasobject or self._dtype.itemsize == 0:
+            raise TypeError(f"ZarrNDSource only supports fixed-size dtypes, got {self._dtype}")
         chunk_nbytes = math.prod(self._chunks) * self._dtype.itemsize
         if chunk_nbytes > blosc2.MAX_BUFFERSIZE:
             raise ValueError(

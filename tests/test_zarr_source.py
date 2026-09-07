@@ -43,20 +43,45 @@ def test_zarr_source_preserves_fill_and_edge_chunks(tmp_path, zarr):
     np.testing.assert_array_equal(proxy[:], expected)
 
 
-@pytest.mark.parametrize("dtype", ["U4", "S4", [("field", "i4")]])
-def test_zarr_source_rejects_unsupported_dtype(tmp_path, zarr, dtype):
-    path = tmp_path / "unsupported.zarr"
-    zarr.create_array(path, shape=(2,), chunks=(2,), dtype=dtype, zarr_format=2)
+@pytest.mark.parametrize(
+    "data",
+    [
+        np.array([[b"one", b"two"], [b"three", b""]], dtype="S6"),
+        np.array([["one", "two"], ["three", ""]], dtype="U6"),
+        np.array([["2024-01-01", "2024-01-02"], ["2024-01-03", "2024-01-04"]], dtype="M8[ns]"),
+        np.array([[1, 2], [3, 4]], dtype="m8[ns]"),
+    ],
+)
+@pytest.mark.parametrize("zarr_format", [2, 3])
+@pytest.mark.filterwarnings("ignore::zarr.errors.UnstableSpecificationWarning")
+def test_zarr_source_supports_fixed_size_dtypes(tmp_path, zarr, data, zarr_format):
+    path = tmp_path / "fixed-size.zarr"
+    array = zarr.create_array(path, data=data, chunks=data.shape, zarr_format=zarr_format)
 
-    with pytest.raises(TypeError, match="fixed-size boolean and numeric"):
-        blosc2.ZarrNDSource(path)
+    source = blosc2.ZarrNDSource(path)
+    proxy = blosc2.Proxy(source)
+
+    assert source.dtype == data.dtype
+    np.testing.assert_array_equal(proxy[:], data)
+
+
+def test_zarr_source_supports_structured_dtype(tmp_path, zarr):
+    data = np.array([(1, 1.5), (2, 2.5)], dtype=[("id", "i4"), ("value", "f4")])
+    path = tmp_path / "structured.zarr"
+    zarr.create_array(path, data=data, chunks=data.shape, zarr_format=2, fill_value=(0, 0))
+
+    source = blosc2.ZarrNDSource(path)
+    proxy = blosc2.Proxy(source)
+
+    assert source.dtype == data.dtype
+    np.testing.assert_array_equal(proxy[:], data)
 
 
 def test_zarr_source_rejects_variable_string_dtype(tmp_path, zarr):
     path = tmp_path / "variable-string.zarr"
     zarr.create_array(path, shape=(2,), chunks=(2,), dtype="str")
 
-    with pytest.raises(TypeError, match="fixed-size boolean and numeric"):
+    with pytest.raises(TypeError, match="fixed-size dtypes"):
         blosc2.ZarrNDSource(path)
 
 
