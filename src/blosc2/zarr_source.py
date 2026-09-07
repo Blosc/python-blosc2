@@ -132,12 +132,8 @@ class ZarrNDSource(ProxyNDSource):
         ).hexdigest()
 
     def _validate_metadata(self) -> None:
-        if not self._shape:
-            raise ValueError("ZarrNDSource does not support scalar arrays")
         if len(self._shape) > blosc2.MAX_DIM:
             raise ValueError(f"Zarr arrays may have at most {blosc2.MAX_DIM} dimensions")
-        if any(size == 0 for size in self._shape):
-            raise ValueError("ZarrNDSource does not support zero-length dimensions")
         if len(self._chunks) != len(self._shape) or any(size <= 0 for size in self._chunks):
             raise ValueError("Zarr chunk extents must be positive and match the array dimensions")
         if self._dtype.hasobject or self._dtype.itemsize == 0:
@@ -178,8 +174,12 @@ class ZarrNDSource(ProxyNDSource):
             slice(int(coord) * chunk, min((int(coord) + 1) * chunk, size))
             for coord, chunk, size in zip(coords, self.chunks, self.shape, strict=True)
         )
-        values = np.ascontiguousarray(self.array[selection], dtype=self.dtype)
+        values = np.asarray(self.array[selection], dtype=self.dtype)
         buffer = np.zeros(self.chunks, dtype=self.dtype)
-        buffer[tuple(slice(0, size) for size in values.shape)] = values
+        if self.shape:
+            values = np.ascontiguousarray(values)
+            buffer[tuple(slice(0, size) for size in values.shape)] = values
+        else:
+            buffer[()] = values
         converted = blosc2.asarray(buffer, chunks=self.chunks, blocks=self.blocks, cparams=self.cparams)
         return converted.schunk.get_chunk(0)

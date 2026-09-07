@@ -26,8 +26,9 @@ Caterva2 server.
   the cache chunk shape. Let Zarr resolve chunk reads within shards.
 - Support Zarr format 2 and 3 through a supported Zarr-Python 3 release. This
   does not require supporting the older Zarr-Python 2 API.
-- Start with fixed-size numeric and boolean arrays representable by B2ND.
-  Reject unsupported dtypes explicitly before creating a cache.
+- Support fixed-size NumPy dtypes representable by B2ND, including fixed-width
+  strings, temporal values, and structured records. Reject object-bearing and
+  variable-length dtypes explicitly before creating a cache.
 - `RemoteProxy(..., assume_immutable=True)` is the default for every source and
   skips metadata polling before reads. `False` retains identity refresh and cache
   invalidation for mutable single-file and Caterva2 sources.
@@ -162,15 +163,14 @@ payload, not transient decoded memory or process RSS.
 
 ### Supported representations
 
-Cover bool, integer, floating-point, and complex dtypes supported by B2ND, both
-Zarr formats, alternative codec pipelines, nonzero fill values, edge chunks,
-and Zarr v3 sharding. Let Zarr decode storage order and transpose codecs.
+Cover all fixed-size dtypes supported by B2ND, both Zarr formats, alternative
+codec pipelines, nonzero fill values, edge chunks, scalar arrays, zero-length
+arrays, and Zarr v3 sharding. Let Zarr decode storage order and transpose codecs.
 
-Reject object, variable-length, string, structured, and other unsupported dtype
-representations with a clear `TypeError` in this first version. Test scalar and
-zero-length arrays against existing B2ND geometry constraints; support them if
-the normal path works, otherwise reject explicitly at construction and document
-the limitation. Never defer such failures until after a partially written cache.
+Reject object-bearing and variable-length dtype representations with a clear
+`TypeError`. Scalar arrays cache their one value; zero-length arrays have no
+payload chunks and retain zero cache bytes. Never defer failures until after a
+partially written cache.
 
 ## Immutable identity and persistence
 

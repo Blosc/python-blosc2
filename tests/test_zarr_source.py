@@ -85,16 +85,35 @@ def test_zarr_source_rejects_variable_string_dtype(tmp_path, zarr):
         blosc2.ZarrNDSource(path)
 
 
-def test_zarr_source_rejects_scalar_and_empty(tmp_path, zarr):
+def test_zarr_source_supports_scalar_and_empty(tmp_path, zarr):
     scalar = tmp_path / "scalar.zarr"
     empty = tmp_path / "empty.zarr"
     zarr.create_array(scalar, shape=(), dtype="i4")
+    zarr.open_array(scalar, mode="r+")[()] = 42
     zarr.create_array(empty, shape=(0,), chunks=(1,), dtype="i4")
 
-    with pytest.raises(ValueError, match="scalar"):
-        blosc2.ZarrNDSource(scalar)
-    with pytest.raises(ValueError, match="zero-length"):
-        blosc2.ZarrNDSource(empty)
+    scalar_proxy = blosc2.Proxy(blosc2.ZarrNDSource(scalar))
+    empty_proxy = blosc2.Proxy(blosc2.ZarrNDSource(empty))
+
+    assert scalar_proxy[()] == 42
+    np.testing.assert_array_equal(empty_proxy[:], np.empty(0, dtype=np.int32))
+
+
+def test_open_remote_zarr_scalar_and_empty(zarr):
+    scalar_url = "memory://zarr-tests/scalar.zarr"
+    empty_url = "memory://zarr-tests/empty.zarr"
+    scalar = zarr.create_array(scalar_url, shape=(), dtype="i4")
+    scalar[()] = 42
+    zarr.create_array(empty_url, shape=(0,), chunks=(1,), dtype="i4")
+
+    scalar_proxy = blosc2.open(scalar_url, lazy=True)
+    empty_proxy = blosc2.open(empty_url, lazy=True)
+
+    assert isinstance(scalar_proxy, blosc2.RemoteProxy)
+    assert scalar_proxy[()] == 42
+    assert isinstance(empty_proxy, blosc2.RemoteProxy)
+    np.testing.assert_array_equal(empty_proxy[:], np.empty(0, dtype=np.int32))
+    assert empty_proxy.cache_bytes == 0
 
 
 def test_zarr_source_group_error(tmp_path, zarr):
