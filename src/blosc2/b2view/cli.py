@@ -39,9 +39,11 @@ def resolve_source(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Browse a Blosc2 TreeStore bundle in the terminal.")
-    parser.add_argument("urlpath", nargs="?", default=None, help="Path to a .b2d directory or .b2z file")
+    parser = argparse.ArgumentParser(description="Browse a Blosc2 bundle or array in the terminal.")
+    parser.add_argument("urlpath", nargs="?", default=None, help="Local path or remote array URL")
     parser.add_argument("path", nargs="?", default="/", help="Optional starting path inside the bundle")
+    parser.add_argument("--profile", help="S3 credential profile")
+    parser.add_argument("--endpoint-url", help="S3 endpoint URL")
     parser.add_argument(
         "--download",
         nargs="?",
@@ -114,6 +116,12 @@ def main(argv: list[str] | None = None) -> int:
         preview_cols=args.preview_cols,
         download_url=download_url,
         info_url=info_url,
+        storage_options={
+            key: value
+            for key, value in {"profile": args.profile, "endpoint_url": args.endpoint_url}.items()
+            if value is not None
+        }
+        or None,
     )
     app.run(mouse=args.mouse)
     return 0

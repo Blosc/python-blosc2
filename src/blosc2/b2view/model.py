@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 import blosc2
+from blosc2.core import is_fsspec_url, parse_container_url
 
 # Above this uncompressed size, plot_series does not read the whole series at
 # once for an exact min/max envelope.  Local objects are instead streamed in
@@ -251,9 +252,17 @@ class StoreBrowser:
     slices.
     """
 
-    def __init__(self, urlpath: str):
+    def __init__(self, urlpath: str, *, storage_options: dict[str, Any] | None = None):
         self.urlpath = urlpath
-        self.store = blosc2.open(urlpath, mode="r")
+        open_options = {}
+        if is_fsspec_url(urlpath):
+            _, dataset, source_format = parse_container_url(urlpath)
+            # Whole B2Z bundles keep their existing TreeStore opening path.
+            if source_format != "b2z" or dataset is not None:
+                open_options["lazy"] = True
+        if storage_options is not None:
+            open_options["storage_options"] = storage_options
+        self.store = blosc2.open(urlpath, mode="r", **open_options)
         self.is_tree = isinstance(self.store, blosc2.TreeStore)
         # Per-path row filters for CTable nodes (path -> expr / where() view)
         self._filters: dict[str, str] = {}
@@ -523,7 +532,7 @@ class StoreBrowser:
                 n,
                 np.dtype(obj.dtype).itemsize,
                 chunks[row_dim] if chunks else None,
-                remote=(kind == "c2array"),
+                remote=(kind == "c2array" or isinstance(obj, blosc2.RemoteProxy)),
                 max_points=max_points,
             )
 
@@ -1203,7 +1212,7 @@ def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
-    if isinstance(obj, blosc2.NDArray):
+    if isinstance(obj, (blosc2.NDArray, blosc2.RemoteProxy)):
         return "ndarray"
     if isinstance(obj, blosc2.CTable):
         return "ctable"

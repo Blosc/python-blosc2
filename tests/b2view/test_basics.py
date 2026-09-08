@@ -144,6 +144,26 @@ def _assert_ctable_window_values(page, expected):
 # ── Tree and panel focus navigation ──────────────────────────────────────
 
 
+async def test_remote_array_startup(tmp_path):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    path = tmp_path / "remote.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/d0/d1/a2"] = data
+    fsspec.filesystem("memory").pipe_file("b2view-tui.b2z", path.read_bytes())
+    app = B2ViewApp("memory://b2view-tui.b2z/d0/d1/a2", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert isinstance(app.browser.store, blosc2.RemoteProxy)
+        assert app._data_layout.shape == data.shape
+        page = app.table_page
+        for column in page["columns"]:
+            np.testing.assert_array_equal(
+                page["data"][column], data[0, page["start"] : page["stop"], int(column)]
+            )
+        assert app.focused is app.query_one("#data-table", DataTable)
+
+
 async def _wait_focus(pilot, expected_id: str) -> str | None:
     """Pause until the focused widget is *expected_id* (or give up)."""
     for _ in range(30):

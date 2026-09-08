@@ -56,6 +56,22 @@ You can also jump straight to a node and panel:
 
     b2view sample.b2z /dense/a --panel data
 
+Remote arrays
+~~~~~~~~~~~~~
+
+Remote array URLs open lazily, fetching data as you browse and caching reads
+in memory.  A dataset inside a B2Z archive opens as a single array at the
+viewer root; include its path in the URL using ``/`` or ``::``:
+
+.. code-block:: console
+
+    b2view s3://blosc2/hierarchy.b2z/d0/d1/a2 --profile blosc2 --endpoint-url https://s3.us-west-001.backblazeb2.com --panel data
+
+``--profile`` and ``--endpoint-url`` are optional; when omitted, the S3 backend
+uses its normal credential and endpoint configuration.  Install ``s3fs`` for
+S3 access.  Remote ``.b2nd`` arrays and supported HDF5/Zarr dataset URLs use
+the same viewer (with their corresponding backend dependencies installed).
+
 Step 3 — Navigate the data panel
 --------------------------------
 

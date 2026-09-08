@@ -2021,10 +2021,12 @@ class B2ViewApp(App):
         preview_cols: int = 10,
         download_url: str | None = None,
         info_url: str | None = None,
+        storage_options: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
         self.urlpath = urlpath
+        self.storage_options = storage_options
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
         # Header label: the path as given on the CLI, or the @public-relative
@@ -2126,7 +2128,7 @@ class B2ViewApp(App):
 
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
-        self.browser = StoreBrowser(self.urlpath)
+        self.browser = StoreBrowser(self.urlpath, storage_options=self.storage_options)
         self.query_one(B2ViewHeader).set_filename(self._header_label)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
