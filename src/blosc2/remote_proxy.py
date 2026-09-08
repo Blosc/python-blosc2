@@ -48,8 +48,8 @@ _SENSITIVE_QUERY_PARTS = (
 
 
 def _normalize_source_format(urlpath, source_format):
-    if source_format not in {None, "blosc2", "zarr", "hdf5"}:
-        raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
+    if source_format not in {None, "blosc2", "zarr", "hdf5", "b2z"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', 'hdf5', or 'b2z'")
     if source_format is not None:
         return source_format
     if isinstance(urlpath, blosc2.ZarrNDSource):
@@ -152,6 +152,8 @@ def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
 
 
 def _validate_authorized_source(urlpath, storage_options, source_descriptor):
+    if isinstance(urlpath, blosc2.B2ZNDSource):
+        raise NotImplementedError("authorized B2Z sparse attachment is not supported yet")
     if storage_options is not None:
         raise ValueError("storage_options cannot be used with an authorized source")
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
@@ -233,6 +235,17 @@ def _open_url_source(
             "dataset": src.dataset,
             "assume_immutable": assume_immutable,
         }
+    elif source_format == "b2z":
+        if not assume_immutable:
+            raise NotImplementedError("mutable B2Z sources are not supported")
+        src = blosc2.B2ZNDSource(urlpath, dataset, _traffic=traffic, **kwargs)
+        source = {
+            "kind": "b2z",
+            "version": 1,
+            "urlpath": urlpath,
+            "dataset": src.dataset,
+            "assume_immutable": True,
+        }
     else:
         src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
         source = {
@@ -288,13 +301,13 @@ def _parse_source_from_payload(source):
         urlpath = _validate_urlpath_source(
             source, {"kind", "version", "urlpath", "assume_immutable"}, "Zarr"
         )
-    elif source_kind == "hdf5":
+    elif source_kind in {"hdf5", "b2z"}:
         urlpath = _validate_urlpath_source(
-            source, {"kind", "version", "urlpath", "dataset", "assume_immutable"}, "HDF5"
+            source, {"kind", "version", "urlpath", "dataset", "assume_immutable"}, source_kind.upper()
         )
         dataset = source.get("dataset")
         if not isinstance(dataset, str):
-            raise TypeError("HDF5 RemoteProxy sources require a string 'dataset'")
+            raise TypeError(f"{source_kind.upper()} RemoteProxy sources require a string 'dataset'")
     else:
         raise ValueError(f"unsupported RemoteProxy source kind: {source_kind!r}")
     _validate_assume_immutable(source.get("assume_immutable"), "source assume_immutable")
@@ -310,8 +323,8 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
     if source_format is None:
         source_format = detected_format
     resolved_format = _normalize_source_format(urlpath, source_format)
-    if dataset is not None and resolved_format not in {"hdf5", "zarr"}:
-        raise ValueError("dataset is only supported for HDF5 and Zarr sources")
+    if dataset is not None and resolved_format not in {"hdf5", "zarr", "b2z"}:
+        raise ValueError("dataset is only supported for HDF5 and Zarr sources or B2Z archives")
 
     if resolved_format == "zarr":
         if dataset is not None:
@@ -323,7 +336,7 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
             resolved_dataset = urlpath[idx + 6 :].strip("/") or None
         else:
             resolved_dataset = None
-    elif resolved_format == "hdf5":
+    elif resolved_format in {"hdf5", "b2z"}:
         resolved_dataset = dataset.strip("/") if dataset is not None else None
     else:
         resolved_dataset = None
@@ -366,9 +379,11 @@ class RemoteProxy(blosc2.Operand):
     storage_options: dict, optional
         Parameters passed to the underlying ``fsspec`` filesystem when opening
         an fsspec URL.
-    source_format: {None, "blosc2", "zarr"}, optional
-        Format of a URL source. A ``.zarr`` path component selects Zarr when
-        omitted.
+    source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
+        Format of a URL source, inferred from its container suffix when omitted.
+    dataset: str, optional
+        Array path within an HDF5, Zarr, or B2Z container. B2Z supports external
+        NDArray leaves in immutable archives, e.g. ``dataset="d0/a3"``.
     assume_immutable: bool, optional
         Skip remote identity checks before reads. Defaults to ``True``. Set to
         ``False`` when the object at the URL may be replaced.
@@ -812,7 +827,7 @@ class RemoteProxy(blosc2.Operand):
         return src, source
 
     def _source_identity(self) -> str:
-        if self._source["kind"] == "hdf5":
+        if self._source["kind"] in {"hdf5", "b2z"}:
             return f"{self._source['urlpath']}::{self._source['dataset']}"
         if self._source["kind"] in {"fsspec", "zarr"}:
             return self._source["urlpath"]
@@ -973,7 +988,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def urlpath(self):
         """The remote fsspec URL or credential-free Caterva2 URLPath."""
-        if self._source["kind"] in {"fsspec", "zarr", "hdf5"}:
+        if self._source["kind"] in {"fsspec", "zarr", "hdf5", "b2z"}:
             return self._source["urlpath"]
         return blosc2.URLPath(self._source["path"], urlbase=self._source["urlbase"])
 
@@ -1222,8 +1237,8 @@ class RemoteProxy(blosc2.Operand):
         obj = cls(
             urlpath,
             cache_policy=policy,
-            source_format=source_kind if source_kind in {"zarr", "hdf5"} else None,
-            dataset=source.get("dataset") if source_kind == "hdf5" else None,
+            source_format=source_kind if source_kind in {"zarr", "hdf5", "b2z"} else None,
+            dataset=source.get("dataset") if source_kind in {"hdf5", "b2z"} else None,
             refs=refs,
             assume_immutable=source["assume_immutable"],
             _carrier=carrier_arg,

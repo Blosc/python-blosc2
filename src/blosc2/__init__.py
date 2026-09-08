@@ -604,6 +604,7 @@ from .proxy_source import (
     Traffic,
 )
 from .zarr_source import ZarrNDSource
+from .b2z_source import B2ZNDSource
 from .hdf5_source import HDF5NDSource, available_datasets
 from .indexing import Index
 
@@ -902,6 +903,7 @@ __all__ = [  # noqa : RUF022
     "Operand",
     "ByteRangeNDSource",
     "FsspecNDSource",
+    "B2ZNDSource",
     "Traffic",
     "ZarrNDSource",
     "HDF5NDSource",

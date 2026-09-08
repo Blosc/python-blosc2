@@ -20,7 +20,7 @@ class Ref:
     - a persistent local Blosc2 object reopenable from ``urlpath``
     - a member inside a :class:`blosc2.DictStore`
     - a remote :class:`blosc2.C2Array`
-    - an fsspec or Zarr URL used by a :class:`blosc2.RemoteProxy`
+    - an fsspec or Zarr URL, or B2Z array key, used by a :class:`blosc2.RemoteProxy`
 
     Instances can be created directly, from dictionaries via :meth:`from_dict`,
     or from supported objects via :meth:`from_object`. Use :meth:`open` to
@@ -47,13 +47,17 @@ class Ref:
 
                 _validate_persistable_url(self.urlpath)
             return
-        if self.kind == "dictstore_key":
+        if self.kind in {"dictstore_key", "b2z"}:
             if not isinstance(self.urlpath, str):
-                raise TypeError("Ref(kind='dictstore_key') requires a string 'urlpath'")
+                raise TypeError(f"Ref(kind={self.kind!r}) requires a string 'urlpath'")
             if not isinstance(self.key, str):
-                raise TypeError("Ref(kind='dictstore_key') requires a string 'key'")
+                raise TypeError(f"Ref(kind={self.kind!r}) requires a string 'key'")
             if self.path is not None or self.urlbase is not None:
-                raise ValueError("Ref(kind='dictstore_key') only supports 'urlpath' and 'key'")
+                raise ValueError(f"Ref(kind={self.kind!r}) only supports 'urlpath' and 'key'")
+            if self.kind == "b2z":
+                from blosc2.remote_proxy import _validate_persistable_url
+
+                _validate_persistable_url(self.urlpath)
             return
         if self.kind == "c2array":
             if not isinstance(self.path, str):
@@ -112,6 +116,8 @@ class Ref:
                 return cls.c2array_ref(source["path"], source["urlbase"])
             if source["kind"] == "zarr":
                 return cls.zarr_ref(source["urlpath"])
+            if source["kind"] == "b2z":
+                return cls(kind="b2z", urlpath=source["urlpath"], key=source["dataset"])
             return cls.fsspec_ref(source["urlpath"])
         if isinstance(obj, blosc2.Proxy):
             obj = obj._cache
@@ -129,7 +135,7 @@ class Ref:
         payload = {"kind": self.kind, "version": 1}
         if self.kind in {"urlpath", "fsspec", "zarr"}:
             payload["urlpath"] = self.urlpath
-        elif self.kind == "dictstore_key":
+        elif self.kind in {"dictstore_key", "b2z"}:
             payload["urlpath"] = self.urlpath
             payload["key"] = self.key
         elif self.kind == "c2array":
@@ -146,6 +152,8 @@ class Ref:
             return blosc2.open(self.urlpath, mode="r")
         if self.kind == "dictstore_key":
             return blosc2.DictStore(self.urlpath, mode="r")[self.key]
+        if self.kind == "b2z":
+            return blosc2.RemoteProxy(self.urlpath, source_format="b2z", dataset=self.key)
         if self.kind == "c2array":
             return blosc2.C2Array(self.path, urlbase=self.urlbase)
         if self.kind == "fsspec":

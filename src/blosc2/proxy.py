@@ -70,6 +70,17 @@ def _source_urlpath(src):
     return src.urlpath
 
 
+def _remote_array_metadata(src):
+    if isinstance(src, blosc2.B2ZNDSource):
+        return {"source_kind": "b2z", "urlpath": src.urlpath, "dataset": src.dataset}
+    return {
+        "source_kind": "zarr" if isinstance(src, blosc2.ZarrNDSource) else "fsspec",
+        "urlpath": _source_urlpath(src),
+        # Preserve the legacy field for older readers of standalone sources.
+        "local_abspath": src.urlpath,
+    }
+
+
 def _validate_max_cache_bytes(value: int | None) -> int | None:
     if value is None:
         return None
@@ -209,12 +220,8 @@ class Proxy(blosc2.Operand):
                 "caterva2_env": caterva2_env,
             }
             container = getattr(self.src, "schunk", self.src)
-            if isinstance(self.src, (blosc2.FsspecNDSource, blosc2.ZarrNDSource)):
-                meta_val["source_kind"] = "zarr" if isinstance(self.src, blosc2.ZarrNDSource) else "fsspec"
-                meta_val["urlpath"] = _source_urlpath(self.src)
-                # Keep the legacy field populated so older readers still
-                # reopen this cache, albeit through their eager URL path.
-                meta_val["local_abspath"] = self.src.urlpath
+            if isinstance(self.src, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, blosc2.B2ZNDSource)):
+                meta_val.update(_remote_array_metadata(self.src))
             elif isinstance(self.src, blosc2.C2Array):
                 meta_val["source_kind"] = "caterva2"
                 # Authentication belongs to the reopening process, not to a

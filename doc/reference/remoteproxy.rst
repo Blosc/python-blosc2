@@ -3,7 +3,7 @@
 RemoteProxy
 ===========
 
-``RemoteProxy`` is a persistable proxy for one remote B2ND, Zarr, or HDF5 array. It
+``RemoteProxy`` is a persistable proxy for one remote B2ND, B2Z, Zarr, or HDF5 array. It
 accepts an fsspec URL or a Caterva2 :ref:`URLPath`. With disk caching enabled,
 its B2ND carrier is both the portable descriptor and the bounded compressed-data
 cache.
@@ -70,6 +70,43 @@ Pre-computed kerchunk references can be supplied via ``refs`` to avoid remote sc
     )
     # Equivalent to "s3://public-bucket/hierarchy.h5::d0/d1/a2"
     # or blosc2.open("s3://public-bucket/hierarchy.h5", lazy=True, dataset="d0/d1/a2", ...)
+
+B2Z archives
+------------
+
+An external NDArray inside an immutable ``.b2z`` archive can be selected using
+the same three addressing forms:
+
+.. code-block:: python
+
+    remote = blosc2.open(
+        "s3://public-bucket/hierarchy.b2z::/d0/a3",
+        lazy=True,
+        storage_options={"anon": True},
+    )
+    values = remote[:10, 0, :5]
+    # Also accepts hierarchy.b2z/d0/a3 or dataset="d0/a3".
+
+Use ``source_format="b2z"`` for suffix-free archive URLs. The dataset is a logical
+tree key without the member's ``.b2nd`` suffix. The native Blosc2 reader preserves
+source chunks, blocks, dtype, and compression parameters; no kerchunk, Zarr, or
+HDF5 dependencies are needed. Install the fsspec extra and the protocol backend.
+
+Opening reads the ZIP directory and selected member's headers. Directory cost
+scales with archive member count. Subsequent reads fetch native chunks or blocks
+by byte range; repeated cache hits perform no remote reads. Reopening a saved
+carrier rereads archive/frame metadata and resolves the member offset afresh.
+
+Only unencrypted, ``ZIP_STORED`` external NDArray members are supported. Groups,
+embedded leaves inside ``embed.b2e``, other leaf types, and compressed ZIP members
+are unsupported. Archives must remain immutable; replacing an archive requires
+replacing its cache. Authorized B2Z sparse attachment and Caterva2 federation are
+not supported in this version.
+
+.. autoclass:: blosc2.B2ZNDSource
+
+Caching and persistence
+-----------------------
 
 Ephemeral in-memory caching is available through :attr:`blosc2.CachePolicy.MEMORY`.
 Fetched chunks are kept in RAM, bounded by a finite 256 MiB compressed-payload limit by default

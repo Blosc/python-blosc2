@@ -683,6 +683,25 @@ def split_h5_url(url: str) -> tuple[str, str | None]:
     return url, None
 
 
+def _parse_b2z_url(urlpath, dataset):
+    if "::" in urlpath:
+        return None  # A remaining separator belongs to an fsspec protocol chain.
+    parsed = urllib.parse.urlsplit(urlpath)
+    path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    parts = path_str.split("/")
+    for index, part in enumerate(parts):
+        if part.endswith(".b2z"):
+            subpath = "/".join(parts[index + 1 :]).strip("/")
+            if subpath:
+                if dataset is not None:
+                    raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+                base_path = parsed.path[: -len("/".join(parts[index + 1 :]))].rstrip("/")
+                urlpath = urllib.parse.urlunsplit(parsed._replace(path=base_path))
+                dataset = subpath
+            return urlpath, dataset, "b2z"
+    return None
+
+
 def parse_container_url(
     urlpath: object,
     dataset: str | None = None,
@@ -705,6 +724,8 @@ def parse_container_url(
             raw_dataset = parts[1].strip("/")
             dataset = raw_dataset if raw_dataset else None
 
+    if b2z := _parse_b2z_url(urlpath, dataset):
+        return b2z
     h5_base, h5_dataset = split_h5_url(urlpath)
     if h5_dataset is not None:
         if dataset is not None:

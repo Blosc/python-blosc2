@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Open a remote S3 array (Blosc2 .b2nd, Zarr .zarr, or HDF5 .h5) and print metadata and sample data.
+"""Open a remote S3 array (Blosc2 .b2nd/.b2z, Zarr .zarr, or HDF5 .h5) and print sample data.
 
 Usage:
     python s3-access.py <url> [--profile PROFILE] [--endpoint-url ENDPOINT_URL]
@@ -19,6 +19,7 @@ Examples:
     python s3-access.py s3://blosc2/hierarchy.zarr::d0/d1/a2
     python s3-access.py s3://blosc2/hierarchy.h5/d0/d1/a2
     python s3-access.py s3://blosc2/hierarchy.h5::d0/d1/a2
+    python s3-access.py s3://blosc2/hierarchy.b2z::/d0/a3
 """
 
 from __future__ import annotations
@@ -129,6 +130,8 @@ def open_remote_array(
         label = "HDF5"
     elif kind == "zarr":
         label = "Zarr"
+    elif kind == "b2z":
+        label = "Blosc2 B2Z"
     else:
         label = "Blosc2"
     return f"{label} (Lazy RemoteProxy)", arr

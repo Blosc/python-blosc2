@@ -1890,6 +1890,9 @@ def _set_default_dparams(kwargs):
 
 def _reconstruct_legacy_proxy(proxy_cache, proxy_src):
     source_kind = proxy_src.get("source_kind")
+    if source_kind == "b2z":
+        src = blosc2.B2ZNDSource(proxy_src["urlpath"], proxy_src["dataset"])
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
     if source_kind == "fsspec":
         src = blosc2.FsspecNDSource(proxy_src["urlpath"])
         return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
@@ -2038,8 +2041,8 @@ def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str 
 
 
 def _validate_fsspec_source_format(source_format, lazy):
-    if source_format not in {None, "blosc2", "zarr", "hdf5"}:
-        raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
+    if source_format not in {None, "blosc2", "zarr", "hdf5", "b2z"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', 'hdf5', or 'b2z'")
     if source_format == "zarr" and not lazy:
         raise NotImplementedError("Zarr sources require lazy=True")
     if source_format == "hdf5" and not lazy:
@@ -2242,8 +2245,8 @@ def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bo
     if dataset is not None and not lazy:
         raise ValueError("dataset requires lazy=True")
     _validate_fsspec_source_format(source_format, lazy)
-    if dataset is not None and source_format not in {None, "hdf5", "zarr"}:
-        raise ValueError("dataset is only supported for HDF5 and Zarr sources")
+    if dataset is not None and source_format not in {None, "hdf5", "zarr", "b2z"}:
+        raise ValueError("dataset is only supported for HDF5 and Zarr sources or B2Z archives")
     parsed = urlsplit(urlpath)
     url_path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
     if not lazy and any(part.endswith((".h5", ".hdf5")) for part in url_path_str.split("/")):
@@ -2355,7 +2358,9 @@ def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
     _, parsed_dataset, hint = parse_container_url(urlpath, kwargs.get("dataset"))
     if hint == "hdf5":
         return True
-    return hint == "zarr" and (kwargs.get("lazy") or parsed_dataset is not None or "dataset" in kwargs)
+    return (hint in {"zarr", "b2z"} or kwargs.get("source_format") == "b2z") and (
+        kwargs.get("lazy") or parsed_dataset is not None or "dataset" in kwargs
+    )
 
 
 def _try_open_special_store(urlpath: str, mode: str, offset: int, kwargs: dict):
@@ -2389,7 +2394,11 @@ def _normalize_open_target(urlpath, kwargs, dataset, refs):
         urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, kwargs.get("dataset"))
         if parsed_dataset is not None:
             kwargs["dataset"] = parsed_dataset
-        if detected_format is not None and kwargs.get("source_format") is None:
+        if (
+            detected_format is not None
+            and kwargs.get("source_format") is None
+            and (detected_format != "b2z" or kwargs.get("lazy") or parsed_dataset is not None)
+        ):
             kwargs["source_format"] = detected_format
     return urlpath
 
@@ -2515,16 +2524,17 @@ def open(
             Parameters passed to the underlying ``fsspec`` filesystem when opening
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
         dataset: str, optional
-            For HDF5 sources (``source_format="hdf5"`` or ``.h5``/``.hdf5`` files),
-            the dataset path within the HDF5 file (e.g. ``dataset="d0/d1/a2"``).
+            Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
+            B2Z supports external NDArray leaves in immutable archives.
             Requires ``lazy=True``.
         refs: dict | str | PathLike, optional
             Pre-computed kerchunk reference dictionary or path to a JSON reference
             file for HDF5 sources.
-        source_format: {None, "blosc2", "zarr", "hdf5"}, optional
+        source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
-            an explicit value supports suffix-free array paths.
+            a ``.b2z`` path selects B2Z automatically. An explicit value supports
+            suffix-free array paths.
         assume_immutable: bool, optional
             With ``lazy=True``, skip remote identity checks before reads. Defaults
             to ``True``; set to ``False`` when the remote object may be replaced.
@@ -2559,7 +2569,8 @@ def open(
       A plain URL read rebuilds the object from a cframe held in memory, so it
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
       archive rather than a cframe, and needs ``cache_dir`` like the directory
-      formats do. With ``lazy=True``, it returns a :ref:`RemoteProxy` (using
+      formats do. With ``lazy=True`` and a dataset path, a B2Z archive serves
+      its selected external NDArray by byte range. Lazy opening returns a :ref:`RemoteProxy` (using
       ``CachePolicy.DISK`` with ``cache_dir`` or ``cache_path``, and
       ``CachePolicy.MEMORY`` otherwise).
 
