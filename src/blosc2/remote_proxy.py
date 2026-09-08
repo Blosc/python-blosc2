@@ -1092,9 +1092,11 @@ class RemoteProxy(blosc2.Operand):
         return {}
 
     def _fetch_vlmeta(self) -> dict[str, Any]:
-        vlmeta = getattr(self.src, "vlmeta", None)
+        vlmeta = (
+            self.src.attrs if isinstance(self.src, blosc2.C2Array) else getattr(self.src, "vlmeta", None)
+        )
         if vlmeta is not None and isinstance(vlmeta, Mapping):
-            if isinstance(self.src, blosc2.C2Array):
+            if isinstance(self.src, blosc2.C2Array) and self.src.meta.get("attrs") is None:
                 res = {k: v for k, v in vlmeta.items() if k not in _C2_INTERNAL_VLMETA_KEYS}
             elif isinstance(vlmeta, dict):
                 res = vlmeta.copy()

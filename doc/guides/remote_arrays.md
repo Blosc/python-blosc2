@@ -9,6 +9,12 @@ Read user attributes with `a.attrs["name"]` or get them all with `a.attrs[:]`.
 metadata cache across all source formats. HDF5 attributes exclude the
 `_ARRAY_DIMENSIONS` metadata added by Kerchunk during translation.
 
+For Caterva2 sources, user attributes come from the `attrs` field in `/api/info`.
+`C2Array.attrs` uses the same field, with a fallback to variable metadata for
+older servers. Its `vlmeta` property retains the original protocol metadata.
+These properties do not write attributes to the server. For a saved remote
+proxy served by Caterva2, attributes reflect the snapshot stored in its carrier.
+
 ## Choose a remote route
 
 The argument passed to {func}`blosc2.open` selects the route:

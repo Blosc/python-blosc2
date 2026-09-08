@@ -1640,6 +1640,17 @@ class C2Array(blosc2.Operand):
         return self.meta["schunk"]["vlmeta"]
 
     @property
+    def attrs(self) -> dict:
+        """User attributes; changing this mapping does not update the server.
+
+        Uses the cached metadata, refreshing after writes as :attr:`vlmeta`
+        does. Older servers without public attributes fall back to ``vlmeta``.
+        """
+        self._refresh_meta()
+        attrs = self.meta.get("attrs")
+        return self.vlmeta if attrs is None else attrs
+
+    @property
     def info(self) -> InfoReporter:
         """
         Print information about this remote array.

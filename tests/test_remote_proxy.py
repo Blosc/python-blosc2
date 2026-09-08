@@ -1240,9 +1240,16 @@ def test_zarr_source_vlmeta():
     assert proxy.attrs is proxy.vlmeta
 
 
-def test_caterva2_vlmeta_filters_internal_keys(monkeypatch):
+@pytest.mark.parametrize(
+    "attrs", [None, {}, {"user_tag": {"nested": [1, True]}, "fill_state": "user value"}]
+)
+def test_caterva2_vlmeta_filters_internal_keys(monkeypatch, attrs):
+    requests = 0
+
     def fake_info(path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None):
-        return {
+        nonlocal requests
+        requests += 1
+        result = {
             "shape": [10],
             "chunks": [5],
             "blocks": [5],
@@ -1256,19 +1263,34 @@ def test_caterva2_vlmeta_filters_internal_keys(monkeypatch):
                 },
             },
         }
+        if attrs is not None:
+            result["attrs"] = attrs
+        return result
 
     monkeypatch.setattr(blosc2_c2array, "info", fake_info)
     remote = blosc2.RemoteProxy(blosc2.URLPath("@public/test-vlmeta.b2nd", urlbase="https://example.org/c2"))
 
     # Caterva2 fixed metalayers are not supported by api/info, returns empty
     assert remote.meta == {}
-    # Internal keys fill_nonce and fill_state are filtered out
-    assert remote.vlmeta == {"user_tag": "public_data"}
+    # Only legacy responses need client-side filtering of internal keys.
+    expected = {"user_tag": "public_data"} if attrs is None else attrs
+    assert remote.vlmeta == expected
+    assert remote.attrs is remote.vlmeta
+    assert remote.src.attrs == (remote.src.vlmeta if attrs is None else attrs)
+    assert remote.src.vlmeta["fill_nonce"] == "secret_nonce_123"
 
     # Export to carrier and verify roundtrip doesn't persist internal keys
     cframe = remote.to_cframe()
     restored = blosc2.from_cframe(cframe)
-    assert restored.vlmeta == {"user_tag": "public_data"}
+    assert restored.vlmeta == expected
+
+    previous_requests = requests
+    _ = remote.src.attrs
+    assert requests == previous_requests
+    attrs = {"refreshed": True}
+    remote.src._forget_index()
+    assert remote.src.attrs == attrs
+    assert requests == previous_requests + 1
 
 
 def test_remote_proxy_filters_carrier_internal_metalayers():
