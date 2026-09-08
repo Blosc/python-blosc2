@@ -400,6 +400,13 @@ class HDF5NDSource(ProxyNDSource):
     def cparams(self):
         return self._cparams
 
+    @property
+    def vlmeta(self) -> dict:
+        try:
+            return dict(self.array.attrs)
+        except Exception:
+            return {}
+
     def get_chunk(self, nchunk: int) -> bytes:
         return zarr_chunk_to_blosc2(
             self.array,

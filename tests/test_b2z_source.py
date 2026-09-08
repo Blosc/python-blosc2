@@ -247,6 +247,75 @@ def test_geometry_change_and_expression(tmp_path):
         blosc2.open(path)
 
 
+def test_b2z_metadata_and_caching():
+    data = np.arange(100, dtype=np.int32)
+    array = blosc2.asarray(
+        data,
+        chunks=(20,),
+        blocks=(10,),
+        meta={"sensor_info": {"model": "X1", "rate": 100}},
+    )
+    array.vlmeta["experiment_notes"] = {"comment": "test run", "valid": True}
+    plain_array = blosc2.asarray(data, chunks=(20,), blocks=(10,))
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("d0/with_meta.b2nd", array.to_cframe())
+        archive.writestr("d0/plain.b2nd", plain_array.to_cframe())
+
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("meta_test.b2z", buffer.getvalue())
+
+    # 1. Test B2ZNDSource directly
+    src = blosc2.B2ZNDSource("memory://meta_test.b2z", "d0/with_meta")
+    assert src.has_vlmetalayers
+    assert "b2nd" in src.meta
+    assert src.meta["sensor_info"] == {"model": "X1", "rate": 100}
+    assert src.vlmeta["experiment_notes"] == {"comment": "test run", "valid": True}
+
+    plain_src = blosc2.B2ZNDSource("memory://meta_test.b2z", "d0/plain")
+    assert not plain_src.has_vlmetalayers
+    assert "b2nd" in plain_src.meta
+    assert "sensor_info" not in plain_src.meta
+    plain_src.traffic.reset()
+    assert plain_src.vlmeta == {}
+    assert plain_src.traffic.requests == 0
+
+    # 2. Test RemoteProxy over B2Z
+    proxy = blosc2.open("memory://meta_test.b2z", dataset="d0/with_meta", lazy=True)
+    assert isinstance(proxy.meta, blosc2.RemoteMetadataMapping)
+    assert isinstance(proxy.vlmeta, blosc2.RemoteMetadataMapping)
+    assert proxy.meta["sensor_info"] == {"model": "X1", "rate": 100}
+    assert proxy.meta.get("sensor_info") == {"model": "X1", "rate": 100}
+    assert proxy.meta.get("nonexistent", "fallback") == "fallback"
+    assert "b2nd" in proxy.meta
+    assert "sensor_info" in proxy.meta
+    assert len(proxy.meta) >= 2
+    assert proxy.meta[:] == proxy.meta.getall()
+    with pytest.raises(TypeError):
+        proxy.meta["new_meta"] = 123
+    with pytest.raises(TypeError):
+        del proxy.meta["sensor_info"]
+
+    assert proxy.vlmeta["experiment_notes"] == {"comment": "test run", "valid": True}
+    assert proxy.vlmeta.get("experiment_notes") == {"comment": "test run", "valid": True}
+    assert "experiment_notes" in proxy.vlmeta
+    assert len(proxy.vlmeta) == 1
+    assert proxy.vlmeta[:] == {"experiment_notes": {"comment": "test run", "valid": True}}
+    with pytest.raises(TypeError):
+        proxy.vlmeta["new_vlmeta"] = 123
+    with pytest.raises(TypeError):
+        del proxy.vlmeta["experiment_notes"]
+
+    # In-memory caching: subsequent accesses issue 0 network traffic
+    proxy.traffic.reset()
+    _ = proxy.meta["sensor_info"]
+    _ = proxy.vlmeta["experiment_notes"]
+    _ = proxy.meta[:]
+    _ = proxy.vlmeta[:]
+    assert proxy.traffic.requests == 0
+
+
 def test_optional_dependencies():
     subprocess.run(
         [

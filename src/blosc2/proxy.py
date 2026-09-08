@@ -174,6 +174,7 @@ class Proxy(blosc2.Operand):
         self._max_cache_bytes = _validate_max_cache_bytes(kwargs.pop("_max_cache_bytes", None))
         self._persistent_dirty = bool(kwargs.pop("_persistent_dirty", False))
         vlmeta = kwargs.pop("vlmeta", None)
+        meta_kw = kwargs.pop("meta", None)
         caterva2_env = kwargs.pop("caterva2_env", False)
         # Before anything is built or emptied: a call that is going to be refused
         # must leave the cache at `urlpath` exactly as it found it, and adopting
@@ -230,7 +231,7 @@ class Proxy(blosc2.Operand):
             elif hasattr(container, "urlpath"):
                 meta_val["source_kind"] = "local"
                 meta_val["local_abspath"] = container.urlpath
-            meta = {"proxy-source": meta_val}
+            meta = {"proxy-source": meta_val, **(meta_kw or {})}
             if hasattr(self.src, "shape"):
                 self._cache = blosc2.empty(
                     self.src.shape,
@@ -1267,6 +1268,17 @@ class Proxy(blosc2.Operand):
 
     def __str__(self):
         return f"Proxy({self.src}, urlpath={self.urlpath})"
+
+    @property
+    def meta(self) -> blosc2.schunk.meta:
+        """
+        Get the fixed-length metalayers of the cache.
+
+        See Also
+        --------
+        :py:attr:`blosc2.schunk.SChunk.meta`
+        """
+        return self._schunk_cache.meta
 
     @property
     def vlmeta(self) -> blosc2.schunk.vlmeta:

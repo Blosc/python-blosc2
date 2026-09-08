@@ -20,11 +20,13 @@ outright.  Nothing here reaches into the package for more than what
 
 import ast
 import asyncio
+import contextlib
 import math
 import struct
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 try:
     from itertools import batched
@@ -81,6 +83,8 @@ BLOCK_GAP = 4096
 # has 4 KB of compressed offsets.
 _FRAME_PREFETCH = 8192
 _INDEX_PREFETCH = 1 << 16
+_TRAILER_MINLEN = 25
+_TRAILER_PREFETCH = 4096
 
 # How many partly filled chunks keep their blocks in memory as well as in the
 # cache.  Adding a block to a chunk rewrites that chunk, and the blocks already
@@ -341,6 +345,16 @@ class ProxyNDSource(ABC):
         raise NotImplementedError(
             "aget_chunk is only available if the source has an async aget_chunk method"
         )
+
+    @property
+    def meta(self) -> dict:
+        """The fixed-length metadata of the source."""
+        return {}
+
+    @property
+    def vlmeta(self) -> dict:
+        """The variable-length metadata of the source."""
+        return {}
 
 
 class ProxySource(ABC):
@@ -608,6 +622,58 @@ def _frame_metalayer(raw: bytes, header: list, name: str):
     return msgpack.unpackb(raw[offset + 5 : offset + 5 + nbytes], raw=False)
 
 
+def _read_frame_metalayers(raw: bytes, header: list) -> dict[str, Any]:
+    """Decode all metalayers out of an already-read frame header."""
+    if len(header) <= 13 or not header[13] or len(header[13]) < 2:
+        return {}
+    names_map = header[13][1]
+    if not isinstance(names_map, dict):
+        return {}
+    res = {}
+    for name_bytes in names_map:
+        name = name_bytes.decode("utf-8") if isinstance(name_bytes, bytes) else str(name_bytes)
+        with contextlib.suppress(Exception):
+            res[name] = _frame_metalayer(raw, header, name)
+    return res
+
+
+def _parse_trailer_vlmeta(trailer_bytes: bytes) -> dict[str, Any]:
+    """Decode vlmetalayers mapping from trailer bytes."""
+    import msgpack
+
+    try:
+        trailer = msgpack.unpackb(trailer_bytes, raw=True, strict_map_key=False)
+    except Exception:
+        return {}
+    if not isinstance(trailer, list) or len(trailer) < 2:
+        return {}
+    vlmeta_section = trailer[1]
+    if not isinstance(vlmeta_section, list) or len(vlmeta_section) < 2:
+        return {}
+    names_map = vlmeta_section[1]
+    if not isinstance(names_map, dict):
+        return {}
+    res = {}
+    for name_bytes, offset in names_map.items():
+        name = name_bytes.decode("utf-8") if isinstance(name_bytes, bytes) else str(name_bytes)
+        if offset + 5 > len(trailer_bytes) or trailer_bytes[offset] != 0xC6:
+            continue
+        content_len = int.from_bytes(trailer_bytes[offset + 1 : offset + 5], "big")
+        if offset + 5 + content_len > len(trailer_bytes):
+            continue
+        blob = trailer_bytes[offset + 5 : offset + 5 + content_len]
+        try:
+            decomp = blosc2.decompress(blob)
+        except Exception:
+            continue
+        try:
+            val = msgpack.unpackb(decomp, raw=False)
+        except Exception:
+            val = decomp
+        res[name] = val
+    return res
+
+
 def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     """How many bytes to read at each chunk offset to be sure of covering it.
 
@@ -714,8 +780,11 @@ class ByteRangeNDSource(ProxyNDSource):
         # open. Chunk reads are stateless, so the index below is the only state a
         # thread pool shares, and the only thing here that needs a lock
         raw, self._header, self._head = _read_frame_header(self.read_range)
+        self._raw_header = raw
         self._header_len = len(raw)
         self._chunksize = self._header[8]
+        self._meta = None
+        self._vlmeta = None
         # Where the chunks are is read on the first one touched, not here: a
         # `Proxy` over a cache that already holds the slice asked for fetches
         # nothing, and then the offsets are a request spent on nothing at all.
@@ -863,9 +932,12 @@ class ByteRangeNDSource(ProxyNDSource):
                 # offsets are found through both, so the header is read first, and
                 # the offsets it locates are read again after it
                 raw, self._header, self._head = _read_frame_header(self.read_range)
+                self._raw_header = raw
                 self._header_len = len(raw)
                 self._chunksize = self._header[8]
                 self._index = None
+                self._meta = None
+                self._vlmeta = None
                 self._stale = False
             if self._index is None:
                 offsets = _read_frame_offsets(self.read_range, self._header, self._head, self._header_len)
@@ -934,6 +1006,50 @@ class ByteRangeNDSource(ProxyNDSource):
             # then presents as whole.  A layout costs one header read to rebuild
             # and only the partly fetched chunks have one at all
             self._layouts.clear()
+            self._meta = None
+            self._vlmeta = None
+
+    @property
+    def has_vlmetalayers(self) -> bool:
+        """Whether the underlying frame has variable-length metalayers."""
+        return bool(len(self._header) > 11 and self._header[11])
+
+    @property
+    def meta(self) -> dict:
+        """Fixed-length metadata of the remote frame."""
+        if self._meta is None:
+            self._meta = _read_frame_metalayers(self._raw_header, self._header)
+        return dict(self._meta)
+
+    @property
+    def vlmeta(self) -> dict:
+        """Variable-length metadata of the remote frame."""
+        if self._vlmeta is None:
+            self._vlmeta = self._read_frame_vlmeta()
+        return dict(self._vlmeta)
+
+    def _read_frame_vlmeta(self) -> dict[str, Any]:
+        """Decode all vlmetalayers from the frame trailer, if present."""
+        if not self.has_vlmetalayers:
+            return {}
+        frame_len = self._header[2]
+        if frame_len < _TRAILER_MINLEN:
+            return {}
+        prefetch_size = min(frame_len, _TRAILER_PREFETCH)
+        tail_start = frame_len - prefetch_size
+        tail = self.read_range(tail_start, prefetch_size)
+        if len(tail) < _TRAILER_MINLEN or tail[-23] != 0xCE:
+            return {}
+        trailer_len = int.from_bytes(tail[-22:-18], "big")
+        if trailer_len <= 0 or trailer_len > frame_len:
+            return {}
+        if trailer_len <= len(tail):
+            trailer_bytes = tail[-trailer_len:]
+        else:
+            trailer_bytes = self.read_range(frame_len - trailer_len, trailer_len)
+            if len(trailer_bytes) != trailer_len:
+                return {}
+        return _parse_trailer_vlmeta(trailer_bytes)
 
     @property
     def shape(self) -> tuple:

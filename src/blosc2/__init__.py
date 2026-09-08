@@ -619,7 +619,7 @@ from .proxy import (
     jit,
     as_simpleproxy,
 )
-from .remote_proxy import RemoteProxy
+from .remote_proxy import RemoteMetadataMapping, RemoteProxy
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
@@ -912,6 +912,7 @@ __all__ = [  # noqa : RUF022
     "ProxyNDSource",
     "ProxySource",
     "Ref",
+    "RemoteMetadataMapping",
     "RemoteProxy",
     "SChunk",
     "SimpleProxy",

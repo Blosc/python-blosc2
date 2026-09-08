@@ -377,6 +377,18 @@ def test_vlmeta_cannot_overwrite_proxy_state():
     assert proxy.vlmeta["mine"] == "ok"
 
 
+def test_proxy_meta_and_vlmeta_access():
+    source = blosc2.asarray(
+        np.arange(20).reshape(4, 5),
+        chunks=(2, 5),
+        blocks=(1, 5),
+    )
+    proxy = blosc2.Proxy(source, meta={"extra": 123}, vlmeta={"mine": "ok"})
+    assert "b2nd" in proxy.meta
+    assert proxy.meta["extra"] == 123
+    assert proxy.vlmeta["mine"] == "ok"
+
+
 def test_the_proxy_module_still_answers_for_the_source_names():
     # They live in `blosc2.proxy_source` now, so that the modules bound early in
     # `blosc2/__init__` can reach them without dragging `proxy.py` in ahead of

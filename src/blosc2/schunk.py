@@ -123,7 +123,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __getitem__(self, name):
         _ = self._owner  # dead-owner check: the raw C schunk pointer below dangles otherwise
         if isinstance(name, slice):
-            if name.start is None and name.stop is None:
+            if name.start is None and name.stop is None and name.step is None:
                 # Return all the vlmetalayers
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
@@ -212,7 +212,7 @@ class Meta(Mapping):
             a dictionary with all the metalayers is returned.
         """
         if isinstance(item, slice):
-            if item.start is None and item.stop is None:
+            if item.start is None and item.stop is None and item.step is None:
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
         if self.__contains__(item):

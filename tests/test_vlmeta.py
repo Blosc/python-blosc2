@@ -107,6 +107,11 @@ def test_vlmeta_supports_ref_roundtrip(tmp_path):
     assert bulk["ref"] == ref
     np.testing.assert_array_equal(bulk["ref"].open()[:], array[:])
 
+    with pytest.raises(NotImplementedError, match="Slicing is not supported, unless"):
+        _ = schunk.vlmeta[::2]
+    with pytest.raises(NotImplementedError, match="Slicing is not supported, unless"):
+        _ = schunk.meta[::2]
+
 
 def delete(schunk):
     # Remove one of them

@@ -573,6 +573,19 @@ def test_s3_hdf5_nested_datasets():
         assert val.shape == (3, 3)
 
 
+def test_hdf5_vlmeta(tmp_path):
+    path = str(tmp_path / "test_attrs.h5")
+    data = np.arange(100, dtype=np.int32).reshape(10, 10)
+    with h5py.File(path, "w") as f:
+        ds = f.create_dataset("d0/data", data=data, chunks=(5, 5))
+        ds.attrs["description"] = "hdf5 dataset"
+        ds.attrs["sampling_rate"] = 250
+
+    src = blosc2.HDF5NDSource(path, "d0/data")
+    assert src.vlmeta["description"] == "hdf5 dataset"
+    assert src.vlmeta["sampling_rate"] == 250
+
+
 @pytest.mark.network
 def test_s3_hdf5_matches_zarr():
     pytest.importorskip("s3fs")

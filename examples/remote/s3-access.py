@@ -181,15 +181,22 @@ def main() -> int:
 
     print(f"\n[Format: {fmt}]")
     if hasattr(arr, "info"):
-        print(arr.info)
-    print("Shape: ", arr.shape)
-    print("Dtype: ", arr.dtype)
-    chunks = getattr(arr, "chunks", None)
-    if chunks is not None:
-        print("Chunks:", chunks)
-    blocks = getattr(arr, "blocks", None)
-    if blocks is not None:
-        print("Blocks:", blocks)
+        print(arr.info, end="")
+    else:
+        print(f"{'shape':<12} : {arr.shape}")
+        print(f"{'dtype':<12} : {arr.dtype}")
+        chunks = getattr(arr, "chunks", None)
+        if chunks is not None:
+            print(f"{'chunks':<12} : {chunks}")
+        blocks = getattr(arr, "blocks", None)
+        if blocks is not None:
+            print(f"{'blocks':<12} : {blocks}")
+    meta = getattr(arr, "meta", None)
+    if meta:
+        print(f"{'meta':<12} : {dict(meta)}")
+    vlmeta = getattr(arr, "vlmeta", None)
+    if vlmeta is not None:
+        print(f"{'vlmeta':<12} : {dict(vlmeta) if vlmeta else {}}")
 
     print("\nSample slice data (1st fetch):")
     t0 = time.perf_counter()

@@ -1067,3 +1067,250 @@ def test_sparse_seed_with_dirty_marker_is_not_imported(tmp_path):
     runtime = blosc2.RemoteProxy.with_sparse_cache(url, tmp_path / "runtime", carrier=seed.cache)
     assert not runtime.cache_contains(nchunk=0)
     np.testing.assert_array_equal(runtime[:], data)
+
+
+def test_remote_proxy_metadata_access_and_caching():
+    data = np.arange(20_000, dtype=np.int32)
+    array = blosc2.asarray(
+        data,
+        chunks=(10_000,),
+        blocks=(5_000,),
+        meta={"experiment": {"id": 42, "user": "alice"}},
+    )
+    array.vlmeta["notes"] = {"status": "calibrated", "tags": ["optical", "v2"]}
+    url = "memory://metadata-test.b2nd"
+    fsspec.filesystem("memory").pipe_file("metadata-test.b2nd", array.to_cframe())
+
+    proxy = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.MEMORY)
+
+    # Fixed-length metadata
+    meta = proxy.meta
+    assert isinstance(meta, blosc2.RemoteMetadataMapping)
+    assert "b2nd" in meta
+    assert "experiment" in meta
+    assert meta["experiment"] == {"id": 42, "user": "alice"}
+    assert meta.get("experiment") == {"id": 42, "user": "alice"}
+    assert meta.get("missing", 999) == 999
+    assert len(meta) >= 2
+    assert meta[:] == meta.getall()
+    assert meta.copy() == meta.getall()
+    assert meta == meta.getall()
+    assert repr(meta) == repr(meta.getall())
+    assert str(meta) == str(meta.getall())
+    with pytest.raises(TypeError):
+        meta["new_key"] = 1
+    with pytest.raises(TypeError):
+        del meta["experiment"]
+    with pytest.raises(NotImplementedError, match="Slicing is not supported"):
+        _ = meta[0:1]
+
+    # Variable-length metadata
+    vlmeta = proxy.vlmeta
+    assert isinstance(vlmeta, blosc2.RemoteMetadataMapping)
+    assert "notes" in vlmeta
+    assert vlmeta["notes"] == {"status": "calibrated", "tags": ["optical", "v2"]}
+    assert vlmeta.get("notes") == {"status": "calibrated", "tags": ["optical", "v2"]}
+    assert len(vlmeta) == 1
+    assert vlmeta[:] == {"notes": {"status": "calibrated", "tags": ["optical", "v2"]}}
+    with pytest.raises(TypeError):
+        vlmeta["new_key"] = 1
+    with pytest.raises(TypeError):
+        del vlmeta["notes"]
+
+    # In-memory caching: subsequent accesses issue 0 network traffic
+    proxy.traffic.reset()
+    _ = proxy.meta["experiment"]
+    _ = proxy.vlmeta["notes"]
+    _ = proxy.meta[:]
+    _ = proxy.vlmeta[:]
+    assert proxy.traffic.requests == 0
+
+
+def test_remote_proxy_disk_cache_persists_metadata_and_offline_reopen(tmp_path):
+    data = np.arange(20_000, dtype=np.int32)
+    array = blosc2.asarray(
+        data,
+        chunks=(10_000,),
+        blocks=(5_000,),
+        meta={"exp_header": "test_disk_meta"},
+    )
+    array.vlmeta["exp_trailer"] = [1, 2, 3]
+    url = "memory://disk-meta-test.b2nd"
+    fsspec.filesystem("memory").pipe_file("disk-meta-test.b2nd", array.to_cframe())
+
+    cache_path = tmp_path / "disk-meta-cache.b2nd"
+    first = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK, cache_path=cache_path)
+    assert first.meta["exp_header"] == "test_disk_meta"
+    assert first.vlmeta["exp_trailer"] == [1, 2, 3]
+
+    # Reopen existing DISK cache
+    reopened = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.DISK, cache_path=cache_path)
+    reopened.traffic.reset()
+    assert reopened.meta["exp_header"] == "test_disk_meta"
+    assert reopened.vlmeta["exp_trailer"] == [1, 2, 3]
+    # Reading metadata from existing carrier issues 0 remote requests!
+    assert reopened.traffic.requests == 0
+
+    # Open carrier directly using blosc2.open()
+    opened = blosc2.open(cache_path)
+    assert isinstance(opened, blosc2.RemoteProxy)
+    opened.traffic.reset()
+    assert opened.meta["exp_header"] == "test_disk_meta"
+    assert opened.vlmeta["exp_trailer"] == [1, 2, 3]
+    assert opened.traffic.requests == 0
+
+
+def test_remote_proxy_export_preserves_metadata(tmp_path):
+    data = np.arange(10_000, dtype=np.int32)
+    array = blosc2.asarray(
+        data,
+        chunks=(5_000,),
+        blocks=(2_500,),
+        meta={"export_meta": {"model": "sensor_a"}},
+    )
+    array.vlmeta["export_vlmeta"] = {"quality": "high"}
+    url = "memory://export-meta-test.b2nd"
+    fsspec.filesystem("memory").pipe_file("export-meta-test.b2nd", array.to_cframe())
+
+    proxy = blosc2.RemoteProxy(url, cache_policy=blosc2.CachePolicy.MEMORY)
+
+    # 1. Export via save()
+    save_path = tmp_path / "saved_carrier.b2nd"
+    proxy.save(save_path)
+    saved_proxy = blosc2.open(save_path)
+    assert isinstance(saved_proxy, blosc2.RemoteProxy)
+    assert saved_proxy.meta["export_meta"] == {"model": "sensor_a"}
+    assert saved_proxy.vlmeta["export_vlmeta"] == {"quality": "high"}
+
+    # 2. Export via to_cframe()
+    cframe = proxy.to_cframe()
+    restored_proxy = blosc2.from_cframe(cframe)
+    assert isinstance(restored_proxy, blosc2.RemoteProxy)
+    assert restored_proxy.meta["export_meta"] == {"model": "sensor_a"}
+    assert restored_proxy.vlmeta["export_vlmeta"] == {"quality": "high"}
+
+
+def test_remote_proxy_invalidation_refetches_metadata():
+    data1 = np.arange(10_000, dtype=np.int32)
+    array1 = blosc2.asarray(data1, chunks=(5_000,), blocks=(2_500,), meta={"v": 1})
+    array1.vlmeta["note"] = "version 1"
+    url = "memory://mutable-meta.b2nd"
+    fsspec.filesystem("memory").pipe_file("mutable-meta.b2nd", array1.to_cframe())
+
+    proxy = blosc2.RemoteProxy(url, assume_immutable=False)
+    assert proxy.meta["v"] == 1
+    assert proxy.vlmeta["note"] == "version 1"
+
+    # Replace remote array with new version
+    data2 = np.arange(10_000, dtype=np.int32) + 100
+    array2 = blosc2.asarray(data2, chunks=(5_000,), blocks=(2_500,), meta={"v": 2})
+    array2.vlmeta["note"] = "version 2"
+    fsspec.filesystem("memory").pipe_file("mutable-meta.b2nd", array2.to_cframe())
+
+    # proxy detects the change and returns updated metadata
+    assert proxy.meta["v"] == 2
+    assert proxy.vlmeta["note"] == "version 2"
+
+
+def test_zarr_source_vlmeta():
+    zarr = pytest.importorskip("zarr")
+    zarr_url = "memory://test_attrs.zarr"
+    mapper = fsspec.get_mapper(zarr_url)
+    z_arr = zarr.open_array(
+        store=mapper,
+        mode="w",
+        shape=(100,),
+        chunks=(50,),
+        dtype="i4",
+    )
+    z_arr[:] = np.arange(100, dtype=np.int32)
+    z_arr.attrs["author"] = "researcher"
+    z_arr.attrs["dataset_id"] = 12345
+
+    src = blosc2.ZarrNDSource(zarr_url)
+    assert src.vlmeta["author"] == "researcher"
+    assert src.vlmeta["dataset_id"] == 12345
+
+    proxy = blosc2.RemoteProxy(zarr_url, source_format="zarr")
+    assert proxy.vlmeta["author"] == "researcher"
+    assert proxy.vlmeta["dataset_id"] == 12345
+
+
+def test_caterva2_vlmeta_filters_internal_keys(monkeypatch):
+    def fake_info(path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None):
+        return {
+            "shape": [10],
+            "chunks": [5],
+            "blocks": [5],
+            "dtype": np.dtype(np.int32).str,
+            "schunk": {
+                "cparams": dict(blosc2.cparams_dflts),
+                "vlmeta": {
+                    "fill_nonce": "secret_nonce_123",
+                    "fill_state": "complete",
+                    "user_tag": "public_data",
+                },
+            },
+        }
+
+    monkeypatch.setattr(blosc2_c2array, "info", fake_info)
+    remote = blosc2.RemoteProxy(blosc2.URLPath("@public/test-vlmeta.b2nd", urlbase="https://example.org/c2"))
+
+    # Caterva2 fixed metalayers are not supported by api/info, returns empty
+    assert remote.meta == {}
+    # Internal keys fill_nonce and fill_state are filtered out
+    assert remote.vlmeta == {"user_tag": "public_data"}
+
+    # Export to carrier and verify roundtrip doesn't persist internal keys
+    cframe = remote.to_cframe()
+    restored = blosc2.from_cframe(cframe)
+    assert restored.vlmeta == {"user_tag": "public_data"}
+
+
+def test_remote_proxy_filters_carrier_internal_metalayers():
+    data = np.arange(10, dtype=np.int32)
+    meta = {
+        "user_key": "val1",
+        "b2o": {"kind": "carrier"},
+        "proxy": {"foo": "bar"},
+        "proxy-source": {"bar": "baz"},
+    }
+    carrier = blosc2.asarray(data, chunks=(5,), blocks=(5,), meta=meta)
+
+    url = "memory://carrier-leak-test.b2nd"
+    fsspec.filesystem("memory").pipe_file("carrier-leak-test.b2nd", carrier.to_cframe())
+
+    proxy = blosc2.RemoteProxy(url)
+    assert "user_key" in proxy.meta
+    assert "b2nd" in proxy.meta
+    assert "b2o" not in proxy.meta
+    assert "proxy" not in proxy.meta
+    assert "proxy-source" not in proxy.meta
+
+
+def test_remote_proxy_metadata_slicing_and_caching():
+    data = np.arange(10, dtype=np.int32)
+    arr = blosc2.asarray(data, chunks=(5,), blocks=(5,), meta={"foo": "bar"})
+    arr.vlmeta["desc"] = "test"
+    url = "memory://slice-test.b2nd"
+    fsspec.filesystem("memory").pipe_file("slice-test.b2nd", arr.to_cframe())
+
+    proxy = blosc2.RemoteProxy(url)
+    # [:] full slice returns copy of dict
+    assert proxy.meta[:] == dict(proxy.meta)
+    assert proxy.vlmeta[:] == dict(proxy.vlmeta)
+
+    # [::2] stepped slice raises NotImplementedError
+    with pytest.raises(NotImplementedError, match="Slicing is not supported, unless"):
+        _ = proxy.meta[::2]
+    with pytest.raises(NotImplementedError, match="Slicing is not supported, unless"):
+        _ = proxy.vlmeta[::2]
+
+    # Repeated access returns the cached mapping instance without re-wrapping
+    meta1 = proxy.meta
+    meta2 = proxy.meta
+    assert meta1 is meta2
+
+    vlmeta1 = proxy.vlmeta
+    vlmeta2 = proxy.vlmeta
+    assert vlmeta1 is vlmeta2

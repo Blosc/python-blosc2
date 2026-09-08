@@ -10,22 +10,74 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import os
 import threading
+from collections.abc import Mapping
 from contextlib import nullcontext
 from functools import wraps
 from types import SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 import numpy as np
 
 import blosc2
-from blosc2.b2objects import make_b2object_carrier, write_b2object_payload
+from blosc2.b2objects import (
+    _B2OBJECT_USER_VLMETA_KEY,
+    make_b2object_carrier,
+    read_b2object_user_vlmeta,
+    write_b2object_payload,
+    write_b2object_user_vlmeta,
+)
 from blosc2.core import parse_container_url
 from blosc2.info import InfoReporter, format_nbytes_info
 
 DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
+
+
+class RemoteMetadataMapping(Mapping):
+    """Read-only dictionary-like mapping of remote array metadata."""
+
+    def __init__(self, data: Mapping | None = None):
+        self._data = dict(data) if data is not None else {}
+
+    def __getitem__(self, key: str | slice) -> Any:
+        if isinstance(key, slice):
+            if key.start is None and key.stop is None and key.step is None:
+                return self.getall()
+            raise NotImplementedError("Slicing is not supported, unless [:]")
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._data.get(key, default)
+
+    def getall(self) -> dict[str, Any]:
+        return self._data.copy()
+
+    def copy(self) -> dict[str, Any]:
+        return self._data.copy()
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+    def __str__(self) -> str:
+        return str(self._data)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Mapping):
+            return self._data == dict(other)
+        return False
 
 
 class _PolicyDefault:
@@ -34,6 +86,8 @@ class _PolicyDefault:
 
 
 _POLICY_DEFAULT = _PolicyDefault()
+_INTERNAL_CARRIER_METALAYERS = frozenset({"b2o", "proxy", "proxy-source"})
+_C2_INTERNAL_VLMETA_KEYS = frozenset({"fill_nonce", "fill_state"})
 _SENSITIVE_QUERY_PARTS = (
     "credential",
     "signature",
@@ -458,6 +512,10 @@ class RemoteProxy(blosc2.Operand):
         self._runtime_cache = _carrier if cache_policy is blosc2.CachePolicy.DISK else None
         self._shared_runtime_cache = _runtime_cache_path is not None
         self._cache_status = None
+        self._cached_meta = None
+        self._cached_vlmeta = None
+        self._meta_mapping = None
+        self._vlmeta_mapping = None
 
         if cache_policy is blosc2.CachePolicy.DISK:
             if _runtime_cache_path is not None:
@@ -472,6 +530,12 @@ class RemoteProxy(blosc2.Operand):
                 self._attach_carrier_cache()
         elif cache_policy is blosc2.CachePolicy.MEMORY:
             self._attach_carrier_cache()
+
+        if self._carrier is not None:
+            if self._cached_meta is None:
+                self._cached_meta = self._meta_from_carrier(self._carrier)
+            if self._cached_vlmeta is None:
+                self._cached_vlmeta = read_b2object_user_vlmeta(self._carrier)
 
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
@@ -526,6 +590,11 @@ class RemoteProxy(blosc2.Operand):
                 if stored is not None and current is not None and stored != current
                 else "reused"
             )
+            if status == "reused":
+                if self._cached_meta is None:
+                    self._cached_meta = self._meta_from_carrier(carrier)
+                if self._cached_vlmeta is None:
+                    self._cached_vlmeta = read_b2object_user_vlmeta(carrier)
             return carrier, status
         carrier = self._to_b2object_carrier(urlpath=path, contiguous=True, mode="w")
         return carrier, "created"
@@ -553,6 +622,11 @@ class RemoteProxy(blosc2.Operand):
                 if stored is not None and current is not None and stored != current
                 else "reused"
             )
+            if status == "reused":
+                if self._cached_meta is None:
+                    self._cached_meta = self._meta_from_carrier(runtime)
+                if self._cached_vlmeta is None:
+                    self._cached_vlmeta = read_b2object_user_vlmeta(runtime)
             return runtime, status
 
         if self._carrier is not None:
@@ -592,6 +666,7 @@ class RemoteProxy(blosc2.Operand):
             "proxy-fetched-bpc",
             "proxy-index",
             "proxy-stamp",
+            _B2OBJECT_USER_VLMETA_KEY,
         ):
             value = seed_schunk.vlmeta.get(name)
             if value is not None:
@@ -888,6 +963,10 @@ class RemoteProxy(blosc2.Operand):
                 self._validate_geometry(self._expected_geometry, src=fresh)
                 self.src = fresh
                 self._attach_carrier_cache()
+                self._cached_meta = None
+                self._cached_vlmeta = None
+                self._meta_mapping = None
+                self._vlmeta_mapping = None
 
             return self.src if self._proxy is None else self._proxy
 
@@ -966,6 +1045,68 @@ class RemoteProxy(blosc2.Operand):
     def assume_immutable(self) -> bool:
         """Whether reads skip remote identity checks."""
         return self._assume_immutable
+
+    @property
+    def meta(self) -> RemoteMetadataMapping:
+        """The fixed-length metalayers of the remote array."""
+        self._prepare_read()
+        if self._cached_meta is None:
+            self._cached_meta = self._fetch_meta()
+            self._meta_mapping = None
+        if self._meta_mapping is None:
+            self._meta_mapping = RemoteMetadataMapping(self._cached_meta)
+        return self._meta_mapping
+
+    @property
+    def vlmeta(self) -> RemoteMetadataMapping:
+        """The variable-length metadata of the remote array."""
+        self._prepare_read()
+        if self._cached_vlmeta is None:
+            self._cached_vlmeta = self._fetch_vlmeta()
+            self._vlmeta_mapping = None
+        if self._vlmeta_mapping is None:
+            self._vlmeta_mapping = RemoteMetadataMapping(self._cached_vlmeta)
+        return self._vlmeta_mapping
+
+    @staticmethod
+    def _meta_from_carrier(carrier) -> dict[str, Any]:
+        carrier_schunk = getattr(carrier, "schunk", carrier)
+        return {
+            name: carrier_schunk.meta[name]
+            for name in carrier_schunk.meta
+            if name not in _INTERNAL_CARRIER_METALAYERS
+        }
+
+    def _fetch_meta(self) -> dict[str, Any]:
+        if isinstance(self.src, blosc2.C2Array):
+            # The Caterva2 REST API (api/info) does not carry Blosc2 fixed metalayers.
+            return {}
+        meta = getattr(self.src, "meta", None)
+        if meta is not None and isinstance(meta, Mapping):
+            return {name: meta[name] for name in meta if name not in _INTERNAL_CARRIER_METALAYERS}
+        return {}
+
+    def _fetch_vlmeta(self) -> dict[str, Any]:
+        vlmeta = getattr(self.src, "vlmeta", None)
+        if vlmeta is not None and isinstance(vlmeta, Mapping):
+            if isinstance(self.src, blosc2.C2Array):
+                res = {k: v for k, v in vlmeta.items() if k not in _C2_INTERNAL_VLMETA_KEYS}
+            elif isinstance(vlmeta, dict):
+                res = vlmeta.copy()
+            else:
+                res = dict(vlmeta)
+        else:
+            res = {}
+        if self._runtime_cache is not None:
+            cache_lock = (
+                self._runtime_cache.holding_lock()
+                if self._shared_runtime_cache and hasattr(self._runtime_cache, "holding_lock")
+                else nullcontext()
+            )
+            with self._operation_lock, cache_lock:
+                with contextlib.suppress(Exception):
+                    write_b2object_user_vlmeta(self._runtime_cache, res)
+        return res
 
     @property
     def schunk(self):
@@ -1118,14 +1259,20 @@ class RemoteProxy(blosc2.Operand):
         }
 
     def _to_b2object_carrier(self, **kwargs):
+        carrier_excluded = _INTERNAL_CARRIER_METALAYERS | {"b2nd"}
         if self._carrier is not None:
             kwargs.setdefault(
                 "meta",
                 {
                     name: self._carrier.schunk.meta[name]
                     for name in self._carrier.schunk.meta
-                    if name not in {"b2nd", "b2o", "proxy"}
+                    if name not in carrier_excluded
                 },
+            )
+        else:
+            kwargs.setdefault(
+                "meta",
+                {name: self.meta[name] for name in self.meta if name not in carrier_excluded},
             )
         array = make_b2object_carrier(
             "remote_proxy",
@@ -1137,6 +1284,9 @@ class RemoteProxy(blosc2.Operand):
             **kwargs,
         )
         write_b2object_payload(array, self._payload())
+        user_vlmeta = dict(self.vlmeta)
+        if user_vlmeta:
+            write_b2object_user_vlmeta(array, user_vlmeta)
         if self._source.get("kind") == "hdf5":
             refs = getattr(self.src, "_refs", None)
             if refs is not None:
@@ -1247,6 +1397,11 @@ class RemoteProxy(blosc2.Operand):
             **kwargs,
         )
         obj._validate_geometry(expected)
+        if carrier is not None:
+            if obj._cached_meta is None:
+                obj._cached_meta = obj._meta_from_carrier(carrier)
+            if obj._cached_vlmeta is None:
+                obj._cached_vlmeta = read_b2object_user_vlmeta(carrier)
         return obj
 
     def __enter__(self):
