@@ -31,6 +31,7 @@ Deselect the whole TUI suite with ``pytest -m "not tui"``.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
@@ -155,6 +156,7 @@ async def test_remote_array_startup(tmp_path):
     async with app.run_test(size=TERM_SIZE) as pilot:
         await wait_for_table(pilot)
         assert isinstance(app.browser.store, blosc2.RemoteProxy)
+        assert not app.query_one("#tree-pane").display
         assert app._data_layout.shape == data.shape
         page = app.table_page
         for column in page["columns"]:
@@ -171,6 +173,49 @@ async def _wait_focus(pilot, expected_id: str) -> str | None:
         if getattr(pilot.app.focused, "id", None) == expected_id:
             break
     return getattr(pilot.app.focused, "id", None)
+
+
+@pytest.mark.parametrize("kind", ["ndarray", "ctable"])
+async def test_standalone_panel_layout(tmp_path, kind):
+    path = str(tmp_path / ("array.b2nd" if kind == "ndarray" else "table.b2z"))
+    if kind == "ndarray":
+        blosc2.asarray(np.arange(100), urlpath=path)
+    else:
+
+        @dataclass
+        class Row:
+            x: int = 0
+
+        table = blosc2.CTable(Row, urlpath=path, mode="w")
+        table.extend({"x": np.arange(100)})
+        table.close()
+
+    app = B2ViewApp(path)
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert await _wait_focus(pilot, "data-table") == "data-table"
+        assert not app.query_one("#tree-pane").display
+        assert app.query_one("#right-pane").size.width == app.query_one("#main").size.width
+        for key, expected in [
+            ("tab", "meta-scroll"),
+            ("tab", "vlmeta-scroll"),
+            ("tab", "data-table"),
+            ("shift+tab", "vlmeta-scroll"),
+            ("shift+tab", "meta-scroll"),
+            ("shift+tab", "data-table"),
+        ]:
+            await pilot.press(key)
+            assert await _wait_focus(pilot, expected) == expected
+        await pilot.press("m")
+        await pilot.pause()
+        assert app.screen.maximized is app.query_one("#data-pane")
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.screen.maximized is None
+        assert not app.query_one("#tree-pane").display
+        await pilot.press("r")
+        await wait_for_table(pilot)
+        assert app.table_page["nrows"] == 100
 
 
 async def test_start_panel_focus_with_path(store_path):
@@ -200,6 +245,7 @@ async def test_tree_and_panel_focus(store_path):
     async with app.run_test(size=TERM_SIZE) as pilot:
         await pilot.pause()
         assert isinstance(app.focused, Tree)
+        assert app.query_one("#tree-pane").display
 
         # Tab: tree -> meta -> vlmeta -> data and wraps back to the tree
         for expected in ["meta-scroll", "vlmeta-scroll", "data-scroll", "tree"]:

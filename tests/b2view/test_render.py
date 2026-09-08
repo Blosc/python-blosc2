@@ -8,8 +8,24 @@
 """Unit tests for b2view cell formatting (no app session needed)."""
 
 import numpy as np
+import pytest
 
-from blosc2.b2view.render import column_float_decimals, format_cell
+from blosc2.b2view.model import ObjectInfo
+from blosc2.b2view.render import column_float_decimals, format_cell, make_metadata_renderable
+
+
+@pytest.mark.parametrize("show_path", [False, True])
+def test_metadata_path_visibility(show_path):
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    info = ObjectInfo(path="/", kind="ndarray", metadata={"shape": (10,)})
+    console = Console(record=True)
+    console.print(make_metadata_renderable(info, show_path=show_path))
+    rendered = console.export_text()
+    assert ("path" in rendered) is show_path
+    assert "ndarray" in rendered
+    assert "(10,)" in rendered
 
 
 def test_column_decimals_follow_max_magnitude():

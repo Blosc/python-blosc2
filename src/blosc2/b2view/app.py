@@ -1968,7 +1968,7 @@ class B2ViewApp(App):
     CSS = """
     #main { height: 1fr; }
     #tree-pane { width: 35%; border: solid $primary; }
-    #right-pane { width: 65%; }
+    #right-pane { width: 1fr; }
     #top-row { height: 40%; }
     #meta-pane, #vlmeta-pane { width: 50%; border: solid $secondary; }
     #data-pane { height: 60%; border: solid $secondary; }
@@ -2129,6 +2129,7 @@ class B2ViewApp(App):
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
         self.browser = StoreBrowser(self.urlpath, storage_options=self.storage_options)
+        self.query_one("#tree-pane").display = self.browser.is_tree
         self.query_one(B2ViewHeader).set_filename(self._header_label)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
@@ -2157,6 +2158,8 @@ class B2ViewApp(App):
 
     def _focus_panel_by_name(self, name: str) -> None:
         """Focus a panel by its user-facing name."""
+        if name == "tree" and not self.query_one("#tree-pane").display:
+            name = "data"
         panel_map = {
             "tree": lambda: self.query_one("#tree", Tree),
             "meta": lambda: self.query_one("#meta-scroll", VerticalScroll),
@@ -2238,7 +2241,7 @@ class B2ViewApp(App):
         vlmeta_widget = self.query_one("#vlmetadata", Static)
         try:
             info = self.browser.get_info(path)
-            metadata.update(make_metadata_renderable(info))
+            metadata.update(make_metadata_renderable(info, show_path=self.browser.is_tree))
             self.table_buffer = None
             self.grid_col_start = 0
             self._data_layout = None
@@ -2917,8 +2920,8 @@ class B2ViewApp(App):
             if data_table_row.display
             else self.query_one("#data-scroll", VerticalScroll)
         )
-        return [
-            self.query_one("#tree", Tree),
+        tree_panels = [self.query_one("#tree", Tree)] if self.query_one("#tree-pane").display else []
+        return tree_panels + [
             self.query_one("#meta-scroll", VerticalScroll),
             self.query_one("#vlmeta-scroll", VerticalScroll),
             data_panel,
