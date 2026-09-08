@@ -4,6 +4,11 @@ Blosc2 can open remote arrays without downloading them first. Metadata is read i
 
 All lazy remote array access in Python-Blosc2 is unified under {ref}`RemoteProxy`.
 
+Read user attributes with `a.attrs["name"]` or get them all with `a.attrs[:]`.
+`RemoteProxy.attrs` is a read-only alias for `RemoteProxy.vlmeta` and shares its
+metadata cache across all source formats. HDF5 attributes exclude the
+`_ARRAY_DIMENSIONS` metadata added by Kerchunk during translation.
+
 ## Choose a remote route
 
 The argument passed to {func}`blosc2.open` selects the route:

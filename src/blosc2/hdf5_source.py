@@ -403,7 +403,8 @@ class HDF5NDSource(ProxyNDSource):
     @property
     def vlmeta(self) -> dict:
         try:
-            return dict(self.array.attrs)
+            # Kerchunk adds dimension metadata to the translated Zarr attributes.
+            return {key: value for key, value in self.array.attrs.items() if key != "_ARRAY_DIMENSIONS"}
         except Exception:
             return {}
 

@@ -584,6 +584,14 @@ def test_hdf5_vlmeta(tmp_path):
     src = blosc2.HDF5NDSource(path, "d0/data")
     assert src.vlmeta["description"] == "hdf5 dataset"
     assert src.vlmeta["sampling_rate"] == 250
+    assert "_ARRAY_DIMENSIONS" not in src.vlmeta
+    assert "_ARRAY_DIMENSIONS" in src.array.attrs
+
+    url = "memory://test_attrs.h5"
+    fsspec.filesystem("memory").pipe_file(url, Path(path).read_bytes())
+    proxy = blosc2.RemoteProxy(url, source_format="hdf5", dataset="d0/data")
+    assert proxy.attrs is proxy.vlmeta
+    assert proxy.attrs[:] == {"description": "hdf5 dataset", "sampling_rate": 250}
 
 
 @pytest.mark.network

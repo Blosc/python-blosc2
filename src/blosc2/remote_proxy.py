@@ -1068,6 +1068,11 @@ class RemoteProxy(blosc2.Operand):
             self._vlmeta_mapping = RemoteMetadataMapping(self._cached_vlmeta)
         return self._vlmeta_mapping
 
+    @property
+    def attrs(self) -> RemoteMetadataMapping:
+        """Read-only alias for :attr:`vlmeta`, sharing its metadata cache."""
+        return self.vlmeta
+
     @staticmethod
     def _meta_from_carrier(carrier) -> dict[str, Any]:
         carrier_schunk = getattr(carrier, "schunk", carrier)

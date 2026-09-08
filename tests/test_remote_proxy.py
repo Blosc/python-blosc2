@@ -1106,6 +1106,7 @@ def test_remote_proxy_metadata_access_and_caching():
 
     # Variable-length metadata
     vlmeta = proxy.vlmeta
+    assert proxy.attrs is vlmeta
     assert isinstance(vlmeta, blosc2.RemoteMetadataMapping)
     assert "notes" in vlmeta
     assert vlmeta["notes"] == {"status": "calibrated", "tags": ["optical", "v2"]}
@@ -1123,6 +1124,7 @@ def test_remote_proxy_metadata_access_and_caching():
     _ = proxy.vlmeta["notes"]
     _ = proxy.meta[:]
     _ = proxy.vlmeta[:]
+    _ = proxy.attrs["notes"]
     assert proxy.traffic.requests == 0
 
 
@@ -1210,6 +1212,7 @@ def test_remote_proxy_invalidation_refetches_metadata():
     # proxy detects the change and returns updated metadata
     assert proxy.meta["v"] == 2
     assert proxy.vlmeta["note"] == "version 2"
+    assert proxy.attrs["note"] == "version 2"
 
 
 def test_zarr_source_vlmeta():
@@ -1234,6 +1237,7 @@ def test_zarr_source_vlmeta():
     proxy = blosc2.RemoteProxy(zarr_url, source_format="zarr")
     assert proxy.vlmeta["author"] == "researcher"
     assert proxy.vlmeta["dataset_id"] == 12345
+    assert proxy.attrs is proxy.vlmeta
 
 
 def test_caterva2_vlmeta_filters_internal_keys(monkeypatch):
