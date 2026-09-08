@@ -4,6 +4,12 @@
 
 XXX version-specific blurb XXX
 
+* Use `.attrs` as the recommended interface for user-defined metadata. Arrays,
+  containers and proxy sources now expose it as an alias for `.vlmeta`, preserving
+  existing storage and access rules. `C2Array.attrs` continues to select the
+  server's user attributes while `C2Array.vlmeta` retains protocol metadata.
+  `.vlmeta` remains supported and is not deprecated.
+
 ## Changes from 4.11.0 to 4.12.0
 
 This release focuses on efficient remote arrays. Blosc2 containers can now be

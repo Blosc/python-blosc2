@@ -3876,6 +3876,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self.schunk.meta
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self) -> dict:
         """The variable-length metadata of the array."""
         return self.schunk.vlmeta

@@ -201,7 +201,6 @@ file. Read-only mode can use warm chunks but does not retain misses:
     .. autoattribute:: cparams
     .. autoattribute:: nbytes
     .. autoattribute:: meta
-    .. autoattribute:: vlmeta
     .. autoattribute:: attrs
     .. autoattribute:: info
     .. autoattribute:: cache

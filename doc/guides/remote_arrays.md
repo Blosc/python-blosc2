@@ -4,6 +4,7 @@ Blosc2 can open remote arrays without downloading them first. Metadata is read i
 
 All lazy remote array access in Python-Blosc2 is unified under {ref}`RemoteProxy`.
 
+Use `.attrs` as the recommended interface for user-defined metadata.
 Read user attributes with `a.attrs["name"]` or get them all with `a.attrs[:]`.
 `RemoteProxy.attrs` is a read-only alias for `RemoteProxy.vlmeta` and shares its
 metadata cache across all source formats. HDF5 attributes exclude the
@@ -11,7 +12,10 @@ metadata cache across all source formats. HDF5 attributes exclude the
 
 For Caterva2 sources, user attributes come from the `attrs` field in `/api/info`.
 `C2Array.attrs` uses the same field, with a fallback to variable metadata for
-older servers. Its `vlmeta` property retains the original protocol metadata.
+older servers. Unlike the aliases on other Blosc2 objects, `C2Array.attrs`
+can differ from `C2Array.vlmeta`: the latter retains raw protocol metadata,
+including operational entries such as `fill_nonce` and `fill_state`.
+`vlmeta` remains supported for compatibility and is not deprecated.
 These properties do not write attributes to the server. For a saved remote
 proxy served by Caterva2, attributes reflect the snapshot stored in its carrier.
 

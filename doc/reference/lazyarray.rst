@@ -14,7 +14,7 @@ You can get an object following the LazyArray API in any of the following ways:
 
 The LazyArray object is a thin wrapper around the expression or user-defined function that allows for lazy computation. This means that the expression is not computed until the ``compute`` or ``__getitem__`` methods are called. The ``compute`` method will return a new NDArray object with the result of the expression evaluation. The ``__getitem__`` method will return a NumPy object instead.
 
-LazyArray objects also support user metadata via :attr:`LazyArray.vlmeta`. For
+LazyArray objects also support user metadata via :attr:`LazyArray.attrs`. For
 in-memory objects, this metadata lives on the Python object itself. For
 persisted LazyArrays reopened from disk, metadata is synchronized with the
 underlying carrier and survives reopening.
@@ -40,7 +40,7 @@ See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 
     Attributes
     ----------
-    .. autoattribute:: vlmeta
+    .. autoattribute:: attrs
 
 .. _LazyExpr:
 

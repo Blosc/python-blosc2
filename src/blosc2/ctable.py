@@ -14570,6 +14570,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return self._schema
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self):
         """Variable-length metadata attached to this table.
 
@@ -14587,16 +14595,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ... class Row:
         ...     x: int = 0
         >>> t = blosc2.CTable(Row)
-        >>> t.vlmeta["author"] = "Alice"
-        >>> t.vlmeta["tags"] = ["alpha", "beta"]
-        >>> t.vlmeta["count"] = 42
-        >>> print(t.vlmeta["author"])
+        >>> t.attrs["author"] = "Alice"
+        >>> t.attrs["tags"] = ["alpha", "beta"]
+        >>> t.attrs["count"] = 42
+        >>> print(t.attrs["author"])
         Alice
-        >>> print(t.vlmeta[:])
+        >>> print(t.attrs[:])
         {'author': 'Alice', 'tags': ['alpha', 'beta'], 'count': 42}
-        >>> del t.vlmeta["count"]
-        >>> for name in t.vlmeta:
-        ...     print(name, t.vlmeta[name])
+        >>> del t.attrs["count"]
+        >>> for name in t.attrs:
+        ...     print(name, t.attrs[name])
         ...
         author Alice
         tags ['alpha', 'beta']

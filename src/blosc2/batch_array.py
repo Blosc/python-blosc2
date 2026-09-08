@@ -874,6 +874,14 @@ class BatchArray:
         return self.schunk.meta
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self):
         return self.schunk.vlmeta
 

@@ -489,6 +489,14 @@ class LazyArray(ABC, blosc2.Operand):
             write_b2object_user_vlmeta(array, self._get_user_vlmeta())
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self) -> LazyArrayVLMeta:
         """User variable-length metadata for this LazyArray."""
         if not hasattr(self, "_vlmeta_proxy"):

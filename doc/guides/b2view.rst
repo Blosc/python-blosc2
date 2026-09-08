@@ -24,9 +24,9 @@ arrays and some metadata:
     import blosc2
 
     with blosc2.TreeStore("sample.b2z", mode="w") as tstore:
-        tstore.vlmeta["author"] = "me"
+        tstore.attrs["author"] = "me"
         a = blosc2.linspace(0, 1, num=1_000_000, shape=(1000, 1000))
-        a.vlmeta["description"] = "a 2-D linspace"
+        a.attrs["description"] = "a 2-D linspace"
         tstore["/dense/a"] = a
         tstore["/dense/b"] = blosc2.arange(10_000, shape=(10, 100, 10))
 

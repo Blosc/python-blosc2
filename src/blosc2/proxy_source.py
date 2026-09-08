@@ -352,6 +352,14 @@ class ProxyNDSource(ABC):
         return {}
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self) -> dict:
         """The variable-length metadata of the source."""
         return {}

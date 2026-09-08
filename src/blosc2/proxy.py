@@ -1281,6 +1281,14 @@ class Proxy(blosc2.Operand):
         return self._schunk_cache.meta
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self) -> blosc2.schunk.vlmeta:
         """
         Get the vlmeta of the cache.

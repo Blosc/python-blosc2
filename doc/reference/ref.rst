@@ -39,11 +39,11 @@ Example
        # A Ref can itself be persisted, for example as variable-length metadata
        # in another persistent Blosc2 object.
        catalog = blosc2.zeros(1, urlpath=catalog_path, mode="w")
-       catalog.schunk.vlmeta["array_ref"] = ref
+       catalog.schunk.attrs["array_ref"] = ref
 
        # Reopen the metadata holder and resolve the persisted reference.
        catalog = blosc2.open(catalog_path, mode="r")
-       restored_ref = catalog.schunk.vlmeta["array_ref"]
+       restored_ref = catalog.schunk.attrs["array_ref"]
 
        reopened = restored_ref.open()
        print(reopened[:])  # [0 1 2 3 4]
