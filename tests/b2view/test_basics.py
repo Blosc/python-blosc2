@@ -31,6 +31,8 @@ Deselect the whole TUI suite with ``pytest -m "not tui"``.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -164,6 +166,55 @@ async def test_remote_array_startup(tmp_path):
                 page["data"][column], data[0, page["start"] : page["stop"], int(column)]
             )
         assert app.focused is app.query_one("#data-table", DataTable)
+
+
+async def test_zarr_startup_fresh_process(tmp_path):
+    zarr = pytest.importorskip("zarr")
+    pytest.importorskip("fsspec")
+    path = tmp_path / "array.zarr"
+    zarr.create_array(
+        path,
+        data=np.arange(100, dtype=np.int32),
+        chunks=(100,),
+        compressors=[zarr.codecs.BloscCodec()],
+        zarr_format=3,
+    )
+    # A fresh interpreter is essential: writing the fixture initializes the
+    # codec lock, masking failures when its first use is inside Textual.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import asyncio
+import sys
+from pathlib import Path
+import fsspec
+from blosc2.b2view.app import B2ViewApp
+
+async def main():
+    path = Path(sys.argv[1])
+    fs = fsspec.filesystem('memory')
+    for file in path.rglob('*'):
+        if file.is_file():
+            fs.pipe_file('/startup.zarr/' + file.relative_to(path).as_posix(), file.read_bytes())
+    app = B2ViewApp('memory://startup.zarr')
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.table_page is not None, 'Zarr preview failed to load'
+        assert app.table_page['nrows'] == 100
+        values = next(iter(app.table_page['data'].values()))
+        assert list(values) == list(range(len(values)))
+
+asyncio.run(main())
+""",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 async def _wait_focus(pilot, expected_id: str) -> str | None:

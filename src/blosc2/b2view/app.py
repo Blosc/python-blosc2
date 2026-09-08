@@ -53,6 +53,7 @@ from blosc2.b2view.render import (
     make_metadata_renderable,
     make_preview_renderables,
 )
+from blosc2.core import parse_container_url
 
 if TYPE_CHECKING:
     from textual import events
@@ -2025,6 +2026,13 @@ class B2ViewApp(App):
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
+        if parse_container_url(urlpath)[2] == "zarr":
+            # Initialize before Textual captures stderr (fileno=-1), which
+            # prevents multiprocessing's resource tracker from starting.
+            with contextlib.suppress(ImportError):
+                from numcodecs.blosc import get_mutex
+
+                get_mutex()
         self.urlpath = urlpath
         self.storage_options = storage_options
         self.download_url = download_url  # when set, fetch urlpath before browsing
