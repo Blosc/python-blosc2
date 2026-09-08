@@ -51,6 +51,8 @@ def test_addressing_and_hits(address, monkeypatch):
     assert arr.blocks == (10, 50)
     assert arr.traffic.nbytes == sum(end - start for start, end in reads)
     assert arr.traffic.nbytes < data.nbytes // 4
+    assert len(reads) == 2  # ZIP tail, then local header plus native frame prefix.
+    assert not arr.src._opening_ranges  # Discovery buffers do not become a second payload cache.
     reads.clear()
     np.testing.assert_array_equal(arr[1:6, :5], data[1:6, :5])
     assert reads
@@ -112,6 +114,31 @@ def test_zip64_and_range_bounds():
     assert src.read_range(src.member_length + 10, 100) == b""
     with pytest.raises(ValueError, match="range"):
         src.read_range(-1, 10)
+
+
+@pytest.mark.parametrize("variant", ["directory", "comment", "extra"])
+def test_opening_buffer_fallbacks(variant):
+    url, data = memory_archive()
+    fs = fsspec.filesystem("memory")
+    buffer = io.BytesIO(fs.cat_file("v10.b2z"))
+    if variant == "extra":
+        with zipfile.ZipFile(buffer) as archive:
+            frame = archive.read("d0/a.b2nd")
+        buffer = io.BytesIO()
+        info = zipfile.ZipInfo("d0/a.b2nd")
+        info.extra = b"\x00\xf0" + (20000).to_bytes(2, "little") + b"x" * 20000
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(info, frame)
+    else:
+        with zipfile.ZipFile(buffer, "a") as archive:
+            if variant == "comment":
+                archive.comment = b"x" * 60000
+            else:
+                for index in range(300):
+                    archive.writestr(f"directory/padding-{index}", b"")
+    fs.pipe_file("v10.b2z", buffer.getvalue())
+    arr = blosc2.open(url, dataset="d0/a", lazy=True)
+    np.testing.assert_array_equal(arr[:], data)
 
 
 @pytest.mark.parametrize("dataset", [None, "", "/", "d0", "missing", "../d0/a", "d0//a", "d0/./a", "d0/\na"])

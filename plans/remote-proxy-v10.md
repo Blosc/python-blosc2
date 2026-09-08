@@ -9,8 +9,8 @@ Deferred work are not prerequisites for this version.
 
 ## Implementation results
 
-- Added `B2ZNDSource` using an unbuffered seekable view for ZIP discovery and
-  bounded native Blosc2 range reads for the selected member.
+- Added `B2ZNDSource` using a seekable view with bounded opening buffers for ZIP
+  discovery and bounded native Blosc2 range reads for the selected member.
 - Integrated all three addressing forms, source descriptors, cache identity,
   carrier reopening, and durable B2Z operand references for saved expressions.
 - Added validation for member bounds, ZIP64, duplicate/encrypted/compressed
@@ -27,6 +27,29 @@ Deferred work are not prerequisites for this version.
   These are individual observed timings, not performance guarantees.
 - Tests needing localhost servers and the S3 check were run outside the network
   sandbox. All Python commands used the `blosc2` conda environment.
+
+## Opening optimization measurements
+
+Three fresh-process S3 runs per version against `hierarchy.b2z::/d0/a3`:
+
+| Metric | Initial reader | Buffered reader |
+|--------|---------------:|----------------:|
+| Median opening time | 2268.9 ms | 1197.3 ms |
+| Opening requests | 2 HEAD + 7 GET | 1 HEAD + 2 GET |
+| Opening payload | 9067 bytes | 24576 bytes |
+| First-slice payload | 78257 bytes | 78257 bytes |
+| Repeated-slice payload | 0 bytes | 0 bytes |
+
+Opening is approximately 47% faster in these measurements. An 8 KiB tail and
+16 KiB member prefix combine ZIP and native-frame header reads, while larger
+directories, comments, and extra fields retain exact-read fallbacks. Buffers
+are released after source construction; payload cache ownership is unchanged.
+Source stamps now use the existing archive-info response instead of a second
+identity lookup. This changes stamps from the initial reader, so older warm
+caches may refetch once. Values, geometry, and cached-repeat behavior were
+verified on every measurement. These timings do not promise a first-slice speedup.
+Validation: 39 focused B2Z tests passed; the default suite passed with 9754 tests
+and 29 skips. Ruff and whitespace checks passed.
 
 ## Objective
 

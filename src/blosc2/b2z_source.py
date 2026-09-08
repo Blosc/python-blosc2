@@ -15,7 +15,7 @@ from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traff
 
 
 class _ArchiveFile(io.RawIOBase):
-    """Seekable, unbuffered view used only while zipfile reads the directory."""
+    """Seekable view using the source's bounded opening buffers."""
 
     def __init__(self, source, size):
         self.source, self.size, self.pos = source, size, 0
@@ -48,8 +48,8 @@ class B2ZNDSource(ByteRangeNDSource):
 
     ``dataset`` is a logical tree key, e.g. ``d0/a3``, without the member's
     ``.b2nd`` suffix. Embedded leaves and ZIP-compressed members are unsupported.
-    Only directory/header metadata is read eagerly; native chunks and blocks
-    are fetched on demand. Replacing the archive requires replacing its cache.
+    Opening uses bounded metadata prefetch; native chunks and blocks are fetched
+    on demand. Replacing the archive requires replacing its cache.
     """
 
     def __init__(
@@ -77,7 +77,12 @@ class B2ZNDSource(ByteRangeNDSource):
         else:
             self._fs, self._path = _filesystem, _filesystem._strip_protocol(urlpath)
         self.traffic = _traffic if _traffic is not None else Traffic()
-        size = self._fs.size(self._path)
+        object_info = self._fs.info(self._path)
+        size = object_info["size"]
+        self._opening_ranges = []
+        # ponytail: small directories fit in 8 KiB; larger ones use exact reads.
+        tail_start = max(0, size - 8192)
+        self._opening_ranges.append((tail_start, self._read_archive(tail_start, size - tail_start)))
         with _ArchiveFile(self, size) as file, zipfile.ZipFile(file) as archive:
             matches = [info for info in archive.infolist() if info.filename == dataset + ".b2nd"]
             if not matches:
@@ -89,8 +94,12 @@ class B2ZNDSource(ByteRangeNDSource):
             info = matches[0]
             if info.flag_bits & 1 or info.compress_type != zipfile.ZIP_STORED:
                 raise NotImplementedError("B2Z array members must be unencrypted ZIP_STORED entries")
-            if info.compress_size != info.file_size or info.header_offset < 0:
+            if info.compress_size != info.file_size or not 0 <= info.header_offset <= size - 30:
                 raise ValueError("invalid B2Z member size or offset")
+            # Cover the local header and the native reader's 8 KiB frame prefix
+            # together. Unusually long ZIP headers fall back to exact reads.
+            prefix = self._read_archive(info.header_offset, min(16384, size - info.header_offset))
+            self._opening_ranges.append((info.header_offset, prefix))
             # zipfile validates the local signature, filename, and member overlap.
             # Opening does not read/decode member payloads.
             with archive.open(info):
@@ -115,8 +124,9 @@ class B2ZNDSource(ByteRangeNDSource):
                 raise ValueError("B2Z member exceeds archive bounds")
         from fsspec.utils import tokenize
 
-        self.stamp = tokenize(self._fs.ukey(self._path), dataset, self.member_offset, self.member_length)
+        self.stamp = tokenize(urlpath, object_info, dataset, self.member_offset, self.member_length)
         super().__init__(urlpath, max_concurrency, traffic=self.traffic)
+        self._opening_ranges.clear()
         if b"b2o" in self._header[13][1]:
             raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")
         if not self._header_len <= self._header[2] <= self.member_length:
@@ -125,6 +135,9 @@ class B2ZNDSource(ByteRangeNDSource):
     def _read_archive(self, offset, size):
         if not size:
             return b""
+        for start, data in self._opening_ranges:
+            if start <= offset and offset + size <= start + len(data):
+                return data[offset - start : offset - start + size]
         data = self._fs.cat_file(self._path, start=offset, end=offset + size)
         if len(data) > size:
             raise ValueError("B2Z transport did not honor the requested byte range")

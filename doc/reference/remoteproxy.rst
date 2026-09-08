@@ -93,9 +93,15 @@ source chunks, blocks, dtype, and compression parameters; no kerchunk, Zarr, or
 HDF5 dependencies are needed. Install the fsspec extra and the protocol backend.
 
 Opening reads the ZIP directory and selected member's headers. Directory cost
-scales with archive member count. Subsequent reads fetch native chunks or blocks
+scales with archive member count. An 8 KiB archive tail and 16 KiB member prefix
+are prefetched to combine small metadata requests; larger directories or headers
+fall back to exact reads. These temporary buffers are released after opening.
+Subsequent reads fetch native chunks or blocks
 by byte range; repeated cache hits perform no remote reads. Reopening a saved
 carrier rereads archive/frame metadata and resolves the member offset afresh.
+The optimized reader derives its source stamp from the same metadata response
+used to obtain archive size. Caches from the initial v10 reader may therefore
+refetch their contents once after upgrading.
 
 Only unencrypted, ``ZIP_STORED`` external NDArray members are supported. Groups,
 embedded leaves inside ``embed.b2e``, other leaf types, and compressed ZIP members
