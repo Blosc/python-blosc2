@@ -604,6 +604,7 @@ from .proxy_source import (
     Traffic,
 )
 from .zarr_source import ZarrNDSource
+from .hdf5_source import HDF5NDSource, available_datasets
 from .indexing import Index
 
 from .schunk import SChunk, load, open
@@ -903,6 +904,7 @@ __all__ = [  # noqa : RUF022
     "FsspecNDSource",
     "Traffic",
     "ZarrNDSource",
+    "HDF5NDSource",
     "Proxy",
     "ProxyNDField",
     "ProxyNDSource",
@@ -932,6 +934,7 @@ __all__ = [  # noqa : RUF022
     "any",
     "arange",
     "array",
+    "available_datasets",
     "arccos",
     "arccosh",
     "arcsin",

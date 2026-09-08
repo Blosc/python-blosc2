@@ -12,6 +12,7 @@ The argument passed to {func}`blosc2.open` selects the route:
 |---|---|---|
 | A URL string such as `s3://...` or `https://...` | fsspec | A byte-addressable, standalone `.b2nd` file |
 | A URL containing a `.zarr` path component | Zarr | One immutable Zarr v2 or v3 array |
+| A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5 | One immutable HDF5 dataset via kerchunk |
 | A {ref}`URLPath` | Caterva2 | One array-like dataset on a Caterva2 server |
 
 ```python
@@ -29,20 +30,39 @@ b = blosc2.open(
     lazy=True,
 )
 
+# Zarr and HDF5: addressing datasets inside containers
+# Both formats support standard slashes (/), container separators (::), or the dataset= parameter:
+c1 = blosc2.open("s3://bucket/hierarchy.zarr/d0/d1/a2", lazy=True)
+c2 = blosc2.open("s3://bucket/hierarchy.zarr::d0/d1/a2", lazy=True)
+c3 = blosc2.open("s3://bucket/hierarchy.zarr", lazy=True, dataset="d0/d1/a2")
+
+h1 = blosc2.open("s3://bucket/hierarchy.h5/d0/d1/a2", lazy=True)
+h2 = blosc2.open("s3://bucket/hierarchy.h5::d0/d1/a2", lazy=True)
+h3 = blosc2.open("s3://bucket/hierarchy.h5", lazy=True, dataset="d0/d1/a2")
+
 a.shape, a.dtype  # metadata is available immediately
 a[100:110, :50]  # data is fetched now
 ```
 
 Remote Zarr needs `pip install "blosc2[zarr,fsspec]"` plus the protocol driver
-(`s3fs` for S3). The URL names the array itself; nested array paths work, while
-opening a group asks for an array path. For a suffix-free URL, pass
-`source_format="zarr"`. Converted Blosc2 chunks are cached under an immutable
-source contract, so publish changed data at a new URL or replace its cache.
+(`s3fs` for S3). Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr`
+separator, or via `dataset="sub/arr"`. For a suffix-free URL, pass `source_format="zarr"`.
+Converted Blosc2 chunks are cached under an immutable source contract, so publish changed
+data at a new URL or replace its cache.
+
+Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"` plus the protocol driver
+(`s3fs` for S3). Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`),
+the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
+Pre-indexing is performed via `kerchunk`, and the resulting reference map is cached inside
+the RemoteProxy carrier (`schunk.vlmeta["hdf5-refs"]`) so reopening the carrier requires
+no network re-indexing. Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5
+container.
 
 `RemoteProxy` assumes remote sources are immutable by default, avoiding a
 metadata request before every read. For a replaceable `.b2nd` or Caterva2
 source, pass `assume_immutable=False` to refresh its identity and invalidate
-stale cached chunks before each operation.
+stale cached chunks before each operation. Mutable Zarr and HDF5 sources are
+not supported.
 
 A `URLPath` always means Caterva2. If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`. Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
 
@@ -54,7 +74,7 @@ When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing
 |---|---|---|
 | Standalone contiguous `.b2nd` | Yes | Yes |
 | Zarr v2/v3 array | Yes, with `source_format="zarr"` | No |
-| HDF5 dataset | No | Yes |
+| HDF5 dataset | Yes, with `dataset="..."` | Yes |
 | NDArray leaf inside `.b2z` | No | Yes |
 | Lazy or computed array | No | Yes |
 | Whole `.b2z` `TreeStore` or `DictStore` | No | No; open one array-like leaf |

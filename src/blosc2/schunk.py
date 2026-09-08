@@ -18,6 +18,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -29,6 +30,7 @@ from blosc2.core import (
     is_fsspec_url,
     localize_fsspec_url,
     normalize_urlpath,
+    parse_container_url,
 )
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
@@ -1886,38 +1888,58 @@ def _set_default_dparams(kwargs):
             kwargs["dparams"] = dparams
 
 
+def _reconstruct_legacy_proxy(proxy_cache, proxy_src):
+    source_kind = proxy_src.get("source_kind")
+    if source_kind == "fsspec":
+        src = blosc2.FsspecNDSource(proxy_src["urlpath"])
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "zarr":
+        src = blosc2.ZarrNDSource(
+            proxy_src["urlpath"], blocks=proxy_cache.blocks, cparams=proxy_cache.cparams
+        )
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "hdf5":
+        refs = None
+        raw_refs = getattr(proxy_cache, "schunk", proxy_cache).vlmeta.get("hdf5-refs")
+        if raw_refs is not None:
+            try:
+                import ujson as json_mod
+            except ImportError:
+                import json as json_mod
+            refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+        src = blosc2.HDF5NDSource(
+            proxy_src["urlpath"],
+            proxy_src["dataset"],
+            refs=refs,
+            blocks=proxy_cache.blocks,
+            cparams=proxy_cache.cparams,
+        )
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "caterva2":
+        src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if proxy_src["local_abspath"] is not None:
+        source_path = proxy_src["local_abspath"]
+        # Older FsspecNDSource caches recorded their URL in the field that
+        # otherwise names a local source. Preserve those caches while
+        # restoring their lazy byte-range behavior.
+        if source_kind is None and is_fsspec_url(source_path):
+            src = blosc2.FsspecNDSource(source_path)
+        else:
+            src = blosc2.open(source_path, mode="r")
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    elif proxy_src["urlpath"] is not None:
+        src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+        return blosc2.Proxy(src, _cache=proxy_cache)
+    elif not proxy_src["caterva2_env"]:
+        raise RuntimeError("Could not find the source when opening a Proxy")
+    return None
+
+
 def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
-        proxy_cache = res
-        proxy_src = meta["proxy-source"]
-        source_kind = proxy_src.get("source_kind")
-        if source_kind == "fsspec":
-            src = blosc2.FsspecNDSource(proxy_src["urlpath"])
-            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
-        if source_kind == "zarr":
-            src = blosc2.ZarrNDSource(
-                proxy_src["urlpath"], blocks=proxy_cache.blocks, cparams=proxy_cache.cparams
-            )
-            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
-        if source_kind == "caterva2":
-            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
-        if proxy_src["local_abspath"] is not None:
-            source_path = proxy_src["local_abspath"]
-            # Older FsspecNDSource caches recorded their URL in the field that
-            # otherwise names a local source. Preserve those caches while
-            # restoring their lazy byte-range behavior.
-            if source_kind is None and is_fsspec_url(source_path):
-                src = blosc2.FsspecNDSource(source_path)
-            else:
-                src = blosc2.open(source_path, mode="r")
-            return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
-        elif proxy_src["urlpath"] is not None:
-            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=proxy_cache)
-        elif not proxy_src["caterva2_env"]:
-            raise RuntimeError("Could not find the source when opening a Proxy")
+        return _reconstruct_legacy_proxy(res, meta["proxy-source"])
 
     if "b2o" in meta:
         return blosc2.open_b2object(res)
@@ -2016,10 +2038,12 @@ def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str 
 
 
 def _validate_fsspec_source_format(source_format, lazy):
-    if source_format not in {None, "blosc2", "zarr"}:
-        raise ValueError("source_format must be None, 'blosc2', or 'zarr'")
+    if source_format not in {None, "blosc2", "zarr", "hdf5"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
     if source_format == "zarr" and not lazy:
         raise NotImplementedError("Zarr sources require lazy=True")
+    if source_format == "hdf5" and not lazy:
+        raise ValueError("HDF5 sources require lazy=True")
 
 
 def _remote_proxy_options(
@@ -2032,6 +2056,8 @@ def _remote_proxy_options(
     storage_options=None,
     source_format=None,
     assume_immutable=True,
+    dataset=None,
+    refs=None,
 ):
     """Return explicit RemoteProxy options, or None for the legacy lazy Proxy path."""
     policy_present = "cache_policy" in kwargs
@@ -2060,6 +2086,10 @@ def _remote_proxy_options(
         options["storage_options"] = storage_options
     if source_format is not None:
         options["source_format"] = source_format
+    if dataset is not None:
+        options["dataset"] = dataset
+    if refs is not None:
+        options["refs"] = refs
     return options
 
 
@@ -2130,6 +2160,32 @@ def _lazy_remote_proxy(
     return proxy
 
 
+def _validate_c2_urlpath_options(kwargs: dict):
+    if kwargs.pop("dataset", None) is not None:
+        raise ValueError("dataset is not supported for Caterva2 inputs")
+    if kwargs.pop("refs", None) is not None:
+        raise ValueError("refs is not supported for Caterva2 inputs")
+    source_format = kwargs.pop("source_format", None)
+    if source_format not in {None, "blosc2", "zarr", "hdf5"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
+    if source_format is not None:
+        raise ValueError("source_format is not supported for Caterva2 URLPath inputs")
+
+
+def _open_non_lazy_c2(
+    urlpath, immutable_present, remote_proxy_options, cache_dir, cache_path, max_concurrency
+):
+    if immutable_present:
+        raise NotImplementedError("assume_immutable requires lazy=True")
+    if remote_proxy_options is not None:
+        raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
+    if cache_dir is not None or cache_path is not None:
+        raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
+    if max_concurrency is not None:
+        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+    return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+
+
 def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
     """Open a Caterva2 array directly, or through the same lazy cache API as fsspec."""
     if mode != "r":
@@ -2141,11 +2197,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     max_concurrency = kwargs.pop("max_concurrency", None)
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
-    source_format = kwargs.pop("source_format", None)
-    if source_format not in {None, "blosc2", "zarr"}:
-        raise ValueError("source_format must be None, 'blosc2', or 'zarr'")
-    if source_format is not None:
-        raise ValueError("source_format is not supported for Caterva2 URLPath inputs")
+    _validate_c2_urlpath_options(kwargs)
     lazy = kwargs.pop("lazy", False)
     remote_proxy_options = _remote_proxy_options(
         kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, assume_immutable=assume_immutable
@@ -2155,15 +2207,9 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
 
     if not lazy:
-        if immutable_present:
-            raise NotImplementedError("assume_immutable requires lazy=True")
-        if remote_proxy_options is not None:
-            raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
-        if cache_dir is not None or cache_path is not None:
-            raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
-        if max_concurrency is not None:
-            raise NotImplementedError("max_concurrency is only supported with lazy=True")
-        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+        return _open_non_lazy_c2(
+            urlpath, immutable_present, remote_proxy_options, cache_dir, cache_path, max_concurrency
+        )
 
     if remote_proxy_options is not None:
         return blosc2.RemoteProxy(urlpath, **remote_proxy_options)
@@ -2192,6 +2238,30 @@ def _cache_stamp(path: str):
     return getattr(cache, "schunk", cache).vlmeta.get("proxy-stamp")
 
 
+def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):
+    if dataset is not None and not lazy:
+        raise ValueError("dataset requires lazy=True")
+    _validate_fsspec_source_format(source_format, lazy)
+    if dataset is not None and source_format not in {None, "hdf5", "zarr"}:
+        raise ValueError("dataset is only supported for HDF5 and Zarr sources")
+    parsed = urlsplit(urlpath)
+    url_path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    if not lazy and any(part.endswith((".h5", ".hdf5")) for part in url_path_str.split("/")):
+        raise ValueError("HDF5 sources require lazy=True")
+
+
+def _validate_non_lazy_fsspec_options(immutable_present, remote_proxy_options, cache_path, max_concurrency):
+    if immutable_present:
+        raise NotImplementedError("assume_immutable requires lazy=True")
+    if remote_proxy_options is not None:
+        raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
+    if cache_path is not None:
+        raise NotImplementedError("cache_path is only supported with lazy=True")
+    if max_concurrency is not None:
+        # Nothing is fetched chunk by chunk here, so there is nothing to overlap
+        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2208,11 +2278,20 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     cache_dir, cache_path = _remote_cache_options(kwargs)
     storage_options = kwargs.pop("storage_options", None)
     source_format = kwargs.pop("source_format", None)
+    dataset = kwargs.pop("dataset", None)
+    refs = kwargs.pop("refs", None)
     max_concurrency = kwargs.pop("max_concurrency", None)
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
     lazy = kwargs.pop("lazy", False)
-    _validate_fsspec_source_format(source_format, lazy)
+
+    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
+    if dataset is None:
+        dataset = parsed_dataset
+    if source_format is None:
+        source_format = detected_format
+
+    _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
     remote_proxy_options = _remote_proxy_options(
         kwargs,
         cache_dir,
@@ -2222,6 +2301,8 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         storage_options=storage_options,
         source_format=source_format,
         assume_immutable=assume_immutable,
+        dataset=dataset,
+        refs=refs,
     )
     if lazy:
         if offset != 0:
@@ -2235,18 +2316,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
             urlpath, cache_dir, cache_path, max_concurrency, storage_options=storage_options
         )
 
-    if immutable_present:
-        raise NotImplementedError("assume_immutable requires lazy=True")
-
-    if remote_proxy_options is not None:
-        raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
-
-    if cache_path is not None:
-        raise NotImplementedError("cache_path is only supported with lazy=True")
-
-    if max_concurrency is not None:
-        # Nothing is fetched chunk by chunk here, so there is nothing to overlap
-        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+    _validate_non_lazy_fsspec_options(immutable_present, remote_proxy_options, cache_path, max_concurrency)
 
     if cache_dir is not None:
         return open(
@@ -2268,10 +2338,68 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         return blosc2.from_cframe(f.read())
 
 
+def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
+    if kwargs.get("source_format") == "hdf5" or "refs" in kwargs:
+        return True
+    if not isinstance(urlpath, str):
+        return False
+    _, _, hint = parse_container_url(urlpath, kwargs.get("dataset"))
+    return hint == "hdf5"
+
+
+def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
+    if kwargs.get("source_format") in {"hdf5", "zarr"} or "refs" in kwargs:
+        return True
+    if not isinstance(urlpath, str):
+        return False
+    _, parsed_dataset, hint = parse_container_url(urlpath, kwargs.get("dataset"))
+    if hint == "hdf5":
+        return True
+    return hint == "zarr" and (kwargs.get("lazy") or parsed_dataset is not None or "dataset" in kwargs)
+
+
+def _try_open_special_store(urlpath: str, mode: str, offset: int, kwargs: dict):
+    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        special = _finalize_special_open(special, urlpath, mode)
+        if special is not None:
+            return special
+    return None
+
+
+def _try_open_aliased_store(urlpath: str, mode: str, offset: int, kwargs: dict):
+    resolved_urlpath = _resolve_store_alias(urlpath)
+    special_path = (
+        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    )
+    special = _open_special_store(special_path, mode, offset, **kwargs)
+    special = _finalize_special_open(special, special_path, mode)
+    return special, special_path
+
+
+def _normalize_open_target(urlpath, kwargs, dataset, refs):
+    if dataset is not None:
+        kwargs["dataset"] = dataset
+    if refs is not None:
+        kwargs["refs"] = refs
+    if isinstance(urlpath, pathlib.PurePath):
+        urlpath = str(urlpath)
+    urlpath = normalize_urlpath(urlpath)
+    if isinstance(urlpath, str):
+        urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, kwargs.get("dataset"))
+        if parsed_dataset is not None:
+            kwargs["dataset"] = parsed_dataset
+        if detected_format is not None and kwargs.get("source_format") is None:
+            kwargs["source_format"] = detected_format
+    return urlpath
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
     offset: int = 0,
+    dataset: str | None = None,
+    refs: dict | str | os.PathLike | None = None,
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2386,9 +2514,17 @@ def open(
         storage_options: dict, optional
             Parameters passed to the underlying ``fsspec`` filesystem when opening
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
-        source_format: {None, "blosc2", "zarr"}, optional
+        dataset: str, optional
+            For HDF5 sources (``source_format="hdf5"`` or ``.h5``/``.hdf5`` files),
+            the dataset path within the HDF5 file (e.g. ``dataset="d0/d1/a2"``).
+            Requires ``lazy=True``.
+        refs: dict | str | PathLike, optional
+            Pre-computed kerchunk reference dictionary or path to a JSON reference
+            file for HDF5 sources.
+        source_format: {None, "blosc2", "zarr", "hdf5"}, optional
             Format of a lazy remote source. A ``.zarr`` URL path component selects
-            Zarr automatically; an explicit value supports suffix-free array paths.
+            Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
+            an explicit value supports suffix-free array paths.
         assume_immutable: bool, optional
             With ``lazy=True``, skip remote identity checks before reads. Defaults
             to ``True``; set to ``False`` when the remote object may be replaced.
@@ -2483,11 +2619,9 @@ def open(
     if isinstance(urlpath, blosc2.URLPath):
         return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 
-    if isinstance(urlpath, pathlib.PurePath):
-        urlpath = str(urlpath)
-    urlpath = normalize_urlpath(urlpath)
+    urlpath = _normalize_open_target(urlpath, kwargs, dataset, refs)
 
-    if is_fsspec_url(urlpath):
+    if is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)
 
     if "storage_options" in kwargs and kwargs["storage_options"] is not None:
@@ -2497,11 +2631,9 @@ def open(
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the
     # more expensive store probing when that fails.
-    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
-        special = _open_special_store(urlpath, mode, offset, **kwargs)
-        special = _finalize_special_open(special, urlpath, mode)
-        if special is not None:
-            return special
+    special = _try_open_special_store(urlpath, mode, offset, kwargs)
+    if special is not None:
+        return special
 
     regular_exc = None
     if os.path.exists(urlpath):
@@ -2513,12 +2645,7 @@ def open(
         else:
             return process_opened_object(res)
 
-    resolved_urlpath = _resolve_store_alias(urlpath)
-    special_path = (
-        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
-    )
-    special = _open_special_store(special_path, mode, offset, **kwargs)
-    special = _finalize_special_open(special, special_path, mode)
+    special, special_path = _try_open_aliased_store(urlpath, mode, offset, kwargs)
     if special is not None:
         return special
 

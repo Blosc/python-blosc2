@@ -269,3 +269,20 @@ def test_authorized_zarr_store_is_retained_for_sparse_cache(tmp_path, monkeypatc
         source, tmp_path / "runtime-cache", source_descriptor=descriptor
     )
     np.testing.assert_array_equal(proxy[:], data)
+
+
+def test_open_remote_zarr_with_dataset(zarr):
+    data = np.arange(20, dtype=np.int32).reshape(4, 5)
+    root_url = "memory://zarr-tests/hierarchy.zarr"
+    array = zarr.create_array(f"{root_url}/sub/arr", shape=data.shape, chunks=(2, 3), dtype=data.dtype)
+    array[:] = data
+
+    p1 = blosc2.open(f"{root_url}/sub/arr", lazy=True)
+    p2 = blosc2.open(f"{root_url}::sub/arr", lazy=True)
+    p3 = blosc2.open(f"{root_url}::/sub/arr", lazy=True)
+    p4 = blosc2.open(root_url, lazy=True, dataset="sub/arr")
+
+    for p in (p1, p2, p3, p4):
+        assert p.dataset == "sub/arr"
+        assert p.source["urlpath"] == f"{root_url}/sub/arr"
+        np.testing.assert_array_equal(p[:], data)

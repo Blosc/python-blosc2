@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Open a remote S3 array (Blosc2 .b2nd or Zarr .zarr) and print metadata and sample data.
+"""Open a remote S3 array (Blosc2 .b2nd, Zarr .zarr, or HDF5 .h5) and print metadata and sample data.
 
 Usage:
     python s3-access.py <url> [--profile PROFILE] [--endpoint-url ENDPOINT_URL]
@@ -16,6 +16,9 @@ Examples:
     python s3-access.py s3://blosc2/cube-1k-1k-1k.zarr
     python s3-access.py s3://blosc2/cube-1k-1k-1k-1shard.zarr
     python s3-access.py s3://blosc2/hierarchy.zarr/d0/d1/a2
+    python s3-access.py s3://blosc2/hierarchy.zarr::d0/d1/a2
+    python s3-access.py s3://blosc2/hierarchy.h5/d0/d1/a2
+    python s3-access.py s3://blosc2/hierarchy.h5::d0/d1/a2
 """
 
 from __future__ import annotations
@@ -88,7 +91,7 @@ def open_remote_array(
     profile: str = DEFAULT_PROFILE,
     endpoint_url: str = DEFAULT_ENDPOINT_URL,
 ) -> tuple[str, Any]:
-    """Open remote array depending on extension (.b2nd vs .zarr/.zip).
+    """Open remote array depending on extension (.b2nd vs .zarr/.zip vs .h5).
 
     Returns (format_name, array_object).
     """
@@ -96,12 +99,8 @@ def open_remote_array(
         "profile": profile,
         "endpoint_url": endpoint_url,
     }
-    clean_url = url.rstrip("/")
 
-    if clean_url.endswith((".b2nd", ".b2frame")):
-        arr = blosc2.open(url, lazy=True, storage_options=storage_options)
-        return "Blosc2 (Lazy RemoteProxy)", arr
-
+    clean_url = url.split("::", 1)[0].rstrip("/")
     if clean_url.endswith((".zarr.zip", ".zip")):
         import fsspec
         import zarr
@@ -115,8 +114,23 @@ def open_remote_array(
         arr.traffic = traffic
         return "Zarr (Zip)", arr
 
+    # If the URL targets an HDF5 container without a dataset path, list available datasets
+    base_url, detected_dataset, hint = blosc2.remote_proxy.parse_container_url(url)
+    if hint == "hdf5" and detected_dataset is None:
+        available = blosc2.available_datasets(base_url, storage_options=storage_options)
+        raise ValueError(
+            f"HDF5 files require specifying the dataset path using '/dataset_name' or '::dataset_name' "
+            f"(e.g. {base_url}/d0/d1/a2 or {base_url}::d0/d1/a2). Available datasets: {available}"
+        )
+
     arr = blosc2.open(url, lazy=True, storage_options=storage_options)
-    label = "Zarr" if arr.source["kind"] == "zarr" else "Blosc2"
+    kind = arr.source.get("kind", "")
+    if kind == "hdf5":
+        label = "HDF5"
+    elif kind == "zarr":
+        label = "Zarr"
+    else:
+        label = "Blosc2"
     return f"{label} (Lazy RemoteProxy)", arr
 
 

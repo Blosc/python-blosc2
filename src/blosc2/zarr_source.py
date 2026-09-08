@@ -21,7 +21,7 @@ import blosc2
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
 
 
-def _counting_store(zarr, store, traffic):
+def counting_store(zarr, store, traffic):
     class CountingStore(zarr.storage.WrapperStore):
         async def get(self, key, prototype, byte_range=None):
             value = await super().get(key, prototype, byte_range)
@@ -37,6 +37,42 @@ def _counting_store(zarr, store, traffic):
             return values
 
     return CountingStore(store)
+
+
+_counting_store = counting_store
+
+
+def zarr_chunk_to_blosc2(
+    array,
+    nchunk: int,
+    shape: tuple,
+    chunks: tuple,
+    blocks: tuple,
+    dtype: np.dtype,
+    cparams,
+) -> bytes:
+    """Read a Zarr chunk slice and return it as Blosc2 compressed bytes."""
+    grid = tuple(math.ceil(size / chunk) for size, chunk in zip(shape, chunks, strict=True))
+    total = math.prod(grid)
+    if isinstance(nchunk, bool) or not isinstance(nchunk, int) or nchunk < 0 or nchunk >= total:
+        raise IndexError(f"nchunk must be in range [0, {total}), got {nchunk}")
+    coords = np.unravel_index(nchunk, grid)
+    selection = tuple(
+        slice(int(coord) * chunk, min((int(coord) + 1) * chunk, size))
+        for coord, chunk, size in zip(coords, chunks, shape, strict=True)
+    )
+    values = np.asarray(array[selection], dtype=dtype)
+    buffer = np.zeros(chunks, dtype=dtype)
+    if shape:
+        values = np.ascontiguousarray(values)
+        buffer[tuple(slice(0, size) for size in values.shape)] = values
+    else:
+        buffer[()] = values
+    converted = blosc2.asarray(buffer, chunks=chunks, blocks=blocks, cparams=cparams)
+    return converted.schunk.get_chunk(0)
+
+
+_zarr_chunk_to_blosc2 = zarr_chunk_to_blosc2
 
 
 class ZarrNDSource(ProxyNDSource):
@@ -165,21 +201,12 @@ class ZarrNDSource(ProxyNDSource):
         return self._cparams
 
     def get_chunk(self, nchunk: int) -> bytes:
-        grid = tuple(math.ceil(size / chunk) for size, chunk in zip(self.shape, self.chunks, strict=True))
-        total = math.prod(grid)
-        if isinstance(nchunk, bool) or not isinstance(nchunk, int) or nchunk < 0 or nchunk >= total:
-            raise IndexError(f"nchunk must be in range [0, {total}), got {nchunk}")
-        coords = np.unravel_index(nchunk, grid)
-        selection = tuple(
-            slice(int(coord) * chunk, min((int(coord) + 1) * chunk, size))
-            for coord, chunk, size in zip(coords, self.chunks, self.shape, strict=True)
+        return zarr_chunk_to_blosc2(
+            self.array,
+            nchunk,
+            self.shape,
+            self.chunks,
+            self.blocks,
+            self.dtype,
+            self.cparams,
         )
-        values = np.asarray(self.array[selection], dtype=self.dtype)
-        buffer = np.zeros(self.chunks, dtype=self.dtype)
-        if self.shape:
-            values = np.ascontiguousarray(values)
-            buffer[tuple(slice(0, size) for size in values.shape)] = values
-        else:
-            buffer[()] = values
-        converted = blosc2.asarray(buffer, chunks=self.chunks, blocks=self.blocks, cparams=self.cparams)
-        return converted.schunk.get_chunk(0)

@@ -22,6 +22,7 @@ import numpy as np
 
 import blosc2
 from blosc2.b2objects import make_b2object_carrier, write_b2object_payload
+from blosc2.core import parse_container_url
 from blosc2.info import InfoReporter, format_nbytes_info
 
 DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
@@ -47,18 +48,18 @@ _SENSITIVE_QUERY_PARTS = (
 
 
 def _normalize_source_format(urlpath, source_format):
-    if source_format not in {None, "blosc2", "zarr"}:
-        raise ValueError("source_format must be None, 'blosc2', or 'zarr'")
+    if source_format not in {None, "blosc2", "zarr", "hdf5"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
     if source_format is not None:
         return source_format
     if isinstance(urlpath, blosc2.ZarrNDSource):
         return "zarr"
-    if (
-        isinstance(urlpath, str)
-        and "::" not in urlpath
-        and any(part.endswith(".zarr") for part in urlsplit(urlpath).path.split("/"))
-    ):
-        return "zarr"
+    if isinstance(getattr(blosc2, "HDF5NDSource", None), type) and isinstance(urlpath, blosc2.HDF5NDSource):
+        return "hdf5"
+    if isinstance(urlpath, str):
+        _, _, hint = parse_container_url(urlpath)
+        if hint is not None:
+            return hint
     return "blosc2"
 
 
@@ -150,6 +151,186 @@ def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
         raise ValueError(f"persisted {policy.name} RemoteProxy requires positive max_cache_bytes")
 
 
+def _validate_authorized_source(urlpath, storage_options, source_descriptor):
+    if storage_options is not None:
+        raise ValueError("storage_options cannot be used with an authorized source")
+    hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
+    if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls)):
+        raise TypeError(
+            "source_descriptor requires an authorized FsspecNDSource, ZarrNDSource, or HDF5NDSource"
+        )
+    assume_immutable = _validate_assume_immutable(
+        source_descriptor.get("assume_immutable"), "source_descriptor assume_immutable"
+    )
+    expected = {
+        "kind": (
+            "hdf5"
+            if isinstance(urlpath, hdf5_cls)
+            else "zarr"
+            if isinstance(urlpath, blosc2.ZarrNDSource)
+            else "fsspec"
+        ),
+        "version": 1,
+        "urlpath": urlpath.urlpath,
+        "assume_immutable": assume_immutable,
+    }
+    if isinstance(urlpath, hdf5_cls):
+        expected["dataset"] = urlpath.dataset
+    if source_descriptor != expected:
+        raise ValueError("source_descriptor does not match the supplied source")
+    _validate_persistable_url(urlpath.urlpath)
+    return urlpath, dict(expected)
+
+
+def _open_url_source(
+    urlpath: str,
+    max_concurrency: int | None,
+    *,
+    traffic=None,
+    persistable=True,
+    storage_options=None,
+    source_format=None,
+    assume_immutable=True,
+    dataset=None,
+    refs=None,
+    blocks=None,
+    cparams=None,
+):
+    if persistable:
+        _validate_persistable_url(urlpath)
+    kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
+    if storage_options is not None:
+        kwargs["storage_options"] = storage_options
+    source_format = _normalize_source_format(urlpath, source_format)
+    if source_format == "zarr":
+        if not assume_immutable:
+            raise NotImplementedError("mutable Zarr sources are not supported")
+        src = blosc2.ZarrNDSource(urlpath, _traffic=traffic, blocks=blocks, cparams=cparams, **kwargs)
+        source = {
+            "kind": "zarr",
+            "version": 1,
+            "urlpath": urlpath,
+            "assume_immutable": assume_immutable,
+        }
+    elif source_format == "hdf5":
+        if not assume_immutable:
+            raise NotImplementedError("mutable HDF5 sources are not supported")
+        if dataset is None:
+            raise ValueError("HDF5 sources require a dataset path (e.g., dataset='d0/d1/a2')")
+        src = blosc2.HDF5NDSource(
+            urlpath,
+            dataset,
+            refs=refs,
+            _traffic=traffic,
+            blocks=blocks,
+            cparams=cparams,
+            **kwargs,
+        )
+        source = {
+            "kind": "hdf5",
+            "version": 1,
+            "urlpath": urlpath,
+            "dataset": src.dataset,
+            "assume_immutable": assume_immutable,
+        }
+    else:
+        src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
+        source = {
+            "kind": "fsspec",
+            "version": 1,
+            "urlpath": urlpath,
+            "assume_immutable": assume_immutable,
+        }
+    return src, source
+
+
+def _validate_cache_locations(cache_policy, cache_dir, cache_path, carrier, runtime_cache_path):
+    if cache_dir is not None and cache_path is not None:
+        raise ValueError("cache_dir and cache_path are mutually exclusive")
+    if cache_policy is not blosc2.CachePolicy.DISK and (cache_dir is not None or cache_path is not None):
+        raise ValueError("cache_dir and cache_path require CachePolicy.DISK")
+    if (
+        cache_policy is blosc2.CachePolicy.DISK
+        and cache_dir is None
+        and cache_path is None
+        and carrier is None
+        and runtime_cache_path is None
+    ):
+        raise ValueError("CachePolicy.DISK requires cache_dir or cache_path")
+
+
+def _validate_urlpath_source(source, expected_fields, kind_name):
+    if set(source) != expected_fields:
+        raise ValueError(f"{kind_name} RemoteProxy source descriptors contain unsupported fields")
+    urlpath = source.get("urlpath")
+    if not isinstance(urlpath, str):
+        raise TypeError(f"{kind_name} RemoteProxy sources require a string 'urlpath'")
+    return urlpath
+
+
+def _parse_source_from_payload(source):
+    if not isinstance(source, dict) or source.get("version") != 1:
+        raise ValueError("unsupported RemoteProxy source descriptor")
+    source_kind = source.get("kind")
+    if source_kind == "fsspec":
+        urlpath = _validate_urlpath_source(
+            source, {"kind", "version", "urlpath", "assume_immutable"}, "fsspec"
+        )
+    elif source_kind == "caterva2":
+        if set(source) != {"kind", "version", "path", "urlbase", "assume_immutable"}:
+            raise ValueError("Caterva2 RemoteProxy source descriptors contain unsupported fields")
+        path = source.get("path")
+        urlbase = source.get("urlbase")
+        if not isinstance(path, str) or (urlbase is not None and not isinstance(urlbase, str)):
+            raise TypeError("Caterva2 RemoteProxy sources require string 'path' and 'urlbase' fields")
+        urlpath = blosc2.URLPath(path, urlbase=urlbase)
+    elif source_kind == "zarr":
+        urlpath = _validate_urlpath_source(
+            source, {"kind", "version", "urlpath", "assume_immutable"}, "Zarr"
+        )
+    elif source_kind == "hdf5":
+        urlpath = _validate_urlpath_source(
+            source, {"kind", "version", "urlpath", "dataset", "assume_immutable"}, "HDF5"
+        )
+        dataset = source.get("dataset")
+        if not isinstance(dataset, str):
+            raise TypeError("HDF5 RemoteProxy sources require a string 'dataset'")
+    else:
+        raise ValueError(f"unsupported RemoteProxy source kind: {source_kind!r}")
+    _validate_assume_immutable(source.get("assume_immutable"), "source assume_immutable")
+    return source_kind, urlpath
+
+
+def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
+    if isinstance(urlpath, (blosc2.URLPath, blosc2.C2Array)) and source_format is not None:
+        raise ValueError("source_format is not supported for Caterva2 inputs")
+    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
+    if dataset is None:
+        dataset = parsed_dataset
+    if source_format is None:
+        source_format = detected_format
+    resolved_format = _normalize_source_format(urlpath, source_format)
+    if dataset is not None and resolved_format not in {"hdf5", "zarr"}:
+        raise ValueError("dataset is only supported for HDF5 and Zarr sources")
+
+    if resolved_format == "zarr":
+        if dataset is not None:
+            resolved_dataset = dataset.strip("/")
+            if not urlpath.rstrip("/").endswith(f"/{resolved_dataset}"):
+                urlpath = f"{urlpath.rstrip('/')}/{resolved_dataset}"
+        elif isinstance(urlpath, str) and ".zarr/" in urlpath.lower():
+            idx = urlpath.lower().find(".zarr/")
+            resolved_dataset = urlpath[idx + 6 :].strip("/") or None
+        else:
+            resolved_dataset = None
+    elif resolved_format == "hdf5":
+        resolved_dataset = dataset.strip("/") if dataset is not None else None
+    else:
+        resolved_dataset = None
+
+    return urlpath, resolved_dataset, resolved_format
+
+
 class RemoteProxy(blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
@@ -205,6 +386,8 @@ class RemoteProxy(blosc2.Operand):
         storage_options: dict | None = None,
         source_format: str | None = None,
         assume_immutable: bool = True,
+        dataset: str | None = None,
+        refs=None,
         _carrier=None,
         _runtime_cache_path=None,
         _source_descriptor=None,
@@ -214,45 +397,28 @@ class RemoteProxy(blosc2.Operand):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
         assume_immutable = _validate_assume_immutable(assume_immutable)
-        if cache_dir is not None and cache_path is not None:
-            raise ValueError("cache_dir and cache_path are mutually exclusive")
-        if cache_policy is not blosc2.CachePolicy.DISK and (cache_dir is not None or cache_path is not None):
-            raise ValueError("cache_dir and cache_path require CachePolicy.DISK")
-        if (
-            cache_policy is blosc2.CachePolicy.DISK
-            and cache_dir is None
-            and cache_path is None
-            and _carrier is None
-            and _runtime_cache_path is None
-        ):
-            raise ValueError("CachePolicy.DISK requires cache_dir or cache_path")
+        _validate_cache_locations(cache_policy, cache_dir, cache_path, _carrier, _runtime_cache_path)
 
         self._cache_policy = cache_policy
         self._cache_limit = _normalize_limit(cache_policy, max_cache_bytes)
         self._max_concurrency = _validate_max_concurrency(max_concurrency)
-        if isinstance(urlpath, (blosc2.URLPath, blosc2.C2Array)) and source_format is not None:
-            raise ValueError("source_format is not supported for Caterva2 inputs")
-        self._source_format = _normalize_source_format(urlpath, source_format)
+        urlpath, self._dataset, self._source_format = _resolve_init_dataset_and_url(
+            urlpath, dataset, source_format
+        )
         self._authorized_source = _source_descriptor is not None
         if self._authorized_source:
-            if storage_options is not None:
-                raise ValueError("storage_options cannot be used with an authorized source")
-            if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource)):
-                raise TypeError("source_descriptor requires an authorized FsspecNDSource or ZarrNDSource")
-            assume_immutable = _validate_assume_immutable(
-                _source_descriptor.get("assume_immutable"), "source_descriptor assume_immutable"
+            self.src, self._source = _validate_authorized_source(
+                urlpath, storage_options, _source_descriptor
             )
-            expected = {
-                "kind": "zarr" if isinstance(urlpath, blosc2.ZarrNDSource) else "fsspec",
-                "version": 1,
-                "urlpath": urlpath.urlpath,
-                "assume_immutable": assume_immutable,
-            }
-            if _source_descriptor != expected:
-                raise ValueError("source_descriptor does not match the supplied source")
-            _validate_persistable_url(urlpath.urlpath)
-            self.src, self._source = urlpath, dict(expected)
         else:
+            if refs is None and _carrier is not None:
+                raw_refs = getattr(_carrier, "schunk", _carrier).vlmeta.get("hdf5-refs")
+                if raw_refs is not None:
+                    try:
+                        import ujson as json_mod
+                    except ImportError:
+                        import json as json_mod
+                    refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
             self.src, self._source = self._open_source(
                 urlpath,
                 self._max_concurrency,
@@ -260,6 +426,8 @@ class RemoteProxy(blosc2.Operand):
                 storage_options=storage_options,
                 source_format=self._source_format,
                 assume_immutable=assume_immutable,
+                dataset=self._dataset,
+                refs=refs,
                 blocks=_source_blocks,
                 cparams=_source_cparams,
             )
@@ -326,6 +494,16 @@ class RemoteProxy(blosc2.Operand):
                     "open legacy Proxy caches directly with blosc2.open(cache_path), "
                     "or choose a new cache_path"
                 )
+            if self._source.get("kind") == "hdf5" and "hdf5-refs" not in carrier.schunk.vlmeta:
+                refs = getattr(self.src, "_refs", None)
+                if refs is not None:
+                    try:
+                        import ujson as json_mod
+                    except ImportError:
+                        import json as json_mod
+                    carrier.schunk.vlmeta["hdf5-refs"] = blosc2.compress(
+                        json_mod.dumps(refs).encode("utf-8"), typesize=1
+                    )
             stored = carrier.schunk.vlmeta.get("proxy-stamp")
             current = getattr(self.src, "stamp", None)
             status = (
@@ -574,6 +752,8 @@ class RemoteProxy(blosc2.Operand):
         storage_options: dict | None = None,
         source_format: str | None = None,
         assume_immutable: bool = True,
+        dataset: str | None = None,
+        refs=None,
         blocks=None,
         cparams=None,
     ):
@@ -611,32 +791,19 @@ class RemoteProxy(blosc2.Operand):
                 "assume_immutable": assume_immutable,
             }
         elif isinstance(urlpath, str):
-            if persistable:
-                _validate_persistable_url(urlpath)
-            kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
-            if storage_options is not None:
-                kwargs["storage_options"] = storage_options
-            source_format = _normalize_source_format(urlpath, source_format)
-            if source_format == "zarr":
-                if not assume_immutable:
-                    raise NotImplementedError("mutable Zarr sources are not supported")
-                src = blosc2.ZarrNDSource(
-                    urlpath, _traffic=traffic, blocks=blocks, cparams=cparams, **kwargs
-                )
-                source = {
-                    "kind": "zarr",
-                    "version": 1,
-                    "urlpath": urlpath,
-                    "assume_immutable": assume_immutable,
-                }
-            else:
-                src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
-                source = {
-                    "kind": "fsspec",
-                    "version": 1,
-                    "urlpath": urlpath,
-                    "assume_immutable": assume_immutable,
-                }
+            src, source = _open_url_source(
+                urlpath,
+                max_concurrency,
+                traffic=traffic,
+                persistable=persistable,
+                storage_options=storage_options,
+                source_format=source_format,
+                assume_immutable=assume_immutable,
+                dataset=dataset,
+                refs=refs,
+                blocks=blocks,
+                cparams=cparams,
+            )
         else:
             raise TypeError("RemoteProxy requires a URL string, URLPath, or C2Array")
 
@@ -645,6 +812,8 @@ class RemoteProxy(blosc2.Operand):
         return src, source
 
     def _source_identity(self) -> str:
+        if self._source["kind"] == "hdf5":
+            return f"{self._source['urlpath']}::{self._source['dataset']}"
         if self._source["kind"] in {"fsspec", "zarr"}:
             return self._source["urlpath"]
         return f"caterva2:{blosc2.c2array._server_url(self.src.urlbase, self.src.path)}"
@@ -694,6 +863,8 @@ class RemoteProxy(blosc2.Operand):
                     storage_options=self._storage_options,
                     source_format=self._source_format,
                     assume_immutable=self._assume_immutable,
+                    dataset=self.dataset,
+                    refs=getattr(self.src, "_refs", None),
                 )
                 if current_stamp is None and not isinstance(fresh, blosc2.C2Array):
                     # No stable validator means cached bytes cannot safely be
@@ -802,9 +973,14 @@ class RemoteProxy(blosc2.Operand):
     @property
     def urlpath(self):
         """The remote fsspec URL or credential-free Caterva2 URLPath."""
-        if self._source["kind"] in {"fsspec", "zarr"}:
+        if self._source["kind"] in {"fsspec", "zarr", "hdf5"}:
             return self._source["urlpath"]
         return blosc2.URLPath(self._source["path"], urlbase=self._source["urlbase"])
+
+    @property
+    def dataset(self) -> str | None:
+        """The dataset path within a container source, or None."""
+        return self._source.get("dataset", self._dataset)
 
     @property
     def cache_path(self):
@@ -946,6 +1122,20 @@ class RemoteProxy(blosc2.Operand):
             **kwargs,
         )
         write_b2object_payload(array, self._payload())
+        if self._source.get("kind") == "hdf5":
+            refs = getattr(self.src, "_refs", None)
+            if refs is not None:
+                try:
+                    import ujson as json_mod
+                except ImportError:
+                    import json as json_mod
+                array.schunk.vlmeta["hdf5-refs"] = blosc2.compress(
+                    json_mod.dumps(refs).encode("utf-8"), typesize=1
+                )
+            elif self._carrier is not None:
+                carrier_schunk = getattr(self._carrier, "schunk", self._carrier)
+                if "hdf5-refs" in carrier_schunk.vlmeta:
+                    array.schunk.vlmeta["hdf5-refs"] = carrier_schunk.vlmeta["hdf5-refs"]
         return array
 
     def _export_carrier(self, include_cache: bool, cache_policy=None):
@@ -1016,43 +1206,29 @@ class RemoteProxy(blosc2.Operand):
         limit = payload.get("max_cache_bytes")
         _validate_payload_limit(policy, limit)
         source = payload.get("source")
-        if not isinstance(source, dict) or source.get("version") != 1:
-            raise ValueError("unsupported RemoteProxy source descriptor")
-        source_kind = source.get("kind")
-        if source_kind == "fsspec":
-            if set(source) != {"kind", "version", "urlpath", "assume_immutable"}:
-                raise ValueError("fsspec RemoteProxy source descriptors contain unsupported fields")
-            urlpath = source.get("urlpath")
-            if not isinstance(urlpath, str):
-                raise TypeError("fsspec RemoteProxy sources require a string 'urlpath'")
-        elif source_kind == "caterva2":
-            if set(source) != {"kind", "version", "path", "urlbase", "assume_immutable"}:
-                raise ValueError("Caterva2 RemoteProxy source descriptors contain unsupported fields")
-            path = source.get("path")
-            urlbase = source.get("urlbase")
-            if not isinstance(path, str) or (urlbase is not None and not isinstance(urlbase, str)):
-                raise TypeError("Caterva2 RemoteProxy sources require string 'path' and 'urlbase' fields")
-            urlpath = blosc2.URLPath(path, urlbase=urlbase)
-        elif source_kind == "zarr":
-            if set(source) != {"kind", "version", "urlpath", "assume_immutable"}:
-                raise ValueError("Zarr RemoteProxy source descriptors contain unsupported fields")
-            urlpath = source.get("urlpath")
-            if not isinstance(urlpath, str):
-                raise TypeError("Zarr RemoteProxy sources require a string 'urlpath'")
-        else:
-            raise ValueError(f"unsupported RemoteProxy source kind: {source_kind!r}")
-        _validate_assume_immutable(source.get("assume_immutable"), "source assume_immutable")
+        source_kind, urlpath = _parse_source_from_payload(source)
         expected = (carrier.shape, carrier.dtype, carrier.chunks, carrier.blocks)
         kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
         carrier_arg = carrier if policy is blosc2.CachePolicy.DISK else None
+        refs = None
+        if source_kind == "hdf5" and carrier is not None:
+            raw_refs = getattr(carrier, "schunk", carrier).vlmeta.get("hdf5-refs")
+            if raw_refs is not None:
+                try:
+                    import ujson as json_mod
+                except ImportError:
+                    import json as json_mod
+                refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
         obj = cls(
             urlpath,
             cache_policy=policy,
-            source_format="zarr" if source_kind == "zarr" else None,
+            source_format=source_kind if source_kind in {"zarr", "hdf5"} else None,
+            dataset=source.get("dataset") if source_kind == "hdf5" else None,
+            refs=refs,
             assume_immutable=source["assume_immutable"],
             _carrier=carrier_arg,
-            _source_blocks=carrier.blocks if source_kind == "zarr" else None,
-            _source_cparams=carrier.cparams if source_kind == "zarr" else None,
+            _source_blocks=carrier.blocks if source_kind in {"zarr", "hdf5"} else None,
+            _source_cparams=carrier.cparams if source_kind in {"zarr", "hdf5"} else None,
             **kwargs,
         )
         obj._validate_geometry(expected)

@@ -3,7 +3,7 @@
 RemoteProxy
 ===========
 
-``RemoteProxy`` is a persistable proxy for one remote B2ND or Zarr array. It
+``RemoteProxy`` is a persistable proxy for one remote B2ND, Zarr, or HDF5 array. It
 accepts an fsspec URL or a Caterva2 :ref:`URLPath`. With disk caching enabled,
 its B2ND carrier is both the portable descriptor and the bounded compressed-data
 cache.
@@ -51,6 +51,25 @@ publishing a new dataset. Mutable Zarr stores are not supported.
         lazy=True,
         storage_options={"anon": True},
     )
+
+HDF5 URLs (``.h5``, ``.hdf5``, or ``source_format="hdf5"``) select :ref:`HDF5NDSource`.
+Datasets within an HDF5 container can be specified via standard slash syntax (``.../file.h5/dataset``),
+the double-colon separator (``.../file.h5::dataset``), or the ``dataset="dataset"`` argument.
+Zarr containers similarly accept all three forms (``.../file.zarr/dataset``, ``.../file.zarr::dataset``,
+or ``dataset="dataset"``).
+HDF5 datasets are read through ``kerchunk`` metadata pre-indexing. Like Zarr, HDF5 sources
+are assumed immutable (``assume_immutable=True``); mutable HDF5 sources are not supported.
+Pre-computed kerchunk references can be supplied via ``refs`` to avoid remote scanning.
+
+.. code-block:: python
+
+    remote = blosc2.open(
+        "s3://public-bucket/hierarchy.h5/d0/d1/a2",
+        lazy=True,
+        storage_options={"profile": "blosc2"},
+    )
+    # Equivalent to "s3://public-bucket/hierarchy.h5::d0/d1/a2"
+    # or blosc2.open("s3://public-bucket/hierarchy.h5", lazy=True, dataset="d0/d1/a2", ...)
 
 Ephemeral in-memory caching is available through :attr:`blosc2.CachePolicy.MEMORY`.
 Fetched chunks are kept in RAM, bounded by a finite 256 MiB compressed-payload limit by default
@@ -149,6 +168,7 @@ file. Read-only mode can use warm chunks but does not retain misses:
     .. autoattribute:: source
     .. autoattribute:: traffic
     .. autoattribute:: urlpath
+    .. autoattribute:: dataset
 
 CachePolicy
 -----------

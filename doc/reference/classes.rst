@@ -33,6 +33,7 @@ without chunk caching.
     ProxySource
     ProxyNDSource
     ZarrNDSource
+    HDF5NDSource
     SimpleProxy
     Traffic
 
@@ -146,6 +147,7 @@ container APIs above.
     byterangendsource
     fsspecndsource
     zarrndsource
+    hdf5ndsource
     simpleproxy
     traffic
     embed_store

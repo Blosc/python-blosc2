@@ -43,6 +43,9 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
    * - ``zarr``
      - Lazy Zarr sources and the ``b2nd-to-zarr`` (or ``blosc2-to-zarr``)
        converter (``zarr``).
+   * - ``hdf5``
+     - Reading HDF5 datasets lazily as virtual arrays via kerchunk (``kerchunk``,
+       ``h5py``, ``hdf5plugin``).
    * - ``fsspec``
      - Reading and writing single-file containers through any `fsspec
        <https://filesystem-spec.readthedocs.io>`_ URL.  The HTTP(S) driver is
@@ -61,6 +64,7 @@ argument in shells like ``zsh`` that treat brackets specially):
     pip install "blosc2[fsspec]"          # fsspec URLs, including HTTP(S)
     pip install "blosc2[fsspec]" s3fs     # fsspec URLs, plus the S3 driver
     pip install "blosc2[zarr,fsspec]" s3fs # remote Zarr arrays on S3
+    pip install "blosc2[hdf5,fsspec]" s3fs # remote HDF5 datasets on S3
     pip install "blosc2[tui,parquet]"     # several at once
 
 With the ``fsspec`` extra, :func:`blosc2.open` accepts any fsspec URL, chained

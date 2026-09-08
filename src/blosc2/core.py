@@ -669,6 +669,64 @@ def is_fsspec_url(urlpath: object) -> bool:
     return isinstance(urlpath, str) and "://" in urlpath and not urlpath.startswith("file://")
 
 
+def split_h5_url(url: str) -> tuple[str, str | None]:
+    """Split an HDF5 URL on '.h5/' or '.hdf5/' if followed by a dataset subpath."""
+    lower = url.lower()
+    for ext in (".h5/", ".hdf5/"):
+        idx = lower.find(ext)
+        if idx != -1:
+            base_len = idx + len(ext) - 1
+            base = url[:base_len]
+            rest = url[base_len + 1 :].strip("/")
+            if rest:
+                return base, rest
+    return url, None
+
+
+def parse_container_url(
+    urlpath: object,
+    dataset: str | None = None,
+) -> tuple[object, str | None, str | None]:
+    """Parse container URL and dataset specification.
+
+    Handles '::' container separator, '/subpath' for HDF5, and explicit 'dataset'.
+
+    Returns (normalized_urlpath, normalized_dataset, source_format_hint).
+    """
+    if not isinstance(urlpath, str):
+        return urlpath, dataset, None
+
+    if "::" in urlpath:
+        parts = urlpath.split("::", 1)
+        if "://" not in parts[1]:
+            if dataset is not None:
+                raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+            urlpath = parts[0].rstrip("/")
+            raw_dataset = parts[1].strip("/")
+            dataset = raw_dataset if raw_dataset else None
+
+    h5_base, h5_dataset = split_h5_url(urlpath)
+    if h5_dataset is not None:
+        if dataset is not None:
+            raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+        return h5_base, h5_dataset, "hdf5"
+
+    if dataset is not None:
+        dataset = dataset.strip("/")
+        if not dataset:
+            dataset = None
+
+    parsed = urllib.parse.urlsplit(urlpath)
+    path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    parts = path_str.split("/")
+    if any(part.endswith((".h5", ".hdf5")) for part in parts):
+        return urlpath, dataset, "hdf5"
+    if any(part.endswith(".zarr") for part in parts):
+        return urlpath, dataset, "zarr"
+
+    return urlpath, dataset, None
+
+
 def _import_fsspec(urlpath: str):
     """Import fsspec with an actionable error when the extra is not installed."""
     try:
