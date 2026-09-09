@@ -34,8 +34,9 @@ The argument passed to {func}`blosc2.open` selects the route:
 ```python
 import blosc2
 
-# fsspec: an object store or plain web server
-a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+# fsspec: a plain web server, CDN, or cloud object store
+a1 = blosc2.open("https://datasets.example.org/big.b2nd", lazy=True)
+a2 = blosc2.open("s3://bucket/big.b2nd", lazy=True)
 
 # Caterva2: a dataset identified by root and path
 b = blosc2.open(
@@ -47,42 +48,48 @@ b = blosc2.open(
 )
 
 # B2Z, Zarr, and HDF5: addressing datasets inside containers
-# All three formats support standard slashes (/), container separators (::), or the dataset= parameter:
-b1 = blosc2.open("s3://bucket/hierarchy.b2z/d0/d1/a2", lazy=True)
-b2 = blosc2.open("s3://bucket/hierarchy.b2z::d0/d1/a2", lazy=True)
-b3 = blosc2.open("s3://bucket/hierarchy.b2z", lazy=True, dataset="d0/d1/a2")
+# All three formats support standard slashes (/), container separators (::), or the dataset= parameter
+# across any fsspec protocol (HTTPS, S3, etc.):
+b1 = blosc2.open(
+    "https://f001.backblazeb2.com/file/blosc2/hierarchy.b2z::/d0/a3", lazy=True
+)
+b2 = blosc2.open("s3://bucket/hierarchy.b2z/d0/d1/a2", lazy=True)
+b3 = blosc2.open(
+    "https://my-server.org/data/hierarchy.b2z", lazy=True, dataset="d0/d1/a2"
+)
 
-c1 = blosc2.open("s3://bucket/hierarchy.zarr/d0/d1/a2", lazy=True)
+c1 = blosc2.open("https://datasets.example.org/hierarchy.zarr/d0/d1/a2", lazy=True)
 c2 = blosc2.open("s3://bucket/hierarchy.zarr::d0/d1/a2", lazy=True)
 c3 = blosc2.open("s3://bucket/hierarchy.zarr", lazy=True, dataset="d0/d1/a2")
 
-h1 = blosc2.open("s3://bucket/hierarchy.h5/d0/d1/a2", lazy=True)
+h1 = blosc2.open("https://datasets.example.org/hierarchy.h5/d0/d1/a2", lazy=True)
 h2 = blosc2.open("s3://bucket/hierarchy.h5::d0/d1/a2", lazy=True)
 h3 = blosc2.open("s3://bucket/hierarchy.h5", lazy=True, dataset="d0/d1/a2")
 
-a.shape, a.dtype  # metadata is available immediately
-a[100:110, :50]  # data is fetched now
+a1.shape, a1.dtype  # metadata is available immediately
+a1[100:110, :50]  # data is fetched now
 ```
 
-Remote B2Z needs `pip install "blosc2[fsspec]"` plus the protocol driver (`s3fs` for S3).
-It accesses external `ZIP_STORED` NDArray members in `.b2z` archives using native Blosc2
-chunk and block range reads without decompressing or downloading the archive. For a suffix-free
-URL, pass `source_format="b2z"`. Embedded leaves and CTable columns are not supported as
-lazy NDArrays.
+Remote B2Z needs `pip install "blosc2[fsspec]"`. HTTP and HTTPS URLs work out of the box;
+cloud object stores need their respective protocol driver (such as `s3fs` for S3, `gcsfs`
+for GCS, or `adlfs` for Azure). It accesses external `ZIP_STORED` NDArray members in `.b2z`
+archives using native Blosc2 chunk and block range reads without decompressing or downloading
+the archive. For a suffix-free URL, pass `source_format="b2z"`. Embedded leaves and CTable
+columns are not supported as lazy NDArrays.
 
-Remote Zarr needs `pip install "blosc2[zarr,fsspec]"` plus the protocol driver
-(`s3fs` for S3). Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr`
-separator, or via `dataset="sub/arr"`. For a suffix-free URL, pass `source_format="zarr"`.
-Converted Blosc2 chunks are cached under an immutable source contract, so publish changed
-data at a new URL or replace its cache.
+Remote Zarr needs `pip install "blosc2[zarr,fsspec]"`. HTTP/HTTPS works directly; cloud
+stores require their protocol driver (`s3fs` for S3, etc.). Datasets can be named directly
+by path (`/sub/arr`), with the `::sub/arr` separator, or via `dataset="sub/arr"`. For a
+suffix-free URL, pass `source_format="zarr"`. Converted Blosc2 chunks are cached under an
+immutable source contract, so publish changed data at a new URL or replace its cache.
 
-Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"` plus the protocol driver
-(`s3fs` for S3). Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`),
-the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
-Pre-indexing is performed via `kerchunk`, and the resulting reference map is cached inside
-the RemoteProxy carrier (`schunk.vlmeta["hdf5-refs"]`) so reopening the carrier requires
-no network re-indexing. Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5
-container.
+Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`. HTTP/HTTPS works directly; cloud
+stores require their protocol driver (`s3fs` for S3, etc.). Datasets can be specified using
+standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`),
+or the `dataset="d0/d1/a2"` parameter. Pre-indexing is performed via `kerchunk`, and the
+resulting reference map is cached inside the RemoteProxy carrier (`schunk.vlmeta["hdf5-refs"]`)
+so reopening the carrier requires no network re-indexing. Use `blosc2.available_datasets(url)`
+to inspect datasets in an HDF5 container.
 
 `RemoteProxy` assumes remote sources are immutable by default, avoiding a
 metadata request before every read. For a replaceable `.b2nd` or Caterva2
@@ -115,22 +122,56 @@ When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing
 > arrays in remote `.b2z`, `.zarr`, or `.h5` containers interactively without downloading
 > the complete container, use {doc}`b2view <b2view>` (e.g. `b2view s3://bucket/hierarchy.b2z`).
 
-## Access S3 and cloud object stores
+## Access HTTP/HTTPS, S3, and cloud storage
 
-For arrays stored on Amazon S3 or S3-compatible cloud object stores (Backblaze B2, MinIO, Cloudflare R2, Ceph, Wasabi, etc.), open the `s3://` URL with `lazy=True`:
+Because Python-Blosc2 uses [fsspec](https://filesystem-spec.readthedocs.io/) under the hood,
+any remote protocol supported by fsspec can be used to open arrays lazily.
+
+### HTTP and HTTPS
+
+Publicly accessible arrays on any web server, CDN, or object store URL can be opened directly
+over HTTP or HTTPS without requiring cloud-specific libraries or credentials:
 
 ```python
 import blosc2
 
+# Standalone array over HTTPS:
+a = blosc2.open("https://datasets.example.org/big.b2nd", lazy=True)
+
+# Container dataset over HTTPS:
+b = blosc2.open(
+    "https://f001.backblazeb2.com/file/blosc2/hierarchy.b2z::/d0/a3",
+    lazy=True,
+)
+```
+
+### S3 and cloud object stores
+
+For arrays stored on Amazon S3 or S3-compatible cloud object stores (Backblaze B2, MinIO,
+Cloudflare R2, Ceph, Wasabi, etc.), install `s3fs` and open the `s3://` URL:
+
+```python
 # Using default credentials from environment or ~/.aws/credentials
 a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
 ```
 
+Other cloud stores work similarly by installing their respective fsspec driver (e.g.
+`gcsfs` for Google Cloud `gs://` or `adlfs` for Azure `abfs://`).
+
 ### Storage options and authentication
 
-Pass a `storage_options` dictionary to configure credentials, AWS profiles, or custom S3 endpoint URLs:
+Pass a `storage_options` dictionary to configure headers, credentials, or custom endpoints.
+Options are forwarded directly to the underlying `fsspec` filesystem:
 
 ```python
+# For HTTP/HTTPS: custom headers or authentication tokens
+a = blosc2.open(
+    "https://datasets.example.org/private.b2nd",
+    lazy=True,
+    storage_options={"headers": {"Authorization": "Bearer <token>"}},
+)
+
+# For S3: AWS profiles, credentials, or custom endpoints
 storage_options = {
     "profile": "blosc2",  # named profile from ~/.aws/credentials
     "endpoint_url": "https://s3.us-west-001.backblazeb2.com",  # custom endpoint
@@ -140,24 +181,18 @@ storage_options = {
     # Or anonymous public access:
     # "anon": True,
 }
-
-a = blosc2.open(
-    "s3://bucket/big.b2nd",
-    lazy=True,
-    storage_options=storage_options,
-)
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True, storage_options=storage_options)
 ```
 
-The options in `storage_options` are forwarded directly to `fsspec` (and `s3fs`).
+### Remote performance: latency, caching, and concurrency
 
-### S3 performance: latency, caching, and concurrency
-
-Object stores typically incur 20–100 ms of latency per HTTP range request. Python-Blosc2 addresses this in two ways:
+Remote requests over HTTP or object stores typically incur 20–100 ms of latency per range request.
+Python-Blosc2 addresses this in two ways:
 
 1. **Caching**: Chunks and blocks fetched for a slice are kept in the local cache (in RAM by default, or persisted to disk with `cache_dir=` or `cache_path=`). Re-fetching previously read regions requires zero network round trips and zero bytes transferred.
 2. **Concurrent fetches**: Independent range requests for required chunks and blocks are issued concurrently in a thread pool (configured via `max_concurrency=`, default 8).
 
-The runnable script `examples/remote/s3-access.py` demonstrates opening `.b2nd`, `.b2z`, `.zarr`, and `.h5` datasets from S3, timing metadata discovery vs. slice fetching, measuring network traffic with {ref}`Traffic`, and showing the impact of chunk caching.
+The runnable script `examples/remote/s3-access.py` demonstrates opening `.b2nd`, `.b2z`, `.zarr`, and `.h5` datasets over remote URLs (both S3 and HTTPS), timing metadata discovery vs. slice fetching, measuring network traffic with {ref}`Traffic`, and showing the impact of chunk caching.
 
 ## Cache policies and memory management
 
@@ -436,12 +471,12 @@ a = blosc2.Proxy(S3Source("bucket", "big.b2nd"), urlpath="cache.b2nd", mode="a")
 
 Initialize the transport before `super().__init__()`, because the base constructor immediately reads the frame header. Make `read_range()` thread-safe, set `stamp` so persistent caches can detect changes, and charge the bytes read so traffic measurements remain accurate.
 
-For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; the custom class only illustrates the transport contract.
+For ordinary remote access, use `blosc2.open("https://...", lazy=True)` or `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; the custom class only illustrates the transport contract.
 
 ## See also
 
 - {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — a step-by-step introduction with output.
-- `examples/remote/s3-access.py` — S3 access across Blosc2 (.b2nd, .b2z), Zarr, and HDF5 with timing and network traffic metering.
+- `examples/remote/s3-access.py` — remote access across Blosc2 (.b2nd, .b2z), Zarr, and HDF5 with timing and network traffic metering.
 - `examples/remote/c2array-get-slice.py` — opening and reading remote Caterva2 arrays via URLPath.
 - `examples/remote/c2array-traffic.py` — block, chunk, and cached transfer sizes against Caterva2.
 - `examples/remote/c2array_expr.py` — lazy expression evaluation on remote Caterva2 arrays.
