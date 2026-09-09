@@ -2566,6 +2566,8 @@ class B2ViewApp(App):
         """Upper bound of columns worth fetching before the width-based trim."""
         width = self._data_table_width()
         if width <= 1:
+            width = self.size.width
+        if width <= 1:
             return self.preview_cols
         # The narrowest possible column is one character plus padding.
         return max(1, width // (1 + self._CELL_PAD))
@@ -2909,18 +2911,25 @@ class B2ViewApp(App):
             cursor_col = table.cursor_column
         self.loading_table_page = True
         try:
-            table.clear(columns=True)
-            for name in data["columns"]:
-                table.add_column(name, key=name)
             # Uniform decimals per float column, taken from the whole buffer
             # when available so the format is stable while paging rows.
             buffer = self.table_buffer
             source = buffer if buffer is not None and buffer["columns"] == data["columns"] else data
             decimals = {name: column_float_decimals(source["data"][name]) for name in data["columns"]}
+            widths = self._measure_column_widths(source)
+            table.clear(columns=True)
+            for name, width in zip(data["columns"], widths, strict=True):
+                table.add_column(name, key=name, width=width - self._CELL_PAD)
             nrows = data["stop"] - data["start"]
             # SChunk hex dumps carry explicit (hex byte-offset) row labels;
             # everything else labels the gutter with the logical row number.
             row_labels = data.get("row_labels")
+            labels = row_labels if row_labels is not None else range(data["start"], data["stop"])
+            if nrows:
+                # Textual otherwise discovers this on idle, after a remote page
+                # may already have rendered without its row-label gutter.
+                table._labelled_row_exists = True
+                table._label_column.content_width = max(len(str(label)) for label in labels)
             for i in range(nrows):
                 table.add_row(
                     *[

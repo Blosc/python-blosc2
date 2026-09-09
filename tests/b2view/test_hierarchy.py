@@ -167,7 +167,17 @@ async def test_remote_tui_lifecycle(tmp_path, monkeypatch):
         await wait_for(lambda: app.table_page is not None and bool(app.table_page["columns"]))
         assert app.query_one("#tree-pane").display
         assert app.selected_path == "/group/a"
+        assert len(app.table_page["columns"]) > app.preview_cols
         np.testing.assert_array_equal(app.table_page["data"]["0"], data[: app.table_page["stop"], 0])
+        table = app.query_one("#data-table")
+        app._update_data_table(app.table_page)
+        first_column = table.ordered_columns[0]
+        assert (
+            first_column.get_render_width(table)
+            >= max(len(str(value)) for value in app.table_page["data"]["0"]) + 2 * table.cell_padding
+        )
+        assert table._row_label_column_width >= len(str(app.table_page["stop"] - 1)) + 2 * table.cell_padding
+        await pilot.pause()
         app._go_to_row(100)
         await wait_for(lambda: app.table_page["start"] > 0 and bool(app.table_page["columns"]))
         page = app.table_page
