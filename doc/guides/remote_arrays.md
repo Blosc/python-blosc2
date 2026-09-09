@@ -26,6 +26,7 @@ The argument passed to {func}`blosc2.open` selects the route:
 | Argument | Route | What it names |
 |---|---|---|
 | A URL string such as `s3://...` or `https://...` | fsspec | A byte-addressable, standalone `.b2nd` file |
+| A URL containing a `.b2z` path component, or `source_format="b2z"` | B2Z | One immutable external NDArray leaf in a `.b2z` archive |
 | A URL containing a `.zarr` path component | Zarr | One immutable Zarr v2 or v3 array |
 | A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5 | One immutable HDF5 dataset via kerchunk |
 | A {ref}`URLPath` | Caterva2 | One array-like dataset on a Caterva2 server |
@@ -45,8 +46,12 @@ b = blosc2.open(
     lazy=True,
 )
 
-# Zarr and HDF5: addressing datasets inside containers
-# Both formats support standard slashes (/), container separators (::), or the dataset= parameter:
+# B2Z, Zarr, and HDF5: addressing datasets inside containers
+# All three formats support standard slashes (/), container separators (::), or the dataset= parameter:
+b1 = blosc2.open("s3://bucket/hierarchy.b2z/d0/d1/a2", lazy=True)
+b2 = blosc2.open("s3://bucket/hierarchy.b2z::d0/d1/a2", lazy=True)
+b3 = blosc2.open("s3://bucket/hierarchy.b2z", lazy=True, dataset="d0/d1/a2")
+
 c1 = blosc2.open("s3://bucket/hierarchy.zarr/d0/d1/a2", lazy=True)
 c2 = blosc2.open("s3://bucket/hierarchy.zarr::d0/d1/a2", lazy=True)
 c3 = blosc2.open("s3://bucket/hierarchy.zarr", lazy=True, dataset="d0/d1/a2")
@@ -58,6 +63,12 @@ h3 = blosc2.open("s3://bucket/hierarchy.h5", lazy=True, dataset="d0/d1/a2")
 a.shape, a.dtype  # metadata is available immediately
 a[100:110, :50]  # data is fetched now
 ```
+
+Remote B2Z needs `pip install "blosc2[fsspec]"` plus the protocol driver (`s3fs` for S3).
+It accesses external `ZIP_STORED` NDArray members in `.b2z` archives using native Blosc2
+chunk and block range reads without decompressing or downloading the archive. For a suffix-free
+URL, pass `source_format="b2z"`. Embedded leaves and CTable columns are not supported as
+lazy NDArrays.
 
 Remote Zarr needs `pip install "blosc2[zarr,fsspec]"` plus the protocol driver
 (`s3fs` for S3). Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr`
@@ -76,8 +87,8 @@ container.
 `RemoteProxy` assumes remote sources are immutable by default, avoiding a
 metadata request before every read. For a replaceable `.b2nd` or Caterva2
 source, pass `assume_immutable=False` to refresh its identity and invalidate
-stale cached chunks before each operation. Mutable Zarr and HDF5 sources are
-not supported.
+stale cached chunks before each operation. Mutable B2Z, Zarr, and HDF5 sources
+are not supported.
 
 A `URLPath` always means Caterva2. If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`. Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
 
@@ -90,14 +101,19 @@ When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing
 | Standalone contiguous `.b2nd` | Yes | Yes |
 | Zarr v2/v3 array | Yes, with `source_format="zarr"` | No |
 | HDF5 dataset | Yes, with `dataset="..."` | Yes |
-| NDArray leaf inside `.b2z` | No | Yes |
+| NDArray leaf inside `.b2z` | Yes, for external leaves | Yes |
 | Lazy or computed array | No | Yes |
-| Whole `.b2z` `TreeStore` or `DictStore` | No | No; open one array-like leaf |
+| Whole `.b2z` `TreeStore` or `DictStore` | No; use `b2view` to browse | No; open one array-like leaf |
 
 - **fsspec** supplies byte ranges. Python-Blosc2 parses the remote `.b2nd` frame to discover its geometry and chunk offsets, making this route direct and efficient for standalone arrays.
 - **Caterva2** understands dataset paths, array metadata, and slicing. It can therefore expose array-like data that is not stored as a standalone Blosc2 frame, as well as apply authentication or server-side computation. Use Caterva2's navigation API to find a leaf in a remote hierarchy, then open that leaf with a `URLPath`.
 
 `lazy=True` changes *when* data is fetched; it does not expand the underlying storage formats supported by either route.
+
+> [!TIP]
+> **Browse remote hierarchies**: To explore groups, inspect attributes, or preview
+> arrays in remote `.b2z`, `.zarr`, or `.h5` containers interactively without downloading
+> the complete container, use {doc}`b2view <b2view>` (e.g. `b2view s3://bucket/hierarchy.b2z`).
 
 ## Access S3 and cloud object stores
 
@@ -141,7 +157,7 @@ Object stores typically incur 20–100 ms of latency per HTTP range request. Pyt
 1. **Caching**: Chunks and blocks fetched for a slice are kept in the local cache (in RAM by default, or persisted to disk with `cache_dir=` or `cache_path=`). Re-fetching previously read regions requires zero network round trips and zero bytes transferred.
 2. **Concurrent fetches**: Independent range requests for required chunks and blocks are issued concurrently in a thread pool (configured via `max_concurrency=`, default 8).
 
-The runnable script `examples/remote/s3-access.py` demonstrates opening `.b2nd` and `.zarr` datasets from S3, timing metadata discovery vs. slice fetching, measuring network traffic with {ref}`Traffic`, and showing the impact of chunk caching.
+The runnable script `examples/remote/s3-access.py` demonstrates opening `.b2nd`, `.b2z`, `.zarr`, and `.h5` datasets from S3, timing metadata discovery vs. slice fetching, measuring network traffic with {ref}`Traffic`, and showing the impact of chunk caching.
 
 ## Cache policies and memory management
 
@@ -425,7 +441,7 @@ For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; th
 ## See also
 
 - {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — a step-by-step introduction with output.
-- `examples/remote/s3-access.py` — S3 access comparing Blosc2 and Zarr with timing and network traffic metering.
+- `examples/remote/s3-access.py` — S3 access across Blosc2 (.b2nd, .b2z), Zarr, and HDF5 with timing and network traffic metering.
 - `examples/remote/c2array-get-slice.py` — opening and reading remote Caterva2 arrays via URLPath.
 - `examples/remote/c2array-traffic.py` — block, chunk, and cached transfer sizes against Caterva2.
 - `examples/remote/c2array_expr.py` — lazy expression evaluation on remote Caterva2 arrays.
@@ -433,4 +449,5 @@ For ordinary S3 access, use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; th
 - `examples/remote/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
 - `examples/remote/proxy-carray.py` — creating a persistent local disk proxy of a remote Caterva2 array.
 - `examples/remote/rw-fsspec.py` — fsspec reading and writing examples.
-- {ref}`RemoteProxy`, {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.
+- {doc}`b2view <b2view>` — interactive terminal browser for local and remote containers.
+- {ref}`RemoteProxy`, {ref}`C2Array`, {ref}`B2ZNDSource`, {ref}`ZarrNDSource`, {ref}`HDF5NDSource`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.

@@ -109,7 +109,7 @@ are unsupported. Archives must remain immutable; replacing an archive requires
 replacing its cache. Authorized B2Z sparse attachment and Caterva2 federation are
 not supported in this version.
 
-.. autoclass:: blosc2.B2ZNDSource
+See :ref:`B2ZNDSource` for class details.
 
 Caching and persistence
 -----------------------
