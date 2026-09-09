@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preview-cols", type=int, default=10, help="Maximum preview columns")
     parser.add_argument(
         "--panel",
-        choices=["tree", "meta", "vlmeta", "data"],
+        choices=["tree", "meta", "attrs", "vlmeta", "data"],
         default="tree",
         help="Panel to focus on startup",
     )
@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     app = B2ViewApp(
         urlpath,
         start_path=args.path,
-        start_panel=args.panel,
+        start_panel="attrs" if args.panel == "vlmeta" else args.panel,
         start_maximized=args.maximized,
         preview_rows=args.preview_rows,
         preview_cols=args.preview_cols,

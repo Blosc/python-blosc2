@@ -215,6 +215,16 @@ file. Read-only mode can use warm chunks but does not retain misses:
     .. autoattribute:: urlpath
     .. autoattribute:: dataset
 
+RemoteMetadataMapping
+---------------------
+
+``RemoteProxy.attrs`` returns a read-only mapping that fetches array attributes
+only when they are accessed.  Use it like a dictionary, or use ``attrs[:]`` to
+fetch all attributes at once.
+
+.. autoclass:: blosc2.RemoteMetadataMapping
+    :members:
+
 CachePolicy
 -----------
 

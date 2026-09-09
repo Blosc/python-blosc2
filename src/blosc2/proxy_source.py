@@ -353,10 +353,7 @@ class ProxyNDSource(ABC):
 
     @property
     def attrs(self):
-        """User attributes; the recommended alias for :attr:`vlmeta`.
-
-        Shares the existing metadata storage and access rules without filtering keys.
-        """
+        """The user attributes of the source."""
         return self.vlmeta
 
     @property
@@ -675,9 +672,14 @@ def _parse_trailer_vlmeta(trailer_bytes: bytes) -> dict[str, Any]:
         except Exception:
             continue
         try:
-            val = msgpack.unpackb(decomp, raw=False)
+            from blosc2.msgpack_utils import msgpack_unpackb
+
+            val = msgpack_unpackb(decomp)
         except Exception:
-            val = decomp
+            try:
+                val = msgpack.unpackb(decomp, raw=False)
+            except Exception:
+                val = decomp
         res[name] = val
     return res
 
@@ -1028,6 +1030,11 @@ class ByteRangeNDSource(ProxyNDSource):
         if self._meta is None:
             self._meta = _read_frame_metalayers(self._raw_header, self._header)
         return dict(self._meta)
+
+    @property
+    def attrs(self) -> dict:
+        """The user attributes of the remote frame."""
+        return self.vlmeta
 
     @property
     def vlmeta(self) -> dict:

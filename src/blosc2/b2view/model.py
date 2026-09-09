@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from threading import RLock
 from typing import Any
 
 import numpy as np
@@ -254,16 +255,31 @@ class StoreBrowser:
 
     def __init__(self, urlpath: str, *, storage_options: dict[str, Any] | None = None):
         self.urlpath = urlpath
+        self.io_lock = RLock()
+        self.hierarchy = None
         open_options = {}
         if is_fsspec_url(urlpath):
-            _, dataset, source_format = parse_container_url(urlpath)
-            # Whole B2Z bundles keep their existing TreeStore opening path.
-            if source_format != "b2z" or dataset is not None:
-                open_options["lazy"] = True
+            _, _, source_format = parse_container_url(urlpath)
+            if source_format in {"b2z", "zarr", "hdf5"}:
+                from blosc2.b2view.hierarchy import RemoteHierarchy
+
+                self.hierarchy = RemoteHierarchy(urlpath, storage_options)
+            open_options["lazy"] = True
         if storage_options is not None:
             open_options["storage_options"] = storage_options
-        self.store = blosc2.open(urlpath, mode="r", **open_options)
-        self.is_tree = isinstance(self.store, blosc2.TreeStore)
+        if (
+            self.hierarchy is not None
+            and not self.hierarchy.is_tree
+            and self.hierarchy.kind("/") == "ndarray"
+        ):
+            # Preserve the established standalone RemoteProxy contract. HDF5
+            # keeps the discovery references so this does not scan the file twice.
+            if self.hierarchy.format == "hdf5":
+                open_options["refs"] = self.hierarchy.refs
+            self.hierarchy.close()
+            self.hierarchy = None
+        self.store = self.hierarchy or blosc2.open(urlpath, mode="r", **open_options)
+        self.is_tree = self.hierarchy.is_tree if self.hierarchy else isinstance(self.store, blosc2.TreeStore)
         # Per-path row filters for CTable nodes (path -> expr / where() view)
         self._filters: dict[str, str] = {}
         self._filter_views: dict[str, Any] = {}
@@ -311,6 +327,8 @@ class StoreBrowser:
     def list_children(self, path: str = "/") -> list[NodeInfo]:
         """Return direct children for *path*."""
         path = self.normalize_path(path)
+        if self.hierarchy is not None:
+            return self.hierarchy.list_children(path)
         if not self.is_tree:
             self._check_root_path(path)
             return []
@@ -333,6 +351,8 @@ class StoreBrowser:
     def kind(self, path: str) -> str:
         """Classify a browser path."""
         path = self.normalize_path(path)
+        if self.hierarchy is not None:
+            return self.hierarchy.kind(path)
         if not self.is_tree:
             self._check_root_path(path)
             return object_kind(self.store)
@@ -344,6 +364,8 @@ class StoreBrowser:
     def get_info(self, path: str) -> ObjectInfo:
         """Return metadata for *path*."""
         path = self.normalize_path(path)
+        if self.hierarchy is not None:
+            return self.hierarchy.get_info(path)
         kind = self.kind(path)
         if kind == "group":
             metadata: dict[str, Any] = {
@@ -351,15 +373,22 @@ class StoreBrowser:
                 "children": len(self.store.get_children(path)),
                 "descendants": len(self.store.get_descendants(path)),
             }
-            user_attrs = self._vlmeta_dict(self.store.vlmeta)
+            if path in ("", "/"):
+                attrs_obj = getattr(self.store, "attrs", getattr(self.store, "vlmeta", None))
+            else:
+                subtree = self.store.get_subtree(path)
+                attrs_obj = getattr(subtree, "attrs", getattr(subtree, "vlmeta", None))
+            user_attrs = self._attrs_dict(attrs_obj)
             return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
 
         obj = self._get_object(path)
         metadata = object_metadata(obj)
         metadata.setdefault("type", type(obj).__name__)
-        user_attrs = self._vlmeta_dict(getattr(obj, "vlmeta", None))
+        attrs_obj = getattr(obj, "attrs", getattr(obj, "vlmeta", None))
+        user_attrs = self._attrs_dict(attrs_obj)
         if user_attrs is None and self.is_tree:
-            user_attrs = self._vlmeta_dict(self.store.vlmeta)
+            store_attrs = getattr(self.store, "attrs", getattr(self.store, "vlmeta", None))
+            user_attrs = self._attrs_dict(store_attrs)
         return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
 
     def preview(
@@ -532,7 +561,7 @@ class StoreBrowser:
                 n,
                 np.dtype(obj.dtype).itemsize,
                 chunks[row_dim] if chunks else None,
-                remote=(kind == "c2array" or isinstance(obj, blosc2.RemoteProxy)),
+                remote=(kind == "c2array" or isinstance(obj, (blosc2.RemoteProxy, blosc2.Proxy))),
                 max_points=max_points,
             )
 
@@ -1169,6 +1198,8 @@ class StoreBrowser:
     def _get_object(self, path: str) -> Any:
         """Return the object represented by *path*."""
         path = self.normalize_path(path)
+        if self.hierarchy is not None:
+            return self.hierarchy.open_leaf(path)
         if self.is_tree:
             return self.store[path]
         self._check_root_path(path)
@@ -1179,7 +1210,7 @@ class StoreBrowser:
         if path != "/":
             raise KeyError(f"Standalone objects only expose the root path '/', got {path!r}")
 
-    _INTERNAL_VLMETA_KEYS = frozenset(
+    _INTERNAL_ATTRS_KEYS = frozenset(
         {
             "kind",
             "version",
@@ -1190,29 +1221,32 @@ class StoreBrowser:
             "materialized_columns",
         }
     )
+    _INTERNAL_VLMETA_KEYS = _INTERNAL_ATTRS_KEYS
 
     @staticmethod
-    def _vlmeta_dict(vlmeta) -> dict[str, Any] | None:
-        if vlmeta is None:
+    def _attrs_dict(attrs) -> dict[str, Any] | None:
+        if attrs is None:
             return None
         try:
-            data = vlmeta[:]
+            data = attrs[:]
         except Exception:
             try:
-                data = {name: vlmeta[name] for name in vlmeta}
+                data = {name: attrs[name] for name in attrs}
             except Exception:
                 return None
         if data is None:
             return None
         # Filter out internal blosc2 metadata keys (schema, version, etc.)
-        return {k: v for k, v in data.items() if k not in StoreBrowser._INTERNAL_VLMETA_KEYS}
+        return {k: v for k, v in data.items() if k not in StoreBrowser._INTERNAL_ATTRS_KEYS}
+
+    _vlmeta_dict = _attrs_dict
 
 
 def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
-    if isinstance(obj, (blosc2.NDArray, blosc2.RemoteProxy)):
+    if isinstance(obj, (blosc2.NDArray, blosc2.RemoteProxy, blosc2.Proxy)):
         return "ndarray"
     if isinstance(obj, blosc2.CTable):
         return "ctable"

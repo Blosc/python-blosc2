@@ -22,7 +22,12 @@ from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
 
 
 def counting_store(zarr, store, traffic):
+    if getattr(store, "_blosc2_traffic", None) is traffic:
+        return store
+
     class CountingStore(zarr.storage.WrapperStore):
+        _blosc2_traffic = traffic
+
         async def get(self, key, prototype, byte_range=None):
             value = await super().get(key, prototype, byte_range)
             if value is not None:
@@ -98,6 +103,7 @@ class ZarrNDSource(ProxyNDSource):
         cparams=None,
         _traffic: Traffic | None = None,
         _urlpath: str | None = None,
+        _path: str | None = None,
     ):
         try:
             import zarr
@@ -130,6 +136,7 @@ class ZarrNDSource(ProxyNDSource):
         try:
             self.array = zarr.open_array(
                 store=open_store,
+                path=_path,
                 mode="r",
             )
         except Exception as exc:
@@ -199,6 +206,11 @@ class ZarrNDSource(ProxyNDSource):
     @property
     def cparams(self):
         return self._cparams
+
+    @property
+    def attrs(self) -> dict:
+        """The user attributes of the remote array."""
+        return self.vlmeta
 
     @property
     def vlmeta(self) -> dict:

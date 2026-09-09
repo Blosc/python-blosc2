@@ -1070,7 +1070,7 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def attrs(self) -> RemoteMetadataMapping:
-        """Read-only alias for :attr:`vlmeta`, sharing its metadata cache."""
+        """The read-only user attributes of the remote array."""
         return self.vlmeta
 
     @staticmethod

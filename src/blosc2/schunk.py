@@ -2334,6 +2334,12 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
             localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options), mode, offset, **kwargs
         )
 
+    if source_format == "b2z":
+        raise NotImplementedError(
+            "Remote B2Z containers require b2view for browsing, lazy=True with a dataset for arrays, "
+            "or cache_dir= for explicit localization"
+        )
+
     if offset != 0:
         raise NotImplementedError("offset on an fsspec URL requires passing cache_dir=")
     # Unset options (dparams=None and friends) are not a request for anything

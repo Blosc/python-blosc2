@@ -1340,3 +1340,188 @@ def test_remote_proxy_metadata_slicing_and_caching():
     vlmeta1 = proxy.vlmeta
     vlmeta2 = proxy.vlmeta
     assert vlmeta1 is vlmeta2
+
+
+def test_remote_proxy_metadata_complex_and_containers():
+    from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
+
+    payload = {
+        "attr0": True,
+        "attr1": 11,
+        "attr2": 3.5,
+        "attr3": 1.0 + 2.0j,
+        "attr4": "str_4",
+        "attr5": b"bytes_5",
+        "attr6": [1, 2, 3],
+        "attr7": (4, 5, 6),
+        "attr8": {"key": "val_8", "index": 8},
+        "attr9": {7, 8, 9},
+        "np_int": np.int64(42),
+        "np_float": np.float32(3.14),
+        "np_complex": np.complex128(2.0 + 3.0j),
+        "np_bool": np.bool_(True),
+    }
+    unpacked = msgpack_unpackb(msgpack_packb(payload))
+    assert unpacked["attr0"] is True
+    assert unpacked["attr1"] == 11
+    assert unpacked["attr2"] == 3.5
+    assert unpacked["attr3"] == 1.0 + 2.0j
+    assert isinstance(unpacked["attr3"], complex)
+    assert unpacked["attr4"] == "str_4"
+    assert unpacked["attr5"] == b"bytes_5"
+    assert unpacked["attr6"] == [1, 2, 3]
+    assert unpacked["attr7"] == (4, 5, 6)
+    assert isinstance(unpacked["attr7"], tuple)
+    assert unpacked["attr8"] == {"key": "val_8", "index": 8}
+    assert unpacked["attr9"] == {7, 8, 9}
+    assert isinstance(unpacked["attr9"], set)
+    assert unpacked["np_int"] == 42
+    assert unpacked["np_bool"] is True
+
+    # Test via RemoteProxy and trailer vlmeta
+    data = np.arange(10, dtype=np.int32)
+    arr = blosc2.asarray(data, chunks=(5,), blocks=(5,))
+    for k, v in [
+        ("attr0", True),
+        ("attr1", 11),
+        ("attr2", 3.5),
+        ("attr3", 1.0 + 2.0j),
+        ("attr4", "str_4"),
+        ("attr5", b"bytes_5"),
+        ("attr6", [1, 2, 3]),
+        ("attr7", (4, 5, 6)),
+        ("attr8", {"key": "val_8", "index": 8}),
+        ("attr9", {7, 8, 9}),
+    ]:
+        arr.vlmeta[k] = v
+
+    url = "memory://complex-attrs-test.b2nd"
+    fsspec.filesystem("memory").pipe_file("complex-attrs-test.b2nd", arr.to_cframe())
+
+    proxy = blosc2.RemoteProxy(url)
+    assert proxy.vlmeta["attr0"] is True
+    assert proxy.vlmeta["attr1"] == 11
+    assert proxy.vlmeta["attr2"] == 3.5
+    assert proxy.vlmeta["attr3"] == 1.0 + 2.0j
+    assert isinstance(proxy.vlmeta["attr3"], complex)
+    assert proxy.vlmeta["attr4"] == "str_4"
+    assert proxy.vlmeta["attr5"] == b"bytes_5"
+    assert proxy.vlmeta["attr6"] == [1, 2, 3]
+    assert proxy.vlmeta["attr7"] == (4, 5, 6)
+    assert isinstance(proxy.vlmeta["attr7"], tuple)
+    assert proxy.vlmeta["attr8"] == {"key": "val_8", "index": 8}
+    assert proxy.vlmeta["attr9"] == {7, 8, 9}
+    assert isinstance(proxy.vlmeta["attr9"], set)
+
+
+def test_create_hierarchy_attributes_and_variations(tmp_path):
+    import importlib.util
+    from pathlib import Path
+
+    script_path = Path(__file__).parent.parent / "create-hierarchy.py"
+    spec = importlib.util.spec_from_file_location("create_hierarchy_script", script_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Check attribute counts
+    assert mod.get_num_attrs("/", is_array=False) == 9
+    assert mod.get_num_attrs("", is_array=False) == 9
+    assert mod.get_num_attrs("a0", is_array=True) == 0
+    assert mod.get_num_attrs("a1", is_array=True) == 3
+    assert mod.get_num_attrs("a2", is_array=True) == 6
+    assert mod.get_num_attrs("a3", is_array=True) == 9
+    assert mod.get_num_attrs("d0", is_array=False) == 1
+    assert mod.get_num_attrs("d1", is_array=False) == 3
+    assert mod.get_num_attrs("d2", is_array=False) == 6
+
+    # Check 10 distinct types
+    attrs = mod.make_attributes(10, format="b2z")
+    assert isinstance(attrs["attr0"], bool)
+    assert isinstance(attrs["attr1"], int)
+    assert isinstance(attrs["attr2"], float)
+    assert isinstance(attrs["attr3"], complex)
+    assert isinstance(attrs["attr4"], str)
+    assert isinstance(attrs["attr5"], bytes)
+    assert isinstance(attrs["attr6"], list)
+    assert isinstance(attrs["attr7"], list)
+    assert all(isinstance(x, str) for x in attrs["attr7"])
+    assert isinstance(attrs["attr8"], dict)
+    assert attrs["attr8"] == {"val_8": 8}
+    assert isinstance(attrs["attr9"], set)
+
+    # Run create_hierarchy for B2Z
+    out_b2z = tmp_path / "test.b2z"
+    info = mod.create_hierarchy(
+        out_b2z,
+        format="b2z",
+        levels=3,
+        arrays_per_level=4,
+        shape=(4, 10, 10),
+        chunks=(2, 5, 5),
+        overwrite=True,
+    )
+    assert out_b2z.exists()
+    assert "float32" in info["tree_str"]
+
+    with blosc2.TreeStore(str(out_b2z), mode="r") as ts:
+        # Check root group
+        assert len(ts.vlmeta) == 9
+        assert ts.vlmeta["attr0"] is True
+        assert ts.vlmeta["attr8"] == {"val_8": 8}
+
+        # Check groups
+        assert len(ts.get_subtree("/d0").vlmeta) == 1
+        assert ts.get_subtree("/d0").vlmeta["attr0"] is True
+        assert len(ts.get_subtree("/d0/d1").vlmeta) == 3
+        assert len(ts.get_subtree("/d0/d1/d2").vlmeta) == 6
+
+        # Check arrays
+        assert ts["/d0/a0"].dtype == np.int32
+        assert ts["/d0/a0"].shape == ()
+        assert len(ts["/d0/a0"].vlmeta) == 0
+        assert ts["/d0/a0"][()] == 0
+
+        # Check a1
+        a1_0 = ts["/d0/a1"]
+        a1_1 = ts["/d0/d1/a1"]
+        a1_2 = ts["/d0/d1/d2/a1"]
+
+        assert a1_0.dtype == np.float32
+        assert a1_0.shape == (10_000,)
+        assert a1_1.dtype == np.float32
+        assert a1_2.dtype == np.float32
+        assert len(a1_0.vlmeta) == 3
+
+        data0 = a1_0[:]
+        data1 = a1_1[:]
+        data2 = a1_2[:]
+
+        # Verify Gaussian curve shape with ~10% variability
+        perfect_gaussian = np.exp(-0.5 * np.linspace(-3, 3, 10000, dtype=np.float32) ** 2).astype(np.float32)
+        for data in (data0, data1, data2):
+            assert data.min() > 0.0
+            assert 0.85 < data.max() < 1.15
+            diff = np.abs((data - perfect_gaussian) / perfect_gaussian)
+            assert diff.max() <= 0.10001
+            assert diff.max() > 0.05
+
+        # Verify variations across levels
+        assert not np.array_equal(data0, data1)
+        assert not np.array_equal(data1, data2)
+
+        # Check a2
+        assert ts["/d0/a2"].dtype == np.int32
+        assert ts["/d0/a2"].shape == (10, 10)
+        assert len(ts["/d0/a2"].vlmeta) == 6
+        np.testing.assert_array_equal(ts["/d0/a2"][:], np.arange(100, dtype=np.int32).reshape(10, 10))
+
+        # Check a3
+        a3_0 = ts["/d0/a3"]
+        assert a3_0.dtype == np.int32
+        assert a3_0.shape == (4, 10, 10)
+        assert len(a3_0.vlmeta) == 9
+        assert len(a3_0.attrs) == 9
+        assert dict(a3_0.attrs) == dict(a3_0.vlmeta)
+        assert dict(ts.attrs) == dict(ts.vlmeta)
+        assert dict(ts.get_subtree("/d0").attrs) == dict(ts.get_subtree("/d0").vlmeta)
+        np.testing.assert_array_equal(a3_0[:], np.arange(400, dtype=np.int32).reshape(4, 10, 10))

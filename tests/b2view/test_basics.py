@@ -249,9 +249,9 @@ async def test_standalone_panel_layout(tmp_path, kind):
         assert app.query_one("#right-pane").size.width == app.query_one("#main").size.width
         for key, expected in [
             ("tab", "meta-scroll"),
-            ("tab", "vlmeta-scroll"),
+            ("tab", "attrs-scroll"),
             ("tab", "data-table"),
-            ("shift+tab", "vlmeta-scroll"),
+            ("shift+tab", "attrs-scroll"),
             ("shift+tab", "meta-scroll"),
             ("shift+tab", "data-table"),
         ]:
@@ -283,7 +283,7 @@ async def test_start_panel_focus_with_path(store_path):
         assert await _wait_focus(pilot, "data-table") == "data-table"
 
     # Other panels still land where asked.
-    for panel, expected in [("meta", "meta-scroll"), ("tree", "tree")]:
+    for panel, expected in [("meta", "meta-scroll"), ("attrs", "attrs-scroll"), ("tree", "tree")]:
         app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel=panel)
         async with app.run_test(size=TERM_SIZE) as pilot:
             await wait_for_table(pilot)
@@ -298,8 +298,8 @@ async def test_tree_and_panel_focus(store_path):
         assert isinstance(app.focused, Tree)
         assert app.query_one("#tree-pane").display
 
-        # Tab: tree -> meta -> vlmeta -> data and wraps back to the tree
-        for expected in ["meta-scroll", "vlmeta-scroll", "data-scroll", "tree"]:
+        # Tab: tree -> meta -> attrs -> data and wraps back to the tree
+        for expected in ["meta-scroll", "attrs-scroll", "data-scroll", "tree"]:
             await pilot.press("tab")
             assert await _wait_focus(pilot, expected) == expected
 

@@ -58,30 +58,28 @@ def test_no_source_is_an_error():
 
 
 @pytest.mark.parametrize("options", [{}, {"profile": "blosc2", "endpoint_url": "https://s3.example.com"}])
-def test_remote_options_reach_open(monkeypatch, options):
+def test_remote_options_reach_browser(monkeypatch, options):
     pytest.importorskip("textual")
-    import blosc2
+    from blosc2.b2view import app as app_module
     from blosc2.b2view.app import B2ViewApp
 
     url = "s3://blosc2/hierarchy.b2z/d0/d1/a2"
     opened = []
-    monkeypatch.setattr(blosc2, "open", lambda path, **kwargs: opened.append((path, kwargs)))
+
+    def open_browser(path, **kwargs):
+        opened.append((path, kwargs))
+        raise LookupError("Stop before remote I/O")
+
+    monkeypatch.setattr(app_module, "StoreBrowser", open_browser)
 
     def run(app, **kwargs):
-        # Stop after the real startup opens its browser, before widget lookup.
-        def no_widgets(*args):
-            raise LookupError("No widgets in CLI test")
-
-        monkeypatch.setattr(app, "query_one", no_widgets)
-        with pytest.raises(LookupError, match="No widgets"):
-            app._start_browsing()
+        monkeypatch.setattr(app, "_deliver_remote", lambda *args: None)
+        # Exercise the worker body without starting a terminal or a thread.
+        app._open_remote.__wrapped__(app, app._remote_session, "/")
 
     monkeypatch.setattr(B2ViewApp, "run", run)
     argv = [url]
     for key, value in options.items():
         argv.extend(["--" + key.replace("_", "-"), value])
     assert main(argv) == 0
-    expected = {"mode": "r", "lazy": True}
-    if options:
-        expected["storage_options"] = options
-    assert opened == [(url, expected)]
+    assert opened == [(url, {"storage_options": options or None})]

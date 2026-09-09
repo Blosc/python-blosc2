@@ -120,23 +120,23 @@ def create_store(nlevels: int, nleaves: int, max_elems: int, nrows: int, output:
 
     tstore = blosc2.TreeStore(output, mode="w")
     try:
-        tstore.vlmeta["author"] = "test-suite"
-        tstore.vlmeta["purpose"] = "testing"
+        tstore.attrs["author"] = "test-suite"
+        tstore.attrs["purpose"] = "testing"
         for level in range(nlevels):
             parent = f"/level{level}"
             for leaf in range(nleaves):
                 arr = leaf_arrays[leaf]
-                # Diverse vlmeta types so the vlmeta panel has content
-                arr.vlmeta["is_even"] = leaf % 2 == 0
-                arr.vlmeta["index"] = leaf
-                arr.vlmeta["label"] = f"leaf_{leaf}"
-                arr.vlmeta["tags"] = [f"tag_{leaf}", f"tag_{leaf + 1}"]
+                # Diverse attribute types so the attrs panel has content
+                arr.attrs["is_even"] = leaf % 2 == 0
+                arr.attrs["index"] = leaf
+                arr.attrs["label"] = f"leaf_{leaf}"
+                arr.attrs["tags"] = [f"tag_{leaf}", f"tag_{leaf + 1}"]
                 tstore[f"{parent}/leaf{leaf}"] = arr
 
             table_key = f"{parent}/ctable"
             tstore[table_key] = tmpl_table
             ct = tstore[table_key]
-            ct.vlmeta["description"] = f"Level {level} CTable"
-            ct.vlmeta["ncols"] = tmpl_table.ncols
+            ct.attrs["description"] = f"Level {level} CTable"
+            ct.attrs["ncols"] = tmpl_table.ncols
     finally:
         tstore.close()

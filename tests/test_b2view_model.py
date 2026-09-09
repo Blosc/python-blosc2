@@ -79,7 +79,7 @@ def test_store_browser_remote_array(tmp_path, suffix):
     fsspec = pytest.importorskip("fsspec")
     data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
     array = blosc2.asarray(data, chunks=(1, 20, 20), blocks=(1, 10, 10))
-    array.vlmeta["description"] = "remote preview"
+    array.attrs["description"] = "remote preview"
     fs = fsspec.filesystem("memory")
     if suffix == ".b2nd":
         fs.pipe_file("b2view-array.b2nd", array.to_cframe())

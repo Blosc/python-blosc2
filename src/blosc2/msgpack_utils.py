@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import struct
+
+import numpy as np
 from msgpack import ExtType, packb, unpackb
 
 from blosc2 import blosc2_ext
@@ -23,6 +26,8 @@ _BLOSC2_EXT_CODE = 42
 # stable ``kind`` and ``version`` envelope.
 _BLOSC2_STRUCTURED_EXT_CODE = 43
 _BLOSC2_STRUCTURED_VERSION = 1
+_BLOSC2_COMPLEX_EXT_CODE = 44
+_BLOSC2_SET_EXT_CODE = 45
 
 
 def _encode_structured_reference(obj):
@@ -71,6 +76,16 @@ def _encode_msgpack_ext(obj):
     structured = _encode_structured_reference(obj)
     if structured is not None:
         return structured
+    if isinstance(obj, (complex, np.complexfloating)):
+        return ExtType(_BLOSC2_COMPLEX_EXT_CODE, struct.pack(">dd", float(obj.real), float(obj.imag)))
+    if isinstance(obj, (set, frozenset)):
+        return ExtType(_BLOSC2_SET_EXT_CODE, msgpack_packb(list(obj)))
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
     return blosc2_ext.encode_tuple(obj)
 
 
@@ -91,6 +106,11 @@ def _decode_msgpack_ext(code, data):
         return blosc2.from_cframe(data, copy=True)
     if code == _BLOSC2_STRUCTURED_EXT_CODE:
         return _decode_structured_reference(data)
+    if code == _BLOSC2_COMPLEX_EXT_CODE:
+        real, imag = struct.unpack(">dd", data)
+        return complex(real, imag)
+    if code == _BLOSC2_SET_EXT_CODE:
+        return set(msgpack_unpackb(data))
     return ExtType(code, data)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -132,6 +133,63 @@ def check_zarr_fsspec_dependencies() -> None:
         ) from exc
 
 
+class _CountingFile(io.IOBase):
+    """Count h5py's read/readinto calls without fsspec read-ahead."""
+
+    def __init__(self, file, traffic):
+        self.file, self.traffic = file, traffic
+
+    def read(self, size=-1):
+        data = self.file.read(size)
+        self.traffic.charge(len(data))
+        return data
+
+    def readinto(self, buffer):
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+    def seek(self, offset, whence=0):
+        return self.file.seek(offset, whence)
+
+    def tell(self):
+        return self.file.tell()
+
+
+def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=None):
+    """Translate once, closing owned handles and optionally isolating bad leaves.
+
+    Disable fsspec read-ahead: h5py requests metadata ranges itself. Translation
+    may still read small inline values and scales with the file's chunk index.
+    """
+    check_hdf5_dependencies()
+    import fsspec
+    import kerchunk.hdf
+
+    fs, path = fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+    with fs.open(path, "rb", block_size=0, cache_type="none") as file:
+        if traffic is not None:
+            file = _CountingFile(file, traffic)
+        translator = kerchunk.hdf.SingleHdf5ToZarr(
+            file, url=urlpath, error="raise" if unsupported is not None else "warn"
+        )
+        if unsupported is not None:
+            translate_node = translator._translator
+
+            def isolated_node(name, obj):
+                try:
+                    return translate_node(name, obj)
+                except Exception as exc:
+                    unsupported[name] = f"{type(exc).__name__}: {exc}"
+                    return None
+
+            translator._translator = isolated_node
+        try:
+            return translator.translate()
+        finally:
+            translator.close()
+
+
 def available_datasets(url, storage_options: dict | None = None) -> list[str]:
     """Return all dataset paths within an HDF5 file or reference dictionary.
 
@@ -174,9 +232,8 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
             ref_dict = refs.get("refs", refs)
         else:
             check_hdf5_dependencies()
-            import kerchunk.hdf
 
-            refs = kerchunk.hdf.SingleHdf5ToZarr(url_str, storage_options=storage_options or {}).translate()
+            refs = scan_hdf5_refs(url_str, storage_options)
             ref_dict = refs.get("refs", refs)
     else:
         raise TypeError("url must be a URL string, path-like object, or reference dict")
@@ -323,9 +380,7 @@ class HDF5NDSource(ProxyNDSource):
                 return refs
             raise TypeError("refs must be a dict, string, or path-like object")
 
-        import kerchunk.hdf
-
-        return kerchunk.hdf.SingleHdf5ToZarr(self.urlpath, storage_options=storage_options or {}).translate()
+        return scan_hdf5_refs(self.urlpath, storage_options)
 
     def _validate_dataset_presence(self, raw_dataset: str) -> None:
         ref_dict = self._refs.get("refs", self._refs)
@@ -399,6 +454,11 @@ class HDF5NDSource(ProxyNDSource):
     @property
     def cparams(self):
         return self._cparams
+
+    @property
+    def attrs(self) -> dict:
+        """The user attributes of the remote dataset."""
+        return self.vlmeta
 
     @property
     def vlmeta(self) -> dict:
