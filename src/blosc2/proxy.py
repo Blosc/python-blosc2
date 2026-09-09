@@ -1270,7 +1270,7 @@ class Proxy(blosc2.Operand):
         return f"Proxy({self.src}, urlpath={self.urlpath})"
 
     @property
-    def meta(self) -> blosc2.schunk.meta:
+    def meta(self) -> blosc2.schunk.Meta:
         """
         Get the fixed-length metalayers of the cache.
 
