@@ -14,6 +14,14 @@ import pytest
 
 import blosc2
 
+_NETWORK_ERRORS = (httpx.HTTPError,)
+try:
+    from botocore.exceptions import ProfileNotFound
+except ImportError:
+    pass
+else:
+    _NETWORK_ERRORS += (ProfileNotFound,)
+
 # Each SChunk allocates C-level thread pools (pthreads) for its compression
 # and decompression contexts.  Python 3.14 changed the GC gen-2 threshold
 # to 0, so long-lived objects are never collected automatically; they
@@ -98,13 +106,13 @@ def cat2_context():
 
 
 def pytest_runtest_call(item):
-    # Skip network-marked tests on transient request failures to keep CI stable.
+    # Skip network-marked tests when their endpoint or optional credentials are unavailable.
     if item.get_closest_marker("network") is None:
         return
     try:
         item.runtest()
-    except httpx.HTTPError as exc:
-        pytest.skip(f"Skipping network test due to request failure: {exc}")
+    except _NETWORK_ERRORS as exc:
+        pytest.skip(f"Skipping unavailable network test: {exc}")
 
 
 def pytest_runtest_teardown(item, nextitem):

@@ -363,3 +363,13 @@ def test_s3_b2z_slice():
     before = arr.traffic.nbytes
     np.testing.assert_array_equal(arr[:10, 0, :5], expected)
     assert arr.traffic.nbytes == before
+
+
+@pytest.mark.network
+def test_https_b2z_slice():
+    arr = blosc2.open("https://f001.backblazeb2.com/file/blosc2/hierarchy.b2z::/d0/a3", lazy=True)
+    expected = np.arange(10)[:, None] * 1_000_000 + np.arange(5)
+    np.testing.assert_array_equal(arr[:10, 0, :5], expected)
+    before = arr.traffic.nbytes
+    np.testing.assert_array_equal(arr[:10, 0, :5], expected)
+    assert arr.traffic.nbytes == before
