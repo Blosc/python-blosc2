@@ -53,7 +53,7 @@ def test_zarr_source_preserves_fill_and_edge_chunks(tmp_path, zarr):
     ],
 )
 @pytest.mark.parametrize("zarr_format", [2, 3])
-@pytest.mark.filterwarnings("ignore::zarr.errors.UnstableSpecificationWarning")
+@pytest.mark.filterwarnings("ignore:The data type .* does not have a Zarr V3 specification:FutureWarning")
 def test_zarr_source_supports_fixed_size_dtypes(tmp_path, zarr, data, zarr_format):
     path = tmp_path / "fixed-size.zarr"
     array = zarr.create_array(path, data=data, chunks=data.shape, zarr_format=zarr_format)
