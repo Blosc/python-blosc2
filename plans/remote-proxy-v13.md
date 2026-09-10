@@ -1,7 +1,8 @@
 # RemoteArray and RemoteStore v13: shared caching and public hierarchies
 
-Status: implementation in progress, 2026-09-10. Steps 1–5 and measurement baseline
-complete; step 6 remains. RemoteStore supports NONE, shared MEMORY and DISK caching.
+Status: implemented and locally validated, 2026-09-10. Steps 1–6 complete.
+RemoteStore supports NONE, shared MEMORY and DISK caching. Windows execution
+remains subject to the existing CI matrix; see validation limits below.
 
 ## Implementation progress
 
@@ -90,7 +91,21 @@ complete; step 6 remains. RemoteStore supports NONE, shared MEMORY and DISK cach
   process codec initialization. Ruff and whitespace checks passed. The new
   `examples/remote/store-browse.py` ran against a memory-backed B2Z with a DISK
   cache, and browser/reference/remote-array guides describe shared retention.
-- Next: repository-wide validation and remaining platform checks (step 6).
+- Step 6: the full default `conda run --no-capture-output -n blosc2 pytest -q`
+  run passed on macOS: **9,853 passed, 31 skipped in 28.93 seconds**. The run used
+  the repository's default parallel workers and permitted local HTTP/subprocess
+  fixtures. Ruff lint and format checks passed for all 12 maintained Python files
+  changed in steps 3–5; whitespace checks passed. No implementation changes were
+  needed after this validation run.
+- Validation limits: the 34 Textual tests passed separately in step 5; default
+  pytest excludes marked Textual, heavy and network tests. The explicit standalone
+  core/ndarray/schunk doctest invocation reported earlier was not rerun; its
+  previously recorded failures are not claimed fixed by the default-suite result.
+  Windows byte locking is implemented and covered by tests in the existing Windows
+  CI matrix, but was not executed locally. No new live S3/HTTPS benchmark, fully
+  offline validation, or heavy-test run was performed. The recorded live-network
+  measurements remain the standalone RemoteArray baseline, not a RemoteStore
+  performance claim.
 - Measurement follow-up: added `bench/remote_array_traffic.py` with its report
   and raw JSONL results. It measures cold/warm requests, connections and response
   body bytes for B2Z, Zarr and HDF5 over S3 and HTTPS. Fixed HTTPS HDF5 discovery
