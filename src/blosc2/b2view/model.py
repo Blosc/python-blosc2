@@ -253,13 +253,20 @@ class StoreBrowser:
     slices.
     """
 
-    def __init__(self, urlpath: str, *, storage_options: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        urlpath: str,
+        *,
+        storage_options: dict[str, Any] | None = None,
+        cache_dir: str | None = None,
+    ):
         self.urlpath = urlpath
+        self.cache_dir = cache_dir
         self.io_lock = RLock()
         self._remote_leaf = None
         self._remote_child_counts = {}
         self._remote_leaf_path = None
-        self.store = self._open_store(urlpath, storage_options)
+        self.store = self._open_store(urlpath, storage_options, cache_dir=cache_dir)
         self.is_tree = isinstance(self.store, blosc2.TreeStore) or (
             isinstance(self.store, blosc2.RemoteStore) and self.store.kind() == "group"
         )
@@ -287,16 +294,21 @@ class StoreBrowser:
         self._column_selections: dict[str, list[str]] = {}
 
     @staticmethod
-    def _open_store(urlpath, storage_options):
+    def _open_store(urlpath, storage_options, *, cache_dir: str | None = None):
         options = {} if storage_options is None else {"storage_options": storage_options}
         if is_fsspec_url(urlpath):
             _, _, source_format = parse_container_url(urlpath)
             if source_format in {"b2z", "zarr", "hdf5"}:
                 # Discover once even for an array root; return public handles in
                 # both cases without rescanning HDF5 or reopening a B2Z archive.
-                store = blosc2.RemoteStore(
-                    urlpath, max_cache_bytes=64 << 20, _allow_array_root=True, **options
-                )
+                store_kwargs: dict[str, Any] = {
+                    "max_cache_bytes": 64 << 20,
+                    "_allow_array_root": True,
+                    **options,
+                }
+                if cache_dir is not None:
+                    store_kwargs["cache_dir"] = cache_dir
+                store = blosc2.RemoteStore(urlpath, **store_kwargs)
                 try:
                     if store.kind() == "ndarray":
                         array = store[""]
@@ -307,6 +319,8 @@ class StoreBrowser:
                     store.close()
                     raise
             options["lazy"] = True
+            if cache_dir is not None:
+                options["cache_dir"] = cache_dir
         return blosc2.open(urlpath, mode="r", **options)
 
     def _release_remote_leaf(self):

@@ -2026,6 +2026,7 @@ class B2ViewApp(App):
         download_url: str | None = None,
         info_url: str | None = None,
         storage_options: dict[str, Any] | None = None,
+        cache_dir: str | None = None,
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
@@ -2038,6 +2039,7 @@ class B2ViewApp(App):
                 get_mutex()
         self.urlpath = urlpath
         self.storage_options = storage_options
+        self.cache_dir = cache_dir
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
         # Header label: the path as given on the CLI, or the @public-relative
@@ -2153,7 +2155,9 @@ class B2ViewApp(App):
             self.query_one("#metadata", Static).update("Loading remote container…")
             self._open_remote(self._remote_session, self.start_path)
             return
-        self.browser = StoreBrowser(self.urlpath, storage_options=self.storage_options)
+        self.browser = StoreBrowser(
+            self.urlpath, storage_options=self.storage_options, cache_dir=self.cache_dir
+        )
         self._populate_browser()
 
     def _populate_browser(self) -> None:
@@ -2269,7 +2273,9 @@ class B2ViewApp(App):
     def _open_remote(self, session, start_path):
         browser = None
         try:
-            browser = StoreBrowser(self.urlpath, storage_options=self.storage_options)
+            browser = StoreBrowser(
+                self.urlpath, storage_options=self.storage_options, cache_dir=self.cache_dir
+            )
             children = {}
             if browser.is_tree:
                 parent = "/"

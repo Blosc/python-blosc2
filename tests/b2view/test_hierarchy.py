@@ -562,3 +562,23 @@ def test_zarr_listing_permission_preserves_direct_array(monkeypatch):
         assert isinstance(browser.store, blosc2.RemoteStore)
     with StoreBrowser(url + "/a") as browser:
         np.testing.assert_array_equal(browser.preview("/", stop=3)["data"]["value"], np.arange(3))
+
+
+def test_remote_store_browser_cache_dir_reused(tmp_path):
+    url, data = b2z_url(tmp_path)
+    cache_dir = tmp_path / "b2view_cache"
+
+    selection = (slice(2), slice(3))
+    # First session: cold
+    with StoreBrowser(url, cache_dir=str(cache_dir)) as browser:
+        assert isinstance(browser.store, blosc2.RemoteStore)
+        np.testing.assert_array_equal(browser.preview("/group/a", slices=selection), data[:2, :3])
+        traffic1 = browser.store.traffic.nbytes
+        assert traffic1 > 0
+
+    # Second session: warm reuse upon restart
+    with StoreBrowser(url, cache_dir=str(cache_dir)) as browser:
+        assert isinstance(browser.store, blosc2.RemoteStore)
+        assert browser.store.traffic.nbytes == 0
+        np.testing.assert_array_equal(browser.preview("/group/a", slices=selection), data[:2, :3])
+        assert browser.store.traffic.nbytes == 0

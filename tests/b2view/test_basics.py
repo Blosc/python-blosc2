@@ -194,6 +194,34 @@ async def test_remote_array_horizontal_paging_uncapped(tmp_path):
         assert len(app.table_page["columns"]) == init_cols
 
 
+async def test_b2view_app_cache_dir_reused(tmp_path):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    b2z_file = tmp_path / "app_cached.b2z"
+    with blosc2.TreeStore(str(b2z_file), mode="w") as store:
+        store["/d0/d1/a2"] = data
+    fsspec.filesystem("memory").pipe_file("b2view-cached.b2z", b2z_file.read_bytes())
+    url = "memory://b2view-cached.b2z/d0/d1/a2"
+    cache_dir = str(tmp_path / "app_cache")
+
+    # Pass 1: cold load
+    app1 = B2ViewApp(url, start_panel="data", cache_dir=cache_dir)
+    async with app1.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert app1.table_page is not None
+        assert app1.table_page["columns"]
+        traffic1 = app1.browser.store.traffic.nbytes
+        assert traffic1 > 0
+
+    # Pass 2: warm restart
+    app2 = B2ViewApp(url, start_panel="data", cache_dir=cache_dir)
+    async with app2.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert app2.table_page is not None
+        assert app2.table_page["columns"]
+        assert app2.browser.store.traffic.nbytes == 0
+
+
 async def test_zarr_startup_fresh_process(tmp_path):
     zarr = pytest.importorskip("zarr")
     pytest.importorskip("fsspec")

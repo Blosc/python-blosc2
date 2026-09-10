@@ -10,7 +10,7 @@ from pathlib import Path
 import msgpack
 
 import blosc2
-from blosc2.blosc2_ext import encode_tuple
+from blosc2.msgpack_utils import msgpack_packb
 
 
 def validate_generation(generation):
@@ -120,7 +120,7 @@ class StoreDiskCache:
         finally:
             if os.path.exists(name):
                 os.unlink(name)
-        encoded = msgpack.packb(value, use_bin_type=True, strict_types=True, default=encode_tuple)
+        encoded = msgpack_packb(value)
         return len(encoded)
 
     def payload_path(self, generation, key):
