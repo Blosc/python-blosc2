@@ -191,6 +191,24 @@ def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=N
     raise TimeoutError("HDF5 translation timed out twice")  # pragma: no cover -- retry re-raises
 
 
+def _plain_hdf5_refs(value):
+    """Make zarr's Buffer objects safe to keep in a manifest.
+
+    kerchunk writes the zarr hierarchy through MemoryStore, which holds Buffer
+    objects; when a translation is cut short (zarr's sync bridge timing out)
+    some of those buffers survive in the returned references, and the manifest
+    cannot serialize them.  Buffer bytes are what a reference stores anyway.
+    """
+    if isinstance(value, dict):
+        return {key: _plain_hdf5_refs(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain_hdf5_refs(item) for item in value]
+    to_bytes = getattr(value, "to_bytes", None)
+    if type(value).__module__.startswith("zarr.") and callable(to_bytes):
+        return bytes(to_bytes())
+    return value
+
+
 def _translate_hdf5(fs, path, urlpath, unsupported, traffic):
     import kerchunk.hdf
 
@@ -213,7 +231,7 @@ def _translate_hdf5(fs, path, urlpath, unsupported, traffic):
 
             translator._translator = isolated_node
         try:
-            return translator.translate()
+            return _plain_hdf5_refs(translator.translate())
         finally:
             translator.close()
 
