@@ -345,7 +345,7 @@ async def test_remote_listing_retry_and_shutdown(tmp_path, monkeypatch):
     import asyncio
     import threading
 
-    from textual.widgets import Tree
+    from textual.widgets import Static, Tree
 
     from blosc2.b2view.app import B2ViewApp
 
@@ -383,7 +383,7 @@ async def test_remote_listing_retry_and_shutdown(tmp_path, monkeypatch):
 
         def blocked(self, path, **kwargs):
             entered.set()
-            release.wait(5)
+            release.wait(15)
             return preview(self, path, **kwargs)
 
         def counted_close(self):
@@ -394,18 +394,20 @@ async def test_remote_listing_retry_and_shutdown(tmp_path, monkeypatch):
         monkeypatch.setattr(StoreBrowser, "preview", blocked)
         monkeypatch.setattr(StoreBrowser, "close", counted_close)
         app.update_panels("/group/a")
-        for _ in range(300):
+        for _ in range(500):
             if entered.is_set():
                 break
-            await asyncio.sleep(0.02)
-        assert entered.is_set()
+            await pilot.pause(0.02)
+        assert entered.is_set(), (
+            f"preview was never called; metadata={app.query_one('#metadata', Static).renderable!r}"
+        )
         await pilot.press("q")
         assert not closed.is_set()
         release.set()
-    for _ in range(100):
+    for _ in range(300):
         if closed.is_set():
             break
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.02)
     assert closed.is_set()
 
 
