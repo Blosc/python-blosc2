@@ -122,6 +122,21 @@ def pytest_runtest_teardown(item, nextitem):
         gc.collect()
 
 
+_deadman_log_file = None
+
+
+def _deadman_log():
+    """Append-only stack log at the repo root; the workers share it."""
+    global _deadman_log_file
+    if _deadman_log_file is None:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Must stay open: faulthandler writes to it after the test is abandoned.
+        _deadman_log_file = open(  # noqa: SIM115
+            os.path.join(root, "deadman-stacks.log"), "a", buffering=1
+        )
+    return _deadman_log_file
+
+
 @pytest.fixture(autouse=True)
 def _worker_deadman():
     """Turn a hung test into a named worker crash instead of a burned job.
@@ -137,7 +152,7 @@ def _worker_deadman():
         return
     import faulthandler
 
-    faulthandler.dump_traceback_later(float(seconds), exit=True)
+    faulthandler.dump_traceback_later(float(seconds), exit=True, file=_deadman_log())
     try:
         yield
     finally:
