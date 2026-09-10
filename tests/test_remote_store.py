@@ -121,6 +121,132 @@ def test_store_none_rejects_limit():
         )
 
 
+def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
+    url, data = hierarchy
+    parent = tmp_path / "cache"
+    with blosc2.RemoteStore(url, cache_dir=parent) as store:
+        assert store.cache_policy is blosc2.CachePolicy.DISK
+        with store["group/a"] as a, store["group/b"] as b:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            np.testing.assert_array_equal(b[:10, :10], data[:10, :10] + 1)
+        retained = store.cache_bytes
+        assert retained > 0
+        assert store.metadata_bytes > 0
+        with pytest.raises(RuntimeError, match="already owned"):
+            blosc2.RemoteStore(url, cache_dir=parent)
+    with monkeypatch.context() as patch:
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("reopen fetched remote bytes")
+
+        patch.setattr(type(fsspec.filesystem("memory")), "cat_file", forbidden)
+        reopened = blosc2.RemoteStore(url, cache_dir=parent)
+        reopened.close()
+    with blosc2.RemoteStore(url, cache_dir=parent) as store:
+        # Partial B2Z blocks may have in-memory duplicates in the first session.
+        assert 0 < store.cache_bytes <= retained
+        assert len(store._owner.caches) == 2
+        with store["group/a"] as a:
+            before = store.traffic.nbytes
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            assert store.traffic.nbytes == before
+        group = store["group"]
+        a = group["a"]
+        store.refresh()
+        assert store.cache_bytes == 0
+        with pytest.raises(RuntimeError, match="stale"):
+            a[:1]
+        with pytest.raises(RuntimeError, match="stale"):
+            group.keys()
+        a.close()
+        group.close()
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:], data)
+    with blosc2.RemoteStore(url, cache_dir=parent, max_cache_bytes=1) as store:
+        assert store.cache_bytes == 0
+
+
+def test_disk_lock_outlives_root(hierarchy, tmp_path):
+    url, data = hierarchy
+    root = blosc2.RemoteStore(url, cache_dir=tmp_path)
+    leaf = root["group/a"]
+    root.close()
+    with pytest.raises(RuntimeError, match="already owned"):
+        blosc2.RemoteStore(url, cache_dir=tmp_path)
+    np.testing.assert_array_equal(leaf[:2], data[:2])
+    leaf.close()
+    with blosc2.RemoteStore(url, cache_dir=tmp_path):
+        pass
+
+
+def test_disk_manifest_rejects_corruption_and_releases_lock(hierarchy, tmp_path):
+    import msgpack
+
+    url, _ = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path) as store:
+        path = store._owner.disk.path / "manifest.msgpack"
+    value = msgpack.unpackb(path.read_bytes(), raw=False)
+    value["caches"] = ["../escape"]
+    path.write_bytes(msgpack.packb(value, use_bin_type=True))
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Unsafe path"):
+            blosc2.RemoteStore(url, cache_dir=tmp_path)
+
+
+def test_disk_failed_refresh_and_portable_export(hierarchy, tmp_path, monkeypatch):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path, max_cache_bytes=None) as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            generation = store._owner.generation
+
+            def fail(*args):
+                raise OSError("manifest publication failed")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(store._owner.disk, "publish", fail)
+                with pytest.raises(OSError, match="publication failed"):
+                    store.refresh()
+            assert store._owner.generation == generation
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            exported = blosc2.from_cframe(a.to_cframe(include_cache=True))
+    before = exported.traffic.nbytes
+    np.testing.assert_array_equal(exported[:10, :10], data[:10, :10])
+    assert exported.traffic.nbytes == before
+
+
+def test_disk_lock_crash_release(tmp_path):
+    import subprocess
+    import sys
+
+    from blosc2.remote_store_cache import StoreDiskCache
+
+    code = """
+import sys
+from blosc2.remote_store_cache import StoreDiskCache
+cache = StoreDiskCache(sys.argv[1], {"urlpath": "https://example.com/data.b2z"})
+print("locked", flush=True)
+sys.stdin.read()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(tmp_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert process.stdout.readline().strip() == "locked"
+        with pytest.raises(RuntimeError, match="already owned"):
+            StoreDiskCache(tmp_path, {"urlpath": "https://example.com/data.b2z"})
+        process.kill()
+        process.wait(timeout=10)
+        cache = StoreDiskCache(tmp_path, {"urlpath": "https://example.com/data.b2z"})
+        cache.close()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+        process.stdin.close()
+        process.stdout.close()
+
+
 @pytest.fixture(params=["b2z", "h5", "zarr2", "zarr3"])
 def hierarchy(request, tmp_path):
     backend = request.param
@@ -322,7 +448,7 @@ def test_zarr_unsupported_codec():
 def test_store_validation():
     with pytest.raises(TypeError, match="dataset must be a string"):
         blosc2.RemoteStore("memory://a.b2z", dataset=1)
-    with pytest.raises(NotImplementedError, match="DISK"):
+    with pytest.raises(ValueError, match="cache_dir"):
         blosc2.RemoteStore("memory://a.b2z", cache_policy=blosc2.CachePolicy.DISK)
     with pytest.raises(TypeError, match="CachePolicy"):
         blosc2.RemoteStore("memory://a.b2z", cache_policy="none")

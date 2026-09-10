@@ -767,6 +767,29 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
         assert len(requests) == count
 
 
+def test_http_store_disk_reopen_and_transport_close(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    pytest.importorskip("kerchunk")
+    pytest.importorskip("zarr")
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "store.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    with _ranged_server(tmp_path) as (urlbase, requests):
+        url = f"{urlbase}/{path.name}"
+        with blosc2.RemoteStore(url, cache_dir=tmp_path / "cache") as store:
+            with store["data"] as array:
+                np.testing.assert_array_equal(array[:10], data[:10])
+            session = store._owner.filesystem._session
+            assert not session.closed
+        assert session.closed
+        count = len(requests)
+        with blosc2.RemoteStore(url, cache_dir=tmp_path / "cache") as store:
+            with store["data"] as array:
+                np.testing.assert_array_equal(array[:10], data[:10])
+        assert len(requests) == count
+
+
 def test_zip_store_needs_cache(tmp_path):
     # A .b2z store is a zip archive, not a cframe, so there is nothing for the
     # in-memory read to rebuild

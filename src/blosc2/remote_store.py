@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import uuid
 import weakref
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -34,7 +36,9 @@ class RemoteNode:
 class RemoteDiscovery:
     """Shared metadata and source resources, independent of browser presentation."""
 
-    def __init__(self, urlpath, storage_options=None, *, dataset=None):
+    def __init__(
+        self, urlpath, storage_options=None, *, dataset=None, manifest=None, persist_metadata=False
+    ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         self.root = (dataset or "").strip("/")
         self._validate(self.root)
@@ -48,12 +52,25 @@ class RemoteDiscovery:
         self.zstore = None
         self.sources = {}
         self.caches = {}
+        self.disk = None
+        self.generation = manifest["generation"] if manifest else uuid.uuid4().hex
+        self.metadata = manifest["metadata"] if manifest else {}
+        self.persist_metadata = persist_metadata
+        self.metadata_bytes = 0
+        self.restoring = False
+        self.filesystem = None
         self._users = 0
         self._closed = False
         # ponytail: serialize store operations; finer locks if multi-leaf throughput matters.
         self.lock = threading.RLock()
         try:
-            if self.format == "b2z":
+            import fsspec
+
+            options = {**self.storage_options, "skip_instance_cache": True}
+            self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
+            if manifest:
+                self._restore_manifest(manifest)
+            elif self.format == "b2z":
                 self._open_b2z()
             elif self.format == "hdf5":
                 self._open_hdf5()
@@ -68,8 +85,91 @@ class RemoteDiscovery:
             self.close()
             raise
 
+    def _restore_manifest(self, manifest):
+        for path, entry in manifest["nodes"].items():
+            self._validate(path)
+            if (
+                not isinstance(entry, (list, tuple))
+                or len(entry) != 2
+                or entry[0] not in {"group", "ndarray", "unsupported"}
+            ):
+                raise ValueError("Invalid RemoteStore node")
+            self.nodes[path] = tuple(entry)
+        for mapping in (manifest["attrs"], manifest["listed"]):
+            for path in mapping:
+                self._validate(path)
+                if path not in self.nodes:
+                    raise ValueError("Invalid RemoteStore metadata path")
+        for parent, children in manifest["listed"].items():
+            if not isinstance(children, list) or any(
+                not isinstance(child, str) or child not in self.nodes or child.rpartition("/")[0] != parent
+                for child in children
+            ):
+                raise ValueError("Invalid RemoteStore child list")
+        self.attrs = manifest["attrs"]
+        self.listed = manifest["listed"]
+        self.notice = manifest.get("notice")
+        if self.format == "b2z":
+            from blosc2.b2z_source import B2ZArchive
+
+            self.archive = B2ZArchive(
+                self.urlpath,
+                storage_options=self.storage_options,
+                _traffic=self.traffic,
+                _metadata=self.metadata,
+                _filesystem=self.filesystem,
+            )
+        elif self.format == "hdf5":
+            self.refs = self.metadata
+            self._validate_refs()
+        else:
+            self._open_zarr()
+
+    def _validate_refs(self):
+        refs = self.refs.get("refs", self.refs)
+        if not isinstance(refs, dict) or self.refs.get("templates"):
+            raise ValueError("Invalid HDF5 manifest references")
+        for value in refs.values():
+            if isinstance(value, list):
+                if (
+                    len(value) != 3
+                    or value[0] != self.urlpath
+                    or any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in value[1:])
+                ):
+                    raise ValueError("HDF5 manifest contains an unsafe reference")
+                validate_persistable_url(value[0])
+
+    def save_manifest(self):
+        if self.disk is None or self.restoring:
+            return
+        # ponytail: publish whole discovery snapshots; add dirty tracking if large maps make this costly.
+        if self.format == "hdf5":
+            self._validate_refs()
+            self.metadata = self.refs
+        elif self.format == "b2z":
+            self.metadata = self.archive.metadata
+        nodes = {
+            path: (kind, value if kind == "unsupported" else None)
+            for path, (kind, value) in self.nodes.items()
+        }
+        self.metadata_bytes = self.disk.publish(
+            {
+                "version": 1,
+                "source": self.disk.source,
+                "generation": self.generation,
+                "nodes": nodes,
+                "attrs": self.attrs,
+                "listed": self.listed,
+                "notice": self.notice,
+                "metadata": self.metadata,
+                "caches": sorted(self.caches),
+            }
+        )
+
     @staticmethod
     def _validate(path):
+        if not isinstance(path, str):
+            raise ValueError("Remote container paths must be strings")
         if path and (
             any(p in {"", ".", ".."} for p in path.split("/")) or any(c in path for c in "\\\0\n\r\t")
         ):
@@ -166,7 +266,14 @@ class RemoteDiscovery:
     def _open_b2z(self):
         from blosc2.b2z_source import B2ZArchive, member_vlmeta
 
-        self.archive = B2ZArchive(self.urlpath, storage_options=self.storage_options, _traffic=self.traffic)
+        self.archive = B2ZArchive(
+            self.urlpath,
+            storage_options=self.storage_options,
+            _traffic=self.traffic,
+            _metadata=self.metadata if self.persist_metadata else None,
+            _filesystem=self.filesystem,
+        )
+        self.archive.capture_metadata = True
         members = {}
         for info in self.archive.members:
             self._validate(info.filename.rstrip("/"))
@@ -191,13 +298,18 @@ class RemoteDiscovery:
         self._process_b2z_members(members, roots)
         self._process_b2z_embedded(embedded, roots, embedded_reader, members)
         self.archive._opening_ranges.clear()
+        self.archive.capture_metadata = False
 
     def _open_hdf5(self):
         from blosc2.hdf5_source import scan_hdf5_refs
 
         unsupported = {}
         self.refs = scan_hdf5_refs(
-            self.urlpath, self.storage_options, unsupported=unsupported, traffic=self.traffic
+            self.urlpath,
+            self.storage_options,
+            unsupported=unsupported,
+            traffic=self.traffic,
+            _filesystem=self.filesystem,
         )
         refs = self.refs.get("refs", self.refs)
         for key, value in refs.items():
@@ -215,17 +327,15 @@ class RemoteDiscovery:
         )
 
     def _open_zarr(self):
-        import fsspec
         import zarr
 
-        from blosc2.zarr_source import counting_store
+        from blosc2.zarr_source import counting_store, owned_fsspec_store
 
         self.zstore = counting_store(
             zarr,
-            zarr.storage.FsspecStore.from_mapper(
-                fsspec.get_mapper(self.urlpath, **self.storage_options), read_only=True
-            ),
+            owned_fsspec_store(zarr, self.filesystem, self.filesystem._strip_protocol(self.urlpath)),
             self.traffic,
+            metadata=self.metadata if self.persist_metadata else None,
         )
         # Open the requested node directly; array-only readers need no parent LIST.
         try:
@@ -247,7 +357,9 @@ class RemoteDiscovery:
     def resolve(self, path):
         """Resolve a relative path without listing a Zarr parent."""
         full = self._path(path)
-        if self.format == "zarr" and (full not in self.nodes or self.nodes[full] == ("group", None)):
+        if self.format == "zarr" and (
+            full not in self.nodes or (self.nodes[full][0] != "unsupported" and self.nodes[full][1] is None)
+        ):
             import zarr
 
             try:
@@ -257,6 +369,7 @@ class RemoteDiscovery:
             except (ValueError, TypeError, NotImplementedError) as exc:
                 self._add(full, "unsupported", f"{type(exc).__name__}: {exc}")
             else:
+                self.nodes.pop(full, None)
                 self._add(full, "group" if isinstance(node, zarr.Group) else "ndarray", node)
                 self.attrs[full] = dict(node.attrs)
         if full not in self.nodes:
@@ -339,6 +452,7 @@ class RemoteDiscovery:
                 refs=self.refs,
                 storage_options=self.storage_options,
                 _traffic=self.traffic,
+                _filesystem=self.filesystem,
             )
         else:
             from blosc2.zarr_source import ZarrNDSource
@@ -361,17 +475,54 @@ class RemoteDiscovery:
             if not self._users:
                 self.close()
 
+    def restore_caches(self, manifest):
+        if manifest:
+            self.restoring = True
+            for path in manifest["caches"]:
+                self._validate(path)
+                if path not in self.nodes or self.nodes[path][0] != "ndarray":
+                    raise ValueError("Invalid cached RemoteStore leaf")
+                relative = path[len(self.root) + 1 :] if self.root else path
+                self.resolve(relative)
+                self.get_cache(self.open_source(relative))
+            self.cache_coordinator.enforce()
+            self.restoring = False
+
     def get_cache(self, source):
         key = next(path for path, value in self.sources.items() if value is source)
         if key not in self.caches:
+            path = None if self.disk is None else str(self.disk.payload_path(self.generation, key))
+            identity = {"generation": self.generation, "dataset": key}
+            exists = path is not None and os.path.exists(path)
             self.caches[key] = blosc2.Proxy(
-                source, _refresh_source=False, _cache_coordinator=self.cache_coordinator, _cache_key=key
+                source,
+                urlpath=path,
+                mode="a",
+                _refresh_source=False,
+                _cache_coordinator=self.cache_coordinator,
+                _cache_key=key,
+                _persistent_dirty=self.disk is not None,
+                meta={"remote-store": identity} if path is not None and not exists else None,
             )
+            if exists and self.caches[key].schunk.meta.get("remote-store") != identity:
+                self.caches.pop(key)
+                raise ValueError("RemoteStore payload generation or dataset mismatch")
+            self.save_manifest()
         return self.caches[key]
 
     def close(self):
         if self._closed:
             return
+        try:
+            self.save_manifest()
+        finally:
+            try:
+                self._close_resources()
+            finally:
+                if self.disk is not None:
+                    self.disk.close()
+
+    def _close_resources(self):
         self._closed = True
         if self.archive is not None:
             self.archive.close()
@@ -386,6 +537,15 @@ class RemoteDiscovery:
         self.attrs.clear()
         self.listed.clear()
         self.refs = None
+        if self.filesystem is not None:
+            # fsspec's HTTP and S3 clients expose their own synchronous close hook.
+            close = getattr(self.filesystem, "close_session", None)
+            session = getattr(self.filesystem, "_s3creator", None) or getattr(
+                self.filesystem, "_session", None
+            )
+            if close is not None and session is not None:
+                close(self.filesystem.loop, session)
+            self.filesystem = None
 
 
 class RemoteStore:
@@ -393,7 +553,8 @@ class RemoteStore:
 
     Discovery and returned array handles share source resources and traffic.
     MEMORY shares one bounded cache across all leaves; NONE retains no payload.
-    DISK retention will follow. Sources must be immutable.
+    DISK retains payload and discovery under an exclusively owned cache directory.
+    Sources must be immutable until an explicit root refresh.
 
     ``keys()`` lists immediate children; ``get_info()`` inspects metadata without
     creating an array cache. Paths are relative to this group. Closing a handle
@@ -406,21 +567,46 @@ class RemoteStore:
         *,
         dataset=None,
         storage_options=None,
-        cache_policy=blosc2.CachePolicy.MEMORY,
+        cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
+        cache_dir=None,
     ):
         if not isinstance(urlpath, str):
             raise TypeError("RemoteStore requires a remote URL string")
         if dataset is not None and not isinstance(dataset, str):
             raise TypeError("dataset must be a string")
+        if cache_policy is CACHE_POLICY_DEFAULT:
+            cache_policy = blosc2.CachePolicy.DISK if cache_dir is not None else blosc2.CachePolicy.MEMORY
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
-        if cache_policy is blosc2.CachePolicy.DISK:
-            raise NotImplementedError("RemoteStore DISK caching is not implemented")
+        if (cache_policy is blosc2.CachePolicy.DISK) != (cache_dir is not None):
+            raise ValueError("CachePolicy.DISK requires cache_dir; other policies reject it")
         limit = normalize_cache_limit(cache_policy, max_cache_bytes)
         base_url, _, _ = parse_container_url(urlpath, dataset)
         validate_persistable_url(base_url)
-        owner = RemoteDiscovery(urlpath, storage_options, dataset=dataset)
+        disk = None
+        manifest = None
+        if cache_policy is blosc2.CachePolicy.DISK:
+            from blosc2.remote_store_cache import StoreDiskCache
+
+            base_url, root, kind = parse_container_url(urlpath, dataset)
+            disk = StoreDiskCache(
+                cache_dir, {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": kind}
+            )
+        try:
+            manifest = disk.load() if disk is not None else None
+            owner = RemoteDiscovery(
+                urlpath,
+                storage_options,
+                dataset=dataset,
+                manifest=manifest,
+                persist_metadata=disk is not None,
+            )
+        except BaseException:
+            if disk is not None:
+                disk.close()
+            raise
+        owner.disk = disk
         if not owner.is_tree:
             kind, diagnostic = owner.nodes[owner.root]
             owner.close()
@@ -430,17 +616,28 @@ class RemoteStore:
         owner.cache_policy = cache_policy
         owner.max_cache_bytes = limit
         owner.cache_coordinator = CacheCoordinator(limit)
+        try:
+            owner.restore_caches(manifest)
+            owner.save_manifest()
+            if disk is not None:
+                disk.discard_old_generations(owner.generation)
+        except BaseException:
+            owner.close()
+            raise
         self._attach(owner, "")
 
     def _attach(self, owner, path):
         owner.acquire()
         self._owner = owner
         self._path = path
+        self._generation = owner.generation
         self._finalizer = weakref.finalize(self, owner.release)
 
     def _resolve(self, path):
         if not self._finalizer.alive:
             raise RuntimeError("RemoteStore handle is closed")
+        if self._generation != self._owner.generation:
+            raise RuntimeError("RemoteStore handle is stale; look it up again after refresh")
         if not isinstance(path, str):
             raise TypeError("RemoteStore paths must be strings")
         relative = path.strip("/")
@@ -452,7 +649,9 @@ class RemoteStore:
         """Return sorted immediate child names, using only discovery metadata."""
         with self._owner.lock:
             path, _ = self._resolve("")
-            return [key.rsplit("/", 1)[-1] for key in self._owner.list_children(path)]
+            result = [key.rsplit("/", 1)[-1] for key in self._owner.list_children(path)]
+            self._owner.save_manifest()
+            return result
 
     def __iter__(self):
         return iter(self.keys())
@@ -460,6 +659,7 @@ class RemoteStore:
     def __getitem__(self, path):
         with self._owner.lock:
             relative, full = self._resolve(path)
+            self._owner.save_manifest()
             kind, value = self._owner.nodes[full]
             if kind == "group":
                 group = object.__new__(type(self))
@@ -483,7 +683,7 @@ class RemoteStore:
                 cache_policy=self.cache_policy,
                 max_cache_bytes=(
                     self.max_cache_bytes
-                    if self.cache_policy is blosc2.CachePolicy.MEMORY
+                    if self.cache_policy is not blosc2.CachePolicy.NONE
                     else CACHE_POLICY_DEFAULT
                 ),
             )
@@ -550,6 +750,47 @@ class RemoteStore:
         with self._owner.lock:
             self._resolve("")
             return self._owner.cache_coordinator.cache_bytes
+
+    @property
+    def metadata_bytes(self):
+        """Encoded discovery manifest size, separate from retained payload."""
+        with self._owner.lock:
+            self._resolve("")
+            self._owner.save_manifest()
+            return self._owner.metadata_bytes
+
+    def refresh(self):
+        """Rebuild root discovery atomically; existing child handles become stale."""
+        with self._owner.lock:
+            self._resolve("")
+            if self._path:
+                raise ValueError("refresh must be called on the root store handle")
+            owner = self._owner
+            replacement = RemoteDiscovery(
+                owner.urlpath,
+                owner.storage_options,
+                dataset=owner.root,
+                persist_metadata=owner.disk is not None,
+            )
+            try:
+                if not replacement.is_tree:
+                    raise ValueError("Refreshed source is no longer a group")
+                replacement.disk = owner.disk
+                replacement.save_manifest()
+            except BaseException:
+                replacement.disk = None
+                replacement.close()
+                raise
+            # Keep the owner and lifetime lock stable for dependent finalizers.
+            disk, users, lock = owner.disk, owner._users, owner.lock
+            owner.disk = None
+            owner.close()
+            policy, limit = owner.cache_policy, owner.max_cache_bytes
+            owner.__dict__.update(replacement.__dict__)
+            owner.disk, owner._users, owner.lock = disk, users, lock
+            owner.cache_policy, owner.max_cache_bytes = policy, limit
+            owner.cache_coordinator = CacheCoordinator(limit)
+            self._generation = owner.generation
 
     def close(self):
         """Release this handle; the last dependent handle closes shared resources."""

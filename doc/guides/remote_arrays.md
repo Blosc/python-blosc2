@@ -23,8 +23,11 @@ with blosc2.RemoteStore(
 Groups and arrays share discovery resources and traffic counters. Stores default
 to MEMORY with a shared 256 MiB budget; `max_cache_bytes` sets a positive byte
 limit. Native chunks are evicted by recency across all leaves, and reopening a
-leaf reuses its warm cache. NONE fetches again on every read. Store DISK caching
-will follow. Standalone `RemoteArray` and
+leaf reuses its warm cache. NONE fetches again on every read. Passing `cache_dir`
+selects persistent DISK caching, with one exclusive owner per source directory.
+Reopening accounts for every retained leaf; `metadata_bytes` reports the separate
+discovery manifest. Root `refresh()` invalidates old child handles after replacing
+discovery successfully. Standalone `RemoteArray` and
 `blosc2.open(..., lazy=True)` retain their existing cache policies and defaults.
 
 ## Choose a remote route

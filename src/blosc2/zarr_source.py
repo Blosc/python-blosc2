@@ -21,7 +21,15 @@ import blosc2
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
 
 
-def counting_store(zarr, store, traffic):
+def owned_fsspec_store(zarr, filesystem, path):
+    """Adapt an owned filesystem without Zarr reconstructing another client."""
+    from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
+
+    wrapped = AsyncFileSystemWrapper(filesystem, asynchronous=True)
+    return zarr.storage.FsspecStore(wrapped, path=path, read_only=True)
+
+
+def counting_store(zarr, store, traffic, *, metadata=None):
     if getattr(store, "_blosc2_traffic", None) is traffic:
         return store
 
@@ -29,9 +37,19 @@ def counting_store(zarr, store, traffic):
         _blosc2_traffic = traffic
 
         async def get(self, key, prototype, byte_range=None):
+            is_metadata = (
+                metadata is not None
+                and key.rsplit("/", 1)[-1] in {".zarray", ".zgroup", ".zattrs", ".zmetadata", "zarr.json"}
+                and byte_range is None
+            )
+            if is_metadata and key in metadata:
+                data = metadata[key]
+                return None if data is None else prototype.buffer.from_bytes(data)
             value = await super().get(key, prototype, byte_range)
             if value is not None:
                 traffic.charge(len(value))
+            if is_metadata:
+                metadata[key] = None if value is None else value.to_bytes()
             return value
 
         async def get_partial_values(self, prototype, key_ranges):

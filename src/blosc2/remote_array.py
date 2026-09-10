@@ -474,9 +474,11 @@ class RemoteArray(blosc2.Operand):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
         assume_immutable = _validate_assume_immutable(assume_immutable)
-        _validate_cache_locations(cache_policy, cache_dir, cache_path, _carrier, _runtime_cache_path)
+        if _store_owner is None:
+            _validate_cache_locations(cache_policy, cache_dir, cache_path, _carrier, _runtime_cache_path)
 
         self._store_owner = _store_owner
+        self._store_generation = _store_owner.generation if _store_owner is not None else None
         self._cache_policy = cache_policy
         self._cache_limit = normalize_cache_limit(cache_policy, max_cache_bytes)
         self._max_concurrency = _validate_max_concurrency(max_concurrency)
@@ -526,19 +528,7 @@ class RemoteArray(blosc2.Operand):
         self._meta_mapping = None
         self._vlmeta_mapping = None
 
-        if cache_policy is blosc2.CachePolicy.DISK:
-            if _runtime_cache_path is not None:
-                self._runtime_cache, self._cache_status = self._open_or_create_sparse_cache(
-                    _runtime_cache_path
-                )
-            elif self._carrier is None:
-                self._carrier, self._cache_status = self._open_or_create_carrier(cache_dir, cache_path)
-                self._runtime_cache = self._carrier
-            cache_lock = self._runtime_cache.holding_lock() if self._shared_runtime_cache else nullcontext()
-            with cache_lock:
-                self._attach_carrier_cache()
-        elif cache_policy is blosc2.CachePolicy.MEMORY:
-            self._attach_carrier_cache()
+        self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
 
         if self._carrier is not None:
             if self._cached_meta is None:
@@ -551,10 +541,29 @@ class RemoteArray(blosc2.Operand):
             self._store_owner = _store_owner
             self._store_finalizer = weakref.finalize(self, _store_owner.release)
 
+    def _initialize_runtime_cache(self, cache_dir, cache_path, _runtime_cache_path):
+        if self._store_owner is not None and self.cache_policy is not blosc2.CachePolicy.NONE:
+            self._attach_carrier_cache()
+        elif self.cache_policy is blosc2.CachePolicy.DISK:
+            if _runtime_cache_path is not None:
+                self._runtime_cache, self._cache_status = self._open_or_create_sparse_cache(
+                    _runtime_cache_path
+                )
+            elif self._carrier is None:
+                self._carrier, self._cache_status = self._open_or_create_carrier(cache_dir, cache_path)
+                self._runtime_cache = self._carrier
+            cache_lock = self._runtime_cache.holding_lock() if self._shared_runtime_cache else nullcontext()
+            with cache_lock:
+                self._attach_carrier_cache()
+        elif self.cache_policy is blosc2.CachePolicy.MEMORY:
+            self._attach_carrier_cache()
+
     def _check_open(self):
         finalizer = getattr(self, "_store_finalizer", None)
         if finalizer is not None and not finalizer.alive:
             raise RuntimeError("RemoteArray handle is closed")
+        if self._store_owner is not None and self._store_generation != self._store_owner.generation:
+            raise RuntimeError("RemoteArray handle is stale; look it up again after refresh")
 
     def close(self):
         """Release this store-derived handle; standalone handles retain their existing lifetime."""
@@ -835,6 +844,9 @@ class RemoteArray(blosc2.Operand):
             return evicted, sum(backend._cache_sizes.values())
 
     def _attach_carrier_cache(self):
+        if self._store_owner is not None and self.cache_policy is not blosc2.CachePolicy.NONE:
+            self._proxy = self._store_owner.get_cache(self.src)
+            return
         if self.cache_policy is blosc2.CachePolicy.DISK:
             if self._runtime_cache is None:
                 self._proxy = None
@@ -851,8 +863,6 @@ class RemoteArray(blosc2.Operand):
                 _max_cache_bytes=self._cache_limit,
                 _persistent_dirty=self._shared_runtime_cache,
             )
-        elif self.cache_policy is blosc2.CachePolicy.MEMORY and self._store_owner is not None:
-            self._proxy = self._store_owner.get_cache(self.src)
         elif self.cache_policy is blosc2.CachePolicy.MEMORY:
             self._proxy = blosc2.Proxy(
                 self.src,
@@ -1383,6 +1393,14 @@ class RemoteArray(blosc2.Operand):
             return carrier
         if include_cache and self._runtime_cache is not None:
             return self._runtime_cache
+        if include_cache and self._store_owner is not None and self._proxy is not None:
+            carrier = self._to_b2object_carrier()
+            for nchunk in self._proxy._cache_sizes:
+                carrier.schunk.update_chunk(nchunk, self._proxy.schunk.get_chunk(nchunk))
+            for key in self._proxy.schunk.vlmeta:
+                if key.startswith("proxy-"):
+                    carrier.schunk.vlmeta[key] = self._proxy.schunk.vlmeta[key]
+            return carrier
         return self._to_b2object_carrier()
 
     @_serialized_operation

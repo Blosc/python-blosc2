@@ -46,7 +46,7 @@ class _ArchiveFile(io.RawIOBase):
 class B2ZArchive:
     """Session directory and bounded range access shared by discovery and leaves."""
 
-    def __init__(self, urlpath, *, storage_options=None, _filesystem=None, _traffic=None):
+    def __init__(self, urlpath, *, storage_options=None, _filesystem=None, _traffic=None, _metadata=None):
         self.storage_options = storage_options or {}
         self.urlpath = urlpath
         fsspec = _import_fsspec(urlpath)
@@ -59,6 +59,21 @@ class B2ZArchive:
         self.object_info = object_info
         size = object_info["size"]
         self.size = size
+        self.metadata = _metadata if _metadata is not None else {}
+        self.persist_metadata = _metadata is not None
+        identity = repr(sorted((key, str(value)) for key, value in object_info.items()))
+        if self.metadata and self.metadata.get("identity") != identity:
+            raise ValueError("B2Z source changed; refresh the store cache")
+        self.metadata.setdefault("identity", identity)
+        self.metadata.setdefault("ranges", [])
+        for offset, data in self.metadata["ranges"]:
+            if (
+                not isinstance(offset, int)
+                or not isinstance(data, bytes)
+                or not 0 <= offset <= size - len(data)
+            ):
+                raise ValueError("Invalid cached B2Z metadata range")
+        self.capture_metadata = True
         self._opening_ranges = []
         # ponytail: small directories fit in 8 KiB; larger ones use exact reads.
         tail_start = max(0, size - 8192)
@@ -66,6 +81,7 @@ class B2ZArchive:
         self.file = _ArchiveFile(self, size)
         self.archive = zipfile.ZipFile(self.file)
         self.members = self.archive.infolist()
+        self.capture_metadata = False
 
     def member_window(self, info, *, prefetch=False):
         size = self.size
@@ -106,6 +122,9 @@ class B2ZArchive:
     def _read_archive(self, offset, size):
         if not size:
             return b""
+        for start, data in self.metadata["ranges"] if self.capture_metadata else ():
+            if start <= offset and offset + size <= start + len(data):
+                return data[offset - start : offset - start + size]
         for start, data in self._opening_ranges:
             if start <= offset and offset + size <= start + len(data):
                 return data[offset - start : offset - start + size]
@@ -113,6 +132,8 @@ class B2ZArchive:
         if len(data) > size:
             raise ValueError("B2Z transport did not honor the requested byte range")
         self.traffic.charge(len(data))
+        if self.capture_metadata and self.persist_metadata:
+            self.metadata["ranges"].append((offset, data))
         return data
 
     def close(self):
@@ -155,6 +176,7 @@ class B2ZNDSource(ByteRangeNDSource):
             urlpath, storage_options=storage_options, _filesystem=_filesystem, _traffic=_traffic
         )
         try:
+            archive.capture_metadata = True
             self._archive = archive
             self.storage_options = archive.storage_options
             self._fs, self._path = archive._fs, archive._path
@@ -179,6 +201,7 @@ class B2ZNDSource(ByteRangeNDSource):
             if not self._header_len <= self._header[2] <= self.member_length:
                 raise ValueError("Blosc2 frame exceeds B2Z member bounds")
         finally:
+            archive.capture_metadata = False
             archive._opening_ranges.clear()
             if _archive is None:
                 archive.close()

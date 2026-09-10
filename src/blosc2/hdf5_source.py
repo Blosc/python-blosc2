@@ -156,7 +156,7 @@ class _CountingFile(io.IOBase):
         return self.file.tell()
 
 
-def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=None):
+def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=None, _filesystem=None):
     """Translate once, closing owned handles and optionally isolating bad leaves.
 
     Disable fsspec read-ahead: h5py requests metadata ranges itself. Translation
@@ -166,7 +166,11 @@ def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=N
     import fsspec
     import kerchunk.hdf
 
-    fs, path = fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+    fs, path = (
+        fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+        if _filesystem is None
+        else (_filesystem, _filesystem._strip_protocol(urlpath))
+    )
     # HTTP uses block_size=0 for non-seekable streaming; cache_type disables read-ahead.
     with fs.open(path, "rb", block_size=1, cache_type="none") as file:
         if traffic is not None:
@@ -292,6 +296,7 @@ class HDF5NDSource(ProxyNDSource):
         blocks=None,
         cparams=None,
         _traffic: Traffic | None = None,
+        _filesystem=None,
     ):
         check_hdf5_dependencies()
         check_zarr_fsspec_dependencies()
@@ -332,7 +337,7 @@ class HDF5NDSource(ProxyNDSource):
 
         self._refs = self._load_or_scan_refs(refs, storage_options)
         self._validate_dataset_presence(dataset)
-        self.array = self._open_array(storage_options)
+        self.array = self._open_array(storage_options, _filesystem)
 
         self._shape = tuple(int(value) for value in self.array.shape)
         self._chunks = tuple(int(value) for value in self.array.chunks)
@@ -402,7 +407,7 @@ class HDF5NDSource(ProxyNDSource):
                 f"dataset {raw_dataset!r} not found in {self.urlpath!r}. Available datasets: {available}"
             )
 
-    def _open_array(self, storage_options):
+    def _open_array(self, storage_options, filesystem=None):
         import fsspec
         import zarr
 
@@ -410,10 +415,17 @@ class HDF5NDSource(ProxyNDSource):
         if storage_options:
             rfs_kwargs["target_options"] = storage_options
             rfs_kwargs["remote_options"] = storage_options
+        if filesystem is not None:
+            rfs_kwargs.update(fs=filesystem, skip_instance_cache=True)
         fs = fsspec.filesystem("reference", fo=self._refs, **rfs_kwargs)
         mapper = fs.get_mapper(self.dataset)
         try:
-            open_store = zarr.storage.FsspecStore.from_mapper(mapper, read_only=True)
+            if filesystem is None:
+                open_store = zarr.storage.FsspecStore.from_mapper(mapper, read_only=True)
+            else:
+                from blosc2.zarr_source import owned_fsspec_store
+
+                open_store = owned_fsspec_store(zarr, fs, mapper.root)
         except ValueError:
             from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
 

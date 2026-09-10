@@ -1,7 +1,7 @@
 # RemoteArray and RemoteStore v13: shared caching and public hierarchies
 
-Status: implementation in progress, 2026-09-10. Steps 1–3 and measurement baseline
-complete; steps 4–6 pending. RemoteStore supports NONE and shared MEMORY caching.
+Status: implementation in progress, 2026-09-10. Steps 1–4 and measurement baseline
+complete; steps 5–6 pending. RemoteStore supports NONE, shared MEMORY and DISK caching.
 
 ## Implementation progress
 
@@ -30,8 +30,8 @@ complete; steps 4–6 pending. RemoteStore supports NONE and shared MEMORY cachi
   adapter over that implementation, retaining the browser's existing current-leaf
   Proxy cache until step 5. Independent store/array handles own resource lifetime:
   closing a parent leaves children usable, and the last close or garbage collection
-  closes owned archive/store wrappers. Fsspec still manages transport connection
-  pools; store-owned transport exclusion/lifetime work remains with step 4.
+  closes owned archive/store wrappers. Step 4 adds private filesystem ownership
+  and explicit HTTP/S3 session cleanup.
 - Step-2 validation in `blosc2`: 437 focused array/source/serialization/browser
   tests passed, with 2 Zarr-specific cases skipped for other formats. Another
   23 Textual UI tests passed. Coverage includes Zarr v2/v3, one HDF5 translation,
@@ -52,8 +52,33 @@ complete; steps 4–6 pending. RemoteStore supports NONE and shared MEMORY cachi
   oversized concurrent reads, publication/eviction failures and limit validation.
   Ruff check/format and whitespace checks passed. No live benchmark or full-suite
   rerun was performed for this milestone.
-- Next: DISK persistence, exclusion, manifest restoration and refresh (step 4).
-  The final b2view migration to public handles and store-wide caching remains step 5.
+- Step 4: `cache_dir` selects DISK when policy is omitted, with source-derived
+  directories, generation-tagged per-leaf Proxy files, and one exclusive lifetime
+  OS lock. Reopening restores every retained leaf before aggregate trimming;
+  DISK permits an unbounded `None` limit. Standalone exports remain self-contained,
+  including warm payload and one embedded HDF5 reference map when requested.
+- Atomic versioned MessagePack manifests preserve discovery and safe source identity.
+  B2Z restores directory/locator data by replaying captured bounded metadata reads
+  through the existing ZIP reader (including its offset/member validation), rather
+  than inventing a parallel ZIP index representation. These prefixes may include
+  incidental payload bytes but are only replayed for metadata, never for ordinary
+  chunk reads. HDF5 stores one shared map; Zarr preserves metadata keys and lazy
+  listing state without recursively discovering unvisited groups.
+- Root `refresh()` builds replacement discovery before publishing a generation;
+  old child handles become stale only after success. Failed publication leaves the
+  current generation usable. Obsolete generation files are removed on the next
+  exclusive reopen. Payload accounting excludes filesystem allocation and metadata;
+  `metadata_bytes` exposes encoded manifest size. Private filesystem clients are
+  reused without Zarr cloning them, and owned HTTP/S3 sessions close on last release.
+- Step-4 validation in `blosc2`: 306 focused tests passed, 2 skipped and 8 deselected.
+  Tests cover B2Z/HDF5/Zarr v2/v3 disk reopening without remote byte reads, aggregate
+  smaller-limit trimming, lock exclusion and process-kill release, dependent lifetime,
+  corrupt manifests, failed refresh and warm standalone export. A local HTTP HDF5
+  regression verifies request-free warm reopen and actual session closure. Ruff and
+  whitespace checks passed. POSIX locking ran on macOS; Windows byte locking still
+  needs Windows CI. No live S3 benchmark or full default-suite run was performed.
+- Next: migrate b2view to public handles and store-wide caching (step 5), then
+  complete repository-wide validation and remaining platform checks (step 6).
 - Measurement follow-up: added `bench/remote_array_traffic.py` with its report
   and raw JSONL results. It measures cold/warm requests, connections and response
   body bytes for B2Z, Zarr and HDF5 over S3 and HTTPS. Fixed HTTPS HDF5 discovery
