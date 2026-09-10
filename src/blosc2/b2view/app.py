@@ -2654,7 +2654,7 @@ class B2ViewApp(App):
         candidate = min(end, max(1, avail // (1 + self._CELL_PAD)))
         cand_start = end - candidate
         if self._remote:
-            self._remote_col_end = end
+            self._remote_col_end = end if cand_start > 0 else None
             return cand_start
         widths = self._measure_column_widths(self._fetch_columns_for_measure(cand_start, candidate))
         start = end - 1  # always keep at least one column

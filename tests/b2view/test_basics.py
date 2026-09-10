@@ -168,6 +168,32 @@ async def test_remote_array_startup(tmp_path):
         assert app.focused is app.query_one("#data-table", DataTable)
 
 
+async def test_remote_array_horizontal_paging_uncapped(tmp_path):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    path = tmp_path / "remote_paging.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/d0/d1/a2"] = data
+    fsspec.filesystem("memory").pipe_file("b2view-paging.b2z", path.read_bytes())
+    app = B2ViewApp("memory://b2view-paging.b2z/d0/d1/a2", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        init_cols = len(app.table_page["columns"])
+
+        # Jump to end of row
+        await pilot.press("end")
+        await wait_for_table(pilot)
+        assert app.grid_col_start > 0
+
+        # Page left until beginning of row
+        while app.grid_col_start > 0:
+            app.page_grid_columns(-1)
+            await wait_for_table(pilot)
+
+        assert app.grid_col_start == 0
+        assert len(app.table_page["columns"]) == init_cols
+
+
 async def test_zarr_startup_fresh_process(tmp_path):
     zarr = pytest.importorskip("zarr")
     pytest.importorskip("fsspec")
