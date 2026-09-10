@@ -180,14 +180,18 @@ def test_disk_lock_outlives_root(hierarchy, tmp_path):
 
 
 def test_disk_manifest_rejects_corruption_and_releases_lock(hierarchy, tmp_path):
-    import msgpack
+    import json
 
     url, _ = hierarchy
     with blosc2.RemoteStore(url, cache_dir=tmp_path) as store:
-        path = store._owner.disk.path / "manifest.msgpack"
-    value = msgpack.unpackb(path.read_bytes(), raw=False)
-    value["caches"] = ["../escape"]
-    path.write_bytes(msgpack.packb(value, use_bin_type=True))
+        active_path = store._owner.disk.path / "active_generation.json"
+        gen = json.loads(active_path.read_text(encoding="utf-8"))["generation"]
+        embed_path = store._owner.disk.path / f"{gen}.b2d" / "embed.b2e"
+    carrier = blosc2.blosc2_ext.open(str(embed_path), "a", 0)
+    manifest = dict(carrier.vlmeta["b2remote_manifest"])
+    manifest["caches"] = ["../escape"]
+    carrier.vlmeta["b2remote_manifest"] = manifest
+    del carrier
     for _ in range(2):
         with pytest.raises(ValueError, match="Unsafe path"):
             blosc2.RemoteStore(url, cache_dir=tmp_path)
@@ -454,3 +458,477 @@ def test_store_validation():
         blosc2.RemoteStore("memory://a.b2z", cache_policy="none")
     with pytest.raises(ValueError, match="user information"):
         blosc2.RemoteStore("https://user:password@example.com/a.b2z")
+
+
+def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
+    import hashlib
+
+    url, data = hierarchy
+    live_cache = tmp_path / "live_cache"
+    with blosc2.RemoteStore(url, cache_dir=live_cache) as store:
+        assert store.mutable is False
+        assert store.is_cache_mutable is True
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        assert store.cache_bytes > 0
+        snapshot_imm = tmp_path / "snapshot_imm.b2z"
+        snapshot_mut = tmp_path / "snapshot_mut.b2z"
+        snapshot_cold = tmp_path / "snapshot_cold.b2z"
+        store.save(snapshot_imm)
+        store.save(snapshot_mut, mutable=True)
+        store.save(snapshot_cold, include_cache=False)
+
+    # 1. Test immutable reopen
+    with blosc2.open(snapshot_imm) as restored:
+        assert isinstance(restored, blosc2.RemoteStore)
+        assert restored.mutable is False
+        assert restored.is_cache_mutable is False
+        assert restored.cache_bytes > 0
+        with restored["group/a"] as a:
+            restored.traffic.reset()
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            assert restored.traffic.requests == 0
+            assert a.get_chunk(0)
+            assert restored.traffic.requests == 0
+            before_bytes = restored.cache_bytes
+            assert a.get_chunk(2)
+            assert not a.cache_contains(nchunk=2)
+            with pytest.raises(RuntimeError, match="immutable"):
+                a.fetch()
+            with pytest.raises(RuntimeError, match="immutable"):
+                a.trim_cache(0)
+            np.testing.assert_array_equal(a[10:20, :10], data[10:20, :10])
+            assert restored.cache_bytes == before_bytes
+        with pytest.raises(ValueError, match="immutable"):
+            restored.refresh()
+
+    # Verify read-only permissions (chmod 0o444) and byte preservation
+    snapshot_imm.chmod(0o444)
+    sha_before = hashlib.sha256(snapshot_imm.read_bytes()).hexdigest()
+    with blosc2.open(snapshot_imm) as ro_store:
+        with ro_store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            np.testing.assert_array_equal(a[10:20, :10], data[10:20, :10])
+    sha_after = hashlib.sha256(snapshot_imm.read_bytes()).hexdigest()
+    assert sha_after == sha_before
+    snapshot_imm.chmod(0o644)
+
+    # 2. Test budget rejection on immutable snapshot
+    with pytest.raises(ValueError, match="smaller than retained immutable payload"):
+        blosc2.open(snapshot_imm, max_cache_bytes=10)
+    with pytest.raises(ValueError, match=r"CachePolicy\.NONE"):
+        blosc2.open(snapshot_imm, cache_policy=blosc2.CachePolicy.NONE)
+
+    # 3. Test mutable reopen
+    mut_sha_before = hashlib.sha256(snapshot_mut.read_bytes()).hexdigest()
+    with blosc2.open(snapshot_mut) as restored_mut:
+        assert isinstance(restored_mut, blosc2.RemoteStore)
+        assert restored_mut.mutable is False  # export default is False
+        assert restored_mut.is_cache_mutable is True
+        with restored_mut["group/a"] as a:
+            restored_mut.traffic.reset()
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            assert restored_mut.traffic.requests == 0
+            before_cbytes = restored_mut.cache_bytes
+            np.testing.assert_array_equal(a[10:20, :10], data[10:20, :10])
+            mut_cbytes = restored_mut.cache_bytes
+            assert mut_cbytes > before_cbytes
+    # Archive file on disk remains unchanged
+    mut_sha_after = hashlib.sha256(snapshot_mut.read_bytes()).hexdigest()
+    assert mut_sha_after == mut_sha_before
+
+    # 4. Test mutable trim on smaller requested allowance
+    with blosc2.open(snapshot_mut, max_cache_bytes=mut_cbytes // 2) as trimmed:
+        assert trimmed.cache_bytes <= mut_cbytes // 2
+        assert trimmed.max_cache_bytes == mut_cbytes // 2
+
+    # 5. Test cold reopen
+    with blosc2.open(snapshot_cold) as restored_cold:
+        assert restored_cold.cache_bytes == 0
+        with restored_cold["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+
+
+def test_subtree_export(hierarchy, tmp_path):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        group = store["group"]
+        subtree_path = tmp_path / "subtree.b2z"
+        group.save(subtree_path)
+
+    with blosc2.open(subtree_path) as sub:
+        assert isinstance(sub, blosc2.RemoteStore)
+        assert set(sub.keys()) >= {"a", "b", "empty"}
+        assert sub.attrs.get("title") == "child"
+        assert sub["empty"].attrs.get("empty") is True
+        sub.traffic.reset()
+        np.testing.assert_array_equal(sub["a"][:10, :10], data[:10, :10])
+        assert sub.traffic.requests == 0
+        np.testing.assert_array_equal(sub["b"][:10, :10], data[:10, :10] + 1)
+
+
+def test_hdf5_single_ref_map_preserved(hierarchy, tmp_path, monkeypatch):
+    url, data = hierarchy
+    if not url.endswith(".h5"):
+        pytest.skip("HDF5 specific test")
+    import kerchunk.hdf
+
+    translations = []
+    orig_translate = kerchunk.hdf.SingleHdf5ToZarr.translate
+
+    def counted(self):
+        translations.append(1)
+        return orig_translate(self)
+
+    monkeypatch.setattr(kerchunk.hdf.SingleHdf5ToZarr, "translate", counted)
+    snapshot = tmp_path / "h5_snap.b2z"
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        store.save(snapshot)
+    assert len(translations) == 1
+
+    translations.clear()
+    with blosc2.open(snapshot) as restored:
+        with restored["group/a"] as a, restored["group/b"] as b:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            np.testing.assert_array_equal(b[:10, :10], data[:10, :10] + 1)
+            assert a.src._refs is b.src._refs is restored._owner.refs
+    assert len(translations) == 0
+
+
+def test_mutability_property_and_inheritance(hierarchy):
+    url, _ = hierarchy
+    with blosc2.RemoteStore(url) as store:
+        assert store.mutable is False
+        assert store["group"].mutable is False
+        assert store["group/a"].mutable is False
+
+        store.mutable = True
+        assert store.mutable is True
+        assert store["group"].mutable is True
+        assert store["group/a"].mutable is True
+
+        store["group"].mutable = False
+        assert store.mutable is False
+        assert store["group"].mutable is False
+        assert store["group/a"].mutable is False
+
+        with pytest.raises(TypeError, match="boolean"):
+            store.mutable = "invalid"
+
+
+def test_save_destination_and_budget_validation(hierarchy, tmp_path):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        with pytest.raises(ValueError, match=r"\.b2z extension"):
+            store.save(tmp_path / "not_b2z.txt")
+        dir_b2z = tmp_path / "somedir.b2z"
+        dir_b2z.mkdir()
+        with pytest.raises(ValueError, match="directory"):
+            store.save(dir_b2z)
+        target = tmp_path / "exist.b2z"
+        target.write_text("x")
+        with pytest.raises(FileExistsError):
+            store.save(target)
+        store.save(target, overwrite=True)
+        assert target.exists()
+
+        with pytest.raises(ValueError, match="inside live cache"):
+            store.save(store._owner.disk.path / "nested.b2z")
+
+        store._owner.max_cache_bytes = 10
+        with pytest.raises(ValueError, match="exceeds max_cache_bytes"):
+            store.save(tmp_path / "exceeded.b2z")
+
+
+def test_memory_store_save_and_reopen(hierarchy, tmp_path):
+    """MEMORY is the default policy; every backend must export through it."""
+    import os
+
+    url, data = hierarchy
+    with blosc2.RemoteStore(url) as store:
+        assert store.cache_policy is blosc2.CachePolicy.MEMORY
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        retained = store.cache_bytes
+        assert retained > 0
+
+        warm = tmp_path / "mem_warm.b2z"
+        writable = tmp_path / "mem_mut.b2z"
+        cold = tmp_path / "mem_cold.b2z"
+        assert store.save(warm) == os.path.abspath(warm)
+        store.save(writable, mutable=True)
+        store.save(cold, include_cache=False)
+        # A cold export references discovery metadata only and must not clear
+        # the live cache it was taken from.
+        assert store.cache_bytes == retained
+
+    with blosc2.open(warm) as restored:
+        assert restored.is_cache_mutable is False
+        assert restored.cache_bytes > 0
+        with restored["group/a"] as a:
+            restored.traffic.reset()
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            assert restored.traffic.requests == 0
+            before = restored.cache_bytes
+            np.testing.assert_array_equal(a[20:30, :10], data[20:30, :10])
+            assert restored.cache_bytes == before  # misses are transient
+
+    with blosc2.open(writable) as restored:
+        assert restored.is_cache_mutable is True
+        with restored["group/a"] as a:
+            restored.traffic.reset()
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            assert restored.traffic.requests == 0
+
+
+def test_cold_artifact_reopens_under_none(hierarchy, tmp_path):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        cold = tmp_path / "cold.b2z"
+        warm = tmp_path / "warm.b2z"
+        store.save(cold, include_cache=False)
+        store.save(warm)
+
+    with blosc2.open(cold, cache_policy=blosc2.CachePolicy.NONE) as restored:
+        assert restored.cache_policy is blosc2.CachePolicy.NONE
+        assert restored.cache_bytes == 0
+        with restored["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+
+    with pytest.raises(ValueError, match=r"warm RemoteStore artifact with CachePolicy\.NONE"):
+        blosc2.open(warm, cache_policy=blosc2.CachePolicy.NONE)
+
+
+def test_artifact_reopen_modes_and_policies(hierarchy, tmp_path):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        immutable = tmp_path / "immutable.b2z"
+        writable = tmp_path / "writable.b2z"
+        store.save(immutable)
+        store.save(writable, mutable=True)
+
+    with pytest.raises(ValueError, match="only support modes"):
+        blosc2.open(immutable, mode="w")
+    with pytest.raises(ValueError, match="read-only"):
+        blosc2.open(immutable, mode="a")
+    with pytest.raises(ValueError, match=r"require CachePolicy\.DISK"):
+        blosc2.open(writable, cache_policy=blosc2.CachePolicy.MEMORY)
+
+    # Neither artifact may be saved over itself, mutable or not.
+    with blosc2.open(immutable) as restored:
+        with pytest.raises(ValueError, match="source artifact"):
+            restored.save(immutable, overwrite=True)
+    with blosc2.open(writable) as restored:
+        with pytest.raises(ValueError, match="source artifact"):
+            restored.save(writable, overwrite=True)
+
+
+def _rewrite_artifact(path, *, compress=False, mutate_manifest=None):
+    """Rewrite a .b2z artifact, optionally deflating its leaves or editing its manifest."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as zf:
+        members = {info.filename: zf.read(info.filename) for info in zf.infolist()}
+    embed_bytes = members.pop("embed.b2e")
+    if mutate_manifest is not None:
+        embed_path = path.parent / "embed.b2e"
+        embed_path.write_bytes(embed_bytes)
+        embed = blosc2.blosc2_ext.open(str(embed_path), "a", 0)
+        manifest = dict(embed.vlmeta["b2remote_manifest"])
+        mutate_manifest(manifest)
+        embed.vlmeta["b2remote_manifest"] = manifest
+        del embed
+        members["embed.b2e"] = embed_path.read_bytes()
+        embed_path.unlink()
+    else:
+        members["embed.b2e"] = embed_bytes
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in members.items():
+            # embed.b2e stays stored so dispatch still reaches _open_artifact.
+            deflated = compress and name != "embed.b2e"
+            zf.writestr(
+                name,
+                content,
+                compress_type=zipfile.ZIP_DEFLATED if deflated else zipfile.ZIP_STORED,
+            )
+
+
+@pytest.mark.parametrize("bad_generation", ["absolute", "../escaped", "x" * 32, None])
+def test_artifact_generation_validated_before_staging(hierarchy, tmp_path, bad_generation):
+    url, _ = hierarchy
+    artifact = tmp_path / "generation.b2z"
+    with blosc2.RemoteStore(url) as store:
+        store.save(artifact, mutable=True)
+    if bad_generation == "absolute":
+        bad_generation = str(tmp_path / "escaped")
+    _rewrite_artifact(artifact, mutate_manifest=lambda m: m.update(generation=bad_generation))
+    cache_dir = tmp_path / "destination"
+    with pytest.raises(ValueError, match="generation"):
+        blosc2.open(artifact, cache_dir=cache_dir)
+    assert not cache_dir.exists()
+    assert not (tmp_path / "escaped.b2d").exists()
+
+
+def test_artifact_extraction_failure_releases_owner(hierarchy, tmp_path, monkeypatch):
+    import zipfile
+
+    url, _ = hierarchy
+    artifact = tmp_path / "extract.b2z"
+    cache_dir = tmp_path / "staged"
+    with blosc2.RemoteStore(url) as store:
+        store.save(artifact, mutable=True)
+
+    def fail(*args, **kwargs):
+        raise OSError("extraction failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(zipfile.ZipFile, "extractall", fail)
+        with pytest.raises(OSError, match="extraction failed"):
+            blosc2.open(artifact, cache_dir=cache_dir)
+    assert not list(cache_dir.rglob("active_generation.json"))
+    with blosc2.open(artifact, cache_dir=cache_dir) as reopened:
+        assert reopened.is_cache_mutable
+
+
+def test_artifact_manifest_and_member_validation(hierarchy, tmp_path):
+    import shutil
+
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        artifact = tmp_path / "artifact.b2z"
+        store.save(artifact)
+
+    def inject_credentials(manifest):
+        manifest["source"] = dict(manifest["source"])
+        manifest["source"]["urlpath"] = "https://user:pass@example.com/x.b2z"
+
+    bad_url = tmp_path / "bad_url.b2z"
+    shutil.copy2(artifact, bad_url)
+    _rewrite_artifact(bad_url, mutate_manifest=inject_credentials)
+    with pytest.raises(ValueError, match="user information"):
+        blosc2.open(bad_url)
+
+    compressed = tmp_path / "compressed.b2z"
+    shutil.copy2(artifact, compressed)
+    _rewrite_artifact(compressed, compress=True)
+    with pytest.raises(ValueError, match="ZIP_STORED"):
+        blosc2.open(compressed)
+
+
+def test_save_failure_preserves_destination_and_live_cache(hierarchy, tmp_path, monkeypatch):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+
+        def fail(self, *args, **kwargs):
+            raise OSError("export failed")
+
+        destination = tmp_path / "out.b2z"
+        destination.write_bytes(b"sentinel")
+        with monkeypatch.context() as patch:
+            patch.setattr(blosc2.RemoteStore, "_copy_leaf_carrier", fail)
+            with pytest.raises(OSError, match="export failed"):
+                store.save(destination, overwrite=True)
+        assert destination.read_bytes() == b"sentinel"
+        assert not [p for p in tmp_path.iterdir() if p.name.startswith("b2z-export-")]
+
+        fresh = tmp_path / "fresh.b2z"
+        with monkeypatch.context() as patch:
+            patch.setattr(blosc2.RemoteStore, "_copy_leaf_carrier", fail)
+            with pytest.raises(OSError, match="export failed"):
+                store.save(fresh)
+        assert not fresh.exists()
+
+        # The live store is still usable after a failed export.
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+
+
+def test_artifact_reopens_in_fresh_process(tmp_path):
+    """A locally transported .b2z must be readable by another interpreter."""
+    import functools
+    import hashlib
+    import http.server
+    import subprocess
+    import sys
+    import threading
+
+    data = np.arange(600, dtype="int32").reshape(30, 20)
+    served = tmp_path / "served"
+    served.mkdir()
+    tree = served / "hierarchy.b2z"
+    with blosc2.TreeStore(tree, mode="w", threshold=0) as root:
+        root["/group/a"] = blosc2.asarray(data, chunks=(10, 10), blocks=(5, 5))
+
+    class Ranged(http.server.SimpleHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            span = self.headers.get("Range")
+            if not span:
+                return super().do_GET()
+            body = (served / self.path.lstrip("/")).read_bytes()
+            first, _, last = span.removeprefix("bytes=").partition("-")
+            first, last = int(first), int(last) if last else len(body) - 1
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(last - first + 1))
+            self.send_header("ETag", hashlib.sha256(body).hexdigest())
+            self.end_headers()
+            self.wfile.write(body[first : last + 1])
+            return None
+
+        def do_HEAD(self):
+            body = (served / self.path.lstrip("/")).read_bytes()
+            self.send_response(200)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", hashlib.sha256(body).hexdigest())
+            self.end_headers()
+
+    handler = functools.partial(Ranged, directory=str(served))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/{tree.name}"
+        with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
+            with store["group/a"] as a:
+                np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+            artifact = tmp_path / "snapshot.b2z"
+            store.save(artifact)
+        script = (
+            "import sys\n"
+            "import numpy as np\n"
+            "import blosc2\n"
+            "store = blosc2.open(sys.argv[1])\n"
+            "with store['group/a'] as a:\n"
+            "    print(int(np.asarray(a[:10, :10]).sum()))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(artifact)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert int(result.stdout.strip()) == int(data[:10, :10].sum())

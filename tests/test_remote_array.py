@@ -45,6 +45,63 @@ def _remote_array(name="remote-proxy.b2nd", *, nchunks=4, chunk_size=100_000):
     return url, data
 
 
+@pytest.mark.parametrize("carrier_kind", ["memory", "file-r", "file-a"])
+def test_immutable_cache_chunk_reads_and_mutation_paths(tmp_path, carrier_kind):
+    url, data = _remote_array("immutable-paths.b2nd", nchunks=3, chunk_size=1000)
+    live = blosc2.RemoteArray(url, cache_policy=blosc2.CachePolicy.DISK, cache_dir=tmp_path / "live")
+    live[:1000]
+    if carrier_kind == "memory":
+        frozen = blosc2.from_cframe(live.to_cframe())
+    else:
+        path = tmp_path / "snapshot.b2nd"
+        live.save(path)
+        frozen = blosc2.open(path, mode=carrier_kind[-1])
+    assert not frozen.is_cache_mutable
+    before = frozen._carrier.to_cframe()
+    retained = frozen.cache_bytes
+    for nchunk in (0, 1, 1):
+        chunk = frozen.get_chunk(nchunk)
+        np.testing.assert_array_equal(
+            np.frombuffer(blosc2.decompress(chunk), dtype=data.dtype),
+            data[nchunk * 1000 : (nchunk + 1) * 1000],
+        )
+    chunk = asyncio.run(frozen.aget_chunk(2))
+    np.testing.assert_array_equal(np.frombuffer(blosc2.decompress(chunk), dtype=data.dtype), data[2000:])
+    assert frozen.read_cached(nchunk=0)[0]
+    assert not frozen.cache_contains(nchunk=1)
+    assert not frozen.cache_contains(nchunk=2)
+    for operation in (
+        lambda: frozen.fetch(slice(1000, 2000)),
+        lambda: asyncio.run(frozen.afetch(slice(1000, 2000))),
+        lambda: frozen.trim_cache(0),
+    ):
+        with pytest.raises(RuntimeError, match="immutable"):
+            operation()
+    assert frozen.cache_bytes == retained
+    assert frozen._carrier.to_cframe() == before
+
+
+@pytest.mark.parametrize("carrier_kind", ["memory", "file"])
+def test_immutable_array_rejects_oversized_payload(tmp_path, carrier_kind):
+    url, _ = _remote_array("immutable-budget.b2nd", nchunks=2, chunk_size=1000)
+    live = blosc2.RemoteArray(url, cache_policy=blosc2.CachePolicy.DISK, cache_dir=tmp_path / "live")
+    live[:1000]
+    carrier = blosc2.ndarray_from_cframe(live.to_cframe(), copy=True)
+    payload = dict(carrier.schunk.vlmeta["b2o"])
+    payload["max_cache_bytes"] = 1
+    carrier.schunk.vlmeta["b2o"] = payload
+    if carrier_kind == "file":
+        path = tmp_path / "oversized.b2nd"
+        carrier.save(path)
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match=r"immutable payload.*exceeds"):
+            blosc2.open(path, mode="a")
+        assert path.read_bytes() == before
+    else:
+        with pytest.raises(ValueError, match=r"immutable payload.*exceeds"):
+            blosc2.from_cframe(carrier.to_cframe())
+
+
 def test_cache_policy_validation(tmp_path):
     url, _ = _remote_array("policy.b2nd")
 
@@ -389,6 +446,7 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
         },
         "cache_policy": "disk",
         "max_cache_bytes": 120_000,
+        "mutable": False,
     }
     assert carrier.schunk.vlmeta.get("proxy-cache-sizes")
 
@@ -407,7 +465,7 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
     assert restored.traffic.requests == 0
 
     cold_path = tmp_path / "cold.b2nd"
-    original.save(cold_path, include_cache=False)
+    original.save(cold_path, include_cache=False, mutable=True)
     cold = blosc2.open(cold_path, mode="r")
     cold.traffic.reset()
     np.testing.assert_array_equal(cold[:100_000], data[:100_000])
@@ -420,6 +478,49 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
     reopened.traffic.reset()
     np.testing.assert_array_equal(reopened[:100_000], data[:100_000])
     assert reopened.traffic.requests == 0
+
+    immutable_path = tmp_path / "immutable.b2nd"
+    original.save(immutable_path, include_cache=False)
+    imm = blosc2.open(immutable_path, mode="a")
+    imm.traffic.reset()
+    np.testing.assert_array_equal(imm[:100_000], data[:100_000])
+    assert imm.traffic.requests > 0
+    imm_reopened = blosc2.open(immutable_path, mode="r")
+    imm_reopened.traffic.reset()
+    np.testing.assert_array_equal(imm_reopened[:100_000], data[:100_000])
+    assert imm_reopened.traffic.requests > 0
+
+
+def test_save_returns_written_path(tmp_path):
+    url, _ = _remote_array("save-return.b2nd")
+    original = blosc2.RemoteArray(
+        url, cache_policy=blosc2.CachePolicy.DISK, cache_path=tmp_path / "carrier.b2nd"
+    )
+    original[:]
+    destination = tmp_path / "out.b2nd"
+    assert original.save(destination) == str(destination)
+
+
+def test_dict_store_externalizes_disk_remote_array(tmp_path):
+    from blosc2.dict_store import DictStore
+
+    url, data = _remote_array("dictstore-external.b2nd")
+    array = blosc2.RemoteArray(
+        url, cache_policy=blosc2.CachePolicy.DISK, cache_path=tmp_path / "carrier.b2nd"
+    )
+    array[:]
+
+    assert DictStore._is_external_value(array)
+    assert DictStore._external_ext(array) == ".b2nd"
+
+    store_path = tmp_path / "store.b2d"
+    with blosc2.DictStore(store_path, mode="w") as store:
+        store["/leaf"] = array
+    # The local DISK carrier, not the remote URL, is what gets externalized.
+    assert (store_path / "leaf.b2nd").is_file()
+
+    with blosc2.DictStore(store_path, mode="r") as store:
+        np.testing.assert_array_equal(store["/leaf"][:], data)
 
 
 def test_reference_rejects_changed_source_geometry(tmp_path):

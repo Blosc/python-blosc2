@@ -1851,6 +1851,12 @@ def _open_special_store(urlpath, mode, offset, **kwargs):
     # Meta-based detection has priority over extension
     schunk_meta = _meta_from_store(urlpath, offset)
     if schunk_meta is not None:
+        if "b2remote_store" in schunk_meta:
+            if offset != 0:
+                raise ValueError("Offset must be 0 for RemoteStore")
+            from blosc2.remote_store import RemoteStore
+
+            return RemoteStore._open_artifact(urlpath, mode=mode, **kwargs)
         if "b2embed" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for EmbedStore")

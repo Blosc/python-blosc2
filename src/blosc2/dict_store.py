@@ -574,13 +574,15 @@ class DictStore:
 
     @staticmethod
     def _is_external_value(value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray) -> bool:
+        if isinstance(value, blosc2.RemoteArray):
+            return bool(getattr(value, "cache_path", None) and os.path.isfile(value.cache_path))
         return isinstance(value, blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray) and bool(
             getattr(value, "urlpath", None)
         )
 
     @staticmethod
     def _external_ext(value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray) -> str:
-        if isinstance(value, blosc2.NDArray):
+        if isinstance(value, (blosc2.NDArray, blosc2.RemoteArray)):
             return ".b2nd"
         if isinstance(value, blosc2.BatchArray):
             return ".b2b"
@@ -665,7 +667,13 @@ class DictStore:
                             f.write(value.to_cframe())
                 else:
                     # This should be faster than using value.save() ?
-                    shutil.copy2(value.urlpath, tmp_path)
+                    # A RemoteArray's `urlpath` is its remote source, not a local
+                    # file; the DISK carrier `cache_path` is the analogue of the
+                    # NDArray file the other external values point at.
+                    source_path = (
+                        value.cache_path if isinstance(value, blosc2.RemoteArray) else value.urlpath
+                    )
+                    shutil.copy2(source_path, tmp_path)
                 os.replace(tmp_path, dest_path)
 
                 # Store relative path from tree directory

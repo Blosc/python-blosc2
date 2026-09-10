@@ -141,7 +141,7 @@ def _serialized_operation(method):
                 try:
                     return method(self, *args, **kwargs)
                 finally:
-                    if self._proxy is not None:
+                    if self._proxy is not None and getattr(self, "is_cache_mutable", True):
                         self._proxy._enforce_cache_limit(tuple(slice(0, 0) for _ in self.shape))
 
     return locked
@@ -470,6 +470,7 @@ class RemoteArray(blosc2.Operand):
         _source_blocks=None,
         _source_cparams=None,
         _store_owner=None,
+        _runtime_is_mutable: bool = True,
     ):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
@@ -527,6 +528,8 @@ class RemoteArray(blosc2.Operand):
         self._cached_vlmeta = None
         self._meta_mapping = None
         self._vlmeta_mapping = None
+        self._runtime_is_mutable = _runtime_is_mutable
+        self._mutable = False
 
         self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
 
@@ -604,7 +607,7 @@ class RemoteArray(blosc2.Operand):
             kwargs = {"dparams": blosc2.DParams(nthreads=1)}
             carrier = blosc2.blosc2_ext.open(path, "a", 0, **kwargs)
             payload = carrier.schunk.vlmeta.get("b2o")
-            if payload != self._payload():
+            if payload != self._payload(mutable=True):
                 raise ValueError(
                     f"the RemoteArray carrier at {path} has a different specification; "
                     "open legacy Proxy caches directly with blosc2.open(cache_path), "
@@ -633,7 +636,7 @@ class RemoteArray(blosc2.Operand):
                 if self._cached_vlmeta is None:
                     self._cached_vlmeta = read_b2object_user_vlmeta(carrier)
             return carrier, status
-        carrier = self._to_b2object_carrier(urlpath=path, contiguous=True, mode="w")
+        carrier = self._to_b2object_carrier(urlpath=path, contiguous=True, mode="w", mutable=True)
         return carrier, "created"
 
     def _open_or_create_sparse_cache(self, cache_path):
@@ -647,7 +650,7 @@ class RemoteArray(blosc2.Operand):
             if not os.path.isdir(path):
                 raise ValueError("runtime_cache_path must name a sparse frame directory")
             runtime = blosc2.blosc2_ext.open(path, "a", 0, dparams=blosc2.DParams(nthreads=1), locking=True)
-            if runtime.schunk.vlmeta.get("b2o") != self._payload():
+            if runtime.schunk.vlmeta.get("b2o") != self._payload(mutable=True):
                 raise ValueError(f"the sparse runtime cache at {path} has a different specification")
             self._validate_geometry(
                 (runtime.shape, runtime.dtype, runtime.chunks, runtime.blocks), src=self.src
@@ -669,7 +672,9 @@ class RemoteArray(blosc2.Operand):
         if self._carrier is not None:
             self._validate_warm_seed(self._carrier)
 
-        runtime = self._to_b2object_carrier(urlpath=path, contiguous=False, mode="w", locking=True)
+        runtime = self._to_b2object_carrier(
+            urlpath=path, contiguous=False, mode="w", locking=True, mutable=True
+        )
         if self._carrier is not None:
             self._import_warm_seed(self._carrier, runtime)
         return runtime, "created"
@@ -778,7 +783,8 @@ class RemoteArray(blosc2.Operand):
         if self._proxy._missing_blocks(item):
             return False, None
         result = self._proxy._cache[item] if nchunk is None else self.schunk.get_chunk(nchunk)
-        self._proxy._enforce_cache_limit(item)
+        if self.is_cache_mutable:
+            self._proxy._enforce_cache_limit(item)
         return True, result
 
     @_serialized_operation
@@ -803,6 +809,8 @@ class RemoteArray(blosc2.Operand):
         for name, value in (("target_bytes", target_bytes), ("max_chunks", max_chunks)):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
+        if not self.is_cache_mutable:
+            raise RuntimeError("Cannot trim an immutable cache")
         if self._proxy is None:
             return ()
         return self._proxy._trim_cache(target_bytes, max_chunks=max_chunks)
@@ -850,6 +858,17 @@ class RemoteArray(blosc2.Operand):
         if self.cache_policy is blosc2.CachePolicy.DISK:
             if self._runtime_cache is None:
                 self._proxy = None
+                return
+            if not getattr(self, "_runtime_is_mutable", True):
+                self._runtime_cache.schunk.mode = "r"
+                self._proxy = blosc2.Proxy(
+                    self.src,
+                    _cache=self._runtime_cache,
+                    mode="r",
+                    _refresh_source=False,
+                    _max_cache_bytes=self._cache_limit,
+                    _persistent_dirty=False,
+                )
                 return
             if getattr(self.src, "stamp", None) is None:
                 # Without a stable validator, cached bytes cannot be trusted across
@@ -1049,6 +1068,32 @@ class RemoteArray(blosc2.Operand):
         return self._cache_limit
 
     @property
+    def mutable(self) -> bool:
+        """The export default mutability for future exports."""
+        self._check_open()
+        if self._store_owner is not None:
+            return self._store_owner.mutable
+        return getattr(self, "_mutable", False)
+
+    @mutable.setter
+    def mutable(self, value: bool) -> None:
+        self._check_open()
+        if not isinstance(value, bool):
+            raise TypeError("mutable must be a boolean")
+        if self._store_owner is not None:
+            self._store_owner.mutable = value
+        else:
+            self._mutable = value
+
+    @property
+    def is_cache_mutable(self) -> bool:
+        """Whether the currently opened cache is writable."""
+        self._check_open()
+        if self._store_owner is not None:
+            return getattr(self._store_owner, "is_mutable", True)
+        return getattr(self, "_runtime_is_mutable", True)
+
+    @property
     def cparams(self):
         self._check_open()
         return self._expected_cparams
@@ -1237,6 +1282,10 @@ class RemoteArray(blosc2.Operand):
     def __getitem__(self, item):
         backend = self._prepare_read()
         if isinstance(backend, blosc2.Proxy):
+            if not self.is_cache_mutable:
+                if backend._missing_blocks(item):
+                    return blosc2.Proxy(self.src, _refresh_source=False)[item]
+                return backend._cache[item]
             return backend[item]
         if isinstance(backend, blosc2.C2Array):
             # Caterva2 can evaluate slices and fancy indices server-side.  In
@@ -1277,6 +1326,8 @@ class RemoteArray(blosc2.Operand):
         backend = self._prepare_read()
         if not isinstance(backend, blosc2.Proxy):
             raise NotImplementedError("fetch requires CachePolicy.DISK or CachePolicy.MEMORY")
+        if not self.is_cache_mutable:
+            raise RuntimeError("Cannot prefetch into an immutable cache; use indexing or get_chunk()")
         backend.fetch(item, max_concurrency=max_concurrency)
         backend._enforce_cache_limit(item)
         return self
@@ -1305,6 +1356,10 @@ class RemoteArray(blosc2.Operand):
         if not isinstance(backend, blosc2.Proxy):
             return backend.get_chunk(nchunk)
         item = self._chunk_slice(nchunk)
+        if not self.is_cache_mutable:
+            if backend._missing_blocks(item):
+                return self.src.get_chunk(nchunk)
+            return backend.schunk.get_chunk(nchunk)
         backend.fetch(item)
         chunk = backend.schunk.get_chunk(nchunk)
         backend._enforce_cache_limit(item)
@@ -1313,7 +1368,7 @@ class RemoteArray(blosc2.Operand):
     async def aget_chunk(self, nchunk: int) -> bytes:
         return await asyncio.to_thread(self.get_chunk, nchunk)
 
-    def _payload(self):
+    def _payload(self, mutable=None):
         url = self._source.get("urlpath", self._source.get("urlbase"))
         if url is not None:
             validate_persistable_url(url)
@@ -1323,9 +1378,10 @@ class RemoteArray(blosc2.Operand):
             "source": dict(self._source),
             "cache_policy": self.cache_policy.value,
             "max_cache_bytes": self.max_cache_bytes,
+            "mutable": self.mutable if mutable is None else mutable,
         }
 
-    def _to_b2object_carrier(self, **kwargs):
+    def _to_b2object_carrier(self, mutable=None, **kwargs):
         carrier_excluded = _INTERNAL_CARRIER_METALAYERS | {"b2nd"}
         if self._carrier is not None:
             kwargs.setdefault(
@@ -1350,7 +1406,7 @@ class RemoteArray(blosc2.Operand):
             cparams=self.cparams,
             **kwargs,
         )
-        write_b2object_payload(array, self._payload())
+        write_b2object_payload(array, self._payload(mutable=mutable))
         user_vlmeta = dict(self.vlmeta)
         if user_vlmeta:
             write_b2object_user_vlmeta(array, user_vlmeta)
@@ -1370,46 +1426,68 @@ class RemoteArray(blosc2.Operand):
                     array.schunk.vlmeta["hdf5-refs"] = carrier_schunk.vlmeta["hdf5-refs"]
         return array
 
-    def _export_carrier(self, include_cache: bool, cache_policy=None):
+    def _export_carrier_with_policy(self, cache_policy, effective_mutable):
+        carrier = self._to_b2object_carrier(mutable=effective_mutable)
+        payload = self._payload(mutable=effective_mutable)
+        payload["cache_policy"] = cache_policy.value
+        if cache_policy is blosc2.CachePolicy.NONE:
+            payload["max_cache_bytes"] = None
+        elif cache_policy is blosc2.CachePolicy.DISK:
+            payload["max_cache_bytes"] = (
+                self.max_cache_bytes
+                if self.cache_policy is not blosc2.CachePolicy.NONE
+                else DEFAULT_DISK_CACHE_BYTES
+            )
+        else:
+            payload["max_cache_bytes"] = self.max_cache_bytes or DEFAULT_DISK_CACHE_BYTES
+        write_b2object_payload(carrier, payload)
+        return carrier
+
+    def _export_carrier(self, include_cache: bool, cache_policy=None, mutable=None):
         if not isinstance(include_cache, bool):
             raise TypeError("include_cache must be a boolean")
+        effective_mutable = self.mutable if mutable is None else mutable
         if cache_policy is not None:
             if not isinstance(cache_policy, blosc2.CachePolicy):
                 raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
-            carrier = self._to_b2object_carrier()
-            payload = self._payload()
-            payload["cache_policy"] = cache_policy.value
-            if cache_policy is blosc2.CachePolicy.NONE:
-                payload["max_cache_bytes"] = None
-            elif cache_policy is blosc2.CachePolicy.DISK:
-                payload["max_cache_bytes"] = (
-                    self.max_cache_bytes
-                    if self.cache_policy is not blosc2.CachePolicy.NONE
-                    else DEFAULT_DISK_CACHE_BYTES
-                )
-            else:
-                payload["max_cache_bytes"] = self.max_cache_bytes or DEFAULT_DISK_CACHE_BYTES
-            write_b2object_payload(carrier, payload)
-            return carrier
+            return self._export_carrier_with_policy(cache_policy, effective_mutable)
         if include_cache and self._runtime_cache is not None:
-            return self._runtime_cache
+            current_payload = getattr(self._runtime_cache, "schunk", self._runtime_cache).vlmeta.get(
+                "b2o", {}
+            )
+            if current_payload.get("mutable") == effective_mutable:
+                return self._runtime_cache
+            carrier = self._to_b2object_carrier(mutable=effective_mutable)
+            runtime_schunk = getattr(self._runtime_cache, "schunk", self._runtime_cache)
+            for nchunk in range(runtime_schunk.nchunks):
+                chunk = runtime_schunk.get_chunk(nchunk)
+                if chunk is not None:
+                    carrier.schunk.update_chunk(nchunk, chunk)
+            for key in runtime_schunk.vlmeta:
+                if key.startswith("proxy-") or key == _B2OBJECT_USER_VLMETA_KEY:
+                    carrier.schunk.vlmeta[key] = runtime_schunk.vlmeta[key]
+            return carrier
         if include_cache and self._store_owner is not None and self._proxy is not None:
-            carrier = self._to_b2object_carrier()
+            carrier = self._to_b2object_carrier(mutable=effective_mutable)
             for nchunk in self._proxy._cache_sizes:
                 carrier.schunk.update_chunk(nchunk, self._proxy.schunk.get_chunk(nchunk))
             for key in self._proxy.schunk.vlmeta:
-                if key.startswith("proxy-"):
+                if key.startswith("proxy-") or key == _B2OBJECT_USER_VLMETA_KEY:
                     carrier.schunk.vlmeta[key] = self._proxy.schunk.vlmeta[key]
             return carrier
-        return self._to_b2object_carrier()
+        return self._to_b2object_carrier(mutable=effective_mutable)
 
     @_serialized_operation
-    def to_cframe(self, *, include_cache: bool = True, cache_policy=None) -> bytes:
+    def to_cframe(
+        self, *, include_cache: bool = True, cache_policy=None, mutable: bool | None = None
+    ) -> bytes:
         """Export a carrier. Only DISK preserves warm chunks by default.
 
         An explicit cache_policy exports a cold carrier with that policy.
         """
-        return self._export_carrier(include_cache, cache_policy).to_cframe()
+        if mutable is not None and not isinstance(mutable, bool):
+            raise TypeError("mutable must be a boolean")
+        return self._export_carrier(include_cache, cache_policy, mutable=mutable).to_cframe()
 
     @_serialized_operation
     def save(
@@ -1419,30 +1497,47 @@ class RemoteArray(blosc2.Operand):
         *,
         include_cache: bool = True,
         cache_policy=None,
+        mutable: bool | None = None,
         **kwargs,
-    ) -> None:
-        """Save a carrier; MEMORY exports are cold. See :meth:`to_cframe`."""
+    ) -> str:
+        """Save a carrier; MEMORY exports are cold. See :meth:`to_cframe`.
+
+        Return the written ``urlpath``.
+        """
+        if mutable is not None and not isinstance(mutable, bool):
+            raise TypeError("mutable must be a boolean")
         urlpath = os.fspath(urlpath)
         if (cache_policy is not None or not include_cache) and any(
             path is not None and os.path.abspath(path) == os.path.abspath(urlpath)
             for path in (self.cache_path, self.runtime_cache_path)
         ):
             raise ValueError("cold or policy-changing export requires a different destination")
-        carrier = self._export_carrier(include_cache, cache_policy)
+        carrier = self._export_carrier(include_cache, cache_policy, mutable=mutable)
         source_path = getattr(carrier.schunk, "urlpath", None)
         if source_path is not None and os.path.abspath(source_path) == os.path.abspath(urlpath):
-            return
+            return urlpath
         blosc2.blosc2_ext.check_access_mode(urlpath, "w")
         carrier.save(urlpath, contiguous=contiguous, **kwargs)
+        return urlpath
 
     @classmethod
     def _from_payload(cls, payload, carrier):
-        if set(payload) != {"kind", "version", "source", "cache_policy", "max_cache_bytes"}:
+        allowed = {"kind", "version", "source", "cache_policy", "max_cache_bytes", "mutable"}
+        if not set(payload).issubset(allowed) or not {
+            "kind",
+            "version",
+            "source",
+            "cache_policy",
+            "max_cache_bytes",
+        }.issubset(payload):
             raise ValueError("persisted RemoteArray payload contains unsupported fields")
         try:
             policy = blosc2.CachePolicy(payload.get("cache_policy"))
         except ValueError as exc:
             raise ValueError("persisted RemoteArray has an unsupported cache policy") from exc
+        mutable = payload.get("mutable", False)
+        if not isinstance(mutable, bool):
+            raise ValueError("persisted RemoteArray mutable flag must be a boolean")
         limit = payload.get("max_cache_bytes")
         _validate_payload_limit(policy, limit)
         source = payload.get("source")
@@ -1459,6 +1554,9 @@ class RemoteArray(blosc2.Operand):
                 except ImportError:
                     import json as json_mod
                 refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+        carrier_mode = getattr(carrier.schunk, "mode", "r") if carrier is not None else "r"
+        is_disk_file = carrier is not None and bool(getattr(carrier.schunk, "urlpath", None))
+        is_runtime_mutable = mutable and (carrier_mode != "r" if is_disk_file else True)
         obj = cls(
             urlpath,
             cache_policy=policy,
@@ -1469,9 +1567,16 @@ class RemoteArray(blosc2.Operand):
             _carrier=carrier_arg,
             _source_blocks=carrier.blocks if source_kind in {"zarr", "hdf5"} else None,
             _source_cparams=carrier.cparams if source_kind in {"zarr", "hdf5"} else None,
+            _runtime_is_mutable=is_runtime_mutable,
             **kwargs,
         )
+        obj._mutable = False
         obj._validate_geometry(expected)
+        if not obj.is_cache_mutable and limit is not None and obj.cache_bytes > limit:
+            raise ValueError(
+                f"Retained immutable payload ({obj.cache_bytes} bytes) exceeds max_cache_bytes ({limit}); "
+                "use a larger allowance or produce a smaller/cold export"
+            )
         if carrier is not None:
             if obj._cached_meta is None:
                 obj._cached_meta = obj._meta_from_carrier(carrier)

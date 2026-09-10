@@ -617,6 +617,8 @@ class Proxy(blosc2.Operand):
 
     def _enforce_cache_limit(self, item) -> None:
         """Touch *item* and evict whole LRU chunks after its result is assembled."""
+        if getattr(self._schunk_cache, "mode", None) == "r":
+            return
         if self._cache_coordinator is None and not self._persistent_dirty:
             return
         for nchunk in self._wanted_chunks(item):
