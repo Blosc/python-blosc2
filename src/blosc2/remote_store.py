@@ -912,20 +912,22 @@ class RemoteStore:
                 if not replacement.is_tree:
                     raise ValueError("Refreshed source is no longer a group")
                 replacement.disk = owner.disk
+                replacement.cache_policy = owner.cache_policy
+                replacement.max_cache_bytes = owner.max_cache_bytes
+                replacement.mutable = owner.mutable
                 replacement.save_manifest()
             except BaseException:
                 replacement.disk = None
                 replacement.close()
                 raise
             # Keep the owner and lifetime lock stable for dependent finalizers.
-            disk, users, lock = owner.disk, owner._users, owner.lock
-            owner.disk = None
-            owner.close()
-            policy, limit = owner.cache_policy, owner.max_cache_bytes
+            users, lock = owner._users, owner.lock
+            replacement._cleanup_dir = owner._cleanup_dir
+            replacement.artifact_path = owner.artifact_path
+            owner._close_resources()
             owner.__dict__.update(replacement.__dict__)
-            owner.disk, owner._users, owner.lock = disk, users, lock
-            owner.cache_policy, owner.max_cache_bytes = policy, limit
-            owner.cache_coordinator = CacheCoordinator(limit)
+            owner._users, owner.lock = users, lock
+            owner.cache_coordinator = CacheCoordinator(owner.max_cache_bytes)
             self._generation = owner.generation
 
     def close(self):

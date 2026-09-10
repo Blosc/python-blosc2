@@ -118,6 +118,30 @@ def test_b2nd_to_zarr_overwrite_protection(tmp_path):
     assert dst.exists()
 
 
+@pytest.mark.parametrize("destination", ["source", "parent"])
+def test_conversion_cannot_overwrite_source(tmp_path, destination):
+    src = tmp_path / "input" / "data.b2nd"
+    src.parent.mkdir()
+    data = np.arange(10, dtype=np.int32)
+    blosc2.asarray(data, urlpath=src, mode="w")
+    dst = src if destination == "source" else src.parent
+    with pytest.raises(ValueError, match="source"):
+        b2nd_to_zarr(src, dst, overwrite=True)
+    np.testing.assert_array_equal(blosc2.open(src)[:], data)
+
+
+def test_invalid_conversion_preserves_destination(tmp_path):
+    src = tmp_path / "data.b2nd"
+    dst = tmp_path / "data.zarr"
+    blosc2.asarray(np.arange(10), urlpath=src, mode="w")
+    dst.mkdir()
+    sentinel = dst / "sentinel"
+    sentinel.write_bytes(b"preserve me")
+    with pytest.raises(ValueError, match="Sharding"):
+        b2nd_to_zarr(src, dst, overwrite=True, shards=(10,), zarr_format=2)
+    assert sentinel.read_bytes() == b"preserve me"
+
+
 def test_cli_main(tmp_path, capsys):
     src = tmp_path / "cli.b2nd"
     dst = tmp_path / "cli.zarr"

@@ -671,13 +671,16 @@ def is_fsspec_url(urlpath: object) -> bool:
 
 def split_h5_url(url: str) -> tuple[str, str | None]:
     """Split an HDF5 URL on '.h5/' or '.hdf5/' if followed by a dataset subpath."""
-    lower = url.lower()
+    parsed = urllib.parse.urlsplit(url)
+    # Include the authority for fsspec URLs such as memory://data.h5/group/a.
+    path = f"{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+    lower = path.lower()
     for ext in (".h5/", ".hdf5/"):
         idx = lower.find(ext)
         if idx != -1:
             base_len = idx + len(ext) - 1
-            base = url[:base_len]
-            rest = url[base_len + 1 :].strip("/")
+            base = urllib.parse.urlunsplit(parsed._replace(path=path[len(parsed.netloc) : base_len]))
+            rest = path[base_len + 1 :].strip("/")
             if rest:
                 return base, rest
     return url, None
@@ -740,7 +743,7 @@ def parse_container_url(
     parsed = urllib.parse.urlsplit(urlpath)
     path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
     parts = path_str.split("/")
-    if any(part.endswith((".h5", ".hdf5")) for part in parts):
+    if any(part.lower().endswith((".h5", ".hdf5")) for part in parts):
         return urlpath, dataset, "hdf5"
     if any(part.endswith(".zarr") for part in parts):
         return urlpath, dataset, "zarr"

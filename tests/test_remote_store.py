@@ -167,6 +167,29 @@ def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
         assert store.cache_bytes == 0
 
 
+def test_mutable_artifact_refresh_preserves_runtime_storage(hierarchy, tmp_path):
+    url, data = hierarchy
+    artifact = tmp_path / "refresh.b2z"
+    with blosc2.RemoteStore(url) as store:
+        store.save(artifact, mutable=True)
+    with blosc2.open(artifact, max_cache_bytes=4096) as store:
+        store.mutable = True
+        cache_root = store._owner.disk.path
+        cleanup = store._owner._cleanup_dir
+        store.refresh()
+        assert cache_root.exists()
+        assert store._owner._cleanup_dir is cleanup
+        assert store.mutable is True
+        manifest = store._owner.disk.load()
+        assert manifest["max_cache_bytes"] == 4096
+        assert manifest["mutable"] is True
+        with pytest.raises(ValueError, match="source artifact"):
+            store.save(artifact, overwrite=True)
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:], data)
+    assert not cache_root.exists()
+
+
 def test_disk_lock_outlives_root(hierarchy, tmp_path):
     url, data = hierarchy
     root = blosc2.RemoteStore(url, cache_dir=tmp_path)

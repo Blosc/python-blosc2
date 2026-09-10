@@ -15,6 +15,8 @@ Currently supported reference kinds are:
 - ``"dictstore_key"`` for members inside ``.b2d`` / ``.b2z`` ``DictStore`` containers
 - ``"c2array"`` for remote ``C2Array`` objects
 - ``"fsspec"`` for fsspec sources used by ``RemoteArray`` objects
+- ``"zarr"`` for remote Zarr arrays
+- ``"b2z"`` and ``"hdf5"`` for remote container datasets, with the dataset path in ``key``
 
 Use :meth:`Ref.open` to resolve a reference back into a live object.
 

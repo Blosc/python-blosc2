@@ -45,6 +45,27 @@ def make_memory_h5(name: str = "test.h5", **datasets) -> str:
 # ---------------------------------------------------------------------------
 
 
+def test_hdf5_reference_and_expression_roundtrip(tmp_path):
+    data = np.arange(20, dtype=np.int32)
+    url = make_memory_h5("reference.h5", **{"group/data": (data, (5,))})
+    array = blosc2.RemoteArray(url, dataset="group/data")
+    reference = blosc2.Ref.from_dict(blosc2.Ref.from_object(array).to_dict())
+    np.testing.assert_array_equal(reference.open()[:], data)
+    expression = array + 2
+    destination = tmp_path / "expression.b2nd"
+    expression.save(destination)
+    np.testing.assert_array_equal(blosc2.open(destination)[:], data + 2)
+
+
+@pytest.mark.parametrize("extension", ["h5", "hdf5", "H5"])
+def test_hdf5_url_preserves_query(extension):
+    from blosc2.core import parse_container_url
+
+    url = f"https://host/data.{extension}/group/data?version=1"
+    assert parse_container_url(url) == (f"https://host/data.{extension}?version=1", "group/data", "hdf5")
+    assert parse_container_url(f"https://host/frame?next=data.{extension}/group/data")[2] is None
+
+
 def test_hdf5_source_through_proxy(tmp_path):
     path = str(tmp_path / "through_proxy.h5")
     data = np.arange(100, dtype=np.int32).reshape(10, 10)
@@ -59,6 +80,12 @@ def test_hdf5_source_through_proxy(tmp_path):
 
     np.testing.assert_array_equal(proxy[1:4, 2:5], data[1:4, 2:5])
     np.testing.assert_array_equal(proxy[:], data)
+
+    cache_path = tmp_path / "proxy.b2nd"
+    cached = blosc2.Proxy(src, urlpath=cache_path)
+    np.testing.assert_array_equal(cached[:], data)
+    del cached
+    np.testing.assert_array_equal(blosc2.open(cache_path)[:], data)
 
 
 @pytest.mark.parametrize(

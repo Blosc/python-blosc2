@@ -346,16 +346,13 @@ def b2nd_to_zarr(
     dst_path = (
         src_path.with_suffix(".zarr") if output_path is None else Path(output_path).expanduser().resolve()
     )
+    if src_path == dst_path or src_path.is_relative_to(dst_path) or dst_path.is_relative_to(src_path):
+        raise ValueError("Destination must not overlap the source path")
 
-    if dst_path.exists():
-        if not overwrite:
-            raise FileExistsError(
-                f"Destination path already exists: {dst_path}. Use -f/--force/--overwrite to replace it."
-            )
-        if dst_path.is_dir():
-            shutil.rmtree(dst_path)
-        else:
-            dst_path.unlink()
+    if dst_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"Destination path already exists: {dst_path}. Use -f/--force/--overwrite to replace it."
+        )
 
     t_start = time.perf_counter()
     arr = blosc2.open(str(src_path))
@@ -406,6 +403,11 @@ def b2nd_to_zarr(
         print(f"Target chunks: {target_chunks}, shards: {target_shards}")
         print(f"Batch copy shape: {copy_shape} ({len(batch_slices)} batches)")
         print(f"Compressor: {compressor}")
+
+    if dst_path.is_dir():
+        shutil.rmtree(dst_path)
+    else:
+        dst_path.unlink(missing_ok=True)
 
     is_zip = dst_path.name.endswith(".zip")
     zip_store = None

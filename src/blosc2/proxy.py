@@ -72,8 +72,12 @@ def _source_urlpath(src):
 
 
 def _remote_array_metadata(src):
-    if isinstance(src, blosc2.B2ZNDSource):
-        return {"source_kind": "b2z", "urlpath": src.urlpath, "dataset": src.dataset}
+    if isinstance(src, (blosc2.B2ZNDSource, blosc2.HDF5NDSource)):
+        return {
+            "source_kind": "b2z" if isinstance(src, blosc2.B2ZNDSource) else "hdf5",
+            "urlpath": src.urlpath,
+            "dataset": src.dataset,
+        }
     return {
         "source_kind": "zarr" if isinstance(src, blosc2.ZarrNDSource) else "fsspec",
         "urlpath": _source_urlpath(src),
@@ -274,7 +278,10 @@ class Proxy(blosc2.Operand):
                 "caterva2_env": caterva2_env,
             }
             container = getattr(self.src, "schunk", self.src)
-            if isinstance(self.src, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, blosc2.B2ZNDSource)):
+            if isinstance(
+                self.src,
+                (blosc2.FsspecNDSource, blosc2.ZarrNDSource, blosc2.B2ZNDSource, blosc2.HDF5NDSource),
+            ):
                 meta_val.update(_remote_array_metadata(self.src))
             elif isinstance(self.src, blosc2.C2Array):
                 meta_val["source_kind"] = "caterva2"
