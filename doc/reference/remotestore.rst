@@ -64,6 +64,10 @@ the owned archive/store wrappers and private HTTP/S3 transport sessions. Operati
 Standalone ``RemoteArray`` exports remain self-contained references, including
 the HDF5 reference map when applicable.
 
+``b2view`` uses ``RemoteStore`` for remote hierarchies with one 64 MiB MEMORY
+allowance, and ``RemoteArray`` for selected or directly opened leaves. Switching
+selection releases the UI handle while retaining the store's warm chunks.
+
 For persistent shared caching:
 
 .. code-block:: python

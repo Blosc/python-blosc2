@@ -12,6 +12,19 @@ from blosc2.b2view.model import StoreBrowser
 fsspec = pytest.importorskip("fsspec")
 
 
+def assert_warm_revisit(browser, data):
+    selection = (slice(2), slice(3))
+    np.testing.assert_array_equal(browser.preview("/group/a", slices=selection), data[:2, :3])
+    leaf = browser._get_object("/group/a")
+    browser.preview("/group/b", slices=selection)
+    with pytest.raises(RuntimeError, match="closed"):
+        leaf[:1]
+    before = browser.store.traffic.nbytes
+    np.testing.assert_array_equal(browser.preview("/group/a", slices=selection), data[:2, :3])
+    assert browser.store.traffic.nbytes == before
+    assert browser.store.cache_bytes <= 64 << 20
+
+
 def b2z_url(tmp_path, *, threshold=0):
     path = tmp_path / "hierarchy.b2z"
     data = np.random.default_rng(12).integers(0, 256, (200, 1000), dtype="uint8")
@@ -53,9 +66,19 @@ def test_b2z_discovery_and_dispatch(tmp_path, monkeypatch):
             browser.preview("/group/a", slices=(slice(2, 5), slice(4, 9))), data[2:5, 4:9]
         )
         leaf = browser._get_object("/group/a")
+        assert isinstance(browser.store, blosc2.RemoteStore)
+        assert browser.store.max_cache_bytes == 64 << 20
+        assert isinstance(leaf, blosc2.RemoteArray)
         assert leaf is browser._get_object("/group/a")
         reads.clear()
         browser.preview("/group/a", slices=(slice(2, 5), slice(4, 9)))
+        assert reads == []
+        browser.preview("/group/b", slices=(slice(2, 5), slice(4, 9)))
+        browser.get_info("/group")
+        reads.clear()
+        np.testing.assert_array_equal(
+            browser.preview("/group/a", slices=(slice(2, 5), slice(4, 9))), data[2:5, 4:9]
+        )
         assert reads == []
     with StoreBrowser(url + "/group/") as browser:
         assert browser.get_info("/").user_attrs == {"title": "child"}
@@ -77,6 +100,7 @@ def test_zarr_hierarchy(version, consolidated):
     group.create_group("empty").attrs["empty"] = True
     data = np.arange(600).reshape(30, 20)
     group.create_array("a", data=data, chunks=(10, 10))
+    group.create_array("b", data=data + 1, chunks=(10, 10))
     if consolidated:
         import warnings
 
@@ -87,12 +111,13 @@ def test_zarr_hierarchy(version, consolidated):
         assert browser.get_info("/").user_attrs == {"title": "root"}
         assert [n.name for n in browser.list_children()] == ["group"]
         assert browser.get_info("/group").user_attrs == {"title": "child"}
-        assert [n.name for n in browser.list_children("/group")] == ["a", "empty"]
+        assert [n.name for n in browser.list_children("/group")] == ["a", "b", "empty"]
         assert browser.kind("/group/empty") == "group"
         assert browser.list_children("/group/empty") == []
         np.testing.assert_array_equal(browser.preview("/group/a", slices=(slice(2), slice(3))), data[:2, :3])
+        assert_warm_revisit(browser, data)
     with StoreBrowser(url + "/group") as browser:
-        assert [n.path for n in browser.list_children()] == ["/a", "/empty"]
+        assert [n.path for n in browser.list_children()] == ["/a", "/b", "/empty"]
     with StoreBrowser(url + "/group/a") as browser:
         assert not browser.is_tree
         np.testing.assert_array_equal(browser.preview("/", slices=(slice(2), slice(3))), data[:2, :3])
@@ -128,6 +153,7 @@ def test_hdf5_hierarchy(tmp_path, monkeypatch):
             np.testing.assert_array_equal(
                 browser.preview(f"/group/{leaf}", slices=(slice(2), slice(3))), data[:2, :3] + (leaf == "b")
             )
+        assert_warm_revisit(browser, data)
         assert calls == [1]
 
 
@@ -533,6 +559,6 @@ def test_zarr_listing_permission_preserves_direct_array(monkeypatch):
     with StoreBrowser(url) as browser:
         with pytest.raises(OSError, match="LIST permission"):
             browser.list_children()
-        assert not browser.hierarchy.listed
+        assert isinstance(browser.store, blosc2.RemoteStore)
     with StoreBrowser(url + "/a") as browser:
         np.testing.assert_array_equal(browser.preview("/", stop=3)["data"]["value"], np.arange(3))

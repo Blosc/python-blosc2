@@ -86,8 +86,11 @@ and quit remain available during a slow request. Refresh opens a new discovery
 session, discards cached pages, and restores the selected path when it still
 exists. Failed listings can be retried by selecting or expanding the group again.
 
-Browsing is read-only. Only the selected array retains a payload cache, bounded
-to 64 MiB in hierarchy views; selecting another node releases it. Discovery reads
+Browsing is read-only. Remote roots and groups use ``RemoteStore`` with one
+64 MiB MEMORY allowance shared across arrays. Selected leaves are ``RemoteArray``
+handles. Switching arrays or selecting a group releases the selected handle but
+keeps its warm payload in the store until eviction or browser close. Revisited
+chunks within the allowance need no further payload download. Discovery reads
 metadata, not every array's data. Metadata cost can grow with the number of
 objects and chunks. Small objects may fit entirely within a bounded opening read.
 

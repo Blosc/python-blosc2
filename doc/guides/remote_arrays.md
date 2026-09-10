@@ -30,6 +30,11 @@ discovery manifest. Root `refresh()` invalidates old child handles after replaci
 discovery successfully. Standalone `RemoteArray` and
 `blosc2.open(..., lazy=True)` retain their existing cache policies and defaults.
 
+The `b2view` browser uses these public types with one 64 MiB MEMORY allowance per
+remote hierarchy. Switching selections keeps warm chunks available across leaves.
+For a script showing hierarchy discovery, leaf previews and optional persistent
+caching, see `examples/remote/store-browse.py` in the repository.
+
 ## Choose a remote route
 
 The argument passed to {func}`blosc2.open` selects the route:

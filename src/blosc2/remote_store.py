@@ -570,6 +570,7 @@ class RemoteStore:
         cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
         cache_dir=None,
+        _allow_array_root=False,
     ):
         if not isinstance(urlpath, str):
             raise TypeError("RemoteStore requires a remote URL string")
@@ -607,7 +608,7 @@ class RemoteStore:
                 disk.close()
             raise
         owner.disk = disk
-        if not owner.is_tree:
+        if not owner.is_tree and not _allow_array_root:
             kind, diagnostic = owner.nodes[owner.root]
             owner.close()
             if kind == "unsupported":

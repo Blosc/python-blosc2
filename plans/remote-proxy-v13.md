@@ -1,7 +1,7 @@
 # RemoteArray and RemoteStore v13: shared caching and public hierarchies
 
-Status: implementation in progress, 2026-09-10. Steps 1–4 and measurement baseline
-complete; steps 5–6 pending. RemoteStore supports NONE, shared MEMORY and DISK caching.
+Status: implementation in progress, 2026-09-10. Steps 1–5 and measurement baseline
+complete; step 6 remains. RemoteStore supports NONE, shared MEMORY and DISK caching.
 
 ## Implementation progress
 
@@ -26,9 +26,8 @@ complete; steps 5–6 pending. RemoteStore supports NONE, shared MEMORY and DISK
   HDF5 reference maps and Zarr stores/readers are reused across leaves and aliases.
   Enumeration constructs no leaf readers or payload caches. B2Z attachment checks
   archive/source identity; the existing sparse-attachment restriction remains.
-- Discovery now lives in `remote_store.py`; `b2view/hierarchy.py` is a presentation
-  adapter over that implementation, retaining the browser's existing current-leaf
-  Proxy cache until step 5. Independent store/array handles own resource lifetime:
+- Discovery now lives in `remote_store.py`. Step 5 removes the temporary
+  `b2view/hierarchy.py` presentation adapter. Independent store/array handles own resource lifetime:
   closing a parent leaves children usable, and the last close or garbage collection
   closes owned archive/store wrappers. Step 4 adds private filesystem ownership
   and explicit HTTP/S3 session cleanup.
@@ -77,8 +76,21 @@ complete; steps 5–6 pending. RemoteStore supports NONE, shared MEMORY and DISK
   regression verifies request-free warm reopen and actual session closure. Ruff and
   whitespace checks passed. POSIX locking ran on macOS; Windows byte locking still
   needs Windows CI. No live S3 benchmark or full default-suite run was performed.
-- Next: migrate b2view to public handles and store-wide caching (step 5), then
-  complete repository-wide validation and remaining platform checks (step 6).
+- Step 5: b2view uses public RemoteStore/RemoteArray handles, with one 64 MiB
+  MEMORY budget per remote browsing session. Selecting another leaf or group
+  closes the old UI handle while preserving warm payload in the store. Browser
+  presentation converts public node metadata directly; the internal RemoteHierarchy
+  adapter is deleted. An internal array-root opening flag preserves single-pass
+  discovery for direct leaves without changing public RemoteStore group validation
+  or generic `blosc2.open` dispatch. Direct Zarr leaves do not require parent LIST.
+- Step-5 validation: 246 focused browser/store/array tests passed, 2 skipped and
+  34 deselected; all 34 marked Textual tests passed separately. Coverage includes
+  B2Z/HDF5/Zarr warm revisits, subtree-relative paths, empty/unsupported nodes,
+  navigation during blocked reads, refresh, listing retries, shutdown and fresh
+  process codec initialization. Ruff and whitespace checks passed. The new
+  `examples/remote/store-browse.py` ran against a memory-backed B2Z with a DISK
+  cache, and browser/reference/remote-array guides describe shared retention.
+- Next: repository-wide validation and remaining platform checks (step 6).
 - Measurement follow-up: added `bench/remote_array_traffic.py` with its report
   and raw JSONL results. It measures cold/warm requests, connections and response
   body bytes for B2Z, Zarr and HDF5 over S3 and HTTPS. Fixed HTTPS HDF5 discovery
