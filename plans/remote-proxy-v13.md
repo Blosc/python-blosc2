@@ -1,7 +1,7 @@
 # RemoteArray and RemoteStore v13: shared caching and public hierarchies
 
-Status: implementation in progress, 2026-09-10. Steps 1–2 and measurement baseline
-complete; steps 3–6 pending. RemoteStore currently supports NONE only.
+Status: implementation in progress, 2026-09-10. Steps 1–3 and measurement baseline
+complete; steps 4–6 pending. RemoteStore supports NONE and shared MEMORY caching.
 
 ## Implementation progress
 
@@ -32,20 +32,28 @@ complete; steps 3–6 pending. RemoteStore currently supports NONE only.
   closing a parent leaves children usable, and the last close or garbage collection
   closes owned archive/store wrappers. Fsspec still manages transport connection
   pools; store-owned transport exclusion/lifetime work remains with step 4.
-- The step-2 API deliberately defaults to and supports `CachePolicy.NONE` only.
-  MEMORY/DISK raise `NotImplementedError`; limits and disk locations are not yet
-  constructor options. The public behavior below describes the completed v13
-  target, including its eventual MEMORY default. Standalone RemoteArray caching
-  and self-contained exports retain their existing behavior.
 - Step-2 validation in `blosc2`: 437 focused array/source/serialization/browser
   tests passed, with 2 Zarr-specific cases skipped for other formats. Another
   23 Textual UI tests passed. Coverage includes Zarr v2/v3, one HDF5 translation,
   no-cache repeat reads, expressions, standalone exports and independent close/GC.
   Ruff check/format passed for all 8 affected Python files; whitespace checks passed.
   No new live-network benchmark or full default-suite run was performed for step 2.
-- Next: implement aggregate MEMORY accounting and eviction (step 3), then DISK
-  persistence, exclusion, manifest restoration and refresh (step 4). The final
-  b2view migration to public handles and store-wide caching remains step 5.
+- Step 3: RemoteStore defaults to MEMORY with one 256 MiB allowance and accepts
+  a positive `max_cache_bytes`. NONE remains uncached and rejects an explicit limit.
+  Existing Proxy compressed-size and partial-block maps supply aggregate accounting;
+  one coordinator orders native chunks across leaves. Aliases share the same Proxy,
+  and closing a leaf preserves warm payload while session handles remain alive.
+  Bounded standalone Proxies use the same coordinator privately. Operations enforce
+  the budget after returning data internally and on failures; failed backing-store
+  eviction keeps its byte charge until a later successful eviction.
+- Step-3 validation in `blosc2`: 272 focused store/array/Proxy/fsspec/expression tests
+  passed, 2 skipped and 4 deselected, including local HTTP fixtures. New cases cover
+  B2Z, HDF5, Zarr v2/v3, cross-leaf LRU, warm reopen, aggregate partial-block charges,
+  oversized concurrent reads, publication/eviction failures and limit validation.
+  Ruff check/format and whitespace checks passed. No live benchmark or full-suite
+  rerun was performed for this milestone.
+- Next: DISK persistence, exclusion, manifest restoration and refresh (step 4).
+  The final b2view migration to public handles and store-wide caching remains step 5.
 - Measurement follow-up: added `bench/remote_array_traffic.py` with its report
   and raw JSONL results. It measures cold/warm requests, connections and response
   body bytes for B2Z, Zarr and HDF5 over S3 and HTTPS. Fixed HTTPS HDF5 discovery

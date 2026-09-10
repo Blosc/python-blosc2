@@ -13,6 +13,7 @@ import math
 import os
 import textwrap
 import time
+import weakref
 from collections import OrderedDict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -89,6 +90,58 @@ def _validate_max_cache_bytes(value: int | None) -> int | None:
     if value <= 0:
         raise ValueError("max_cache_bytes must be a positive integer or None")
     return value
+
+
+class CacheCoordinator:
+    """Internal aggregate limit/LRU over existing Proxy storage; caller serializes operations.
+
+    Weak registrations avoid a Proxy/coordinator ownership cycle. Store sessions
+    retain their Proxies; a standalone bounded Proxy uses a private coordinator.
+    """
+
+    def __init__(self, max_cache_bytes):
+        self.max_cache_bytes = max_cache_bytes
+        self.proxies = weakref.WeakValueDictionary()
+        self.lru = OrderedDict()
+
+    def register(self, proxy):
+        key = proxy._cache_key
+        self.proxies[key] = proxy
+        for entry in list(self.lru):
+            if entry[0] == key:
+                del self.lru[entry]
+        for nchunk in proxy._cache_lru:
+            self.touch(proxy, nchunk)
+
+    def touch(self, proxy, nchunk):
+        entry = (proxy._cache_key, nchunk)
+        self.lru.pop(entry, None)
+        self.lru[entry] = None
+
+    def forget(self, proxy, nchunk):
+        self.lru.pop((proxy._cache_key, nchunk), None)
+
+    @property
+    def cache_bytes(self):
+        # ponytail: sum existing maps; incremental totals if large caches make accounting costly.
+        for proxy in self.proxies.values():
+            proxy._sync_evictions()
+        return sum(proxy._retained_cache_bytes() for proxy in self.proxies.values())
+
+    def enforce(self):
+        if self.max_cache_bytes is None:
+            return
+        retained = self.cache_bytes
+        while retained > self.max_cache_bytes and self.lru:
+            key, nchunk = next(iter(self.lru))
+            proxy = self.proxies.get(key)
+            if proxy is None or nchunk not in proxy._cache_sizes:
+                self.lru.pop((key, nchunk))
+                continue
+            before = proxy._retained_cache_bytes()
+            # The global oldest entry is also the oldest entry in its leaf.
+            proxy._trim_cache(0, max_chunks=1)
+            retained -= before - proxy._retained_cache_bytes()
 
 
 class Proxy(blosc2.Operand):
@@ -171,7 +224,7 @@ class Proxy(blosc2.Operand):
         if kwargs is None:
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
-        self._max_cache_bytes = _validate_max_cache_bytes(kwargs.pop("_max_cache_bytes", None))
+        self._configure_cache_budget(kwargs)
         self._persistent_dirty = bool(kwargs.pop("_persistent_dirty", False))
         vlmeta = kwargs.pop("vlmeta", None)
         meta_kw = kwargs.pop("meta", None)
@@ -288,6 +341,15 @@ class Proxy(blosc2.Operand):
         self._restore_cache_accounting()
         for key in vlmeta or ():
             self._schunk_cache.vlmeta[key] = vlmeta[key]
+
+    def _configure_cache_budget(self, kwargs):
+        self._max_cache_bytes = _validate_max_cache_bytes(kwargs.pop("_max_cache_bytes", None))
+        self._cache_coordinator = kwargs.pop("_cache_coordinator", None)
+        self._cache_key = kwargs.pop("_cache_key", id(self))
+        if self._cache_coordinator is not None and self._max_cache_bytes is not None:
+            raise ValueError("A shared cache cannot also have a per-array limit")
+        if self._cache_coordinator is None and self._max_cache_bytes is not None:
+            self._cache_coordinator = CacheCoordinator(self._max_cache_bytes)
 
     @property
     def traffic(self) -> "blosc2.proxy_source.Traffic | None":
@@ -508,10 +570,12 @@ class Proxy(blosc2.Operand):
             self._hot_payloads.pop(info.nchunk, None)
             self._cache_sizes.pop(info.nchunk, None)
             self._cache_lru.pop(info.nchunk, None)
+            if self._cache_coordinator is not None:
+                self._cache_coordinator.forget(self, info.nchunk)
 
     def _restore_cache_accounting(self) -> None:
         """Restore compressed-byte accounting for a bounded cache."""
-        if self._max_cache_bytes is None and not self._persistent_dirty:
+        if self._cache_coordinator is None and not self._persistent_dirty:
             return
         stored = self._schunk_cache.vlmeta.get("proxy-cache-sizes", {})
         if not isinstance(stored, dict):
@@ -533,13 +597,18 @@ class Proxy(blosc2.Operand):
             if nchunk in self._cache_lru:
                 self._cache_lru.move_to_end(nchunk)
 
+        if self._cache_coordinator is not None:
+            self._cache_coordinator.register(self)
+
     def _remember_cached(self, nchunk: int, size: int) -> None:
         """Record the current compressed size and recency of one cached chunk."""
-        if self._max_cache_bytes is None and not self._persistent_dirty:
+        if self._cache_coordinator is None and not self._persistent_dirty:
             return
         self._cache_sizes[nchunk] = size
         self._cache_lru.pop(nchunk, None)
         self._cache_lru[nchunk] = None
+        if self._cache_coordinator is not None:
+            self._cache_coordinator.touch(self, nchunk)
 
     def _retained_cache_bytes(self) -> int:
         """Compressed bytes retained by a bounded cache, including hot duplicates."""
@@ -548,14 +617,16 @@ class Proxy(blosc2.Operand):
 
     def _enforce_cache_limit(self, item) -> None:
         """Touch *item* and evict whole LRU chunks after its result is assembled."""
-        if self._max_cache_bytes is None and not self._persistent_dirty:
+        if self._cache_coordinator is None and not self._persistent_dirty:
             return
         for nchunk in self._wanted_chunks(item):
             if nchunk in self._cache_sizes:
                 self._cache_lru.move_to_end(nchunk)
+                if self._cache_coordinator is not None:
+                    self._cache_coordinator.touch(self, nchunk)
 
-        if self._max_cache_bytes is not None:
-            self._trim_cache(self._max_cache_bytes)
+        if self._cache_coordinator is not None:
+            self._cache_coordinator.enforce()
         if self._persistent_dirty and self._cache_lru:
             vlmeta = self._schunk_cache.vlmeta
             now = time.time()
@@ -575,10 +646,14 @@ class Proxy(blosc2.Operand):
                 and self._cache_lru
                 and (max_chunks is None or len(evicted) < max_chunks)
             ):
-                nchunk, _ = self._cache_lru.popitem(last=False)
+                nchunk = next(iter(self._cache_lru))
+                # Do not credit eviction until the backing storage accepted it.
+                self._schunk_cache.update_special(nchunk, blosc2.SpecialValue.UNINIT)
+                self._cache_lru.pop(nchunk)
                 self._cache_sizes.pop(nchunk, None)
                 self._hot_payloads.pop(nchunk, None)
-                self._schunk_cache.update_special(nchunk, blosc2.SpecialValue.UNINIT)
+                if self._cache_coordinator is not None:
+                    self._cache_coordinator.forget(self, nchunk)
                 base = nchunk * self._blocks_per_chunk
                 for n in range(base, base + self._blocks_per_chunk):
                     self._fetched[n // 8] &= ~(1 << (n % 8))
@@ -734,7 +809,7 @@ class Proxy(blosc2.Operand):
         self._schunk_cache.vlmeta[self._fetched_key] = bytes(self._fetched)
         if self._blocks_per_chunk > 1:
             self._schunk_cache.vlmeta["proxy-fetched-bpc"] = self._blocks_per_chunk
-        if self._max_cache_bytes is not None or self._persistent_dirty:
+        if self._cache_coordinator is not None or self._persistent_dirty:
             self._schunk_cache.vlmeta["proxy-cache-sizes"] = {
                 str(nchunk): size for nchunk, size in self._cache_sizes.items()
             }

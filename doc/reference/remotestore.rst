@@ -7,8 +7,9 @@ RemoteStore
 :ref:`RemoteArray` leaves. Groups and arrays share one source session: a B2Z
 archive, an HDF5 reference map, or a Zarr store. Zarr listing remains lazy.
 
-This first implementation supports ``CachePolicy.NONE`` only, which is also
-its current default. Shared MEMORY and DISK retention are not implemented yet.
+The default ``CachePolicy.MEMORY`` shares a 256 MiB allowance across all leaves.
+Set ``max_cache_bytes`` to a positive integer to change it. ``CachePolicy.NONE``
+retains no payload and rejects a limit. Store DISK caching is not implemented yet.
 Sources must be immutable. Generic ``blosc2.open(..., lazy=True, dataset=...)``
 continues to open a single array.
 
@@ -47,8 +48,13 @@ Group ``attrs`` mappings are read-only. ``source`` returns the credential-free
 container descriptor and full group path. ``traffic`` is one shared source
 counter across all views, including discovery; do not add counts from aliases.
 It counts source reads, not connections or every HTTP request: HEAD requests and
-failed Zarr probes are excluded. ``cache_bytes`` is zero and ``max_cache_bytes``
-is ``None`` in this implementation.
+failed Zarr probes are excluded. ``cache_bytes`` counts retained compressed chunks
+and partial-block duplicates across the store, without double-counting aliases.
+The least recently used native chunk is evicted across all leaves when necessary.
+Oversized reads return their result before eviction; returned arrays and temporary
+buffers are outside the allowance. Closing a leaf preserves its warm cache while
+other session handles remain open. With NONE, ``cache_bytes`` is zero and
+``max_cache_bytes`` is ``None``.
 
 Closing a handle, or exiting its context, releases its ownership. Existing child
 handles remain usable until closed or garbage-collected. The last handle closes

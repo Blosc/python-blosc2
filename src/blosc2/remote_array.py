@@ -86,7 +86,7 @@ class _PolicyDefault:
         return "<policy default>"
 
 
-_POLICY_DEFAULT = _PolicyDefault()
+CACHE_POLICY_DEFAULT = _PolicyDefault()
 _INTERNAL_CARRIER_METALAYERS = frozenset({"b2o", "proxy", "proxy-source"})
 _C2_INTERNAL_VLMETA_KEYS = frozenset({"fill_nonce", "fill_state"})
 _SENSITIVE_QUERY_PARTS = (
@@ -169,12 +169,12 @@ def validate_persistable_url(url: str) -> None:
         raise ValueError("RemoteArray URLs cannot contain credential-like query parameters")
 
 
-def _normalize_limit(policy, value):
+def normalize_cache_limit(policy, value):
     if policy is blosc2.CachePolicy.NONE:
-        if value is not _POLICY_DEFAULT:
+        if value is not CACHE_POLICY_DEFAULT:
             raise ValueError("max_cache_bytes is not applicable to CachePolicy.NONE")
         return None
-    if value is _POLICY_DEFAULT:
+    if value is CACHE_POLICY_DEFAULT:
         return DEFAULT_DISK_CACHE_BYTES
     if value is None:
         if policy is blosc2.CachePolicy.DISK:
@@ -457,7 +457,7 @@ class RemoteArray(blosc2.Operand):
         cache_policy=blosc2.CachePolicy.NONE,
         cache_path=None,
         cache_dir=None,
-        max_cache_bytes=_POLICY_DEFAULT,
+        max_cache_bytes=CACHE_POLICY_DEFAULT,
         max_concurrency: int | None = None,
         storage_options: dict | None = None,
         source_format: str | None = None,
@@ -476,8 +476,9 @@ class RemoteArray(blosc2.Operand):
         assume_immutable = _validate_assume_immutable(assume_immutable)
         _validate_cache_locations(cache_policy, cache_dir, cache_path, _carrier, _runtime_cache_path)
 
+        self._store_owner = _store_owner
         self._cache_policy = cache_policy
-        self._cache_limit = _normalize_limit(cache_policy, max_cache_bytes)
+        self._cache_limit = normalize_cache_limit(cache_policy, max_cache_bytes)
         self._max_concurrency = _validate_max_concurrency(max_concurrency)
         urlpath, self._dataset, self._source_format = _resolve_init_dataset_and_url(
             urlpath, dataset, source_format
@@ -561,6 +562,8 @@ class RemoteArray(blosc2.Operand):
         if owner is not None:
             with owner.lock, self._operation_lock:
                 self._store_finalizer()
+                self._proxy = None
+                self._runtime_cache = None
 
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
@@ -718,7 +721,7 @@ class RemoteArray(blosc2.Operand):
         *,
         carrier=None,
         source_descriptor=None,
-        max_cache_bytes=_POLICY_DEFAULT,
+        max_cache_bytes=CACHE_POLICY_DEFAULT,
         max_concurrency: int | None = None,
         assume_immutable: bool = True,
     ):
@@ -848,6 +851,8 @@ class RemoteArray(blosc2.Operand):
                 _max_cache_bytes=self._cache_limit,
                 _persistent_dirty=self._shared_runtime_cache,
             )
+        elif self.cache_policy is blosc2.CachePolicy.MEMORY and self._store_owner is not None:
+            self._proxy = self._store_owner.get_cache(self.src)
         elif self.cache_policy is blosc2.CachePolicy.MEMORY:
             self._proxy = blosc2.Proxy(
                 self.src,
@@ -1214,7 +1219,7 @@ class RemoteArray(blosc2.Operand):
         self._check_open()
         if self._proxy is None:
             return 0
-        if self._proxy._max_cache_bytes is None:
+        if self._proxy._cache_coordinator is None:
             return self._proxy.schunk.cbytes
         return self._proxy._retained_cache_bytes()
 

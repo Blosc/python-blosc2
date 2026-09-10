@@ -11,8 +11,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 import blosc2
 from blosc2.core import parse_container_url
+from blosc2.proxy import CacheCoordinator
 from blosc2.proxy_source import Traffic
-from blosc2.remote_array import RemoteMetadataMapping, validate_persistable_url
+from blosc2.remote_array import (
+    CACHE_POLICY_DEFAULT,
+    RemoteMetadataMapping,
+    normalize_cache_limit,
+    validate_persistable_url,
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,7 @@ class RemoteDiscovery:
         self.archive = None
         self.zstore = None
         self.sources = {}
+        self.caches = {}
         self._users = 0
         self._closed = False
         # ponytail: serialize store operations; finer locks if multi-leaf throughput matters.
@@ -354,6 +361,14 @@ class RemoteDiscovery:
             if not self._users:
                 self.close()
 
+    def get_cache(self, source):
+        key = next(path for path, value in self.sources.items() if value is source)
+        if key not in self.caches:
+            self.caches[key] = blosc2.Proxy(
+                source, _refresh_source=False, _cache_coordinator=self.cache_coordinator, _cache_key=key
+            )
+        return self.caches[key]
+
     def close(self):
         if self._closed:
             return
@@ -366,6 +381,7 @@ class RemoteDiscovery:
             if isinstance(source, blosc2.HDF5NDSource):
                 source.array.store.close()
         self.sources.clear()
+        self.caches.clear()
         self.nodes.clear()
         self.attrs.clear()
         self.listed.clear()
@@ -376,23 +392,32 @@ class RemoteStore:
     """Read-only remote B2Z, Zarr or HDF5 hierarchy.
 
     Discovery and returned array handles share source resources and traffic.
-    This first implementation supports CachePolicy.NONE only; shared MEMORY
-    and DISK retention will follow. Sources must be immutable.
+    MEMORY shares one bounded cache across all leaves; NONE retains no payload.
+    DISK retention will follow. Sources must be immutable.
 
     ``keys()`` lists immediate children; ``get_info()`` inspects metadata without
     creating an array cache. Paths are relative to this group. Closing a handle
     leaves its previously returned arrays and group handles usable.
     """
 
-    def __init__(self, urlpath, *, dataset=None, storage_options=None, cache_policy=blosc2.CachePolicy.NONE):
+    def __init__(
+        self,
+        urlpath,
+        *,
+        dataset=None,
+        storage_options=None,
+        cache_policy=blosc2.CachePolicy.MEMORY,
+        max_cache_bytes=CACHE_POLICY_DEFAULT,
+    ):
         if not isinstance(urlpath, str):
             raise TypeError("RemoteStore requires a remote URL string")
         if dataset is not None and not isinstance(dataset, str):
             raise TypeError("dataset must be a string")
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
-        if cache_policy is not blosc2.CachePolicy.NONE:
-            raise NotImplementedError("RemoteStore currently supports CachePolicy.NONE only")
+        if cache_policy is blosc2.CachePolicy.DISK:
+            raise NotImplementedError("RemoteStore DISK caching is not implemented")
+        limit = normalize_cache_limit(cache_policy, max_cache_bytes)
         base_url, _, _ = parse_container_url(urlpath, dataset)
         validate_persistable_url(base_url)
         owner = RemoteDiscovery(urlpath, storage_options, dataset=dataset)
@@ -402,6 +427,9 @@ class RemoteStore:
             if kind == "unsupported":
                 raise NotImplementedError(str(diagnostic))
             raise ValueError("RemoteStore requires a group; use RemoteArray for an array")
+        owner.cache_policy = cache_policy
+        owner.max_cache_bytes = limit
+        owner.cache_coordinator = CacheCoordinator(limit)
         self._attach(owner, "")
 
     def _attach(self, owner, path):
@@ -448,7 +476,17 @@ class RemoteStore:
             }
             if self._owner.format in {"b2z", "hdf5"}:
                 descriptor["dataset"] = full
-            return blosc2.RemoteArray(source, _source_descriptor=descriptor, _store_owner=self._owner)
+            return blosc2.RemoteArray(
+                source,
+                _source_descriptor=descriptor,
+                _store_owner=self._owner,
+                cache_policy=self.cache_policy,
+                max_cache_bytes=(
+                    self.max_cache_bytes
+                    if self.cache_policy is blosc2.CachePolicy.MEMORY
+                    else CACHE_POLICY_DEFAULT
+                ),
+            )
 
     def get_info(self, path=""):
         """Return node kind, known attributes and unsupported-node diagnostics."""
@@ -499,18 +537,19 @@ class RemoteStore:
     @property
     def cache_policy(self):
         self._resolve("")
-        return blosc2.CachePolicy.NONE
+        return self._owner.cache_policy
 
     @property
     def max_cache_bytes(self):
         self._resolve("")
-        return None
+        return self._owner.max_cache_bytes
 
     @property
     def cache_bytes(self):
         """Retained payload bytes; NONE retains no payload between reads."""
-        self._resolve("")
-        return 0
+        with self._owner.lock:
+            self._resolve("")
+            return self._owner.cache_coordinator.cache_bytes
 
     def close(self):
         """Release this handle; the last dependent handle closes shared resources."""

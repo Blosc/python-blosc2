@@ -12,6 +12,115 @@ import blosc2
 fsspec = pytest.importorskip("fsspec")
 
 
+def test_shared_memory_lru_and_revisit(hierarchy):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url) as store:
+        assert store.max_cache_bytes == 256 * 1024**2
+        a, b = store["group/a"], store["group/b"]
+        first = np.s_[:10, :10]
+        second = np.s_[10:20, :10]
+        for array, offset in ((a, 0), (b, 1), (a, 0)):
+            np.testing.assert_array_equal(array[first], data[first] + offset)
+        assert store.cache_bytes == a.cache_bytes + b.cache_bytes
+        a.close()
+        with store["group"] as group, group["a"] as alias:
+            before = store.traffic.nbytes
+            np.testing.assert_array_equal(alias[first], data[first])
+            assert store.traffic.nbytes == before
+            # Calibrate the limit from actual compressed payloads, then force
+            # eviction of B's chunk after touching A's chunk.
+            coordinator = store._owner.cache_coordinator
+            coordinator.max_cache_bytes = store.cache_bytes
+            np.testing.assert_array_equal(alias[second], data[second])
+            assert store.cache_bytes <= coordinator.max_cache_bytes
+            assert not b.cache_contains(first)
+            assert alias.cache_contains(second)
+            assert store.cache_bytes == alias.cache_bytes + b.cache_bytes
+        b.close()
+
+
+def test_shared_memory_partial_and_failed_publication(hierarchy, monkeypatch):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, max_cache_bytes=1) as store, store["group/a"] as a:
+        proxy = a._proxy
+        # Fail after publishing a native chunk. The operation's finally block
+        # must still enforce the store budget before propagating the failure.
+        original = proxy._store_chunk
+
+        def fail(*args, **kwargs):
+            original(*args, **kwargs)
+            raise OSError("publication failed")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(proxy, "_store_chunk", fail)
+            with pytest.raises(OSError, match="publication failed"):
+                a.get_chunk(0)
+        assert store.cache_bytes == 0
+        np.testing.assert_array_equal(a[:2, :2], data[:2, :2])
+        assert store.cache_bytes == 0
+
+    with blosc2.RemoteStore(url) as store, store["group/a"] as a:
+        for item in (np.s_[:2, :2], np.s_[:5, :5], np.s_[:10, :10]):
+            np.testing.assert_array_equal(a[item], data[item])
+            proxy = a._proxy
+            expected = sum(proxy._cache_sizes.values()) + sum(
+                len(payload) for blocks in proxy._hot_payloads.values() for payload in blocks.values()
+            )
+            assert store.cache_bytes == a.cache_bytes == expected
+        a.trim_cache(0)
+        assert store.cache_bytes == 0
+
+
+def test_shared_memory_failed_eviction_keeps_charge(hierarchy, monkeypatch):
+    url, data = hierarchy
+    with blosc2.RemoteStore(url) as store, store["group/a"] as a:
+        np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
+        before = store.cache_bytes
+        schunk = a._proxy.schunk
+        original = type(schunk).update_special
+
+        def fail(self, *args, **kwargs):
+            if self is schunk:
+                raise OSError("eviction failed")
+            return original(self, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(type(schunk), "update_special", fail)
+            with pytest.raises(OSError, match="eviction failed"):
+                a.trim_cache(0)
+        assert store.cache_bytes == before
+        a.trim_cache(0)
+        assert store.cache_bytes == 0
+
+
+def test_shared_memory_oversized_and_concurrent(hierarchy):
+    from concurrent.futures import ThreadPoolExecutor
+
+    url, data = hierarchy
+    with blosc2.RemoteStore(url, max_cache_bytes=1) as store:
+        a, b = store["group/a"], store["group/b"]
+        with ThreadPoolExecutor(2) as pool:
+            results = list(pool.map(lambda array: array[:], (a, b)))
+        np.testing.assert_array_equal(results[0], data)
+        np.testing.assert_array_equal(results[1], data + 1)
+        assert store.cache_bytes == a.cache_bytes == b.cache_bytes == 0
+        a.close()
+        b.close()
+
+
+@pytest.mark.parametrize("limit", [None, True, 0, -1, 1.5])
+def test_store_rejects_invalid_memory_limit(limit):
+    with pytest.raises((ValueError, TypeError), match="positive integer"):
+        blosc2.RemoteStore("memory://missing.b2z", max_cache_bytes=limit)
+
+
+def test_store_none_rejects_limit():
+    with pytest.raises(ValueError, match="not applicable"):
+        blosc2.RemoteStore(
+            "memory://missing.b2z", cache_policy=blosc2.CachePolicy.NONE, max_cache_bytes=None
+        )
+
+
 @pytest.fixture(params=["b2z", "h5", "zarr2", "zarr3"])
 def hierarchy(request, tmp_path):
     backend = request.param
@@ -77,7 +186,7 @@ def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch
 
         for cls in (blosc2.B2ZNDSource, blosc2.HDF5NDSource, blosc2.ZarrNDSource, blosc2.Proxy):
             no_payload.setattr(cls, "__init__", forbidden)
-        root = blosc2.RemoteStore(url)
+        root = blosc2.RemoteStore(url, cache_policy=blosc2.CachePolicy.NONE)
         owner = root._owner
         assert "group" in list(root)
         assert root.attrs == {"title": "root"}
@@ -213,8 +322,8 @@ def test_zarr_unsupported_codec():
 def test_store_validation():
     with pytest.raises(TypeError, match="dataset must be a string"):
         blosc2.RemoteStore("memory://a.b2z", dataset=1)
-    with pytest.raises(NotImplementedError, match="NONE only"):
-        blosc2.RemoteStore("memory://a.b2z", cache_policy=blosc2.CachePolicy.MEMORY)
+    with pytest.raises(NotImplementedError, match="DISK"):
+        blosc2.RemoteStore("memory://a.b2z", cache_policy=blosc2.CachePolicy.DISK)
     with pytest.raises(TypeError, match="CachePolicy"):
         blosc2.RemoteStore("memory://a.b2z", cache_policy="none")
     with pytest.raises(ValueError, match="user information"):
