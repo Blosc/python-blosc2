@@ -5,6 +5,7 @@ import zipfile
 
 import numpy as np
 import pytest
+from tui_wait import wait_until
 
 import blosc2
 from blosc2.b2view.model import StoreBrowser
@@ -172,7 +173,6 @@ def test_b2z_ambiguous_paths():
 @pytest.mark.tui
 @pytest.mark.asyncio
 async def test_remote_tui_lifecycle(tmp_path, monkeypatch):
-    import asyncio
     import threading
 
     from textual.widgets import Tree
@@ -182,14 +182,11 @@ async def test_remote_tui_lifecycle(tmp_path, monkeypatch):
     url, data = b2z_url(tmp_path)
     app = B2ViewApp(url, start_path="/group/a")
 
-    async def wait_for(predicate):
-        for _ in range(200):
-            if predicate():
-                return
-            await asyncio.sleep(0.02)
-        raise AssertionError("remote UI did not settle")
-
     async with app.run_test(size=(120, 40)) as pilot:
+
+        async def wait_for(predicate):
+            await wait_until(pilot, predicate, message="remote UI did not settle")
+
         await wait_for(lambda: app.table_page is not None and bool(app.table_page["columns"]))
         assert app.query_one("#tree-pane").display
         assert app.selected_path == "/group/a"

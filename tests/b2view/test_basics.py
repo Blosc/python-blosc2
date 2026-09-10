@@ -92,12 +92,12 @@ def store_path(tmp_path_factory) -> str:
 
 async def wait_for_table(pilot) -> None:
     """Wait until the data grid has a loaded, settled page."""
-    for _ in range(100):
-        await pilot.pause()
-        app = pilot.app
-        if app.table_page is not None and not app.loading_table_page:
-            return
-    raise AssertionError("data table never finished loading")
+    app = pilot.app
+    await wait_until(
+        pilot,
+        lambda: app.table_page is not None and not app.loading_table_page,
+        message="data table never finished loading",
+    )
 
 
 async def wait_for_dim_mode(pilot, expected: bool) -> None:
@@ -107,11 +107,11 @@ async def wait_for_dim_mode(pilot, expected: bool) -> None:
     later frame -- so asserting straight after the press is a race that a loaded
     CI runner loses.  Same shape as :func:`wait_for_table`, and the same reason.
     """
-    for _ in range(100):
-        await pilot.pause()
-        if pilot.app._dim_mode is expected:
-            return
-    raise AssertionError(f"dim mode never became {expected}")
+    await wait_until(
+        pilot,
+        lambda: pilot.app._dim_mode is expected,
+        message=f"dim mode never became {expected}",
+    )
 
 
 async def focus_data_table(pilot) -> DataTable:

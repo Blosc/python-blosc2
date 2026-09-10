@@ -26,7 +26,7 @@ import blosc2
 if blosc2.IS_WASM:
     pytest.skip("Textual apps need a terminal driver (termios)", allow_module_level=True)
 
-from tui_wait import wait_for_screen
+from tui_wait import wait_for_screen, wait_until
 
 from blosc2.b2view.app import B2ViewApp, SortByScreen
 from blosc2.b2view.model import StoreBrowser
@@ -178,11 +178,12 @@ def test_sort_composes_over_active_filter(sort_store):
 
 
 async def _wait_for_table(pilot) -> None:
-    for _ in range(100):
-        await pilot.pause()
-        if pilot.app.table_page is not None and not pilot.app.loading_table_page:
-            return
-    raise AssertionError("data table never loaded")
+    app = pilot.app
+    await wait_until(
+        pilot,
+        lambda: app.table_page is not None and not app.loading_table_page,
+        message="data table never loaded",
+    )
 
 
 @pytest.mark.asyncio
