@@ -1587,6 +1587,14 @@ def _clear_caches():
     indexing._hot_cache_clear()
     indexing._QUERY_CACHE_STORE_HANDLES.clear()
     indexing._PERSISTENT_INDEXES.clear()
+    # File-backed handles are keyed by urlpath and only purged when the file
+    # disappears -- never, for a tmp_path kept for the session -- so a worker
+    # walks into the fd limit without this.  In-memory entries must stay:
+    # their sidecar path is None and cannot be reopened.
+    for cache in (indexing._SIDECAR_HANDLE_CACHE, indexing._DATA_CACHE):
+        for key in [k for k in tuple(cache) if k[0][0] == "persistent"]:
+            cache.pop(key, None)
+    indexing._GATHER_MMAP_HANDLES.clear()
 
 
 # ---------------------------------------------------------------------------
