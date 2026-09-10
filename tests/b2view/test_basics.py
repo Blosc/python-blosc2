@@ -213,6 +213,13 @@ async def test_b2view_app_cache_dir_reused(tmp_path):
         traffic1 = app1.browser.store.traffic.nbytes
         assert traffic1 > 0
 
+    # A remote browser closes on its own thread, holding the cache-dir lock
+    # until it gets there; pass 2 must not race it for that lock.
+    closer = app1._browser_close_thread
+    if closer is not None:
+        closer.join(timeout=20)
+        assert not closer.is_alive(), "closing the first browser never finished"
+
     # Pass 2: warm restart
     app2 = B2ViewApp(url, start_panel="data", cache_dir=cache_dir)
     async with app2.run_test(size=TERM_SIZE) as pilot:

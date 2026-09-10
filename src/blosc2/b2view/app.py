@@ -2051,6 +2051,9 @@ class B2ViewApp(App):
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
+        # Set when a remote browser is closed on its own thread (on_unmount);
+        # lets teardown wait for the cache-dir lock to be released.
+        self._browser_close_thread: threading.Thread | None = None
         self.loaded_paths: set[str] = set()
         self._remote = is_fsspec_url(urlpath)
         self._remote_session = 0
@@ -2249,7 +2252,9 @@ class B2ViewApp(App):
         self._remote_session += 1
         if self.browser is not None:
             if self._remote:
-                threading.Thread(target=self._close_browser, args=(self.browser,), daemon=True).start()
+                closer = threading.Thread(target=self._close_browser, args=(self.browser,), daemon=True)
+                self._browser_close_thread = closer
+                closer.start()
             else:
                 self.browser.close()
 
