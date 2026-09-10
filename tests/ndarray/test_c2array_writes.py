@@ -338,7 +338,7 @@ def test_concurrent_writers_fill_the_array(server):
 def test_two_writers_racing_for_one_chunk_leave_one_winner(server):
     array, srv = server
     urlbase = array.urlbase
-    barrier = threading.Barrier(2)
+    barrier = threading.Barrier(2, timeout=10)
 
     def fill(value):
         writer = blosc2.C2Array("run.b2nd", urlbase=urlbase)
