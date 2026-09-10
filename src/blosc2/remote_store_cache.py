@@ -63,7 +63,16 @@ class StoreDiskCache:
             raise
 
     def close(self):
-        self.file.close()
+        if not self.file.closed:
+            if os.name == "nt":
+                import msvcrt
+
+                try:
+                    self.file.seek(0)
+                    msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            self.file.close()
 
     def load(self):
         active_path = self.path / "active_generation.json"

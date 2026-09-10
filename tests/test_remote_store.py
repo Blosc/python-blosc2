@@ -2,6 +2,7 @@
 
 import gc
 import json
+import sys
 import weakref
 
 import numpy as np
@@ -857,13 +858,16 @@ def test_save_failure_preserves_destination_and_live_cache(hierarchy, tmp_path, 
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="in-process HTTP servers not supported on Windows",
+)
 def test_artifact_reopens_in_fresh_process(tmp_path):
     """A locally transported .b2z must be readable by another interpreter."""
     import functools
     import hashlib
     import http.server
     import subprocess
-    import sys
     import threading
 
     data = np.arange(600, dtype="int32").reshape(30, 20)
@@ -874,7 +878,7 @@ def test_artifact_reopens_in_fresh_process(tmp_path):
         root["/group/a"] = blosc2.asarray(data, chunks=(10, 10), blocks=(5, 5))
 
     class Ranged(http.server.SimpleHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
+        protocol_version = "HTTP/1.0"
 
         def log_message(self, *args):
             pass
@@ -891,6 +895,7 @@ def test_artifact_reopens_in_fresh_process(tmp_path):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(last - first + 1))
             self.send_header("ETag", hashlib.sha256(body).hexdigest())
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body[first : last + 1])
             return None
@@ -901,11 +906,12 @@ def test_artifact_reopens_in_fresh_process(tmp_path):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("ETag", hashlib.sha256(body).hexdigest())
+            self.send_header("Connection", "close")
             self.end_headers()
 
     handler = functools.partial(Ranged, directory=str(served))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}/{tree.name}"
         with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
@@ -917,9 +923,9 @@ def test_artifact_reopens_in_fresh_process(tmp_path):
             "import sys\n"
             "import numpy as np\n"
             "import blosc2\n"
-            "store = blosc2.open(sys.argv[1])\n"
-            "with store['group/a'] as a:\n"
-            "    print(int(np.asarray(a[:10, :10]).sum()))\n"
+            "with blosc2.open(sys.argv[1]) as store:\n"
+            "    with store['group/a'] as a:\n"
+            "        print(int(np.asarray(a[:10, :10]).sum()))\n"
         )
         result = subprocess.run(
             [sys.executable, "-c", script, str(artifact)],
