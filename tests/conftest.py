@@ -120,3 +120,25 @@ def pytest_runtest_teardown(item, nextitem):
     _test_counter += 1
     if _test_counter % _GC_COLLECT_INTERVAL == 0:
         gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _worker_deadman():
+    """Turn a hung test into a named worker crash instead of a burned job.
+
+    CI sets PYTEST_DEADMAN_SECONDS: a test that outlives it dumps every
+    thread's stack (faulthandler) and kills the worker, and xdist reports
+    which test it was running.  Without it a deadlock only shows up as a
+    progress bar that stops moving until the job timeout hours later.
+    """
+    seconds = os.environ.get("PYTEST_DEADMAN_SECONDS")
+    if not seconds:
+        yield
+        return
+    import faulthandler
+
+    faulthandler.dump_traceback_later(float(seconds), exit=True)
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
