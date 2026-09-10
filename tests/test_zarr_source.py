@@ -14,7 +14,7 @@ def zarr():
 @pytest.mark.parametrize("zarr_format", [2, 3])
 @pytest.mark.parametrize("dtype", [np.bool_, np.int32, np.float64, np.complex64, ">i4"])
 def test_zarr_source_through_proxy(tmp_path, zarr, zarr_format, dtype):
-    path = tmp_path / f"array-{zarr_format}-{np.dtype(dtype).str}.zarr"
+    path = tmp_path / f"array-{zarr_format}.zarr"
     data = np.arange(35).reshape(5, 7).astype(dtype)
     array = zarr.create_array(path, shape=data.shape, chunks=(3, 4), dtype=dtype, zarr_format=zarr_format)
     array[:] = data
