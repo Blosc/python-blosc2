@@ -164,13 +164,36 @@ def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=N
     """
     check_hdf5_dependencies()
     import fsspec
-    import kerchunk.hdf
+    import zarr
 
     fs, path = (
         fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
         if _filesystem is None
         else (_filesystem, _filesystem._strip_protocol(urlpath))
     )
+    # kerchunk builds a zarr hierarchy through zarr's sync bridge, which runs
+    # its event loop in another thread and waits with no timeout by default
+    # (async.timeout is None).  A lost wake-up there hung CI for hours, on
+    # every platform, inside this translation.  Bound it -- and if it fires,
+    # drop the loop the failed attempt may have wedged, so the retry gets a
+    # fresh one -- rather than wait forever on a library's private loop.
+    for attempt in range(2):
+        try:
+            with zarr.config.set({"async.timeout": 120}):
+                return _translate_hdf5(fs, path, urlpath, unsupported, traffic)
+        except TimeoutError:
+            if attempt:
+                raise
+            from zarr.core import sync as zarr_sync
+
+            zarr_sync.loop[0] = None
+            zarr_sync.iothread[0] = None
+    raise TimeoutError("HDF5 translation timed out twice")  # pragma: no cover -- retry re-raises
+
+
+def _translate_hdf5(fs, path, urlpath, unsupported, traffic):
+    import kerchunk.hdf
+
     # HTTP uses block_size=0 for non-seekable streaming; cache_type disables read-ahead.
     with fs.open(path, "rb", block_size=1, cache_type="none") as file:
         if traffic is not None:
