@@ -254,8 +254,11 @@ async def main():
             fs.pipe_file('/startup.zarr/' + file.relative_to(path).as_posix(), file.read_bytes())
     app = B2ViewApp('memory://startup.zarr')
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        assert app.table_page is not None, 'Zarr preview failed to load'
+        for _ in range(300):
+            if app.table_page and app.table_page['columns']:
+                break
+            await asyncio.sleep(.02)
+        assert app.table_page and app.table_page['columns'], 'Zarr preview failed to load'
         assert app.table_page['nrows'] == 100
         values = next(iter(app.table_page['data'].values()))
         assert list(values) == list(range(len(values)))

@@ -393,13 +393,15 @@ async def test_remote_listing_retry_and_shutdown(tmp_path, monkeypatch):
 
         monkeypatch.setattr(StoreBrowser, "preview", blocked)
         monkeypatch.setattr(StoreBrowser, "close", counted_close)
-        app.update_panels("/group/a")
+        app.query_one("#tree", Tree).select_node(
+            next(child for child in node.children if child.data == "/group/a")
+        )
         for _ in range(500):
             if entered.is_set():
                 break
             await pilot.pause(0.02)
         assert entered.is_set(), (
-            f"preview was never called; metadata={app.query_one('#metadata', Static).renderable!r}"
+            f"preview was never called; metadata={app.query_one('#metadata', Static).render()!r}"
         )
         await pilot.press("q")
         assert not closed.is_set()
