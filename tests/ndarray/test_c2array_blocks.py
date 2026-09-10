@@ -20,6 +20,7 @@ import json
 import math
 import os
 import pathlib
+import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,8 +32,13 @@ import blosc2
 
 # The stand-in server binds a real socket, and Pyodide has no listen(2):
 # node asks for the `ws` module that is not there, and takes the runtime down
-# with it rather than raising
-pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+# with it rather than raising.  Windows serves the same stand-in badly -- a
+# client abort (WinError 10053) can leave an in-process server wedging the
+# xdist worker -- and serving HTTP from Windows is not what this suite covers.
+pytestmark = pytest.mark.skipif(
+    blosc2.IS_WASM or sys.platform == "win32",
+    reason="in-process HTTP servers not supported on wasm32 or Windows",
+)
 
 
 class _Cat2Server:

@@ -12,6 +12,7 @@ import hashlib
 import http.server
 import os
 import pathlib
+import sys
 import threading
 
 import numpy as np
@@ -621,6 +622,15 @@ def test_unknown_protocol():
         blosc2.open("nosuchproto://bucket/key.b2nd")
 
 
+# The stand-in server is not worth running on Windows: an in-process
+# http.server there aborts client connections (WinError 10053) and can wedge
+# the worker, and Windows-as-a-server is not what this suite covers.
+_http_server_skip = pytest.mark.skipif(
+    sys.platform == "win32", reason="in-process HTTP servers not supported on Windows"
+)
+
+
+@_http_server_skip
 @pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
 def test_http_url_is_read_through_fsspec(tmp_path):
     # A frame behind a plain web server -- no Caterva2 there to ask anything of --
@@ -646,6 +656,7 @@ def test_http_url_is_read_through_fsspec(tmp_path):
         assert np.array_equal(lazy[3:5, 100:120], data[3:5, 100:120])
 
 
+@_http_server_skip
 def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     pytest.importorskip("aiohttp")
     path = tmp_path / "www"
@@ -667,6 +678,7 @@ def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
         assert np.array_equal(lazy[3:5, 100:120], second[3:5, 100:120])
 
 
+@_http_server_skip
 def test_http_remote_array_checks_identity_without_refetching_cached_data(tmp_path):
     pytest.importorskip("aiohttp")
     path = tmp_path / "www"
