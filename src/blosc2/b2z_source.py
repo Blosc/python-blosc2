@@ -149,6 +149,8 @@ class B2ZNDSource(ByteRangeNDSource):
         ):
             raise ValueError("invalid B2Z dataset path")
         self.dataset = dataset
+        if _archive is not None and _archive.urlpath != urlpath:
+            raise ValueError("B2Z source URL does not match its archive")
         archive = _archive or B2ZArchive(
             urlpath, storage_options=storage_options, _filesystem=_filesystem, _traffic=_traffic
         )

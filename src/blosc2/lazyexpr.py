@@ -717,7 +717,7 @@ class LazyArray(ABC, blosc2.Operand):
         * All the operands of the LazyArray must be Python scalars, or :class:`blosc2.Array` objects.
         * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
-          section for more info). A :ref:`RemoteProxy` is persisted as its
+          section for more info). A :ref:`RemoteArray` is persisted as its
           portable source descriptor rather than embedding its carrier cache.
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
           (including kernels decorated with :func:`blosc2.dsl_kernel`).
@@ -4711,7 +4711,7 @@ class LazyExpr(LazyArray):
         items += [("expression", self.expression)]
         opsinfo = {}
         for key, value in self.operands.items():
-            if isinstance(value, blosc2.RemoteProxy):
+            if isinstance(value, blosc2.RemoteArray):
                 urlpath = value.urlpath
                 opsinfo[key] = urlpath if isinstance(urlpath, str) else str(value)
                 continue
@@ -4750,7 +4750,7 @@ class LazyExpr(LazyArray):
             if isinstance(value, blosc2.C2Array):
                 payload["operands"][key] = encode_b2object_payload(value)
                 continue
-            if isinstance(value, blosc2.RemoteProxy):
+            if isinstance(value, blosc2.RemoteArray):
                 payload["operands"][key] = blosc2.Ref.from_object(value).to_dict()
                 continue
             if isinstance(value, blosc2.Proxy):

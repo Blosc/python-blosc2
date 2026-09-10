@@ -5,7 +5,7 @@ ZarrNDSource
 
 ``ZarrNDSource`` exposes a Zarr v2 or v3 array through :ref:`ProxyNDSource`.
 Zarr decodes each logical chunk and Blosc2 stores the converted compressed
-chunk in the surrounding :ref:`Proxy` or :ref:`RemoteProxy` cache.
+chunk in the surrounding :ref:`Proxy` or :ref:`RemoteArray` cache.
 
 The source is assumed immutable for the cache lifetime. It supports fixed-size
 boolean, integer, floating-point, and complex arrays. Scalar arrays, empty

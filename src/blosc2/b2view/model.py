@@ -272,7 +272,7 @@ class StoreBrowser:
             and not self.hierarchy.is_tree
             and self.hierarchy.kind("/") == "ndarray"
         ):
-            # Preserve the established standalone RemoteProxy contract. HDF5
+            # Preserve the established standalone RemoteArray contract. HDF5
             # keeps the discovery references so this does not scan the file twice.
             if self.hierarchy.format == "hdf5":
                 open_options["refs"] = self.hierarchy.refs
@@ -561,7 +561,7 @@ class StoreBrowser:
                 n,
                 np.dtype(obj.dtype).itemsize,
                 chunks[row_dim] if chunks else None,
-                remote=(kind == "c2array" or isinstance(obj, (blosc2.RemoteProxy, blosc2.Proxy))),
+                remote=(kind == "c2array" or isinstance(obj, (blosc2.RemoteArray, blosc2.Proxy))),
                 max_points=max_points,
             )
 
@@ -1246,7 +1246,7 @@ def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
-    if isinstance(obj, (blosc2.NDArray, blosc2.RemoteProxy, blosc2.Proxy)):
+    if isinstance(obj, (blosc2.NDArray, blosc2.RemoteArray, blosc2.Proxy)):
         return "ndarray"
     if isinstance(obj, blosc2.CTable):
         return "ctable"

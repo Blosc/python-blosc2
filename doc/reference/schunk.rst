@@ -19,7 +19,7 @@ Use ``obj.attrs`` as the recommended interface for user-defined metadata::
 
 ``attrs`` delegates to ``vlmeta`` on ``NDArray``, ``SChunk``, ``ObjectArray``,
 ``BatchArray``, ``ListArray``, ``CTable``, ``TreeStore``, ``LazyArray``, ``Proxy``
-and ``RemoteProxy``, and on ``ProxyNDSource`` implementations. It preserves
+and ``RemoteArray``, and on ``ProxyNDSource`` implementations. It preserves
 existing persistence, serialization and access rules; it does not introduce
 another metadata store or filter operational entries from ordinary containers.
 Some objects return a fresh mapping wrapper on each access.
@@ -31,7 +31,7 @@ retain their existing names.
 ``C2Array`` is the exception: ``attrs`` selects user attributes from the server,
 whereas ``vlmeta`` retains raw protocol metadata. Older servers without an
 ``attrs`` field fall back to raw variable metadata. Neither property writes
-changes to the server. ``RemoteProxy.attrs`` is read-only. See the
+changes to the server. ``RemoteArray.attrs`` is read-only. See the
 :doc:`remote array guide <../guides/remote_arrays>` for details.
 
 ``SChunk.attrs`` uses the general Blosc2 msgpack extensions. This means

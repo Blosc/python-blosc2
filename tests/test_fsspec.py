@@ -540,7 +540,7 @@ def test_exact_cache_path_reopens_as_lazy_fsspec_proxy(tmp_path, monkeypatch):
     )
 
     reopened = blosc2.open(cache_path, mode="a")
-    assert isinstance(reopened, blosc2.RemoteProxy)
+    assert isinstance(reopened, blosc2.RemoteArray)
     assert isinstance(reopened.src, blosc2.FsspecNDSource)
     assert np.array_equal(reopened[0:100], a[0:100])
     assert fetched == []
@@ -639,7 +639,7 @@ def test_http_url_is_read_through_fsspec(tmp_path):
 
         requests.clear()
         lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_dir=str(tmp_path / "cs"))
-        assert isinstance(lazy, blosc2.RemoteProxy)
+        assert isinstance(lazy, blosc2.RemoteArray)
         assert isinstance(lazy.src, blosc2.FsspecNDSource)
         assert ":etag:" in lazy.src.stamp
         assert requests == ["bytes=0-8191"]  # metadata and identity, one round trip
@@ -667,7 +667,7 @@ def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
         assert np.array_equal(lazy[3:5, 100:120], second[3:5, 100:120])
 
 
-def test_http_remote_proxy_checks_identity_without_refetching_cached_data(tmp_path):
+def test_http_remote_array_checks_identity_without_refetching_cached_data(tmp_path):
     pytest.importorskip("aiohttp")
     path = tmp_path / "www"
     path.mkdir()
@@ -675,7 +675,7 @@ def test_http_remote_proxy_checks_identity_without_refetching_cached_data(tmp_pa
     blosc2.asarray(data, chunks=(50, 200), blocks=(10, 100), urlpath=path / "stable.b2nd")
 
     with _ranged_server(path) as (urlbase, requests):
-        remote = blosc2.RemoteProxy(
+        remote = blosc2.RemoteArray(
             f"{urlbase}/stable.b2nd",
             cache_policy=blosc2.CachePolicy.DISK,
             cache_path=tmp_path / "stable-proxy.b2nd",
@@ -747,6 +747,24 @@ def _ranged_server(root):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_http_hdf5_scan_and_warm_slice(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    pytest.importorskip("kerchunk")
+    pytest.importorskip("zarr")
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "seekable.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    with _ranged_server(tmp_path) as (urlbase, requests):
+        remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data")
+        np.testing.assert_array_equal(remote[:10], data[:10])
+        assert requests
+        assert all(requests)  # Metadata and payload both use bounded ranges.
+        count = len(requests)
+        np.testing.assert_array_equal(remote[:10], data[:10])
+        assert len(requests) == count
 
 
 def test_zip_store_needs_cache(tmp_path):
@@ -1486,16 +1504,16 @@ def test_open_memory_url_with_storage_options():
     assert np.array_equal(b[:], a[:])
 
     lazy_b = blosc2.open("memory://so_test.b2nd", lazy=True, storage_options={})
-    assert isinstance(lazy_b, blosc2.RemoteProxy)
+    assert isinstance(lazy_b, blosc2.RemoteArray)
     assert np.array_equal(lazy_b[:], a[:])
 
 
-def test_fsspec_ndsource_and_remote_proxy_storage_options():
+def test_fsspec_ndsource_and_remote_array_storage_options():
     a = blosc2.arange(20, dtype="i4")
     a.save("memory://so_source.b2nd")
 
     src = blosc2.FsspecNDSource("memory://so_source.b2nd", storage_options={})
     assert src.storage_options == {}
 
-    proxy = blosc2.RemoteProxy("memory://so_source.b2nd", storage_options={})
+    proxy = blosc2.RemoteArray("memory://so_source.b2nd", storage_options={})
     assert np.array_equal(proxy[:], a[:])

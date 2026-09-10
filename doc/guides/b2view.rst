@@ -121,7 +121,7 @@ Format details and limits:
   links and group cycles are not followed.
 
 These internal browser adapters do not change the array-only contract of
-``blosc2.open(..., lazy=True)`` or add a persisted RemoteProxy hierarchy descriptor.
+``blosc2.open(..., lazy=True)`` or add a persisted RemoteArray hierarchy descriptor.
 Opening an entire remote B2Z through ``blosc2.open`` requires an explicit
 ``cache_dir`` for localization; use ``b2view`` for range-based hierarchy browsing.
 Standalone remote ``.b2nd`` arrays retain their existing lazy viewer behavior.

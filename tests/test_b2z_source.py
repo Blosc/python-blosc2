@@ -83,7 +83,7 @@ def test_disk_persistence_and_eviction(tmp_path, limit):
 
 def test_policies_exports_and_identity(tmp_path):
     url, data = memory_archive()
-    none = blosc2.RemoteProxy(url, dataset="d0/a")
+    none = blosc2.RemoteArray(url, dataset="d0/a")
     np.testing.assert_array_equal(none[:2], data[:2])
     before = none.traffic.nbytes
     np.testing.assert_array_equal(none[:2], data[:2])
@@ -103,7 +103,7 @@ def test_policies_exports_and_identity(tmp_path):
     proxy[:2]
     np.testing.assert_array_equal(blosc2.open(tmp_path / "legacy.b2nd")[-2:], data[-2:])
     with pytest.raises(NotImplementedError, match="authorized B2Z"):
-        blosc2.RemoteProxy.with_sparse_cache(src, tmp_path / "sparse", source_descriptor=a.source)
+        blosc2.RemoteArray.with_sparse_cache(src, tmp_path / "sparse", source_descriptor=a.source)
 
 
 def test_zip64_and_range_bounds():
@@ -281,7 +281,7 @@ def test_b2z_metadata_and_caching():
     assert plain_src.vlmeta == {}
     assert plain_src.traffic.requests == 0
 
-    # 2. Test RemoteProxy over B2Z
+    # 2. Test RemoteArray over B2Z
     proxy = blosc2.open("memory://meta_test.b2z", dataset="d0/with_meta", lazy=True)
     assert isinstance(proxy.meta, blosc2.RemoteMetadataMapping)
     assert isinstance(proxy.vlmeta, blosc2.RemoteMetadataMapping)

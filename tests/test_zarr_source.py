@@ -109,9 +109,9 @@ def test_open_remote_zarr_scalar_and_empty(zarr):
     scalar_proxy = blosc2.open(scalar_url, lazy=True)
     empty_proxy = blosc2.open(empty_url, lazy=True)
 
-    assert isinstance(scalar_proxy, blosc2.RemoteProxy)
+    assert isinstance(scalar_proxy, blosc2.RemoteArray)
     assert scalar_proxy[()] == 42
-    assert isinstance(empty_proxy, blosc2.RemoteProxy)
+    assert isinstance(empty_proxy, blosc2.RemoteArray)
     np.testing.assert_array_equal(empty_proxy[:], np.empty(0, dtype=np.int32))
     assert empty_proxy.cache_bytes == 0
 
@@ -132,7 +132,7 @@ def test_zarr_source_group_error(tmp_path, zarr):
         ("memory://zarr-tests/suffix-free-open", "zarr"),
     ],
 )
-def test_open_remote_zarr_as_remote_proxy(zarr, url, source_format):
+def test_open_remote_zarr_as_remote_array(zarr, url, source_format):
     data = np.arange(35, dtype=np.int32).reshape(5, 7)
     array = zarr.create_array(url, shape=data.shape, chunks=(3, 4), dtype=data.dtype)
     array[:] = data
@@ -140,7 +140,7 @@ def test_open_remote_zarr_as_remote_proxy(zarr, url, source_format):
     kwargs = {} if source_format is None else {"source_format": source_format}
     proxy = blosc2.open(url, lazy=True, **kwargs)
 
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert proxy.source == {
         "kind": "zarr",
         "version": 1,
@@ -161,13 +161,13 @@ def test_remote_zarr_disk_carrier_reopens_warm(tmp_path, zarr):
     array = zarr.create_array(url, shape=data.shape, chunks=(3, 4), dtype=data.dtype)
     array[:] = data
     path = tmp_path / "zarr-proxy.b2nd"
-    proxy = blosc2.RemoteProxy(
+    proxy = blosc2.RemoteArray(
         url, cache_policy=blosc2.CachePolicy.DISK, cache_path=path, source_format="zarr"
     )
     np.testing.assert_array_equal(proxy[:3, :4], data[:3, :4])
 
     reopened = blosc2.open(path)
-    assert isinstance(reopened, blosc2.RemoteProxy)
+    assert isinstance(reopened, blosc2.RemoteArray)
     reopened.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
     np.testing.assert_array_equal(reopened[:3, :4], data[:3, :4])
 
@@ -179,7 +179,7 @@ def test_zarr_requires_lazy_open():
 
 def test_zarr_rejects_mutable_source_mode():
     with pytest.raises(NotImplementedError, match="mutable Zarr"):
-        blosc2.RemoteProxy(
+        blosc2.RemoteArray(
             "memory://zarr-tests/not-opened.zarr",
             source_format="zarr",
             assume_immutable=False,
@@ -242,7 +242,7 @@ def test_zarr_ref_preserves_explicit_suffix_free_format(zarr):
     data = np.arange(8, dtype=np.int16)
     array = zarr.create_array(url, shape=data.shape, chunks=(4,), dtype=data.dtype)
     array[:] = data
-    proxy = blosc2.RemoteProxy(url, source_format="zarr")
+    proxy = blosc2.RemoteArray(url, source_format="zarr")
     ref = blosc2.Ref.from_object(proxy)
 
     assert ref.kind == "zarr"
@@ -261,11 +261,11 @@ def test_authorized_zarr_store_is_retained_for_sparse_cache(tmp_path, monkeypatc
     descriptor = {"kind": "zarr", "version": 1, "urlpath": url, "assume_immutable": True}
 
     monkeypatch.setattr(
-        blosc2.RemoteProxy,
+        blosc2.RemoteArray,
         "_open_source",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unrestricted reopen")),
     )
-    proxy = blosc2.RemoteProxy.with_sparse_cache(
+    proxy = blosc2.RemoteArray.with_sparse_cache(
         source, tmp_path / "runtime-cache", source_descriptor=descriptor
     )
     np.testing.assert_array_equal(proxy[:], data)

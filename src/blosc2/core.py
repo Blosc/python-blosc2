@@ -2197,7 +2197,7 @@ def from_cframe(
     | blosc2.BatchArray
     | blosc2.ObjectArray
     | blosc2.C2Array
-    | blosc2.RemoteProxy
+    | blosc2.RemoteArray
 ):
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
     :ref:`BatchArray <BatchArray>` or :ref:`ObjectArray <ObjectArray>` instance
@@ -2217,7 +2217,7 @@ def from_cframe(
     -------
     out: :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
          :ref:`BatchArray <BatchArray>`, :ref:`ObjectArray <ObjectArray>`, or
-         :ref:`RemoteProxy <RemoteProxy>`
+         :ref:`RemoteArray <RemoteArray>`
         A new instance of the appropriate type containing the data passed.
 
     See Also

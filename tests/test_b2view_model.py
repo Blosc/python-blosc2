@@ -90,7 +90,7 @@ def test_store_browser_remote_array(tmp_path, suffix):
         fs.pipe_file("b2view-array.b2z", path.read_bytes())
 
     with StoreBrowser("memory://b2view-array" + suffix) as browser:
-        assert isinstance(browser.store, blosc2.RemoteProxy)
+        assert isinstance(browser.store, blosc2.RemoteArray)
         assert browser.list_children("/") == []
         info = browser.get_info("/")
         assert info.kind == "ndarray"

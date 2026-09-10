@@ -1,12 +1,29 @@
 # Working with Remote Arrays
 
 Blosc2 can open remote arrays without downloading them first.
-Metadata is read instantly at open time; array data is fetched only when a slice needs it and is then kept in a local cache.
+Source metadata is read at open time; array data is fetched when a slice needs it and retained according to the cache policy.
 
-All lazy remote array access in Python-Blosc2 is unified under {ref}`RemoteProxy`.
+All lazy remote array access in Python-Blosc2 is unified under {ref}`RemoteArray`.
 
 Use `.attrs` as the recommended interface for user-defined metadata.
 Read user attributes with `a.attrs["name"]` or get them all with `a.attrs[:]`.
+
+For hierarchy discovery, use {ref}`RemoteStore` with B2Z, Zarr or HDF5:
+
+```python
+with blosc2.RemoteStore(
+    "https://host/data.h5", cache_policy=blosc2.CachePolicy.NONE
+) as store:
+    names = store.keys()
+    attrs = store["experiment"].attrs
+    with store["experiment/temperature"] as array:
+        values = array[:100]
+```
+
+Groups and arrays share discovery resources and traffic counters. The current
+store implementation supports NONE only: each read fetches again, with no retained
+payload. Shared MEMORY/DISK caching will follow. Standalone `RemoteArray` and
+`blosc2.open(..., lazy=True)` retain their existing cache policies and defaults.
 
 ## Choose a remote route
 
@@ -74,10 +91,10 @@ Converted Blosc2 chunks are cached under an immutable source contract, so publis
 Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
 Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
-Pre-indexing is performed via `kerchunk`, and the resulting reference map is cached inside the RemoteProxy carrier (`schunk.vlmeta["hdf5-refs"]`) so reopening the carrier requires no network re-indexing.
+Pre-indexing is performed via `kerchunk`, and the resulting reference map is cached inside the RemoteArray carrier (`schunk.vlmeta["hdf5-refs"]`) so reopening the carrier requires no network re-indexing.
 Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5 container.
 
-`RemoteProxy` assumes remote sources are immutable by default, avoiding a metadata request before every read.
+`RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
 Mutable B2Z, Zarr, and HDF5 sources are not supported.
 
@@ -87,7 +104,7 @@ Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use y
 
 ### What each route supports
 
-When opened with `lazy=True`, both routes return a {ref}`RemoteProxy`, providing an identical user interface for slicing, caching, and introspection.
+When opened with `lazy=True`, both routes return a {ref}`RemoteArray`, providing an identical user interface for slicing, caching, and introspection.
 What differs is the types of remote objects each backend can open:
 
 | Remote object                           | fsspec URL                       | Caterva2 `URLPath`           |
@@ -186,7 +203,7 @@ By default, fetched data is cached in memory with a bound on retained compressed
 
 ### In-memory caching (`CachePolicy.MEMORY` — Default)
 
-When opened without disk options, `blosc2.open(..., lazy=True)` retains fetched chunks in RAM as a {ref}`RemoteProxy` with {attr}`CachePolicy.MEMORY <blosc2.CachePolicy.MEMORY>`:
+When opened without disk options, `blosc2.open(..., lazy=True)` retains fetched chunks in RAM as a {ref}`RemoteArray` with {attr}`CachePolicy.MEMORY <blosc2.CachePolicy.MEMORY>`:
 
 ```python
 a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
@@ -206,7 +223,7 @@ a = blosc2.open("s3://bucket/big.b2nd", lazy=True, max_cache_bytes=512 * 2**20)
 ### Persistent disk caching (`CachePolicy.DISK`)
 
 Set `cache_dir` or `cache_path` to persist fetched data across sessions.
-Providing either option with `lazy=True` configures the {ref}`RemoteProxy` to use persistent disk caching ({attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`):
+Providing either option with `lazy=True` configures the {ref}`RemoteArray` to use persistent disk caching ({attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`):
 
 ```python
 url = "s3://bucket/big.b2nd"
@@ -226,7 +243,7 @@ Use `cache_path` instead when the cache should have an exact filename:
 a = blosc2.open(url, lazy=True, cache_path="big-cache.b2nd")
 ```
 
-In both cases, the cache is an ordinary `.b2nd` carrier file managed as a {ref}`RemoteProxy` with {attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`.
+In both cases, the cache is an ordinary `.b2nd` carrier file managed as a {ref}`RemoteArray` with {attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`.
 It starts small and retains compressed chunks up to a finite bound (256 MiB by default, or customized via `max_cache_bytes`; pass `max_cache_bytes=None` for an unbounded disk cache that never evicts).
 `cache_dir` and `cache_path` are mutually exclusive.
 
@@ -296,7 +313,7 @@ Separate handles or processes sharing a disk carrier require external locking.
 
 ## Measure network traffic
 
-{ref}`RemoteProxy`, {ref}`C2Array`, and {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`.
+{ref}`RemoteArray`, {ref}`C2Array`, and {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`.
 The count starts when the remote source is opened, so it includes metadata as well as array data:
 
 ```python
@@ -320,10 +337,10 @@ Use `reset()` or subtract two readings to measure one operation.
 
 ### Persist a self-caching remote proxy
 
-Use {ref}`RemoteProxy` directly when a `.b2nd` file should carry a portable remote descriptor and, optionally, its own bounded persistent cache:
+Use {ref}`RemoteArray` directly when a `.b2nd` file should carry a portable remote descriptor and, optionally, its own bounded persistent cache:
 
 ```python
-remote = blosc2.RemoteProxy(
+remote = blosc2.RemoteArray(
     "s3://bucket/big.b2nd",
     cache_policy=blosc2.CachePolicy.NONE,
 )
@@ -336,7 +353,7 @@ With `CachePolicy.NONE`, repeated reads contact the source and do not mutate the
 With `CachePolicy.DISK`, the proxy carrier itself is the cache:
 
 ```python
-remote = blosc2.RemoteProxy(
+remote = blosc2.RemoteArray(
     "s3://bucket/big.b2nd",
     cache_policy=blosc2.CachePolicy.DISK,
     cache_path="big-cache.b2nd",
@@ -366,7 +383,7 @@ Memory-only access accepts runtime URLs such as signed URLs and fsspec chains.
 Such URLs cannot be exported or obtained as portable `.source` descriptors; disk caching and reference-only construction continue to require persistable URLs.
 
 Existing files are never automatically deleted when opening or validating a cache fails.
-Open legacy caches directly with `blosc2.open(cache_path)`, or choose a new cache path for `RemoteProxy`.
+Open legacy caches directly with `blosc2.open(cache_path)`, or choose a new cache path for `RemoteArray`.
 Preserve or explicitly remove corrupt files before recreating their cache.
 
 ### Reopen a cache file independently
@@ -382,7 +399,7 @@ a[100:110, :50]  # cached data stays local
 a[500:510, :50]  # missing data is fetched from the recorded source and cached
 ```
 
-Opening an on-disk carrier with `mode="a"` returns a {ref}`RemoteProxy` and lets newly fetched regions extend the cache; opening with `mode="r"` keeps the cache file unchanged.
+Opening an on-disk carrier with `mode="a"` returns a {ref}`RemoteArray` and lets newly fetched regions extend the cache; opening with `mode="r"` keeps the cache file unchanged.
 Legacy proxy caches created by older Blosc2 versions are also detected and reopened as a {ref}`Proxy`.
 
 Independent reopening works for fsspec URLs, Caterva2 datasets, and persistent local Blosc2 sources.
@@ -515,4 +532,4 @@ For ordinary remote access, use `blosc2.open("https://...", lazy=True)` or `blos
 - `examples/remote/proxy-carray.py` — creating a persistent local disk proxy of a remote Caterva2 array.
 - `examples/remote/rw-fsspec.py` — fsspec reading and writing examples.
 - {doc}`b2view <b2view>` — interactive terminal browser for local and remote containers.
-- {ref}`RemoteProxy`, {ref}`C2Array`, {ref}`B2ZNDSource`, {ref}`ZarrNDSource`, {ref}`HDF5NDSource`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.
+- {ref}`RemoteArray`, {ref}`C2Array`, {ref}`B2ZNDSource`, {ref}`ZarrNDSource`, {ref}`HDF5NDSource`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.

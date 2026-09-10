@@ -124,10 +124,10 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carri
     if kind == "c2array":
         ref = blosc2.Ref.from_dict(payload)
         return ref.open()
-    if kind == "remote_proxy":
+    if kind == "remote_array":
         if carrier is None:
-            raise ValueError("A persisted RemoteProxy requires its B2ND carrier")
-        return blosc2.RemoteProxy._from_payload(payload, carrier)
+            raise ValueError("A persisted RemoteArray requires its B2ND carrier")
+        return blosc2.RemoteArray._from_payload(payload, carrier)
     if kind == "lazyexpr":
         return decode_structured_lazyexpr(payload, carrier_path=carrier_path)
     if kind == "lazyudf":

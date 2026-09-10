@@ -333,7 +333,7 @@ def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
     proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3)
 
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert proxy.cache_policy is blosc2.CachePolicy.MEMORY
     assert isinstance(proxy.src, blosc2.C2Array)
     assert proxy.src.max_concurrency == 3
@@ -354,14 +354,14 @@ def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_bl
 
     srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     del proxy
 
     srv.log.clear()
     proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
@@ -375,7 +375,7 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
     cache_path = tmp_path / "chosen.b2nd"
 
     proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path)
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert proxy.cache_path == str(cache_path)
     assert proxy.source["kind"] == "caterva2"
@@ -383,7 +383,7 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
 
     srv.log.clear()
     proxy = blosc2.open(cache_path, mode="a")
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert isinstance(proxy.src, blosc2.C2Array)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]

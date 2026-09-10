@@ -6,7 +6,7 @@ HDF5NDSource
 ``HDF5NDSource`` exposes an HDF5 dataset through :ref:`ProxyNDSource` using
 ``kerchunk`` metadata pre-indexing. Individual chunks are fetched on demand
 and converted to Blosc2-compressed chunks stored in the surrounding
-:ref:`Proxy` or :ref:`RemoteProxy` cache.
+:ref:`Proxy` or :ref:`RemoteArray` cache.
 
 The source is assumed immutable (``assume_immutable=True``). It supports fixed-size
 boolean, integer, floating-point, complex, and fixed-length string arrays.

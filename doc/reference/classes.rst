@@ -142,7 +142,8 @@ container APIs above.
     list_array
     objectarray
     proxy
-    remoteproxy
+    remotearray
+    remotestore
     proxysource
     proxyndsource
     byterangendsource

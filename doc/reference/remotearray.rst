@@ -1,9 +1,9 @@
-.. _RemoteProxy:
+.. _RemoteArray:
 
-RemoteProxy
+RemoteArray
 ===========
 
-``RemoteProxy`` is a persistable proxy for one remote B2ND, B2Z, Zarr, or HDF5 array. It
+``RemoteArray`` is a persistable proxy for one remote B2ND, B2Z, Zarr, or HDF5 array. It
 accepts an fsspec URL or a Caterva2 :ref:`URLPath`. With disk caching enabled,
 its B2ND carrier is both the portable descriptor and the bounded compressed-data
 cache.
@@ -14,7 +14,7 @@ object writes only its source descriptor and array geometry.
 
 .. code-block:: python
 
-    remote = blosc2.RemoteProxy(
+    remote = blosc2.RemoteArray(
         "s3://public-bucket/dataset.b2nd",
         cache_policy=blosc2.CachePolicy.NONE,
     )
@@ -25,14 +25,14 @@ URL:
 
 .. code-block:: python
 
-    remote = blosc2.RemoteProxy(
+    remote = blosc2.RemoteArray(
         blosc2.URLPath(
             "@public/dataset.b2nd",
             urlbase="https://example.org/caterva2",
         )
     )
 
-By default, ``RemoteProxy`` assumes its source is immutable and skips remote
+By default, ``RemoteArray`` assumes its source is immutable and skips remote
 identity checks before reads. For a replaceable single-file or Caterva2 source,
 pass ``assume_immutable=False`` to refresh its identity and invalidate stale
 cached data before each operation.
@@ -127,20 +127,20 @@ returned NumPy array.
 
 .. code-block:: python
 
-    remote = blosc2.RemoteProxy(
+    remote = blosc2.RemoteArray(
         "s3://public-bucket/dataset.b2nd",
         cache_policy=blosc2.CachePolicy.DISK,
         cache_path="dataset-cache.b2nd",
         max_cache_bytes=2 * 2**30,
     )
 
-When opening a remote array via :func:`blosc2.open` with ``lazy=True``, a :class:`RemoteProxy`
+When opening a remote array via :func:`blosc2.open` with ``lazy=True``, a :class:`RemoteArray`
 is always returned: specifying ``cache_dir`` or ``cache_path`` configures it with
 :attr:`blosc2.CachePolicy.DISK`, while omitting them configures it with
 :attr:`blosc2.CachePolicy.MEMORY`.
 
-By default, :meth:`RemoteProxy.save <blosc2.RemoteProxy.save>` and
-:meth:`RemoteProxy.to_cframe <blosc2.RemoteProxy.to_cframe>` include valid warm
+By default, :meth:`RemoteArray.save <blosc2.RemoteArray.save>` and
+:meth:`RemoteArray.to_cframe <blosc2.RemoteArray.to_cframe>` include valid warm
 chunks for DISK proxies; MEMORY proxies always export cold carriers.
 Pass ``include_cache=False`` for a cold carrier without changing the
 warm original. The cache policy and limit remain in both forms; local paths and
@@ -182,7 +182,7 @@ file. Read-only mode can use warm chunks but does not retain misses:
     credentials, redirects, and resource limits. Client-side URL checks are not
     a server security boundary.
 
-.. autoclass:: blosc2.RemoteProxy
+.. autoclass:: blosc2.RemoteArray
 
     .. automethod:: __init__
     .. automethod:: __getitem__
@@ -218,7 +218,7 @@ file. Read-only mode can use warm chunks but does not retain misses:
 RemoteMetadataMapping
 ---------------------
 
-``RemoteProxy.attrs`` returns a read-only mapping that fetches array attributes
+``RemoteArray.attrs`` returns a read-only mapping that fetches array attributes
 only when they are accessed.  Use it like a dictionary, or use ``attrs[:]`` to
 fetch all attributes at once.
 

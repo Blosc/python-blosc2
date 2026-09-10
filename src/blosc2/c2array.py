@@ -1705,7 +1705,7 @@ class URLPath:
         Passing this object to :func:`blosc2.open` returns a :ref:`C2Array`. With
         ``lazy=True`` it instead returns a :ref:`Proxy`, using an in-memory cache
         by default or a persistent cache when ``cache_dir`` is provided. Passing
-        ``cache_policy`` explicitly selects a :ref:`RemoteProxy` with the
+        ``cache_policy`` explicitly selects a :ref:`RemoteArray` with the
         requested retention policy.
         Authenticated users sharing a machine must use separate cache directories.
 

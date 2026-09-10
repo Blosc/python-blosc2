@@ -116,7 +116,7 @@ def open_remote_array(
         return "Zarr (Zip)", arr
 
     # If the URL targets an HDF5 container without a dataset path, list available datasets
-    base_url, detected_dataset, hint = blosc2.remote_proxy.parse_container_url(url)
+    base_url, detected_dataset, hint = blosc2.remote_array.parse_container_url(url)
     if hint == "hdf5" and detected_dataset is None:
         available = blosc2.available_datasets(base_url, storage_options=storage_options)
         raise ValueError(
@@ -134,7 +134,7 @@ def open_remote_array(
         label = "Blosc2 B2Z"
     else:
         label = "Blosc2"
-    return f"{label} (Lazy RemoteProxy)", arr
+    return f"{label} (Lazy RemoteArray)", arr
 
 
 def main() -> int:

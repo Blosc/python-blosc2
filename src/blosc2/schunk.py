@@ -2057,7 +2057,7 @@ def _validate_fsspec_source_format(source_format, lazy):
         raise ValueError("HDF5 sources require lazy=True")
 
 
-def _remote_proxy_options(
+def _remote_array_options(
     kwargs,
     cache_dir,
     cache_path,
@@ -2070,7 +2070,7 @@ def _remote_proxy_options(
     dataset=None,
     refs=None,
 ):
-    """Return explicit RemoteProxy options, or None for the legacy lazy Proxy path."""
+    """Return explicit RemoteArray options, or None for the legacy lazy Proxy path."""
     policy_present = "cache_policy" in kwargs
     limit_present = "max_cache_bytes" in kwargs
     if not lazy and not policy_present and not limit_present:
@@ -2122,10 +2122,10 @@ def _lazy_fsspec_proxy(
     if storage_options is not None:
         kwargs["storage_options"] = storage_options
     src = blosc2.FsspecNDSource(urlpath, **kwargs)
-    return _lazy_remote_proxy(src, urlpath, cache_dir, cache_path)
+    return _lazy_remote_array(src, urlpath, cache_dir, cache_path)
 
 
-def _lazy_remote_proxy(
+def _lazy_remote_array(
     src,
     identity: str,
     cache_dir: str | pathlib.Path | None,
@@ -2184,11 +2184,11 @@ def _validate_c2_urlpath_options(kwargs: dict):
 
 
 def _open_non_lazy_c2(
-    urlpath, immutable_present, remote_proxy_options, cache_dir, cache_path, max_concurrency
+    urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
 ):
     if immutable_present:
         raise NotImplementedError("assume_immutable requires lazy=True")
-    if remote_proxy_options is not None:
+    if remote_array_options is not None:
         raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
     if cache_dir is not None or cache_path is not None:
         raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
@@ -2210,7 +2210,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     assume_immutable = kwargs.pop("assume_immutable", True)
     _validate_c2_urlpath_options(kwargs)
     lazy = kwargs.pop("lazy", False)
-    remote_proxy_options = _remote_proxy_options(
+    remote_array_options = _remote_array_options(
         kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, assume_immutable=assume_immutable
     )
     requested = [key for key, value in kwargs.items() if value is not None]
@@ -2219,11 +2219,11 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
 
     if not lazy:
         return _open_non_lazy_c2(
-            urlpath, immutable_present, remote_proxy_options, cache_dir, cache_path, max_concurrency
+            urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
         )
 
-    if remote_proxy_options is not None:
-        return blosc2.RemoteProxy(urlpath, **remote_proxy_options)
+    if remote_array_options is not None:
+        return blosc2.RemoteArray(urlpath, **remote_array_options)
 
     src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
     if max_concurrency is not None:
@@ -2232,7 +2232,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     # C2Array's constructor has just read api/info.  That response supplies both
     # the geometry and the stamp against which the cache is checked, so asking
     # for it again in Proxy.__init__ only adds a second serial round trip.
-    return _lazy_remote_proxy(src, identity, cache_dir, cache_path, source_fresh=True)
+    return _lazy_remote_array(src, identity, cache_dir, cache_path, source_fresh=True)
 
 
 def _cache_stamp(path: str):
@@ -2261,10 +2261,10 @@ def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bo
         raise ValueError("HDF5 sources require lazy=True")
 
 
-def _validate_non_lazy_fsspec_options(immutable_present, remote_proxy_options, cache_path, max_concurrency):
+def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency):
     if immutable_present:
         raise NotImplementedError("assume_immutable requires lazy=True")
-    if remote_proxy_options is not None:
+    if remote_array_options is not None:
         raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
     if cache_path is not None:
         raise NotImplementedError("cache_path is only supported with lazy=True")
@@ -2303,7 +2303,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         source_format = detected_format
 
     _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
-    remote_proxy_options = _remote_proxy_options(
+    remote_array_options = _remote_array_options(
         kwargs,
         cache_dir,
         cache_path,
@@ -2321,13 +2321,13 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        if remote_proxy_options is not None:
-            return blosc2.RemoteProxy(urlpath, **remote_proxy_options)
+        if remote_array_options is not None:
+            return blosc2.RemoteArray(urlpath, **remote_array_options)
         return _lazy_fsspec_proxy(
             urlpath, cache_dir, cache_path, max_concurrency, storage_options=storage_options
         )
 
-    _validate_non_lazy_fsspec_options(immutable_present, remote_proxy_options, cache_path, max_concurrency)
+    _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
     if cache_dir is not None:
         return open(
@@ -2430,7 +2430,7 @@ def open(
     | blosc2.BatchArray
     | blosc2.ObjectArray
     | blosc2.C2Array
-    | blosc2.RemoteProxy
+    | blosc2.RemoteArray
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -2438,7 +2438,7 @@ def open(
     | blosc2.EmbedStore
 ):
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
-    :ref:`RemoteProxy`, :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or
+    :ref:`RemoteArray`, :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or
     :ref:`TreeStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
@@ -2473,7 +2473,7 @@ def open(
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
         lazy: bool, optional
-            For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteProxy` over
+            For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
             the remote dataset and read the byte ranges a slice touches. Neither form opens
             a whole remote store hierarchy. A slice landing in a small part of a large
             chunk costs only the *blocks* it touches when ranges are available;
@@ -2490,24 +2490,24 @@ def open(
         cache_dir: str | pathlib.Path, optional
             For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's
             local copy — either the whole thing, or just the chunks and blocks ``lazy`` has fetched so far
-            (as a persistent :ref:`RemoteProxy` with :attr:`CachePolicy.DISK`). Either way a later run
+            (as a persistent :ref:`RemoteArray` with :attr:`CachePolicy.DISK`). Either way a later run
             starts from what is already there, and the copy is discarded when the remote no longer matches
             it. There is no default on purpose, so nothing writes to a disk you did not name.
         cache_path: str | pathlib.Path, optional
             With ``lazy=True``, the exact file to use for the remote array's
-            persistent :ref:`RemoteProxy` cache (:attr:`CachePolicy.DISK`). Mutually exclusive with
+            persistent :ref:`RemoteArray` cache (:attr:`CachePolicy.DISK`). Mutually exclusive with
             ``cache_dir``.
         cache_storage: str | pathlib.Path, optional
             Deprecated alias for ``cache_dir``. Mutually exclusive with
             ``cache_dir`` and ``cache_path``.
         cache_policy: CachePolicy, optional
-            With ``lazy=True`` on a remote source, return a :ref:`RemoteProxy`
+            With ``lazy=True`` on a remote source, return a :ref:`RemoteArray`
             using the requested retention policy (``NONE``, ``MEMORY``, or ``DISK``).
             When omitted, passing ``cache_dir`` or ``cache_path`` defaults to
             ``CachePolicy.DISK``, while omitting them defaults to ``CachePolicy.MEMORY``.
         max_cache_bytes: int or None, optional
             With ``lazy=True``, bound retained compressed cache payload for a
-            :ref:`RemoteProxy` after each operation. Defaults to 256 MiB for both
+            :ref:`RemoteArray` after each operation. Defaults to 256 MiB for both
             ``DISK`` and ``MEMORY``. Passing ``None`` with ``DISK`` disables cache
             eviction (unbounded cache). This does not bound the current operation's
             working set or result.
@@ -2555,7 +2555,7 @@ def open(
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`RemoteProxy`,
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`RemoteArray`,
         :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
         The object found in the path.
 
@@ -2564,13 +2564,15 @@ def open(
     * Returned objects can be used as context managers for API consistency.
       For objects with an explicit ``close()`` implementation, exiting the
       context will close/flush them; for logical handles such as regular
-      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, :class:`RemoteProxy`,
+      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, standalone :class:`RemoteArray`,
       :class:`Proxy`, and :class:`LazyArray`, exiting the context is currently a
       no-op.
+      Store-derived :class:`RemoteArray` handles release their shared source
+      ownership when closed; other handles from that store remain usable.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
-      returns a :ref:`C2Array`. With ``lazy=True``, it returns a :ref:`RemoteProxy`
+      returns a :ref:`C2Array`. With ``lazy=True``, it returns a :ref:`RemoteArray`
       (defaulting to ``CachePolicy.DISK`` when ``cache_dir`` or ``cache_path`` is
       provided, and ``CachePolicy.MEMORY`` otherwise).
       Authenticated users sharing a machine must use separate caches.
@@ -2584,20 +2586,20 @@ def open(
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
       archive rather than a cframe, and needs ``cache_dir`` like the directory
       formats do. With ``lazy=True`` and a dataset path, a B2Z archive serves
-      its selected external NDArray by byte range. Lazy opening returns a :ref:`RemoteProxy` (using
+      its selected external NDArray by byte range. Lazy opening returns a :ref:`RemoteArray` (using
       ``CachePolicy.DISK`` with ``cache_dir`` or ``cache_path``, and
       ``CachePolicy.MEMORY`` otherwise).
 
     * Persistent data handling follows a no-hidden-writes rule except for an
-      explicitly self-caching :ref:`RemoteProxy`:
+      explicitly self-caching :ref:`RemoteArray`:
 
       - ``mode='r'`` is observational only and never mutates the opened object.
-      - ``mode='a'`` permits a ``DISK`` RemoteProxy to retain remote chunks in
+      - ``mode='a'`` permits a ``DISK`` RemoteArray to retain remote chunks in
         its own carrier. Other execution caches are not serialized implicitly.
       - ``mode='w'`` persists explicit mutations requested by the caller.
 
     * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`
-      or a :ref:`RemoteProxy`, this function reconstructs sources backed by a
+      or a :ref:`RemoteArray`, this function reconstructs sources backed by a
       persistent local :ref:`SChunk` or :ref:`NDArray`, an fsspec URL, or a remote
       :ref:`C2Array`. Custom proxy sources must be recreated explicitly because
       their Python class and runtime state are not stored in the cache.

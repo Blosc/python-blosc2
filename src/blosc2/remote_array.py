@@ -14,6 +14,7 @@ import contextlib
 import math
 import os
 import threading
+import weakref
 from collections.abc import Mapping
 from contextlib import nullcontext
 from functools import wraps
@@ -126,7 +127,9 @@ def _validate_assume_immutable(value, name="assume_immutable"):
 def _serialized_operation(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
-        with self._operation_lock:
+        owner = getattr(self, "_store_owner", None)
+        with owner.lock if owner is not None else nullcontext(), self._operation_lock:
+            self._check_open()
             cache_lock = (
                 self._runtime_cache.holding_lock()
                 if self._shared_runtime_cache and self._runtime_cache is not None
@@ -144,26 +147,26 @@ def _serialized_operation(method):
     return locked
 
 
-def _validate_persistable_url(url: str) -> None:
+def validate_persistable_url(url: str) -> None:
     """Reject URL features that would put credentials in a portable carrier."""
     if "::" in url:
-        raise ValueError("RemoteProxy does not persist chained fsspec URLs")
+        raise ValueError("RemoteArray does not persist chained fsspec URLs")
     parsed = urlsplit(url)
     if not parsed.scheme:
-        raise ValueError("RemoteProxy requires a remote URL or a Caterva2 URLPath")
+        raise ValueError("RemoteArray requires a remote URL or a Caterva2 URLPath")
     if parsed.scheme.lower() in {"file", "local"}:
-        raise ValueError("RemoteProxy does not persist local filesystem URLs")
+        raise ValueError("RemoteArray does not persist local filesystem URLs")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError("RemoteProxy URLs cannot contain user information")
+        raise ValueError("RemoteArray URLs cannot contain user information")
     if parsed.fragment:
-        raise ValueError("RemoteProxy URLs cannot contain fragments")
+        raise ValueError("RemoteArray URLs cannot contain fragments")
     sensitive = [
         key
         for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
         if any(part in key.lower() for part in _SENSITIVE_QUERY_PARTS)
     ]
     if sensitive:
-        raise ValueError("RemoteProxy URLs cannot contain credential-like query parameters")
+        raise ValueError("RemoteArray URLs cannot contain credential-like query parameters")
 
 
 def _normalize_limit(policy, value):
@@ -197,21 +200,21 @@ def _validate_max_concurrency(value: int | None) -> int | None:
 def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
     if policy is blosc2.CachePolicy.NONE:
         if limit is not None:
-            raise ValueError("persisted NONE RemoteProxy cannot have max_cache_bytes")
+            raise ValueError("persisted NONE RemoteArray cannot have max_cache_bytes")
     elif policy is blosc2.CachePolicy.DISK:
         if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0):
-            raise ValueError("persisted DISK RemoteProxy requires positive max_cache_bytes or None")
+            raise ValueError("persisted DISK RemoteArray requires positive max_cache_bytes or None")
     elif isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-        raise ValueError(f"persisted {policy.name} RemoteProxy requires positive max_cache_bytes")
+        raise ValueError(f"persisted {policy.name} RemoteArray requires positive max_cache_bytes")
 
 
-def _validate_authorized_source(urlpath, storage_options, source_descriptor):
-    if isinstance(urlpath, blosc2.B2ZNDSource):
+def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, store_attachment=False):
+    if isinstance(urlpath, blosc2.B2ZNDSource) and not store_attachment:
         raise NotImplementedError("authorized B2Z sparse attachment is not supported yet")
     if storage_options is not None:
         raise ValueError("storage_options cannot be used with an authorized source")
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
-    if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls)):
+    if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls, blosc2.B2ZNDSource)):
         raise TypeError(
             "source_descriptor requires an authorized FsspecNDSource, ZarrNDSource, or HDF5NDSource"
         )
@@ -220,7 +223,9 @@ def _validate_authorized_source(urlpath, storage_options, source_descriptor):
     )
     expected = {
         "kind": (
-            "hdf5"
+            "b2z"
+            if isinstance(urlpath, blosc2.B2ZNDSource)
+            else "hdf5"
             if isinstance(urlpath, hdf5_cls)
             else "zarr"
             if isinstance(urlpath, blosc2.ZarrNDSource)
@@ -230,11 +235,13 @@ def _validate_authorized_source(urlpath, storage_options, source_descriptor):
         "urlpath": urlpath.urlpath,
         "assume_immutable": assume_immutable,
     }
-    if isinstance(urlpath, hdf5_cls):
+    if isinstance(urlpath, (hdf5_cls, blosc2.B2ZNDSource)):
         expected["dataset"] = urlpath.dataset
+    if isinstance(urlpath, blosc2.B2ZNDSource) and urlpath._archive.urlpath != urlpath.urlpath:
+        raise ValueError("B2Z source URL does not match its archive")
     if source_descriptor != expected:
         raise ValueError("source_descriptor does not match the supplied source")
-    _validate_persistable_url(urlpath.urlpath)
+    validate_persistable_url(urlpath.urlpath)
     return urlpath, dict(expected)
 
 
@@ -253,7 +260,7 @@ def _open_url_source(
     cparams=None,
 ):
     if persistable:
-        _validate_persistable_url(urlpath)
+        validate_persistable_url(urlpath)
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
     if storage_options is not None:
         kwargs["storage_options"] = storage_options
@@ -328,16 +335,16 @@ def _validate_cache_locations(cache_policy, cache_dir, cache_path, carrier, runt
 
 def _validate_urlpath_source(source, expected_fields, kind_name):
     if set(source) != expected_fields:
-        raise ValueError(f"{kind_name} RemoteProxy source descriptors contain unsupported fields")
+        raise ValueError(f"{kind_name} RemoteArray source descriptors contain unsupported fields")
     urlpath = source.get("urlpath")
     if not isinstance(urlpath, str):
-        raise TypeError(f"{kind_name} RemoteProxy sources require a string 'urlpath'")
+        raise TypeError(f"{kind_name} RemoteArray sources require a string 'urlpath'")
     return urlpath
 
 
 def _parse_source_from_payload(source):
     if not isinstance(source, dict) or source.get("version") != 1:
-        raise ValueError("unsupported RemoteProxy source descriptor")
+        raise ValueError("unsupported RemoteArray source descriptor")
     source_kind = source.get("kind")
     if source_kind == "fsspec":
         urlpath = _validate_urlpath_source(
@@ -345,11 +352,11 @@ def _parse_source_from_payload(source):
         )
     elif source_kind == "caterva2":
         if set(source) != {"kind", "version", "path", "urlbase", "assume_immutable"}:
-            raise ValueError("Caterva2 RemoteProxy source descriptors contain unsupported fields")
+            raise ValueError("Caterva2 RemoteArray source descriptors contain unsupported fields")
         path = source.get("path")
         urlbase = source.get("urlbase")
         if not isinstance(path, str) or (urlbase is not None and not isinstance(urlbase, str)):
-            raise TypeError("Caterva2 RemoteProxy sources require string 'path' and 'urlbase' fields")
+            raise TypeError("Caterva2 RemoteArray sources require string 'path' and 'urlbase' fields")
         urlpath = blosc2.URLPath(path, urlbase=urlbase)
     elif source_kind == "zarr":
         urlpath = _validate_urlpath_source(
@@ -361,9 +368,9 @@ def _parse_source_from_payload(source):
         )
         dataset = source.get("dataset")
         if not isinstance(dataset, str):
-            raise TypeError(f"{source_kind.upper()} RemoteProxy sources require a string 'dataset'")
+            raise TypeError(f"{source_kind.upper()} RemoteArray sources require a string 'dataset'")
     else:
-        raise ValueError(f"unsupported RemoteProxy source kind: {source_kind!r}")
+        raise ValueError(f"unsupported RemoteArray source kind: {source_kind!r}")
     _validate_assume_immutable(source.get("assume_immutable"), "source assume_immutable")
     return source_kind, urlpath
 
@@ -398,7 +405,7 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
     return urlpath, resolved_dataset, resolved_format
 
 
-class RemoteProxy(blosc2.Operand):
+class RemoteArray(blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
     With :attr:`CachePolicy.DISK`, the public constructor uses the persisted
@@ -416,7 +423,7 @@ class RemoteProxy(blosc2.Operand):
     cache_policy: CachePolicy
         ``NONE`` retains no array data. ``MEMORY`` retains compressed chunks
         in client process memory. ``DISK`` retains compressed chunks in
-        the RemoteProxy carrier at ``cache_path`` or under ``cache_dir``.
+        the RemoteArray carrier at ``cache_path`` or under ``cache_dir``.
     cache_path: str or path-like, optional
         Exact persistent cache filename. Only valid with ``DISK`` and mutually
         exclusive with ``cache_dir``.
@@ -462,6 +469,7 @@ class RemoteProxy(blosc2.Operand):
         _source_descriptor=None,
         _source_blocks=None,
         _source_cparams=None,
+        _store_owner=None,
     ):
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
@@ -477,7 +485,7 @@ class RemoteProxy(blosc2.Operand):
         self._authorized_source = _source_descriptor is not None
         if self._authorized_source:
             self.src, self._source = _validate_authorized_source(
-                urlpath, storage_options, _source_descriptor
+                urlpath, storage_options, _source_descriptor, store_attachment=_store_owner is not None
             )
         else:
             if refs is None and _carrier is not None:
@@ -537,6 +545,23 @@ class RemoteProxy(blosc2.Operand):
             if self._cached_vlmeta is None:
                 self._cached_vlmeta = read_b2object_user_vlmeta(self._carrier)
 
+        if _store_owner is not None:
+            _store_owner.acquire()
+            self._store_owner = _store_owner
+            self._store_finalizer = weakref.finalize(self, _store_owner.release)
+
+    def _check_open(self):
+        finalizer = getattr(self, "_store_finalizer", None)
+        if finalizer is not None and not finalizer.alive:
+            raise RuntimeError("RemoteArray handle is closed")
+
+    def close(self):
+        """Release this store-derived handle; standalone handles retain their existing lifetime."""
+        owner = getattr(self, "_store_owner", None)
+        if owner is not None:
+            with owner.lock, self._operation_lock:
+                self._store_finalizer()
+
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
         if isinstance(self.src, blosc2.C2Array):
@@ -569,7 +594,7 @@ class RemoteProxy(blosc2.Operand):
             payload = carrier.schunk.vlmeta.get("b2o")
             if payload != self._payload():
                 raise ValueError(
-                    f"the RemoteProxy carrier at {path} has a different specification; "
+                    f"the RemoteArray carrier at {path} has a different specification; "
                     "open legacy Proxy caches directly with blosc2.open(cache_path), "
                     "or choose a new cache_path"
                 )
@@ -603,7 +628,7 @@ class RemoteProxy(blosc2.Operand):
         """Open a server-owned sparse runtime cache or create it cold.
 
         This is deliberately separate from ``cache_path`` in the public
-        constructor: portable RemoteProxy carriers remain contiguous files.
+        constructor: portable RemoteArray carriers remain contiguous files.
         """
         path = os.fspath(cache_path)
         if os.path.exists(path):
@@ -679,7 +704,7 @@ class RemoteProxy(blosc2.Operand):
         seed_payload = seed_schunk.vlmeta.get("b2o")
         if (
             not isinstance(seed_payload, dict)
-            or seed_payload.get("kind") != "remote_proxy"
+            or seed_payload.get("kind") != "remote_array"
             or seed_payload.get("source") != self._source
         ):
             raise ValueError("the warm carrier belongs to a different remote source")
@@ -704,7 +729,7 @@ class RemoteProxy(blosc2.Operand):
         directory must construct it through this method so frame locking and
         interrupted-mutation recovery remain enabled.
 
-        ``carrier`` is the portable RemoteProxy carrier.  If it contains valid
+        ``carrier`` is the portable RemoteArray carrier.  If it contains valid
         warm chunks when the sparse runtime cache is first created, those chunks
         are copied into the runtime cache.  Both copies continue to exist until
         the server replaces the portable carrier with a cold descriptor.  After
@@ -854,7 +879,7 @@ class RemoteProxy(blosc2.Operand):
                 raise ValueError("storage_options is only supported for fsspec URLs")
             src = urlpath
             if persistable and src.urlbase is not None:
-                _validate_persistable_url(src.urlbase)
+                validate_persistable_url(src.urlbase)
             source = {
                 "kind": "caterva2",
                 "version": 1,
@@ -895,7 +920,7 @@ class RemoteProxy(blosc2.Operand):
                 cparams=cparams,
             )
         else:
-            raise TypeError("RemoteProxy requires a URL string, URLPath, or C2Array")
+            raise TypeError("RemoteArray requires a URL string, URLPath, or C2Array")
 
         if max_concurrency is not None and isinstance(src, blosc2.C2Array):
             src.max_concurrency = max_concurrency
@@ -920,12 +945,13 @@ class RemoteProxy(blosc2.Operand):
         )
         if actual != normalized:
             raise ValueError(
-                "RemoteProxy source geometry no longer matches its carrier: "
+                "RemoteArray source geometry no longer matches its carrier: "
                 f"carrier={normalized}, source={actual}"
             )
 
     def _prepare_read(self):
         """Refresh source identity and return the backend for one operation."""
+        self._check_open()
         if self._authorized_source or self._assume_immutable:
             return self._proxy if self._proxy is not None else self.src
         with self._refresh_lock:
@@ -972,10 +998,12 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def shape(self):
+        self._check_open()
         return self._expected_geometry[0]
 
     @property
     def dtype(self):
+        self._check_open()
         return self._expected_geometry[1]
 
     @property
@@ -985,39 +1013,47 @@ class RemoteProxy(blosc2.Operand):
 
     @property
     def chunks(self):
+        self._check_open()
         return self._expected_geometry[2]
 
     @property
     def blocks(self):
+        self._check_open()
         return self._expected_geometry[3]
 
     @property
     def cache_policy(self) -> blosc2.CachePolicy:
         """The persisted retention policy."""
+        self._check_open()
         return self._cache_policy
 
     @property
     def max_cache_bytes(self) -> int | None:
         """The persisted post-operation retained-cache bound."""
+        self._check_open()
         return self._cache_limit
 
     @property
     def cparams(self):
+        self._check_open()
         return self._expected_cparams
 
     @property
     def traffic(self):
+        self._check_open()
         return getattr(self.src, "traffic", None)
 
     @property
     def nbytes(self) -> int:
         """The uncompressed size of the remote array."""
+        self._check_open()
         value = getattr(self.src, "nbytes", None)
         return int(value) if value is not None else math.prod(self.shape) * self.dtype.itemsize
 
     @property
     def info(self) -> InfoReporter:
         """A printable summary of this remote reference."""
+        self._check_open()
         return InfoReporter(self)
 
     @property
@@ -1044,6 +1080,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def assume_immutable(self) -> bool:
         """Whether reads skip remote identity checks."""
+        self._check_open()
         return self._assume_immutable
 
     @property
@@ -1118,6 +1155,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def schunk(self):
         """The underlying carrier's or cache's :class:`SChunk`, or None if unattached."""
+        self._check_open()
         if self._proxy is not None:
             return self._proxy.schunk
         if self._runtime_cache is not None:
@@ -1129,6 +1167,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def cache(self):
         """The local container used as cache, or None if caching is disabled."""
+        self._check_open()
         if self._proxy is not None:
             return getattr(self._proxy, "cache", getattr(self._proxy, "_cache", None))
         return self._runtime_cache
@@ -1136,6 +1175,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def urlpath(self):
         """The remote fsspec URL or credential-free Caterva2 URLPath."""
+        self._check_open()
         if self._source["kind"] in {"fsspec", "zarr", "hdf5", "b2z"}:
             return self._source["urlpath"]
         return blosc2.URLPath(self._source["path"], urlbase=self._source["urlbase"])
@@ -1143,11 +1183,13 @@ class RemoteProxy(blosc2.Operand):
     @property
     def dataset(self) -> str | None:
         """The dataset path within a container source, or None."""
+        self._check_open()
         return self._source.get("dataset", self._dataset)
 
     @property
     def cache_path(self):
         """The self-caching carrier path, or ``None`` for other policies."""
+        self._check_open()
         if self._carrier is None or self.cache_policy is not blosc2.CachePolicy.DISK:
             return None
         return getattr(self._carrier.schunk, "urlpath", None)
@@ -1155,6 +1197,7 @@ class RemoteProxy(blosc2.Operand):
     @property
     def runtime_cache_path(self):
         """The mutable sparse cache directory, when one is attached."""
+        self._check_open()
         if not self._shared_runtime_cache or self._runtime_cache is None:
             return None
         return getattr(self._runtime_cache.schunk, "urlpath", None)
@@ -1162,11 +1205,13 @@ class RemoteProxy(blosc2.Operand):
     @property
     def cache_status(self):
         """How a persistent disk cache was handled, or ``None`` otherwise."""
+        self._check_open()
         return self._cache_status
 
     @property
     def cache_bytes(self) -> int:
         """Compressed bytes currently retained by the runtime cache."""
+        self._check_open()
         if self._proxy is None:
             return 0
         if self._proxy._max_cache_bytes is None:
@@ -1256,9 +1301,9 @@ class RemoteProxy(blosc2.Operand):
     def _payload(self):
         url = self._source.get("urlpath", self._source.get("urlbase"))
         if url is not None:
-            _validate_persistable_url(url)
+            validate_persistable_url(url)
         return {
-            "kind": "remote_proxy",
+            "kind": "remote_array",
             "version": 1,
             "source": dict(self._source),
             "cache_policy": self.cache_policy.value,
@@ -1282,7 +1327,7 @@ class RemoteProxy(blosc2.Operand):
                 {name: self.meta[name] for name in self.meta if name not in carrier_excluded},
             )
         array = make_b2object_carrier(
-            "remote_proxy",
+            "remote_array",
             self.shape,
             self.dtype,
             chunks=self.chunks,
@@ -1370,11 +1415,11 @@ class RemoteProxy(blosc2.Operand):
     @classmethod
     def _from_payload(cls, payload, carrier):
         if set(payload) != {"kind", "version", "source", "cache_policy", "max_cache_bytes"}:
-            raise ValueError("persisted RemoteProxy payload contains unsupported fields")
+            raise ValueError("persisted RemoteArray payload contains unsupported fields")
         try:
             policy = blosc2.CachePolicy(payload.get("cache_policy"))
         except ValueError as exc:
-            raise ValueError("persisted RemoteProxy has an unsupported cache policy") from exc
+            raise ValueError("persisted RemoteArray has an unsupported cache policy") from exc
         limit = payload.get("max_cache_bytes")
         _validate_payload_limit(policy, limit)
         source = payload.get("source")
@@ -1412,10 +1457,12 @@ class RemoteProxy(blosc2.Operand):
         return obj
 
     def __enter__(self):
+        self._check_open()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
         return False
 
     def __str__(self):
-        return f"RemoteProxy({self._source_identity()!r}, cache_policy={self.cache_policy.name})"
+        return f"RemoteArray({self._source_identity()!r}, cache_policy={self.cache_policy.name})"

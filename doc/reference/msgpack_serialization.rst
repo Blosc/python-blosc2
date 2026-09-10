@@ -22,7 +22,7 @@ The following objects are serialized by value using
 - ``ObjectArray``
 - ``BatchArray``
 - ``EmbedStore``
-- ``RemoteProxy``
+- ``RemoteArray``
 
 Structured objects
 ------------------
@@ -41,7 +41,7 @@ Currently implemented structured kinds are:
 
 - ``"ref"``
 - ``"c2array"``
-- ``"remote_proxy"``
+- ``"remote_array"``
 - ``"fsspec"``
 - ``"urlpath"``
 - ``"dictstore_key"``
@@ -61,7 +61,7 @@ Remote arrays are serialized as lightweight references with:
 
 Authentication data is intentionally not serialized.
 
-``RemoteProxy``
+``RemoteArray``
 ---------------
 
 Remote proxies use a B2ND carrier containing a versioned Caterva2 or fsspec
@@ -106,7 +106,7 @@ Only durable reference-style operands are supported:
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
-- ``RemoteProxy`` operands for fsspec, Zarr, or Caterva2 references
+- ``RemoteArray`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Purely in-memory operands are intentionally rejected. This keeps msgpack
@@ -133,7 +133,7 @@ Supported operands are the same durable reference-style operands used for
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
-- ``RemoteProxy`` operands for fsspec, Zarr, or Caterva2 references
+- ``RemoteArray`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Plain Python ``LazyUDF`` callables are intentionally not serialized by

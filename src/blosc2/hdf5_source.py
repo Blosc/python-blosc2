@@ -167,7 +167,8 @@ def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=N
     import kerchunk.hdf
 
     fs, path = fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
-    with fs.open(path, "rb", block_size=0, cache_type="none") as file:
+    # HTTP uses block_size=0 for non-seekable streaming; cache_type disables read-ahead.
+    with fs.open(path, "rb", block_size=1, cache_type="none") as file:
         if traffic is not None:
             file = _CountingFile(file, traffic)
         translator = kerchunk.hdf.SingleHdf5ToZarr(

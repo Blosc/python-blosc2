@@ -160,18 +160,18 @@ def test_hdf5_source_available_datasets():
 
 
 # ---------------------------------------------------------------------------
-# RemoteProxy integration tests
+# RemoteArray integration tests
 # ---------------------------------------------------------------------------
 
 
-def test_open_hdf5_as_remote_proxy(tmp_path):
+def test_open_hdf5_as_remote_array(tmp_path):
     path = str(tmp_path / "open_remote.h5")
     data = np.arange(50, dtype=np.int32)
     with h5py.File(path, "w") as f:
         f.create_dataset("data", data=data, chunks=(10,))
 
     proxy = blosc2.open(path, lazy=True, source_format="hdf5", dataset="data")
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert proxy.dataset == "data"
     np.testing.assert_array_equal(proxy[:], data)
 
@@ -184,7 +184,7 @@ def test_hdf5_auto_detection(tmp_path):
 
     # Without source_format="hdf5", suffix should trigger it
     proxy = blosc2.open(path, lazy=True, dataset="data")
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert isinstance(proxy.src, blosc2.HDF5NDSource)
     assert proxy.dataset == "data"
     np.testing.assert_array_equal(proxy[:], data)
@@ -289,7 +289,7 @@ def test_hdf5_disk_cache(tmp_path):
 
     assert "hdf5-refs" in proxy.schunk.vlmeta
     reopened = blosc2.open(cache_path)
-    assert isinstance(reopened, blosc2.RemoteProxy)
+    assert isinstance(reopened, blosc2.RemoteArray)
     assert reopened.dataset == "data"
     np.testing.assert_array_equal(reopened[:], data)
 
@@ -323,7 +323,7 @@ def test_hdf5_carrier_reopens_warm(tmp_path):
     url = make_memory_h5("warm_reopen.h5", data=(data, (20,)))
     cache_path = tmp_path / "warm_carrier.b2nd"
 
-    creator = blosc2.RemoteProxy(
+    creator = blosc2.RemoteArray(
         url,
         dataset="data",
         cache_policy=blosc2.CachePolicy.DISK,
@@ -461,7 +461,7 @@ def test_moto_s3_hdf5_read(s3_server):
 
     url = "s3://moto-bucket/test.h5"
     proxy = blosc2.open(url, lazy=True, dataset="test_ds", storage_options=s3_opts)
-    assert isinstance(proxy, blosc2.RemoteProxy)
+    assert isinstance(proxy, blosc2.RemoteArray)
     assert proxy.shape == (50,)
     np.testing.assert_array_equal(proxy[:20], data[:20])
     np.testing.assert_array_equal(proxy[:], data)
@@ -589,7 +589,7 @@ def test_hdf5_vlmeta(tmp_path):
 
     url = "memory://test_attrs.h5"
     fsspec.filesystem("memory").pipe_file(url, Path(path).read_bytes())
-    proxy = blosc2.RemoteProxy(url, source_format="hdf5", dataset="d0/data")
+    proxy = blosc2.RemoteArray(url, source_format="hdf5", dataset="d0/data")
     assert proxy.attrs is proxy.vlmeta
     assert proxy.attrs[:] == {"description": "hdf5 dataset", "sampling_rate": 250}
 

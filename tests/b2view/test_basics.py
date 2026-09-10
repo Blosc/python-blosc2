@@ -157,7 +157,7 @@ async def test_remote_array_startup(tmp_path):
     app = B2ViewApp("memory://b2view-tui.b2z/d0/d1/a2", start_panel="data")
     async with app.run_test(size=TERM_SIZE) as pilot:
         await wait_for_table(pilot)
-        assert isinstance(app.browser.store, blosc2.RemoteProxy)
+        assert isinstance(app.browser.store, blosc2.RemoteArray)
         assert not app.query_one("#tree-pane").display
         assert app._data_layout.shape == data.shape
         page = app.table_page

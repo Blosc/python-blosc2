@@ -70,7 +70,7 @@ def _encode_msgpack_ext(obj):
         | blosc2.ObjectArray
         | blosc2.BatchArray
         | blosc2.EmbedStore
-        | blosc2.RemoteProxy,
+        | blosc2.RemoteArray,
     ):
         return ExtType(_BLOSC2_EXT_CODE, obj.to_cframe())
     structured = _encode_structured_reference(obj)
