@@ -8,6 +8,7 @@
 import gc
 import os
 import sys
+import time
 
 import httpx
 import pytest
@@ -83,6 +84,7 @@ def pytest_configure(config):
     # to 80 columns, which hides columns the tests expect to see).
     os.environ["COLUMNS"] = "120"
     blosc2.print_versions()
+    _arm_session_deadman()
     if sys.platform != "emscripten":
         # Using the defaults for nthreads can be very time consuming for tests.
         # Fastest runtime (95 sec) for the whole test suite (Mac Mini M4 Pro)
@@ -123,6 +125,7 @@ def pytest_runtest_teardown(item, nextitem):
 
 
 _deadman_log_file = None
+_session_deadline: float | None = None
 
 
 def _deadman_log():
@@ -135,6 +138,23 @@ def _deadman_log():
             os.path.join(root, "deadman-stacks.log"), "a", buffering=1
         )
     return _deadman_log_file
+
+
+def _arm_session_deadman() -> None:
+    """Arm a budget for the whole session, to catch hangs outside a test.
+
+    The per-test deadman cannot see a hang in collection, session teardown or
+    interpreter exit.  Between tests the fixture re-arms this deadline instead
+    of the per-test one.
+    """
+    global _session_deadline
+    seconds = os.environ.get("PYTEST_DEADMAN_SESSION_SECONDS")
+    if not seconds:
+        return
+    _session_deadline = time.monotonic() + float(seconds)
+    import faulthandler
+
+    faulthandler.dump_traceback_later(float(seconds), exit=True, file=_deadman_log())
 
 
 @pytest.fixture(autouse=True)
@@ -156,4 +176,9 @@ def _worker_deadman():
     try:
         yield
     finally:
-        faulthandler.cancel_dump_traceback_later()
+        if _session_deadline is None:
+            faulthandler.cancel_dump_traceback_later()
+        else:
+            # Between tests the session, not the test, is the one on a clock.
+            remaining = max(1.0, _session_deadline - time.monotonic())
+            faulthandler.dump_traceback_later(remaining, exit=True, file=_deadman_log())

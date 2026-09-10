@@ -92,8 +92,11 @@ jobs:
       env:
         # A test over this many seconds is a deadlock, not a slow test (the
         # slowest is ~7 s): dump stacks and kill the worker so xdist names it
-        # instead of the job hanging until the 6-hour cap.
+        # instead of the job hanging until the 6-hour cap.  The session budget
+        # catches the same hang in teardown or interpreter exit, where no test
+        # is running to be named.
         PYTEST_DEADMAN_SECONDS: "300"
+        PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 #        BLOSC_NTHREADS: "1"
 #        NUMEXPR_NUM_THREADS: "1"
 #        OMP_NUM_THREADS: "1"
@@ -103,6 +106,7 @@ jobs:
       run: python -m pytest -m "not heavy and not network" --durations=25
       env:
         PYTEST_DEADMAN_SECONDS: "300"
+        PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 
     - name: Deadlock stacks, if a worker had to be killed
       if: always()
