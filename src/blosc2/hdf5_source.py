@@ -22,7 +22,7 @@ import numpy as np
 
 import blosc2
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
-from blosc2.zarr_source import counting_store, zarr_chunk_to_blosc2
+from blosc2.zarr_source import ZARR_SYNC_LOCK, counting_store, zarr_chunk_to_blosc2
 
 _HDF5_SCAN_LOCK = threading.Lock()
 
@@ -140,24 +140,25 @@ def _reset_zarr_sync_resources() -> None:
     """Stop and detach Zarr's process-global synchronous event-loop resources."""
     from zarr.core import sync
 
-    loop = sync.loop[0]
-    thread = sync.iothread[0]
-    executor = getattr(sync, "_executor", None)
-    sync.loop[0] = None
-    sync.iothread[0] = None
-    if hasattr(sync, "_executor"):
-        sync._executor = None
-    if loop is not None:
-        if loop.is_running():
-            with contextlib.suppress(RuntimeError):
-                loop.call_soon_threadsafe(loop.stop)
-        if thread is not None:
-            thread.join(timeout=0.2)
-        if not thread or not thread.is_alive():
-            with contextlib.suppress(RuntimeError):
-                loop.close()
-    if executor is not None:
-        executor.shutdown(wait=False, cancel_futures=True)
+    with ZARR_SYNC_LOCK:
+        loop = sync.loop[0]
+        thread = sync.iothread[0]
+        executor = getattr(sync, "_executor", None)
+        sync.loop[0] = None
+        sync.iothread[0] = None
+        if hasattr(sync, "_executor"):
+            sync._executor = None
+        if loop is not None:
+            if loop.is_running():
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(loop.stop)
+            if thread is not None:
+                thread.join(timeout=0.2)
+            if not thread or not thread.is_alive():
+                with contextlib.suppress(RuntimeError):
+                    loop.close()
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 class _CountingFile(io.IOBase):
@@ -505,7 +506,8 @@ class HDF5NDSource(ProxyNDSource):
             open_store = zarr.storage.FsspecStore(wrapped_fs, path=mapper.root, read_only=True)
         if self.traffic is not None:
             open_store = counting_store(zarr, open_store, self.traffic)
-        return zarr.open_array(store=open_store, mode="r")
+        with ZARR_SYNC_LOCK:
+            return zarr.open_array(store=open_store, mode="r")
 
     def _validate_metadata(self) -> None:
         if len(self._shape) > blosc2.MAX_DIM:

@@ -641,6 +641,44 @@ def test_hdf5_vlmeta(tmp_path):
     assert proxy.attrs[:] == {"description": "hdf5 dataset", "sampling_rate": 250}
 
 
+def test_zarr_sync_reset_waits_for_inflight_read(monkeypatch):
+    import threading
+
+    from zarr.core import sync
+
+    from blosc2 import hdf5_source
+    from blosc2.zarr_source import ZARR_SYNC_LOCK
+
+    # Keep the reset from touching real Zarr runtime state.
+    monkeypatch.setattr(sync, "loop", [None])
+    monkeypatch.setattr(sync, "iothread", [None])
+    monkeypatch.setattr(sync, "_executor", None)
+
+    reading, release = threading.Event(), threading.Event()
+
+    def read():
+        with ZARR_SYNC_LOCK:
+            reading.set()
+            release.wait(5)
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    resetter = threading.Thread(target=hdf5_source._reset_zarr_sync_resources)
+    try:
+        assert reading.wait(5)
+        resetter.start()
+        resetter.join(0.2)
+        # The reset must not stop Zarr's loop while a read holds the sync lock.
+        assert resetter.is_alive()
+        release.set()
+        resetter.join(5)
+        assert not resetter.is_alive()
+    finally:
+        release.set()
+        resetter.join(5)
+        reader.join(5)
+
+
 @pytest.mark.network
 def test_s3_hdf5_matches_zarr():
     pytest.importorskip("s3fs")

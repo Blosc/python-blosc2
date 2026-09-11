@@ -13,12 +13,18 @@ import hashlib
 import json
 import math
 import os
+import threading
 from urllib.parse import urlsplit
 
 import numpy as np
 
 import blosc2
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
+
+# Zarr's synchronous bridge keeps a process-global loop, thread, and executor.
+# The HDF5 translator resets that state to recover from a wedged loop, so every
+# read through it must hold this lock to avoid having its runtime yanked away.
+ZARR_SYNC_LOCK = threading.RLock()
 
 
 def owned_fsspec_store(zarr, filesystem, path):
@@ -84,7 +90,8 @@ def zarr_chunk_to_blosc2(
         slice(int(coord) * chunk, min((int(coord) + 1) * chunk, size))
         for coord, chunk, size in zip(coords, chunks, shape, strict=True)
     )
-    values = np.asarray(array[selection], dtype=dtype)
+    with ZARR_SYNC_LOCK:
+        values = np.asarray(array[selection], dtype=dtype)
     buffer = np.zeros(chunks, dtype=dtype)
     if shape:
         values = np.ascontiguousarray(values)
@@ -152,11 +159,12 @@ class ZarrNDSource(ProxyNDSource):
         if self.traffic is not None:
             open_store = _counting_store(zarr, open_store, self.traffic)
         try:
-            self.array = zarr.open_array(
-                store=open_store,
-                path=_path,
-                mode="r",
-            )
+            with ZARR_SYNC_LOCK:
+                self.array = zarr.open_array(
+                    store=open_store,
+                    path=_path,
+                    mode="r",
+                )
         except Exception as exc:
             if type(exc).__name__ in {"ContainsGroupError", "NodeTypeValidationError"}:
                 raise ValueError(f"{store!r} is a Zarr group; pass the path of an array") from exc
