@@ -16,7 +16,7 @@ from pathlib import PurePosixPath
 from urllib.parse import urlsplit, urlunsplit
 
 import blosc2
-from blosc2.core import parse_container_url
+from blosc2.core import parse_container_url, storage_options_fingerprint
 from blosc2.proxy import CacheCoordinator
 from blosc2.proxy_source import Traffic
 from blosc2.remote_array import (
@@ -754,9 +754,13 @@ class RemoteStore:
             from blosc2.remote_store_cache import StoreDiskCache
 
             base_url, root, kind = parse_container_url(urlpath, dataset)
-            disk = StoreDiskCache(
-                cache_dir, {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": kind}
-            )
+            source = {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": kind}
+            fingerprint = storage_options_fingerprint(storage_options)
+            if fingerprint:
+                # The same URL through another endpoint or account must not
+                # reuse this manifest and its leaf payloads.
+                source["storage_options"] = fingerprint
+            disk = StoreDiskCache(cache_dir, source)
         try:
             manifest = disk.load() if disk is not None else manifest
             owner = RemoteDiscovery(
@@ -1262,6 +1266,9 @@ class RemoteStore:
             "dataset": group_full,
             "kind": self._owner.format,
         }
+        fingerprint = storage_options_fingerprint(getattr(self._owner, "storage_options", None))
+        if fingerprint:
+            exported_source["storage_options"] = fingerprint
         if prefix:
             exported_nodes = {
                 k: (v[0], v[1] if v[0] == "unsupported" else None)

@@ -170,6 +170,34 @@ def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
         assert store.cache_bytes == 0
 
 
+def test_disk_cache_partitions_storage_options(hierarchy, tmp_path):
+    url, data = hierarchy
+    cache = tmp_path / "cache"
+
+    for endpoint in ("one", "two"):
+        with blosc2.RemoteStore(url, cache_dir=cache, storage_options={"endpoint": endpoint}) as store:
+            with store["group/a"] as a:
+                np.testing.assert_array_equal(a[:2, :2], data[:2, :2])
+
+    # Different backends must not share a manifest or its leaf payloads.
+    assert len([path for path in cache.iterdir() if path.is_dir()]) == 2
+
+
+def test_artifact_keeps_storage_options_identity(hierarchy, tmp_path):
+    url, data = hierarchy
+    artifact = tmp_path / "warm.b2z"
+    with blosc2.RemoteStore(url, storage_options={"endpoint": "one"}) as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:2, :2], data[:2, :2])
+        store.save(artifact)
+
+    # The access-configuration fingerprint is recorded, not required: a warm
+    # artifact stays portable and reopens without live credentials.
+    with blosc2.open(artifact) as restored:
+        with restored["group/a"] as a:
+            np.testing.assert_array_equal(a[:2, :2], data[:2, :2])
+
+
 def test_mutable_artifact_refresh_preserves_runtime_storage(hierarchy, tmp_path):
     url, data = hierarchy
     artifact = tmp_path / "refresh.b2z"
