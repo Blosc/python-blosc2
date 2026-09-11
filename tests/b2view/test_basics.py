@@ -178,10 +178,18 @@ async def test_remote_array_horizontal_paging_uncapped(tmp_path):
     app = B2ViewApp("memory://b2view-paging.b2z/d0/d1/a2", start_panel="data")
     async with app.run_test(size=TERM_SIZE) as pilot:
         await wait_for_table(pilot)
+        await focus_data_table(pilot)
         init_cols = len(app.table_page["columns"])
 
-        # Jump to end of row
+        # Jump to end of row.  ``pilot.press`` returns before the app is
+        # guaranteed to have handled the key (see tui_wait), so poll for the
+        # jump itself instead of assuming the next page load watched it.
         await pilot.press("end")
+        await wait_until(
+            pilot,
+            lambda: app.grid_col_start > 0,
+            message="End never jumped to the last column window",
+        )
         await wait_for_table(pilot)
         assert app.grid_col_start > 0
 
