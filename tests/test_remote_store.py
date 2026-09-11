@@ -319,6 +319,135 @@ def hierarchy(request, tmp_path):
     return url, data
 
 
+def test_sparse_store_shared_handles(hierarchy, tmp_path):
+    url, data = hierarchy
+    parent = tmp_path / "shared"
+    with blosc2.RemoteStore.with_sparse_cache(url, parent) as first:
+        with blosc2.RemoteStore.with_sparse_cache(url, parent) as second:
+            with first["group/a"] as a, second["group/a"] as b:
+                np.testing.assert_array_equal(a[:], data)
+                second.traffic.reset()
+                np.testing.assert_array_equal(b[:], data)
+                assert second.traffic.requests == 0
+                assert first.cache_bytes == second.cache_bytes > 0
+                assert a._proxy._cache.schunk.contiguous is False
+            second.refresh()
+            with pytest.raises(RuntimeError, match="stale"):
+                first.keys()
+
+
+def test_sparse_store_trim_export_recovery(hierarchy, tmp_path):
+    url, data = hierarchy
+    parent = tmp_path / "shared"
+    with blosc2.RemoteStore.with_sparse_cache(url, parent) as store:
+        with store["group/a"] as a:
+            np.testing.assert_array_equal(a[:], data)
+        store.save(tmp_path / "warm.b2z")
+        store.save(tmp_path / "cold.b2z", include_cache=False)
+        source = store._owner.disk.source
+        evicted, remaining = blosc2.RemoteStore.trim_sparse_cache(parent, source, 0)
+        assert evicted
+        assert remaining == 0
+        assert store.cache_bytes == 0
+    with blosc2.open(tmp_path / "warm.b2z") as restored:
+        with restored["group/a"] as a:
+            np.testing.assert_array_equal(a[:], data)
+
+
+def test_sparse_store_reopen_reuses_payload(hierarchy, tmp_path):
+    url, data = hierarchy
+    for repeat in range(3):
+        with blosc2.RemoteStore.with_sparse_cache(url, tmp_path / "cache") as store:
+            with store["group/a"] as array:
+                store.traffic.reset()
+                np.testing.assert_array_equal(array[:], data)
+                if repeat:
+                    assert store.traffic.requests == 0
+
+
+def _shared_fs():
+    from fsspec.implementations.local import LocalFileSystem
+
+    fs = LocalFileSystem(skip_instance_cache=True)
+    fs._strip_protocol = lambda path: LocalFileSystem._strip_protocol(
+        str(path).removeprefix("https://fixture.example")
+    )
+    return fs
+
+
+def _shared_reader(url, cache, barrier, results):
+    try:
+        with blosc2.RemoteStore.with_sparse_cache(
+            url, cache, max_cache_bytes=1 << 20, _filesystem=_shared_fs()
+        ) as store:
+            with store["a"] as array:
+                barrier.wait(timeout=30)
+                np.testing.assert_array_equal(array[:], np.arange(10000, dtype="i4"))
+                barrier.wait(timeout=30)
+                store.traffic.reset()
+                np.testing.assert_array_equal(array[:], np.arange(10000, dtype="i4"))
+                results.put((store.traffic.requests, store.cache_bytes))
+    except BaseException as exc:
+        results.put(repr(exc))
+
+
+def _shared_crash(url, cache):
+    import os
+
+    store = blosc2.RemoteStore.with_sparse_cache(url, cache, _filesystem=_shared_fs())
+    array = store["a"]
+    original = blosc2.Proxy._store_chunk
+
+    def die(self, *args):
+        original(self, *args)
+        os._exit(17)
+
+    blosc2.Proxy._store_chunk = die
+    array[:]
+    os._exit(18)
+
+
+def test_sparse_store_processes_and_crash(tmp_path):
+    import multiprocessing
+
+    source = tmp_path / "source.b2z"
+    with blosc2.TreeStore(source, mode="w", threshold=0) as tree:
+        tree["a"] = blosc2.asarray(np.arange(10000, dtype="i4"), chunks=(1000,), blocks=(1000,))
+    url, cache = "https://fixture.example" + str(source), str(tmp_path / "shared")
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(4), ctx.Queue()
+    workers = [ctx.Process(target=_shared_reader, args=(url, cache, barrier, results)) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    try:
+        answers = [results.get(timeout=60) for _ in workers]
+        assert all(isinstance(answer, tuple) and answer[0] == 0 and answer[1] > 0 for answer in answers), (
+            answers
+        )
+        for worker in workers:
+            worker.join(timeout=10)
+            assert worker.exitcode == 0
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join()
+        results.close()
+    crash_cache = str(tmp_path / "crash")
+    worker = ctx.Process(target=_shared_crash, args=(url, crash_cache))
+    worker.start()
+    worker.join(timeout=30)
+    if worker.is_alive():
+        worker.terminate()
+        worker.join()
+    assert worker.exitcode == 17
+    with (
+        blosc2.RemoteStore.with_sparse_cache(url, crash_cache, _filesystem=_shared_fs()) as store,
+        store["a"] as array,
+    ):
+        np.testing.assert_array_equal(array[:], np.arange(10000, dtype="i4"))
+
+
 def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch):
     url, data = hierarchy
     translations = []

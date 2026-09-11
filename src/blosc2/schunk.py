@@ -2371,6 +2371,8 @@ def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
 
 
 def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
+    if os.path.isfile(urlpath) and urlpath.endswith((".b2nd", ".b2frame")) and "dataset" not in kwargs:
+        return False
     if kwargs.get("source_format") in {"hdf5", "zarr"} or "refs" in kwargs:
         return True
     if not isinstance(urlpath, str):
@@ -2410,6 +2412,8 @@ def _normalize_open_target(urlpath, kwargs, dataset, refs):
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
     urlpath = normalize_urlpath(urlpath)
+    if isinstance(urlpath, str) and os.path.isfile(urlpath) and urlpath.endswith((".b2nd", ".b2frame")):
+        return urlpath
     if isinstance(urlpath, str):
         urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, kwargs.get("dataset"))
         if parsed_dataset is not None:

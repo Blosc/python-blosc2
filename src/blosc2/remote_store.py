@@ -68,7 +68,17 @@ class RemoteDiscovery:
     """Shared metadata and source resources, independent of browser presentation."""
 
     def __init__(
-        self, urlpath, storage_options=None, *, dataset=None, manifest=None, persist_metadata=False
+        self,
+        urlpath,
+        storage_options=None,
+        *,
+        dataset=None,
+        manifest=None,
+        persist_metadata=False,
+        _filesystem=None,
+        _source_validator=None,
+        _manifest_validator=None,
+        _max_nodes=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         self.root = (dataset or "").strip("/")
@@ -87,6 +97,10 @@ class RemoteDiscovery:
         self.generation = manifest["generation"] if manifest else uuid.uuid4().hex
         self.metadata = manifest["metadata"] if manifest else {}
         self.persist_metadata = persist_metadata
+        self._external_filesystem = _filesystem
+        self.source_validator = _source_validator
+        self.manifest_validator = _manifest_validator
+        self.max_nodes = _max_nodes
         self.metadata_bytes = 0
         self.restoring = False
         self.filesystem = None
@@ -103,7 +117,9 @@ class RemoteDiscovery:
             import fsspec
 
             options = {**self.storage_options, "skip_instance_cache": True}
-            self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
+            self.filesystem = _filesystem
+            if self.filesystem is None:
+                self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
             if manifest:
                 self._restore_manifest(manifest)
             elif self.format == "b2z":
@@ -143,7 +159,7 @@ class RemoteDiscovery:
         self.attrs = manifest["attrs"]
         self.listed = manifest["listed"]
         self.notice = manifest.get("notice")
-        if self.format == "b2z":
+        if self.format == "b2z" and self.archive is None:
             from blosc2.b2z_source import B2ZArchive
 
             self.archive = B2ZArchive(
@@ -156,7 +172,7 @@ class RemoteDiscovery:
         elif self.format == "hdf5":
             self.refs = self.metadata
             self._validate_refs()
-        else:
+        elif self.format == "zarr" and self.zstore is None:
             self._open_zarr()
 
     def _validate_refs(self):
@@ -186,22 +202,23 @@ class RemoteDiscovery:
             path: (kind, value if kind == "unsupported" else None)
             for path, (kind, value) in self.nodes.items()
         }
-        self.metadata_bytes = self.disk.publish(
-            {
-                "version": 1,
-                "source": self.disk.source,
-                "generation": self.generation,
-                "nodes": nodes,
-                "attrs": self.attrs,
-                "listed": self.listed,
-                "notice": self.notice,
-                "metadata": self.metadata,
-                "caches": sorted(self.caches),
-                "cache_policy": getattr(self, "cache_policy", blosc2.CachePolicy.DISK).value,
-                "max_cache_bytes": getattr(self, "max_cache_bytes", None),
-                "mutable": getattr(self, "mutable", False),
-            }
-        )
+        manifest = {
+            "version": 1,
+            "source": self.disk.source,
+            "generation": self.generation,
+            "nodes": nodes,
+            "attrs": self.attrs,
+            "listed": self.listed,
+            "notice": self.notice,
+            "metadata": self.metadata,
+            "caches": sorted(self.caches),
+            "cache_policy": getattr(self, "cache_policy", blosc2.CachePolicy.DISK).value,
+            "max_cache_bytes": getattr(self, "max_cache_bytes", None),
+            "mutable": getattr(self, "mutable", False),
+        }
+        if self.manifest_validator is not None:
+            self.manifest_validator(manifest)
+        self.metadata_bytes = self.disk.publish(manifest)
 
     @staticmethod
     def _validate(path):
@@ -221,6 +238,8 @@ class RemoteDiscovery:
         if path in self.nodes and kind != "group":
             raise ValueError("Leaf/group collision in remote container")
         self.nodes[path] = (kind, value)
+        if self.max_nodes is not None and len(self.nodes) > self.max_nodes:
+            raise ValueError("RemoteStore discovery exceeds the node limit")
         parent = path
         while parent:
             parent = parent.rpartition("/")[0]
@@ -504,6 +523,8 @@ class RemoteDiscovery:
             url = urlsplit(self.urlpath)
             leaf_url = urlunsplit(url._replace(path=url.path.rstrip("/") + "/" + full))
             source = ZarrNDSource(self.zstore, _path=full, _urlpath=leaf_url, _traffic=self.traffic)
+        if self.source_validator is not None:
+            self.source_validator(source)
         self.sources[full] = source
         return source
 
@@ -532,9 +553,34 @@ class RemoteDiscovery:
             self.cache_coordinator.enforce()
             self.restoring = False
 
-    def get_cache(self, source):
+    def get_cache(self, source, *, seed=None):
         key = next(path for path, value in self.sources.items() if value is source)
         if key not in self.caches:
+            if getattr(self, "shared", False):
+                descriptor = {
+                    "kind": self.format,
+                    "version": 1,
+                    "urlpath": source.urlpath,
+                    "assume_immutable": True,
+                }
+                if self.format in {"b2z", "hdf5"}:
+                    descriptor["dataset"] = key
+                runtime = blosc2.RemoteArray.with_sparse_cache(
+                    source,
+                    self.disk.payload_path(self.generation, key),
+                    source_descriptor=descriptor,
+                    max_cache_bytes=None,
+                    carrier=seed,
+                )
+                proxy = runtime._proxy
+                if proxy is None:
+                    raise ValueError("Shared store caching requires a stable source identity")
+                proxy._cache_coordinator = self.cache_coordinator
+                proxy._cache_key = key
+                self.cache_coordinator.register(proxy)
+                self.caches[key] = proxy
+                self.save_manifest()
+                return proxy
             if not self.is_mutable:
                 carrier = None
                 if self.artifact_offsets is not None:
@@ -615,7 +661,7 @@ class RemoteDiscovery:
         self.attrs.clear()
         self.listed.clear()
         self.refs = None
-        if self.filesystem is not None:
+        if self.filesystem is not None and self._external_filesystem is None:
             # fsspec's HTTP and S3 clients expose their own synchronous close hook.
             close = getattr(self.filesystem, "close_session", None)
             session = getattr(self.filesystem, "_s3creator", None) or getattr(
@@ -681,6 +727,11 @@ class RemoteStore:
         max_cache_bytes=CACHE_POLICY_DEFAULT,
         cache_dir=None,
         _allow_array_root=False,
+        _filesystem=None,
+        _manifest=None,
+        _source_validator=None,
+        _manifest_validator=None,
+        _max_nodes=None,
     ):
         if isinstance(urlpath, os.PathLike):
             urlpath = os.fspath(urlpath)
@@ -698,7 +749,7 @@ class RemoteStore:
         base_url, _, _ = parse_container_url(urlpath, dataset)
         validate_persistable_url(base_url)
         disk = None
-        manifest = None
+        manifest = _manifest
         if cache_policy is blosc2.CachePolicy.DISK:
             from blosc2.remote_store_cache import StoreDiskCache
 
@@ -707,13 +758,17 @@ class RemoteStore:
                 cache_dir, {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": kind}
             )
         try:
-            manifest = disk.load() if disk is not None else None
+            manifest = disk.load() if disk is not None else manifest
             owner = RemoteDiscovery(
                 urlpath,
                 storage_options,
                 dataset=dataset,
                 manifest=manifest,
                 persist_metadata=disk is not None,
+                _filesystem=_filesystem,
+                _source_validator=_source_validator,
+                _manifest_validator=_manifest_validator,
+                _max_nodes=_max_nodes,
             )
         except BaseException:
             if disk is not None:
@@ -745,6 +800,140 @@ class RemoteStore:
         self._path = path
         self._generation = owner.generation
         self._finalizer = weakref.finalize(self, owner.release)
+
+    @classmethod
+    def with_sparse_cache(
+        cls,
+        urlpath,
+        runtime_cache_path,
+        *,
+        dataset=None,
+        manifest=None,
+        max_cache_bytes=None,
+        carrier=None,
+        _filesystem=None,
+        _source_validator=None,
+        _manifest_validator=None,
+        _max_nodes=None,
+    ):
+        """Attach an immutable remote hierarchy to a cache shared across processes.
+
+        All users of this private cache must use this constructor. Operations
+        serialize per store, reload discovery, and enforce one aggregate payload
+        allowance. The caller authorizes the supplied filesystem and manifest;
+        no credentials or filesystem objects are persisted. Portable artifacts
+        are exported with ``save`` rather than opened as mutable runtime storage.
+        """
+        from blosc2.remote_store_cache import SharedStoreCache, SharedStoreOperation
+
+        limit = normalize_cache_limit(blosc2.CachePolicy.DISK, max_cache_bytes)
+        base, root, kind = parse_container_url(urlpath, dataset)
+        validate_persistable_url(base)
+        source = {"urlpath": base, "dataset": (root or "").strip("/"), "kind": kind}
+        disk = SharedStoreCache(runtime_cache_path, source)
+        with disk.guard():
+            current = disk.load()
+            seed_manifest = None
+            if current is None and carrier is not None:
+                seed_manifest, seed_offsets = cls._load_artifact_manifest(os.fspath(carrier))
+                if seed_manifest["source"] != source:
+                    raise ValueError("RemoteStore seed source mismatch")
+            if current is None and manifest is not None:
+                cls._validate_artifact_manifest(manifest)
+                if manifest["source"] != source:
+                    raise ValueError("RemoteStore manifest source mismatch")
+                current = dict(manifest, caches=[], generation=uuid.uuid4().hex)
+            owner = RemoteDiscovery(
+                base,
+                dataset=root,
+                manifest=current,
+                persist_metadata=True,
+                _filesystem=_filesystem,
+                _source_validator=_source_validator,
+                _manifest_validator=_manifest_validator,
+                _max_nodes=_max_nodes,
+            )
+            owner.disk = disk
+            owner.shared = True
+            owner.cache_policy = blosc2.CachePolicy.DISK
+            owner.max_cache_bytes = limit
+            owner.cache_coordinator = CacheCoordinator(limit)
+            try:
+                owner.restore_caches(current)
+                if seed_manifest is not None:
+                    for key in seed_manifest["caches"]:
+                        relative = key[len(owner.root) + 1 :] if owner.root else key
+                        src = owner.open_source(relative)
+                        name = key + ".b2nd"
+                        seed = blosc2.blosc2_ext.open(
+                            os.fspath(carrier),
+                            "r",
+                            seed_offsets[name]["offset"],
+                        )
+                        seed = blosc2.ndarray_from_cframe(seed.to_cframe(), copy=True)
+                        descriptor = {
+                            "kind": owner.format,
+                            "version": 1,
+                            "urlpath": src.urlpath,
+                            "assume_immutable": True,
+                        }
+                        if owner.format in {"b2z", "hdf5"}:
+                            descriptor["dataset"] = key
+                        seed.schunk.vlmeta["b2o"] = {"kind": "remote_array", "source": descriptor}
+                        owner.get_cache(src, seed=seed)
+                    owner.cache_coordinator.enforce()
+                owner.save_manifest()
+                obj = object.__new__(cls)
+                obj._attach(owner, "")
+                owner.lock = SharedStoreOperation(owner)
+                return obj
+            except BaseException:
+                owner.close()
+                raise
+
+    @staticmethod
+    def trim_sparse_cache(runtime_cache_path, source, target_bytes, *, max_chunks=64):
+        """Trim shared leaf payload without opening or contacting the source."""
+        from blosc2.remote_store_cache import SharedStoreCache
+
+        for value in (target_bytes, max_chunks):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("Cache trim limits must be non-negative integers")
+        if not os.path.isdir(runtime_cache_path):
+            return (), 0
+        disk = SharedStoreCache(runtime_cache_path, source)
+        with disk.guard():
+            manifest = disk.load()
+            if manifest is None:
+                return (), 0
+            leaves = []
+            for key in manifest["caches"]:
+                path = disk.payload_path(manifest["generation"], key)
+                evicted, size = blosc2.RemoteArray.trim_sparse_cache(path, 1 << 63, max_chunks=0)
+                leaves.append((key, path, size))
+            total = sum(size for _, _, size in leaves)
+            removed = []
+            # ponytail: leaf-order eviction; persist global recency if workloads need exact LRU.
+            for key, path, size in leaves:
+                if total <= target_bytes or len(removed) >= max_chunks:
+                    break
+                evicted, remaining = blosc2.RemoteArray.trim_sparse_cache(
+                    path,
+                    max(0, size - (total - target_bytes)),
+                    max_chunks=max_chunks - len(removed),
+                )
+                removed.extend((key, chunk) for chunk in evicted)
+                total += remaining - size
+            return tuple(removed), total
+
+    def read_cached(self, path, item=(), *, nchunk=None):
+        """Return ``(hit, result)`` atomically without fetching missing payload."""
+        with self._owner.lock:
+            _, full = self._resolve(path)
+            if full not in self._owner.caches:
+                return False, None
+            with self[path] as array:
+                return array.read_cached(item, nchunk=nchunk)
 
     def _resolve(self, path):
         if not self._finalizer.alive:
@@ -907,6 +1096,10 @@ class RemoteStore:
                 owner.storage_options,
                 dataset=owner.root,
                 persist_metadata=owner.disk is not None,
+                _filesystem=owner._external_filesystem,
+                _source_validator=owner.source_validator,
+                _manifest_validator=owner.manifest_validator,
+                _max_nodes=owner.max_nodes,
             )
             try:
                 if not replacement.is_tree:
@@ -914,6 +1107,7 @@ class RemoteStore:
                 replacement.disk = owner.disk
                 replacement.cache_policy = owner.cache_policy
                 replacement.max_cache_bytes = owner.max_cache_bytes
+                replacement.shared = getattr(owner, "shared", False)
                 replacement.mutable = owner.mutable
                 replacement.save_manifest()
             except BaseException:
@@ -1097,7 +1291,7 @@ class RemoteStore:
         if self._owner.artifact_offsets is not None:
             with zipfile.ZipFile(self._owner.artifact_path, "r") as zf:
                 zf.extract(leaf_filename, staging_dir)
-        elif self._owner.disk is not None:
+        elif self._owner.disk is not None and not getattr(self._owner, "shared", False):
             src_file = self._owner.disk.payload_path(self._owner.generation, orig_key)
             if src_file.exists():
                 shutil.copy2(src_file, leaf_dst)

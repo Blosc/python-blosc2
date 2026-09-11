@@ -130,6 +130,8 @@ def _serialized_operation(method):
         owner = getattr(self, "_store_owner", None)
         with owner.lock if owner is not None else nullcontext(), self._operation_lock:
             self._check_open()
+            if owner is not None and getattr(owner, "shared", False):
+                self._proxy = owner.get_cache(self.src)
             cache_lock = (
                 self._runtime_cache.holding_lock()
                 if self._shared_runtime_cache and self._runtime_cache is not None
@@ -209,8 +211,6 @@ def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
 
 
 def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, store_attachment=False):
-    if isinstance(urlpath, blosc2.B2ZNDSource) and not store_attachment:
-        raise NotImplementedError("authorized B2Z sparse attachment is not supported yet")
     if storage_options is not None:
         raise ValueError("storage_options cannot be used with an authorized source")
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())

@@ -106,6 +106,48 @@ B2Z validator mismatches raise an error; use a fresh cache directory if the stor
 cannot be opened. Fully offline reopening is not promised. The lifetime lock
 uses POSIX flock or Windows byte locking; Windows execution remains a CI check.
 
+Shared sparse runtime caches
+----------------------------
+
+Services and multiple local processes can use ``RemoteStore.with_sparse_cache``
+to keep simultaneous handles to the same private runtime cache:
+
+.. code-block:: python
+
+    with blosc2.RemoteStore.with_sparse_cache(
+        "https://host/data.b2z", "shared-runtime", max_cache_bytes=64 << 20
+    ) as store:
+        with store["experiment/temperature"] as array:
+            values = array[:100]
+        hit, values = store.read_cached("experiment/temperature", slice(0, 100))
+
+This mode stores leaf payload in sparse RemoteArray caches. Each operation
+acquires a store-wide OS lock, reloads discovery and leaf accounting, and applies
+one aggregate payload allowance. Handles may coexist across processes, while
+operations within a store serialize. All users of that directory must use the
+shared constructor. A process-local memory cache or the ordinary exclusive
+``cache_dir`` constructor must not write to it.
+
+Manifests and generation pointers are published atomically. An interrupted
+operation causes the next owner to discard the disposable payload generation;
+remote sources are not contacted by offline trimming or manifest recovery.
+Refresh publishes a new generation and makes child handles in other processes
+stale. Reopen a store handle after another process refreshes it.
+
+``read_cached`` returns ``(False, None)`` on a miss without fetching missing
+payload. ``trim_sparse_cache`` trims leaves offline with a bounded chunk count.
+Its first implementation evicts in leaf order; the live aggregate coordinator
+handles eviction during ordinary reads. Allocated storage and old generations
+are separate from the compressed-payload allowance and belong to the service's
+storage accounting and lifecycle management.
+
+The shared constructor accepts an authorized ``_filesystem`` and validation
+callbacks for server use; these runtime objects are never persisted. A portable
+``carrier`` archive can seed a new cache once, with source stamp and geometry
+checks. ``save`` exports ordinary portable warm/cold archives. Private sparse
+directories are not portable store artifacts. This protocol targets processes
+sharing a local filesystem, not distributed or network-filesystem ownership.
+
 .. autoclass:: blosc2.RemoteStore
     :members:
     :special-members: __getitem__, __iter__
