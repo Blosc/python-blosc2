@@ -20,7 +20,7 @@ from contextlib import nullcontext
 from functools import wraps
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import numpy as np
 
@@ -216,7 +216,7 @@ def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, 
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
     if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls, blosc2.B2ZNDSource)):
         raise TypeError(
-            "source_descriptor requires an authorized FsspecNDSource, ZarrNDSource, or HDF5NDSource"
+            "source_descriptor requires an authorized FsspecNDSource, ZarrNDSource, HDF5NDSource, or B2ZNDSource"
         )
     assume_immutable = _validate_assume_immutable(
         source_descriptor.get("assume_immutable"), "source_descriptor assume_immutable"
@@ -390,11 +390,30 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
     if resolved_format == "zarr":
         if dataset is not None:
             resolved_dataset = dataset.strip("/")
-            if not urlpath.rstrip("/").endswith(f"/{resolved_dataset}"):
-                urlpath = f"{urlpath.rstrip('/')}/{resolved_dataset}"
-        elif isinstance(urlpath, str) and ".zarr/" in urlpath.lower():
-            idx = urlpath.lower().find(".zarr/")
-            resolved_dataset = urlpath[idx + 6 :].strip("/") or None
+            if isinstance(urlpath, str):
+                parsed = urlsplit(urlpath)
+                clean_path = parsed.path.rstrip("/")
+                if not clean_path.endswith(f"/{resolved_dataset}"):
+                    new_path = f"{clean_path}/{resolved_dataset}"
+                    urlpath = urlunsplit(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            new_path,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
+            elif not str(urlpath).rstrip("/").endswith(f"/{resolved_dataset}"):
+                urlpath = f"{str(urlpath).rstrip('/')}/{resolved_dataset}"
+        elif isinstance(urlpath, str):
+            parsed = urlsplit(urlpath)
+            clean_path = parsed.path.rstrip("/")
+            if ".zarr/" in clean_path.lower():
+                idx = clean_path.lower().find(".zarr/")
+                resolved_dataset = clean_path[idx + 6 :].strip("/") or None
+            else:
+                resolved_dataset = None
         else:
             resolved_dataset = None
     elif resolved_format in {"hdf5", "b2z"}:

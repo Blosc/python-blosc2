@@ -60,6 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="Directory for persistent disk caching of remote stores and arrays",
     )
+    parser.add_argument(
+        "--max-cache-bytes",
+        type=int,
+        default=None,
+        metavar="BYTES",
+        help="Maximum size in bytes for the remote cache (defaults to 64 MiB)",
+    )
     parser.add_argument("--preview-rows", type=int, default=20, help="Maximum preview rows")
     parser.add_argument("--preview-cols", type=int, default=10, help="Maximum preview columns")
     parser.add_argument(
@@ -122,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         download_url=download_url,
         info_url=info_url,
         cache_dir=args.cache_dir,
+        max_cache_bytes=args.max_cache_bytes,
         storage_options={
             key: value
             for key, value in {"profile": args.profile, "endpoint_url": args.endpoint_url}.items()

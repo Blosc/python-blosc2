@@ -238,6 +238,8 @@ def copy_batches(
 ) -> float:
     """Copy data slices from Blosc2 NDArray to Zarr array with progress tracking."""
     total_batches = len(batch_slices)
+    if total_batches == 0:
+        return 0.0
     t_start = time.perf_counter()
 
     if HAVE_RICH and not quiet:
@@ -270,6 +272,44 @@ def copy_batches(
     return time.perf_counter() - t_start
 
 
+def _fast_sample_verify(
+    b2_arr: blosc2.NDArray, z_arr: Any, slices_list: list[tuple[slice, ...]], quiet: bool
+) -> None:
+    corner_indices = [
+        tuple(0 for _ in b2_arr.shape),
+        tuple(-1 for _ in b2_arr.shape),
+        tuple(s // 2 for s in b2_arr.shape),
+    ]
+    for idx in corner_indices:
+        v_b2 = b2_arr[idx]
+        v_z = z_arr[idx]
+        if not np.array_equal(v_b2, v_z, equal_nan=True):
+            raise ValueError(f"Verification failed at index {idx}: Blosc2={v_b2} != Zarr={v_z}")
+
+    if slices_list:
+        for s in (slices_list[0], slices_list[-1]):
+            b2_chunk = b2_arr[s]
+            z_chunk = z_arr[s]
+            if not np.array_equal(b2_chunk, z_chunk, equal_nan=True):
+                raise ValueError(f"Verification failed for slice {s}")
+    if not quiet:
+        print("✓ Fast sample verification passed!")
+
+
+def _full_verify(
+    b2_arr: blosc2.NDArray, z_arr: Any, slices_list: list[tuple[slice, ...]], quiet: bool
+) -> None:
+    if not quiet:
+        print("Performing full verification across all slices...")
+    for idx, s in enumerate(slices_list):
+        b2_data = b2_arr[s]
+        z_data = z_arr[s]
+        if not np.array_equal(b2_data, z_data, equal_nan=True):
+            raise ValueError(f"Full verification failed at slice {s} (batch {idx})")
+    if not quiet:
+        print("✓ Full element verification passed!")
+
+
 def verify_arrays(
     b2_arr: blosc2.NDArray,
     z_arr: Any,
@@ -283,38 +323,59 @@ def verify_arrays(
     if b2_arr.dtype != z_arr.dtype:
         raise ValueError(f"Dtype mismatch: Blosc2 {b2_arr.dtype} vs Zarr {z_arr.dtype}")
 
-    if not full:
-        corner_indices = [
-            tuple(0 for _ in b2_arr.shape),
-            tuple(-1 for _ in b2_arr.shape),
-            tuple(s // 2 for s in b2_arr.shape),
-        ]
-        for idx in corner_indices:
-            v_b2 = b2_arr[idx]
-            v_z = z_arr[idx]
-            if not np.array_equal(v_b2, v_z):
-                raise ValueError(f"Verification failed at index {idx}: Blosc2={v_b2} != Zarr={v_z}")
-
-        if slices_list:
-            for s in (slices_list[0], slices_list[-1]):
-                b2_chunk = b2_arr[s]
-                z_chunk = z_arr[s]
-                if not np.array_equal(b2_chunk, z_chunk):
-                    raise ValueError(f"Verification failed for slice {s}")
+    if math.prod(b2_arr.shape) == 0:
         if not quiet:
-            print("✓ Fast sample verification passed!")
+            print("✓ Empty array verification passed!")
         return True
 
-    if not quiet:
-        print("Performing full verification across all slices...")
-    for idx, s in enumerate(slices_list):
-        b2_data = b2_arr[s]
-        z_data = z_arr[s]
-        if not np.array_equal(b2_data, z_data):
-            raise ValueError(f"Full verification failed at slice {s} (batch {idx})")
-    if not quiet:
-        print("✓ Full element verification passed!")
+    if not full:
+        _fast_sample_verify(b2_arr, z_arr, slices_list, quiet)
+    else:
+        _full_verify(b2_arr, z_arr, slices_list, quiet)
     return True
+
+
+def _determine_target_chunks_and_shards(
+    arr: blosc2.NDArray,
+    chunks: tuple[int, ...] | None,
+    shards: tuple[int, ...] | None,
+    sharded: bool,
+) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
+    target_chunks = chunks if chunks is not None else arr.chunks
+    target_shards = shards
+
+    if sharded and target_shards is None:
+        blocks = getattr(arr, "blocks", None)
+        if blocks is not None and all(c % b == 0 for c, b in zip(arr.chunks, blocks, strict=True)):
+            target_shards = arr.chunks
+            target_chunks = blocks
+        else:
+            target_shards = arr.chunks
+
+    target_chunks = tuple(max(1, c) for c in target_chunks)
+    if target_shards is not None:
+        target_shards = tuple(max(c, max(1, s)) for c, s in zip(target_chunks, target_shards, strict=True))
+    return target_chunks, target_shards
+
+
+def _compute_batches(
+    shape: tuple[int, ...],
+    target_chunks: tuple[int, ...],
+    target_shards: tuple[int, ...] | None,
+    itemsize: int,
+    buffer_size_mb: int,
+) -> tuple[tuple[int, ...], list[tuple[slice, ...]]]:
+    if math.prod(shape) == 0:
+        return shape, []
+    unit_shape = target_shards if target_shards is not None else target_chunks
+    copy_shape = compute_copy_shape(
+        shape, unit_shape, itemsize, max_buffer_bytes=buffer_size_mb * 1024 * 1024
+    )
+    slices_per_dim = [
+        [slice(i, min(i + step, s)) for i in range(0, s, step)]
+        for s, step in zip(shape, copy_shape, strict=True)
+    ]
+    return copy_shape, list(itertools.product(*slices_per_dim))
 
 
 def b2nd_to_zarr(
@@ -368,16 +429,7 @@ def b2nd_to_zarr(
     uncompressed_bytes = math.prod(shape) * itemsize
     src_file_size = get_path_size(src_path)
 
-    target_chunks = chunks if chunks is not None else arr.chunks
-    target_shards = shards
-
-    if sharded and target_shards is None:
-        blocks = getattr(arr, "blocks", None)
-        if blocks is not None and all(c % b == 0 for c, b in zip(arr.chunks, blocks, strict=True)):
-            target_shards = arr.chunks
-            target_chunks = blocks
-        else:
-            target_shards = arr.chunks
+    target_chunks, target_shards = _determine_target_chunks_and_shards(arr, chunks, shards, sharded)
 
     if zarr_format == 2 and target_shards is not None:
         raise ValueError("Sharding is only supported in Zarr format 3.")
@@ -385,16 +437,9 @@ def b2nd_to_zarr(
     compressor = determine_zarr_codec(
         arr, codec_name=codec, clevel=clevel, shuffle_mode=shuffle, blocksize=blocksize
     )
-    unit_shape = target_shards if target_shards is not None else target_chunks
-    copy_shape = compute_copy_shape(
-        shape, unit_shape, itemsize, max_buffer_bytes=buffer_size_mb * 1024 * 1024
+    copy_shape, batch_slices = _compute_batches(
+        shape, target_chunks, target_shards, itemsize, buffer_size_mb
     )
-
-    slices_per_dim = [
-        [slice(i, min(i + step, s)) for i in range(0, s, step)]
-        for s, step in zip(shape, copy_shape, strict=True)
-    ]
-    batch_slices = list(itertools.product(*slices_per_dim))
 
     if verbose and not quiet:
         print(f"Source: {src_path} ({format_bytes(src_file_size)})")

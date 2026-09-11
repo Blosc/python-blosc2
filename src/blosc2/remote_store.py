@@ -1110,6 +1110,8 @@ class RemoteStore:
                 replacement.shared = getattr(owner, "shared", False)
                 replacement.mutable = owner.mutable
                 replacement.save_manifest()
+                if replacement.disk is not None:
+                    replacement.disk.discard_old_generations(replacement.generation)
             except BaseException:
                 replacement.disk = None
                 replacement.close()

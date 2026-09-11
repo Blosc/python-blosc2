@@ -286,3 +286,47 @@ def test_open_remote_zarr_with_dataset(zarr):
         assert p.dataset == "sub/arr"
         assert p.source["urlpath"] == f"{root_url}/sub/arr"
         np.testing.assert_array_equal(p[:], data)
+
+
+def test_open_remote_zarr_with_query_and_fragment(monkeypatch):
+    from blosc2.remote_array import _resolve_init_dataset_and_url
+
+    url = "https://example.org/data.zarr?token=secret_123&expire=999#myfragment"
+    resolved_url, resolved_dataset, resolved_format = _resolve_init_dataset_and_url(url, "group/arr", None)
+    assert resolved_format == "zarr"
+    assert resolved_dataset == "group/arr"
+    assert resolved_url == "https://example.org/data.zarr/group/arr?token=secret_123&expire=999#myfragment"
+
+    captured_urls = []
+    dummy_src = type(
+        "DummySrc",
+        (),
+        {
+            "shape": (4,),
+            "dtype": np.dtype("int32"),
+            "chunks": (2,),
+            "blocks": (2,),
+            "cparams": {},
+        },
+    )()
+
+    def mock_open_source(urlpath, *args, **kwargs):
+        captured_urls.append(urlpath)
+        source = {
+            "kind": "zarr",
+            "version": 1,
+            "urlpath": urlpath,
+            "assume_immutable": True,
+        }
+        return dummy_src, source
+
+    monkeypatch.setattr(blosc2.RemoteArray, "_open_source", staticmethod(mock_open_source))
+    proxy = blosc2.RemoteArray(url, dataset="group/arr", cache_policy=blosc2.CachePolicy.MEMORY)
+    assert proxy.dataset == "group/arr"
+    assert captured_urls == [
+        "https://example.org/data.zarr/group/arr?token=secret_123&expire=999#myfragment"
+    ]
+    assert (
+        proxy._source["urlpath"]
+        == "https://example.org/data.zarr/group/arr?token=secret_123&expire=999#myfragment"
+    )

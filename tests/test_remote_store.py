@@ -155,6 +155,9 @@ def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
         a = group["a"]
         store.refresh()
         assert store.cache_bytes == 0
+        b2d_dirs = list(parent.glob("**/*.b2d"))
+        assert len(b2d_dirs) == 1
+        assert b2d_dirs[0].name == f"{store._owner.generation}.b2d"
         with pytest.raises(RuntimeError, match="stale"):
             a[:1]
         with pytest.raises(RuntimeError, match="stale"):

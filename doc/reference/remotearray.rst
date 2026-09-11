@@ -106,8 +106,9 @@ refetch their contents once after upgrading.
 Only unencrypted, ``ZIP_STORED`` external NDArray members are supported. Groups,
 embedded leaves inside ``embed.b2e``, other leaf types, and compressed ZIP members
 are unsupported. Archives must remain immutable; replacing an archive requires
-replacing its cache. Authorized B2Z sparse attachment and Caterva2 federation are
-not supported in this version.
+replacing its cache. Authorized sparse attachment (:meth:`RemoteArray.with_sparse_cache`)
+is supported for eligible external NDArray leaves, while Caterva2 federation is not
+supported in this version.
 
 See :ref:`B2ZNDSource` for class details.
 

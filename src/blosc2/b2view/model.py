@@ -259,14 +259,18 @@ class StoreBrowser:
         *,
         storage_options: dict[str, Any] | None = None,
         cache_dir: str | None = None,
+        max_cache_bytes: int | None = None,
     ):
         self.urlpath = urlpath
         self.cache_dir = cache_dir
+        self.max_cache_bytes = max_cache_bytes
         self.io_lock = RLock()
         self._remote_leaf = None
         self._remote_child_counts = {}
         self._remote_leaf_path = None
-        self.store = self._open_store(urlpath, storage_options, cache_dir=cache_dir)
+        self.store = self._open_store(
+            urlpath, storage_options, cache_dir=cache_dir, max_cache_bytes=max_cache_bytes
+        )
         self.is_tree = isinstance(self.store, blosc2.TreeStore) or (
             isinstance(self.store, blosc2.RemoteStore) and self.store.kind() == "group"
         )
@@ -294,7 +298,13 @@ class StoreBrowser:
         self._column_selections: dict[str, list[str]] = {}
 
     @staticmethod
-    def _open_store(urlpath, storage_options, *, cache_dir: str | None = None):
+    def _open_store(
+        urlpath,
+        storage_options,
+        *,
+        cache_dir: str | None = None,
+        max_cache_bytes: int | None = None,
+    ):
         options = {} if storage_options is None else {"storage_options": storage_options}
         if is_fsspec_url(urlpath):
             _, _, source_format = parse_container_url(urlpath)
@@ -302,7 +312,7 @@ class StoreBrowser:
                 # Discover once even for an array root; return public handles in
                 # both cases without rescanning HDF5 or reopening a B2Z archive.
                 store_kwargs: dict[str, Any] = {
-                    "max_cache_bytes": 64 << 20,
+                    "max_cache_bytes": 64 << 20 if max_cache_bytes is None else max_cache_bytes,
                     "_allow_array_root": True,
                     **options,
                 }
@@ -319,6 +329,8 @@ class StoreBrowser:
                     store.close()
                     raise
             options["lazy"] = True
+            if max_cache_bytes is not None:
+                options["max_cache_bytes"] = max_cache_bytes
             if cache_dir is not None:
                 options["cache_dir"] = cache_dir
         return blosc2.open(urlpath, mode="r", **options)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import copy
 import io
@@ -2027,6 +2028,7 @@ class B2ViewApp(App):
         info_url: str | None = None,
         storage_options: dict[str, Any] | None = None,
         cache_dir: str | None = None,
+        max_cache_bytes: int | None = None,
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
@@ -2040,6 +2042,7 @@ class B2ViewApp(App):
         self.urlpath = urlpath
         self.storage_options = storage_options
         self.cache_dir = cache_dir
+        self.max_cache_bytes = max_cache_bytes
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
         # Header label: the path as given on the CLI, or the @public-relative
@@ -2158,9 +2161,13 @@ class B2ViewApp(App):
             self.query_one("#metadata", Static).update("Loading remote container…")
             self._open_remote(self._remote_session, self.start_path)
             return
-        self.browser = StoreBrowser(
-            self.urlpath, storage_options=self.storage_options, cache_dir=self.cache_dir
-        )
+        browser_kwargs: dict[str, Any] = {
+            "storage_options": self.storage_options,
+            "cache_dir": self.cache_dir,
+        }
+        if self.max_cache_bytes is not None:
+            browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
+        self.browser = StoreBrowser(self.urlpath, **browser_kwargs)
         self._populate_browser()
 
     def _populate_browser(self) -> None:
@@ -2258,6 +2265,24 @@ class B2ViewApp(App):
             else:
                 self.browser.close()
 
+    async def _shutdown(self) -> None:
+        await super()._shutdown()
+        if self._browser_close_thread is not None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._browser_close_thread.join, 30.0)
+
+    def run(self, *args, **kwargs):
+        try:
+            return super().run(*args, **kwargs)
+        finally:
+            if self._browser_close_thread is not None:
+                self._browser_close_thread.join(timeout=30.0)
+
+    def wait_for_close(self, timeout: float = 30.0) -> None:
+        """Wait for any asynchronous remote browser shutdown to complete."""
+        if self._browser_close_thread is not None:
+            self._browser_close_thread.join(timeout=timeout)
+
     def _deliver_remote(self, session, callback, *args):
         """A blocking read may finish after cancellation, refresh, or shutdown."""
         if self._closing or session != self._remote_session:
@@ -2278,9 +2303,13 @@ class B2ViewApp(App):
     def _open_remote(self, session, start_path):
         browser = None
         try:
-            browser = StoreBrowser(
-                self.urlpath, storage_options=self.storage_options, cache_dir=self.cache_dir
-            )
+            browser_kwargs: dict[str, Any] = {
+                "storage_options": self.storage_options,
+                "cache_dir": self.cache_dir,
+            }
+            if self.max_cache_bytes is not None:
+                browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
+            browser = StoreBrowser(self.urlpath, **browser_kwargs)
             children = {}
             if browser.is_tree:
                 parent = "/"

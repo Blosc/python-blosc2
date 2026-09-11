@@ -163,3 +163,36 @@ def test_cli_main_errors(tmp_path, capsys):
     assert ret == 1
     captured = capsys.readouterr()
     assert "Error:" in captured.err
+
+
+def test_conversion_empty_array_with_zero_chunks(tmp_path):
+    src = tmp_path / "empty.b2nd"
+    dst = tmp_path / "empty.zarr"
+    # Create empty Blosc2 array with zero chunk extent
+    blosc2.asarray(
+        np.empty((0, 100), dtype=np.float32),
+        chunks=(0, 10),
+        blocks=(0, 5),
+        urlpath=str(src),
+        mode="w",
+    )
+
+    result = b2nd_to_zarr(src, dst, verify=True)
+    assert result["shape"] == (0, 100)
+    assert all(c > 0 for c in result["chunks"])
+
+    z = zarr.open(store=str(dst), mode="r")
+    assert z.shape == (0, 100)
+    assert all(c > 0 for c in z.chunks)
+
+
+def test_conversion_with_nans(tmp_path):
+    src = tmp_path / "nans.b2nd"
+    dst = tmp_path / "nans.zarr"
+    data = np.array([1.0, np.nan, 3.0, np.nan, 5.0], dtype=np.float32)
+    blosc2.asarray(data, chunks=(2,), urlpath=str(src), mode="w")
+
+    # Fast verify and full verify both verify slices with NaNs without raising
+    result = b2nd_to_zarr(src, dst, full_verify=True)
+    z = zarr.open(store=str(dst), mode="r")
+    np.testing.assert_array_equal(z[:], data)
