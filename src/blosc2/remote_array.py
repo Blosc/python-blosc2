@@ -32,7 +32,7 @@ from blosc2.b2objects import (
     write_b2object_payload,
     write_b2object_user_vlmeta,
 )
-from blosc2.core import parse_container_url
+from blosc2.core import parse_container_url, storage_options_fingerprint
 from blosc2.info import InfoReporter, format_nbytes_info
 
 DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
@@ -621,7 +621,7 @@ class RemoteArray(blosc2.Operand):
             if os.path.isdir(path):
                 raise ValueError("cache_path must name a file, not a directory")
         else:
-            path = blosc2.schunk.fsspec_cache_path(self._source_identity(), cache_dir, ".b2nd")
+            path = blosc2.schunk.fsspec_cache_path(self._cache_identity(), cache_dir, ".b2nd")
         if os.path.exists(path):
             kwargs = {"dparams": blosc2.DParams(nthreads=1)}
             carrier = blosc2.blosc2_ext.open(path, "a", 0, **kwargs)
@@ -985,6 +985,16 @@ class RemoteArray(blosc2.Operand):
         if self._source["kind"] in {"fsspec", "zarr"}:
             return self._source["urlpath"]
         return f"caterva2:{blosc2.c2array._server_url(self.src.urlbase, self.src.path)}"
+
+    def _cache_identity(self) -> str:
+        """``_source_identity`` plus a fingerprint of the fsspec access options.
+
+        Different endpoints or accounts can reach different bytes through the
+        same URL, so source-derived cache names must not collide across them.
+        """
+        identity = self._source_identity()
+        fingerprint = storage_options_fingerprint(self._storage_options)
+        return f"{identity}::{fingerprint}" if fingerprint else identity
 
     def _validate_geometry(self, expected, *, src=None) -> None:
         if expected is None:

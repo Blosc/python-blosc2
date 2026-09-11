@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 import numpy as np
 
 import blosc2
+from blosc2.core import storage_options_fingerprint
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
 
 # Zarr's synchronous bridge keeps a process-global loop, thread, and executor.
@@ -196,6 +197,11 @@ class ZarrNDSource(ProxyNDSource):
             "blocks": self._blocks,
             "dtype": self._dtype.str,
         }
+        fingerprint = storage_options_fingerprint(storage_options) if remote else ""
+        if fingerprint:
+            # The same store path through another endpoint/account may hold
+            # different bytes, so it is a different source identity.
+            identity["storage_options"] = fingerprint
         self.stamp = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()

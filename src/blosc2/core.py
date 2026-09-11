@@ -775,6 +775,19 @@ def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: s
     return os.path.join(str(cache_storage), name + suffix)
 
 
+def storage_options_fingerprint(storage_options: dict | None) -> str:
+    """A stable, non-reversible fingerprint of fsspec access configuration.
+
+    Two endpoints or accounts can serve different data from the same URL, so a
+    cache identity must include the backend options.  Hashing keeps credentials
+    out of cache paths and persisted manifests.
+    """
+    if not storage_options:
+        return ""
+    payload = json.dumps(storage_options, sort_keys=True, default=repr).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 @cache
 def _suffixed_cache_mapper():
     """fsspec's cache naming, plus the extension `blosc2.open()` dispatches on.

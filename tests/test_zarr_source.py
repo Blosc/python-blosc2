@@ -99,6 +99,19 @@ def test_zarr_source_supports_scalar_and_empty(tmp_path, zarr):
     np.testing.assert_array_equal(empty_proxy[:], np.empty(0, dtype=np.int32))
 
 
+def test_zarr_source_stamp_includes_storage_options(zarr):
+    url = "memory://zarr-tests/stamp.zarr"
+    zarr.create_array(url, shape=(4,), chunks=(2,), dtype="i4")
+
+    plain = blosc2.ZarrNDSource(url)
+    same = blosc2.ZarrNDSource(url)
+    other = blosc2.ZarrNDSource(url, storage_options={"endpoint": "elsewhere"})
+
+    assert plain.stamp == same.stamp
+    # The same store path through another endpoint may hold different bytes.
+    assert other.stamp != plain.stamp
+
+
 def test_open_remote_zarr_scalar_and_empty(zarr):
     scalar_url = "memory://zarr-tests/scalar.zarr"
     empty_url = "memory://zarr-tests/empty.zarr"

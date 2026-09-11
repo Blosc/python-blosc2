@@ -1516,3 +1516,36 @@ def test_remote_array_metadata_complex_and_containers():
     assert proxy.vlmeta["attr8"] == {"key": "val_8", "index": 8}
     assert proxy.vlmeta["attr9"] == {7, 8, 9}
     assert isinstance(proxy.vlmeta["attr9"], set)
+
+
+def test_disk_cache_dir_includes_storage_options(tmp_path):
+    url, data = _remote_array("storage-options-identity.b2nd", nchunks=2, chunk_size=1000)
+    cache = tmp_path / "cache"
+
+    for endpoint in ("one", "two"):
+        array = blosc2.RemoteArray(
+            url,
+            cache_policy=blosc2.CachePolicy.DISK,
+            cache_dir=cache,
+            storage_options={"endpoint": endpoint},
+        )
+        np.testing.assert_array_equal(array[:], data)
+
+    # Different backends are different sources, so they get different carriers.
+    assert len(list(cache.glob("*.b2nd"))) == 2
+
+
+def test_disk_cache_dir_reuses_same_storage_options(tmp_path):
+    url, data = _remote_array("storage-options-reuse.b2nd", nchunks=2, chunk_size=1000)
+    cache = tmp_path / "cache"
+
+    for _ in range(2):
+        array = blosc2.RemoteArray(
+            url,
+            cache_policy=blosc2.CachePolicy.DISK,
+            cache_dir=cache,
+            storage_options={"endpoint": "same"},
+        )
+        np.testing.assert_array_equal(array[:], data)
+
+    assert len(list(cache.glob("*.b2nd"))) == 1
