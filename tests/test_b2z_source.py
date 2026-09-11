@@ -102,8 +102,9 @@ def test_policies_exports_and_identity(tmp_path):
     proxy = blosc2.Proxy(src, urlpath=str(tmp_path / "legacy.b2nd"), mode="w")
     proxy[:2]
     np.testing.assert_array_equal(blosc2.open(tmp_path / "legacy.b2nd")[-2:], data[-2:])
-    with pytest.raises(NotImplementedError, match="authorized B2Z"):
-        blosc2.RemoteArray.with_sparse_cache(src, tmp_path / "sparse", source_descriptor=a.source)
+    sparse = blosc2.RemoteArray.with_sparse_cache(src, tmp_path / "sparse", source_descriptor=a.source)
+    np.testing.assert_array_equal(sparse[:2], data[:2])
+    assert sparse.cache_bytes > 0
 
 
 def test_zip64_and_range_bounds():
