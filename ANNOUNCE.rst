@@ -1,27 +1,49 @@
-Announcing Python-Blosc2 4.12.0
+Announcing Python-Blosc2 4.13.0
 ===============================
 
-This release makes remote Blosc2 arrays faster and easier to use, from object
-stores and plain HTTP servers to Caterva2.
+Python-Blosc2 4.13.0 turns remote data access into a comprehensive, portable
+remote data layer. It introduces bounded in-memory and persistent disk caching
+for remote arrays, multi-dataset hierarchy discovery across B2Z, Zarr, and HDF5
+containers over fsspec, portable reference snapshots, the ``.attrs`` metadata
+interface, interactive remote browsing in ``b2view``, and the ``b2nd-to-zarr``
+CLI converter.
 
-- **Read and write through fsspec URLs.** ``blosc2.open()``, ``save_array()``
-  and ``save_tensor()`` support URLs such as ``s3://``, ``gs://``, ``https://``
-  and chained filesystems via the new ``blosc2[fsspec]`` extra.
+Note: remote cache protocol should be considered somewhat experimental until it
+has seen more real S3/HTTP usage; feedback is very welcome!
 
-- **Fetch only the bytes a slice needs.** Lazy remote proxies read individual
-  compressed blocks, overlap requests and can reuse a validated on-disk cache.
-  This cuts traffic, latency and peak memory for small remote slices.
+- **Unified RemoteArray and bounded caching.** ``blosc2.open(..., lazy=True)``
+  now returns a ``RemoteArray`` with in-memory caching by default (256 MiB quota,
+  automatic LRU eviction). Persistent caching on disk is supported via
+  ``cache_dir`` or ``cache_path``, and stateless streaming via ``CachePolicy.NONE``.
+  ``cache_storage`` is deprecated in favor of ``cache_dir``.
 
-- **Improved Caterva2 access.** Stored arrays and leaves inside ``.b2z``
-  containers use HTTP byte ranges. Pre-sized remote arrays can also be filled
-  concurrently with ``C2Array.update_chunk()`` and ``aupdate_chunk()``.
+- **Hierarchy discovery and shared caching with RemoteStore.** Discover, navigate,
+  and slice multi-dataset hierarchies in ``.b2z``, ``.zarr`` (v2/v3), and HDF5
+  (``.h5``) containers over fsspec (HTTP/HTTPS, S3, GCS). All leaves share a
+  single cache budget with cross-dataset LRU eviction.
 
-- **Lean UTF-8 index lookups.** FULL-index queries bisect the vocabulary on
-  disk instead of materializing it, greatly reducing memory use for
-  high-cardinality string columns.
+- **Portable reference exports and snapshots.** Export portable references and
+  snapshots (``.b2nd`` carriers and ``.b2z`` store archives) with optional warm
+  cached data, and reopen them seamlessly with ``blosc2.open()``.
 
-- **Bundled C-Blosc2 3.3.3**, together with expanded remote-array documentation
-  and benchmarks.
+- **On-demand adapters for B2Z, Zarr, and HDF5.** Native chunk/block range reads
+  for B2Z archives (``B2ZNDSource``), Zarr v2/v3 datasets (``ZarrNDSource``), and
+  remote HDF5 datasets via kerchunk (``HDF5NDSource``). Includes a new
+  ``b2nd-to-zarr`` CLI converter.
+
+- **Recommended ``.attrs`` metadata interface.** User-defined metadata across
+  arrays, containers, and proxy sources is now accessible via ``.attrs``
+  (aliased to ``.vlmeta``, which remains fully supported).
+
+- **Interactive remote browsing in ``b2view``.** Explore remote containers and
+  array slices interactively in the terminal with the new ``--cache-dir`` option
+  for persistent caching across sessions.
+
+- **Enhanced AST shape inference.** Extended shape inferencer for subscripts,
+  slices, builtins, and common array methods in ``LazyExpr``.
+
+- **Bundled C-Blosc2 3.3.4**, alongside CI stability improvements and test
+  deadlock diagnostics.
 
 Install it with::
 

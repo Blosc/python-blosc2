@@ -2,24 +2,115 @@
 
 ## Changes from 4.12.0 to 4.13.0
 
-This release adds portable remote array references, bounded caches, and remote
-hierarchy browsing for B2Z, Zarr, and HDF5 containers.
+This release turns Python-Blosc2's remote capabilities into a comprehensive,
+portable remote data access layer. It introduces `RemoteArray` as the unified
+lazy array interface with bounded in-memory and persistent disk caching,
+`RemoteStore` for discovering and navigating multi-dataset hierarchies across
+B2Z, Zarr, and HDF5 containers over fsspec, portable reference exports and
+snapshots, the `.attrs` user metadata interface, interactive remote browsing
+in `b2view`, and the `b2nd-to-zarr` CLI converter.
 
-* `blosc2.open(..., lazy=True)` now returns a `RemoteArray` with a bounded
-  memory cache by default. `CachePolicy.NONE` disables retention; `cache_dir`
-  or `cache_path` selects persistent disk caching. `cache_storage` is deprecated
-  in favor of `cache_dir`.
-* `RemoteStore` discovers remote hierarchies and shares a cache budget across
-  their arrays. Stores and arrays can export portable references with optional
-  cached data. `b2view` supports browsing these remote sources.
-* New `ZarrNDSource`, `HDF5NDSource`, and `B2ZNDSource` adapters read immutable
-  arrays on demand. The `b2nd-to-zarr` command converts local NDArrays to Zarr.
+**Note**: The remote cache protocol should be considered somewhat experimental
+until it has seen more real S3/HTTP usage; feedback is very welcome!
 
-* Use `.attrs` as the recommended interface for user-defined metadata. Arrays,
-  containers and proxy sources now expose it as an alias for `.vlmeta`, preserving
-  existing storage and access rules. `C2Array.attrs` continues to select the
-  server's user attributes while `C2Array.vlmeta` retains protocol metadata.
-  `.vlmeta` remains supported and is not deprecated.
+### Improvements
+
+* **Unified `RemoteArray` with bounded caching**: `blosc2.open(..., lazy=True)`
+  now returns a `RemoteArray` object that provides a consistent slicing,
+  fetching, and caching interface across standalone `.b2nd` files, container
+  datasets, and Caterva2 endpoints.
+  * **In-memory cache by default (`CachePolicy.MEMORY`)**: Fetched chunks are
+    retained in RAM bounded by `max_cache_bytes` (defaults to 256 MiB) with
+    automatic LRU eviction after operations.
+  * **Persistent disk caching (`CachePolicy.DISK`)**: Specify `cache_dir` (or
+    `cache_path`) to retain fetched chunks and frame layout metadata on disk
+    across sessions. `cache_storage` is deprecated in favor of `cache_dir`.
+  * **Stateless streaming (`CachePolicy.NONE`)**: Disables chunk retention
+    entirely for memory-constrained streaming reads.
+  * **Cache partitioning**: Disk caches for `fsspec` URLs are partitioned by
+    `storage_options` so distinct credentials or custom endpoints do not clash.
+  * **Explicit cache pre-fetching**: `fetch()` and `afetch()` preheat specified
+    slices synchronously or asynchronously into the cache.
+  * `materialize(item)` returns an independent in-memory `NDArray`.
+
+* **`RemoteStore` hierarchy discovery and shared caching**: Multi-dataset
+  containers (`.b2z`, `.zarr`, and `.h5`/`.hdf5`) can now be explored and
+  sliced lazily without downloading the entire container:
+  * **Discovery and navigation**: Discover child groups and datasets via
+    `store.keys()` or iteration (`for name in store:`). Access nodes using slash
+    paths (`store["group/dataset"]`) or chained indexing
+    (`store["group"]["dataset"]`).
+  * **Lightweight inspection**: `store.get_info(name)` returns a `RemoteNode`
+    (`path`, `kind`, `attrs`, `diagnostic`) without initializing leaf readers
+    or allocating cache memory. Unsupported nodes degrade gracefully.
+  * **Shared cache budget**: All leaves accessed through a `RemoteStore` share
+    a single cache coordinator (256 MiB RAM by default, or persistent disk
+    via `cache_dir`). When the budget is reached, cross-leaf LRU eviction frees
+    chunks across any leaf in the store. Closing a leaf handle preserves its
+    warm cache in the active store session.
+  * **Atomic refresh**: `store.refresh()` atomically checks and reloads remote
+    discovery, safely invalidating previously opened leaf handles (`RuntimeError`
+    on reuse) to prevent reading inconsistent state.
+
+* **Portable references and snapshots**:
+  * `RemoteArray.save("ref.b2nd")` exports portable array descriptors with
+    optional persistent caches.
+  * `RemoteStore.save("snapshot.b2z")` exports an entire remote hierarchy
+    (discovered keys, attributes, and source locators) into a portable `.b2z`
+    archive without exposing credentials or secrets.
+  * `include_cache=True` (default) bundles warm cached chunks for offline or
+    zero-traffic reuse; `include_cache=False` exports lightweight streaming
+    references.
+  * `mutable=False` (default) produces immutable snapshots safe on read-only
+    media; `mutable=True` allows local cache expansion upon reopening.
+  * Exported references can be reopened transparently using `blosc2.open()`
+    (`blosc2.open("snapshot.b2z")` returns a `RemoteStore`).
+
+* **Remote container adapters (`B2ZNDSource`, `ZarrNDSource`, `HDF5NDSource`)**:
+  * `B2ZNDSource`: Direct byte-range access to external uncompressed `ZIP_STORED`
+    NDArray members within remote `.b2z` archives without downloading or unzipping.
+  * `ZarrNDSource`: Reads remote Zarr v2 and v3 arrays lazily on demand, caching
+    converted Blosc2 chunks. Supports scalar and empty arrays, as well as fixed-size
+    dtypes.
+  * `HDF5NDSource`: Accesses remote HDF5 datasets lazily via `kerchunk` reference
+    indexing. Unifies dataset syntax across slashes (`file.h5/group/data`), double
+    colons (`file.h5::group/data`), and `dataset="group/data"`. Manifests are
+    indexed once per container and shared across leaves.
+
+* **New `b2nd-to-zarr` CLI utility**: Converts local Blosc2 NDArray containers
+  into Zarr v2 (with numcodecs blosc/blosc2 compressor) or Zarr v3 datasets.
+
+* **Recommended `.attrs` metadata interface**: Arrays, containers, and proxy
+  sources now expose `.attrs` as the recommended interface for user-defined
+  metadata (aliased to `.vlmeta`). `C2Array.attrs` selects server user attributes
+  while `C2Array.vlmeta` retains Caterva2 protocol metadata. Internal HDF5
+  dimension metadata is filtered out of user `.attrs`. `.vlmeta` remains fully
+  supported and is not deprecated.
+
+* **Interactive remote browsing in `b2view`**:
+  * The terminal browser can open remote arrays and remote container hierarchies
+    (`.b2z`, `.zarr`, `.h5`, fsspec URLs, S3, HTTPS).
+  * Added `--cache-dir` option to persist discovery metadata and fetched chunks
+    between viewer sessions.
+  * Improved TUI responsiveness: fixed column capping when paging backward to
+    start, bounded wall-clock wait budgets, and robust async shutdown.
+
+* **Enhanced `LazyExpr` AST shape inferencer**:
+  * Shape inference now handles bracket subscripts and slices (`arr[10:20, ...]`).
+  * Recognizes `slice` and `len` builtins, common array methods (`astype`,
+    `copy`, `flatten`, `ravel`, `squeeze`), and attributes (`shape`, `size`,
+    `ndim`, `itemsize`).
+  * Supports negative slice indices and unary operations in AST slice evaluation.
+
+* **Bundled C-Blosc2 3.3.4**: Updated to the latest C-Blosc2 release.
+
+* **Test suite and CI reliability**: Added pytest watchdog deadman timer
+  (`PYTEST_DEADMAN_SECONDS`, `PYTEST_DEADMAN_SESSION_SECONDS`) and thread stack
+  dumps to catch and diagnose worker hangs. Fixed file descriptor exhaustion by
+  clearing index handle caches between tests, and resolved Windows-specific
+  in-process HTTP server aborts and file locking races.
+
+
 
 ## Changes from 4.11.0 to 4.12.0
 
