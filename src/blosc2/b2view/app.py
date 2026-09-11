@@ -2303,6 +2303,12 @@ class B2ViewApp(App):
     def _open_remote(self, session, start_path):
         browser = None
         try:
+            # A refresh may still be closing the previous browser, which owns
+            # the exclusive cache lock until close() returns.  Wait for it so
+            # the new store cannot fail with "cache is already owned".
+            closer = self._browser_close_thread
+            if closer is not None:
+                closer.join()
             browser_kwargs: dict[str, Any] = {
                 "storage_options": self.storage_options,
                 "cache_dir": self.cache_dir,
@@ -3876,7 +3882,9 @@ class B2ViewApp(App):
             self._remote_page_request += 1
             previous, self.browser = self.browser, None
             if previous is not None:
-                threading.Thread(target=self._close_browser, args=(previous,), daemon=True).start()
+                closer = threading.Thread(target=self._close_browser, args=(previous,), daemon=True)
+                self._browser_close_thread = closer
+                closer.start()
             self.start_path = self.selected_path
             self.loaded_paths.clear()
             self._remote_children.clear()
