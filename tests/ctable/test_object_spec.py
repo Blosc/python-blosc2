@@ -61,6 +61,6 @@ def test_object_column_rejects_none_when_not_nullable():
 
 def test_object_col_rejects_non_msgpack():
     t = CTable(ObjectRow)
-    t.append([1, {"not-msgpack": {1, 2, 3}}])
+    t.append([1, {"not-msgpack": object()}])
     with pytest.raises(TypeError):
         t.close()

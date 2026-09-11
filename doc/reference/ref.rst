@@ -14,6 +14,9 @@ Currently supported reference kinds are:
 - ``"urlpath"`` for persistent local objects
 - ``"dictstore_key"`` for members inside ``.b2d`` / ``.b2z`` ``DictStore`` containers
 - ``"c2array"`` for remote ``C2Array`` objects
+- ``"fsspec"`` for fsspec sources used by ``RemoteArray`` objects
+- ``"zarr"`` for remote Zarr arrays
+- ``"b2z"`` and ``"hdf5"`` for remote container datasets, with the dataset path in ``key``
 
 Use :meth:`Ref.open` to resolve a reference back into a live object.
 
@@ -38,11 +41,11 @@ Example
        # A Ref can itself be persisted, for example as variable-length metadata
        # in another persistent Blosc2 object.
        catalog = blosc2.zeros(1, urlpath=catalog_path, mode="w")
-       catalog.schunk.vlmeta["array_ref"] = ref
+       catalog.schunk.attrs["array_ref"] = ref
 
        # Reopen the metadata holder and resolve the persisted reference.
        catalog = blosc2.open(catalog_path, mode="r")
-       restored_ref = catalog.schunk.vlmeta["array_ref"]
+       restored_ref = catalog.schunk.attrs["array_ref"]
 
        reopened = restored_ref.open()
        print(reopened[:])  # [0 1 2 3 4]

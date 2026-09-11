@@ -377,6 +377,18 @@ def test_vlmeta_cannot_overwrite_proxy_state():
     assert proxy.vlmeta["mine"] == "ok"
 
 
+def test_proxy_meta_and_vlmeta_access():
+    source = blosc2.asarray(
+        np.arange(20).reshape(4, 5),
+        chunks=(2, 5),
+        blocks=(1, 5),
+    )
+    proxy = blosc2.Proxy(source, meta={"extra": 123}, vlmeta={"mine": "ok"})
+    assert "b2nd" in proxy.meta
+    assert proxy.meta["extra"] == 123
+    assert proxy.vlmeta["mine"] == "ok"
+
+
 def test_the_proxy_module_still_answers_for_the_source_names():
     # They live in `blosc2.proxy_source` now, so that the modules bound early in
     # `blosc2/__init__` can reach them without dragging `proxy.py` in ahead of
@@ -388,3 +400,13 @@ def test_the_proxy_module_still_answers_for_the_source_names():
     for name in ("ProxySource", "ProxyNDSource", "ByteRangeNDSource", "FsspecNDSource"):
         assert getattr(blosc2.proxy, name) is getattr(blosc2.proxy_source, name)
         assert getattr(blosc2, name) is getattr(blosc2.proxy_source, name)
+
+
+def test_caterva2_env_cache_reopens_as_raw_array(tmp_path):
+    data = np.arange(12).reshape(3, 4)
+    path = tmp_path / "server-cache.b2nd"
+    proxy = blosc2.Proxy(blosc2.asarray(data), urlpath=path, caterva2_env=True)
+    proxy.fetch()
+    reopened = blosc2.open(path)
+    assert isinstance(reopened, blosc2.NDArray)
+    np.testing.assert_array_equal(reopened[:], data)

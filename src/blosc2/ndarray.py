@@ -159,7 +159,7 @@ class Array(Protocol):
 
     This protocol describes the basic interface required by blosc2 arrays.
     It is implemented by blosc2 classes (:ref:`NDArray`, :ref:`NDField`,
-    :ref:`LazyArray`, :ref:`C2Array`, :ref:`ProxyNDSource`...)
+    :ref:`LazyArray`, :ref:`C2Array`, :ref:`RemoteArray`, :ref:`ProxyNDSource`...)
     and is compatible with NumPy arrays and other array-like containers
     (e.g., PyTorch, TensorFlow, Dask, Zarr, ...).
     """
@@ -3876,6 +3876,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self.schunk.meta
 
     @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
+
+    @property
     def vlmeta(self) -> dict:
         """The variable-length metadata of the array."""
         return self.schunk.vlmeta
@@ -5084,13 +5092,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 raise NotImplementedError(
                     "a sparse frame is a directory, so it cannot be saved to an fsspec URL"
                 )
+            storage_options = kwargs.pop("storage_options", None)
             # An object store takes the whole thing at once, and always replaces,
             # but reading mode still forbids a write
             blosc2_ext.check_access_mode(urlpath, kwargs.pop("mode", "w"))
             array = self.copy(**kwargs) if kwargs else self
-            with fsspec_open(urlpath, "wb") as f:
+            with fsspec_open(urlpath, "wb", storage_options=storage_options) as f:
                 f.write(array.to_cframe())
             return
+
+        if "storage_options" in kwargs and kwargs["storage_options"] is not None:
+            raise ValueError("storage_options is only supported for fsspec URLs")
+        kwargs.pop("storage_options", None)
 
         blosc2_ext.check_access_mode(urlpath, "w")
         # Add urlpath to kwargs

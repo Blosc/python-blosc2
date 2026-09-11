@@ -2299,6 +2299,7 @@ def test_constructors_string_dtype_reject_nd():
         blosc2.zeros(3, dtype=STRING_DTYPE, urlpath="unused.b2nd")
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(
     blosc2.IS_WASM,
     reason="peak-memory scaling is not measurable under Pyodide: its noise floor "

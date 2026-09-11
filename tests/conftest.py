@@ -8,11 +8,20 @@
 import gc
 import os
 import sys
+import time
 
 import httpx
 import pytest
 
 import blosc2
+
+_NETWORK_ERRORS = (httpx.HTTPError,)
+try:
+    from botocore.exceptions import ProfileNotFound
+except ImportError:
+    pass
+else:
+    _NETWORK_ERRORS += (ProfileNotFound,)
 
 # Each SChunk allocates C-level thread pools (pthreads) for its compression
 # and decompression contexts.  Python 3.14 changed the GC gen-2 threshold
@@ -75,6 +84,7 @@ def pytest_configure(config):
     # to 80 columns, which hides columns the tests expect to see).
     os.environ["COLUMNS"] = "120"
     blosc2.print_versions()
+    _arm_session_deadman()
     if sys.platform != "emscripten":
         # Using the defaults for nthreads can be very time consuming for tests.
         # Fastest runtime (95 sec) for the whole test suite (Mac Mini M4 Pro)
@@ -98,13 +108,13 @@ def cat2_context():
 
 
 def pytest_runtest_call(item):
-    # Skip network-marked tests on transient request failures to keep CI stable.
+    # Skip network-marked tests when their endpoint or optional credentials are unavailable.
     if item.get_closest_marker("network") is None:
         return
     try:
         item.runtest()
-    except httpx.HTTPError as exc:
-        pytest.skip(f"Skipping network test due to request failure: {exc}")
+    except _NETWORK_ERRORS as exc:
+        pytest.skip(f"Skipping unavailable network test: {exc}")
 
 
 def pytest_runtest_teardown(item, nextitem):
@@ -112,3 +122,63 @@ def pytest_runtest_teardown(item, nextitem):
     _test_counter += 1
     if _test_counter % _GC_COLLECT_INTERVAL == 0:
         gc.collect()
+
+
+_deadman_log_file = None
+_session_deadline: float | None = None
+
+
+def _deadman_log():
+    """Append-only stack log at the repo root; the workers share it."""
+    global _deadman_log_file
+    if _deadman_log_file is None:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Must stay open: faulthandler writes to it after the test is abandoned.
+        _deadman_log_file = open(  # noqa: SIM115
+            os.path.join(root, "deadman-stacks.log"), "a", buffering=1
+        )
+    return _deadman_log_file
+
+
+def _arm_session_deadman() -> None:
+    """Arm a budget for the whole session, to catch hangs outside a test.
+
+    The per-test deadman cannot see a hang in collection, session teardown or
+    interpreter exit.  Between tests the fixture re-arms this deadline instead
+    of the per-test one.
+    """
+    global _session_deadline
+    seconds = os.environ.get("PYTEST_DEADMAN_SESSION_SECONDS")
+    if not seconds:
+        return
+    _session_deadline = time.monotonic() + float(seconds)
+    import faulthandler
+
+    faulthandler.dump_traceback_later(float(seconds), exit=True, file=_deadman_log())
+
+
+@pytest.fixture(autouse=True)
+def _worker_deadman():
+    """Turn a hung test into a named worker crash instead of a burned job.
+
+    CI sets PYTEST_DEADMAN_SECONDS: a test that outlives it dumps every
+    thread's stack (faulthandler) and kills the worker, and xdist reports
+    which test it was running.  Without it a deadlock only shows up as a
+    progress bar that stops moving until the job timeout hours later.
+    """
+    seconds = os.environ.get("PYTEST_DEADMAN_SECONDS")
+    if not seconds:
+        yield
+        return
+    import faulthandler
+
+    faulthandler.dump_traceback_later(float(seconds), exit=True, file=_deadman_log())
+    try:
+        yield
+    finally:
+        if _session_deadline is None:
+            faulthandler.cancel_dump_traceback_later()
+        else:
+            # Between tests the session, not the test, is the one on a clock.
+            remaining = max(1.0, _session_deadline - time.monotonic())
+            faulthandler.dump_traceback_later(remaining, exit=True, file=_deadman_log())

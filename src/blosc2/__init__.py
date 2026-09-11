@@ -230,6 +230,14 @@ class IndexKind(Enum):
     OPSI = "opsi"
 
 
+class CachePolicy(Enum):
+    """Retention policy for data read through a remote proxy."""
+
+    NONE = "none"
+    MEMORY = "memory"
+    DISK = "disk"
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
@@ -595,6 +603,9 @@ from .proxy_source import (
     FsspecNDSource,
     Traffic,
 )
+from .zarr_source import ZarrNDSource
+from .b2z_source import B2ZNDSource
+from .hdf5_source import HDF5NDSource, available_datasets
 from .indexing import Index
 
 from .schunk import SChunk, load, open
@@ -608,6 +619,8 @@ from .proxy import (
     jit,
     as_simpleproxy,
 )
+from .remote_array import RemoteMetadataMapping, RemoteArray
+from .remote_store import RemoteNode, RemoteStore
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
@@ -873,6 +886,7 @@ __all__ = [  # noqa : RUF022
     "BatchArray",
     # Enums
     "Codec",
+    "CachePolicy",
     "DParams",
     "DictStore",
     "EmbedStore",
@@ -890,12 +904,19 @@ __all__ = [  # noqa : RUF022
     "Operand",
     "ByteRangeNDSource",
     "FsspecNDSource",
+    "B2ZNDSource",
     "Traffic",
+    "ZarrNDSource",
+    "HDF5NDSource",
     "Proxy",
     "ProxyNDField",
     "ProxyNDSource",
     "ProxySource",
     "Ref",
+    "RemoteMetadataMapping",
+    "RemoteArray",
+    "RemoteNode",
+    "RemoteStore",
     "SChunk",
     "SimpleProxy",
     "SpecialValue",
@@ -919,6 +940,7 @@ __all__ = [  # noqa : RUF022
     "any",
     "arange",
     "array",
+    "available_datasets",
     "arccos",
     "arccosh",
     "arcsin",

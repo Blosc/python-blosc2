@@ -39,9 +39,11 @@ def resolve_source(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Browse a Blosc2 TreeStore bundle in the terminal.")
-    parser.add_argument("urlpath", nargs="?", default=None, help="Path to a .b2d directory or .b2z file")
+    parser = argparse.ArgumentParser(description="Browse a Blosc2 bundle or array in the terminal.")
+    parser.add_argument("urlpath", nargs="?", default=None, help="Local path or remote array URL")
     parser.add_argument("path", nargs="?", default="/", help="Optional starting path inside the bundle")
+    parser.add_argument("--profile", help="S3 credential profile")
+    parser.add_argument("--endpoint-url", help="S3 endpoint URL")
     parser.add_argument(
         "--download",
         nargs="?",
@@ -53,11 +55,23 @@ def build_parser() -> argparse.ArgumentParser:
             f"default {DEFAULT_DOWNLOAD_PATH!r}) from the cwd, downloading it first if not present"
         ),
     )
+    parser.add_argument(
+        "--cache-dir",
+        metavar="DIR",
+        help="Directory for persistent disk caching of remote stores and arrays",
+    )
+    parser.add_argument(
+        "--max-cache-bytes",
+        type=int,
+        default=None,
+        metavar="BYTES",
+        help="Maximum size in bytes for the remote cache (defaults to 64 MiB)",
+    )
     parser.add_argument("--preview-rows", type=int, default=20, help="Maximum preview rows")
     parser.add_argument("--preview-cols", type=int, default=10, help="Maximum preview columns")
     parser.add_argument(
         "--panel",
-        choices=["tree", "meta", "vlmeta", "data"],
+        choices=["tree", "meta", "attrs", "vlmeta", "data"],
         default="tree",
         help="Panel to focus on startup",
     )
@@ -108,12 +122,20 @@ def main(argv: list[str] | None = None) -> int:
     app = B2ViewApp(
         urlpath,
         start_path=args.path,
-        start_panel=args.panel,
+        start_panel="attrs" if args.panel == "vlmeta" else args.panel,
         start_maximized=args.maximized,
         preview_rows=args.preview_rows,
         preview_cols=args.preview_cols,
         download_url=download_url,
         info_url=info_url,
+        cache_dir=args.cache_dir,
+        max_cache_bytes=args.max_cache_bytes,
+        storage_options={
+            key: value
+            for key, value in {"profile": args.profile, "endpoint_url": args.endpoint_url}.items()
+            if value is not None
+        }
+        or None,
     )
     app.run(mouse=args.mouse)
     return 0

@@ -18,6 +18,7 @@ from blosc2 import c2array as c2array_mod
 class _FakeResponse:
     def __init__(self, json_data):
         self._json = json_data
+        self.content = b""
 
     def raise_for_status(self):
         pass

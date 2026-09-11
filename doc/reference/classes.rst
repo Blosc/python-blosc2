@@ -32,6 +32,9 @@ without chunk caching.
     Proxy
     ProxySource
     ProxyNDSource
+    ZarrNDSource
+    HDF5NDSource
+    B2ZNDSource
     SimpleProxy
     Traffic
 
@@ -108,6 +111,7 @@ codecs, filters, and remote paths.
     SpecialValue
     Tuner
     FPAccuracy
+    CachePolicy
     URLPath
 
 
@@ -138,10 +142,15 @@ container APIs above.
     list_array
     objectarray
     proxy
+    remotearray
+    remotestore
     proxysource
     proxyndsource
     byterangendsource
     fsspecndsource
+    zarrndsource
+    hdf5ndsource
+    b2zndsource
     simpleproxy
     traffic
     embed_store

@@ -74,6 +74,38 @@ def test_store_browser_metadata_and_previews(tmp_path):
         np.testing.assert_array_equal(preview["data"]["x"], np.array([0, 1, 2]))
 
 
+@pytest.mark.parametrize("suffix", [".b2nd", ".b2z/d0/d1/a2", ".b2z::d0/d1/a2"])
+def test_store_browser_remote_array(tmp_path, suffix):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    array = blosc2.asarray(data, chunks=(1, 20, 20), blocks=(1, 10, 10))
+    array.attrs["description"] = "remote preview"
+    fs = fsspec.filesystem("memory")
+    if suffix == ".b2nd":
+        fs.pipe_file("b2view-array.b2nd", array.to_cframe())
+    else:
+        path = tmp_path / "bundle.b2z"
+        with blosc2.TreeStore(str(path), mode="w") as store:
+            store["/d0/d1/a2"] = array
+        fs.pipe_file("b2view-array.b2z", path.read_bytes())
+
+    with StoreBrowser("memory://b2view-array" + suffix) as browser:
+        assert isinstance(browser.store, blosc2.RemoteArray)
+        assert browser.store.max_cache_bytes == 64 << 20
+        assert browser.list_children("/") == []
+        info = browser.get_info("/")
+        assert info.kind == "ndarray"
+        assert info.metadata["shape"] == data.shape
+        assert info.user_attrs["description"] == "remote preview"
+        assert browser.store.cache_bytes == 0
+        for _ in range(2):
+            before = browser.store.traffic.nbytes
+            preview = browser.preview("/", slice_indices=[2], start=3, stop=6, max_cols=5)
+            np.testing.assert_array_equal(np.column_stack(list(preview["data"].values())), data[2, 3:6, :5])
+            if _ == 1:
+                assert browser.store.traffic.nbytes == before
+
+
 def test_store_browser_supports_standalone_ctable(tmp_path):
     path = tmp_path / "table.b2z"
     table = make_ctable(4)

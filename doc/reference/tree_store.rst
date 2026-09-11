@@ -105,7 +105,7 @@ Quick example
 
     Properties
     ----------
-    .. autoattribute:: vlmeta
+    .. autoattribute:: attrs
 
     Public Members
     --------------

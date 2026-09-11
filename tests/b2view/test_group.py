@@ -18,7 +18,7 @@ import dataclasses
 
 import numpy as np
 import pytest
-from tui_wait import wait_for_screen
+from tui_wait import wait_for_screen, wait_until
 
 import blosc2
 
@@ -232,12 +232,12 @@ TERM_SIZE = (120, 40)
 
 
 async def _wait_table(pilot):
-    for _ in range(50):
-        await pilot.pause()
-        page = getattr(pilot.app, "table_page", None)
-        if page and page.get("source_kind") == "ctable":
-            return page
-    raise AssertionError("data grid never loaded")
+    await wait_until(
+        pilot,
+        lambda: (getattr(pilot.app, "table_page", None) or {}).get("source_kind") == "ctable",
+        message="data grid never loaded",
+    )
+    return pilot.app.table_page
 
 
 @pytest.mark.asyncio

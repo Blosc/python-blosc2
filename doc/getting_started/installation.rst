@@ -40,12 +40,18 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
    * - ``parquet``
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
        :doc:`../guides/parquet_to_blosc2`.
+   * - ``zarr``
+     - Lazy Zarr sources and the ``b2nd-to-zarr`` (or ``blosc2-to-zarr``)
+       converter (``zarr``).
+   * - ``hdf5``
+     - Reading HDF5 datasets lazily as virtual arrays via kerchunk (``kerchunk``,
+       ``h5py``, ``hdf5plugin``).
    * - ``fsspec``
      - Reading and writing single-file containers through any `fsspec
-       <https://filesystem-spec.readthedocs.io>`_ URL.  The driver for each
-       protocol is a separate install (``s3fs`` for ``s3://``, ``gcsfs`` for
-       ``gs://``, ``adlfs`` for ``abfs://``...), and credentials are configured
-       through the driver, not through blosc2.
+       <https://filesystem-spec.readthedocs.io>`_ URL.  The HTTP(S) driver is
+       included. Other protocol drivers are separate installs (``s3fs`` for
+       ``s3://``, ``gcsfs`` for ``gs://``, ``adlfs`` for ``abfs://``...), and
+       credentials are configured through the driver, not through blosc2.
 
 Install one or more extras by listing them in brackets (quote the
 argument in shells like ``zsh`` that treat brackets specially):
@@ -55,15 +61,18 @@ argument in shells like ``zsh`` that treat brackets specially):
     pip install "blosc2[tui]"             # the b2view terminal browser
     pip install "blosc2[hires]"           # b2view + its high-res view (h key)
     pip install "blosc2[parquet]"         # the Parquet converter
+    pip install "blosc2[fsspec]"          # fsspec URLs, including HTTP(S)
     pip install "blosc2[fsspec]" s3fs     # fsspec URLs, plus the S3 driver
+    pip install "blosc2[zarr,fsspec]" s3fs # remote Zarr arrays on S3
+    pip install "blosc2[hdf5,fsspec]" s3fs # remote HDF5 datasets on S3
     pip install "blosc2[tui,parquet]"     # several at once
 
 With the ``fsspec`` extra, :func:`blosc2.open` accepts any fsspec URL, chained
-ones included, and reads it whole, through a local cache (``cache_storage=``), or
+ones included, and reads it whole, through a local cache (``cache_dir=``), or
 by fetching only the chunks and blocks a slice touches (``lazy=True``); see
 :func:`blosc2.open` and :ref:`FsspecNDSource` for what each mode supports.
-``examples/ndarray/rw-fsspec.py`` walks through all three plus the write side,
-and ``examples/ndarray/concurrent-fsspec.py`` shows what overlapping the
+``examples/remote/rw-fsspec.py`` walks through all three plus the write side,
+and ``examples/remote/concurrent-fsspec.py`` shows what overlapping the
 fetches buys; both run with no network or credentials.
 
 Source code

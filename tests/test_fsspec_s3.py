@@ -81,9 +81,9 @@ def test_save_and_open_whole(stored):
     assert np.array_equal(blosc2.open(urlpath)[:], a[:])
 
 
-def test_cache_storage(stored, tmp_path):
+def test_cache_dir(stored, tmp_path):
     urlpath, a = stored
-    b = blosc2.open(urlpath, cache_storage=tmp_path, mmap_mode="r")
+    b = blosc2.open(urlpath, cache_dir=tmp_path, mmap_mode="r")
     assert np.array_equal(b[:], a[:])
 
 
@@ -197,3 +197,51 @@ def test_a_kept_index_spares_a_later_run_the_reads(s3_endpoint, tmp_path):
     assert np.array_equal(p[60:62, 30:40], data[60:62, 30:40])
     assert len(traffic) == 1  # one block, and nothing to say where it was
     assert np.array_equal(p[...], data)
+
+
+def test_storage_options(s3_endpoint, tmp_path):
+    storage_options = {
+        "endpoint_url": s3_endpoint,
+        "key": "testing",
+        "secret": "testing",
+        "client_kwargs": {"region_name": "eu-west-1"},
+    }
+    # Save with storage_options
+    url = f"s3://{BUCKET}/so_test.b2nd"
+    data = np.arange(500, dtype=np.int32)
+    a = blosc2.asarray(data, chunks=(100,))
+    a.save(url, mode="w", storage_options=storage_options)
+
+    # Open whole with storage_options
+    b = blosc2.open(url, storage_options=storage_options)
+    assert np.array_equal(b[:], data)
+
+    # Open lazy with storage_options
+    lazy_b = blosc2.open(url, lazy=True, storage_options=storage_options)
+    assert np.array_equal(lazy_b[50:150], data[50:150])
+    assert np.array_equal(lazy_b[:], data)
+
+    # Open with cache_dir and storage_options
+    cached_b = blosc2.open(url, cache_dir=tmp_path, storage_options=storage_options)
+    assert np.array_equal(cached_b[:], data)
+
+    # save_array and save_tensor with storage_options
+    url_arr = f"s3://{BUCKET}/so_save_array.b2nd"
+    blosc2.save_array(data, url_arr, storage_options=storage_options)
+    assert np.array_equal(blosc2.load_array(url_arr, storage_options=storage_options), data)
+
+    url_tensor = f"s3://{BUCKET}/so_save_tensor.b2nd"
+    blosc2.save_tensor(data, url_tensor, storage_options=storage_options)
+    assert np.array_equal(blosc2.load_tensor(url_tensor, storage_options=storage_options), data)
+
+
+def test_storage_options_invalid_path(tmp_path):
+    local_file = str(tmp_path / "local.b2nd")
+    a = blosc2.arange(10)
+    a.save(local_file)
+    with pytest.raises(ValueError, match="storage_options is only supported for fsspec URLs"):
+        blosc2.open(local_file, storage_options={"foo": "bar"})
+    with pytest.raises(ValueError, match="storage_options is only supported for fsspec URLs"):
+        a.save(local_file, mode="w", storage_options={"foo": "bar"})
+    with pytest.raises(ValueError, match="storage_options is only supported for fsspec URLs"):
+        blosc2.save_array(np.arange(10), local_file, storage_options={"foo": "bar"})

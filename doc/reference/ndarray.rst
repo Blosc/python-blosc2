@@ -6,6 +6,9 @@ NDArray
 The multidimensional data array class. Instances may be constructed using the constructor functions in the list below `NDArrayConstructors`_.
 In addition, all the functions from the :ref:`LazyArray` section can be used with NDArray instances.
 
+Use ``array.attrs`` for user-defined metadata (see :ref:`MsgpackSerialization`).
+It is a direct alias for ``array.vlmeta`` and uses the same persistent storage.
+
 .. currentmodule:: blosc2
 
 .. autoclass:: NDArray

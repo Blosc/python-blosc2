@@ -88,15 +88,45 @@ jobs:
 
     - name: Test (Windows)
       if: runner.os == 'Windows'
-      run: python -m pytest -m "not heavy and not network" --durations=25
-#      env:
+      run: python -m pytest -m "not heavy and not network and not tui" --durations=25
+      env:
+        # A test over this many seconds is a deadlock, not a slow test (the
+        # slowest is ~7 s): dump stacks and kill the worker so xdist names it
+        # instead of the job hanging until the 6-hour cap.  The session budget
+        # catches the same hang in teardown or interpreter exit, where no test
+        # is running to be named.
+        PYTEST_DEADMAN_SECONDS: "300"
+        PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 #        BLOSC_NTHREADS: "1"
 #        NUMEXPR_NUM_THREADS: "1"
 #        OMP_NUM_THREADS: "1"
 
     - name: Test (non-Windows)
       if: runner.os != 'Windows'
-      run: python -m pytest -m "not heavy and not network" --durations=25
+      run: python -m pytest -m "not heavy and not network and not tui" --durations=25
+      env:
+        PYTEST_DEADMAN_SECONDS: "300"
+        PYTEST_DEADMAN_SESSION_SECONDS: "1500"
+
+    # TUIs are timing-sensitive and only boot a headless terminal: one OS is
+    # enough, and a flake here is feedback, not a release blocker.
+    - name: Test TUI (non-blocking)
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && !matrix.numpy-version
+      continue-on-error: true
+      run: python -m pytest -m "tui and not heavy and not network" -n 4 --dist loadfile --durations=10
+      env:
+        PYTEST_DEADMAN_SECONDS: "300"
+        PYTEST_DEADMAN_SESSION_SECONDS: "900"
+
+    - name: Deadlock stacks, if a worker had to be killed
+      if: always()
+      shell: bash
+      run: |
+        if [ -s deadman-stacks.log ]; then
+          echo "::group::Deadlock stacks"
+          cat deadman-stacks.log
+          echo "::endgroup::"
+        fi
 
     # The network tests talk to a live Caterva2 server and were 24 of the 25
     # slowest tests in *both* the Windows and Linux jobs, with near-identical

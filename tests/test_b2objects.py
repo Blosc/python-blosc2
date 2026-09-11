@@ -32,7 +32,7 @@ def _make_c2array(
 ):
     dtype = np.dtype(dtype)
 
-    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None):
+    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None, traffic=None):
         return {
             "shape": list(shape),
             "chunks": list(chunks),

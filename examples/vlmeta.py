@@ -17,18 +17,18 @@ for i in range(nchunks):
     assert nchunks_ == (i + 1)
 
 # Initially the vlmeta is empty
-print(len(schunk.vlmeta))
+print(len(schunk.attrs))
 # Add a vlmeta
-schunk.vlmeta["meta1"] = "first vlmetalayer"
-print(schunk.vlmeta.getall())
+schunk.attrs["meta1"] = "first vlmetalayer"
+print(schunk.attrs.getall())
 # Update the vlmeta
-schunk.vlmeta["meta1"] = "new vlmetalayer"
-print(schunk.vlmeta.getall())
+schunk.attrs["meta1"] = "new vlmetalayer"
+print(schunk.attrs.getall())
 # Add another vlmeta
-schunk.vlmeta["vlmeta2"] = "second vlmeta"
+schunk.attrs["vlmeta2"] = "second vlmeta"
 # Check that it has been added
-assert "vlmeta2" in schunk.vlmeta
+assert "vlmeta2" in schunk.attrs
 
 # Delete a vlmeta
-del schunk.vlmeta["vlmeta2"]
-assert "vlmeta2" not in schunk.vlmeta
+del schunk.attrs["vlmeta2"]
+assert "vlmeta2" not in schunk.attrs

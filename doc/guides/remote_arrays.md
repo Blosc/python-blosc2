@@ -1,135 +1,559 @@
-# Working with Remote Arrays
+# Working with Remote Arrays and Stores
 
-A Blosc2 array that lives on a server does not have to be downloaded to be used. Blosc2 opens it where it is, fetches only the pieces a slice touches, and keeps those in a local cache so the next run starts from them.
+Blosc2 can open remote arrays and stores (arrays on a hierarchical container) without downloading them first.
+Source metadata is read at open time; array data is fetched when a slice needs it and retained according to the cache policy.
 
-## Three ways in
-
-| Where the array lives | How to open it |
-|---|---|
-| Any URL fsspec reaches — `s3://`, `gs://`, `https://`, `zip://`… | `blosc2.open(url, lazy=True)` |
-| A [Caterva2](https://ironarray.io/caterva2) server | `blosc2.C2Array(path, urlbase=...)` |
-| Anything else | A `read_range()` of your own — see [Your own transport](#your-own-transport) |
+Python-Blosc2 provides two primary entry points for remote data:
+- {ref}`RemoteArray`: Access and slice an individual remote array (a standalone `.b2nd` file or a specific dataset in a container).
+- {ref}`RemoteStore`: Discover, navigate, and access multi-dataset hierarchies in B2Z, Zarr, or HDF5 containers, sharing a single cache budget across all leaves.
 
 ```python
 import blosc2
 
-# An object store, a web server, a zip on either of them
-a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+# Discover and read from a remote container (B2Z, Zarr, or HDF5)
+with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
+    print(store.keys())  # discover groups and datasets
+    group = store["experiment"]
+    array = group["temperature"]  # yields a RemoteArray leaf
+    values = array[:100]  # fetches only the requested slice
+    attrs = array.attrs[:]  # fetches user metadata
 
-# A Caterva2 server
-b = blosc2.C2Array(
-    "@public/examples/lung-jpeg2000_10x.b2nd", urlbase="https://cat2.cloud/demo"
+# Or open a single remote array directly
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+values = a[:100]
+attrs = a.attrs[:]  # fetches user metadata
+```
+
+The `b2view` terminal browser uses these public types with a 64 MiB allowance by default to let you explore remote containers interactively.
+For a script showing hierarchy discovery, leaf previews, and persistent caching, see `examples/remote/store-browse.py`.
+
+## Choose a remote route
+
+The argument passed to {func}`blosc2.open` selects the route:
+
+| Argument                                                                      | Route    | What it names                                           |
+| ----------------------------------------------------------------------------- | -------- | ------------------------------------------------------- |
+| A URL string such as `s3://...` or `https://...`                              | fsspec   | A byte-addressable, standalone `.b2nd` file             |
+| A URL containing a `.b2z` path component, or `source_format="b2z"`            | B2Z      | One immutable external NDArray leaf in a `.b2z` archive |
+| A URL containing a `.zarr` path component                                     | Zarr     | One immutable Zarr v2 or v3 array                       |
+| A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5     | One immutable HDF5 dataset via kerchunk                 |
+| A {ref}`URLPath`                                                              | Caterva2 | One array-like dataset on a Caterva2 server             |
+| An exported `.b2z` reference archive                                          | B2Z      | A restored {ref}`RemoteStore` reference hierarchy       |
+
+```python
+import blosc2
+
+# fsspec: a plain web server, CDN, or cloud object store
+a1 = blosc2.open("https://datasets.example.org/big.b2nd", lazy=True)
+a2 = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+
+# Caterva2: a dataset identified by root and path
+b = blosc2.open(
+    blosc2.URLPath(
+        "@public/examples/lung-jpeg2000_10x.b2nd",
+        urlbase="https://cat2.cloud/demo",
+    ),
+    lazy=True,
 )
 
-a.shape, a.dtype  # metadata only; nothing was downloaded
-a[100:110, :50]  # a NumPy array, fetched now
+# Open individual datasets inside containers (B2Z, Zarr, or HDF5)
+# Datasets can be named using slashes (/), container separators (::), or dataset=:
+b1 = blosc2.open("s3://bucket/hierarchy.b2z/d0/d1/a2", lazy=True)
+c1 = blosc2.open("https://datasets.example.org/hierarchy.zarr::d0/d1/a2", lazy=True)
+h1 = blosc2.open(
+    "https://datasets.example.org/hierarchy.h5", lazy=True, dataset="d0/d1/a2"
+)
+
+# Open whole hierarchies with RemoteStore to discover and navigate containers:
+store_b2z = blosc2.RemoteStore("s3://bucket/hierarchy.b2z")
+store_h5 = blosc2.RemoteStore("https://datasets.example.org/hierarchy.h5")
+
+# Reopen an exported reference snapshot (.b2z):
+store_snap = blosc2.open("snapshot.b2z")
+
+a1.shape, a1.dtype  # metadata is available immediately
+a1[100:110, :50]  # data is fetched now
 ```
 
-`https://` means a plain web server — nginx, a CDN, an S3 website endpoint — anything that answers a `Range` request. A Caterva2 server is *not* reached that way: it names its datasets by root and path, so use {ref}`C2Array`.
+Remote B2Z needs `pip install "blosc2[fsspec]"`.
+HTTP and HTTPS URLs work out of the box; cloud object stores need their respective protocol driver (such as `s3fs` for S3, `gcsfs` for GCS, or `adlfs` for Azure).
+It accesses external `ZIP_STORED` NDArray members in `.b2z` archives using native Blosc2 chunk and block range reads without decompressing or downloading the archive.
+For a suffix-free URL, pass `source_format="b2z"`.
+Embedded leaves and CTable columns are not supported as lazy NDArrays.
 
-## The cache
+Remote Zarr needs `pip install "blosc2[zarr,fsspec]"`.
+HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
+Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr` separator, or via `dataset="sub/arr"`.
+For a suffix-free URL, pass `source_format="zarr"`.
+Converted Blosc2 chunks are cached under an immutable source contract, so publish changed data at a new URL or replace its cache.
 
-Wrap either of those in a {ref}`Proxy` and what you read is kept:
+Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
+HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
+Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
+Pre-indexing is performed via `kerchunk`. When opening a single {ref}`RemoteArray`, the resulting reference map is cached inside the array carrier (`schunk.vlmeta["hdf5-refs"]`). When using {ref}`RemoteStore`, indexing is performed once for the entire container and shared across all leaves and sessions.
+Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5 container.
+
+`RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
+For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
+Mutable B2Z, Zarr, and HDF5 sources are not supported.
+
+A `URLPath` always means Caterva2.
+If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`.
+Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
+
+### Choosing between fsspec and Caterva2
+
+When opening an individual dataset with `lazy=True`, both fsspec URLs and Caterva2 `URLPath`s return a {ref}`RemoteArray`, providing an identical user interface for slicing, caching, and introspection.
+For multi-dataset containers (B2Z, Zarr, and HDF5), a {ref}`RemoteStore` is returned instead, providing container-level discovery and shared caching across fsspec protocols.
+
+What differs between the transports is the types of remote objects each can open:
+
+| Remote object                           | fsspec URL / RemoteStore         | Caterva2 `URLPath`           |
+| --------------------------------------- | -------------------------------- | ---------------------------- |
+| Standalone contiguous `.b2nd`           | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
+| NDArray leaf inside `.b2z`              | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
+| Zarr v2/v3 array                        | Yes (`blosc2.open` / `RemoteArray`) | No                        |
+| HDF5 dataset                            | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
+| Whole container (.b2z, .zarr, .h5)      | Yes (`blosc2.open` / `RemoteArray`) | Yes; zarr not yet         |
+| Lazy or computed array                  | No                               | Yes                          |
+
+- **fsspec** supplies byte ranges.
+  Python-Blosc2 parses the remote frame to discover its geometry and chunk offsets, making this route direct and efficient for standalone arrays.
+- **Caterva2** understands dataset paths, array metadata, and slicing.
+  It can therefore expose array-like data that is not stored as a standalone Blosc2 frame, as well as apply authentication or server-side computation.
+  Use Caterva2's navigation API to find a leaf in a remote hierarchy, then open that leaf with a `URLPath`.
+
+`lazy=True` changes *when* data is fetched; it does not expand the underlying storage formats supported by either route.
+
+> [!TIP]
+> **Browse remote hierarchies**: To explore groups, inspect attributes, or preview arrays in remote `.b2z`, `.zarr`, or `.h5` containers interactively in the terminal without downloading the complete container, use {doc}`b2view <b2view>` (e.g. `b2view s3://bucket/hierarchy.b2z`). To navigate containers programmatically in Python, use {ref}`RemoteStore`.
+
+## Explore remote hierarchies with RemoteStore
+
+When working with containers that hold multiple groups and datasets—such as `.b2z`, `.zarr`, or `.h5` files—use {ref}`RemoteStore` to discover, navigate, and access the hierarchy:
 
 ```python
-p = blosc2.Proxy(b)  # cache in memory, gone when the proxy is
-p[10:12, 500:600]  # fetched from the server, and kept
-p[10:12, 500:600]  # read from the cache, no request at all
+import blosc2
+
+with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
+    # 1. Discover immediate child groups and datasets (metadata only, no array data downloaded)
+    print(store.keys())
+
+    # 2. Inspect a node's kind and attributes
+    info = store.get_info("experiment")
+    print(info.kind)  # "group", "ndarray", or "unsupported"
+
+    # 3. Read user metadata on groups or arrays
+    print(store["experiment"].attrs[:])
+
+    # 4. Access an array leaf and slice it
+    temp = store["experiment/temperature"]
+    values = temp[:100]  # fetches and caches only the requested slice
 ```
 
-Where that cache lives is yours to choose, and it is the one decision to make here. Say nothing and it is memory: fast, and it dies with the proxy, which is all a single process reading a slice twice needs. Name a file with `urlpath=` and the cache outlives the run:
+### Hierarchy navigation and inspection
+
+- **Child enumeration**: `store.keys()` and `for name in store:` list immediate children of the current store or group level without fetching array data.
+- **Relative paths**: Lookups can use slash paths or chained indexing interchangeably (`store["experiment/temperature"]` is equivalent to `store["experiment"]["temperature"]`). Both return a {ref}`RemoteArray` leaf.
+- **Node inspection with {ref}`RemoteNode`**: Call `store.get_info(name)` to inspect a node without creating leaf readers or allocating cache memory. A `RemoteNode` provides:
+  - `path`: relative dataset path.
+  - `kind`: `"group"`, `"ndarray"`, or `"unsupported"`.
+  - `attrs`: user metadata mapping (or `None` if array attributes require opening the leaf).
+  - `diagnostic`: explanation for unsupported nodes (e.g. non-array objects or unsupported codecs).
+- **Graceful degradation**: Unsupported nodes remain visible during discovery and raise an informative `NotImplementedError` only when selected as arrays, allowing you to browse mixed containers without errors.
+
+### Shared caching across the hierarchy
+
+Unlike opening independent arrays with `blosc2.open(..., lazy=True)`, all leaves accessed through a `RemoteStore` share a single cache coordinator:
+
+- **Single shared budget**: The store defaults to {attr}`CachePolicy.MEMORY <blosc2.CachePolicy.MEMORY>` with a shared 256 MiB allowance across all arrays. You can customize this with `max_cache_bytes`.
+- **Cross-leaf LRU eviction**: When total retained chunks reach the budget, the least-recently used chunks across *any* leaf in the store are evicted automatically.
+- **Warm retention on close**: Closing an individual leaf handle (`array.close()`) does not discard its cached chunks from the store session. Re-accessing that dataset reuses the warm cache without re-downloading.
+- **Accounting**:
+  - `store.cache_bytes`: total retained compressed payload across all leaves in the store.
+  - `array.cache_bytes`: payload retained specifically for that leaf.
+  - `store.traffic`: cumulative network requests and response bytes for the entire store, including both metadata discovery and chunk fetches.
+
+### Persistent disk caching with `cache_dir`
+
+Specify `cache_dir` when creating a `RemoteStore` to persist discovery metadata and downloaded chunks to local disk:
 
 ```python
-p = blosc2.Proxy(b, urlpath="lung-cache.b2nd", mode="a")
-p[10:12, 500:600]  # fetched from the server, and written to lung-cache.b2nd
+with blosc2.RemoteStore(
+    "https://datasets.example.org/data.h5",
+    cache_dir="./b2store_cache",
+    max_cache_bytes=512 * 2**20,  # 512 MiB shared disk limit
+) as store:
+    temp = store["experiment/temperature"]
+    values = temp[:100]
 ```
 
-That file is an ordinary Blosc2 array holding only the pieces you touched — a few hundred bytes for a freshly opened proxy over a 64 MB dataset, growing as you read. It is a normal `.b2nd`: copy it, ship it, open it with {func}`blosc2.open`. With `mode="a"` a later run picks up where the last one left off.
+When reopening the same store later with the same `cache_dir`:
+- Discovery metadata (such as B2Z member offsets or HDF5 Kerchunk reference maps) is restored from local disk, avoiding repeated remote translation scans. `store.metadata_bytes` reports the encoded manifest size.
+- Retained leaf chunks are available immediately from disk without network transfers.
+- Single-owner locks ensure that concurrent processes do not corrupt the shared cache.
 
-{func}`blosc2.open` builds the proxy for you and offers the same choice under another name — `cache_storage=` a directory for a cache on disk, nothing for one in memory:
+### Lifetime and clean shutdown
+
+- Use context managers (`with blosc2.RemoteStore(...) as store:`) for clean lifecycle management.
+- Child handles (`RemoteArray` leaves or group views) remain usable even after the parent `store` handle closes.
+- Transport sessions, HTTP connections, and disk cache locks are released automatically once the last dependent handle is closed or garbage collected.
+
+## Access HTTP/HTTPS, S3, and cloud storage
+
+Because Python-Blosc2 uses [fsspec](https://filesystem-spec.readthedocs.io/) under the hood, any remote protocol supported by fsspec can be used to open arrays lazily.
+
+### HTTP and HTTPS
+
+Publicly accessible arrays on any web server, CDN, or object store URL can be opened directly over HTTP or HTTPS without requiring cloud-specific libraries or credentials:
+
+```python
+import blosc2
+
+# Standalone array over HTTPS:
+a = blosc2.open("https://datasets.example.org/big.b2nd", lazy=True)
+
+# Container dataset over HTTPS:
+b = blosc2.open(
+    "https://f001.backblazeb2.com/file/blosc2/hierarchy.b2z::/d0/a3",
+    lazy=True,
+)
+```
+
+### S3 and cloud object stores
+
+For arrays stored on Amazon S3 or S3-compatible cloud object stores (Backblaze B2, MinIO, Cloudflare R2, Ceph, Wasabi, etc.), install `s3fs` and open the `s3://` URL:
+
+```python
+# Using default credentials from environment or ~/.aws/credentials
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+```
+
+Other cloud stores work similarly by installing their respective fsspec driver (e.g. `gcsfs` for Google Cloud `gs://` or `adlfs` for Azure `abfs://`).
+
+### Storage options and authentication
+
+Pass a `storage_options` dictionary to configure headers, credentials, or custom endpoints.
+Options are forwarded directly to the underlying `fsspec` filesystem:
+
+```python
+# For HTTP/HTTPS: custom headers or authentication tokens
+a = blosc2.open(
+    "https://datasets.example.org/private.b2nd",
+    lazy=True,
+    storage_options={"headers": {"Authorization": "Bearer <token>"}},
+)
+
+# For S3: AWS profiles, credentials, or custom endpoints
+storage_options = {
+    "profile": "blosc2",  # named profile from ~/.aws/credentials
+    "endpoint_url": "https://s3.us-west-001.backblazeb2.com",  # custom endpoint
+    # Or explicit keys:
+    # "key": "AWS_ACCESS_KEY_ID",
+    # "secret": "AWS_SECRET_ACCESS_KEY",
+    # Or anonymous public access:
+    # "anon": True,
+}
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True, storage_options=storage_options)
+```
+
+### Remote performance: latency, caching, and concurrency
+
+Remote requests over HTTP or object stores typically incur 20–100 ms of latency per range request.
+Python-Blosc2 addresses this in two ways:
+
+1. **Caching**: Chunks and blocks fetched for a slice are kept in the local cache (in RAM by default, or persisted to disk with `cache_dir=` or `cache_path=`).
+   Re-fetching previously read regions requires zero network round trips and zero bytes transferred.
+2. **Concurrent fetches**: Independent range requests for required chunks and blocks are issued concurrently in a thread pool (configured via `max_concurrency=`, default 8).
+
+The runnable script `examples/remote/s3-access.py` demonstrates opening `.b2nd`, `.b2z`, `.zarr`, and `.h5` datasets over remote URLs (both S3 and HTTPS), timing metadata discovery vs. slice fetching, measuring network traffic with {ref}`Traffic`, and showing the impact of chunk caching.
+
+## Cache policies and memory management
+
+Every lazy open uses a cache policy.
+By default, fetched data is cached in memory with a bound on retained compressed payload.
+
+### In-memory caching (`CachePolicy.MEMORY` — Default)
+
+When opened without disk options, `blosc2.open(..., lazy=True)` retains fetched chunks in RAM as a {ref}`RemoteArray` with {attr}`CachePolicy.MEMORY <blosc2.CachePolicy.MEMORY>`:
+
+```python
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+a[10:12, 500:600]  # fetched and cached in RAM
+a[10:12, 500:600]  # served from memory cache (no network traffic)
+```
+
+In-memory caches use `max_cache_bytes` (defaults to 256 MiB) with automatic LRU eviction after operations, including failed fetches.
+This is not a peak RAM limit: metadata, in-flight transfers, decompression buffers, and results are excluded.
+Large operations can exceed it substantially.
+
+```python
+# Custom in-memory limit (e.g. 512 MiB):
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True, max_cache_bytes=512 * 2**20)
+```
+
+### Persistent disk caching (`CachePolicy.DISK`)
+
+Set `cache_dir` or `cache_path` to persist fetched data across sessions ({attr}`CachePolicy.DISK <blosc2.CachePolicy.DISK>`):
 
 ```python
 url = "s3://bucket/big.b2nd"
 
-# First run: the slice is fetched, and lands under ./b2cache dir
-a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
-a[100:110, :50]
+# Blosc2 manages a cache file inside a directory:
+a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
+a[100:110, :50]  # fetched and stored under ./b2cache
 
-# A later run, a different process: same call, served from ./b2cache
-a = blosc2.open(url, lazy=True, cache_storage="./b2cache")
-a[100:110, :50]  # no request
+# A later process can reuse the same cache:
+a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
+a[100:110, :50]  # served from local disk (no network traffic)
 ```
+
+- For an individual {ref}`RemoteArray`, pass `cache_dir` (Blosc2 creates the cache carrier inside that directory) or `cache_path` (to specify an exact carrier filename).
+- For a {ref}`RemoteStore`, pass `cache_dir` to store discovered hierarchy metadata and all leaf caches together under that directory.
+- In both cases, compressed chunks are retained up to `max_cache_bytes` (defaults to 256 MiB; pass `max_cache_bytes=None` for an unbounded disk cache that never evicts).
+
+Authenticated Caterva2 caches must be private to one user.
+Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
+
+### Stateless streaming (`CachePolicy.NONE`)
+
+To stream data without retaining any chunks after each operation, specify {attr}`CachePolicy.NONE <blosc2.CachePolicy.NONE>`:
+
+```python
+stream = blosc2.open(
+    "s3://bucket/big.b2nd",
+    lazy=True,
+    cache_policy=blosc2.CachePolicy.NONE,
+)
+```
+
+Each read pulls only the bytes required for the slice and retains no cache payload.
+
+> [!NOTE]
+> `max_cache_bytes` is applied after each operation completes.
+> It bounds the retained compressed cache payload; it does not limit the temporary working set or the decompressed NumPy array requested by the caller.
 
 ## Only what a slice touches
 
-A chunk is the unit a container is compressed in, and it can be several megabytes. Fetching a whole one to read a corner of it is most of the cost of a remote read, so Blosc2 fetches **blocks** — the smaller pieces a chunk is built from — whenever a slice lands in a small part of a large chunk.
+Blosc2 arrays are compressed in chunks, which are divided into smaller blocks.
+For a small slice, fetching only its blocks can avoid transferring most of a large chunk.
 
-You do not ask for this; it happens when it pays. For example:
+![A remote array fetches missing regions from the remote array into its local cache.
+Indexing returns the requested values.](../tutorials/images/remote_proxy.png)
 
-- On S3, block reads are **5–17x faster** on arrays with multi-megabyte chunks, and **2–5x** on 1 MB ones.
-- On cat2.cloud's `kevlar-tomo.b2nd`, a corner slice costs **0.031 MB instead of 2.723 MB**, and a slice touching ten chunks takes **0.14 s against 1.01 s**.
+Purple regions are cached; red regions are still remote.
+The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk.
+`fetch()` warms the cache and returns the remote array, whereas indexing returns the requested values.
 
-It is never a loss. A slice wanting more than half a chunk's blocks is wanting the chunk, and a fetch that would skip too little to pay for the extra round trip is made whole — both answered from metadata already in hand, before anything is read. Where blocks are not available the read falls back to whole chunks by itself: that happens for a dataset a Caterva2 server *computes* rather than stores (a lazy expression, an HDF5 leaf, a `.b2z` member), and for a server that stops honouring ranges.
+The remote array chooses blocks or whole chunks automatically.
+It fetches a whole chunk when most of its blocks are needed or when the source cannot expose block ranges, as with computed Caterva2 datasets.
+Independent reads overlap, with up to eight concurrent requests by default; use `max_concurrency=1` when concurrency does not help.
 
-Fetches also overlap: a lazy proxy runs 8 at a time by default. Pass `max_concurrency=1` for a local protocol with no latency to hide.
+Stepped slices also use the block grid.
+For example, `a[::5]` can reduce transfers along an axis whose blocks do not already span that axis.
 
-A step other than 1 needs a proxy — a bare {ref}`C2Array` refuses one. Through a proxy it is placed on the block grid like any other key: `p[::2]` reads the blocks holding the coordinates it selects and no others, and `[::-1]` costs what its forward twin does. What that saves is `min(step, block extent along that axis)`, so it is nothing where blocks already span the axis whole — a step along the last dimension, usually — and the step's own factor where they do not. On `kevlar-tomo.b2nd`, whose blocks are one row deep, `[::2]` halves the read and `[::5]` cuts it fivefold.
+### Explicit cache pre-fetching
 
-### Seeing byte savings
-
-Wall time will not show you any of this: on a fast link a block read and a whole-chunk read take about as long and differ by the compression ratio in *bytes*. Bytes are also what a metered link and a shared server uplink run out of, so they are counted for you. {ref}`C2Array` and {ref}`Proxy` each carry a {ref}`Traffic` under `traffic` — cumulative requests and bytes, tallied at the transport, so the frame index and block offsets are in it too:
+You can warm the cache proactively using `fetch()` or `afetch()`:
 
 ```python
-b = blosc2.C2Array(
-    "@public/examples/kevlar-tomo.b2nd", urlbase="https://cat2.cloud/demo"
+# Synchronously pre-fetch a region into the cache:
+a.fetch(slice(0, 10_000))
+
+# Or asynchronously in an async event loop:
+await a.afetch(slice(10_000, 20_000))
+```
+
+Both methods return `a`.
+Prefetched data may be evicted to satisfy the cache limit; later indexing fetches it again as needed.
+Use `a.materialize(item)` for an independent, complete `NDArray`.
+Its output and temporary buffer are outside the cache limit.
+
+> [!NOTE]
+> `fetch()` and `afetch()` require a writable cache. On an immutable cache snapshot (such as an archive opened with `mutable=False`), pre-fetching raises an error.
+
+`a.cache` exposes the underlying cache for inspection.
+It may contain missing or evicted chunks and must not be treated as a complete array or mutated by callers.
+
+Operations on a single handle are serialized through fetching, result assembly, eviction, and export.
+Async methods run synchronous operations in a worker thread; cancelling the await does not stop an already running fetch.
+Separate handles or processes sharing a disk carrier require external locking.
+
+## Measure network traffic
+
+{ref}`RemoteArray`, {ref}`RemoteStore`, {ref}`C2Array`, and {ref}`Proxy` objects expose cumulative request and byte counts through {ref}`Traffic`.
+The count starts when the remote source is opened, so it includes metadata as well as array data:
+
+```python
+a = blosc2.open("s3://bucket/big.b2nd", lazy=True)
+
+a.traffic.reset()
+corner = a[0, :100, :100]
+print(a.traffic)  # requests and bytes fetched
+
+a.traffic.reset()
+corner = a[0, :100, :100]
+print(a.traffic)  # Traffic(requests=0, nbytes=0) -> cache hit!
+```
+
+Use `reset()` or subtract two readings to measure one operation.
+`traffic` is `None` for a local source because no network transport exists.
+For a `RemoteStore`, `store.traffic` reports cumulative traffic across discovery and all leaf accesses in the session.
+
+`examples/remote/c2array-traffic.py` compares block, chunk, and cached reads against a live Caterva2 dataset.
+
+## Persist and reopen remote references
+
+Python-Blosc2 allows you to save remote references and their cached data to disk as portable files, and reopen them later without needing the original remote URL.
+
+### Persist a remote array reference (.b2nd)
+
+Use {ref}`RemoteArray` directly when a `.b2nd` file should carry a portable remote descriptor and, optionally, its own bounded persistent cache:
+
+```python
+remote = blosc2.RemoteArray(
+    "s3://bucket/big.b2nd",
+    cache_policy=blosc2.CachePolicy.NONE,
 )
-p = blosc2.Proxy(b)
-
-p.traffic.reset()
-corner = p[0, :100, :100]
-print(p.traffic)  # Traffic(requests=4, nbytes=57767)
-
-p.traffic.reset()
-p[0, :100, :100]  # the same slice, from the cache
-print(p.traffic)  # Traffic(requests=0, nbytes=0)
+remote.save("big-reference.b2nd")
 ```
 
-Take two readings and subtract, or `reset()` between them. `Proxy.traffic` is `None` over a local array — nothing crosses a wire there, and a zero would say the traffic was free rather than that it was never measured. `examples/c2array-traffic.py` runs the whole comparison against cat2.cloud's `kevlar-tomo.b2nd`: a 100x100 corner costs 0.055 MB against 1.296 MB for the chunk holding it — 23.5x — and nothing at all on the second read.
+The saved object contains source and geometry metadata but no credentials.
+With `CachePolicy.NONE`, repeated reads contact the source and do not mutate the carrier.
+With `CachePolicy.DISK`, the carrier file itself is the cache and retains compressed chunks up to its payload limit.
+Disk arrays preserve warm chunks by default; memory arrays export cold carriers.
+Pass `include_cache=False` to export a cold copy without mutating the warm carrier.
 
-## Scattered points
+### Export a remote store snapshot (.b2z)
 
-A list of coordinates, or a boolean mask, is not a box — but every point it picks still lives in exactly one block, so it is placed on the block grid as exactly as a slice is:
+To export an entire remote hierarchy—including discovered groups, array geometry, source locators, and optional cached chunks—call `save()` on a {ref}`RemoteStore`:
 
 ```python
-p[rows, :100]  # rows is an array of three indices: three blocks, not three chunks
-p[mask]  # a mask picks coordinates too, and costs the same
+with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
+    temp = store["experiment/temperature"]
+    temp[:100]  # warms the cache for this slice
+
+    # Save a portable .b2z reference archive containing discovery and warm chunks
+    store.save("snapshot.b2z")
+
+    # Or export a cold reference containing only metadata and locators (no chunks)
+    store.save("cold_ref.b2z", include_cache=False)
+
+    # Or export only a specific subtree
+    store["experiment"].save("experiment_sub.b2z")
 ```
 
-Nine scattered points of a 900³ array cost **236 KB in 19 requests** through a proxy, against 1.81 MB for the chunks holding them.
+- **Portable reference**: The `.b2z` archive contains the discovered hierarchy, attributes, and source locators (such as the HDF5 Kerchunk reference map or B2Z member offsets), but no secrets or credentials.
+- **`include_cache=True` (default)**: Bundles warm cached chunks along with metadata so reading previously fetched slices requires zero network traffic.
+- **`include_cache=False`**: Omits cached payload chunks, producing a minimal reference archive for remote streaming.
+- **Subtree export**: Calling `save()` on a group view exports that subtree with relative child keys and the appropriate source root.
 
-However, a {ref}`C2Array` does better with no proxy at all: the coordinates go to the server, which gathers the points and sends back those alone — **271 bytes in one request** for the same nine. When you need efficient scattered retrievals, C2Array+Caterva2 is your best friend.
+### Reopen reference files with `blosc2.open()`
 
-## When the remote changes underneath
-
-A cache is only good while the bytes it was filled from are still there. Sources that can name their bytes — an fsspec URL by its token, a Caterva2 array by an identifier the server keeps — are checked against what the cache recorded:
+Both `.b2nd` array carriers and `.b2z` store snapshots can be reopened directly with `blosc2.open()`:
 
 ```python
-p = blosc2.Proxy(src, urlpath="cache.b2nd", mode="a")
-# ValueError: the cache at cache.b2nd was built against different remote bytes;
-#             pass mode='w' to fetch them anew
+# 1. Reopen an exported RemoteStore hierarchy:
+with blosc2.open("snapshot.b2z") as restored:
+    print(restored.keys())
+    temp = restored["experiment/temperature"]
+    values = temp[:100]  # served from archive if cached; fetched remotely if missing
+
+# 2. Reopen a standalone RemoteArray carrier:
+arr = blosc2.open("big-cache.b2nd", mode="a")
+values = arr[:100]
 ```
 
-`mode="w"` starts the cache empty and refetches. For a source that cannot name its bytes, the cache is adopted on geometry alone — same shape, dtype and partitioning — so an array rewritten in place while its geometry stayed the same is served from the cache as it was. Use `mode="w"` when that is a possibility.
+Opening an exported `.b2z` archive automatically recognizes the remote store marker and constructs a {ref}`RemoteStore`. All leaves opened from it share one cache coordinator and budget.
+Opening an on-disk carrier with `mode="a"` returns a {ref}`RemoteArray` and lets newly fetched regions extend the cache; opening with `mode="r"` keeps the cache file unchanged.
+Legacy proxy caches created by older Blosc2 versions are also detected and reopened as a {ref}`Proxy`.
 
-## Filling an array from several writers
+Independent reopening works for fsspec URLs, Caterva2 datasets, and persistent local Blosc2 sources.
+The required runtime environment must still be available: fsspec backends and their configuration must be installed, local source paths must remain valid, and authenticated Caterva2 caches must be reopened inside an equivalent {func}`blosc2.c2context`.
+Caterva2 credentials are not stored in the cache file.
 
-A Caterva2 array can be *written*, one chunk at a time, by as many processes as it has chunks. Lay the array out empty first — {func}`blosc2.uninit` writes a couple of hundred bytes whatever the shape — upload it to the server, then have each writer post the chunks it owns:
+An arbitrary custom {ref}`ProxyNDSource` cannot be reconstructed because its Python class and runtime state are not serialized.
+In that case, recreate the source explicitly and attach the existing cache with `blosc2.Proxy(source, urlpath="big-cache.b2nd", mode="a")`.
+
+### Cache mutability: immutable vs. mutable snapshots
+
+When saving an export, you can configure whether the resulting snapshot operates in **immutable** or **mutable** mode via the `mutable` argument (or the `.mutable` property on `RemoteStore` / `RemoteArray`):
+
+```python
+# Default is mutable=False (immutable snapshot)
+store.save("read_only.b2z", mutable=False)
+
+# Or export a mutable snapshot
+store.save("writable.b2z", mutable=True)
+```
+
+| Mode | Behavior when reopened | Cache misses | Modifying operations |
+| --- | --- | --- | --- |
+| **Immutable** (`mutable=False`, default) | Reads directly in-place from `.b2z` without disk writes. Safe on read-only media (`chmod 0o444`). | Fetched transiently into RAM to satisfy the read; never written to disk or the archive. | `fetch()`, `afetch()`, `trim_cache()`, and `refresh()` are disallowed. |
+| **Mutable** (`mutable=True`) | Staged into an independent writable runtime cache directory. Original `.b2z` stays untouched. | Fetched and cached to disk under standard LRU eviction rules. | Fully supported. Can be opened with a smaller budget, trimming excess chunks. |
+
+> [!TIP]
+> Use **immutable snapshots** (`mutable=False`) for sharing reproducible, read-only reference archives or distributing datasets that should never modify local storage. Use **mutable snapshots** (`mutable=True`) when users should be able to expand the local cache with newly fetched regions over time.
+
+## Retrieve scattered points
+
+A remote array maps coordinate arrays and boolean masks to the blocks that contain their selected points:
+
+```python
+a[rows, :100]
+a[mask]
+```
+
+For Caterva2, a bare {ref}`C2Array` can be substantially more efficient for one-off point queries: it sends coordinates to the server, which evaluates the selection and returns only the selected values.
+Prefer direct `C2Array` indexing for sparse, one-off point retrieval; prefer a {ref}`RemoteArray` when reuse through a local cache matters.
+
+## Handle remote changes
+
+### Standalone arrays and Caterva2 sources
+
+A persistent cache records the source identity when one is available.
+On a later `blosc2.open()` with the same `cache_dir` or `cache_path`, a mismatched cache is discarded and rebuilt automatically.
+
+When constructing a proxy directly in append mode, a mismatch is reported instead:
+
+```python
+p = blosc2.Proxy(source, urlpath="cache.b2nd", mode="a")
+# ValueError if cache.b2nd belongs to different remote bytes
+```
+
+Use `mode="w"` to start that cache again.
+If a source cannot provide an identity, compatibility is checked only from shape, dtype, chunks, and blocks.
+Use a fresh cache when such a source may have changed without changing its geometry.
+
+For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to check for updates and invalidate stale cached chunks before each operation.
+
+### Refreshing a RemoteStore
+
+Remote containers (B2Z, Zarr, and HDF5) are assumed immutable by default.
+If a remote container is updated on the server—such as adding new datasets or appending data—call `store.refresh()` to update discovery:
+
+```python
+with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
+    # Refresh remote metadata atomically
+    store.refresh()
+
+    # Re-access datasets from the refreshed store
+    array = store["experiment/temperature"]
+```
+
+- **Atomic update**: `store.refresh()` fetches fresh discovery from the remote source before updating the active generation. If discovery fails, the existing store state remains unchanged.
+- **Stale handle safety**: Any child handles (`RemoteArray` leaves or group views) opened *before* `refresh()` become stale. Accessing them raises a `RuntimeError`, prompting you to look them up again from the refreshed store.
+- **Immutability rule**: Calling `refresh()` on an immutable reference snapshot (`mutable=False`) is disallowed and raises an error.
+
+## Fill a Caterva2 array concurrently
+
+Several writers can fill one Caterva2 array when each chunk is written at most once.
+First create and upload an uninitialized array with its final geometry:
 
 ```python
 import blosc2
 import numpy as np
 
-# Once, before the writers start: an empty array of the final geometry
 blosc2.uninit(
     (1_000_000,),
     dtype=np.float64,
@@ -139,50 +563,39 @@ blosc2.uninit(
 )
 ```
 
-Upload it with the client that comes with Caterva2:
-
 ```sh
 cat2-client upload run.b2nd @personal/run.b2nd
 ```
 
-Then each writer opens it and posts its own chunks:
+Each writer compresses and posts the chunks it owns:
 
 ```python
 import math
 
-import blosc2
-
 a = blosc2.C2Array("@personal/run.b2nd", urlbase="https://cat2.cloud/demo")
-itemsize = a.dtype.itemsize
 chunk = blosc2.compress2(
-    data, typesize=itemsize, blocksize=math.prod(a.blocks) * itemsize
+    data,
+    typesize=a.dtype.itemsize,
+    blocksize=math.prod(a.blocks) * a.dtype.itemsize,
 )
-a.update_chunk(nchunk, chunk)
-```
 
-Each slot is written once. A second write to the same slot raises {class}`blosc2.ChunkAlreadyWritten`, and that refusal is the whole of the coordination — two writers that both think they own a chunk are sorted out by the array, with no lease, lock or registry between them. The loser drops its chunk and moves on:
-
-```python
 try:
     a.update_chunk(nchunk, chunk)
 except blosc2.ChunkAlreadyWritten:
-    pass  # someone else got there first
+    pass  # another writer completed this slot
 ```
 
-Writing into an empty slot appends to the file and moves no other chunk, which is what makes a fill cheap and lets a reader follow one without its cached positions going wrong. {meth}`C2Array.written_chunks() <blosc2.C2Array.written_chunks>` says how far it has got, straight out of the file's own index — no endpoint of its own, about 2.5 ms over HTTP:
+The server serializes updates, and {meth}`C2Array.written_chunks() <blosc2.C2Array.written_chunks>` reports progress from the array's index:
 
 ```python
-written = a.written_chunks()  # one bool per chunk
-print(f"{written.sum()}/{written.size} chunks in")
+written = a.written_chunks()
 for nchunk in np.flatnonzero(~written):
-    ...  # the work still to do, after a crash
+    ...  # chunks still missing after a restart
 ```
 
-What this buys: the server serializes the writes themselves, so what overlaps is the round trip — which over a network is nearly all of the cost. Against a real server, a fill went from **244 ms per chunk serially to 32 ms with 8 writers, 7.6x**. Over loopback, where there is no round trip to hide, it is 1.0x.
+## Use your own transport
 
-## Your own transport
-
-If your frames live somewhere fsspec does not reach — per-request credentials, a signing proxy, a database column, an in-house gateway — supply one method and you get everything above:
+Subclass {ref}`ByteRangeNDSource` when the frame lives behind a transport that fsspec cannot use:
 
 ```python
 import boto3
@@ -191,18 +604,18 @@ import blosc2
 
 class S3Source(blosc2.ByteRangeNDSource):
     def __init__(self, bucket, key):
-        self._s3 = boto3.client("s3")
-        self._bucket, self._key = bucket, key
-        self.stamp = self._s3.head_object(Bucket=bucket, Key=key)["ETag"]
+        self.s3 = boto3.client("s3")
+        self.bucket, self.key = bucket, key
+        self.stamp = self.s3.head_object(Bucket=bucket, Key=key)["ETag"]
         super().__init__(f"s3://{bucket}/{key}")
 
     def read_range(self, offset, size):
-        answer = self._s3.get_object(
-            Bucket=self._bucket,
-            Key=self._key,
+        response = self.s3.get_object(
+            Bucket=self.bucket,
+            Key=self.key,
             Range=f"bytes={offset}-{offset + size - 1}",
         )
-        data = answer["Body"].read()
+        data = response["Body"].read()
         self.traffic.charge(len(data))
         return data
 
@@ -210,18 +623,22 @@ class S3Source(blosc2.ByteRangeNDSource):
 a = blosc2.Proxy(S3Source("bucket", "big.b2nd"), urlpath="cache.b2nd", mode="a")
 ```
 
-(For plain S3 you would just use `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; this is the shape of the thing.)
+Initialize the transport before `super().__init__()`, because the base constructor immediately reads the frame header.
+Make `read_range()` thread-safe, set `stamp` so persistent caches can detect changes, and charge the bytes read so traffic measurements remain accurate.
 
-Four things to get right:
-
-- **Set up the transport before `super().__init__()`.** The base constructor calls `read_range()` straight away to read the file's header.
-- **`read_range()` must be thread-safe.** It is called from a thread pool so fetches can overlap. A boto3 *client* is fine; a `Session` or resource is not.
-- **Set `stamp` if you can.** It is what lets a cache tell that the remote has changed. Without it the cache is kept on geometry alone.
-- **Charge what you read.** End `read_range()` with `self.traffic.charge(len(data))` and your source is counted like the built-in ones — see [Seeing byte savings](#seeing-byte-savings). Skip it and `traffic` reads zero forever, which looks like a free transport rather than an uncounted one.
+For ordinary remote access, use `blosc2.open("https://...", lazy=True)` or `blosc2.open("s3://bucket/big.b2nd", lazy=True)`; the custom class only illustrates the transport contract.
 
 ## See also
 
-- {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — the same ground at a slower pace, with output.
-- `examples/ndarray/rw-fsspec.py` — every way of reading and writing an fsspec URL, runnable.
-- `examples/c2array-traffic.py` — what a remote slice costs in bytes, and what blocks and the cache save, runnable.
-- {ref}`C2Array`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, {ref}`Traffic` — the reference pages.
+- {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — a step-by-step introduction with output.
+- `examples/remote/s3-access.py` — remote access across Blosc2 (.b2nd, .b2z), Zarr, and HDF5 with timing and network traffic metering.
+- `examples/remote/store-browse.py` — inspecting hierarchies, leaf previews, and shared caching across leaves.
+- `examples/remote/c2array-get-slice.py` — opening and reading remote Caterva2 arrays via URLPath.
+- `examples/remote/c2array-traffic.py` — block, chunk, and cached transfer sizes against Caterva2.
+- `examples/remote/c2array_expr.py` — lazy expression evaluation on remote Caterva2 arrays.
+- `examples/remote/concurrent-fsspec.py` — concurrent chunk fetching (`max_concurrency`) on high-latency stores.
+- `examples/remote/fsspec-cat2-access.py` — one dataset and cache through fsspec and Caterva2.
+- `examples/remote/proxy-carray.py` — creating a persistent local disk proxy of a remote Caterva2 array.
+- `examples/remote/rw-fsspec.py` — fsspec reading and writing examples.
+- {doc}`b2view <b2view>` — interactive terminal browser for local and remote containers.
+- {ref}`RemoteArray`, {ref}`RemoteStore`, {ref}`RemoteNode`, {ref}`C2Array`, {ref}`B2ZNDSource`, {ref}`ZarrNDSource`, {ref}`HDF5NDSource`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.

@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory() as cachedir:
     # starts from the copy that is already there.  Cached copies are checked
     # against the remote on every open, so a replaced array is never served
     # from a stale cache.
-    c = blosc2.open(urlpath, cache_storage=cachedir, mmap_mode="r")
+    c = blosc2.open(urlpath, cache_dir=cachedir, mmap_mode="r")
     print(f"read cached: {c.shape} (mmapped from {cachedir})")
     np.testing.assert_array_equal(c[:], a[:])
 
@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as cachedir:
     # is and each slice fetches only what it touches -- the chunks it lands in,
     # or just the blocks inside them when the chunks are large enough for that
     # to pay.  This is what you want for an array too big to download.
-    d = blosc2.open(urlpath, lazy=True, cache_storage=cachedir)
+    d = blosc2.open(urlpath, lazy=True, cache_dir=cachedir)
     print(f"read lazy: {type(d).__name__} {d.shape} {d.dtype}")
 
     # Only the two chunks covering rows 15..25 are fetched here

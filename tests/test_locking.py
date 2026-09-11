@@ -219,13 +219,16 @@ sys.exit(0)
 """
 
 
-def test_cross_process_hammer(tmp_path):
+@pytest.mark.parametrize(
+    "iters",
+    # Keep the default suite short, but let `-m heavy` run the original strength.
+    [pytest.param(150, id="short"), pytest.param(500, id="full", marks=pytest.mark.heavy)],
+)
+def test_cross_process_hammer(tmp_path, iters):
     # A writer process keeps evicting/refilling chunks while this process reads
     # all of them; with locking on every handle, no read may ever fail
     urlpath = tmp_path / "schunk-hammer.b2frame"
     create_schunk(urlpath, contiguous=False, locking=True)
-
-    iters = 500
     writer = subprocess.Popen(
         [sys.executable, "-c", WRITER_SCRIPT, str(urlpath), str(NCHUNKS), str(CHUNK_NITEMS), str(iters)]
     )
@@ -345,7 +348,11 @@ sys.exit(0)
 """
 
 
-def test_cross_process_multiwriter_update(tmp_path):
+@pytest.mark.parametrize(
+    "iters",
+    [pytest.param(20, id="short"), pytest.param(60, id="full", marks=pytest.mark.heavy)],
+)
+def test_cross_process_multiwriter_update(tmp_path, iters):
     # Several writer processes repeatedly update *disjoint* chunks of the
     # same schunk through their own locking=True handle, while this process
     # samples every chunk concurrently: no chunk may ever be observed
@@ -353,7 +360,6 @@ def test_cross_process_multiwriter_update(tmp_path):
     # owner's last-written value.
     urlpath = tmp_path / "schunk-multiwriter-update.b2frame"
     nwriters = 4
-    iters = 60
     schunk = create_schunk(urlpath, contiguous=False, locking=True)
     nchunks = schunk.nchunks
     del schunk
@@ -1312,7 +1318,14 @@ dstore._closed = True
     sys.platform == "win32",
     reason="the reader keeps the leaf file open, which Windows refuses to let the writer remove",
 )
-def test_dict_store_read_during_overwrite(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("writer_cycles", "nreads"),
+    [
+        pytest.param(100, 20, id="short"),
+        pytest.param(300, 60, id="full", marks=pytest.mark.heavy),
+    ],
+)
+def test_dict_store_read_during_overwrite(tmp_path, monkeypatch, writer_cycles, nreads):
     # A writer process rewriting the *same* external leaf this process keeps
     # reading.  The overwrite removes and rewrites that exact file, so resolving
     # the leaf path and opening it must happen under one lock; otherwise the
@@ -1332,20 +1345,20 @@ def test_dict_store_read_during_overwrite(tmp_path, monkeypatch):
     dstore = blosc2.DictStore(path, mode="w", threshold=500, locking=True)
     dstore["/hot"] = np.arange(100)
 
-    writer = subprocess.Popen([sys.executable, "-c", DSTORE_OVERWRITER, path, "300"])
+    writer = subprocess.Popen([sys.executable, "-c", DSTORE_OVERWRITER, path, str(writer_cycles)])
     try:
-        nreads = 0
-        while writer.poll() is None and nreads < 60:
+        reads = 0
+        while writer.poll() is None and reads < nreads:
             data = dstore["/hot"][:]
             # Each round writes arange(i, i + 100); a torn read breaks the run
             assert np.array_equal(data, np.arange(data[0], data[0] + 100))
-            nreads += 1
+            reads += 1
     finally:
         if writer.poll() is None:
             writer.kill()
         writer.wait()
 
-    assert nreads == 60
+    assert reads == nreads
     dstore._closed = True
 
 

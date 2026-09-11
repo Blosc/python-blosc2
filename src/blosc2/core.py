@@ -574,7 +574,9 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int | None = None, **kw
     return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
+def load_array(
+    urlpath: str, dparams: dict | None = None, *, storage_options: dict | None = None
+) -> np.ndarray:
     """Load a serialized NumPy array from a file.
 
     Parameters
@@ -584,6 +586,9 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     dparams: dict, optional
         A dictionary with the decompression parameters, which can
         be used in the :func:`~blosc2.decompress2` function.
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem when opening
+        an fsspec URL.
 
     Returns
     -------
@@ -616,7 +621,7 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     :func:`~blosc2.pack_tensor`
     """
     # May we raise a DeprecationWarning here in the future?
-    return load_tensor(urlpath, dparams=dparams)
+    return load_tensor(urlpath, dparams=dparams, storage_options=storage_options)
 
 
 def normalize_urlpath(urlpath: object) -> object:
@@ -664,6 +669,88 @@ def is_fsspec_url(urlpath: object) -> bool:
     return isinstance(urlpath, str) and "://" in urlpath and not urlpath.startswith("file://")
 
 
+def split_h5_url(url: str) -> tuple[str, str | None]:
+    """Split an HDF5 URL on '.h5/' or '.hdf5/' if followed by a dataset subpath."""
+    parsed = urllib.parse.urlsplit(url)
+    # Include the authority for fsspec URLs such as memory://data.h5/group/a.
+    path = f"{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+    lower = path.lower()
+    for ext in (".h5/", ".hdf5/"):
+        idx = lower.find(ext)
+        if idx != -1:
+            base_len = idx + len(ext) - 1
+            base = urllib.parse.urlunsplit(parsed._replace(path=path[len(parsed.netloc) : base_len]))
+            rest = path[base_len + 1 :].strip("/")
+            if rest:
+                return base, rest
+    return url, None
+
+
+def _parse_b2z_url(urlpath, dataset):
+    if "::" in urlpath:
+        return None  # A remaining separator belongs to an fsspec protocol chain.
+    parsed = urllib.parse.urlsplit(urlpath)
+    path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    parts = path_str.split("/")
+    for index, part in enumerate(parts):
+        if part.endswith(".b2z"):
+            subpath = "/".join(parts[index + 1 :]).strip("/")
+            if subpath:
+                if dataset is not None:
+                    raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+                base_path = parsed.path[: -len("/".join(parts[index + 1 :]))].rstrip("/")
+                urlpath = urllib.parse.urlunsplit(parsed._replace(path=base_path))
+                dataset = subpath
+            return urlpath, dataset, "b2z"
+    return None
+
+
+def parse_container_url(
+    urlpath: object,
+    dataset: str | None = None,
+) -> tuple[object, str | None, str | None]:
+    """Parse container URL and dataset specification.
+
+    Handles '::' container separator, '/subpath' for HDF5, and explicit 'dataset'.
+
+    Returns (normalized_urlpath, normalized_dataset, source_format_hint).
+    """
+    if not isinstance(urlpath, str):
+        return urlpath, dataset, None
+
+    if "::" in urlpath:
+        parts = urlpath.split("::", 1)
+        if "://" not in parts[1]:
+            if dataset is not None:
+                raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+            urlpath = parts[0].rstrip("/")
+            raw_dataset = parts[1].strip("/")
+            dataset = raw_dataset if raw_dataset else None
+
+    if b2z := _parse_b2z_url(urlpath, dataset):
+        return b2z
+    h5_base, h5_dataset = split_h5_url(urlpath)
+    if h5_dataset is not None:
+        if dataset is not None:
+            raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+        return h5_base, h5_dataset, "hdf5"
+
+    if dataset is not None:
+        dataset = dataset.strip("/")
+        if not dataset:
+            dataset = None
+
+    parsed = urllib.parse.urlsplit(urlpath)
+    path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    parts = path_str.split("/")
+    if any(part.lower().endswith((".h5", ".hdf5")) for part in parts):
+        return urlpath, dataset, "hdf5"
+    if any(part.endswith(".zarr") for part in parts):
+        return urlpath, dataset, "zarr"
+
+    return urlpath, dataset, None
+
+
 def _import_fsspec(urlpath: str):
     """Import fsspec with an actionable error when the extra is not installed."""
     try:
@@ -676,9 +763,9 @@ def _import_fsspec(urlpath: str):
     return fsspec
 
 
-def fsspec_open(urlpath: str, mode: str):
+def fsspec_open(urlpath: str, mode: str, storage_options: dict | None = None):
     """`fsspec.open()`, but complaining properly when fsspec is missing."""
-    return _import_fsspec(urlpath).open(urlpath, mode)
+    return _import_fsspec(urlpath).open(urlpath, mode, **(storage_options or {}))
 
 
 def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: str = "") -> str:
@@ -686,6 +773,19 @@ def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: s
     os.makedirs(cache_storage, exist_ok=True)
     name = hashlib.sha256(urlpath.encode()).hexdigest()
     return os.path.join(str(cache_storage), name + suffix)
+
+
+def storage_options_fingerprint(storage_options: dict | None) -> str:
+    """A stable, non-reversible fingerprint of fsspec access configuration.
+
+    Two endpoints or accounts can serve different data from the same URL, so a
+    cache identity must include the backend options.  Hashing keeps credentials
+    out of cache paths and persisted manifests.
+    """
+    if not storage_options:
+        return ""
+    payload = json.dumps(storage_options, sort_keys=True, default=repr).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @cache
@@ -704,7 +804,9 @@ def _suffixed_cache_mapper():
     return SuffixedCacheMapper()
 
 
-def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
+def localize_fsspec_url(
+    urlpath: str, cache_storage: str | pathlib.Path, storage_options: dict | None = None
+) -> str:
     """Materialize the container at *urlpath* under *cache_storage*, return its local path.
 
     Single-file containers go through fsspec's ``filecache``, which downloads
@@ -717,7 +819,7 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
     from fsspec.utils import tokenize
 
     cache_storage = str(cache_storage)
-    fs, path = fsspec.url_to_fs(urlpath)
+    fs, path = fsspec.url_to_fs(urlpath, **(storage_options or {}))
 
     if not fs.isdir(path):
         # check_files is off by default in fsspec, which would happily serve a
@@ -728,7 +830,7 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
             "check_files": True,
             "cache_mapper": _suffixed_cache_mapper(),
         }
-        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts) as f:
+        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts, **(storage_options or {})) as f:
             return f.name
 
     localdir = fsspec_cache_path(urlpath, cache_storage)
@@ -793,10 +895,13 @@ def pack_tensor(
     # Object stores cannot be written incrementally, so build the whole cframe in
     # memory and PUT it in one go.
     remote_urlpath = kwargs.get("urlpath") if is_fsspec_url(kwargs.get("urlpath")) else None
+    storage_options = kwargs.pop("storage_options", None)
     if remote_urlpath is not None:
         del kwargs["urlpath"]
         # A remote write always replaces, but reading mode still forbids one
         blosc2_ext.check_access_mode(remote_urlpath, kwargs.pop("mode", "a"))
+    elif storage_options is not None:
+        raise ValueError("storage_options is only supported for fsspec URLs")
 
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
 
@@ -818,7 +923,7 @@ def pack_tensor(
 
     if remote_urlpath is not None:
         cframe = schunk.to_cframe()
-        with fsspec_open(remote_urlpath, "wb") as f:
+        with fsspec_open(remote_urlpath, "wb", storage_options=storage_options) as f:
             f.write(cframe)
         return len(cframe)
 
@@ -944,7 +1049,9 @@ def save_tensor(
     return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
+def load_tensor(
+    urlpath: str, dparams: dict | None = None, *, storage_options: dict | None = None
+) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
     """Load a serialized PyTorch or TensorFlow  tensor or NumPy array from a file.
 
     Parameters
@@ -955,6 +1062,10 @@ def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor 
     dparams: dict, optional
         A dictionary with the decompression parameters, which are the same as those
         used in the :func:`~blosc2.decompress2` function.
+
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem when opening
+        an fsspec URL.
 
     Returns
     -------
@@ -985,7 +1096,7 @@ def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor 
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath, mode="r", dparams=dparams)
+    schunk = blosc2.open(urlpath, mode="r", dparams=dparams, storage_options=storage_options)
     return _unpack_tensor(schunk)
 
 
@@ -2102,6 +2213,7 @@ def from_cframe(
     | blosc2.BatchArray
     | blosc2.ObjectArray
     | blosc2.C2Array
+    | blosc2.RemoteArray
 ):
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
     :ref:`BatchArray <BatchArray>` or :ref:`ObjectArray <ObjectArray>` instance
@@ -2120,7 +2232,8 @@ def from_cframe(
     Returns
     -------
     out: :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-         :ref:`BatchArray <BatchArray>` or :ref:`ObjectArray <ObjectArray>`
+         :ref:`BatchArray <BatchArray>`, :ref:`ObjectArray <ObjectArray>`, or
+         :ref:`RemoteArray <RemoteArray>`
         A new instance of the appropriate type containing the data passed.
 
     See Also

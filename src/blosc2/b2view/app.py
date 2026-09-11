@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import copy
 import io
 import os
+import threading
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
@@ -53,6 +56,7 @@ from blosc2.b2view.render import (
     make_metadata_renderable,
     make_preview_renderables,
 )
+from blosc2.core import is_fsspec_url, parse_container_url
 
 if TYPE_CHECKING:
     from textual import events
@@ -1968,9 +1972,9 @@ class B2ViewApp(App):
     CSS = """
     #main { height: 1fr; }
     #tree-pane { width: 35%; border: solid $primary; }
-    #right-pane { width: 65%; }
+    #right-pane { width: 1fr; }
     #top-row { height: 40%; }
-    #meta-pane, #vlmeta-pane { width: 50%; border: solid $secondary; }
+    #meta-pane, #attrs-pane { width: 50%; border: solid $secondary; }
     #data-pane { height: 60%; border: solid $secondary; }
     #tree { height: 1fr; }
     #data-header { height: auto; padding: 0 1; }
@@ -1978,11 +1982,12 @@ class B2ViewApp(App):
     #data-table { width: 1fr; height: 1fr; }
     #row-scrollbar { width: 1; height: 1fr; color: $primary; }
     #col-scrollbar { height: 1; width: 1fr; color: $primary; }
-    #meta-scroll, #vlmeta-scroll, #data-scroll { height: 1fr; padding: 0 1; }
-    #tree-pane:focus-within, #meta-pane:focus-within, #vlmeta-pane:focus-within, #data-pane:focus-within { border: heavy $accent; }
+    #meta-scroll, #attrs-scroll, #data-scroll { height: 1fr; padding: 0 1; }
+    #tree-pane:focus-within, #meta-pane:focus-within, #attrs-pane:focus-within, #data-pane:focus-within { border: heavy $accent; }
     B2ViewPanel.-maximized,
     #tree-pane.-maximized,
     #meta-pane.-maximized,
+    #attrs-pane.-maximized,
     #data-pane.-maximized { width: 1fr; height: 1fr; }
     """
 
@@ -2021,10 +2026,23 @@ class B2ViewApp(App):
         preview_cols: int = 10,
         download_url: str | None = None,
         info_url: str | None = None,
+        storage_options: dict[str, Any] | None = None,
+        cache_dir: str | None = None,
+        max_cache_bytes: int | None = None,
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
+        if parse_container_url(urlpath)[2] in {"zarr", "hdf5"}:
+            # Initialize before Textual captures stderr (fileno=-1), which
+            # prevents multiprocessing's resource tracker from starting.
+            with contextlib.suppress(ImportError):
+                from numcodecs.blosc import get_mutex
+
+                get_mutex()
         self.urlpath = urlpath
+        self.storage_options = storage_options
+        self.cache_dir = cache_dir
+        self.max_cache_bytes = max_cache_bytes
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
         # Header label: the path as given on the CLI, or the @public-relative
@@ -2036,7 +2054,20 @@ class B2ViewApp(App):
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
+        # Set when a remote browser is closed on its own thread (on_unmount);
+        # lets teardown wait for the cache-dir lock to be released.
+        self._browser_close_thread: threading.Thread | None = None
         self.loaded_paths: set[str] = set()
+        self._remote = is_fsspec_url(urlpath)
+        self._remote_session = 0
+        self._remote_request = 0
+        self._remote_page_request = 0
+        self._remote_page_pending = False
+        self._remote_col_end = None
+        self._remote_children = {}
+        self._listing_paths = set()
+        self._selected_info = None
+        self._closing = False
         self.selected_path = "/"
         self.table_page: dict | None = None
         self.table_buffer: dict | None = None
@@ -2069,10 +2100,10 @@ class B2ViewApp(App):
                         meta_pane.border_title = "meta"
                         with VerticalScroll(id="meta-scroll", can_focus=True):
                             yield Static("Select a node", id="metadata")
-                    with B2ViewPanel(id="vlmeta-pane") as vlmeta_pane:
-                        vlmeta_pane.border_title = "vlmeta"
-                        with VerticalScroll(id="vlmeta-scroll", can_focus=True):
-                            yield Static("", id="vlmetadata")
+                    with B2ViewPanel(id="attrs-pane") as attrs_pane:
+                        attrs_pane.border_title = "attrs"
+                        with VerticalScroll(id="attrs-scroll", can_focus=True):
+                            yield Static("", id="attrs-data")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
                     data_pane.border_subtitle = (
@@ -2126,7 +2157,21 @@ class B2ViewApp(App):
 
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
-        self.browser = StoreBrowser(self.urlpath)
+        if self._remote:
+            self.query_one("#metadata", Static).update("Loading remote container…")
+            self._open_remote(self._remote_session, self.start_path)
+            return
+        browser_kwargs: dict[str, Any] = {
+            "storage_options": self.storage_options,
+            "cache_dir": self.cache_dir,
+        }
+        if self.max_cache_bytes is not None:
+            browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
+        self.browser = StoreBrowser(self.urlpath, **browser_kwargs)
+        self._populate_browser()
+
+    def _populate_browser(self) -> None:
+        self.query_one("#tree-pane").display = self.browser.is_tree
         self.query_one(B2ViewHeader).set_filename(self._header_label)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
@@ -2155,10 +2200,13 @@ class B2ViewApp(App):
 
     def _focus_panel_by_name(self, name: str) -> None:
         """Focus a panel by its user-facing name."""
+        if name == "tree" and not self.query_one("#tree-pane").display:
+            name = "data"
         panel_map = {
             "tree": lambda: self.query_one("#tree", Tree),
             "meta": lambda: self.query_one("#meta-scroll", VerticalScroll),
-            "vlmeta": lambda: self.query_one("#vlmeta-scroll", VerticalScroll),
+            "attrs": lambda: self.query_one("#attrs-scroll", VerticalScroll),
+            "vlmeta": lambda: self.query_one("#attrs-scroll", VerticalScroll),
             "data": lambda: (
                 self.query_one("#data-table", DataTable)
                 if self.query_one("#data-table-row", Horizontal).display
@@ -2201,18 +2249,153 @@ class B2ViewApp(App):
 
         self.call_after_refresh(_do_select)
 
+    @staticmethod
+    def _close_browser(browser):
+        with browser.io_lock:
+            browser.close()
+
     def on_unmount(self) -> None:
+        self._closing = True
+        self._remote_session += 1
         if self.browser is not None:
-            self.browser.close()
+            if self._remote:
+                closer = threading.Thread(target=self._close_browser, args=(self.browser,), daemon=True)
+                self._browser_close_thread = closer
+                closer.start()
+            else:
+                self.browser.close()
+
+    async def _shutdown(self) -> None:
+        await super()._shutdown()
+        if self._browser_close_thread is not None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._browser_close_thread.join, 30.0)
+
+    def run(self, *args, **kwargs):
+        try:
+            return super().run(*args, **kwargs)
+        finally:
+            if self._browser_close_thread is not None:
+                self._browser_close_thread.join(timeout=30.0)
+
+    def wait_for_close(self, timeout: float = 30.0) -> None:
+        """Wait for any asynchronous remote browser shutdown to complete."""
+        if self._browser_close_thread is not None:
+            self._browser_close_thread.join(timeout=timeout)
+
+    def _deliver_remote(self, session, callback, *args):
+        """A blocking read may finish after cancellation, refresh, or shutdown."""
+        if self._closing or session != self._remote_session:
+            return False
+
+        def deliver():
+            if self._closing or session != self._remote_session:
+                return False
+            callback(*args)
+            return True
+
+        try:
+            return self.call_from_thread(deliver)
+        except RuntimeError:
+            return False
+
+    @work(thread=True, exit_on_error=False)
+    def _open_remote(self, session, start_path):
+        browser = None
+        try:
+            # A refresh may still be closing the previous browser, which owns
+            # the exclusive cache lock until close() returns.  Wait for it so
+            # the new store cannot fail with "cache is already owned".
+            closer = self._browser_close_thread
+            if closer is not None:
+                closer.join()
+            browser_kwargs: dict[str, Any] = {
+                "storage_options": self.storage_options,
+                "cache_dir": self.cache_dir,
+            }
+            if self.max_cache_bytes is not None:
+                browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
+            browser = StoreBrowser(self.urlpath, **browser_kwargs)
+            children = {}
+            if browser.is_tree:
+                parent = "/"
+                children[parent] = browser.list_children(parent)
+                for part in start_path.strip("/").split("/"):
+                    target = parent.rstrip("/") + "/" + part
+                    found = next((c for c in children[parent] if c.path == target), None)
+                    if found is None or found.kind != "group":
+                        break
+                    parent = target
+                    children[parent] = browser.list_children(parent)
+            if not self._deliver_remote(session, self._finish_remote_open, browser, children):
+                browser.close()
+        except Exception as exc:
+            if browser is not None:
+                browser.close()
+            self._deliver_remote(session, self._remote_error, exc)
+
+    def _finish_remote_open(self, browser, children):
+        self.browser = browser
+        self._remote_children = children
+        self._populate_browser()
+
+    def _remote_error(self, exc):
+        # Transport exceptions can include signed URLs or credentials. Keep
+        # source-specific limitations, but remove runtime URLs and option values.
+        import re
+
+        message = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"]+", "<remote source>", str(exc))
+
+        def redact(options):
+            nonlocal message
+            for value in options.values():
+                if isinstance(value, dict):
+                    redact(value)
+                elif isinstance(value, str) and value:
+                    message = message.replace(value, "<option>")
+
+        redact(self.storage_options or {})
+        self.query_one("#metadata", Static).update(f"{type(exc).__name__}: {message}")
 
     def load_children(self, node) -> None:
         path = node.data or "/"
         if self.browser is None or path in self.loaded_paths:
             return
-        for child in self.browser.list_children(path):
+        if self._remote:
+            if path not in self._remote_children:
+                if path not in self._listing_paths:
+                    self._listing_paths.add(path)
+                    self.query_one("#metadata", Static).update("Loading group…")
+                    self._list_remote(self._remote_session, self.browser, path, node)
+                return
+            children = self._remote_children[path]
+        else:
+            children = self.browser.list_children(path)
+        for child in children:
             icon = _KIND_ICONS.get(child.kind, "?")
             node.add(f"{icon} {child.name}", data=child.path, allow_expand=child.has_children)
         self.loaded_paths.add(path)
+
+    @work(thread=True, exit_on_error=False)
+    def _list_remote(self, session, browser, path, node):
+        try:
+            with browser.io_lock:
+                if session != self._remote_session:
+                    return
+                children = browser.list_children(path)
+            self._deliver_remote(session, self._finish_remote_list, path, node, children, None)
+        except Exception as exc:
+            self._deliver_remote(session, self._finish_remote_list, path, node, None, exc)
+
+    def _finish_remote_list(self, path, node, children, error):
+        self._listing_paths.discard(path)
+        if error is not None:
+            self._remote_error(error)
+            return
+        self._remote_children[path] = children
+        self.load_children(node)
+        if self.selected_path == path:
+            self.update_panels(path)
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         self.load_children(event.node)
@@ -2227,16 +2410,56 @@ class B2ViewApp(App):
     def update_panels(self, path: str) -> None:
         if self.browser is None:
             return
+        self.selected_path = path
+        self._remote_col_end = None
+        self._remote_page_pending = False
+        self.loading_table_page = False
+        self._remote_request += 1
+        self._remote_page_request += 1
+        if self._remote:
+            self.table_page = self.table_buffer = None
+            self.query_one("#metadata", Static).update("Loading node…")
+            self.query_one("#data-table", DataTable).clear(columns=True)
+            self._read_remote_info(self._remote_session, self._remote_request, self.browser, path)
+            return
+        self._render_panels(path)
+
+    @work(thread=True, exit_on_error=False)
+    def _read_remote_info(self, session, request, browser, path):
+        try:
+            with browser.io_lock:
+                if session != self._remote_session or request != self._remote_request:
+                    return
+                info = browser.get_info(path)
+                data = None
+                if info.kind == "unsupported":
+                    data = {"message": info.metadata.get("preview", "Preview unavailable")}
+                elif info.kind != "group" and not self._uses_grid_preview(info):
+                    data = browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
+            self._deliver_remote(session, self._finish_remote_info, request, path, info, data, None)
+        except Exception as exc:
+            self._deliver_remote(session, self._finish_remote_info, request, path, None, None, exc)
+
+    def _finish_remote_info(self, request, path, info, data, error):
+        if request != self._remote_request:
+            return
+        if error is not None:
+            self._remote_error(error)
+            return
+        self._selected_info = info
+        self._render_panels(path, info, data)
+
+    def _render_panels(self, path, info=None, remote_data=None):
         metadata = self.query_one("#metadata", Static)
         data_header = self.query_one("#data-header", Static)
         data_table_row = self.query_one("#data-table-row", Horizontal)
         data_scroll = self.query_one("#data-scroll", VerticalScroll)
         preview = self.query_one("#preview", Static)
-        vlmeta_pane = self.query_one("#vlmeta-pane", B2ViewPanel)
-        vlmeta_widget = self.query_one("#vlmetadata", Static)
+        attrs_pane = self.query_one("#attrs-pane", B2ViewPanel)
+        attrs_widget = self.query_one("#attrs-data", Static)
         try:
-            info = self.browser.get_info(path)
-            metadata.update(make_metadata_renderable(info))
+            info = info if info is not None else self.browser.get_info(path)
+            metadata.update(make_metadata_renderable(info, show_path=self.browser.is_tree))
             self.table_buffer = None
             self.grid_col_start = 0
             self._data_layout = None
@@ -2252,7 +2475,7 @@ class B2ViewApp(App):
                 self.query_one("#col-scrollbar", Static).display = False
                 data_header.update("")
                 preview.update("Group node; select an array or table to preview.")
-                self._update_vlmeta(vlmeta_pane, vlmeta_widget, path)
+                self._update_attrs(attrs_pane, attrs_widget, path)
             else:
                 if self._uses_grid_preview(info):
                     data_header.display = True
@@ -2266,7 +2489,13 @@ class B2ViewApp(App):
                         self._active_dim = 0
                     data = self._load_table_page(path, 0)
                 else:
-                    data = self.browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
+                    data = (
+                        remote_data
+                        if self._remote
+                        else self.browser.preview(
+                            path, max_rows=self.preview_rows, max_cols=self.preview_cols
+                        )
+                    )
                 if self._is_table_preview(data):
                     # A freshly selected node starts at the first column
                     self._update_data_table(data, cursor_col=0)
@@ -2280,7 +2509,7 @@ class B2ViewApp(App):
                     self.query_one("#col-scrollbar", Static).display = False
                     data_header.update("" if header is None else header)
                     preview.update(body)
-            self._update_vlmeta(vlmeta_pane, vlmeta_widget, path)
+            self._update_attrs(attrs_pane, attrs_widget, path)
             self._reset_panel_scroll()
         except Exception as exc:
             metadata.update(f"Error reading {path}: {exc}")
@@ -2290,7 +2519,7 @@ class B2ViewApp(App):
             self.query_one("#col-scrollbar", Static).display = False
             data_header.update("")
             preview.update("")
-            self._update_vlmeta(vlmeta_pane, vlmeta_widget, None)
+            self._update_attrs(attrs_pane, attrs_widget, None)
             self._reset_panel_scroll()
 
         # The data panel's display/contents are now settled; apply the one-shot
@@ -2300,8 +2529,8 @@ class B2ViewApp(App):
             self.call_after_refresh(self._apply_start_focus)
 
     @staticmethod
-    def _format_vlmeta_value(value: Any) -> str:
-        """Format a vlmeta value for display."""
+    def _format_attr_value(value: Any) -> str:
+        """Format an attribute value for display."""
         if isinstance(value, bool):
             return str(value)
         if isinstance(value, (int, float)):
@@ -2312,14 +2541,16 @@ class B2ViewApp(App):
             return ", ".join(f"{k}: {v}" for k, v in value.items())
         return str(value)
 
-    def _update_vlmeta(self, pane, widget: Static, path: str | None) -> None:
-        """Populate the vlmeta pane with variable-length metadata."""
+    _format_vlmeta_value = _format_attr_value
+
+    def _update_attrs(self, pane, widget: Static, path: str | None) -> None:
+        """Populate the attrs pane with user attributes."""
         pane.display = True
         if path is None or self.browser is None:
             widget.update("<not available>")
             return
         try:
-            info = self.browser.get_info(path)
+            info = self._selected_info if self._remote else self.browser.get_info(path)
             if info.user_attrs is None:
                 widget.update("<not available>")
             elif not info.user_attrs:
@@ -2331,10 +2562,12 @@ class B2ViewApp(App):
                 table.add_column("key", style="bold cyan", no_wrap=True)
                 table.add_column("value")
                 for k, v in info.user_attrs.items():
-                    table.add_row(str(k), self._format_vlmeta_value(v))
+                    table.add_row(str(k), self._format_attr_value(v))
                 widget.update(table)
         except Exception:
             widget.update("<not available>")
+
+    _update_vlmeta = _update_attrs
 
     @staticmethod
     def _is_table_preview(data) -> bool:
@@ -2378,6 +2611,8 @@ class B2ViewApp(App):
     def _candidate_max_cols(self) -> int:
         """Upper bound of columns worth fetching before the width-based trim."""
         width = self._data_table_width()
+        if width <= 1:
+            width = self.size.width
         if width <= 1:
             return self.preview_cols
         # The narrowest possible column is one character plus padding.
@@ -2464,6 +2699,9 @@ class B2ViewApp(App):
             return max(0, end - max(1, self._col_page_size()))
         candidate = min(end, max(1, avail // (1 + self._CELL_PAD)))
         cand_start = end - candidate
+        if self._remote:
+            self._remote_col_end = end if cand_start > 0 else None
+            return cand_start
         widths = self._measure_column_widths(self._fetch_columns_for_measure(cand_start, candidate))
         start = end - 1  # always keep at least one column
         total = widths[-1]
@@ -2534,6 +2772,38 @@ class B2ViewApp(App):
                 self.table_page = data
                 return data
 
+        if self._remote:
+            self._remote_page_request += 1
+            request = self._remote_page_request
+            self._remote_page_pending = True
+            if layout is not None:
+                self._sync_layout_scroll(start, layout)
+            options = {"max_rows": page_size * 10, "max_cols": self._candidate_max_cols()}
+            if layout is not None:
+                options["layout"] = copy.deepcopy(layout)
+            else:
+                options.update(start=start, stop=start + page_size * 10, col_start=self.grid_col_start)
+            column_end, self._remote_col_end = self._remote_col_end, None
+            if column_end is not None:
+                options["max_cols"] = column_end - self.grid_col_start
+            self._read_remote_page(
+                self._remote_session, request, self.browser, path, start, options, column_end
+            )
+            self.query_one("#metadata", Static).update("Loading array page…")
+            shape = tuple(self._selected_info.metadata.get("shape", ()))
+            row_dim = layout.navigable_dims[0] if layout and layout.navigable_dims else None
+            nrows = layout.total_for_dim(row_dim) if row_dim is not None else (shape[0] if shape else 1)
+            data = {
+                "start": start,
+                "stop": start,
+                "nrows": nrows,
+                "columns": [],
+                "data": {},
+                "hidden_columns": 0,
+            }
+            self.table_page = data
+            return data
+
         buffer_size = page_size * 10
         buffer_start = max(0, start - page_size * 4)
 
@@ -2559,6 +2829,49 @@ class B2ViewApp(App):
                 max_cols=self._candidate_max_cols(),
                 col_start=self.grid_col_start,
             )
+        return self._store_table_buffer(data, start, page_size)
+
+    @work(thread=True, exit_on_error=False)
+    def _read_remote_page(self, session, request, browser, path, start, options, column_end):
+        try:
+            with browser.io_lock:
+                if session != self._remote_session or request != self._remote_page_request:
+                    return
+                data = browser.preview(path, **options)
+            self._deliver_remote(session, self._finish_remote_page, request, start, data, None, column_end)
+        except Exception as exc:
+            self._deliver_remote(session, self._finish_remote_page, request, start, None, exc, column_end)
+
+    def _finish_remote_page(self, request, start, data, error, column_end):
+        if request != self._remote_page_request:
+            return
+        self._remote_page_pending = False
+        if error is not None:
+            self._remote_error(error)
+            return
+        if column_end is not None and data["columns"]:
+            widths = self._measure_column_widths(data)
+            avail = self._col_avail_width(data["nrows"])
+            first, total = len(widths) - 1, widths[-1]
+            while first > 0 and total + widths[first - 1] <= avail:
+                first -= 1
+                total += widths[first]
+            data["columns"] = data["columns"][first:]
+            data["data"] = {name: data["data"][name] for name in data["columns"]}
+            data["col_start"] += first
+            data["hidden_columns"] = data["ncols"] - len(data["columns"])
+            self.grid_col_start = data["col_start"]
+            if self._data_layout is not None:
+                self._data_layout.col_start = self.grid_col_start
+            self._col_fit = None
+        data = self._store_table_buffer(data, start, self._table_page_size())
+        self._update_data_table(data)
+        self._update_data_header(data)
+        self.query_one("#metadata", Static).update(
+            make_metadata_renderable(self._selected_info, show_path=self.browser.is_tree)
+        )
+
+    def _store_table_buffer(self, data, start, page_size):
         # The visible column count is sticky for a given column layout: recompute
         # the width-based fit only when the layout key changes (node, horizontal
         # position, ndarray dims, column filter).  Vertical scrolling, reversing a
@@ -2644,18 +2957,25 @@ class B2ViewApp(App):
             cursor_col = table.cursor_column
         self.loading_table_page = True
         try:
-            table.clear(columns=True)
-            for name in data["columns"]:
-                table.add_column(name, key=name)
             # Uniform decimals per float column, taken from the whole buffer
             # when available so the format is stable while paging rows.
             buffer = self.table_buffer
             source = buffer if buffer is not None and buffer["columns"] == data["columns"] else data
             decimals = {name: column_float_decimals(source["data"][name]) for name in data["columns"]}
+            widths = self._measure_column_widths(source)
+            table.clear(columns=True)
+            for name, width in zip(data["columns"], widths, strict=True):
+                table.add_column(name, key=name, width=width - self._CELL_PAD)
             nrows = data["stop"] - data["start"]
             # SChunk hex dumps carry explicit (hex byte-offset) row labels;
             # everything else labels the gutter with the logical row number.
             row_labels = data.get("row_labels")
+            labels = row_labels if row_labels is not None else range(data["start"], data["stop"])
+            if nrows:
+                # Textual otherwise discovers this on idle, after a remote page
+                # may already have rendered without its row-label gutter.
+                table._labelled_row_exists = True
+                table._label_column.content_width = max(len(str(label)) for label in labels)
             for i in range(nrows):
                 table.add_row(
                     *[
@@ -2675,7 +2995,7 @@ class B2ViewApp(App):
             self.call_after_refresh(self._finish_table_page_load)
 
     def _finish_table_page_load(self) -> None:
-        self.loading_table_page = False
+        self.loading_table_page = self._remote_page_pending
 
     def page_table(self, direction: int, *, align: bool = False) -> bool:
         if self.loading_table_page or self.table_page is None:
@@ -2915,10 +3235,10 @@ class B2ViewApp(App):
             if data_table_row.display
             else self.query_one("#data-scroll", VerticalScroll)
         )
-        return [
-            self.query_one("#tree", Tree),
+        tree_panels = [self.query_one("#tree", Tree)] if self.query_one("#tree-pane").display else []
+        return tree_panels + [
             self.query_one("#meta-scroll", VerticalScroll),
-            self.query_one("#vlmeta-scroll", VerticalScroll),
+            self.query_one("#attrs-scroll", VerticalScroll),
             data_panel,
         ]
 
@@ -3471,7 +3791,7 @@ class B2ViewApp(App):
         focused = self.focused
         if focused is None:
             return None
-        for selector in ("#tree-pane", "#meta-pane", "#vlmeta-pane", "#data-pane"):
+        for selector in ("#tree-pane", "#meta-pane", "#attrs-pane", "#data-pane"):
             pane = self.query_one(selector, Vertical)
             if focused is pane or pane in focused.ancestors:
                 return pane
@@ -3501,6 +3821,8 @@ class B2ViewApp(App):
         sizes, so the windows would drift unless we reload once here.
         """
         page = self.table_page
+        if self._remote and page is not None and not page["columns"]:
+            return
         if page is None or not self.query_one("#data-table-row", Horizontal).display:
             return
         rows_loaded = page["stop"] - page["start"]
@@ -3554,6 +3876,24 @@ class B2ViewApp(App):
         self.query_one("#data-table", DataTable).focus()
 
     def action_refresh(self) -> None:
+        if self._remote:
+            self._remote_session += 1
+            self._remote_request += 1
+            self._remote_page_request += 1
+            previous, self.browser = self.browser, None
+            if previous is not None:
+                closer = threading.Thread(target=self._close_browser, args=(previous,), daemon=True)
+                self._browser_close_thread = closer
+                closer.start()
+            self.start_path = self.selected_path
+            self.loaded_paths.clear()
+            self._remote_children.clear()
+            self._listing_paths.clear()
+            self.table_page = self.table_buffer = None
+            self._selected_info = None
+            self.query_one("#tree", Tree).root.remove_children()
+            self._start_browsing()
+            return
         tree = self.query_one("#tree", Tree)
         node = tree.cursor_node or tree.root
         self.loaded_paths.discard(node.data or "/")

@@ -20,11 +20,13 @@ outright.  Nothing here reaches into the package for more than what
 
 import ast
 import asyncio
+import contextlib
 import math
 import struct
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 try:
     from itertools import batched
@@ -81,6 +83,8 @@ BLOCK_GAP = 4096
 # has 4 KB of compressed offsets.
 _FRAME_PREFETCH = 8192
 _INDEX_PREFETCH = 1 << 16
+_TRAILER_MINLEN = 25
+_TRAILER_PREFETCH = 4096
 
 # How many partly filled chunks keep their blocks in memory as well as in the
 # cache.  Adding a block to a chunk rewrites that chunk, and the blocks already
@@ -341,6 +345,21 @@ class ProxyNDSource(ABC):
         raise NotImplementedError(
             "aget_chunk is only available if the source has an async aget_chunk method"
         )
+
+    @property
+    def meta(self) -> dict:
+        """The fixed-length metadata of the source."""
+        return {}
+
+    @property
+    def attrs(self):
+        """The user attributes of the source."""
+        return self.vlmeta
+
+    @property
+    def vlmeta(self) -> dict:
+        """The variable-length metadata of the source."""
+        return {}
 
 
 class ProxySource(ABC):
@@ -608,6 +627,63 @@ def _frame_metalayer(raw: bytes, header: list, name: str):
     return msgpack.unpackb(raw[offset + 5 : offset + 5 + nbytes], raw=False)
 
 
+def _read_frame_metalayers(raw: bytes, header: list) -> dict[str, Any]:
+    """Decode all metalayers out of an already-read frame header."""
+    if len(header) <= 13 or not header[13] or len(header[13]) < 2:
+        return {}
+    names_map = header[13][1]
+    if not isinstance(names_map, dict):
+        return {}
+    res = {}
+    for name_bytes in names_map:
+        name = name_bytes.decode("utf-8") if isinstance(name_bytes, bytes) else str(name_bytes)
+        with contextlib.suppress(Exception):
+            res[name] = _frame_metalayer(raw, header, name)
+    return res
+
+
+def _parse_trailer_vlmeta(trailer_bytes: bytes) -> dict[str, Any]:
+    """Decode vlmetalayers mapping from trailer bytes."""
+    import msgpack
+
+    try:
+        trailer = msgpack.unpackb(trailer_bytes, raw=True, strict_map_key=False)
+    except Exception:
+        return {}
+    if not isinstance(trailer, list) or len(trailer) < 2:
+        return {}
+    vlmeta_section = trailer[1]
+    if not isinstance(vlmeta_section, list) or len(vlmeta_section) < 2:
+        return {}
+    names_map = vlmeta_section[1]
+    if not isinstance(names_map, dict):
+        return {}
+    res = {}
+    for name_bytes, offset in names_map.items():
+        name = name_bytes.decode("utf-8") if isinstance(name_bytes, bytes) else str(name_bytes)
+        if offset + 5 > len(trailer_bytes) or trailer_bytes[offset] != 0xC6:
+            continue
+        content_len = int.from_bytes(trailer_bytes[offset + 1 : offset + 5], "big")
+        if offset + 5 + content_len > len(trailer_bytes):
+            continue
+        blob = trailer_bytes[offset + 5 : offset + 5 + content_len]
+        try:
+            decomp = blosc2.decompress(blob)
+        except Exception:
+            continue
+        try:
+            from blosc2.msgpack_utils import msgpack_unpackb
+
+            val = msgpack_unpackb(decomp)
+        except Exception:
+            try:
+                val = msgpack.unpackb(decomp, raw=False)
+            except Exception:
+                val = decomp
+        res[name] = val
+    return res
+
+
 def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     """How many bytes to read at each chunk offset to be sure of covering it.
 
@@ -714,8 +790,11 @@ class ByteRangeNDSource(ProxyNDSource):
         # open. Chunk reads are stateless, so the index below is the only state a
         # thread pool shares, and the only thing here that needs a lock
         raw, self._header, self._head = _read_frame_header(self.read_range)
+        self._raw_header = raw
         self._header_len = len(raw)
         self._chunksize = self._header[8]
+        self._meta = None
+        self._vlmeta = None
         # Where the chunks are is read on the first one touched, not here: a
         # `Proxy` over a cache that already holds the slice asked for fetches
         # nothing, and then the offsets are a request spent on nothing at all.
@@ -734,7 +813,7 @@ class ByteRangeNDSource(ProxyNDSource):
         except KeyError:
             raise NotImplementedError(
                 f"{urlpath} has no b2nd metalayer, so it is a plain SChunk rather than an "
-                "NDArray; read it whole or with cache_storage= instead"
+                "NDArray; read it whole or with cache_dir= instead"
             ) from None
         if dtype_format != 0:
             raise NotImplementedError(f"unsupported dtype format {dtype_format} in {urlpath}")
@@ -863,9 +942,12 @@ class ByteRangeNDSource(ProxyNDSource):
                 # offsets are found through both, so the header is read first, and
                 # the offsets it locates are read again after it
                 raw, self._header, self._head = _read_frame_header(self.read_range)
+                self._raw_header = raw
                 self._header_len = len(raw)
                 self._chunksize = self._header[8]
                 self._index = None
+                self._meta = None
+                self._vlmeta = None
                 self._stale = False
             if self._index is None:
                 offsets = _read_frame_offsets(self.read_range, self._header, self._head, self._header_len)
@@ -934,6 +1016,55 @@ class ByteRangeNDSource(ProxyNDSource):
             # then presents as whole.  A layout costs one header read to rebuild
             # and only the partly fetched chunks have one at all
             self._layouts.clear()
+            self._meta = None
+            self._vlmeta = None
+
+    @property
+    def has_vlmetalayers(self) -> bool:
+        """Whether the underlying frame has variable-length metalayers."""
+        return bool(len(self._header) > 11 and self._header[11])
+
+    @property
+    def meta(self) -> dict:
+        """Fixed-length metadata of the remote frame."""
+        if self._meta is None:
+            self._meta = _read_frame_metalayers(self._raw_header, self._header)
+        return dict(self._meta)
+
+    @property
+    def attrs(self) -> dict:
+        """The user attributes of the remote frame."""
+        return self.vlmeta
+
+    @property
+    def vlmeta(self) -> dict:
+        """Variable-length metadata of the remote frame."""
+        if self._vlmeta is None:
+            self._vlmeta = self._read_frame_vlmeta()
+        return dict(self._vlmeta)
+
+    def _read_frame_vlmeta(self) -> dict[str, Any]:
+        """Decode all vlmetalayers from the frame trailer, if present."""
+        if not self.has_vlmetalayers:
+            return {}
+        frame_len = self._header[2]
+        if frame_len < _TRAILER_MINLEN:
+            return {}
+        prefetch_size = min(frame_len, _TRAILER_PREFETCH)
+        tail_start = frame_len - prefetch_size
+        tail = self.read_range(tail_start, prefetch_size)
+        if len(tail) < _TRAILER_MINLEN or tail[-23] != 0xCE:
+            return {}
+        trailer_len = int.from_bytes(tail[-22:-18], "big")
+        if trailer_len <= 0 or trailer_len > frame_len:
+            return {}
+        if trailer_len <= len(tail):
+            trailer_bytes = tail[-trailer_len:]
+        else:
+            trailer_bytes = self.read_range(frame_len - trailer_len, trailer_len)
+            if len(trailer_bytes) != trailer_len:
+                return {}
+        return _parse_trailer_vlmeta(trailer_bytes)
 
     @property
     def shape(self) -> tuple:
@@ -1262,7 +1393,7 @@ class FsspecNDSource(ByteRangeNDSource):
 
     This is what ``blosc2.open(url, lazy=True)`` builds; wrap it in a
     :ref:`Proxy` by hand when the cache belongs at a path of your choosing
-    rather than inside ``cache_storage``::
+    rather than inside ``cache_dir``::
 
         src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
         a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
@@ -1273,30 +1404,126 @@ class FsspecNDSource(ByteRangeNDSource):
         The fsspec URL of the frame.
     max_concurrency: int, optional
         As in :ref:`ByteRangeNDSource`.
+    storage_options: dict, optional
+        Parameters passed to the underlying ``fsspec`` filesystem.
     """
 
-    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
+    def __init__(
+        self,
+        urlpath: str,
+        max_concurrency: int = REMOTE_MAX_CONCURRENCY,
+        *,
+        storage_options: dict | None = None,
+        _filesystem=None,
+        _traffic=None,
+    ):
         from blosc2.core import _import_fsspec
 
         fsspec = _import_fsspec(urlpath)
-        fs, path = fsspec.url_to_fs(urlpath)
-        if fs.isdir(path):
+        if _filesystem is None:
+            fs, path = fsspec.url_to_fs(urlpath, **(storage_options or {}))
+        else:
+            fs = _filesystem
+            path = fs._strip_protocol(urlpath)
+        protocols = (fs.protocol,) if isinstance(fs.protocol, str) else fs.protocol
+        self._http = bool({"http", "https"} & set(protocols))
+        if not self._http and fs.isdir(path):
             raise NotImplementedError(
                 f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
-                "chunk by chunk; open it with cache_storage= instead"
+                "chunk by chunk; open it with cache_dir= instead"
             )
         self._fs, self._path = fs, path
+        self.storage_options = storage_options or {}
         # Identifies the remote bytes, so a cache built against them can tell it
         # has gone stale -- and chunk offsets from a replaced frame are garbage.
         # fsspec's own token, rather than a tuple of the metadata fields we guess
         # a backend exposes: memory:// has no mtime, which left it size-only.
-        self.stamp = fs.ukey(path)
-        super().__init__(urlpath, max_concurrency)
+        # HTTPFileSystem.isdir() sends a GET before the range read below, making
+        # a lazy open pay two serial network round trips.  Its ukey is only a
+        # hash of the URL and options, so it needs no request either.  Capture
+        # ETag/Last-Modified from the first range response instead: one request
+        # supplies both the frame header and a stronger identity for the cache.
+        if self._http:
+            from fsspec.utils import tokenize
+
+            self._base_stamp = tokenize(path, fs.kwargs, fs.protocol)
+            self.stamp = self._base_stamp
+        else:
+            self._base_stamp = None
+            self.stamp = fs.ukey(path)
+        self._capture_http_headers = self._http
+        super().__init__(urlpath, max_concurrency, traffic=_traffic)
+
+    def refresh_identity(self) -> None:
+        """Refresh the identity of the object currently stored at this URL.
+
+        Object-store implementations expose this through ``ukey``. HTTP needs
+        an explicit metadata request because its fsspec ukey identifies only
+        the URL and options, not the response currently available there.
+        ``None`` means that the HTTP server supplied no validator strong enough
+        to justify retaining cached data across operations.
+        """
+        if not self._http:
+            self.stamp = self._fs.ukey(self._path)
+            return
+
+        info = self._fs.info(self._path)
+        etag = info.get("etag", info.get("ETag"))
+        if etag:
+            self.stamp = f"{self._base_stamp}:etag:{etag}"
+            return
+        modified = info.get("mtime", info.get("LastModified", info.get("last_modified")))
+        size = info.get("size")
+        if modified is not None and size is not None:
+            self.stamp = f"{self._base_stamp}:modified:{modified}:size:{size}"
+            return
+        self.stamp = None
 
     def read_range(self, offset: int, size: int) -> bytes:
-        data = self._fs.cat_file(self._path, start=offset, end=offset + size)
+        if self._capture_http_headers:
+            from fsspec.asyn import sync
+
+            data, headers = sync(
+                self._fs.loop,
+                _http_cat_file_with_headers,
+                self._fs,
+                self._path,
+                offset,
+                offset + size,
+            )
+            self.stamp = _http_stamp(self.stamp, headers)
+            self._capture_http_headers = False
+        else:
+            data = self._fs.cat_file(self._path, start=offset, end=offset + size)
         self.traffic.charge(len(data))
         return data
+
+
+async def _http_cat_file_with_headers(fs, url: str, start: int, end: int):
+    """HTTPFileSystem.cat_file(), returning the response headers as well."""
+    kwargs = fs.kwargs.copy()
+    headers = kwargs.pop("headers", {}).copy()
+    headers["Range"] = await fs._process_limits(url, start, end)
+    kwargs["headers"] = headers
+    session = await fs.set_session()
+    async with session.get(fs.encode_url(url), **kwargs) as response:
+        data = await response.read()
+        fs._raise_not_found_for_status(response, url)
+        response_headers = {key.lower(): value for key, value in response.headers.items()}
+    return data, response_headers
+
+
+def _http_stamp(url_stamp: str, headers: Mapping[str, str]) -> str:
+    """Combine a URL identity with the strongest validators on an HTTP response."""
+    if etag := headers.get("etag"):
+        return f"{url_stamp}:etag:{etag}"
+
+    modified = headers.get("last-modified", "")
+    content_range = headers.get("content-range", "")
+    size = content_range.rpartition("/")[2] if "/" in content_range else headers.get("content-length", "")
+    if modified or size:
+        return f"{url_stamp}:modified:{modified}:size:{size}"
+    return url_stamp
 
 
 def convert_dtype(dt: str | DTypeLike):

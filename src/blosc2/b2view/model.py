@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from threading import RLock
 from typing import Any
 
 import numpy as np
 
 import blosc2
+from blosc2.core import is_fsspec_url, parse_container_url
 
 # Above this uncompressed size, plot_series does not read the whole series at
 # once for an exact min/max envelope.  Local objects are instead streamed in
@@ -251,10 +253,27 @@ class StoreBrowser:
     slices.
     """
 
-    def __init__(self, urlpath: str):
+    def __init__(
+        self,
+        urlpath: str,
+        *,
+        storage_options: dict[str, Any] | None = None,
+        cache_dir: str | None = None,
+        max_cache_bytes: int | None = None,
+    ):
         self.urlpath = urlpath
-        self.store = blosc2.open(urlpath, mode="r")
-        self.is_tree = isinstance(self.store, blosc2.TreeStore)
+        self.cache_dir = cache_dir
+        self.max_cache_bytes = max_cache_bytes
+        self.io_lock = RLock()
+        self._remote_leaf = None
+        self._remote_child_counts = {}
+        self._remote_leaf_path = None
+        self.store = self._open_store(
+            urlpath, storage_options, cache_dir=cache_dir, max_cache_bytes=max_cache_bytes
+        )
+        self.is_tree = isinstance(self.store, blosc2.TreeStore) or (
+            isinstance(self.store, blosc2.RemoteStore) and self.store.kind() == "group"
+        )
         # Per-path row filters for CTable nodes (path -> expr / where() view)
         self._filters: dict[str, str] = {}
         self._filter_views: dict[str, Any] = {}
@@ -278,7 +297,51 @@ class StoreBrowser:
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
 
+    @staticmethod
+    def _open_store(
+        urlpath,
+        storage_options,
+        *,
+        cache_dir: str | None = None,
+        max_cache_bytes: int | None = None,
+    ):
+        options = {} if storage_options is None else {"storage_options": storage_options}
+        if is_fsspec_url(urlpath):
+            _, _, source_format = parse_container_url(urlpath)
+            if source_format in {"b2z", "zarr", "hdf5"}:
+                # Discover once even for an array root; return public handles in
+                # both cases without rescanning HDF5 or reopening a B2Z archive.
+                store_kwargs: dict[str, Any] = {
+                    "max_cache_bytes": 64 << 20 if max_cache_bytes is None else max_cache_bytes,
+                    "_allow_array_root": True,
+                    **options,
+                }
+                if cache_dir is not None:
+                    store_kwargs["cache_dir"] = cache_dir
+                store = blosc2.RemoteStore(urlpath, **store_kwargs)
+                try:
+                    if store.kind() == "ndarray":
+                        array = store[""]
+                        store.close()
+                        return array
+                    return store
+                except BaseException:
+                    store.close()
+                    raise
+            options["lazy"] = True
+            options["max_cache_bytes"] = 64 << 20 if max_cache_bytes is None else max_cache_bytes
+            if cache_dir is not None:
+                options["cache_dir"] = cache_dir
+        return blosc2.open(urlpath, mode="r", **options)
+
+    def _release_remote_leaf(self):
+        if self._remote_leaf is not None:
+            self._remote_leaf.close()
+            self._remote_leaf = None
+            self._remote_leaf_path = None
+
     def close(self) -> None:
+        self._release_remote_leaf()
         close = getattr(self.store, "close", None)
         if close is not None:
             close()
@@ -302,6 +365,23 @@ class StoreBrowser:
     def list_children(self, path: str = "/") -> list[NodeInfo]:
         """Return direct children for *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, blosc2.RemoteStore):
+            if self.store.kind(path) != "group":
+                return []
+            with self.store[path] as group:
+                children = []
+                for name in group:
+                    kind = group.kind(name)
+                    children.append(
+                        NodeInfo(
+                            path=self.normalize_path(path.rstrip("/") + "/" + name),
+                            name=name,
+                            kind=kind,
+                            has_children=kind == "group",
+                        )
+                    )
+                self._remote_child_counts[path] = len(children)
+                return children
         if not self.is_tree:
             self._check_root_path(path)
             return []
@@ -324,6 +404,8 @@ class StoreBrowser:
     def kind(self, path: str) -> str:
         """Classify a browser path."""
         path = self.normalize_path(path)
+        if isinstance(self.store, blosc2.RemoteStore):
+            return self.store.kind(path)
         if not self.is_tree:
             self._check_root_path(path)
             return object_kind(self.store)
@@ -335,6 +417,8 @@ class StoreBrowser:
     def get_info(self, path: str) -> ObjectInfo:
         """Return metadata for *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, blosc2.RemoteStore):
+            return self._remote_info(path)
         kind = self.kind(path)
         if kind == "group":
             metadata: dict[str, Any] = {
@@ -342,16 +426,39 @@ class StoreBrowser:
                 "children": len(self.store.get_children(path)),
                 "descendants": len(self.store.get_descendants(path)),
             }
-            user_attrs = self._vlmeta_dict(self.store.vlmeta)
+            if path in ("", "/"):
+                attrs_obj = getattr(self.store, "attrs", getattr(self.store, "vlmeta", None))
+            else:
+                subtree = self.store.get_subtree(path)
+                attrs_obj = getattr(subtree, "attrs", getattr(subtree, "vlmeta", None))
+            user_attrs = self._attrs_dict(attrs_obj)
             return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
 
         obj = self._get_object(path)
         metadata = object_metadata(obj)
         metadata.setdefault("type", type(obj).__name__)
-        user_attrs = self._vlmeta_dict(getattr(obj, "vlmeta", None))
+        attrs_obj = getattr(obj, "attrs", getattr(obj, "vlmeta", None))
+        user_attrs = self._attrs_dict(attrs_obj)
         if user_attrs is None and self.is_tree:
-            user_attrs = self._vlmeta_dict(self.store.vlmeta)
+            store_attrs = getattr(self.store, "attrs", getattr(self.store, "vlmeta", None))
+            user_attrs = self._attrs_dict(store_attrs)
         return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
+
+    def _remote_info(self, path):
+        node = self.store.get_info(path)
+        metadata = {"type": f"{self.store.source['kind'].upper()} {node.kind}"}
+        attrs = node.attrs
+        if node.kind == "ndarray":
+            obj = self._get_object(path)
+            metadata.update(object_metadata(obj))
+            attrs = self._attrs_dict(obj.vlmeta)
+        else:
+            self._release_remote_leaf()
+            if node.kind == "group" and path in self._remote_child_counts:
+                metadata["children"] = self._remote_child_counts[path]
+            if node.diagnostic:
+                metadata["preview" if node.kind == "unsupported" else "notice"] = node.diagnostic
+        return ObjectInfo(path, node.kind, metadata, attrs)
 
     def preview(
         self,
@@ -523,7 +630,7 @@ class StoreBrowser:
                 n,
                 np.dtype(obj.dtype).itemsize,
                 chunks[row_dim] if chunks else None,
-                remote=(kind == "c2array"),
+                remote=(kind == "c2array" or isinstance(obj, (blosc2.RemoteArray, blosc2.Proxy))),
                 max_points=max_points,
             )
 
@@ -1160,6 +1267,12 @@ class StoreBrowser:
     def _get_object(self, path: str) -> Any:
         """Return the object represented by *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, blosc2.RemoteStore):
+            if path != self._remote_leaf_path:
+                self._release_remote_leaf()
+                self._remote_leaf = self.store[path]
+                self._remote_leaf_path = path
+            return self._remote_leaf
         if self.is_tree:
             return self.store[path]
         self._check_root_path(path)
@@ -1170,7 +1283,7 @@ class StoreBrowser:
         if path != "/":
             raise KeyError(f"Standalone objects only expose the root path '/', got {path!r}")
 
-    _INTERNAL_VLMETA_KEYS = frozenset(
+    _INTERNAL_ATTRS_KEYS = frozenset(
         {
             "kind",
             "version",
@@ -1181,29 +1294,32 @@ class StoreBrowser:
             "materialized_columns",
         }
     )
+    _INTERNAL_VLMETA_KEYS = _INTERNAL_ATTRS_KEYS
 
     @staticmethod
-    def _vlmeta_dict(vlmeta) -> dict[str, Any] | None:
-        if vlmeta is None:
+    def _attrs_dict(attrs) -> dict[str, Any] | None:
+        if attrs is None:
             return None
         try:
-            data = vlmeta[:]
+            data = attrs[:]
         except Exception:
             try:
-                data = {name: vlmeta[name] for name in vlmeta}
+                data = {name: attrs[name] for name in attrs}
             except Exception:
                 return None
         if data is None:
             return None
         # Filter out internal blosc2 metadata keys (schema, version, etc.)
-        return {k: v for k, v in data.items() if k not in StoreBrowser._INTERNAL_VLMETA_KEYS}
+        return {k: v for k, v in data.items() if k not in StoreBrowser._INTERNAL_ATTRS_KEYS}
+
+    _vlmeta_dict = _attrs_dict
 
 
 def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
-    if isinstance(obj, blosc2.NDArray):
+    if isinstance(obj, (blosc2.NDArray, blosc2.RemoteArray, blosc2.Proxy)):
         return "ndarray"
     if isinstance(obj, blosc2.CTable):
         return "ctable"

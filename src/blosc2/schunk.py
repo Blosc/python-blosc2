@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import os
 import pathlib
+import warnings
 import weakref
 import zipfile
 from collections import namedtuple
@@ -17,6 +18,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -28,6 +30,7 @@ from blosc2.core import (
     is_fsspec_url,
     localize_fsspec_url,
     normalize_urlpath,
+    parse_container_url,
 )
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
@@ -120,7 +123,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __getitem__(self, name):
         _ = self._owner  # dead-owner check: the raw C schunk pointer below dangles otherwise
         if isinstance(name, slice):
-            if name.start is None and name.stop is None:
+            if name.start is None and name.stop is None and name.step is None:
                 # Return all the vlmetalayers
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
@@ -209,7 +212,7 @@ class Meta(Mapping):
             a dictionary with all the metalayers is returned.
         """
         if isinstance(item, slice):
-            if item.start is None and item.stop is None:
+            if item.start is None and item.stop is None and item.step is None:
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
         if self.__contains__(item):
@@ -506,6 +509,14 @@ class SChunk(blosc2_ext.SChunk):
         Access to the fixed-length metadata of the `SChunk`.
         """
         return Meta(self)
+
+    @property
+    def attrs(self):
+        """User attributes; the recommended alias for :attr:`vlmeta`.
+
+        Shares the existing metadata storage and access rules without filtering keys.
+        """
+        return self.vlmeta
 
     @property
     def vlmeta(self) -> vlmeta:
@@ -1840,6 +1851,12 @@ def _open_special_store(urlpath, mode, offset, **kwargs):
     # Meta-based detection has priority over extension
     schunk_meta = _meta_from_store(urlpath, offset)
     if schunk_meta is not None:
+        if "b2remote_store" in schunk_meta:
+            if offset != 0:
+                raise ValueError("Offset must be 0 for RemoteStore")
+            from blosc2.remote_store import RemoteStore
+
+            return RemoteStore._open_artifact(urlpath, mode=mode, **kwargs)
         if "b2embed" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for EmbedStore")
@@ -1885,19 +1902,63 @@ def _set_default_dparams(kwargs):
             kwargs["dparams"] = dparams
 
 
+def _reconstruct_legacy_proxy(proxy_cache, proxy_src):
+    source_kind = proxy_src.get("source_kind")
+    if source_kind == "b2z":
+        src = blosc2.B2ZNDSource(proxy_src["urlpath"], proxy_src["dataset"])
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "fsspec":
+        src = blosc2.FsspecNDSource(proxy_src["urlpath"])
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "zarr":
+        src = blosc2.ZarrNDSource(
+            proxy_src["urlpath"], blocks=proxy_cache.blocks, cparams=proxy_cache.cparams
+        )
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "hdf5":
+        refs = None
+        raw_refs = getattr(proxy_cache, "schunk", proxy_cache).vlmeta.get("hdf5-refs")
+        if raw_refs is not None:
+            try:
+                import ujson as json_mod
+            except ImportError:
+                import json as json_mod
+            refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+        src = blosc2.HDF5NDSource(
+            proxy_src["urlpath"],
+            proxy_src["dataset"],
+            refs=refs,
+            blocks=proxy_cache.blocks,
+            cparams=proxy_cache.cparams,
+        )
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if source_kind == "caterva2":
+        src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    if proxy_src["local_abspath"] is not None:
+        source_path = proxy_src["local_abspath"]
+        # Older FsspecNDSource caches recorded their URL in the field that
+        # otherwise names a local source. Preserve those caches while
+        # restoring their lazy byte-range behavior.
+        if source_kind is None and is_fsspec_url(source_path):
+            src = blosc2.FsspecNDSource(source_path)
+        else:
+            src = blosc2.open(source_path, mode="r")
+        return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
+    elif proxy_src["urlpath"] is not None:
+        src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+        return blosc2.Proxy(src, _cache=proxy_cache)
+    elif not proxy_src["caterva2_env"]:
+        raise RuntimeError("Could not find the source when opening a Proxy")
+    return None
+
+
 def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
-        proxy_cache = res
-        proxy_src = meta["proxy-source"]
-        if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"], mode="r")
-            return blosc2.Proxy(src, _cache=proxy_cache)
-        elif proxy_src["urlpath"] is not None:
-            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=proxy_cache)
-        elif not proxy_src["caterva2_env"]:
-            raise RuntimeError("Could not find the source when opening a Proxy")
+        proxy = _reconstruct_legacy_proxy(res, meta["proxy-source"])
+        if proxy is not None:
+            return proxy
 
     if "b2o" in meta:
         return blosc2.open_b2object(res)
@@ -1975,29 +2036,211 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
+def _remote_cache_options(kwargs: dict) -> tuple[str | pathlib.Path | None, str | pathlib.Path | None]:
+    """Pop the public remote-cache options, including the deprecated alias."""
+    legacy_present = "cache_storage" in kwargs
+    cache_storage = kwargs.pop("cache_storage", None)
+    cache_dir = kwargs.pop("cache_dir", None)
+    cache_path = kwargs.pop("cache_path", None)
+
+    if legacy_present:
+        warnings.warn(
+            "cache_storage is deprecated; use cache_dir instead",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+
+    selected = [value for value in (cache_storage, cache_dir, cache_path) if value is not None]
+    if len(selected) > 1:
+        raise ValueError("cache_storage, cache_dir, and cache_path are mutually exclusive")
+    return (cache_dir if cache_dir is not None else cache_storage), cache_path
+
+
+def _validate_fsspec_source_format(source_format, lazy):
+    if source_format not in {None, "blosc2", "zarr", "hdf5", "b2z"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', 'hdf5', or 'b2z'")
+    if source_format == "zarr" and not lazy:
+        raise NotImplementedError("Zarr sources require lazy=True")
+    if source_format == "hdf5" and not lazy:
+        raise ValueError("HDF5 sources require lazy=True")
+
+
+def _remote_array_options(
+    kwargs,
+    cache_dir,
+    cache_path,
+    max_concurrency,
+    *,
+    lazy=False,
+    storage_options=None,
+    source_format=None,
+    assume_immutable=True,
+    dataset=None,
+    refs=None,
+):
+    """Return explicit RemoteArray options, or None for the legacy lazy Proxy path."""
+    policy_present = "cache_policy" in kwargs
+    limit_present = "max_cache_bytes" in kwargs
+    if not lazy and not policy_present and not limit_present:
+        return None
+    policy = kwargs.pop("cache_policy", None)
+    limit = kwargs.pop("max_cache_bytes", None)
+    if not policy_present:
+        if cache_dir is not None or cache_path is not None:
+            policy = blosc2.CachePolicy.DISK
+        elif lazy:
+            policy = blosc2.CachePolicy.MEMORY
+        else:
+            policy = blosc2.CachePolicy.NONE
+    options = {
+        "cache_policy": policy,
+        "cache_dir": cache_dir,
+        "cache_path": cache_path,
+        "max_concurrency": max_concurrency,
+        "assume_immutable": assume_immutable,
+    }
+    if limit_present:
+        options["max_cache_bytes"] = limit
+    if storage_options is not None:
+        options["storage_options"] = storage_options
+    if source_format is not None:
+        options["source_format"] = source_format
+    if dataset is not None:
+        options["dataset"] = dataset
+    if refs is not None:
+        options["refs"] = refs
+    return options
+
+
 def _lazy_fsspec_proxy(
-    urlpath: str, cache_storage: str | pathlib.Path | None, max_concurrency: int | None = None
+    urlpath: str,
+    cache_dir: str | pathlib.Path | None,
+    cache_path: str | pathlib.Path | None,
+    max_concurrency: int | None = None,
+    storage_options: dict | None = None,
 ):
     """Wrap a remote frame in a Proxy that fetches chunks on demand.
 
-    Without `cache_storage` the fetched chunks live in memory and die with the
-    proxy; with it they go to a container under that directory, so a later run
-    starts from what this one pulled.
+    Without a cache location the fetched chunks live in memory and die with the
+    proxy. Otherwise they go to `cache_path`, or to a derived name under
+    `cache_dir`, so a later run starts from what this one pulled.
     """
     # None leaves the default where it belongs, on the source itself
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
+    if storage_options is not None:
+        kwargs["storage_options"] = storage_options
     src = blosc2.FsspecNDSource(urlpath, **kwargs)
-    if cache_storage is None:
-        return blosc2.Proxy(src)
+    return _lazy_remote_array(src, urlpath, cache_dir, cache_path)
 
-    path = fsspec_cache_path(urlpath, cache_storage, ".b2nd")
-    if os.path.exists(path) and _cache_stamp(path) != src.stamp:
-        # The remote frame was replaced, which makes every cached chunk -- and
-        # every offset they were fetched by -- meaningless
-        blosc2.remove_urlpath(path)
+
+def _lazy_remote_array(
+    src,
+    identity: str,
+    cache_dir: str | pathlib.Path | None,
+    cache_path: str | pathlib.Path | None,
+    *,
+    source_fresh: bool = False,
+    max_cache_bytes: int | None = None,
+):
+    """Wrap a remote source in a memory or persistent cache."""
+    if cache_dir is None and cache_path is None:
+        return blosc2.Proxy(
+            src,
+            _refresh_source=not source_fresh,
+            _max_cache_bytes=max_cache_bytes,
+        )
+
+    if cache_path is not None:
+        path = os.fspath(cache_path)
+        if os.path.isdir(path):
+            raise ValueError("cache_path must name a file, not a directory")
+    else:
+        path = fsspec_cache_path(identity, cache_dir, ".b2nd")
+    stamp = getattr(src, "stamp", None)
+    cache_status = "created"
+    if os.path.exists(path):
+        if _cache_stamp(path) != stamp:
+            # The remote frame was replaced, which makes every cached chunk -- and
+            # every offset they were fetched by -- meaningless
+            blosc2.remove_urlpath(path)
+            cache_status = "invalidated/rebuilt"
+        else:
+            cache_status = "reused"
     # Proxy stamps the cache with src.stamp itself, and refuses one built against
     # other bytes; removing it above is what turns that refusal into a refetch
-    return blosc2.Proxy(src, urlpath=path, mode="a")
+    proxy = blosc2.Proxy(
+        src,
+        urlpath=path,
+        mode="a",
+        _refresh_source=not source_fresh,
+        _max_cache_bytes=max_cache_bytes,
+    )
+    proxy._cache_status = cache_status
+    return proxy
+
+
+def _validate_c2_urlpath_options(kwargs: dict):
+    if kwargs.pop("dataset", None) is not None:
+        raise ValueError("dataset is not supported for Caterva2 inputs")
+    if kwargs.pop("refs", None) is not None:
+        raise ValueError("refs is not supported for Caterva2 inputs")
+    source_format = kwargs.pop("source_format", None)
+    if source_format not in {None, "blosc2", "zarr", "hdf5"}:
+        raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
+    if source_format is not None:
+        raise ValueError("source_format is not supported for Caterva2 URLPath inputs")
+
+
+def _open_non_lazy_c2(
+    urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
+):
+    if immutable_present:
+        raise NotImplementedError("assume_immutable requires lazy=True")
+    if remote_array_options is not None:
+        raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
+    if cache_dir is not None or cache_path is not None:
+        raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
+    if max_concurrency is not None:
+        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+    return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+
+
+def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
+    """Open a Caterva2 array directly, or through the same lazy cache API as fsspec."""
+    if mode != "r":
+        raise NotImplementedError(f"Caterva2 arrays can only be opened with mode='r', not {mode!r}")
+    if offset != 0:
+        raise NotImplementedError("offset is not supported for Caterva2 arrays")
+
+    cache_dir, cache_path = _remote_cache_options(kwargs)
+    max_concurrency = kwargs.pop("max_concurrency", None)
+    immutable_present = "assume_immutable" in kwargs
+    assume_immutable = kwargs.pop("assume_immutable", True)
+    _validate_c2_urlpath_options(kwargs)
+    lazy = kwargs.pop("lazy", False)
+    remote_array_options = _remote_array_options(
+        kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, assume_immutable=assume_immutable
+    )
+    requested = [key for key, value in kwargs.items() if value is not None]
+    if requested:
+        raise NotImplementedError(f"{', '.join(requested)} is not supported for Caterva2 arrays")
+
+    if not lazy:
+        return _open_non_lazy_c2(
+            urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
+        )
+
+    if remote_array_options is not None:
+        return blosc2.RemoteArray(urlpath, **remote_array_options)
+
+    src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+    if max_concurrency is not None:
+        src.max_concurrency = max_concurrency
+    identity = f"caterva2:{blosc2.c2array._server_url(src.urlbase, src.path)}"
+    # C2Array's constructor has just read api/info.  That response supplies both
+    # the geometry and the stamp against which the cache is checked, so asking
+    # for it again in Proxy.__init__ only adds a second serial round trip.
+    return _lazy_remote_array(src, identity, cache_dir, cache_path, source_fresh=True)
 
 
 def _cache_stamp(path: str):
@@ -2014,12 +2257,49 @@ def _cache_stamp(path: str):
     return getattr(cache, "schunk", cache).vlmeta.get("proxy-stamp")
 
 
+def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):
+    if dataset is not None and not lazy:
+        raise ValueError("dataset requires lazy=True")
+    _validate_fsspec_source_format(source_format, lazy)
+    if dataset is not None and source_format not in {None, "hdf5", "zarr", "b2z"}:
+        raise ValueError("dataset is only supported for HDF5 and Zarr sources or B2Z archives")
+    parsed = urlsplit(urlpath)
+    url_path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    if not lazy and any(part.endswith((".h5", ".hdf5")) for part in url_path_str.split("/")):
+        raise ValueError("HDF5 sources require lazy=True")
+
+
+def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency):
+    if immutable_present:
+        raise NotImplementedError("assume_immutable requires lazy=True")
+    if remote_array_options is not None:
+        raise NotImplementedError("cache_policy and max_cache_bytes require lazy=True")
+    if cache_path is not None:
+        raise NotImplementedError("cache_path is only supported with lazy=True")
+    if max_concurrency is not None:
+        # Nothing is fetched chunk by chunk here, so there is nothing to overlap
+        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+
+
+def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, refs):
+    """Dispatch an already-localized fsspec container with its original selection."""
+    if source_format == "b2z":
+        # The localized archive is a plain local TreeStore now, and an
+        # explicit B2Z selection must not be guessed back from its name.
+        from blosc2.tree_store import TreeStore
+
+        return _open_treestore_root_object(TreeStore(localized, mode=mode), localized, mode)
+    if dataset is not None or refs is not None:
+        raise NotImplementedError("dataset and refs are only supported with lazy=True")
+    return open(localized, mode, offset, **kwargs)
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
-    Without `cache_storage`, the whole object is fetched in one go and rebuilt in
+    Without `cache_dir`, the whole object is fetched in one go and rebuilt in
     memory, which is the right thing for a one-shot read of a small container but
-    only works for single-file ones.  With `cache_storage`, the container is
+    only works for single-file ones.  With `cache_dir`, the container is
     materialized under that directory and opened as an ordinary local path, so
     every format, `mmap_mode` and `offset` work.  With `lazy`, nothing is fetched
     up front and each slice pulls just the chunks it needs.
@@ -2027,42 +2307,146 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     if mode != "r":
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
 
-    cache_storage = kwargs.pop("cache_storage", None)
+    cache_dir, cache_path = _remote_cache_options(kwargs)
+    storage_options = kwargs.pop("storage_options", None)
+    source_format = kwargs.pop("source_format", None)
+    dataset = kwargs.pop("dataset", None)
+    refs = kwargs.pop("refs", None)
     max_concurrency = kwargs.pop("max_concurrency", None)
-    if kwargs.pop("lazy", False):
+    immutable_present = "assume_immutable" in kwargs
+    assume_immutable = kwargs.pop("assume_immutable", True)
+    lazy = kwargs.pop("lazy", False)
+
+    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
+    if dataset is None:
+        dataset = parsed_dataset
+    if source_format is None:
+        source_format = detected_format
+
+    _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
+    remote_array_options = _remote_array_options(
+        kwargs,
+        cache_dir,
+        cache_path,
+        max_concurrency,
+        lazy=lazy,
+        storage_options=storage_options,
+        source_format=source_format,
+        assume_immutable=assume_immutable,
+        dataset=dataset,
+        refs=refs,
+    )
+    if lazy:
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        return _lazy_fsspec_proxy(urlpath, cache_storage, max_concurrency)
+        if remote_array_options is not None:
+            return blosc2.RemoteArray(urlpath, **remote_array_options)
+        return _lazy_fsspec_proxy(
+            urlpath, cache_dir, cache_path, max_concurrency, storage_options=storage_options
+        )
 
-    if max_concurrency is not None:
-        # Nothing is fetched chunk by chunk here, so there is nothing to overlap
-        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+    _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
-    if cache_storage is not None:
-        return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
+    if cache_dir is not None:
+        localized = localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options)
+        return _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, refs)
+
+    if source_format == "b2z":
+        raise NotImplementedError(
+            "Remote B2Z containers require b2view for browsing, lazy=True with a dataset for arrays, "
+            "or cache_dir= for explicit localization"
+        )
 
     if offset != 0:
-        raise NotImplementedError("offset on an fsspec URL requires passing cache_storage=")
+        raise NotImplementedError("offset on an fsspec URL requires passing cache_dir=")
     # Unset options (dparams=None and friends) are not a request for anything
     requested = [k for k, v in kwargs.items() if v is not None]
     if requested:
-        raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_storage=")
+        raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_dir=")
     if urlpath.split("?", 1)[0].split("#", 1)[0].endswith(".b2d"):
         raise NotImplementedError(
             "directory containers (.b2d, sparse frames) on an fsspec URL require "
-            "passing cache_storage= to fetch them locally first"
+            "passing cache_dir= to fetch them locally first"
         )
-    with fsspec_open(urlpath, "rb") as f:
+    with fsspec_open(urlpath, "rb", storage_options=storage_options) as f:
         return blosc2.from_cframe(f.read())
+
+
+def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
+    if kwargs.get("source_format") == "hdf5" or "refs" in kwargs:
+        return True
+    if not isinstance(urlpath, str):
+        return False
+    _, _, hint = parse_container_url(urlpath, kwargs.get("dataset"))
+    return hint == "hdf5"
+
+
+def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
+    if os.path.isfile(urlpath) and urlpath.endswith((".b2nd", ".b2frame")) and "dataset" not in kwargs:
+        return False
+    if kwargs.get("source_format") in {"hdf5", "zarr"} or "refs" in kwargs:
+        return True
+    if not isinstance(urlpath, str):
+        return False
+    _, parsed_dataset, hint = parse_container_url(urlpath, kwargs.get("dataset"))
+    if hint == "hdf5":
+        return True
+    return (hint in {"zarr", "b2z"} or kwargs.get("source_format") == "b2z") and (
+        kwargs.get("lazy") or parsed_dataset is not None or "dataset" in kwargs
+    )
+
+
+def _try_open_special_store(urlpath: str, mode: str, offset: int, kwargs: dict):
+    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        special = _finalize_special_open(special, urlpath, mode)
+        if special is not None:
+            return special
+    return None
+
+
+def _try_open_aliased_store(urlpath: str, mode: str, offset: int, kwargs: dict):
+    resolved_urlpath = _resolve_store_alias(urlpath)
+    special_path = (
+        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    )
+    special = _open_special_store(special_path, mode, offset, **kwargs)
+    special = _finalize_special_open(special, special_path, mode)
+    return special, special_path
+
+
+def _normalize_open_target(urlpath, kwargs, dataset, refs):
+    if dataset is not None:
+        kwargs["dataset"] = dataset
+    if refs is not None:
+        kwargs["refs"] = refs
+    if isinstance(urlpath, pathlib.PurePath):
+        urlpath = str(urlpath)
+    urlpath = normalize_urlpath(urlpath)
+    if isinstance(urlpath, str) and os.path.isfile(urlpath) and urlpath.endswith((".b2nd", ".b2frame")):
+        return urlpath
+    if isinstance(urlpath, str):
+        urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, kwargs.get("dataset"))
+        if parsed_dataset is not None:
+            kwargs["dataset"] = parsed_dataset
+        if (
+            detected_format is not None
+            and kwargs.get("source_format") is None
+            and (detected_format != "b2z" or kwargs.get("lazy") or parsed_dataset is not None)
+        ):
+            kwargs["source_format"] = detected_format
+    return urlpath
 
 
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
     offset: int = 0,
+    dataset: str | None = None,
+    refs: dict | str | os.PathLike | None = None,
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2070,6 +2454,7 @@ def open(
     | blosc2.BatchArray
     | blosc2.ObjectArray
     | blosc2.C2Array
+    | blosc2.RemoteArray
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -2077,7 +2462,8 @@ def open(
     | blosc2.EmbedStore
 ):
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
-    a :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`.
+    :ref:`RemoteArray`, :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or
+    :ref:`TreeStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
 
@@ -2085,8 +2471,10 @@ def open(
     ----------
     urlpath: str | pathlib.Path | :ref:`URLPath`
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
-        is stored. If it is a remote Caterva2 array, a :ref:`URLPath` must be passed:
-        a server names its datasets by root and path rather than by URL.
+        is stored. :ref:`URLPath` is exclusively a Caterva2 dataset reference,
+        including when its ``urlbase`` is omitted and inherited from
+        :func:`c2context`; a server names its datasets by root and path rather
+        than by URL.
         Any URL with a scheme (``s3://``, ``gs://``, ``https://``, ``zip://``,
         ``memory://``...) is opened through fsspec; see the `Notes` section for
         the limits.
@@ -2098,8 +2486,9 @@ def open(
 
         Open modes also define the allowed persistence side effects:
 
-        - ``'r'`` never writes to the persistent object or any sidecar/cache file.
-          Query acceleration and other execution caches remain process-local only.
+        - ``'r'`` never writes to the persistent object. It writes a local cache
+          only when ``cache_dir`` or ``cache_path`` explicitly requests one; query acceleration
+          and other implicit execution caches remain process-local only.
         - ``'a'`` and ``'w'`` may persist explicit user-visible changes such as data,
           metadata, and index maintenance, but execution caches and query memoization
           still remain process-local only.
@@ -2108,15 +2497,13 @@ def open(
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
         lazy: bool, optional
-            Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
-            where it is and reads what a slice touches, in range requests,
-            instead of transferring the whole thing. Contiguous frames holding an
-            :ref:`NDArray` only. A slice landing in a small part of a large chunk
-            costs only the *blocks* it touches, which for the partitions
-            :func:`blosc2.asarray` picks by default can be a hundredth of the
-            chunk; chunks small enough to be one cheap request are still fetched
-            whole. What arrives is kept in memory, or in ``cache_storage`` when
-            that is given as well.
+            For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
+            the remote dataset and read the byte ranges a slice touches. Neither form opens
+            a whole remote store hierarchy. A slice landing in a small part of a large
+            chunk costs only the *blocks* it touches when ranges are available;
+            chunks small enough to be one cheap request are still fetched whole.
+            What arrives is kept in memory (defaulting to :attr:`CachePolicy.MEMORY`),
+            under ``cache_dir``, or at the exact ``cache_path`` (as :attr:`CachePolicy.DISK`).
         max_concurrency: int, optional
             Only with ``lazy``: how many fetches to run at once, in a thread
             pool. A slice against an object store is almost entirely round-trip
@@ -2124,13 +2511,30 @@ def open(
             bearable. Defaults to 8; pass 1 for a protocol with no latency to
             hide, where the pool costs about 10 microseconds per chunk and saves
             nothing.
+        cache_dir: str | pathlib.Path, optional
+            For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's
+            local copy — either the whole thing, or just the chunks and blocks ``lazy`` has fetched so far
+            (as a persistent :ref:`RemoteArray` with :attr:`CachePolicy.DISK`). Either way a later run
+            starts from what is already there, and the copy is discarded when the remote no longer matches
+            it. There is no default on purpose, so nothing writes to a disk you did not name.
+        cache_path: str | pathlib.Path, optional
+            With ``lazy=True``, the exact file to use for the remote array's
+            persistent :ref:`RemoteArray` cache (:attr:`CachePolicy.DISK`). Mutually exclusive with
+            ``cache_dir``.
         cache_storage: str | pathlib.Path, optional
-            Only for fsspec URLs: a directory holding this container's local
-            copy — the whole thing, or just the chunks and blocks ``lazy`` has
-            fetched so far. Either way a later run starts from what is already
-            there, and the copy is discarded when the remote no longer matches
-            it. There is no default on purpose, so nothing writes to a disk you
-            did not name.
+            Deprecated alias for ``cache_dir``. Mutually exclusive with
+            ``cache_dir`` and ``cache_path``.
+        cache_policy: CachePolicy, optional
+            With ``lazy=True`` on a remote source, return a :ref:`RemoteArray`
+            using the requested retention policy (``NONE``, ``MEMORY``, or ``DISK``).
+            When omitted, passing ``cache_dir`` or ``cache_path`` defaults to
+            ``CachePolicy.DISK``, while omitting them defaults to ``CachePolicy.MEMORY``.
+        max_cache_bytes: int or None, optional
+            With ``lazy=True``, bound retained compressed cache payload for a
+            :ref:`RemoteArray` after each operation. Defaults to 256 MiB for both
+            ``DISK`` and ``MEMORY``. Passing ``None`` with ``DISK`` disables cache
+            eviction (unbounded cache). This does not bound the current operation's
+            working set or result.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2154,10 +2558,29 @@ def open(
         dparams: dict
             A dictionary with the decompression parameters, which are the same that can
             be used in the :func:`~blosc2.decompress2` function.
+        storage_options: dict, optional
+            Parameters passed to the underlying ``fsspec`` filesystem when opening
+            an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
+        dataset: str, optional
+            Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
+            B2Z supports external NDArray leaves in immutable archives.
+            Requires ``lazy=True``.
+        refs: dict | str | PathLike, optional
+            Pre-computed kerchunk reference dictionary or path to a JSON reference
+            file for HDF5 sources.
+        source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
+            Format of a lazy remote source. A ``.zarr`` URL path component selects
+            Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
+            a ``.b2z`` path selects B2Z automatically. An explicit value supports
+            suffix-free array paths.
+        assume_immutable: bool, optional
+            With ``lazy=True``, skip remote identity checks before reads. Defaults
+            to ``True``; set to ``False`` when the remote object may be replaced.
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`RemoteArray`,
+        :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
         The object found in the path.
 
     Notes
@@ -2165,34 +2588,45 @@ def open(
     * Returned objects can be used as context managers for API consistency.
       For objects with an explicit ``close()`` implementation, exiting the
       context will close/flush them; for logical handles such as regular
-      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, :class:`Proxy`, and
-      :class:`LazyArray`, exiting the context is currently a no-op.
+      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, standalone :class:`RemoteArray`,
+      :class:`Proxy`, and :class:`LazyArray`, exiting the context is currently a
+      no-op.
+      Store-derived :class:`RemoteArray` handles release their shared source
+      ownership when closed; other handles from that store remain usable.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
-      must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+      must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
+      returns a :ref:`C2Array`. With ``lazy=True``, it returns a :ref:`RemoteArray`
+      (defaulting to ``CachePolicy.DISK`` when ``cache_dir`` or ``cache_path`` is
+      provided, and ``CachePolicy.MEMORY`` otherwise).
+      Authenticated users sharing a machine must use separate caches.
 
     * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
       the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
-      by name when it is missing; credentials are configured there, not here.
+      by name when it is missing. Driver and protocol parameters (credentials,
+      endpoint URL, region, etc.) can be passed directly via ``storage_options``.
       ``mode != 'r'`` always raises, as object stores have no rename and no locks.
       A plain URL read rebuilds the object from a cframe held in memory, so it
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
-      archive rather than a cframe, and needs ``cache_storage`` like the
-      directory formats do.  ``cache_storage`` and ``lazy`` above lift that, each
-      in its own way.
+      archive rather than a cframe, and needs ``cache_dir`` like the directory
+      formats do. With ``lazy=True`` and a dataset path, a B2Z archive serves
+      its selected external NDArray by byte range. Lazy opening returns a :ref:`RemoteArray` (using
+      ``CachePolicy.DISK`` with ``cache_dir`` or ``cache_path``, and
+      ``CachePolicy.MEMORY`` otherwise).
 
-    * Persistent data handling follows a strict no-hidden-writes rule:
+    * Persistent data handling follows a no-hidden-writes rule except for an
+      explicitly self-caching :ref:`RemoteArray`:
 
       - ``mode='r'`` is observational only and never mutates the opened object.
-      - ``mode='a'`` / ``mode='w'`` only persist explicit mutations requested by the
-        caller; runtime caches are not serialized back to disk.
+      - ``mode='a'`` permits a ``DISK`` RemoteArray to retain remote chunks in
+        its own carrier. Other execution caches are not serialized implicitly.
+      - ``mode='w'`` persists explicit mutations requested by the caller.
 
-    * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
-      this function will only return a :ref:`Proxy` if its source is a local
-      :ref:`SChunk`, :ref:`NDArray` or a remote :ref:`C2Array`. Otherwise,
-      it will return the Python-Blosc2 container used to cache the data which
-      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data
-      initialized (e.g. if the user has not accessed to it yet).
+    * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`
+      or a :ref:`RemoteArray`, this function reconstructs sources backed by a
+      persistent local :ref:`SChunk` or :ref:`NDArray`, an fsspec URL, or a remote
+      :ref:`C2Array`. Custom proxy sources must be recreated explicitly because
+      their Python class and runtime state are not stored in the cache.
 
     * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
@@ -2234,27 +2668,23 @@ def open(
     True
     """
     if isinstance(urlpath, blosc2.URLPath):
-        if mode != "r" or offset != 0 or kwargs != {}:
-            raise NotImplementedError(
-                "Cannot open a C2Array with mode != 'r', or offset != 0 or some kwargs"
-            )
-        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+        return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 
-    if isinstance(urlpath, pathlib.PurePath):
-        urlpath = str(urlpath)
-    urlpath = normalize_urlpath(urlpath)
+    urlpath = _normalize_open_target(urlpath, kwargs, dataset, refs)
 
-    if is_fsspec_url(urlpath):
+    if is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)
+
+    if "storage_options" in kwargs and kwargs["storage_options"] is not None:
+        raise ValueError("storage_options is only supported for fsspec URLs")
+    kwargs.pop("storage_options", None)
 
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the
     # more expensive store probing when that fails.
-    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
-        special = _open_special_store(urlpath, mode, offset, **kwargs)
-        special = _finalize_special_open(special, urlpath, mode)
-        if special is not None:
-            return special
+    special = _try_open_special_store(urlpath, mode, offset, kwargs)
+    if special is not None:
+        return special
 
     regular_exc = None
     if os.path.exists(urlpath):
@@ -2266,12 +2696,7 @@ def open(
         else:
             return process_opened_object(res)
 
-    resolved_urlpath = _resolve_store_alias(urlpath)
-    special_path = (
-        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
-    )
-    special = _open_special_store(special_path, mode, offset, **kwargs)
-    special = _finalize_special_open(special, special_path, mode)
+    special, special_path = _try_open_aliased_store(urlpath, mode, offset, kwargs)
     if special is not None:
         return special
 

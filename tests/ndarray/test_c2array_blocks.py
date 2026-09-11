@@ -20,6 +20,7 @@ import json
 import math
 import os
 import pathlib
+import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,8 +32,13 @@ import blosc2
 
 # The stand-in server binds a real socket, and Pyodide has no listen(2):
 # node asks for the `ws` module that is not there, and takes the runtime down
-# with it rather than raising
-pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+# with it rather than raising.  Windows serves the same stand-in badly -- a
+# client abort (WinError 10053) can leave an in-process server wedging the
+# xdist worker -- and serving HTTP from Windows is not what this suite covers.
+pytestmark = pytest.mark.skipif(
+    blosc2.IS_WASM or sys.platform == "win32",
+    reason="in-process HTTP servers not supported on wasm32 or Windows",
+)
 
 
 class _Cat2Server:
@@ -322,6 +328,120 @@ def _incompressible(shape, seed=0):
 
 def _bytes(srv, endpoint):
     return sum(n for kind, _, n in srv.log if kind == endpoint)
+
+
+def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+
+    srv.log.clear()
+    proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3)
+
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert isinstance(proxy, blosc2.RemoteArray)
+    assert proxy.cache_policy is blosc2.CachePolicy.MEMORY
+    assert isinstance(proxy.src, blosc2.C2Array)
+    assert proxy.src.max_concurrency == 3
+    assert proxy.cache_path is None
+
+    result = proxy[0:5, 0:10]
+    served = len(srv.log)
+    assert np.array_equal(result, data[0:5, 0:10])
+    assert np.array_equal(proxy[0:5, 0:10], result)
+    assert [endpoint for endpoint, _, _ in srv.log[served:]] == []
+
+
+def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+    cache_dir = tmp_path / "cache"
+
+    srv.log.clear()
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    assert isinstance(proxy, blosc2.RemoteArray)
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    del proxy
+
+    srv.log.clear()
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    assert isinstance(proxy, blosc2.RemoteArray)
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert len(list(cache_dir.glob("*.b2nd"))) == 1
+
+
+def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+    cache_path = tmp_path / "chosen.b2nd"
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path)
+    assert isinstance(proxy, blosc2.RemoteArray)
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    assert proxy.cache_path == str(cache_path)
+    assert proxy.source["kind"] == "caterva2"
+    del proxy
+
+    srv.log.clear()
+    proxy = blosc2.open(cache_path, mode="a")
+    assert isinstance(proxy, blosc2.RemoteArray)
+    assert isinstance(proxy.src, blosc2.C2Array)
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
+    assert np.array_equal(proxy[100:105, 0:10], data[100:105, 0:10])
+    assert any(endpoint != "info" for endpoint, _, _ in srv.log)
+
+
+def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, server):
+    token = "session=secret"
+    data = _incompressible((20, 20))
+    array, _ = server(data, chunks=(10, 20), blocks=(5, 10), cookie=token)
+    urlpath = blosc2.URLPath(array.path)
+    cache_dir = tmp_path / "cache"
+
+    with blosc2.c2context(urlbase=array.urlbase, auth_token=token):
+        proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+        assert np.array_equal(proxy[0:5, 0:5], data[0:5, 0:5])
+        assert proxy.source["kind"] == "caterva2"
+        assert "auth_token" not in proxy.source
+
+        cache = next(cache_dir.glob("*.b2nd"))
+        reopened = blosc2.open(cache, mode="a")
+        assert np.array_equal(reopened[0:5, 0:5], data[0:5, 0:5])
+
+
+def test_open_urlpath_lazy_rebuilds_stale_cache(tmp_path, server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+    cache_dir = tmp_path / "cache"
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
+    del proxy
+
+    other = _incompressible((200, 200), seed=1)
+    _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
+
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    assert np.array_equal(proxy[0:5, 0:10], other[0:5, 0:10])
+
+
+def test_open_urlpath_cache_options_need_lazy(tmp_path, server):
+    data = _incompressible((20, 20))
+    array, _ = server(data, chunks=(10, 20), blocks=(5, 10))
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
+
+    assert isinstance(blosc2.open(urlpath), blosc2.C2Array)
+    with pytest.raises(NotImplementedError, match=r"cache_dir.*lazy=True"):
+        blosc2.open(urlpath, cache_dir=tmp_path)
+    with pytest.raises(NotImplementedError, match=r"max_concurrency.*lazy=True"):
+        blosc2.open(urlpath, max_concurrency=2)
 
 
 def test_blocks_are_read_over_ranges(server, any_chunk_wants_blocks):
@@ -846,14 +966,16 @@ def test_traffic_counts_what_crossed_the_wire(server, any_chunk_wants_blocks):
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     assert p.traffic is array.traffic  # the array's tally, not a second one
+    info_requests = sum(kind == "info" for kind, _, _ in srv.log)
+    assert p.traffic.requests == info_requests
+    assert p.traffic.nbytes == _bytes(srv, "info")
 
     p.traffic.reset()
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     blocks = (p.traffic.requests, p.traffic.nbytes)
     assert blocks[0] > 0
     assert blocks[1] > 0
-    # What the server logged for the data endpoints is what was counted; the
-    # `api/info` that opened the handle is metadata and is deliberately not
+    # After the reset, what the server logged for the data endpoints is what was counted.
     served = [(kind, nbytes) for kind, _, nbytes in srv.log if kind != "info"]
     assert blocks[0] == len(served)
     assert blocks[1] <= sum(nbytes for _, nbytes in served)

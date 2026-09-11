@@ -205,6 +205,10 @@ class TestCodec(unittest.TestCase):
         array = np.ctypeslib.as_ctypes(np_data)
 
         def leaks(operation, repeats=3):
+            # Fill reusable codec/Python allocator arenas before taking the RSS
+            # baseline. A real per-call leak keeps growing in the second batch.
+            for _ in range(repeats):
+                operation()
             gc.collect()
             used_mem_before = psutil.Process(os.getpid()).memory_info()[0]
             for _ in range(repeats):
@@ -218,15 +222,10 @@ class TestCodec(unittest.TestCase):
         def compress():
             blosc2.compress(array, typesize, clevel=1)
 
-        def decompress():
-            cx = blosc2.compress(array, typesize, clevel=1)
-            blosc2.decompress(cx)
+        compressed = blosc2.compress(array, typesize, clevel=1)
 
-        # Warm up the allocator: the first compress grows the heap arena by
-        # one output buffer (a one-time cost, not a leak).  The old test paid
-        # this implicitly while building its ~360MB input list; with the cheap
-        # numpy buffer we must prime it so the RSS baseline is stable.
-        decompress()
+        def decompress():
+            blosc2.decompress(compressed)
 
         assert not leaks(compress), "compress leaks memory"
         assert not leaks(decompress), "decompress leaks memory"

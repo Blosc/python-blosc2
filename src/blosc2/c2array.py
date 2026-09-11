@@ -264,9 +264,11 @@ def login(username, password, urlbase):
     return "=".join(list(resp.cookies.items())[0])
 
 
-def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
+def info(path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None):
     url = _server_url(urlbase, f"api/info/{path}")
     response = _xget(url, params, headers, auth_token)
+    if traffic is not None:
+        traffic.charge(len(response.content))
     json = response.json()
     return json if model is None else model(**json)
 
@@ -707,7 +709,15 @@ class C2Array(blosc2.Operand):
     thread-safe: they share one pooled HTTP client and hold no state of their own.
     """
 
-    def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
+    def __init__(
+        self,
+        path: str,
+        /,
+        urlbase: str | None = None,
+        auth_token: str | None = None,
+        *,
+        _traffic=None,
+    ):
         """Create an instance of a remote NDArray.
 
         Remote NDArrays can be accessed via HTTP from a Caterva2 server
@@ -767,24 +777,28 @@ class C2Array(blosc2.Operand):
         self._meta_lock = threading.Lock()
         # An index a `Proxy` handed over before the source existed; see _adopt_index
         self._pending_index = None
-        self.traffic = blosc2.proxy_source.Traffic()
+        self.traffic = _traffic if _traffic is not None else blosc2.proxy_source.Traffic()
         """Bytes and requests this handle has read off the server; see :ref:`Traffic`.
 
         Cumulative since the array was opened, counted at the transport, so the
-        frame index and the block offsets are in it as well as the data, and the
-        `api/info` call that opened this handle is not.  Whichever endpoint the
-        read used is in it too, and the block source built later is handed this
-        same tally, so one counter answers for the array however it is read.
+        opening `api/info` response, frame index, block offsets, and data are all
+        included. Whichever endpoint serves a read uses this same tally, so one
+        counter answers for the array however it is read.
 
         What a slice cost is the difference between two readings, or one reading
-        after :meth:`Traffic.reset`.  `examples/c2array-traffic.py` is a runnable
+        after :meth:`Traffic.reset`.  `examples/remote/c2array-traffic.py` is a runnable
         walkthrough; :attr:`Proxy.traffic` is the same counter seen through a
         proxy.
         """
 
         # Try to 'open' the remote path
         try:
-            self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
+            self.meta = info(
+                self.path,
+                self.urlbase,
+                auth_token=self.auth_token,
+                traffic=self.traffic,
+            )
         except _httpx().HTTPStatusError as err:
             # HTTPStatusError only (not the broader HTTPError, which also covers
             # connection-level failures): a 404 means "not found", a connection
@@ -1163,7 +1177,12 @@ class C2Array(blosc2.Operand):
         """
         with self._meta_lock:
             seen = self._meta_epoch
-        meta = info(self.path, self.urlbase, auth_token=self.auth_token)
+        meta = info(
+            self.path,
+            self.urlbase,
+            auth_token=self.auth_token,
+            traffic=self.traffic,
+        )
         with self._meta_lock:
             if self._meta_epoch != seen:
                 return
@@ -1194,7 +1213,7 @@ class C2Array(blosc2.Operand):
         vlmeta = self.meta.get("schunk", {}).get("vlmeta") or {}
         return vlmeta.get("fill_nonce") is not None and vlmeta.get("fill_state", "filling") != "filling"
 
-    def refresh_stamp(self) -> None:
+    def refresh_stamp(self, *, force: bool = False) -> None:
         """Look at the array again, so that :attr:`stamp` speaks for it now.
 
         `meta` is read when the handle is opened and, of itself, never again: a
@@ -1205,8 +1224,10 @@ class C2Array(blosc2.Operand):
 
         One `api/info`, and none at all for an array already known to be complete
         -- nothing can write to one of those, so nothing it reports can move.
+        ``force=True`` is for a durable reference whose path may have been
+        replaced with another object after this handle was opened.
         """
-        if self._meta_stale or not self._meta_complete:
+        if force or self._meta_stale or not self._meta_complete:
             self._reread_meta()
 
     # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a
@@ -1619,6 +1640,17 @@ class C2Array(blosc2.Operand):
         return self.meta["schunk"]["vlmeta"]
 
     @property
+    def attrs(self) -> dict:
+        """User attributes; changing this mapping does not update the server.
+
+        Uses the cached metadata, refreshing after writes as :attr:`vlmeta`
+        does. Older servers without public attributes fall back to ``vlmeta``.
+        """
+        self._refresh_meta()
+        attrs = self.meta.get("attrs")
+        return self.vlmeta if attrs is None else attrs
+
+    @property
     def info(self) -> InfoReporter:
         """
         Print information about this remote array.
@@ -1669,6 +1701,12 @@ class URLPath:
         """
         Create an instance of a remote data file (aka :ref:`C2Array <C2Array>`) urlpath.
         This is meant to be used in the :func:`blosc2.open` function.
+
+        Passing this object to :func:`blosc2.open` returns a :ref:`C2Array`. With
+        ``lazy=True`` it instead returns a :ref:`RemoteArray`, using an in-memory cache
+        by default or a persistent cache when ``cache_dir`` is provided. Passing
+        ``cache_policy`` explicitly selects the requested retention policy.
+        Authenticated users sharing a machine must use separate cache directories.
 
         The parameters are the same as for the :meth:`C2Array.__init__`.
 

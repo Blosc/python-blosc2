@@ -22,6 +22,7 @@ The following objects are serialized by value using
 - ``ObjectArray``
 - ``BatchArray``
 - ``EmbedStore``
+- ``RemoteArray``
 
 Structured objects
 ------------------
@@ -40,12 +41,14 @@ Currently implemented structured kinds are:
 
 - ``"ref"``
 - ``"c2array"``
+- ``"remote_array"``
+- ``"fsspec"``
 - ``"urlpath"``
 - ``"dictstore_key"``
 - ``"lazyexpr"``
 - ``"lazyudf"``
 
-The ``"urlpath"``, ``"dictstore_key"``, and ``"c2array"`` reference forms map
+The ``"urlpath"``, ``"dictstore_key"``, ``"c2array"``, and ``"fsspec"`` reference forms map
 directly onto the public :class:`blosc2.Ref` type.
 
 ``C2Array``
@@ -57,6 +60,16 @@ Remote arrays are serialized as lightweight references with:
 - ``urlbase``
 
 Authentication data is intentionally not serialized.
+
+``RemoteArray``
+---------------
+
+Remote proxies use a B2ND carrier containing a versioned Caterva2 or fsspec
+source descriptor, a ``"none"`` or ``"disk"`` cache policy, and the finite
+disk-cache limit. A disk-caching carrier may also contain fetched compressed
+chunks and its cache bookkeeping. Saving includes valid warm chunks by default;
+``include_cache=False`` produces a cold carrier. Local paths, live filesystem
+objects, and credentials are intentionally not serialized.
 
 Persistent local operands
 -------------------------
@@ -93,6 +106,7 @@ Only durable reference-style operands are supported:
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
+- ``RemoteArray`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Purely in-memory operands are intentionally rejected. This keeps msgpack
@@ -119,6 +133,7 @@ Supported operands are the same durable reference-style operands used for
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
+- ``RemoteArray`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
 Plain Python ``LazyUDF`` callables are intentionally not serialized by

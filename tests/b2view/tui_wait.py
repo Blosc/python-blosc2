@@ -24,15 +24,20 @@ piece worth having in one place, since the races are identical across them.
 
 from __future__ import annotations
 
-#: How many frames to pump before giving up.  Generous: the cost of a high
-#: bound is paid only when something is genuinely broken, while the cost of a
-#: low one is a flake on whichever runner happens to be slowest that day.
-MAX_FRAMES = 100
+import time
+
+#: How long to keep pumping frames before giving up.  Generous: the cost of a
+#: high bound is paid only when something is genuinely broken, while the cost
+#: of a low one is a flake on whichever runner happens to be slowest that day.
+#: Wall clock, not frames -- a frame count is the same race with a bigger
+#: constant when the runner is loaded.
+WAIT_SECONDS = 15.0
 
 
 async def wait_until(pilot, predicate, *, message="condition not met in time") -> None:
     """Pump the event loop until *predicate* holds, or fail."""
-    for _ in range(MAX_FRAMES):
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
         await pilot.pause()
         if predicate():
             return

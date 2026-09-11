@@ -31,6 +31,9 @@ Deselect the whole TUI suite with ``pytest -m "not tui"``.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
@@ -89,12 +92,12 @@ def store_path(tmp_path_factory) -> str:
 
 async def wait_for_table(pilot) -> None:
     """Wait until the data grid has a loaded, settled page."""
-    for _ in range(100):
-        await pilot.pause()
-        app = pilot.app
-        if app.table_page is not None and not app.loading_table_page:
-            return
-    raise AssertionError("data table never finished loading")
+    app = pilot.app
+    await wait_until(
+        pilot,
+        lambda: app.table_page is not None and not app.loading_table_page,
+        message="data table never finished loading",
+    )
 
 
 async def wait_for_dim_mode(pilot, expected: bool) -> None:
@@ -104,11 +107,11 @@ async def wait_for_dim_mode(pilot, expected: bool) -> None:
     later frame -- so asserting straight after the press is a race that a loaded
     CI runner loses.  Same shape as :func:`wait_for_table`, and the same reason.
     """
-    for _ in range(100):
-        await pilot.pause()
-        if pilot.app._dim_mode is expected:
-            return
-    raise AssertionError(f"dim mode never became {expected}")
+    await wait_until(
+        pilot,
+        lambda: pilot.app._dim_mode is expected,
+        message=f"dim mode never became {expected}",
+    )
 
 
 async def focus_data_table(pilot) -> DataTable:
@@ -144,6 +147,148 @@ def _assert_ctable_window_values(page, expected):
 # ── Tree and panel focus navigation ──────────────────────────────────────
 
 
+async def test_remote_array_startup(tmp_path):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    path = tmp_path / "remote.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/d0/d1/a2"] = data
+    fsspec.filesystem("memory").pipe_file("b2view-tui.b2z", path.read_bytes())
+    app = B2ViewApp("memory://b2view-tui.b2z/d0/d1/a2", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert isinstance(app.browser.store, blosc2.RemoteArray)
+        assert not app.query_one("#tree-pane").display
+        assert app._data_layout.shape == data.shape
+        page = app.table_page
+        for column in page["columns"]:
+            np.testing.assert_array_equal(
+                page["data"][column], data[0, page["start"] : page["stop"], int(column)]
+            )
+        assert app.focused is app.query_one("#data-table", DataTable)
+
+
+async def test_remote_array_horizontal_paging_uncapped(tmp_path):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    path = tmp_path / "remote_paging.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/d0/d1/a2"] = data
+    fsspec.filesystem("memory").pipe_file("b2view-paging.b2z", path.read_bytes())
+    app = B2ViewApp("memory://b2view-paging.b2z/d0/d1/a2", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        await focus_data_table(pilot)
+        init_cols = len(app.table_page["columns"])
+
+        # Jump to end of row.  ``pilot.press`` returns before the app is
+        # guaranteed to have handled the key (see tui_wait), so poll for the
+        # jump itself instead of assuming the next page load watched it.
+        await pilot.press("end")
+        await wait_until(
+            pilot,
+            lambda: app.grid_col_start > 0,
+            message="End never jumped to the last column window",
+        )
+        await wait_for_table(pilot)
+        assert app.grid_col_start > 0
+
+        # Page left until beginning of row
+        while app.grid_col_start > 0:
+            app.page_grid_columns(-1)
+            await wait_for_table(pilot)
+
+        assert app.grid_col_start == 0
+        assert len(app.table_page["columns"]) == init_cols
+
+
+async def test_b2view_app_cache_dir_reused(tmp_path):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(4 * 60 * 80, dtype=np.int32).reshape(4, 60, 80)
+    b2z_file = tmp_path / "app_cached.b2z"
+    with blosc2.TreeStore(str(b2z_file), mode="w") as store:
+        store["/d0/d1/a2"] = data
+    fsspec.filesystem("memory").pipe_file("b2view-cached.b2z", b2z_file.read_bytes())
+    url = "memory://b2view-cached.b2z/d0/d1/a2"
+    cache_dir = str(tmp_path / "app_cache")
+
+    # Pass 1: cold load
+    app1 = B2ViewApp(url, start_panel="data", cache_dir=cache_dir)
+    async with app1.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert app1.table_page is not None
+        assert app1.table_page["columns"]
+        traffic1 = app1.browser.store.traffic.nbytes
+        assert traffic1 > 0
+
+    # A remote browser closes on its own thread, holding the cache-dir lock
+    # until it gets there; pass 2 must not race it for that lock.
+    closer = app1._browser_close_thread
+    if closer is not None:
+        closer.join(timeout=20)
+        assert not closer.is_alive(), "closing the first browser never finished"
+
+    # Pass 2: warm restart
+    app2 = B2ViewApp(url, start_panel="data", cache_dir=cache_dir)
+    async with app2.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert app2.table_page is not None
+        assert app2.table_page["columns"]
+        assert app2.browser.store.traffic.nbytes == 0
+
+
+async def test_zarr_startup_fresh_process(tmp_path):
+    zarr = pytest.importorskip("zarr")
+    pytest.importorskip("fsspec")
+    path = tmp_path / "array.zarr"
+    zarr.create_array(
+        path,
+        data=np.arange(100, dtype=np.int32),
+        chunks=(100,),
+        compressors=[zarr.codecs.BloscCodec()],
+        zarr_format=3,
+    )
+    # A fresh interpreter is essential: writing the fixture initializes the
+    # codec lock, masking failures when its first use is inside Textual.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import asyncio
+import sys
+from pathlib import Path
+import fsspec
+from blosc2.b2view.app import B2ViewApp
+
+async def main():
+    path = Path(sys.argv[1])
+    fs = fsspec.filesystem('memory')
+    for file in path.rglob('*'):
+        if file.is_file():
+            fs.pipe_file('/startup.zarr/' + file.relative_to(path).as_posix(), file.read_bytes())
+    app = B2ViewApp('memory://startup.zarr')
+    async with app.run_test(size=(120, 40)) as pilot:
+        for _ in range(300):
+            if app.table_page and app.table_page['columns']:
+                break
+            await asyncio.sleep(.02)
+        assert app.table_page and app.table_page['columns'], 'Zarr preview failed to load'
+        assert app.table_page['nrows'] == 100
+        values = next(iter(app.table_page['data'].values()))
+        assert list(values) == list(range(len(values)))
+
+asyncio.run(main())
+""",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 async def _wait_focus(pilot, expected_id: str) -> str | None:
     """Pause until the focused widget is *expected_id* (or give up)."""
     for _ in range(30):
@@ -151,6 +296,49 @@ async def _wait_focus(pilot, expected_id: str) -> str | None:
         if getattr(pilot.app.focused, "id", None) == expected_id:
             break
     return getattr(pilot.app.focused, "id", None)
+
+
+@pytest.mark.parametrize("kind", ["ndarray", "ctable"])
+async def test_standalone_panel_layout(tmp_path, kind):
+    path = str(tmp_path / ("array.b2nd" if kind == "ndarray" else "table.b2z"))
+    if kind == "ndarray":
+        blosc2.asarray(np.arange(100), urlpath=path)
+    else:
+
+        @dataclass
+        class Row:
+            x: int = 0
+
+        table = blosc2.CTable(Row, urlpath=path, mode="w")
+        table.extend({"x": np.arange(100)})
+        table.close()
+
+    app = B2ViewApp(path)
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert await _wait_focus(pilot, "data-table") == "data-table"
+        assert not app.query_one("#tree-pane").display
+        assert app.query_one("#right-pane").size.width == app.query_one("#main").size.width
+        for key, expected in [
+            ("tab", "meta-scroll"),
+            ("tab", "attrs-scroll"),
+            ("tab", "data-table"),
+            ("shift+tab", "attrs-scroll"),
+            ("shift+tab", "meta-scroll"),
+            ("shift+tab", "data-table"),
+        ]:
+            await pilot.press(key)
+            assert await _wait_focus(pilot, expected) == expected
+        await pilot.press("m")
+        await pilot.pause()
+        assert app.screen.maximized is app.query_one("#data-pane")
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.screen.maximized is None
+        assert not app.query_one("#tree-pane").display
+        await pilot.press("r")
+        await wait_for_table(pilot)
+        assert app.table_page["nrows"] == 100
 
 
 async def test_start_panel_focus_with_path(store_path):
@@ -167,7 +355,7 @@ async def test_start_panel_focus_with_path(store_path):
         assert await _wait_focus(pilot, "data-table") == "data-table"
 
     # Other panels still land where asked.
-    for panel, expected in [("meta", "meta-scroll"), ("tree", "tree")]:
+    for panel, expected in [("meta", "meta-scroll"), ("attrs", "attrs-scroll"), ("tree", "tree")]:
         app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel=panel)
         async with app.run_test(size=TERM_SIZE) as pilot:
             await wait_for_table(pilot)
@@ -180,9 +368,10 @@ async def test_tree_and_panel_focus(store_path):
     async with app.run_test(size=TERM_SIZE) as pilot:
         await pilot.pause()
         assert isinstance(app.focused, Tree)
+        assert app.query_one("#tree-pane").display
 
-        # Tab: tree -> meta -> vlmeta -> data and wraps back to the tree
-        for expected in ["meta-scroll", "vlmeta-scroll", "data-scroll", "tree"]:
+        # Tab: tree -> meta -> attrs -> data and wraps back to the tree
+        for expected in ["meta-scroll", "attrs-scroll", "data-scroll", "tree"]:
             await pilot.press("tab")
             assert await _wait_focus(pilot, expected) == expected
 
