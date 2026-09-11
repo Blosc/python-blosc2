@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.13.0 to 4.13.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.12.0 to 4.13.0
 
 This release turns Python-Blosc2's remote capabilities into a comprehensive,
