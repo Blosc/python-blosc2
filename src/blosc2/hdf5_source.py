@@ -15,6 +15,7 @@ import io
 import json
 import math
 import os
+import threading
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -22,6 +23,8 @@ import numpy as np
 import blosc2
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
 from blosc2.zarr_source import counting_store, zarr_chunk_to_blosc2
+
+_HDF5_SCAN_LOCK = threading.Lock()
 
 
 def check_hdf5_dependencies() -> None:
@@ -133,6 +136,30 @@ def check_zarr_fsspec_dependencies() -> None:
         ) from exc
 
 
+def _reset_zarr_sync_resources() -> None:
+    """Stop and detach Zarr's process-global synchronous event-loop resources."""
+    from zarr.core import sync
+
+    loop = sync.loop[0]
+    thread = sync.iothread[0]
+    executor = getattr(sync, "_executor", None)
+    sync.loop[0] = None
+    sync.iothread[0] = None
+    if hasattr(sync, "_executor"):
+        sync._executor = None
+    if loop is not None:
+        if loop.is_running():
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=0.2)
+        if not thread or not thread.is_alive():
+            with contextlib.suppress(RuntimeError):
+                loop.close()
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 class _CountingFile(io.IOBase):
     """Count h5py's read/readinto calls without fsspec read-ahead."""
 
@@ -175,19 +202,18 @@ def scan_hdf5_refs(urlpath, storage_options=None, *, unsupported=None, traffic=N
     # its event loop in another thread and waits with no timeout by default
     # (async.timeout is None).  A lost wake-up there hung CI for hours, on
     # every platform, inside this translation.  Bound it -- and if it fires,
-    # drop the loop the failed attempt may have wedged, so the retry gets a
-    # fresh one -- rather than wait forever on a library's private loop.
-    for attempt in range(2):
-        try:
-            with zarr.config.set({"async.timeout": 120}):
-                return _translate_hdf5(fs, path, urlpath, unsupported, traffic)
-        except TimeoutError:
-            if attempt:
-                raise
-            from zarr.core import sync as zarr_sync
-
-            zarr_sync.loop[0] = None
-            zarr_sync.iothread[0] = None
+    # reset the process-global loop before the first attempt and after a timeout
+    # so a previous failed translation cannot poison this one.
+    with _HDF5_SCAN_LOCK:
+        _reset_zarr_sync_resources()
+        for attempt in range(2):
+            try:
+                with zarr.config.set({"async.timeout": 120}):
+                    return _translate_hdf5(fs, path, urlpath, unsupported, traffic)
+            except TimeoutError:
+                if attempt:
+                    raise
+                _reset_zarr_sync_resources()
     raise TimeoutError("HDF5 translation timed out twice")  # pragma: no cover -- retry re-raises
 
 

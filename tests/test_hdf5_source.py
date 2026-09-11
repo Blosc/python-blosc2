@@ -40,6 +40,26 @@ def make_memory_h5(name: str = "test.h5", **datasets) -> str:
     return f"memory://{name}"
 
 
+def test_hdf5_scan_resets_zarr_resources_after_timeout(monkeypatch):
+    import blosc2.hdf5_source as hdf5_source
+
+    attempts = []
+    resets = []
+
+    def translate(*args):
+        attempts.append(None)
+        if len(attempts) == 1:
+            raise TimeoutError("wedged sync bridge")
+        return {"refs": {}}
+
+    monkeypatch.setattr(hdf5_source, "_translate_hdf5", translate)
+    monkeypatch.setattr(hdf5_source, "_reset_zarr_sync_resources", lambda: resets.append(None))
+
+    assert hdf5_source.scan_hdf5_refs("memory://unused.h5") == {"refs": {}}
+    assert len(attempts) == 2
+    assert len(resets) == 2
+
+
 # ---------------------------------------------------------------------------
 # Adapter tests (HDF5NDSource directly)
 # ---------------------------------------------------------------------------
