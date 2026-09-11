@@ -7,11 +7,11 @@ ZarrNDSource
 Zarr decodes each logical chunk and Blosc2 stores the converted compressed
 chunk in the surrounding :ref:`Proxy` or :ref:`RemoteArray` cache.
 
-The source is assumed immutable for the cache lifetime. It supports fixed-size
-boolean, integer, floating-point, and complex arrays. Scalar arrays, empty
-dimensions, strings, objects, structured dtypes, and ZIP stores are not
-supported. Concurrent reads temporarily hold decoded chunks and conversion
-buffers in addition to the compressed cache.
+The source is assumed immutable for the cache lifetime. It supports scalar and
+zero-length arrays, and fixed-size boolean, integer, floating-point, complex,
+structured, string, datetime, and timedelta dtypes. Variable-length strings,
+object dtypes, and ZIP stores are not supported. Concurrent reads temporarily
+hold decoded chunks and conversion buffers in addition to the compressed cache.
 
 Install local support with ``pip install "blosc2[zarr]"``. Remote stores also
 need ``blosc2[fsspec]`` and the protocol driver, such as ``s3fs``.
