@@ -161,8 +161,7 @@ initialization, after validation by `resolve()`:
 self.requested_cache_policy = payload["cache_policy"]
 self.requested_max_cache_bytes = payload["max_cache_bytes"]
 self.cache_policy = (
-    "none" if self.requested_cache_policy == "memory"
-    else self.requested_cache_policy
+    "none" if self.requested_cache_policy == "memory" else self.requested_cache_policy
 )
 self.max_cache_bytes = (
     self.requested_max_cache_bytes if self.cache_policy == "disk" else None
