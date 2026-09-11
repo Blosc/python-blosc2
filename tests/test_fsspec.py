@@ -1552,3 +1552,23 @@ def test_fsspec_ndsource_and_remote_array_storage_options():
 
     proxy = blosc2.RemoteArray("memory://so_source.b2nd", storage_options={})
     assert np.array_equal(proxy[:], a[:])
+
+
+def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
+    archive = tmp_path / "hierarchy.b2z"
+    with blosc2.TreeStore(archive, mode="w", threshold=0) as root:
+        root["/group/a"] = blosc2.arange(10, dtype="i4")
+    # A suffix-free URL relies entirely on source_format, which must survive
+    # localization instead of falling through to a name-based dispatcher.
+    url = "memory://nonlazy-b2z/data"
+    fsspec.filesystem("memory").pipe_file("nonlazy-b2z/data", archive.read_bytes())
+
+    store = blosc2.open(url, cache_dir=tmp_path / "cache", source_format="b2z")
+    assert isinstance(store, blosc2.TreeStore)
+    np.testing.assert_array_equal(store["/group/a"][:], np.arange(10, dtype="i4"))
+
+
+def test_non_lazy_cache_dir_rejects_refs(tmp_path):
+    fsspec.filesystem("memory").pipe_file("nonlazy-refs/data", b"whatever")
+    with pytest.raises(NotImplementedError, match="refs"):
+        blosc2.open("memory://nonlazy-refs/data", cache_dir=tmp_path / "cache", refs={"refs": {}})

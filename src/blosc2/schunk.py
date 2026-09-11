@@ -2279,6 +2279,19 @@ def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, c
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
 
 
+def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, refs):
+    """Dispatch an already-localized fsspec container with its original selection."""
+    if source_format == "b2z":
+        # The localized archive is a plain local TreeStore now, and an
+        # explicit B2Z selection must not be guessed back from its name.
+        from blosc2.tree_store import TreeStore
+
+        return _open_treestore_root_object(TreeStore(localized, mode=mode), localized, mode)
+    if dataset is not None or refs is not None:
+        raise NotImplementedError("dataset and refs are only supported with lazy=True")
+    return open(localized, mode, offset, **kwargs)
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2336,9 +2349,8 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
     if cache_dir is not None:
-        return open(
-            localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options), mode, offset, **kwargs
-        )
+        localized = localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options)
+        return _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, refs)
 
     if source_format == "b2z":
         raise NotImplementedError(
