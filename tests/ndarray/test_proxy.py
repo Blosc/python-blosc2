@@ -400,3 +400,13 @@ def test_the_proxy_module_still_answers_for_the_source_names():
     for name in ("ProxySource", "ProxyNDSource", "ByteRangeNDSource", "FsspecNDSource"):
         assert getattr(blosc2.proxy, name) is getattr(blosc2.proxy_source, name)
         assert getattr(blosc2, name) is getattr(blosc2.proxy_source, name)
+
+
+def test_caterva2_env_cache_reopens_as_raw_array(tmp_path):
+    data = np.arange(12).reshape(3, 4)
+    path = tmp_path / "server-cache.b2nd"
+    proxy = blosc2.Proxy(blosc2.asarray(data), urlpath=path, caterva2_env=True)
+    proxy.fetch()
+    reopened = blosc2.open(path)
+    assert isinstance(reopened, blosc2.NDArray)
+    np.testing.assert_array_equal(reopened[:], data)

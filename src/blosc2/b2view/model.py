@@ -329,8 +329,7 @@ class StoreBrowser:
                     store.close()
                     raise
             options["lazy"] = True
-            if max_cache_bytes is not None:
-                options["max_cache_bytes"] = max_cache_bytes
+            options["max_cache_bytes"] = 64 << 20 if max_cache_bytes is None else max_cache_bytes
             if cache_dir is not None:
                 options["cache_dir"] = cache_dir
         return blosc2.open(urlpath, mode="r", **options)

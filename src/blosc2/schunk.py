@@ -1956,7 +1956,9 @@ def _reconstruct_legacy_proxy(proxy_cache, proxy_src):
 def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
-        return _reconstruct_legacy_proxy(res, meta["proxy-source"])
+        proxy = _reconstruct_legacy_proxy(res, meta["proxy-source"])
+        if proxy is not None:
+            return proxy
 
     if "b2o" in meta:
         return blosc2.open_b2object(res)

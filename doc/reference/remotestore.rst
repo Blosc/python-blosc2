@@ -128,9 +128,11 @@ operations within a store serialize. All users of that directory must use the
 shared constructor. A process-local memory cache or the ordinary exclusive
 ``cache_dir`` constructor must not write to it.
 
-Manifests and generation pointers are published atomically. An interrupted
-operation causes the next owner to discard the disposable payload generation;
-remote sources are not contacted by offline trimming or manifest recovery.
+Manifests and generation pointers are published atomically. A process that dies
+during an operation causes the next owner to discard the disposable payload
+generation; remote sources are not contacted by offline trimming or manifest recovery.
+Ordinary exceptions, such as a missing key, leave existing handles usable when
+operation cleanup succeeds.
 Refresh publishes a new generation and makes child handles in other processes
 stale. Reopen a store handle after another process refreshes it.
 

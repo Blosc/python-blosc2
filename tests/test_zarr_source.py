@@ -137,6 +137,16 @@ def test_zarr_source_group_error(tmp_path, zarr):
         blosc2.ZarrNDSource(path)
 
 
+def test_memory_store_source_through_proxy(tmp_path, zarr):
+    store = zarr.storage.MemoryStore()
+    data = np.arange(10, dtype=np.int32)
+    zarr.create_array(store, data=data, chunks=(4,))
+    source = blosc2.ZarrNDSource(store)
+    np.testing.assert_array_equal(blosc2.Proxy(source)[:], data)
+    with pytest.raises(ValueError, match="path-backed"):
+        blosc2.Proxy(source, urlpath=tmp_path / "cache.b2nd")
+
+
 @pytest.mark.parametrize(
     ("url", "source_format"),
     [

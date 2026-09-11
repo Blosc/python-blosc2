@@ -125,7 +125,10 @@ class StoreDiskCache:
         return len(encoded)
 
     def payload_path(self, generation, key):
+        from blosc2.remote_store import RemoteDiscovery
+
         validate_generation(generation)
+        RemoteDiscovery._validate(key)
         b2d_path = self.path / f"{generation}.b2d"
         leaf_path = b2d_path / f"{key}.b2nd"
         leaf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,12 +257,16 @@ class SharedStoreOperation:
         try:
             if self.depth == 0:
                 try:
-                    if exc_type is None:
-                        owner = self.owner
-                        if not owner._closed:
-                            owner.cache_coordinator.enforce()
-                            owner.save_manifest()
-                        (owner.disk.path / "dirty").unlink(missing_ok=True)
+                    # A handled Python error (including a missing key) still
+                    # leaves a publishable snapshot. Per-leaf dirty markers
+                    # recover interrupted payload writes on the next operation.
+                    # Keep the store marker only if this finalization fails or
+                    # the process dies before completing it.
+                    owner = self.owner
+                    if not owner._closed:
+                        owner.cache_coordinator.enforce()
+                        owner.save_manifest()
+                    (owner.disk.path / "dirty").unlink(missing_ok=True)
                 finally:
                     self.guard.__exit__(exc_type, exc, tb)
         finally:

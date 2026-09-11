@@ -71,7 +71,7 @@ def _source_urlpath(src):
     return src.urlpath
 
 
-def _remote_array_metadata(src):
+def _remote_array_metadata(src, *, persistent=False):
     if isinstance(src, (blosc2.B2ZNDSource, blosc2.HDF5NDSource)):
         return {
             "source_kind": "b2z" if isinstance(src, blosc2.B2ZNDSource) else "hdf5",
@@ -80,7 +80,7 @@ def _remote_array_metadata(src):
         }
     return {
         "source_kind": "zarr" if isinstance(src, blosc2.ZarrNDSource) else "fsspec",
-        "urlpath": _source_urlpath(src),
+        "urlpath": _source_urlpath(src) if persistent else src.urlpath,
         # Preserve the legacy field for older readers of standalone sources.
         "local_abspath": src.urlpath,
     }
@@ -282,7 +282,7 @@ class Proxy(blosc2.Operand):
                 self.src,
                 (blosc2.FsspecNDSource, blosc2.ZarrNDSource, blosc2.B2ZNDSource, blosc2.HDF5NDSource),
             ):
-                meta_val.update(_remote_array_metadata(self.src))
+                meta_val.update(_remote_array_metadata(self.src, persistent=urlpath is not None))
             elif isinstance(self.src, blosc2.C2Array):
                 meta_val["source_kind"] = "caterva2"
                 # Authentication belongs to the reopening process, not to a

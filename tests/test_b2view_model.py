@@ -91,6 +91,7 @@ def test_store_browser_remote_array(tmp_path, suffix):
 
     with StoreBrowser("memory://b2view-array" + suffix) as browser:
         assert isinstance(browser.store, blosc2.RemoteArray)
+        assert browser.store.max_cache_bytes == 64 << 20
         assert browser.list_children("/") == []
         info = browser.get_info("/")
         assert info.kind == "ndarray"

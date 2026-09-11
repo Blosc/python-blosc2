@@ -437,8 +437,8 @@ class RemoteArray(blosc2.Operand):
     Parameters
     ----------
     urlpath: str, URLPath, or C2Array
-        A single-file B2ND URL opened through fsspec, or a Caterva2 array
-        reference.
+        A B2ND or Zarr array URL, an HDF5 or B2Z container URL with a
+        ``dataset`` selection, or a Caterva2 array reference.
     cache_policy: CachePolicy
         ``NONE`` retains no array data. ``MEMORY`` retains compressed chunks
         in client process memory. ``DISK`` retains compressed chunks in

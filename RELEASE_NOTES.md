@@ -2,7 +2,18 @@
 
 ## Changes from 4.12.0 to 4.13.0
 
-XXX version-specific blurb XXX
+This release adds portable remote array references, bounded caches, and remote
+hierarchy browsing for B2Z, Zarr, and HDF5 containers.
+
+* `blosc2.open(..., lazy=True)` now returns a `RemoteArray` with a bounded
+  memory cache by default. `CachePolicy.NONE` disables retention; `cache_dir`
+  or `cache_path` selects persistent disk caching. `cache_storage` is deprecated
+  in favor of `cache_dir`.
+* `RemoteStore` discovers remote hierarchies and shares a cache budget across
+  their arrays. Stores and arrays can export portable references with optional
+  cached data. `b2view` supports browsing these remote sources.
+* New `ZarrNDSource`, `HDF5NDSource`, and `B2ZNDSource` adapters read immutable
+  arrays on demand. The `b2nd-to-zarr` command converts local NDArrays to Zarr.
 
 * Use `.attrs` as the recommended interface for user-defined metadata. Arrays,
   containers and proxy sources now expose it as an alias for `.vlmeta`, preserving

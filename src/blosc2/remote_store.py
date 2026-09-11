@@ -128,6 +128,7 @@ class RemoteDiscovery:
                 self._open_hdf5()
             else:
                 self._open_zarr()
+            self._check_node_limit()
             if self.root not in self.nodes:
                 raise KeyError("Requested node does not exist in the container")
             self.is_tree = self.nodes[self.root][0] == "group"
@@ -174,6 +175,7 @@ class RemoteDiscovery:
             self._validate_refs()
         elif self.format == "zarr" and self.zstore is None:
             self._open_zarr()
+        self._check_node_limit()
 
     def _validate_refs(self):
         refs = self.refs.get("refs", self.refs)
@@ -238,14 +240,17 @@ class RemoteDiscovery:
         if path in self.nodes and kind != "group":
             raise ValueError("Leaf/group collision in remote container")
         self.nodes[path] = (kind, value)
-        if self.max_nodes is not None and len(self.nodes) > self.max_nodes:
-            raise ValueError("RemoteStore discovery exceeds the node limit")
         parent = path
         while parent:
             parent = parent.rpartition("/")[0]
             if parent in self.nodes and self.nodes[parent][0] != "group":
                 raise ValueError("Leaf/group collision in remote container")
             self.nodes.setdefault(parent, ("group", None))
+        self._check_node_limit()
+
+    def _check_node_limit(self):
+        if self.max_nodes is not None and len(self.nodes) > self.max_nodes:
+            raise ValueError("RemoteStore discovery exceeds the node limit")
 
     def _find_b2z_ctable_roots(self, members, embedded, registry):
         from blosc2.b2z_source import B2ZEmbeddedMetadata, member_vlmeta
@@ -491,10 +496,11 @@ class RemoteDiscovery:
             self.listed[full] = sorted(
                 key for key in self.nodes if key != full and key.rpartition("/")[0] == full
             )
+        self._check_node_limit()
         return self.listed[full].copy()
 
     def open_source(self, path):
-        full = self._path(path)
+        full = self.resolve(path)
         if full in self.sources:
             return self.sources[full]
         kind, value = self.nodes[full]

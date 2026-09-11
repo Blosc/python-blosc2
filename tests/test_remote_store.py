@@ -396,6 +396,29 @@ def test_sparse_store_reopen_reuses_payload(hierarchy, tmp_path):
                     assert store.traffic.requests == 0
 
 
+def test_sparse_store_imports_warm_artifact(hierarchy, tmp_path):
+    url, data = hierarchy
+    artifact = tmp_path / "seed.b2z"
+    with blosc2.RemoteStore(url) as store:
+        with store["group/a"] as array:
+            np.testing.assert_array_equal(array[:], data)
+        store.save(artifact)
+    with blosc2.RemoteStore.with_sparse_cache(url, tmp_path / "cache", carrier=artifact) as store:
+        with store["group/a"] as array:
+            store.traffic.reset()
+            np.testing.assert_array_equal(array[:], data)
+            assert store.traffic.requests == 0
+
+
+def test_sparse_store_missing_key_preserves_handles(hierarchy, tmp_path):
+    url, data = hierarchy
+    with blosc2.RemoteStore.with_sparse_cache(url, tmp_path / "cache") as store:
+        with store["group/a"] as array:
+            with pytest.raises(KeyError):
+                store["missing"]
+            np.testing.assert_array_equal(array[:], data)
+
+
 def _shared_fs():
     from fsspec.implementations.local import LocalFileSystem
 
@@ -642,6 +665,30 @@ def test_store_validation():
         blosc2.RemoteStore("memory://a.b2z", cache_policy="none")
     with pytest.raises(ValueError, match="user information"):
         blosc2.RemoteStore("https://user:password@example.com/a.b2z")
+
+
+def test_discovery_node_limit(hierarchy, tmp_path):
+    url, _ = hierarchy
+    with pytest.raises(ValueError, match="node limit"):
+        with blosc2.RemoteStore(url, _max_nodes=1) as store:
+            store.keys()  # Zarr discovers children lazily.
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "cache") as store:
+        store.keys()
+    with pytest.raises(ValueError, match="node limit"):
+        blosc2.RemoteStore(url, cache_dir=tmp_path / "cache", _max_nodes=1)
+
+
+@pytest.mark.parametrize("key", ["../escape", "/absolute", "group/../../escape", "group\\escape"])
+def test_cache_payload_path_rejects_unsafe_keys(tmp_path, key):
+    from blosc2.remote_store_cache import StoreDiskCache
+
+    cache = StoreDiskCache(tmp_path, {"urlpath": "https://example.com/data.b2z"})
+    try:
+        with pytest.raises(ValueError, match="Unsafe path"):
+            cache.payload_path("a" * 32, key)
+        assert not (cache.path / f"{'a' * 32}.b2d").exists()
+    finally:
+        cache.close()
 
 
 def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):

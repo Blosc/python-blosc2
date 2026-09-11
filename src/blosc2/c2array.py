@@ -786,7 +786,7 @@ class C2Array(blosc2.Operand):
         counter answers for the array however it is read.
 
         What a slice cost is the difference between two readings, or one reading
-        after :meth:`Traffic.reset`.  `examples/c2array-traffic.py` is a runnable
+        after :meth:`Traffic.reset`.  `examples/remote/c2array-traffic.py` is a runnable
         walkthrough; :attr:`Proxy.traffic` is the same counter seen through a
         proxy.
         """
@@ -1703,10 +1703,9 @@ class URLPath:
         This is meant to be used in the :func:`blosc2.open` function.
 
         Passing this object to :func:`blosc2.open` returns a :ref:`C2Array`. With
-        ``lazy=True`` it instead returns a :ref:`Proxy`, using an in-memory cache
+        ``lazy=True`` it instead returns a :ref:`RemoteArray`, using an in-memory cache
         by default or a persistent cache when ``cache_dir`` is provided. Passing
-        ``cache_policy`` explicitly selects a :ref:`RemoteArray` with the
-        requested retention policy.
+        ``cache_policy`` explicitly selects the requested retention policy.
         Authenticated users sharing a machine must use separate cache directories.
 
         The parameters are the same as for the :meth:`C2Array.__init__`.
