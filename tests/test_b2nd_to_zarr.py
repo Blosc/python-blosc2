@@ -64,6 +64,23 @@ def test_b2nd_to_zarr_custom_chunks_and_codec(tmp_path):
     np.testing.assert_array_equal(z[:], data)
 
 
+@pytest.mark.parametrize("codec", ["lz4", "gzip", "none"])
+def test_b2nd_to_zarr_v2_uses_numcodecs_compressor(tmp_path, codec):
+    src = tmp_path / f"v2-{codec}.b2nd"
+    dst = tmp_path / f"v2-{codec}.zarr"
+
+    data = np.arange(1200, dtype=np.int32).reshape(30, 40)
+    blosc2.asarray(data, chunks=(10, 10), urlpath=str(src), mode="w")
+
+    summary = b2nd_to_zarr(src, dst, codec=codec, zarr_format=2, full_verify=True)
+    z = zarr.open(store=str(dst), mode="r")
+    assert z.metadata.zarr_format == 2
+    compressor = z.metadata.compressor
+    expected_id = {"lz4": "blosc", "gzip": "gzip", "none": None}[codec]
+    assert (compressor is None and summary["codec"] is None) or compressor.get_config()["id"] == expected_id
+    np.testing.assert_array_equal(z[:], data)
+
+
 def test_b2nd_to_zarr_sharded(tmp_path):
     src = tmp_path / "sharded.b2nd"
     dst = tmp_path / "sharded.zarr"

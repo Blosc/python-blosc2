@@ -171,6 +171,7 @@ def determine_zarr_codec(
     clevel: int | None = None,
     shuffle_mode: str = "auto",
     blocksize: int | None = None,
+    zarr_format: int = 3,
 ) -> Any:
     """Determine the Zarr compressor codec to use based on Blosc2 cparams and user options."""
     if codec_name in ("none", "uncompressed"):
@@ -180,6 +181,10 @@ def determine_zarr_codec(
     actual_clevel = clevel if clevel is not None else getattr(cparams, "clevel", 5)
 
     if codec_name == "gzip":
+        if zarr_format == 2:
+            from numcodecs import GZip
+
+            return GZip(level=actual_clevel)
         from zarr.codecs import GzipCodec
 
         return GzipCodec(level=actual_clevel)
@@ -190,10 +195,28 @@ def determine_zarr_codec(
     elif cparams and getattr(cparams, "blocksize", 0) > 0:
         actual_blocksize = cparams.blocksize
 
+    cname = resolve_cname(arr, codec_name)
+    if zarr_format == 2:
+        # Zarr v2 stores a numcodecs compressor; zarr v3 codecs are rejected there.
+        from numcodecs import Blosc as NumcodecsBlosc
+
+        shuffle = {
+            "noshuffle": NumcodecsBlosc.NOSHUFFLE,
+            "shuffle": NumcodecsBlosc.SHUFFLE,
+            "bitshuffle": NumcodecsBlosc.BITSHUFFLE,
+        }[resolve_shuffle(arr, shuffle_mode)]
+        return NumcodecsBlosc(
+            cname=cname,
+            clevel=actual_clevel,
+            shuffle=shuffle,
+            blocksize=actual_blocksize,
+            typesize=arr.dtype.itemsize,
+        )
+
     from zarr.codecs import BloscCodec
 
     return BloscCodec(
-        cname=resolve_cname(arr, codec_name),
+        cname=cname,
         clevel=actual_clevel,
         shuffle=resolve_shuffle(arr, shuffle_mode),
         typesize=arr.dtype.itemsize,
@@ -435,7 +458,12 @@ def b2nd_to_zarr(
         raise ValueError("Sharding is only supported in Zarr format 3.")
 
     compressor = determine_zarr_codec(
-        arr, codec_name=codec, clevel=clevel, shuffle_mode=shuffle, blocksize=blocksize
+        arr,
+        codec_name=codec,
+        clevel=clevel,
+        shuffle_mode=shuffle,
+        blocksize=blocksize,
+        zarr_format=zarr_format,
     )
     copy_shape, batch_slices = _compute_batches(
         shape, target_chunks, target_shards, itemsize, buffer_size_mb
