@@ -225,6 +225,11 @@ def _translate_hdf5(fs, path, urlpath, unsupported, traffic):
             def isolated_node(name, obj):
                 try:
                     return translate_node(name, obj)
+                except TimeoutError:
+                    # Not this node's fault: zarr's sync bridge is wedged, and
+                    # swallowing it would just wedge again on the next call.
+                    # Let scan_hdf5_refs reset the loop and start over.
+                    raise
                 except Exception as exc:
                     unsupported[name] = f"{type(exc).__name__}: {exc}"
                     return None
