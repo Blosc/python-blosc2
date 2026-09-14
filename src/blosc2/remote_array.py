@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import math
 import os
 import threading
@@ -18,6 +19,7 @@ import weakref
 from collections.abc import Mapping
 from contextlib import nullcontext
 from functools import wraps
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
@@ -147,6 +149,14 @@ def _store_hdf5_refs(carrier, refs):
     except ImportError:
         import json as json_mod
     carrier.schunk.vlmeta["hdf5-refs"] = blosc2.compress(json_mod.dumps(refs).encode("utf-8"), typesize=1)
+
+
+def _publish_hdf5_refs(path, carrier, *, scanned):
+    if path is not None and (scanned or not path.exists()):
+        from blosc2.remote_store_cache import atomic_write
+
+        # Also seed the shared snapshot when reopening an older leaf cache.
+        atomic_write(path, carrier.schunk.vlmeta["hdf5-refs"])
 
 
 def _b2z_seed_from_carrier(carrier):
@@ -499,6 +509,8 @@ class RemoteArray(blosc2.Operand):
     cache_dir: str or path-like, optional
         Directory in which a source-derived persistent cache filename is made.
         Only valid with ``DISK``.
+        HDF5 leaves also share a container reference snapshot here, avoiding
+        repeated discovery scans when opening sibling datasets.
     max_cache_bytes: int or None, optional
         Post-operation compressed-payload bound. It defaults to 256 MiB for
         ``DISK`` and ``MEMORY``. Passing ``None`` with ``DISK`` disables cache
@@ -556,6 +568,19 @@ class RemoteArray(blosc2.Operand):
             urlpath, dataset, source_format
         )
         self._authorized_source = _source_descriptor is not None
+        shared_refs_path = None
+        if (
+            not self._authorized_source
+            and self._source_format == "hdf5"
+            and cache_policy is blosc2.CachePolicy.DISK
+            and cache_dir is not None
+            and refs is None
+        ):
+            shared_refs_path = Path(
+                blosc2.schunk.fsspec_cache_path(
+                    urlpath, cache_dir, ".hdf5-refs.b2", storage_options=storage_options
+                )
+            )
         if self._authorized_source:
             self.src, self._source = _validate_authorized_source(
                 urlpath, storage_options, _source_descriptor, store_attachment=_store_owner is not None
@@ -584,6 +609,10 @@ class RemoteArray(blosc2.Operand):
                             refs = _hdf5_refs_from_carrier(cached)
                         else:
                             seed = read_seed(cached)
+            if refs is None and shared_refs_path is not None:
+                # Disposable metadata: an absent or damaged snapshot needs a fresh scan.
+                with contextlib.suppress(OSError, ValueError, RuntimeError):
+                    refs = json.loads(blosc2.decompress(shared_refs_path.read_bytes()))
             self.src, self._source = self._open_source(
                 urlpath,
                 self._max_concurrency,
@@ -617,6 +646,8 @@ class RemoteArray(blosc2.Operand):
         self._mutable = False
 
         self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
+
+        _publish_hdf5_refs(shared_refs_path, self._carrier, scanned=refs is None)
 
         if self._carrier is not None:
             if self._cached_meta is None:

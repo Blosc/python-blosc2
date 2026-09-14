@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import json
 from pathlib import Path
 
 import numpy as np
@@ -364,6 +365,41 @@ def test_hdf5_disk_cache_reuses_refs(tmp_path, monkeypatch):
     assert second._cache_status == "reused"
     assert len(scans) == 1  # the cached kerchunk snapshot replaced the rescan
     np.testing.assert_array_equal(second[:10], data[:10])
+
+
+@pytest.mark.parametrize("snapshot", ["new", "legacy", "damaged"])
+def test_hdf5_disk_cache_shares_refs_between_leaves(tmp_path, monkeypatch, snapshot):
+    import blosc2.hdf5_source as hdf5_source
+
+    data = np.arange(40, dtype=np.int32)
+    url = make_memory_h5("sibling_refs.h5", a=(data, (10,)), b=(data + 1, (10,)))
+    scans = []
+    original = hdf5_source.scan_hdf5_refs
+
+    def counting_scan(*args, **kwargs):
+        scans.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(hdf5_source, "scan_hdf5_refs", counting_scan)
+    with blosc2.open(url + "::a", cache_dir=tmp_path) as first:
+        np.testing.assert_array_equal(first[:], data)
+    shared = next(tmp_path.rglob("*.hdf5-refs.b2"))
+    if snapshot == "legacy":
+        shared.unlink()
+        with blosc2.open(url + "::a", cache_dir=tmp_path):
+            pass
+        assert shared.exists()
+    elif snapshot == "damaged":
+        shared.write_bytes(b"broken")
+    with blosc2.open(url + "::b", cache_dir=tmp_path) as sibling:
+        np.testing.assert_array_equal(sibling[:], data + 1)
+    assert len(scans) == (2 if snapshot == "damaged" else 1)
+    assert "b/.zarray" in json.loads(blosc2.decompress(shared.read_bytes()))["refs"]
+
+    # Different access configurations must not share a container snapshot.
+    with blosc2.open(url + "::b", cache_dir=tmp_path, storage_options={"skip_instance_cache": True}):
+        pass
+    assert len(scans) == (3 if snapshot == "damaged" else 2)
 
 
 def test_hdf5_blosc2_filter_codec_decodes_super_chunk():
