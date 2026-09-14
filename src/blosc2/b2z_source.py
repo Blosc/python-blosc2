@@ -13,6 +13,11 @@ import zipfile
 from blosc2.core import _import_fsspec
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traffic
 
+# One request can carry a small member whole -- local header, frame header and the
+# trailing vlmeta -- sparing a round trip each against the object store.
+_WHOLE_MEMBER_PREFETCH_MAX = 64 * 1024
+_LOCAL_HEADER_HEADROOM = 4096
+
 
 class _ArchiveFile(io.RawIOBase):
     """Seekable view using the source's bounded opening buffers."""
@@ -93,7 +98,13 @@ class B2ZArchive:
         # Cover the local header and the native reader's 8 KiB frame prefix
         # together. Unusually long ZIP headers fall back to exact reads.
         if prefetch:
-            prefix = self._read_archive(info.header_offset, min(16384, size - info.header_offset))
+            if info.file_size <= _WHOLE_MEMBER_PREFETCH_MAX:
+                # Take the whole member so the frame's trailing vlmeta is here too.
+                want = info.file_size + _LOCAL_HEADER_HEADROOM
+            else:
+                # Cover the local header and the native reader's 8 KiB frame prefix.
+                want = 16384
+            prefix = self._read_archive(info.header_offset, min(want, size - info.header_offset))
             self._opening_ranges.append((info.header_offset, prefix))
         # zipfile validates the local signature, filename, and member overlap.
         # Opening does not read/decode member payloads.
@@ -142,6 +153,45 @@ class B2ZArchive:
         self._opening_ranges.clear()
 
 
+class _SeededArchive:
+    """Replay a cached B2Z bootstrap; initialize range access only on a read miss.
+
+    A warm DISK carrier already knows where the member is and holds its opening
+    frame prefix, so those bytes are served from memory. The filesystem is
+    initialized lazily for reads outside the prefix, without ZIP discovery.
+    """
+
+    def __init__(self, urlpath, *, storage_options, filesystem, traffic, prefix_start, prefix):
+        self.urlpath = urlpath
+        self.storage_options = storage_options or {}
+        self._filesystem = filesystem
+        self.traffic = traffic
+        self.prefix_start = prefix_start
+        self.prefix = prefix
+        self._opening_ranges = []
+        self.capture_metadata = False
+        self._fs = self._path = None
+
+    def _read_archive(self, offset, size):
+        if not size:
+            return b""
+        if self.prefix_start <= offset and offset + size <= self.prefix_start + len(self.prefix):
+            start = offset - self.prefix_start
+            return self.prefix[start : start + size]
+        if self._fs is None:
+            if self._filesystem is None:
+                fs, path = _import_fsspec(self.urlpath).url_to_fs(self.urlpath, **self.storage_options)
+            else:
+                fs = self._filesystem
+                path = fs._strip_protocol(self.urlpath)
+            self._path, self._fs = path, fs
+        data = self._fs.cat_file(self._path, start=offset, end=offset + size)
+        if len(data) > size:
+            raise ValueError("B2Z transport did not honor the requested byte range")
+        self.traffic.charge(len(data))
+        return data
+
+
 class B2ZNDSource(ByteRangeNDSource):
     """Read a stored external NDArray from an immutable B2Z archive via fsspec.
 
@@ -161,6 +211,7 @@ class B2ZNDSource(ByteRangeNDSource):
         _filesystem=None,
         _traffic=None,
         _archive=None,
+        _seed=None,
     ):
         if not isinstance(dataset, str) or not dataset.strip("/"):
             raise ValueError("B2Z sources require a dataset path (e.g. dataset='d0/a3')")
@@ -170,6 +221,11 @@ class B2ZNDSource(ByteRangeNDSource):
         ):
             raise ValueError("invalid B2Z dataset path")
         self.dataset = dataset
+        if _seed is not None:
+            if _archive is not None:
+                raise ValueError("a cached B2Z seed cannot be combined with an archive")
+            self._init_seeded(urlpath, max_concurrency, storage_options, _filesystem, _traffic, _seed)
+            return
         if _archive is not None and _archive.urlpath != urlpath:
             raise ValueError("B2Z source URL does not match its archive")
         archive = _archive or B2ZArchive(
@@ -191,10 +247,29 @@ class B2ZNDSource(ByteRangeNDSource):
             if len(matches) != 1:
                 raise ValueError("duplicate B2Z array member")
             self.member_offset, self.member_length = archive.member_window(matches[0], prefetch=True)
+            prefix_start, prefix = archive._opening_ranges[-1]
             from fsspec.utils import tokenize
 
             self.stamp = tokenize(urlpath, object_info, dataset, self.member_offset, self.member_length)
             super().__init__(urlpath, max_concurrency, traffic=self.traffic)
+            # The whole-member prefetch already holds the frame trailer, so decode
+            # the vlmeta now rather than leaving the carrier creation to fetch the
+            # very same bytes in a second round trip.
+            if self.has_vlmetalayers and any(
+                start <= self.member_offset and self.member_offset + self.member_length <= start + len(data)
+                for start, data in self._opening_ranges
+            ):
+                self._vlmeta = self._read_frame_vlmeta()
+            # Keep what a later reopen needs to rebuild this source without a
+            # remote ZIP bootstrap; see RemoteArray's DISK carrier.
+            self._seed = {
+                "version": 1,
+                "member_offset": self.member_offset,
+                "member_length": self.member_length,
+                "prefix_start": prefix_start,
+                "prefix": prefix,
+                "stamp": self.stamp,
+            }
             self._opening_ranges.clear()
             if b"b2o" in self._header[13][1]:
                 raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")
@@ -205,6 +280,32 @@ class B2ZNDSource(ByteRangeNDSource):
             archive._opening_ranges.clear()
             if _archive is None:
                 archive.close()
+
+    def _init_seeded(self, urlpath, max_concurrency, storage_options, filesystem, traffic, seed):
+        """Rebuild this source from a carrier's cached bootstrap, without network."""
+        self.member_offset = int(seed["member_offset"])
+        self.member_length = int(seed["member_length"])
+        self.stamp = str(seed["stamp"])
+        self.storage_options = storage_options or {}
+        self.traffic = traffic if traffic is not None else Traffic()
+        self._fs = self._path = None
+        self._archive = _SeededArchive(
+            urlpath,
+            storage_options=self.storage_options,
+            filesystem=filesystem,
+            traffic=self.traffic,
+            prefix_start=int(seed["prefix_start"]),
+            prefix=bytes(seed["prefix"]),
+        )
+        self._opening_ranges = self._archive._opening_ranges
+        # The frame header comes out of the cached prefix, so this reads nothing.
+        super().__init__(urlpath, max_concurrency, traffic=self.traffic)
+        self._opening_ranges.clear()
+        if b"b2o" in self._header[13][1]:
+            raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")
+        if not self._header_len <= self._header[2] <= self.member_length:
+            raise ValueError("Blosc2 frame exceeds B2Z member bounds")
+        self._seed = dict(seed)
 
     def _read_archive(self, offset, size):
         return self._archive._read_archive(offset, size)

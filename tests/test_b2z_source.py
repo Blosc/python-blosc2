@@ -64,6 +64,81 @@ def test_addressing_and_hits(address, monkeypatch):
     np.testing.assert_array_equal(arr[-3:, -4:], data[-3:, -4:])
 
 
+def test_small_member_prefetch_carries_vlmeta(monkeypatch):
+    data = np.random.default_rng(7).integers(0, 256, (200, 200), dtype="uint8")
+    array = blosc2.asarray(data)
+    array.vlmeta["greeting"] = "hello"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("d0/a.b2nd", array.to_cframe())
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("vlmeta_prefetch.b2z", buffer.getvalue())
+
+    reads = []
+    original = type(fs).cat_file
+
+    def counted(self, path, start=None, end=None, **kwargs):
+        reads.append((start, end))
+        return original(self, path, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(type(fs), "cat_file", counted)
+    arr = blosc2.open("memory://vlmeta_prefetch.b2z", dataset="d0/a", lazy=True)
+    # ZIP tail, then one whole-member request that also holds the frame trailer.
+    assert len(reads) == 2
+    assert dict(arr.vlmeta) == {"greeting": "hello"}
+    assert len(reads) == 2  # the trailer came in the opening request
+
+
+@pytest.mark.parametrize("reopen", ["url", "carrier", "cframe"])
+def test_disk_cache_reopen_replays_b2z_bootstrap(tmp_path, monkeypatch, reopen):
+    data = np.random.default_rng(3).integers(0, 256, (1000, 1000), dtype="uint8")
+    array = blosc2.asarray(data, chunks=(200, 250), blocks=(50, 50))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("d0/a.b2nd", array.to_cframe())
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("replay.b2z", buffer.getvalue())
+    url = "memory://replay.b2z"
+
+    reads = []
+    original = type(fs).cat_file
+
+    def counted(self, path, start=None, end=None, **kwargs):
+        reads.append((start, end))
+        return original(self, path, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(type(fs), "cat_file", counted)
+    first = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path)
+    first[:200, :250]
+    assert reads  # the cold open bootstrapped the ZIP
+
+    seed = first._carrier.schunk.vlmeta["b2z-frame"]
+    assert isinstance(seed, dict)
+    assert isinstance(seed["prefix"], bytes)
+
+    def no_discovery(*args, **kwargs):
+        pytest.fail("warm cache must not rediscover the archive")
+
+    monkeypatch.setattr(type(fs), "info", no_discovery)
+    reads.clear()
+    if reopen == "url":
+        second = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path)
+        assert second._cache_status == "reused"
+    elif reopen == "carrier":
+        second = blosc2.open(first.cache_path)
+    else:
+        second = blosc2.from_cframe(first.to_cframe())
+    assert not reads  # the cached bootstrap replaced the remote ZIP bootstrap
+    assert second.src._archive._fs is None
+    np.testing.assert_array_equal(second[:200, :250], data[:200, :250])
+    assert not reads  # the warm chunk needs no remote access either
+    np.testing.assert_array_equal(second[:], data)
+    assert reads
+    lo, hi = second.src.member_offset, second.src.member_offset + second.src.member_length
+    assert all(lo <= start < end <= hi for start, end in reads)
+    assert second.traffic.nbytes == sum(end - start for start, end in reads)
+
+
 @pytest.mark.parametrize("limit", [None, 1000, 300_000])
 def test_disk_persistence_and_eviction(tmp_path, limit):
     url, data = memory_archive()
@@ -243,6 +318,8 @@ def test_geometry_change_and_expression(tmp_path):
     expr = arr + 2
     expr.save(tmp_path / "expr.b2nd")
     np.testing.assert_array_equal(blosc2.open(tmp_path / "expr.b2nd")[:2], data[:2] + 2)
+    # Legacy carriers without a bootstrap still discover and validate remote geometry.
+    del arr._carrier.schunk.vlmeta["b2z-frame"]
     memory_archive(np.zeros((201, 1000), dtype="uint8"))
     with pytest.raises(ValueError, match="geometry"):
         blosc2.open(path)
