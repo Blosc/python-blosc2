@@ -451,3 +451,69 @@ def test_https_b2z_slice():
     before = arr.traffic.nbytes
     np.testing.assert_array_equal(arr[:10, 0, :5], expected)
     assert arr.traffic.nbytes == before
+
+
+@pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
+@pytest.mark.parametrize("limit", [1000, 100_000])
+def test_whole_member_prefetch_counts_and_obeys_budget(tmp_path, policy, limit):
+    data = np.random.default_rng(123).integers(0, 256, (200, 200), dtype="uint8")
+    array = blosc2.asarray(data, chunks=(100, 100), blocks=(50, 50))
+    frame = array.to_cframe()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.b2nd", frame)
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("accounted.b2z", buffer.getvalue())
+    kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
+    if policy is blosc2.CachePolicy.DISK:
+        kwargs["cache_dir"] = tmp_path
+    arr = blosc2.RemoteArray("memory://accounted.b2z", dataset="a", cache_policy=policy, **kwargs)
+    expected = sum(len(array.schunk.get_chunk(i)) for i in range(array.schunk.nchunks))
+    retained = expected if policy is not blosc2.CachePolicy.NONE and limit >= expected else 0
+    assert arr.cache_bytes == retained
+    assert arr.src._seed["prefix"] == arr.src._raw_header
+    assert arr.src._head == arr.src._raw_header
+    assert arr.src._prefetched_frame is None
+    arr.traffic.reset()
+    np.testing.assert_array_equal(arr[:], data)
+    assert (arr.traffic.requests == 0) == bool(retained)
+    assert arr.cache_bytes == retained  # Reading does not duplicate the prefetch.
+    if policy is blosc2.CachePolicy.DISK:
+        reopened = blosc2.open(arr.cache_path, mode="a")
+        assert reopened.traffic.requests == 0
+        assert reopened.cache_bytes == retained
+        exported = blosc2.from_cframe(arr.to_cframe())
+        assert exported.cache_bytes == retained
+        cold = blosc2.from_cframe(arr.to_cframe(include_cache=False))
+        assert cold.cache_bytes == 0
+        reopened.trim_cache(0)
+        assert reopened.cache_bytes == 0
+        again = blosc2.open(arr.cache_path)
+        assert again.cache_bytes == 0  # The bootstrap cannot resurrect evicted data.
+
+
+@pytest.mark.parametrize("direct", [False, True])
+def test_legacy_whole_member_bootstrap_moves_into_chunk_cache(tmp_path, direct):
+    data = np.arange(10000, dtype="int32")
+    array = blosc2.asarray(data, chunks=(2500,), blocks=(2500,))
+    frame = array.to_cframe()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.b2nd", frame)
+    fsspec.filesystem("memory").pipe_file("legacy-prefetch.b2z", buffer.getvalue())
+    url = "memory://legacy-prefetch.b2z"
+    arr = blosc2.open(url, dataset="a", lazy=True, cache_dir=tmp_path)
+    arr.trim_cache(0)
+    # Reproduce the old carrier representation: all data hidden in b2z-frame.
+    seed = dict(arr.src._seed, prefix=frame)
+    arr._carrier.schunk.vlmeta["b2z-frame"] = seed
+    reopened = (
+        blosc2.open(arr.cache_path, mode="a")
+        if direct
+        else blosc2.open(url, dataset="a", lazy=True, cache_dir=tmp_path)
+    )
+    assert reopened.traffic.requests == 0
+    assert reopened.cache_bytes == sum(len(array.schunk.get_chunk(i)) for i in range(array.schunk.nchunks))
+    assert reopened._carrier.schunk.vlmeta["b2z-frame"]["prefix"] == reopened.src._raw_header
+    np.testing.assert_array_equal(reopened[:], data)
+    assert reopened.traffic.requests == 0

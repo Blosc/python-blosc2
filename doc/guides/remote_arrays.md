@@ -665,3 +665,10 @@ inside. Stored source identities are checked before cache reuse.
 Old hash-only entries are neither reused through `cache_dir=` nor deleted. The
 first open creates a new cache; old entries can be removed to reclaim space.
 Explicit `cache_path=` and directly opening existing carrier files still work.
+
+
+Whole-member B2Z prefetch populates the ordinary chunk cache, so `cache_bytes`
+can be nonzero immediately after opening a small array. These prefetched chunks
+count toward `max_cache_bytes` and can be evicted by `trim_cache`, just like
+chunks fetched by a slice. Bootstrap metadata, ZIP headers, and frame metadata
+are excluded; `cache_bytes` is not the allocated size of the carrier file.

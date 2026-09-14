@@ -18,6 +18,9 @@ def test_shared_memory_lru_and_revisit(hierarchy):
     with blosc2.RemoteStore(url) as store:
         assert store.max_cache_bytes == 256 * 1024**2
         a, b = store["group/a"], store["group/b"]
+        # Start cold even when B2Z opening prefetched these small arrays.
+        a.trim_cache(0)
+        b.trim_cache(0)
         first = np.s_[:10, :10]
         second = np.s_[10:20, :10]
         for array, offset in ((a, 0), (b, 1), (a, 0)):
@@ -450,6 +453,7 @@ def _shared_crash(url, cache):
 
     store = blosc2.RemoteStore.with_sparse_cache(url, cache, _filesystem=_shared_fs())
     array = store["a"]
+    array.trim_cache(0)  # Force a publication after whole-member prefetch.
     original = blosc2.Proxy._store_chunk
 
     def die(self, *args):
@@ -700,6 +704,7 @@ def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
         assert store.mutable is False
         assert store.is_cache_mutable is True
         with store["group/a"] as a:
+            a.trim_cache(0)  # Export a partial cache, even for a prefetched member.
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
         assert store.cache_bytes > 0
         snapshot_imm = tmp_path / "snapshot_imm.b2z"
@@ -760,6 +765,9 @@ def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
             restored_mut.traffic.reset()
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
             assert restored_mut.traffic.requests == 0
+            # Exercise growth even if opening prefetched the entire B2Z member.
+            a.trim_cache(0)
+            np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
             before_cbytes = restored_mut.cache_bytes
             np.testing.assert_array_equal(a[10:20, :10], data[10:20, :10])
             mut_cbytes = restored_mut.cache_bytes

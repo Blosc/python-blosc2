@@ -645,6 +645,14 @@ class RemoteArray(blosc2.Operand):
                 self._attach_carrier_cache()
         elif self.cache_policy is blosc2.CachePolicy.MEMORY:
             self._attach_carrier_cache()
+        if isinstance(self.src, blosc2.B2ZNDSource):
+            self.src._prefetched_frame = None
+            if (
+                self._carrier is not None
+                and self._runtime_is_mutable
+                and _b2z_seed_from_carrier(self._carrier) != self.src._seed
+            ):
+                _store_b2z_seed(self._carrier, self.src._seed)
 
     def _check_open(self):
         finalizer = getattr(self, "_store_finalizer", None)
@@ -711,8 +719,6 @@ class RemoteArray(blosc2.Operand):
                 )
             if self._source.get("kind") == "hdf5" and "hdf5-refs" not in carrier.schunk.vlmeta:
                 _store_hdf5_refs(carrier, getattr(self.src, "_refs", None))
-            if self._source.get("kind") == "b2z" and _b2z_seed_from_carrier(carrier) is None:
-                _store_b2z_seed(carrier, getattr(self.src, "_seed", None))
             if self._source.get("kind") == "zarr" and "zarr-metadata" not in carrier.schunk.vlmeta:
                 carrier.schunk.vlmeta["zarr-metadata"] = self.src._metadata
             stored = carrier.schunk.vlmeta.get("proxy-stamp")

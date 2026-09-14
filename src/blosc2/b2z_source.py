@@ -252,29 +252,14 @@ class B2ZNDSource(ByteRangeNDSource):
 
             self.stamp = tokenize(urlpath, object_info, dataset, self.member_offset, self.member_length)
             super().__init__(urlpath, max_concurrency, traffic=self.traffic)
-            # The whole-member prefetch already holds the frame trailer, so decode
-            # the vlmeta now rather than leaving the carrier creation to fetch the
-            # very same bytes in a second round trip.
-            if self.has_vlmetalayers and any(
-                start <= self.member_offset and self.member_offset + self.member_length <= start + len(data)
-                for start, data in self._opening_ranges
-            ):
-                self._vlmeta = self._read_frame_vlmeta()
-            # Keep what a later reopen needs to rebuild this source without a
-            # remote ZIP bootstrap; see RemoteArray's DISK carrier.
-            self._seed = {
-                "version": 1,
-                "member_offset": self.member_offset,
-                "member_length": self.member_length,
-                "prefix_start": prefix_start,
-                "prefix": prefix,
-                "stamp": self.stamp,
-            }
-            self._opening_ranges.clear()
             if b"b2o" in self._header[13][1]:
                 raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")
             if not self._header_len <= self._header[2] <= self.member_length:
                 raise ValueError("Blosc2 frame exceeds B2Z member bounds")
+            # Keep the whole-member prefetch for the ordinary chunk cache, while
+            # the persistent bootstrap itself only needs the frame header.
+            self._prepare_prefetch(prefix_start, prefix)
+            self._opening_ranges.clear()
         finally:
             archive.capture_metadata = False
             archive._opening_ranges.clear()
@@ -299,13 +284,45 @@ class B2ZNDSource(ByteRangeNDSource):
         )
         self._opening_ranges = self._archive._opening_ranges
         # The frame header comes out of the cached prefix, so this reads nothing.
-        super().__init__(urlpath, max_concurrency, traffic=self.traffic)
+        start = self.member_offset - int(seed["prefix_start"])
+        head = bytes(seed["prefix"])[start:] if start >= 0 else None
+        super().__init__(urlpath, max_concurrency, traffic=self.traffic, _head=head)
         self._opening_ranges.clear()
         if b"b2o" in self._header[13][1]:
             raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")
         if not self._header_len <= self._header[2] <= self.member_length:
             raise ValueError("Blosc2 frame exceeds B2Z member bounds")
-        self._seed = dict(seed)
+        self._prepare_prefetch(int(seed["prefix_start"]), bytes(seed["prefix"]))
+        self._archive.prefix_start = self.member_offset
+        self._archive.prefix = self._raw_header
+
+    def _prepare_prefetch(self, prefix_start, prefix):
+        """Transfer whole-frame payload to the chunk cache, outside bootstrap metadata."""
+        start = self.member_offset - prefix_start
+        self._prefetched_frame = None
+        if start >= 0 and start + self.member_length <= len(prefix):
+            self._prefetched_frame = prefix[start : start + self.member_length]
+            # Preserve the offsets and vlmeta already fetched with the payload.
+            self._head = self._prefetched_frame
+            self._frame_index()
+            if self.has_vlmetalayers:
+                self._vlmeta = self._read_frame_vlmeta()
+        self._head = self._raw_header
+        self._seed = {
+            "version": 1,
+            "member_offset": self.member_offset,
+            "member_length": self.member_length,
+            "prefix_start": self.member_offset,
+            "prefix": self._raw_header,
+            "stamp": self.stamp,
+        }
+
+    def _take_prefetched_array(self):
+        """Consume the opening payload once; Proxy owns its accounting and eviction."""
+        import blosc2
+
+        frame, self._prefetched_frame = self._prefetched_frame, None
+        return None if frame is None else blosc2.ndarray_from_cframe(frame, copy=True)
 
     def _read_archive(self, offset, size):
         return self._archive._read_archive(offset, size)

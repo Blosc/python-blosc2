@@ -348,6 +348,23 @@ class Proxy(blosc2.Operand):
         self._restore_cache_accounting()
         for key in vlmeta or ():
             self._schunk_cache.vlmeta[key] = vlmeta[key]
+        self._adopt_prefetched()
+
+    def _adopt_prefetched(self):
+        """Retain prefetched chunks through the normal bitmap, budget, and eviction path."""
+        take_prefetch = getattr(self.src, "_take_prefetched_array", None)
+        array = None if take_prefetch is None else take_prefetch()
+        if array is None or self._schunk_cache.mode == "r":
+            return
+        missing = self._missing_chunks(())
+        if not missing:
+            return
+        self._begin_persistent_mutation()
+        for nchunk in missing:
+            self._store_chunk(nchunk, array.schunk.get_chunk(nchunk))
+        self._save_fetched()
+        self._enforce_cache_limit(())
+        self._end_persistent_mutation()
 
     def _configure_cache_budget(self, kwargs):
         self._max_cache_bytes = _validate_max_cache_bytes(kwargs.pop("_max_cache_bytes", None))

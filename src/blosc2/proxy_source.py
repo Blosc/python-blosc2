@@ -549,7 +549,7 @@ def _chunk_payloads(chunk: bytes, nblocks: int, wanted) -> dict[int, bytes]:
     return {int(n): chunk[bstarts[n] : bstarts[n] + extents[n]] for n in wanted}
 
 
-def _read_frame_header(read_range) -> tuple[bytes, list, bytes]:
+def _read_frame_header(read_range, head=None) -> tuple[bytes, list, bytes]:
     """Read the header of a contiguous frame.
 
     *read_range* is ``(offset, size) -> bytes``, so what this costs is round
@@ -570,7 +570,7 @@ def _read_frame_header(read_range) -> tuple[bytes, list, bytes]:
     """
     import msgpack
 
-    head = read_range(0, _FRAME_PREFETCH)
+    head = read_range(0, _FRAME_PREFETCH) if head is None else head
     if head[2:10] != _FRAME_MAGIC:
         raise ValueError("not a Blosc2 contiguous frame")
     # header_len is the one field that must be located by hand; everything after
@@ -778,6 +778,8 @@ class ByteRangeNDSource(ProxyNDSource):
         urlpath: str,
         max_concurrency: int = REMOTE_MAX_CONCURRENCY,
         traffic: Traffic | None = None,
+        *,
+        _head: bytes | None = None,
     ):
         self.max_concurrency = max_concurrency
         self.urlpath = urlpath
@@ -789,7 +791,7 @@ class ByteRangeNDSource(ProxyNDSource):
         # seek (50 MiB on s3fs by default), which would undo the point of a lazy
         # open. Chunk reads are stateless, so the index below is the only state a
         # thread pool shares, and the only thing here that needs a lock
-        raw, self._header, self._head = _read_frame_header(self.read_range)
+        raw, self._header, self._head = _read_frame_header(self.read_range, head=_head)
         self._raw_header = raw
         self._header_len = len(raw)
         self._chunksize = self._header[8]

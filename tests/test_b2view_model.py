@@ -97,7 +97,8 @@ def test_store_browser_remote_array(tmp_path, suffix):
         assert info.kind == "ndarray"
         assert info.metadata["shape"] == data.shape
         assert info.user_attrs["description"] == "remote preview"
-        assert browser.store.cache_bytes == 0
+        # Small B2Z members arrive whole during opening and count as cached payload.
+        assert (browser.store.cache_bytes > 0) == suffix.startswith(".b2z")
         for _ in range(2):
             before = browser.store.traffic.nbytes
             preview = browser.preview("/", slice_indices=[2], start=3, stop=6, max_cols=5)
