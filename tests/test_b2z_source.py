@@ -89,6 +89,80 @@ def test_small_member_prefetch_carries_vlmeta(monkeypatch):
     assert len(reads) == 2  # the trailer came in the opening request
 
 
+@pytest.mark.parametrize("suffix", ["supported", "ignored", "rejected", "malformed"])
+@pytest.mark.parametrize("small", [False, True])
+def test_http_tail_bootstrap(suffix, small):
+    import http.server
+    import threading
+
+    from blosc2.b2z_source import B2ZArchive
+
+    pytest.importorskip("aiohttp")
+    url, data = memory_archive(np.zeros((40, 250), dtype="uint8") if small else None)
+    body = fsspec.filesystem("memory").cat_file(url)
+    requests = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_HEAD(self):
+            requests.append(("HEAD", None))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", '"fixture"')
+            self.end_headers()
+
+        def do_GET(self):
+            span = self.headers.get("Range")
+            requests.append(("GET", span))
+            assert self.headers.get("X-Test") == "preserved"
+            if span == "bytes=-8192" and suffix in {"ignored", "rejected"}:
+                self.send_response(200 if suffix == "ignored" else 416)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            first, last = span.removeprefix("bytes=").split("-")
+            start = int(first) if first else max(0, len(body) - int(last))
+            end = min(int(last), len(body) - 1) if first else len(body) - 1
+            self.send_response(206)
+            content_range = f"bytes {start}-{end}/{len(body)}"
+            if span == "bytes=-8192" and suffix == "malformed":
+                content_range = "invalid"
+            self.send_header("Content-Range", content_range)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("ETag", '"fixture"')
+            self.end_headers()
+            self.wfile.write(body[start : end + 1])
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/array.b2z"
+        options = {"headers": {"X-Test": "preserved"}, "skip_instance_cache": True}
+        with blosc2.open(url + "::/d0/a", storage_options=options) as arr:
+            assert requests[0] == ("GET", "bytes=-8192")
+            assert sum(method == "HEAD" for method, _ in requests) == (suffix != "supported")
+            if suffix == "supported":
+                assert len(requests) == (1 if small else 2)
+                assert arr.traffic.nbytes == (len(body) if small else 8192 + 16384)
+            np.testing.assert_array_equal(arr[:], data)
+
+        # A persisted suffix bootstrap must have the same identity as HEAD.
+        metadata = {}
+        archive = B2ZArchive(url, storage_options=options, _metadata=metadata)
+        archive.close()
+        requests.clear()
+        archive = B2ZArchive(url, storage_options=options, _metadata=metadata)
+        archive.close()
+        assert requests == [("HEAD", None)]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 @pytest.mark.parametrize("reopen", ["url", "carrier", "cframe"])
 def test_disk_cache_reopen_replays_b2z_bootstrap(tmp_path, monkeypatch, reopen):
     data = np.random.default_rng(3).integers(0, 256, (1000, 1000), dtype="uint8")
@@ -230,8 +304,10 @@ def test_options_and_bad_archives():
         blosc2.open(url, lazy=True, dataset="d0/a", assume_immutable=False)
     with pytest.raises(ValueError, match="both"):
         blosc2.open(url + "::d0/a", dataset="d0/a", lazy=True)
-    with pytest.raises(ValueError, match="lazy=True"):
-        blosc2.open(url, dataset="d0/a")
+    # A dataset path automatically selects lazy remote access.
+    with blosc2.open(url, dataset="d0/a") as arr:
+        assert isinstance(arr, blosc2.RemoteArray)
+        assert arr.dataset == "d0/a"
     fs = fsspec.filesystem("memory")
     fs.pipe_file("suffix-free", fs.cat_file("v10.b2z"))
     assert (

@@ -8,6 +8,7 @@
 
 import io
 import operator
+import re
 import zipfile
 
 from blosc2.core import _import_fsspec
@@ -17,6 +18,40 @@ from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traff
 # trailing vlmeta -- sparing a round trip each against the object store.
 _WHOLE_MEMBER_PREFETCH_MAX = 64 * 1024
 _LOCAL_HEADER_HEADROOM = 4096
+
+
+async def _http_tail(fs, path):
+    """Obtain HTTP object identity and the ZIP tail in one bounded request."""
+    kwargs = fs.kwargs.copy()
+    headers = kwargs.pop("headers", {}).copy()
+    headers.update({"Range": "bytes=-8192", "Accept-Encoding": "identity"})
+    session = await fs.set_session()
+    async with session.get(fs.encode_url(path), headers=headers, **kwargs) as response:
+        # Do not consume a potentially huge body if the server ignores ranges.
+        if response.status in {200, 400, 405, 416, 501}:
+            return None
+        fs._raise_not_found_for_status(response, path)
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
+        if response.status != 206 or match is None:
+            return None
+        start, end, size = map(int, match.groups())
+        if start != max(0, size - 8192) or end != size - 1 or size <= 0:
+            return None
+        if response.headers.get("Content-Encoding", "identity") not in {"", "identity"}:
+            return None
+        data = await response.content.readexactly(end - start + 1)
+        if await response.content.read(1):
+            raise ValueError("B2Z transport did not honor the requested byte range")
+        # Match fsspec's HTTP info fields so persisted identities remain compatible.
+        info = {"name": path, "size": size, "type": "file", "url": str(response.url)}
+        if "Content-Type" in response.headers:
+            info["mimetype"] = response.headers["Content-Type"].partition(";")[0]
+        if response.headers.get("Accept-Ranges") == "none":
+            info["partial"] = False
+        for key in ("ETag", "Content-MD5", "Digest", "Last-Modified"):
+            if response.headers.get(key):
+                info[key] = response.headers[key]
+        return info, data
 
 
 class _ArchiveFile(io.RawIOBase):
@@ -60,7 +95,14 @@ class B2ZArchive:
         else:
             self._fs, self._path = _filesystem, _filesystem._strip_protocol(urlpath)
         self.traffic = _traffic if _traffic is not None else Traffic()
-        object_info = self._fs.info(self._path)
+        bootstrap = None
+        if self._fs.protocol in ("http", "https", ("http", "https")) and not _metadata:
+            from fsspec.asyn import sync
+            from fsspec.implementations.http import HTTPFileSystem
+
+            if isinstance(self._fs, HTTPFileSystem):
+                bootstrap = sync(self._fs.loop, _http_tail, self._fs, self._path)
+        object_info = self._fs.info(self._path) if bootstrap is None else bootstrap[0]
         self.object_info = object_info
         size = object_info["size"]
         self.size = size
@@ -82,7 +124,14 @@ class B2ZArchive:
         self._opening_ranges = []
         # ponytail: small directories fit in 8 KiB; larger ones use exact reads.
         tail_start = max(0, size - 8192)
-        self._opening_ranges.append((tail_start, self._read_archive(tail_start, size - tail_start)))
+        if bootstrap is None:
+            tail = self._read_archive(tail_start, size - tail_start)
+        else:
+            tail = bootstrap[1]
+            self.traffic.charge(len(tail))
+            if self.persist_metadata:
+                self.metadata["ranges"].append((tail_start, tail))
+        self._opening_ranges.append((tail_start, tail))
         self.file = _ArchiveFile(self, size)
         self.archive = zipfile.ZipFile(self.file)
         self.members = self.archive.infolist()

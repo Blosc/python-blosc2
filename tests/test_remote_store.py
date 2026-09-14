@@ -1127,7 +1127,10 @@ def test_artifact_reopens_in_fresh_process(tmp_path):
                 return super().do_GET()
             body = (served / self.path.lstrip("/")).read_bytes()
             first, _, last = span.removeprefix("bytes=").partition("-")
-            first, last = int(first), int(last) if last else len(body) - 1
+            if not first:
+                first, last = max(0, len(body) - int(last)), len(body) - 1
+            else:
+                first, last = int(first), int(last) if last else len(body) - 1
             self.send_response(206)
             self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
             self.send_header("Accept-Ranges", "bytes")
