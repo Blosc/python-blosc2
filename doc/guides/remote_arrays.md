@@ -101,6 +101,27 @@ A `URLPath` always means Caterva2.
 If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`.
 Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
 
+## Operating with remote arrays
+
+Remote arrays can be operands in lazy expressions. Opening an array and building the expression only reads metadata; data is fetched when the expression is sliced or computed. A shared `cache_dir` keeps downloaded chunks locally between runs:
+
+```python
+import blosc2
+
+base = "https://s3.us-west-001.backblazeb2.com/blosc2/hierarchy"
+
+with (
+    blosc2.open(f"{base}.h5::/d0/d1/d2/a1", lazy=True, cache_dir="remote-cache") as h5,
+    blosc2.open(f"{base}.zarr::/d0/d1/a1", lazy=True, cache_dir="remote-cache") as zarr,
+    blosc2.open(f"{base}.b2z::/d0/a1", lazy=True, cache_dir="remote-cache") as b2z,
+):
+    expr = b2z + zarr * h5
+    print(expr[:10])  # fetches only the chunks needed for the first 10 values
+    result = expr.compute()  # materializes the full result as an NDArray
+```
+
+The three leaves above have shape `(10000,)`, so they can be combined directly. Keep HDF5 opens before Zarr opens when using several remote formats in one process.
+
 ### Choosing between fsspec and Caterva2
 
 When opening an individual dataset with `lazy=True`, both fsspec URLs and Caterva2 `URLPath`s return a {ref}`RemoteArray`, providing an identical user interface for slicing, caching, and introspection.
@@ -633,6 +654,7 @@ For ordinary remote access, use `blosc2.open("https://...", lazy=True)` or `blos
 - {doc}`Tutorial 6 <../tutorials/06.remote_proxy>` — a step-by-step introduction with output.
 - `examples/remote/s3-access.py` — remote access across Blosc2 (.b2nd, .b2z), Zarr, and HDF5 with timing and network traffic metering.
 - `examples/remote/store-browse.py` — inspecting hierarchies, leaf previews, and shared caching across leaves.
+- `examples/remote/lazy-expr.py` — evaluating a lazy expression over remote B2Z, Zarr, and HDF5 arrays.
 - `examples/remote/c2array-get-slice.py` — opening and reading remote Caterva2 arrays via URLPath.
 - `examples/remote/c2array-traffic.py` — block, chunk, and cached transfer sizes against Caterva2.
 - `examples/remote/c2array_expr.py` — lazy expression evaluation on remote Caterva2 arrays.
