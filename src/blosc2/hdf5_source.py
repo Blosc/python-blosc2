@@ -70,7 +70,9 @@ def _register_numcodecs_blosc2() -> None:
             try:
                 decomp = blosc2.decompress(buf)
             except Exception:
-                decomp = blosc2.from_cframe(buf)[:].tobytes()
+                # A Blosc2-filter chunk is a whole super-chunk frame, so
+                # from_cframe() may hand back an SChunk whose slice is bytes.
+                decomp = bytes(blosc2.from_cframe(buf)[:])
             if out is not None:
                 np.frombuffer(out, dtype=np.uint8)[:] = np.frombuffer(decomp, dtype=np.uint8)
                 return out

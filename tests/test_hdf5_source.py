@@ -341,6 +341,47 @@ def test_hdf5_disk_cache(tmp_path):
     np.testing.assert_array_equal(reopened[:], data)
 
 
+def test_hdf5_disk_cache_reuses_refs(tmp_path, monkeypatch):
+    import blosc2.hdf5_source as hdf5_source
+
+    data = np.arange(40, dtype=np.int32)
+    url = make_memory_h5("reuse_refs.h5", data=(data, (10,)))
+    cache_dir = tmp_path / "cache"
+    scans = []
+    original = hdf5_source.scan_hdf5_refs
+
+    def counting_scan(*args, **kwargs):
+        scans.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(hdf5_source, "scan_hdf5_refs", counting_scan)
+
+    first = blosc2.open(url, lazy=True, dataset="data", cache_dir=cache_dir)
+    np.testing.assert_array_equal(first[:10], data[:10])
+    assert len(scans) == 1
+
+    second = blosc2.open(url, lazy=True, dataset="data", cache_dir=cache_dir)
+    assert second._cache_status == "reused"
+    assert len(scans) == 1  # the cached kerchunk snapshot replaced the rescan
+    np.testing.assert_array_equal(second[:10], data[:10])
+
+
+def test_hdf5_blosc2_filter_codec_decodes_super_chunk():
+    import numcodecs
+
+    from blosc2.hdf5_source import _ensure_blosc2_filter_registered
+
+    _ensure_blosc2_filter_registered()
+    data = np.arange(100, dtype=np.int32)
+    schunk = blosc2.SChunk(chunksize=200)
+    schunk.append_data(data[:50].tobytes())
+    schunk.append_data(data[50:].tobytes())
+    # blosc2.decompress() rejects a multi-chunk super-chunk frame, so the Blosc2
+    # HDF5 filter codec must fall back to from_cframe().
+    decoded = numcodecs.Blosc2().decode(schunk.to_cframe())
+    assert bytes(decoded) == data.tobytes()
+
+
 def test_hdf5_traffic_accounting():
     data = np.arange(100, dtype=np.int32)
     url = make_memory_h5("traffic.h5", data=(data, (20,)))

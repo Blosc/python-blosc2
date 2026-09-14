@@ -124,6 +124,31 @@ def _validate_assume_immutable(value, name="assume_immutable"):
     return value
 
 
+def _hdf5_refs_from_carrier(carrier):
+    """Decode the kerchunk reference snapshot a carrier stores, if present."""
+    if carrier is None:
+        return None
+    raw_refs = getattr(carrier, "schunk", carrier).vlmeta.get("hdf5-refs")
+    if raw_refs is None:
+        return None
+    try:
+        import ujson as json_mod
+    except ImportError:
+        import json as json_mod
+    return json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+
+
+def _store_hdf5_refs(carrier, refs):
+    """Keep the kerchunk snapshot on the carrier so a reopen needs no rescan."""
+    if refs is None:
+        return
+    try:
+        import ujson as json_mod
+    except ImportError:
+        import json as json_mod
+    carrier.schunk.vlmeta["hdf5-refs"] = blosc2.compress(json_mod.dumps(refs).encode("utf-8"), typesize=1)
+
+
 def _serialized_operation(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
@@ -512,13 +537,25 @@ class RemoteArray(blosc2.Operand):
             )
         else:
             if refs is None and _carrier is not None:
-                raw_refs = getattr(_carrier, "schunk", _carrier).vlmeta.get("hdf5-refs")
-                if raw_refs is not None:
-                    try:
-                        import ujson as json_mod
-                    except ImportError:
-                        import json as json_mod
-                    refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+                refs = _hdf5_refs_from_carrier(_carrier)
+            elif (
+                refs is None
+                and _carrier is None
+                and cache_policy is blosc2.CachePolicy.DISK
+                and (cache_dir is not None or cache_path is not None)
+                and self._source_format == "hdf5"
+            ):
+                # A DISK carrier already holds the kerchunk snapshot from a previous
+                # run; reuse it rather than rescanning the whole HDF5 index again.
+                fingerprint = storage_options_fingerprint(storage_options)
+                identity = f"{urlpath}::{self._dataset}"
+                if fingerprint:
+                    identity = f"{identity}::{fingerprint}"
+                path = self._carrier_path(cache_dir, cache_path, identity)
+                if os.path.exists(path):
+                    with contextlib.suppress(Exception):
+                        cached = blosc2.blosc2_ext.open(path, "r", 0, dparams=blosc2.DParams(nthreads=1))
+                        refs = _hdf5_refs_from_carrier(cached)
             self.src, self._source = self._open_source(
                 urlpath,
                 self._max_concurrency,
@@ -615,13 +652,17 @@ class RemoteArray(blosc2.Operand):
             tuple(src.blocks),
         )
 
-    def _open_or_create_carrier(self, cache_dir, cache_path):
+    def _carrier_path(self, cache_dir, cache_path, identity=None):
         if cache_path is not None:
             path = os.fspath(cache_path)
             if os.path.isdir(path):
                 raise ValueError("cache_path must name a file, not a directory")
-        else:
-            path = blosc2.schunk.fsspec_cache_path(self._cache_identity(), cache_dir, ".b2nd")
+            return path
+        identity = self._cache_identity() if identity is None else identity
+        return blosc2.schunk.fsspec_cache_path(identity, cache_dir, ".b2nd")
+
+    def _open_or_create_carrier(self, cache_dir, cache_path):
+        path = self._carrier_path(cache_dir, cache_path)
         if os.path.exists(path):
             kwargs = {"dparams": blosc2.DParams(nthreads=1)}
             carrier = blosc2.blosc2_ext.open(path, "a", 0, **kwargs)
@@ -633,15 +674,7 @@ class RemoteArray(blosc2.Operand):
                     "or choose a new cache_path"
                 )
             if self._source.get("kind") == "hdf5" and "hdf5-refs" not in carrier.schunk.vlmeta:
-                refs = getattr(self.src, "_refs", None)
-                if refs is not None:
-                    try:
-                        import ujson as json_mod
-                    except ImportError:
-                        import json as json_mod
-                    carrier.schunk.vlmeta["hdf5-refs"] = blosc2.compress(
-                        json_mod.dumps(refs).encode("utf-8"), typesize=1
-                    )
+                _store_hdf5_refs(carrier, getattr(self.src, "_refs", None))
             stored = carrier.schunk.vlmeta.get("proxy-stamp")
             current = getattr(self.src, "stamp", None)
             status = (
@@ -1442,13 +1475,7 @@ class RemoteArray(blosc2.Operand):
         if self._source.get("kind") == "hdf5":
             refs = getattr(self.src, "_refs", None)
             if refs is not None:
-                try:
-                    import ujson as json_mod
-                except ImportError:
-                    import json as json_mod
-                array.schunk.vlmeta["hdf5-refs"] = blosc2.compress(
-                    json_mod.dumps(refs).encode("utf-8"), typesize=1
-                )
+                _store_hdf5_refs(array, refs)
             elif self._carrier is not None:
                 carrier_schunk = getattr(self._carrier, "schunk", self._carrier)
                 if "hdf5-refs" in carrier_schunk.vlmeta:
@@ -1574,15 +1601,7 @@ class RemoteArray(blosc2.Operand):
         expected = (carrier.shape, carrier.dtype, carrier.chunks, carrier.blocks)
         kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
         carrier_arg = carrier if policy is blosc2.CachePolicy.DISK else None
-        refs = None
-        if source_kind == "hdf5" and carrier is not None:
-            raw_refs = getattr(carrier, "schunk", carrier).vlmeta.get("hdf5-refs")
-            if raw_refs is not None:
-                try:
-                    import ujson as json_mod
-                except ImportError:
-                    import json as json_mod
-                refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+        refs = _hdf5_refs_from_carrier(carrier) if source_kind == "hdf5" else None
         carrier_mode = getattr(carrier.schunk, "mode", "r") if carrier is not None else "r"
         is_disk_file = carrier is not None and bool(getattr(carrier.schunk, "urlpath", None))
         is_runtime_mutable = mutable and (carrier_mode != "r" if is_disk_file else True)
