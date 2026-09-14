@@ -130,6 +130,7 @@ class ZarrNDSource(ProxyNDSource):
         _traffic: Traffic | None = None,
         _urlpath: str | None = None,
         _path: str | None = None,
+        _metadata: dict | None = None,
     ):
         try:
             import zarr
@@ -144,6 +145,7 @@ class ZarrNDSource(ProxyNDSource):
         self.max_concurrency = max_concurrency
         remote = isinstance(store, str) and bool(urlsplit(store).scheme)
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
+        self._metadata = dict(_metadata) if _metadata is not None else {}
         open_store = store
         if remote:
             try:
@@ -158,7 +160,7 @@ class ZarrNDSource(ProxyNDSource):
             )
             open_store = source
         if self.traffic is not None:
-            open_store = _counting_store(zarr, open_store, self.traffic)
+            open_store = _counting_store(zarr, open_store, self.traffic, metadata=self._metadata)
         try:
             with ZARR_SYNC_LOCK:
                 self.array = zarr.open_array(

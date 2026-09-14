@@ -164,6 +164,13 @@ def _store_b2z_seed(carrier, seed):
         carrier.schunk.vlmeta["b2z-frame"] = seed
 
 
+def _zarr_metadata_from_carrier(carrier):
+    """Read the Zarr metadata snapshot, including absent metadata keys."""
+    if carrier is None:
+        return None
+    return getattr(carrier, "schunk", carrier).vlmeta.get("zarr-metadata")
+
+
 def _serialized_operation(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
@@ -309,7 +316,9 @@ def _open_url_source(
     if source_format == "zarr":
         if not assume_immutable:
             raise NotImplementedError("mutable Zarr sources are not supported")
-        src = blosc2.ZarrNDSource(urlpath, _traffic=traffic, blocks=blocks, cparams=cparams, **kwargs)
+        src = blosc2.ZarrNDSource(
+            urlpath, _traffic=traffic, _metadata=seed, blocks=blocks, cparams=cparams, **kwargs
+        )
         source = {
             "kind": "zarr",
             "version": 1,
@@ -552,7 +561,10 @@ class RemoteArray(blosc2.Operand):
                 urlpath, storage_options, _source_descriptor, store_attachment=_store_owner is not None
             )
         else:
-            seed = _b2z_seed_from_carrier(_carrier) if self._source_format == "b2z" else None
+            read_seed = (
+                _zarr_metadata_from_carrier if self._source_format == "zarr" else _b2z_seed_from_carrier
+            )
+            seed = read_seed(_carrier) if self._source_format in {"b2z", "zarr"} else None
             if refs is None and _carrier is not None:
                 refs = _hdf5_refs_from_carrier(_carrier)
             elif (
@@ -560,12 +572,12 @@ class RemoteArray(blosc2.Operand):
                 and _carrier is None
                 and cache_policy is blosc2.CachePolicy.DISK
                 and (cache_dir is not None or cache_path is not None)
-                and self._source_format in {"hdf5", "b2z"}
+                and self._source_format in {"hdf5", "b2z", "zarr"}
             ):
                 # A DISK carrier already holds the container bootstrap from a
                 # previous run; reuse it rather than redoing the remote discovery.
                 fingerprint = storage_options_fingerprint(storage_options)
-                identity = f"{urlpath}::{self._dataset}"
+                identity = urlpath if self._source_format == "zarr" else f"{urlpath}::{self._dataset}"
                 if fingerprint:
                     identity = f"{identity}::{fingerprint}"
                 path = self._carrier_path(cache_dir, cache_path, identity)
@@ -575,7 +587,7 @@ class RemoteArray(blosc2.Operand):
                         if self._source_format == "hdf5":
                             refs = _hdf5_refs_from_carrier(cached)
                         else:
-                            seed = _b2z_seed_from_carrier(cached)
+                            seed = read_seed(cached)
             self.src, self._source = self._open_source(
                 urlpath,
                 self._max_concurrency,
@@ -698,6 +710,8 @@ class RemoteArray(blosc2.Operand):
                 _store_hdf5_refs(carrier, getattr(self.src, "_refs", None))
             if self._source.get("kind") == "b2z" and _b2z_seed_from_carrier(carrier) is None:
                 _store_b2z_seed(carrier, getattr(self.src, "_seed", None))
+            if self._source.get("kind") == "zarr" and "zarr-metadata" not in carrier.schunk.vlmeta:
+                carrier.schunk.vlmeta["zarr-metadata"] = self.src._metadata
             stored = carrier.schunk.vlmeta.get("proxy-stamp")
             current = getattr(self.src, "stamp", None)
             status = (
@@ -1505,6 +1519,8 @@ class RemoteArray(blosc2.Operand):
                 carrier_schunk = getattr(self._carrier, "schunk", self._carrier)
                 if "hdf5-refs" in carrier_schunk.vlmeta:
                     array.schunk.vlmeta["hdf5-refs"] = carrier_schunk.vlmeta["hdf5-refs"]
+        elif self._source.get("kind") == "zarr":
+            array.schunk.vlmeta["zarr-metadata"] = self.src._metadata
         elif self._source.get("kind") == "b2z":
             seed = getattr(self.src, "_seed", None)
             if seed is not None:
