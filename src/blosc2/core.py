@@ -768,11 +768,59 @@ def fsspec_open(urlpath: str, mode: str, storage_options: dict | None = None):
     return _import_fsspec(urlpath).open(urlpath, mode, **(storage_options or {}))
 
 
-def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: str = "") -> str:
-    """The local path under *cache_storage* reserved for *urlpath*, creating the directory."""
-    os.makedirs(cache_storage, exist_ok=True)
-    name = hashlib.sha256(urlpath.encode()).hexdigest()
-    return os.path.join(str(cache_storage), name + suffix)
+def cache_path_component(value: str) -> str:
+    """Encode a bounded, portable cache path component without losing its identity."""
+    name = urllib.parse.quote(value, safe="-_.")
+    reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+    if not name or name in {".", ".."} or name.split(".")[0].upper() in reserved:
+        name = "_" + name
+    name = name.rstrip(".") or "_"
+    if len(name) > 100:
+        name = name[:80] + "--" + hashlib.sha256(value.encode()).hexdigest()[:12]
+    return name
+
+
+def cache_directory_name(urlpath: str, identity: bytes) -> str:
+    """A recognizable source basename and a 48-bit cache identity."""
+    parsed = urllib.parse.urlsplit(urlpath)
+    name = pathlib.PurePosixPath(parsed.path.rstrip("/")).name or parsed.hostname or "remote"
+    name = cache_path_component(urllib.parse.unquote(name))
+    return name + "--" + hashlib.sha256(identity).hexdigest()[:12]
+
+
+def fsspec_cache_path(
+    urlpath: str,
+    cache_storage: str | pathlib.Path,
+    suffix: str = "",
+    *,
+    dataset: str | None = None,
+    storage_options: dict | None = None,
+) -> str:
+    """Readable source directory and optional dataset path, creating parent directories."""
+    identity = urlpath
+    fingerprint = storage_options_fingerprint(storage_options)
+    if fingerprint:
+        identity += "::" + fingerprint
+    directory = pathlib.Path(cache_storage) / cache_directory_name(urlpath, identity.encode())
+    if suffix:
+        parsed = urllib.parse.urlsplit(urlpath)
+        name = pathlib.PurePosixPath(parsed.path.rstrip("/")).name or parsed.hostname or "remote"
+        parts = dataset.strip("/").split("/") if dataset else [urllib.parse.unquote(name)]
+        parts = [cache_path_component(part) for part in parts]
+        if dataset or not parts[-1].endswith(suffix):
+            parts[-1] += suffix
+        path = directory.joinpath(*parts)
+    else:
+        path = directory
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def storage_options_fingerprint(storage_options: dict | None) -> str:

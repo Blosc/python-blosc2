@@ -1,6 +1,5 @@
 """Exclusive ownership and atomic discovery manifests for disposable store caches."""
 
-import hashlib
 import json
 import os
 import shutil
@@ -13,6 +12,7 @@ from pathlib import Path
 import msgpack
 
 import blosc2
+from blosc2.core import cache_directory_name
 from blosc2.msgpack_utils import msgpack_packb
 
 
@@ -29,7 +29,7 @@ class StoreDiskCache:
     def __init__(self, parent, source, *, blocking=False):
         self.source = source
         identity = msgpack.packb(source, use_bin_type=True)
-        self.path = Path(parent) / hashlib.sha256(identity).hexdigest()
+        self.path = Path(parent) / cache_directory_name(source["urlpath"], identity)
         self.path.mkdir(parents=True, exist_ok=True)
         self.file = (self.path / "owner.lock").open("a+b")
         try:
@@ -176,7 +176,7 @@ class SharedStoreCache(StoreDiskCache):
         self.parent = Path(parent)
         self.source = source
         identity = msgpack.packb(source, use_bin_type=True)
-        self.path = self.parent / hashlib.sha256(identity).hexdigest()
+        self.path = self.parent / cache_directory_name(source["urlpath"], identity)
         for path in (self.parent, self.path):
             if path.is_symlink():
                 raise ValueError("Shared store cache cannot be a symlink")

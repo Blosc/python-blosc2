@@ -576,11 +576,7 @@ class RemoteArray(blosc2.Operand):
             ):
                 # A DISK carrier already holds the container bootstrap from a
                 # previous run; reuse it rather than redoing the remote discovery.
-                fingerprint = storage_options_fingerprint(storage_options)
-                identity = urlpath if self._source_format == "zarr" else f"{urlpath}::{self._dataset}"
-                if fingerprint:
-                    identity = f"{identity}::{fingerprint}"
-                path = self._carrier_path(cache_dir, cache_path, identity)
+                path = self._carrier_path(cache_dir, cache_path, urlpath, storage_options)
                 if os.path.exists(path):
                     with contextlib.suppress(Exception):
                         cached = blosc2.blosc2_ext.open(path, "r", 0, dparams=blosc2.DParams(nthreads=1))
@@ -685,14 +681,21 @@ class RemoteArray(blosc2.Operand):
             tuple(src.blocks),
         )
 
-    def _carrier_path(self, cache_dir, cache_path, identity=None):
+    def _carrier_path(self, cache_dir, cache_path, urlpath=None, storage_options=None):
         if cache_path is not None:
             path = os.fspath(cache_path)
             if os.path.isdir(path):
                 raise ValueError("cache_path must name a file, not a directory")
             return path
-        identity = self._cache_identity() if identity is None else identity
-        return blosc2.schunk.fsspec_cache_path(identity, cache_dir, ".b2nd")
+        if urlpath is None:
+            urlpath = self._source.get("urlpath", self._source_identity())
+            storage_options = self._storage_options
+        if self._source_format == "zarr" and self._dataset:
+            parsed = urlsplit(urlpath)
+            urlpath = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")[: -len(self._dataset) - 1]))
+        return blosc2.schunk.fsspec_cache_path(
+            urlpath, cache_dir, ".b2nd", dataset=self._dataset, storage_options=storage_options
+        )
 
     def _open_or_create_carrier(self, cache_dir, cache_path):
         path = self._carrier_path(cache_dir, cache_path)

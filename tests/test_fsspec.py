@@ -919,7 +919,7 @@ def test_lazy_cache_preserved_when_corrupt(tmp_path):
 
     with blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path) as b:
         assert np.array_equal(b[:10], a[:10])
-    cache = next(p for p in tmp_path.iterdir() if p.suffix == ".b2nd")
+    cache = next(tmp_path.glob("*/*.b2nd"))
     cache.write_bytes(cache.read_bytes()[:50])
 
     before = cache.read_bytes()

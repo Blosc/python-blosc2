@@ -1532,7 +1532,7 @@ def test_disk_cache_dir_includes_storage_options(tmp_path):
         np.testing.assert_array_equal(array[:], data)
 
     # Different backends are different sources, so they get different carriers.
-    assert len(list(cache.glob("*.b2nd"))) == 2
+    assert len(list(cache.glob("*/*.b2nd"))) == 2
 
 
 def test_disk_cache_dir_reuses_same_storage_options(tmp_path):
@@ -1548,4 +1548,50 @@ def test_disk_cache_dir_reuses_same_storage_options(tmp_path):
         )
         np.testing.assert_array_equal(array[:], data)
 
-    assert len(list(cache.glob("*.b2nd"))) == 1
+    assert len(list(cache.glob("*/*.b2nd"))) == 1
+
+
+def test_readable_cache_paths(tmp_path):
+    import re
+    from pathlib import Path
+
+    from blosc2.core import fsspec_cache_path
+
+    url = "https://example.org/hierarchy.b2z?token=secret"
+    first = Path(fsspec_cache_path(url, tmp_path, ".b2nd", dataset="d0/a1"))
+    second = Path(fsspec_cache_path(url, tmp_path, ".b2nd", dataset="d0/a2"))
+    assert re.fullmatch(r"hierarchy\.b2z--[0-9a-f]{12}", first.relative_to(tmp_path).parts[0])
+    assert first.parts[-2:] == ("d0", "a1.b2nd")
+    assert first.parent == second.parent
+    assert "secret" not in str(first)
+    other = Path(
+        fsspec_cache_path(url, tmp_path, ".b2nd", dataset="d0/a1", storage_options={"endpoint": "other"})
+    )
+    assert other != first
+    for dataset in ("../a", "CON/a", "d0/a:b", "d0/" + "x" * 300, "d0/a\\b"):
+        path = Path(fsspec_cache_path(url, tmp_path, ".b2nd", dataset=dataset))
+        assert path.resolve().is_relative_to(tmp_path.resolve())
+        assert all(len(part) < 130 for part in path.relative_to(tmp_path).parts)
+    assert fsspec_cache_path(url, tmp_path, ".b2nd", dataset="a") != fsspec_cache_path(
+        url, tmp_path, ".b2nd", dataset="a.b2nd"
+    )
+
+
+def test_readable_cache_ignores_legacy_and_checks_identity(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+
+    url, data = _remote_array("readable.b2nd", nchunks=2, chunk_size=1000)
+    legacy = tmp_path / (hashlib.sha256(url.encode()).hexdigest() + ".b2nd")
+    first = blosc2.open(url, lazy=True, cache_path=legacy)
+    first[:]
+    second = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    assert second._cache_status == "created"
+    assert Path(second.cache_path).name == "readable.b2nd"
+    assert legacy.exists()
+    np.testing.assert_array_equal(blosc2.open(legacy)[:], data)
+    directory = Path(second.cache_path).parent.name
+    monkeypatch.setattr(blosc2.core, "cache_directory_name", lambda *args: directory)
+    other_url, _ = _remote_array("other/readable.b2nd", nchunks=2, chunk_size=1000)
+    with pytest.raises(ValueError, match="different specification"):
+        blosc2.open(other_url, lazy=True, cache_dir=tmp_path)

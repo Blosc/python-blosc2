@@ -371,7 +371,7 @@ def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_bl
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
-    assert len(list(cache_dir.glob("*.b2nd"))) == 1
+    assert len(list(cache_dir.glob("*/*.b2nd"))) == 1
 
 
 def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_blocks):
@@ -410,7 +410,7 @@ def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, ser
         assert proxy.source["kind"] == "caterva2"
         assert "auth_token" not in proxy.source
 
-        cache = next(cache_dir.glob("*.b2nd"))
+        cache = next(cache_dir.glob("*/*.b2nd"))
         reopened = blosc2.open(cache, mode="a")
         assert np.array_equal(reopened[0:5, 0:5], data[0:5, 0:5])
 
