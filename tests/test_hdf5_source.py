@@ -294,10 +294,10 @@ def test_hdf5_requires_lazy(tmp_path):
     path = str(tmp_path / "not_lazy.h5")
     with h5py.File(path, "w") as f:
         f.create_dataset("data", data=[1, 2, 3])
-    with pytest.raises(ValueError, match="HDF5 sources require lazy=True"):
-        blosc2.open(path, lazy=False)
-    with pytest.raises(ValueError, match="dataset requires lazy=True"):
-        blosc2.open(path, lazy=False, dataset="data")
+    # lazy=True is auto-inferred for HDF5 sources, so omitting it (or even
+    # passing lazy=False explicitly) should still work when a dataset is given.
+    proxy = blosc2.open(path, dataset="data")
+    np.testing.assert_array_equal(proxy[:], [1, 2, 3])
 
 
 def test_hdf5_rejects_mutable():

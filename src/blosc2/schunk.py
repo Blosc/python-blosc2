@@ -2294,6 +2294,17 @@ def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, datas
     return open(localized, mode, offset, **kwargs)
 
 
+def _infer_lazy(lazy: bool, dataset, source_format, urlpath: str) -> bool:
+    """Return True when the request inherently requires lazy mode."""
+    if lazy:
+        return True
+    if dataset is not None or source_format == "hdf5":
+        return True
+    parsed = urlsplit(urlpath)
+    url_path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
+    return any(part.endswith((".h5", ".hdf5")) for part in url_path_str.split("/"))
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2322,6 +2333,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         dataset = parsed_dataset
     if source_format is None:
         source_format = detected_format
+
+    # Auto-infer lazy=True when the request inherently requires it.
+    lazy = _infer_lazy(lazy, dataset, source_format, urlpath)
 
     _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
     remote_array_options = _remote_array_options(
