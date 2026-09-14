@@ -180,6 +180,25 @@ def test_open_offset(offset, urlpath, mode, mmap_mode):
     blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.parametrize("suffix", [".h5", ".hdf5", ".b2z", ".zarr"])
+@pytest.mark.parametrize("array", [False, True])
+def test_open_embedded_frame_ignores_container_suffix(tmp_path, suffix, array):
+    data = np.arange(20, dtype=np.int32)
+    original = blosc2.asarray(data) if array else blosc2.SChunk(data=data)
+    path = tmp_path / ("embedded" + suffix)
+    prefix = b"surrounding container header"
+    path.write_bytes(prefix + original.to_cframe())
+
+    for target in (path, str(path), path.as_uri()):
+        with blosc2.open(target, offset=len(prefix), dparams={"nthreads": 1}) as opened:
+            assert type(opened) is type(original)
+            if array:
+                np.testing.assert_array_equal(opened[:], data)
+            else:
+                assert opened[:] == data.tobytes()
+    assert path.read_bytes() == prefix + original.to_cframe()
+
+
 def test_open_defaults_to_readonly(tmp_path):
     """open() defaults to read-only mode when mode is omitted."""
     urlpath = str(tmp_path / "test.b2nd")

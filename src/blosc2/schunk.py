@@ -2495,6 +2495,8 @@ def open(
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
+        A nonzero offset in a local file opens the embedded Blosc2 frame
+        directly, bypassing filename-based container format detection.
     kwargs: dict, optional
         lazy: bool, optional
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
@@ -2669,6 +2671,14 @@ def open(
     """
     if isinstance(urlpath, blosc2.URLPath):
         return _open_c2_urlpath(urlpath, mode, offset, kwargs)
+
+    if offset != 0 and not is_fsspec_url(urlpath):
+        local_path = normalize_urlpath(os.fspath(urlpath))
+        if os.path.isfile(local_path):
+            if dataset is not None or refs is not None:
+                raise ValueError("dataset and refs cannot be combined with an embedded frame offset")
+            _set_default_dparams(kwargs)
+            return process_opened_object(blosc2_ext.open(local_path, mode, offset, **kwargs))
 
     urlpath = _normalize_open_target(urlpath, kwargs, dataset, refs)
 
