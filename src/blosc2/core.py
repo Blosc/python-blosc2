@@ -628,10 +628,13 @@ def normalize_urlpath(urlpath: object) -> object:
     """Turn a `file://` URL into the native path it names, leaving anything else alone.
 
     Local URLs are kept off the fsspec branch so they can use mmap and every
-    container format, which only works if the scheme is stripped first.
+    container format, which only works if the scheme is stripped first.  A
+    `::` container path (e.g. ``file:///x.h5::/d0/a2``) rides along: only the
+    part before it names the file, and Windows path conversion rejects `::`.
     """
     if isinstance(urlpath, str) and urlpath.startswith("file://"):
-        parsed = urllib.parse.urlparse(urlpath)
+        base, sep, suffix = urlpath.partition("::")
+        parsed = urllib.parse.urlparse(base)
         netloc = "" if parsed.netloc.lower() in ("", "localhost") else parsed.netloc
         if re.fullmatch("[A-Za-z]:", netloc):
             if os.name != "nt":
@@ -649,7 +652,7 @@ def normalize_urlpath(urlpath: object) -> object:
             raise ValueError(
                 f"{urlpath} names the host {netloc!r}; only Windows can reach one, as a UNC path"
             )
-        return urllib.request.url2pathname(prefix + parsed.path)
+        return urllib.request.url2pathname(prefix + parsed.path) + sep + suffix
     return urlpath
 
 

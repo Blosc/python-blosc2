@@ -832,6 +832,14 @@ def test_normalize_file_url(url, expected):
     assert expected in pathlib.PurePath(blosc2.core.normalize_urlpath(url)).as_posix()
 
 
+def test_normalize_file_url_with_container_separator():
+    # Only the part before '::' names the file; the separator and dataset path
+    # must survive so parse_container_url can split them afterwards.
+    normalized = blosc2.core.normalize_urlpath("file:///tmp/a.h5::/d0/a2")
+    assert not normalized.startswith("file://")
+    assert normalized.endswith("a.h5::/d0/a2")
+
+
 def test_normalize_windows_drive_url():
     # file://C:/x names the host C:, which only Windows can reach, as a drive
     url = "file://C:/data/a.b2nd"
