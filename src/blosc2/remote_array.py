@@ -34,7 +34,7 @@ from blosc2.b2objects import (
     write_b2object_payload,
     write_b2object_user_vlmeta,
 )
-from blosc2.core import parse_container_url, storage_options_fingerprint
+from blosc2.core import fsspec_cache_path, parse_container_url, storage_options_fingerprint
 from blosc2.info import InfoReporter, format_nbytes_info
 
 DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
@@ -585,9 +585,7 @@ class RemoteArray(blosc2.Operand):
             and refs is None
         ):
             shared_refs_path = Path(
-                blosc2.schunk.fsspec_cache_path(
-                    urlpath, cache_dir, ".hdf5-refs.b2", storage_options=storage_options
-                )
+                fsspec_cache_path(urlpath, cache_dir, ".hdf5-refs.b2", storage_options=storage_options)
             )
         if self._authorized_source:
             self.src, self._source = _validate_authorized_source(
@@ -740,7 +738,7 @@ class RemoteArray(blosc2.Operand):
         if self._source_format == "zarr" and self._dataset:
             parsed = urlsplit(urlpath)
             urlpath = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")[: -len(self._dataset) - 1]))
-        return blosc2.schunk.fsspec_cache_path(
+        return fsspec_cache_path(
             urlpath, cache_dir, ".b2nd", dataset=self._dataset, storage_options=storage_options
         )
 

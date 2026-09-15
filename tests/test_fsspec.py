@@ -526,7 +526,7 @@ def test_lazy_with_exact_cache_path(tmp_path):
     assert np.array_equal(q[0:100], a[0:100])
 
 
-def test_exact_cache_path_reopens_as_lazy_fsspec_proxy(tmp_path, monkeypatch):
+def test_exact_cache_path_reopens_as_remote_array(tmp_path, monkeypatch):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
     url = _put("independentcache.b2nd", a)
     cache_path = tmp_path / "independent.b2nd"

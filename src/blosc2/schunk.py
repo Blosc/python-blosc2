@@ -25,7 +25,6 @@ import numpy as np
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
 from blosc2.core import (
-    fsspec_cache_path,
     fsspec_open,
     is_fsspec_url,
     localize_fsspec_url,
@@ -2078,7 +2077,7 @@ def _remote_array_options(
     dataset=None,
     refs=None,
 ):
-    """Return explicit RemoteArray options, or None for the legacy lazy Proxy path."""
+    """Return the explicit RemoteArray options, or None when remote access was not requested."""
     policy_present = "cache_policy" in kwargs
     limit_present = "max_cache_bytes" in kwargs
     if not lazy and not policy_present and not limit_present:
@@ -2110,73 +2109,6 @@ def _remote_array_options(
     if refs is not None:
         options["refs"] = refs
     return options
-
-
-def _lazy_fsspec_proxy(
-    urlpath: str,
-    cache_dir: str | pathlib.Path | None,
-    cache_path: str | pathlib.Path | None,
-    max_concurrency: int | None = None,
-    storage_options: dict | None = None,
-):
-    """Wrap a remote frame in a Proxy that fetches chunks on demand.
-
-    Without a cache location the fetched chunks live in memory and die with the
-    proxy. Otherwise they go to `cache_path`, or to a derived name under
-    `cache_dir`, so a later run starts from what this one pulled.
-    """
-    # None leaves the default where it belongs, on the source itself
-    kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
-    if storage_options is not None:
-        kwargs["storage_options"] = storage_options
-    src = blosc2.FsspecNDSource(urlpath, **kwargs)
-    return _lazy_remote_array(src, urlpath, cache_dir, cache_path)
-
-
-def _lazy_remote_array(
-    src,
-    identity: str,
-    cache_dir: str | pathlib.Path | None,
-    cache_path: str | pathlib.Path | None,
-    *,
-    source_fresh: bool = False,
-    max_cache_bytes: int | None = None,
-):
-    """Wrap a remote source in a memory or persistent cache."""
-    if cache_dir is None and cache_path is None:
-        return blosc2.Proxy(
-            src,
-            _refresh_source=not source_fresh,
-            _max_cache_bytes=max_cache_bytes,
-        )
-
-    if cache_path is not None:
-        path = os.fspath(cache_path)
-        if os.path.isdir(path):
-            raise ValueError("cache_path must name a file, not a directory")
-    else:
-        path = fsspec_cache_path(identity, cache_dir, ".b2nd")
-    stamp = getattr(src, "stamp", None)
-    cache_status = "created"
-    if os.path.exists(path):
-        if _cache_stamp(path) != stamp:
-            # The remote frame was replaced, which makes every cached chunk -- and
-            # every offset they were fetched by -- meaningless
-            blosc2.remove_urlpath(path)
-            cache_status = "invalidated/rebuilt"
-        else:
-            cache_status = "reused"
-    # Proxy stamps the cache with src.stamp itself, and refuses one built against
-    # other bytes; removing it above is what turns that refusal into a refetch
-    proxy = blosc2.Proxy(
-        src,
-        urlpath=path,
-        mode="a",
-        _refresh_source=not source_fresh,
-        _max_cache_bytes=max_cache_bytes,
-    )
-    proxy._cache_status = cache_status
-    return proxy
 
 
 def _validate_c2_urlpath_options(kwargs: dict):
@@ -2231,31 +2163,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
             urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
         )
 
-    if remote_array_options is not None:
-        return blosc2.RemoteArray(urlpath, **remote_array_options)
-
-    src = blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
-    if max_concurrency is not None:
-        src.max_concurrency = max_concurrency
-    identity = f"caterva2:{blosc2.c2array._server_url(src.urlbase, src.path)}"
-    # C2Array's constructor has just read api/info.  That response supplies both
-    # the geometry and the stamp against which the cache is checked, so asking
-    # for it again in Proxy.__init__ only adds a second serial round trip.
-    return _lazy_remote_array(src, identity, cache_dir, cache_path, source_fresh=True)
-
-
-def _cache_stamp(path: str):
-    """The remote stamp a cached proxy container was built against, if any.
-
-    None for a cache that cannot be read at all, which an interrupted run can
-    leave behind: the caller throws those away just like a stale one.
-    """
-    _set_default_dparams(kwargs := {})
-    try:
-        cache = blosc2_ext.open(path, "r", 0, **kwargs)
-    except RuntimeError:
-        return None
-    return getattr(cache, "schunk", cache).vlmeta.get("proxy-stamp")
+    return blosc2.RemoteArray(urlpath, **remote_array_options)
 
 
 def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):
@@ -2372,11 +2280,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        if remote_array_options is not None:
-            return blosc2.RemoteArray(urlpath, **remote_array_options)
-        return _lazy_fsspec_proxy(
-            urlpath, cache_dir, cache_path, max_concurrency, storage_options=storage_options
-        )
+        return blosc2.RemoteArray(urlpath, **remote_array_options)
 
     _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
