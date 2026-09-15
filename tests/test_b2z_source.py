@@ -321,7 +321,8 @@ def test_options_and_bad_archives():
         blosc2.open(url, dataset="d0/a", lazy=True)
 
 
-def test_parser_query_and_local_store(tmp_path):
+@pytest.mark.parametrize("separator", ["/", "::/"])
+def test_parser_query_and_local_store(tmp_path, monkeypatch, separator):
     assert parse_container_url("zip://a.b2nd::memory://h.b2z")[2] is None
     assert parse_container_url("memory://h.b2z/group.h5/a") == ("memory://h.b2z", "group.h5/a", "b2z")
     assert parse_container_url("https://host/h.b2z/d0/a?x=1") == ("https://host/h.b2z?x=1", "d0/a", "b2z")
@@ -331,6 +332,14 @@ def test_parser_query_and_local_store(tmp_path):
         store["/a"] = np.arange(10)
     with blosc2.open(path) as store:
         np.testing.assert_array_equal(store["/a"][:], np.arange(10))
+    monkeypatch.chdir(tmp_path)
+    arr = blosc2.open(f"local.b2z{separator}a")
+    np.testing.assert_array_equal(arr[:], np.arange(10))
+    assert dict(arr.info_items)["source"]["urlpath"] == "local.b2z"
+    assert "local.b2z" in repr(arr.info)
+    assert "local.b2z" in arr.info._repr_html_()
+    with pytest.raises(ValueError, match="remote URL"):
+        arr.to_cframe()
 
 
 @pytest.mark.parametrize("dtype", ["int32", "float64", "complex64", "S8", "datetime64[s]", ">i4"])

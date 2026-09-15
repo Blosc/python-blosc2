@@ -1260,9 +1260,19 @@ class RemoteArray(blosc2.Operand):
     @property
     def info_items(self) -> list[tuple[str, object]]:
         """The fields shown by :attr:`info`."""
+        self._check_open()
+        try:
+            source = self.source
+        except ValueError:
+            # Local paths are useful for display; runtime URLs may contain credentials.
+            source = dict(self._source)
+            for key in ("urlpath", "urlbase"):
+                url = source.get(key)
+                if url is not None and (urlsplit(url).scheme or "::" in url):
+                    source[key] = "<runtime-only URL>"
         return [
             ("type", type(self).__name__),
-            ("source", self.source),
+            ("source", source),
             ("shape", self.shape),
             ("chunks", self.chunks),
             ("blocks", self.blocks),

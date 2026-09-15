@@ -1020,6 +1020,9 @@ def test_runtime_signed_url_is_not_exportable():
     url, data = _remote_array("signed.b2nd?token=secret", nchunks=1, chunk_size=100)
     proxy = blosc2.open(url, lazy=True)
     np.testing.assert_array_equal(proxy[:], data)
+    assert dict(proxy.info_items)["source"]["urlpath"] == "<runtime-only URL>"
+    assert "secret" not in repr(proxy.info)
+    assert "secret" not in proxy.info._repr_html_()
     with pytest.raises(ValueError, match="credential-like"):
         proxy.to_cframe()
     with pytest.raises(ValueError, match="credential-like"):
