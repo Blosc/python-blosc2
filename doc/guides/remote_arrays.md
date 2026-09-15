@@ -1,4 +1,4 @@
-# Working with Remote Arrays and Stores
+# Working with Remote Arrays
 
 Blosc2 can open remote arrays and stores (arrays on a hierarchical container) without downloading them first.
 Source metadata is read at open time; array data is fetched when a slice needs it and retained according to the cache policy.
@@ -108,6 +108,8 @@ Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use y
 ## Operating with remote arrays
 
 Remote arrays can be operands in lazy expressions. Opening an array and building the expression only reads metadata; data is fetched when the expression is sliced or computed. A shared `cache_dir` keeps downloaded chunks locally between runs:
+
+![Remote hierarchical compute across HDF5, Zarr, and B2Z datasets with tiered caching and lazy evaluation.](../tutorials/images/remote_lazy_expr_architecture.png)
 
 ```python
 import blosc2
@@ -666,33 +668,3 @@ For ordinary remote access, use `blosc2.open("https://...", lazy=True)` or `blos
 - `examples/remote/rw-fsspec.py` — fsspec reading and writing examples.
 - {doc}`b2view <b2view>` — interactive terminal browser for local and remote containers.
 - {ref}`RemoteArray`, {ref}`RemoteStore`, {ref}`RemoteNode`, {ref}`C2Array`, {ref}`B2ZNDSource`, {ref}`ZarrNDSource`, {ref}`HDF5NDSource`, {ref}`FsspecNDSource`, {ref}`ByteRangeNDSource`, {ref}`Proxy`, and {ref}`Traffic` — API reference pages.
-
-
-## Readable disk cache paths
-
-Caches created through `cache_dir=` use readable source directories with a
-12-character fingerprint. Individual array caches preserve the dataset hierarchy:
-
-```text
-cache/
-  hierarchy.b2z--03cc6a2f9314/d0/a1.b2nd
-  hierarchy.zarr--a39d11ca41f0/d0/a1.b2nd
-  temperatures.b2nd--4908c5e5602a/temperatures.b2nd
-```
-
-The fingerprint distinguishes source URLs and storage options without exposing
-credentials. Datasets in the same container share a directory. Unsafe filename
-characters are encoded and long components are shortened. RemoteStore caches also
-use readable source directories, retaining their generation and manifest layout
-inside. Stored source identities are checked before cache reuse.
-
-Old hash-only entries are neither reused through `cache_dir=` nor deleted. The
-first open creates a new cache; old entries can be removed to reclaim space.
-Explicit `cache_path=` and directly opening existing carrier files still work.
-
-
-Whole-member B2Z prefetch populates the ordinary chunk cache, so `cache_bytes`
-can be nonzero immediately after opening a small array. These prefetched chunks
-count toward `max_cache_bytes` and can be evicted by `trim_cache`, just like
-chunks fetched by a slice. Bootstrap metadata, ZIP headers, and frame metadata
-are excluded; `cache_bytes` is not the allocated size of the carrier file.
