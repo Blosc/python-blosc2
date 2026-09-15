@@ -32,7 +32,7 @@ Preliminaries
 
 * Commit the changes::
 
-    g
+    git commit -a -m "Getting ready for release X.Y.Z"
     git push
 
 * Double check that the supported Python versions for the wheels are the correct ones

@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.13.1 to 4.13.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.13.0 to 4.13.1
 
 A maintenance and performance follow-up to 4.13.0 focused on remote data
