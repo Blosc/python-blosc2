@@ -464,6 +464,16 @@ def test_hdf5_disk_cache_reuses_refs(tmp_path, monkeypatch):
     np.testing.assert_array_equal(second[:10], data[:10])
 
 
+def test_publish_hdf5_refs_skips_carriers_without_a_snapshot(tmp_path):
+    """Local h5py readers (e.g. Windows drive-letter paths) have no refs to share."""
+    from blosc2.remote_array import _publish_hdf5_refs
+
+    carrier = blosc2.empty((4,), dtype="i4", cparams=blosc2.CParams(nthreads=1))
+    path = tmp_path / "shared.hdf5-refs.b2"
+    _publish_hdf5_refs(path, carrier, scanned=True)
+    assert not path.exists()
+
+
 @pytest.mark.parametrize("snapshot", ["new", "legacy", "damaged"])
 def test_hdf5_disk_cache_shares_refs_between_leaves(tmp_path, monkeypatch, snapshot):
     import blosc2.hdf5_source as hdf5_source

@@ -1023,6 +1023,7 @@ def test_runtime_signed_url_is_not_exportable():
     assert dict(proxy.info_items)["source"]["urlpath"] == "<runtime-only URL>"
     assert "secret" not in repr(proxy.info)
     assert "secret" not in proxy.info._repr_html_()
+    assert "secret" not in str(proxy)
     with pytest.raises(ValueError, match="credential-like"):
         proxy.to_cframe()
     with pytest.raises(ValueError, match="credential-like"):

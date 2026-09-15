@@ -152,11 +152,16 @@ def _store_hdf5_refs(carrier, refs):
 
 
 def _publish_hdf5_refs(path, carrier, *, scanned):
-    if path is not None and (scanned or not path.exists()):
+    if path is None or carrier is None:
+        return
+    raw_refs = getattr(carrier, "schunk", carrier).vlmeta.get("hdf5-refs")
+    if raw_refs is None:
+        return  # Local h5py readers have no reference snapshot to share.
+    if scanned or not path.exists():
         from blosc2.remote_store_cache import atomic_write
 
         # Also seed the shared snapshot when reopening an older leaf cache.
-        atomic_write(path, carrier.schunk.vlmeta["hdf5-refs"])
+        atomic_write(path, raw_refs)
 
 
 def _b2z_seed_from_carrier(carrier):
@@ -1257,12 +1262,10 @@ class RemoteArray(blosc2.Operand):
         self._check_open()
         return InfoReporter(self)
 
-    @property
-    def info_items(self) -> list[tuple[str, object]]:
-        """The fields shown by :attr:`info`."""
-        self._check_open()
+    def _display_source(self) -> dict:
+        """The source descriptor for display, masking runtime-only URLs."""
         try:
-            source = self.source
+            return self.source
         except ValueError:
             # Local paths are useful for display; runtime URLs may contain credentials.
             source = dict(self._source)
@@ -1270,6 +1273,22 @@ class RemoteArray(blosc2.Operand):
                 url = source.get(key)
                 if url is not None and (urlsplit(url).scheme or "::" in url):
                     source[key] = "<runtime-only URL>"
+            return source
+
+    def _display_identity(self) -> str:
+        """`_source_identity` for display, without runtime-only credentials."""
+        source = self._display_source()
+        if source.get("kind") in {"hdf5", "b2z"}:
+            return f"{source['urlpath']}::{source['dataset']}"
+        if source.get("kind") in {"fsspec", "zarr"}:
+            return source["urlpath"]
+        return f"caterva2:{blosc2.c2array._server_url(source.get('urlbase'), source.get('path'))}"
+
+    @property
+    def info_items(self) -> list[tuple[str, object]]:
+        """The fields shown by :attr:`info`."""
+        self._check_open()
+        source = self._display_source()
         return [
             ("type", type(self).__name__),
             ("source", source),
@@ -1740,4 +1759,4 @@ class RemoteArray(blosc2.Operand):
         return False
 
     def __str__(self):
-        return f"RemoteArray({self._source_identity()!r}, cache_policy={self.cache_policy.name})"
+        return f"RemoteArray({self._display_identity()!r}, cache_policy={self.cache_policy.name})"
