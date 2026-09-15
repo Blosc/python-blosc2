@@ -308,6 +308,8 @@ def test_options_and_bad_archives():
     with blosc2.open(url, dataset="d0/a") as arr:
         assert isinstance(arr, blosc2.RemoteArray)
         assert arr.dataset == "d0/a"
+    with pytest.raises(NotImplementedError, match="requires lazy=True"):
+        blosc2.open(url, dataset="d0/a", lazy=False)
     fs = fsspec.filesystem("memory")
     fs.pipe_file("suffix-free", fs.cat_file("v10.b2z"))
     assert (

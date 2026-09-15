@@ -212,6 +212,13 @@ def test_zarr_infers_lazy_open(zarr, zarr_format, path, options):
     np.testing.assert_array_equal(proxy[1:5, 2:6], data[1:5, 2:6])
 
 
+def test_zarr_rejects_explicit_eager_open(zarr):
+    url = "memory://zarr-tests/explicit-eager.zarr"
+    zarr.create_array(url, shape=(3,), chunks=(3,), dtype="i4")
+    with pytest.raises(NotImplementedError, match="requires lazy=True"):
+        blosc2.open(url, lazy=False)
+
+
 def test_zarr_rejects_mutable_source_mode():
     with pytest.raises(NotImplementedError, match="mutable Zarr"):
         blosc2.RemoteArray(

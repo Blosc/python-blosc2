@@ -34,8 +34,12 @@ def test_open_memory_url():
         f.write(a.to_cframe())
 
     b = blosc2.open("memory://x.b2nd")
-    assert isinstance(b, blosc2.NDArray)
+    assert isinstance(b, blosc2.RemoteArray)
     assert np.array_equal(b[:], a[:])
+
+    eager = blosc2.open("memory://x.b2nd", lazy=False)
+    assert isinstance(eager, blosc2.NDArray)
+    assert np.array_equal(eager[:], a[:])
 
 
 def test_save_array_to_url():
@@ -68,7 +72,7 @@ def test_module_save_to_url():
 def test_save_to_url_honours_cparams():
     a = blosc2.arange(0, 100, dtype="i4", shape=(10, 10), chunks=(5, 10))
     a.save("memory://sv3.b2nd", cparams=blosc2.CParams(codec=blosc2.Codec.LZ4))
-    b = blosc2.open("memory://sv3.b2nd")
+    b = blosc2.open("memory://sv3.b2nd", lazy=False)
     assert b.schunk.cparams.codec == blosc2.Codec.LZ4
     assert np.array_equal(b[:], a[:])
 
@@ -1535,8 +1539,12 @@ def test_open_memory_url_with_storage_options():
     a = blosc2.arange(10, dtype="i4")
     a.save("memory://so_test.b2nd", storage_options={})
     b = blosc2.open("memory://so_test.b2nd", storage_options={})
-    assert isinstance(b, blosc2.NDArray)
+    assert isinstance(b, blosc2.RemoteArray)
     assert np.array_equal(b[:], a[:])
+
+    eager_b = blosc2.open("memory://so_test.b2nd", lazy=False, storage_options={})
+    assert isinstance(eager_b, blosc2.NDArray)
+    assert np.array_equal(eager_b[:], a[:])
 
     lazy_b = blosc2.open("memory://so_test.b2nd", lazy=True, storage_options={})
     assert isinstance(lazy_b, blosc2.RemoteArray)

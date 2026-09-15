@@ -1144,7 +1144,7 @@ def load_tensor(
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath, mode="r", dparams=dparams, storage_options=storage_options)
+    schunk = blosc2.open(urlpath, mode="r", lazy=False, dparams=dparams, storage_options=storage_options)
     return _unpack_tensor(schunk)
 
 

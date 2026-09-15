@@ -102,6 +102,11 @@ dataset through h5py and caches converted Blosc2 chunks in memory. Explicit
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
 Mutable B2Z, Zarr, and HDF5 sources are not supported.
 
+The `lazy` argument defaults to `None`: omitted values select the appropriate mode automatically.
+Known remote array paths (such as `.b2nd`) and dataset paths use lazy access by default; `lazy=True`
+requests a `RemoteArray`, and `lazy=False` requests eager access. Dataset paths currently
+require lazy access, so an explicit `lazy=False` raises `NotImplementedError` instead of being silently overridden.
+
 A `URLPath` always means Caterva2.
 If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`.
 Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).

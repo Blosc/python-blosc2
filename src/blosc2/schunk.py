@@ -2217,7 +2217,8 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
     _validate_c2_urlpath_options(kwargs)
-    lazy = kwargs.pop("lazy", False)
+    lazy = kwargs.pop("lazy", None)
+    lazy = _resolve_lazy(lazy, None, None, "")
     remote_array_options = _remote_array_options(
         kwargs, cache_dir, cache_path, max_concurrency, lazy=lazy, assume_immutable=assume_immutable
     )
@@ -2259,7 +2260,7 @@ def _cache_stamp(path: str):
 
 def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):
     if dataset is not None and not lazy:
-        raise ValueError("dataset requires lazy=True")
+        raise NotImplementedError("dataset access currently requires lazy=True")
     _validate_fsspec_source_format(source_format, lazy)
     if dataset is not None and source_format not in {None, "hdf5", "zarr", "b2z"}:
         raise ValueError("dataset is only supported for HDF5 and Zarr sources or B2Z archives")
@@ -2298,11 +2299,19 @@ def _infer_lazy(lazy: bool, dataset, source_format, urlpath: str) -> bool:
     """Return True when the request inherently requires lazy mode."""
     if lazy:
         return True
-    if dataset is not None or source_format in {"hdf5", "zarr"}:
+    if dataset is not None or source_format in {"blosc2", "hdf5", "zarr"}:
         return True
     parsed = urlsplit(urlpath)
     url_path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
-    return any(part.endswith((".h5", ".hdf5")) for part in url_path_str.split("/"))
+    return any(part.lower().endswith((".b2nd", ".h5", ".hdf5")) for part in url_path_str.split("/"))
+
+
+def _resolve_lazy(lazy, dataset, source_format, urlpath):
+    if lazy is not None and not isinstance(lazy, bool):
+        raise TypeError("lazy must be None or a bool")
+    if lazy is False and (dataset is not None or source_format in {"hdf5", "zarr"}):
+        raise NotImplementedError("dataset access currently requires lazy=True")
+    return _infer_lazy(False, dataset, source_format, urlpath) if lazy is None else lazy
 
 
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
@@ -2326,7 +2335,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     max_concurrency = kwargs.pop("max_concurrency", None)
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
-    lazy = kwargs.pop("lazy", False)
+    lazy = kwargs.pop("lazy", None)
 
     urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
     if dataset is None:
@@ -2334,8 +2343,11 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     if source_format is None:
         source_format = detected_format
 
-    # Auto-infer lazy=True when the request inherently requires it.
-    lazy = _infer_lazy(lazy, dataset, source_format, urlpath)
+    # Explicit localization and local-file options retain their eager behavior.
+    if lazy is None and (cache_dir is not None or offset != 0 or kwargs.get("mmap_mode") is not None):
+        lazy = False
+    # Auto-infer lazy=True only when the caller left the choice unspecified.
+    lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
 
     _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
     remote_array_options = _remote_array_options(
@@ -2512,7 +2524,11 @@ def open(
         A nonzero offset in a local file opens the embedded Blosc2 frame
         directly, bypassing filename-based container format detection.
     kwargs: dict, optional
-        lazy: bool, optional
+        lazy: bool or None, optional
+            ``None`` (the default) automatically selects the access mode. ``True``
+            returns a lazy :ref:`RemoteArray`; ``False`` requests eager access.
+            Known remote `.b2nd` arrays default to lazy access. Dataset paths
+            currently require ``lazy=True`` and reject explicit ``False``.
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
             the remote dataset and read the byte ranges a slice touches. Neither form opens
             a whole remote store hierarchy. A slice landing in a small part of a large
