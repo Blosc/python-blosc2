@@ -38,7 +38,6 @@ The argument passed to {func}`blosc2.open` selects the route:
 | A URL containing a `.zarr` path component                                     | Zarr     | One immutable Zarr v2 or v3 array                       |
 | A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5     | One immutable HDF5 dataset (h5py locally, kerchunk remotely) |
 | A {ref}`URLPath`                                                              | Caterva2 | One array-like dataset on a Caterva2 server             |
-| An exported `.b2z` reference archive                                          | B2Z      | A restored {ref}`RemoteStore` reference hierarchy       |
 
 ```python
 import blosc2
@@ -102,14 +101,6 @@ dataset through h5py and caches converted Blosc2 chunks in memory. Explicit
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
 Mutable B2Z, Zarr, and HDF5 sources are not supported.
 
-The `lazy` argument defaults to `None`: omitted values select the appropriate mode automatically.
-Known remote array paths (such as `.b2nd`) and dataset paths use lazy access by default; `lazy=True`
-requests a `RemoteArray`, and `lazy=False` requests eager access. Passing `cache_dir=` keeps that lazy
-default and persists fetched chunks in a `RemoteArray` carrier; combine it with `lazy=False` to
-download the complete container there instead. `mmap_mode=` or a nonzero `offset=` forces the eager path.
-Dataset paths currently
-require lazy access, so an explicit `lazy=False` raises `NotImplementedError` instead of being silently overridden.
-
 A `URLPath` always means Caterva2.
 If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`.
 Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
@@ -148,7 +139,6 @@ What differs between the transports is the types of remote objects each can open
 | NDArray leaf inside `.b2z`              | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
 | Zarr v2/v3 array                        | Yes (`blosc2.open` / `RemoteArray`) | No                        |
 | HDF5 dataset                            | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
-| Whole container (.b2z, .zarr, .h5)      | Yes (`blosc2.open` / `RemoteArray`) | Yes; zarr not yet         |
 | Lazy or computed array                  | No                               | Yes                          |
 
 - **fsspec** supplies byte ranges.
@@ -195,18 +185,6 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
   - `attrs`: user metadata mapping (or `None` if array attributes require opening the leaf).
   - `diagnostic`: explanation for unsupported nodes (e.g. non-array objects or unsupported codecs).
 - **Graceful degradation**: Unsupported nodes remain visible during discovery and raise an informative `NotImplementedError` only when selected as arrays, allowing you to browse mixed containers without errors.
-
-### Shared caching across the hierarchy
-
-Unlike opening independent arrays with `blosc2.open(..., lazy=True)`, all leaves accessed through a `RemoteStore` share a single cache coordinator:
-
-- **Single shared budget**: The store defaults to {attr}`CachePolicy.MEMORY <blosc2.CachePolicy.MEMORY>` with a shared 256 MiB allowance across all arrays. You can customize this with `max_cache_bytes`.
-- **Cross-leaf LRU eviction**: When total retained chunks reach the budget, the least-recently used chunks across *any* leaf in the store are evicted automatically.
-- **Warm retention on close**: Closing an individual leaf handle (`array.close()`) does not discard its cached chunks from the store session. Re-accessing that dataset reuses the warm cache without re-downloading.
-- **Accounting**:
-  - `store.cache_bytes`: total retained compressed payload across all leaves in the store.
-  - `array.cache_bytes`: payload retained specifically for that leaf.
-  - `store.traffic`: cumulative network requests and response bytes for the entire store, including both metadata discovery and chunk fetches.
 
 ### Persistent disk caching with `cache_dir`
 
@@ -342,9 +320,10 @@ a = blosc2.open(url, lazy=True, cache_dir="./b2cache")
 a[100:110, :50]  # served from local disk (no network traffic)
 ```
 
-- For an individual {ref}`RemoteArray`, pass `cache_dir` (Blosc2 creates the cache carrier inside that directory) or `cache_path` (to specify an exact carrier filename).
+- For an individual {ref}`RemoteArray`, pass `cache_dir` (Blosc2 creates the cache carrier inside that directory) or `cache_path` (to specify an exact carrier filename, such as `big-cache.b2nd`).
 - For a {ref}`RemoteStore`, pass `cache_dir` to store discovered hierarchy metadata and all leaf caches together under that directory.
 - In both cases, compressed chunks are retained up to `max_cache_bytes` (defaults to 256 MiB; pass `max_cache_bytes=None` for an unbounded disk cache that never evicts).
+- If you want the on-disk carrier to be visible and predictable, set `cache_path="big-cache.b2nd"` explicitly; otherwise Blosc2 may create its own cache filename under the configured `cache_dir`.
 
 Authenticated Caterva2 caches must be private to one user.
 Reopen them under an equivalent authenticated {func}`blosc2.c2context`; do not share a cache directory between users.
@@ -375,7 +354,7 @@ For a small slice, fetching only its blocks can avoid transferring most of a lar
 ![A remote array fetches missing regions from the remote array into its local cache.
 Indexing returns the requested values.](../tutorials/images/remote_proxy.png)
 
-Purple regions are cached; red regions are still remote.
+Purple regions are cached; red regions are still remote, and they do not use local storage.
 The grid is schematic: where byte ranges are available, the fetched regions can be blocks within a chunk.
 `fetch()` warms the cache and returns the remote array, whereas indexing returns the requested values.
 
@@ -450,9 +429,19 @@ remote = blosc2.RemoteArray(
     cache_policy=blosc2.CachePolicy.NONE,
 )
 remote.save("big-reference.b2nd")
+
+# Or create a named cache carrier explicitly:
+remote = blosc2.open(
+    "s3://bucket/big.b2nd",
+    lazy=True,
+    cache_path="big-cache.b2nd",
+    mode="a",
+)
+remote[:100]
 ```
 
 The saved object contains source and geometry metadata but no credentials.
+A `.b2nd` carrier is a local cache/reference file for a remote array, not a second copy of the remote dataset itself: it stores the source locator plus any warm compressed chunks that have already been fetched. This is why a file such as `big-cache.b2nd` can be reopened later and continue serving cached reads without re-fetching the remote source. To create a visible file with a predictable name, set `cache_path="big-cache.b2nd"` when opening the remote array or call `save("big-cache.b2nd")` on the live handle.
 With `CachePolicy.NONE`, repeated reads contact the source and do not mutate the carrier.
 With `CachePolicy.DISK`, the carrier file itself is the cache and retains compressed chunks up to its payload limit.
 Disk arrays preserve warm chunks by default; memory arrays export cold carriers.
