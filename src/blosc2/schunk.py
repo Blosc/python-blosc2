@@ -338,6 +338,7 @@ class SChunk(blosc2_ext.SChunk):
         [0, 1, 2]
         >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
         [0, 2, 4]
+        >>> del schunk_mmap
         >>> shutil.rmtree(tmpdirname)
         """
         # How many chunks were replaced by a special one, which is how a reader
