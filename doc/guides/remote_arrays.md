@@ -36,7 +36,7 @@ The argument passed to {func}`blosc2.open` selects the route:
 | A URL string such as `s3://...` or `https://...`                              | fsspec   | A byte-addressable, standalone `.b2nd` file             |
 | A URL containing a `.b2z` path component, or `source_format="b2z"`            | B2Z      | One immutable external NDArray leaf in a `.b2z` archive |
 | A URL containing a `.zarr` path component                                     | Zarr     | One immutable Zarr v2 or v3 array                       |
-| A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5     | One immutable HDF5 dataset via kerchunk                 |
+| A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5     | One immutable HDF5 dataset (h5py locally, kerchunk remotely) |
 | A {ref}`URLPath`                                                              | Caterva2 | One array-like dataset on a Caterva2 server             |
 | An exported `.b2z` reference archive                                          | B2Z      | A restored {ref}`RemoteStore` reference hierarchy       |
 

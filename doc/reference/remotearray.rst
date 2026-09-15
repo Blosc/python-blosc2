@@ -57,9 +57,11 @@ Datasets within an HDF5 container can be specified via standard slash syntax (``
 the double-colon separator (``.../file.h5::dataset``), or the ``dataset="dataset"`` argument.
 Zarr containers similarly accept all three forms (``.../file.zarr/dataset``, ``.../file.zarr::dataset``,
 or ``dataset="dataset"``).
-HDF5 datasets are read through ``kerchunk`` metadata pre-indexing. Like Zarr, HDF5 sources
+HDF5 datasets on a local path are read directly with ``h5py``; remote HDF5 files use
+``kerchunk`` metadata pre-indexing. Like Zarr, HDF5 sources
 are assumed immutable (``assume_immutable=True``); mutable HDF5 sources are not supported.
-Pre-computed kerchunk references can be supplied via ``refs`` to avoid remote scanning.
+Pre-computed kerchunk references can be supplied via ``refs`` to avoid remote scanning
+(or to use the reference reader for a local file).
 
 .. code-block:: python
 
