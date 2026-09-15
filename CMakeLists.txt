@@ -22,6 +22,7 @@ set(BLOSC2_BUNDLED_VERSION v3.3.4)
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
 endif()
+
 # Specifying Python version below is tricky, but if you don't specify the minimum version here,
 # it would not consider python3 when looking for the executable. This is problematic since Fedora
 # does not include a python symbolic link to python3.
@@ -131,6 +132,10 @@ set(CMAKE_INSTALL_DATADIR blosc2/share)
 if(EMSCRIPTEN)
   set(MINIEXPR_ENABLE_TCC_JIT ON CACHE BOOL "Enable TCC JIT in Emscripten builds" FORCE)
   set(MINIEXPR_WASM32_SIDE_MODULE ON CACHE BOOL "Use host-registered wasm32 JIT helpers" FORCE)
+elseif(WIN32 AND (CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64"
+                  OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$"))
+  # Keep Windows/ARM64 on interpreter mode until minicc/libtcc supports this target.
+  set(MINIEXPR_ENABLE_TCC_JIT OFF CACHE BOOL "TinyCC lacks a Windows ARM64 backend" FORCE)
 endif()
 
 FetchContent_Declare(miniexpr
@@ -158,15 +163,29 @@ if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         ERROR_QUIET
     )
     if(_clang_resource_dir)
-        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            set(_clang_builtins "${_clang_resource_dir}/lib/windows/clang_rt.builtins-x86_64.lib")
-        else()
-            set(_clang_builtins "${_clang_resource_dir}/lib/windows/clang_rt.builtins-i386.lib")
+        set(_clang_builtins_names)
+        if(CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64"
+           OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$")
+            list(APPEND _clang_builtins_names
+                clang_rt.builtins-aarch64
+                clang_rt.builtins-arm64)
+        elseif(CMAKE_VS_PLATFORM_NAME STREQUAL "x64"
+               OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|X86_64|amd64|x86_64)$")
+            list(APPEND _clang_builtins_names clang_rt.builtins-x86_64)
+        elseif(CMAKE_VS_PLATFORM_NAME STREQUAL "Win32"
+               OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(X86|x86|i[3-6]86)$")
+            list(APPEND _clang_builtins_names clang_rt.builtins-i386)
         endif()
-        if(EXISTS "${_clang_builtins}")
-            target_link_libraries(blosc2_ext PRIVATE "${_clang_builtins}")
-        endif()
+        foreach(_clang_builtins_name IN LISTS _clang_builtins_names)
+            set(_clang_builtins "${_clang_resource_dir}/lib/windows/${_clang_builtins_name}.lib")
+            if(EXISTS "${_clang_builtins}")
+                target_link_libraries(blosc2_ext PRIVATE "${_clang_builtins}")
+                break()
+            endif()
+        endforeach()
         unset(_clang_builtins)
+        unset(_clang_builtins_name)
+        unset(_clang_builtins_names)
     endif()
     unset(_clang_resource_dir)
 endif()
@@ -187,6 +206,12 @@ else()
     set(BUILD_EXAMPLES OFF CACHE BOOL "Build C-Blosc2 examples")
     set(BUILD_BENCHMARKS OFF CACHE BOOL "Build C-Blosc2 benchmarks")
     set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
+    if(WIN32 AND (CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64"
+        OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|AARCH64|arm64|aarch64)$"))
+        # Build failure fixed in https://github.com/zlib-ng/zlib-ng/pull/2274
+        # This can be removed when we update to the next zlib-ng release.
+        set(WITH_ZLIB_OPTIM OFF CACHE BOOL "zlib-ng ARM paths need zlib-ng#2274" FORCE)
+    endif()
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(Blosc2_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/blosc2) # directory for cmake files
     set(CMAKE_INSTALL_BINDIR blosc2/lib) # directory for libblosc2.dll on windows

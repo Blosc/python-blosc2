@@ -83,6 +83,12 @@ jobs:
             cibw_pattern: "cp311-win_amd64 cp314t-win_amd64 cp315t-win_amd64"
             artifact_name: "windows-x86_64"
 
+          # Windows ARM64 builds (native runners)
+          - os: windows-11-arm
+            arch: arm64
+            cibw_pattern: "cp311-win_arm64 cp314t-win_arm64 cp315t-win_arm64"
+            artifact_name: "windows-arm64"
+
           # macOS builds (universal2)
           - os: macos-latest
             arch: x86_64
@@ -106,15 +112,6 @@ jobs:
       - name: Install Ninja
         id: ninja
         uses: turtlesec-no/get-ninja@main
-
-      - name: Add LLVM to PATH (Windows)
-        if: ${{ matrix.os == 'windows-latest' }}
-        run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
-
-      - name: Install MSVC amd64
-        uses: ilammy/msvc-dev-cmd@v1.13.0
-        with:
-          arch: amd64
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.2
@@ -219,17 +216,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both are real matrix dimensions so they cross-product (15 short jobs).
+        # Both are real matrix dimensions so they cross-product (20 short jobs).
         # The `include` entries key on `os`, which is an existing dimension, so
         # they attach artifact_name to the matching combinations rather than
         # being appended as extra jobs.
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, windows-11-arm, macos-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
         include:
           - os: ubuntu-latest
             artifact_name: "linux-x86_64"
           - os: windows-latest
             artifact_name: "windows-x86_64"
+          - os: windows-11-arm
+            artifact_name: "windows-arm64"
           - os: macos-latest
             artifact_name: "macos-universal2"
     steps:
