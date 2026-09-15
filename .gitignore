@@ -146,3 +146,6 @@ doc/reference/autofiles/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# macOS
+.DS_Store
