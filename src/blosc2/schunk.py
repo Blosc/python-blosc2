@@ -2344,7 +2344,11 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         source_format = detected_format
 
     # Explicit localization and local-file options retain their eager behavior.
-    if lazy is None and (cache_dir is not None or offset != 0 or kwargs.get("mmap_mode") is not None):
+    if lazy is None and (
+        offset != 0
+        or kwargs.get("mmap_mode") is not None
+        or (cache_dir is not None and dataset is None and source_format not in {"hdf5", "zarr", "b2z"})
+    ):
         lazy = False
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
@@ -2716,6 +2720,8 @@ def open(
     if is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)
 
+    # The native local opener does not consume the public lazy option.
+    kwargs.pop("lazy", None)
     if "storage_options" in kwargs and kwargs["storage_options"] is not None:
         raise ValueError("storage_options is only supported for fsspec URLs")
     kwargs.pop("storage_options", None)
