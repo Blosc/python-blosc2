@@ -176,7 +176,10 @@ def _b2z_seed_from_carrier(carrier):
 def _store_b2z_seed(carrier, seed):
     """Keep a B2Z bootstrap on the carrier so a reopen skips the remote ZIP bootstrap."""
     if seed is not None:
-        carrier.schunk.vlmeta["b2z-frame"] = seed
+        schunk = getattr(carrier, "schunk", carrier)
+        if getattr(schunk, "mode", "a") != "r":
+            # A read-only portable carrier keeps whatever seed it already has.
+            schunk.vlmeta["b2z-frame"] = seed
 
 
 def _zarr_metadata_from_carrier(carrier):

@@ -604,3 +604,37 @@ def test_legacy_whole_member_bootstrap_moves_into_chunk_cache(tmp_path, direct):
     assert reopened._carrier.schunk.vlmeta["b2z-frame"]["prefix"] == reopened.src._raw_header
     np.testing.assert_array_equal(reopened[:], data)
     assert reopened.traffic.requests == 0
+
+
+def test_read_only_portable_carrier_keeps_b2z_seed(tmp_path):
+    """A stale legacy seed on a read-only carrier must not crash the sparse attach."""
+    data = np.arange(1000, dtype="int32")
+    array = blosc2.asarray(data, chunks=(250,), blocks=(250,))
+    frame = array.to_cframe()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.b2nd", frame)
+    fsspec.filesystem("memory").pipe_file("read-only-seed.b2z", buffer.getvalue())
+    url = "memory://read-only-seed.b2z"
+
+    live = blosc2.RemoteArray(
+        url, dataset="a", cache_policy=blosc2.CachePolicy.DISK, cache_dir=tmp_path / "live"
+    )
+    live[:250]
+    carrier_path = tmp_path / "portable.b2nd"
+    live.save(carrier_path)
+
+    writer = blosc2.blosc2_ext.open(str(carrier_path), "a", 0)
+    seed = writer.schunk.vlmeta["b2z-frame"]
+    writer.schunk.vlmeta["b2z-frame"] = dict(seed, prefix=frame)  # legacy whole-frame seed
+
+    carrier = blosc2.blosc2_ext.open(str(carrier_path), "r", 0)
+    src = blosc2.B2ZNDSource(url, dataset="a")
+    descriptor = {"kind": "b2z", "version": 1, "urlpath": url, "dataset": "a", "assume_immutable": True}
+    with blosc2.RemoteArray.with_sparse_cache(
+        src, tmp_path / "sparse", carrier=carrier, source_descriptor=descriptor
+    ) as runtime:
+        np.testing.assert_array_equal(runtime[:], data)
+    # The read-only carrier keeps its original seed instead of being rewritten.
+    reopened = blosc2.blosc2_ext.open(str(carrier_path), "r", 0)
+    assert reopened.schunk.vlmeta["b2z-frame"]["prefix"] == frame
