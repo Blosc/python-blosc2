@@ -18,9 +18,10 @@ re-discovering the remote object.  Persistent caches created through
   `RemoteArray` without an explicit `lazy=True`. `lazy=False` still requests
   eager access, and dataset paths reject it with `NotImplementedError` instead
   of silently downloading. Zarr and HDF5 sources always use lazy access.
-  Passing `cache_dir=` (or `mmap_mode=`, `offset=`) without `lazy` keeps the
+  Passing `cache_dir=` (or `mmap_mode=`) without `lazy` keeps the
   historical eager localization for single-file containers; pass `lazy=True`
-  to persist fetched chunks in a `RemoteArray` carrier instead.
+  to persist fetched chunks in a `RemoteArray` carrier instead. A nonzero
+  `offset=` also forces the eager path.
 - **Local HDF5 files no longer need kerchunk, Zarr, or fsspec.** A local
   `.h5`/`.hdf5` dataset is read through `h5py` directly: chunked datasets keep
   their HDF5 chunk layout, contiguous datasets get automatically chosen
