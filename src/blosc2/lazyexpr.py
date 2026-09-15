@@ -1693,6 +1693,15 @@ def _raise_dsl_miniexpr_required(reason: str | None = None) -> None:
     raise RuntimeError(_dsl_miniexpr_required_message(reason))
 
 
+def _miniexpr_integer_atan2(expression, operands):
+    # ponytail: use the chunked fallback until miniexpr promotes integer atan2 inputs.
+    return (
+        isinstance(expression, str)
+        and re.search(r"\b(?:arctan2|atan2)\s*\(", expression)
+        and any(getattr(op, "dtype", np.dtype(float)).kind in "biu" for op in operands.values())
+    )
+
+
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -1847,6 +1856,8 @@ def fast_eval(  # noqa: C901
             if is_dsl and dsl_disable_reason is None:
                 dsl_disable_reason = "cumulative scans are not supported by the DSL miniexpr path."
         if isinstance(expr_string_miniexpr, str):
+            if not is_dsl and _miniexpr_integer_atan2(expr_string_miniexpr, operands):
+                use_miniexpr = False
             expr_string_miniexpr = _apply_jit_backend_pragma(
                 expr_string_miniexpr, operands_miniexpr, jit_backend
             )
@@ -2839,6 +2850,8 @@ def reduce_slices(  # noqa: C901
 
     # Check whether we can use miniexpr
     if use_miniexpr and isinstance(expression, str):
+        if _miniexpr_integer_atan2(expression, operands):
+            use_miniexpr = False
         has_complex = any(
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
@@ -3494,6 +3507,9 @@ def check_dtype(op, value1, value2):
             return blosc2.float32
         if np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
             return blosc2.float64
+
+    if op == "arctan2":
+        return np.arctan2(np.empty(0, v1_dtype), np.empty(0, v2_dtype)).dtype
 
     if (v1_dtype.kind in "Mm" or v2_dtype.kind in "Mm") and op in _datetime_binops:
         # result_type describes promotion, not operator semantics, and the two

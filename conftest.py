@@ -5,13 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Root conftest: make the parallel defaults in pytest.ini degrade gracefully.
+"""Root conftest: parallel-option fallback and isolation for source doctests.
 
-Deliberately holds nothing else.  ``tests/conftest.py`` is the one that owns
-fixtures and is imported by name (``from conftest import expected_nthreads``);
-keeping this module free of importable names means a sys.path mishap fails
-loudly instead of silently serving the wrong ``conftest``.
+``tests/conftest.py`` owns test-suite fixtures and helpers; source doctests
+live outside that directory and need their file isolation here.
 """
+
+import pytest
 
 
 def pytest_addoption(parser, pluginmanager):
@@ -45,3 +45,10 @@ def pytest_addoption(parser, pluginmanager):
         default="no",
         help="Ignored: pytest-xdist is not installed, so the run is serial",
     )
+
+
+@pytest.fixture(autouse=True)
+def isolate_doctest_files(request):
+    """Keep examples with relative filenames out of the checkout and each other's way."""
+    if isinstance(request.node, pytest.DoctestItem):
+        request.getfixturevalue("monkeypatch").chdir(request.getfixturevalue("tmp_path"))

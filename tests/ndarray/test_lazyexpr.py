@@ -28,6 +28,23 @@ except ImportError:
 NITEMS_SMALL = 100
 NITEMS = 1000
 
+
+@pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float32, np.float64])
+@pytest.mark.parametrize("fused", [False, True])
+def test_arctan2_preserves_fractional_results(dtype, fused):
+    y = np.array([0, 1, 0, -1, 1], dtype=dtype)
+    x = np.array([1, 1, -1, -1, 0], dtype=dtype)
+    a = blosc2.asarray(y, chunks=(3,), blocks=(1,))
+    b = blosc2.asarray(x, chunks=(3,), blocks=(1,))
+    expected = np.arctan2(y, x)
+    expr = blosc2.arctan2(a + 0 if fused else a, b)
+    assert expr.dtype == expected.dtype
+    np.testing.assert_allclose(expr[:], expected, rtol=1e-6)
+    np.testing.assert_allclose(expr.compute()[:], expected, rtol=1e-6)
+    np.testing.assert_allclose(expr.sum(), expected.sum(), rtol=1e-6)
+    np.testing.assert_allclose(blosc2.lazyexpr("arctan2(a, b)")[:], expected, rtol=1e-6)
+
+
 _UNARY_FUNCTIONS = [
     "sin",
     "cos",

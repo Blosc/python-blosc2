@@ -119,6 +119,26 @@ def test_ndfield():
     assert np.allclose(sa["b"][:], nsa["b"])
 
 
+@pytest.mark.parametrize("value", [7, np.int32(7), 2.5, True])
+def test_ndfield_scalar_assignment(value):
+    expected = np.zeros((4, 6), dtype=[("a", "f8"), ("b", "i4")])
+    array = blosc2.asarray(expected, chunks=(2, 3), blocks=(1, 3))
+    for key in [slice(None), (slice(1, 3), slice(2, 5)), (0, 0)]:
+        expected["a"][key] = value
+        array.fields["a"][key] = value
+        np.testing.assert_array_equal(array[:], expected)
+
+
+def test_structured_scalar_assignment():
+    expected = np.zeros(4, dtype=[("a", "f8"), ("b", "i4")])
+    array = blosc2.asarray(expected)
+    record = np.array((2.5, 7), dtype=expected.dtype)
+    for value in (record, record[()]):
+        expected[1:3] = value
+        array[1:3] = value
+        np.testing.assert_array_equal(array[:], expected)
+
+
 def test_setitem_fancy_index():
     out = blosc2.zeros(10)
     idx = np.array([1, 6, 7])

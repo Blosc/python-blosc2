@@ -624,7 +624,7 @@ def sum(
     >>> # Sum all elements in the array (axis=None)
     >>> total_sum = blosc2.sum(nd_array)
     >>> print("Sum of all elements:", total_sum)
-    21
+    Sum of all elements: 21
     >>> # Sum along axis 0 (columns)
     >>> sum_axis_0 = blosc2.sum(nd_array, axis=0)
     >>> print("Sum along axis 0 (columns):", sum_axis_0)
@@ -936,7 +936,7 @@ def min(
     >>> # Compute the minimum along axis 0 with keepdims=True
     >>> min_keepdims = blosc2.min(nd_array, axis=0, keepdims=True)
     >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
-    Minimum along axis 0 with keepdims=True:  [1]
+    Minimum along axis 0 with keepdims=True: [1]
     """
     if where is None:
         return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
@@ -969,8 +969,8 @@ def max(
     >>> import blosc2
     >>> ndarray = blosc2.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
     >>> print("NDArray data:", ndarray[:])
-    NDArray data:  [[11  2 36 24  5 69]
-                    [73 81 49  6 73  0]]
+    NDArray data: [[11  2 36 24  5 69]
+     [73 81 49  6 73  0]]
     >>> # Compute the maximum along axis 0 and 1
     >>> max_along_axis_0 = blosc2.max(ndarray, axis=0)
     >>> print("Maximum along axis 0:", max_along_axis_0)
@@ -1013,11 +1013,11 @@ def any(
     >>> ndarray = blosc2.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
     >>> print("NDArray data:", ndarray[:])
     NDArray data: [[1 0 0]
-                    [0 1 0]
-                    [0 0 0]]
+     [0 1 0]
+     [0 0 0]]
     >>> any_along_axis_0 = blosc2.any(ndarray, axis=0)
     >>> print("Any along axis 0:", any_along_axis_0)
-    Any along axis 0: [True True False]
+    Any along axis 0: [ True  True False]
     >>> any_flattened = blosc2.any(ndarray)
     >>> print("Any in the flattened array:", any_flattened)
     Any in the flattened array: True
@@ -1147,7 +1147,7 @@ def sin(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
     >>> print("Sine of the angles:", result)
     Sine of the angles: [0.00000000e+00 5.00000000e-01 7.07106781e-01 1.00000000e+00
-    1.22464680e-16]
+     1.22464680e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
 
@@ -1182,7 +1182,7 @@ def cos(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
     >>> print("Cosine of the angles:", result)
     Cosine of the angles: [ 1.00000000e+00  8.66025404e-01  7.07106781e-01  6.12323400e-17
-    -1.00000000e+00]
+     -1.00000000e+00]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
 
@@ -1218,7 +1218,7 @@ def tan(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
     >>> print("Tangent of the angles:", result)
     Tangent of the angles: [ 0.00000000e+00  5.77350269e-01  1.00000000e+00  1.63312394e+16
-    -1.22464680e-16]
+     -1.22464680e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
 
@@ -1246,7 +1246,7 @@ def sqrt(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> data = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> data = np.array([0, 1, 4, 9, 16, 25])
     >>> nd_array = blosc2.asarray(data)
     >>> result_ = blosc2.sqrt(nd_array)
     >>> result = result_[:]
@@ -1890,7 +1890,7 @@ def real(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     >>> result_ = blosc2.real(ndarray)
     >>> result = result_[:]
     >>> print("Original complex values:", complex_values)
-    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
+    Original complex values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
     >>> print("Real parts:", result)
     Real parts: [ 1.  3. -5.  7.]
     """
@@ -1999,7 +1999,7 @@ def abs(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     >>> print("Original values:", values)
     Original values: [-5 -3  0  2  4]
     >>> print("Absolute values:", result)
-    Absolute values: [5. 3. 0. 2. 4.]
+    Absolute values: [5 3 0 2 4]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
 
@@ -2030,7 +2030,7 @@ def isnan(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     >>> result_ = blosc2.isnan(ndarray)
     >>> result = result_[:]
     >>> print("isnan:", result)
-    isnan: [False, False, True, False, False]
+    isnan: [False False  True False False]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "isnan", None))
 
@@ -2061,7 +2061,7 @@ def isfinite(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     >>> result_ = blosc2.isfinite(ndarray)
     >>> result = result_[:]
     >>> print("isfinite:", result)
-    isfinite: [True, True, False, True, True]
+    isfinite: [ True  True False  True  True]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "isfinite", None))
 
@@ -2092,7 +2092,7 @@ def isinf(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     >>> result_ = blosc2.isinf(ndarray)
     >>> result = result_[:]
     >>> print("isinf:", result)
-    isinf: [False, False, True, False, False]
+    isinf: [False False  True False False]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
 
@@ -3940,7 +3940,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> # Create a structured array
         >>> sa = blosc2.zeros(shape, dtype=dtype)
         >>> # Check that fields are equal
-        >>> assert sa.fields['a'] == sa.fields['b']
+        >>> np.testing.assert_array_equal(sa.fields['a'][:], sa.fields['b'][:])
         >>> # Assign through the field view
         >>> sa.fields['a'][:] = 1
         """
@@ -3972,7 +3972,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         --------
         >>> import blosc2
         >>> array = blosc2.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-        >>> print(array.info)
+        >>> print(array.info)  # doctest: +ELLIPSIS
         type    : NDArray
         shape   : (10,)
         chunks  : (10,)
@@ -3982,11 +3982,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         cbytes  : 98 (98 B)
         cratio  : 0.82x
         cparams : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=5, use_dict=False, typesize=8,
-                : nthreads=8, blocksize=80, splitmode=<SplitMode.AUTO_SPLIT: 3>,
+                : nthreads=..., blocksize=80, splitmode=<SplitMode.AUTO_SPLIT: 3>,
                 : filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>,
                 : <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0,
                 : 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)
-        dparams : DParams(nthreads=8)
+        dparams : DParams(nthreads=...)
         <BLANKLINE>
         """
         return InfoReporter(self)
@@ -4764,7 +4764,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
         key_, mask = process_key(key, self.shape)  # internally handles key an integer
-        if hasattr(value, "shape") and value.shape == ():
+        if hasattr(value, "shape") and value.shape == () and not getattr(value.dtype, "fields", None):
             value = value.item()
         value = (
             value if np.isscalar(value) else blosc2.as_simpleproxy(value)
@@ -4858,17 +4858,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         --------
         >>> import blosc2
         >>> import numpy as np
-        >>> # Create an SChunk with some data
+        >>> # Create an NDArray with some data
         >>> ndarray = blosc2.arange(10)
         >>> chunk = ndarray.get_chunk(0)
         >>> # Decompress the chunk to convert it into a numpy array
         >>> decompressed_chunk = blosc2.decompress(chunk)
         >>> np_array_chunk = np.frombuffer(decompressed_chunk, dtype=np.int64)
         >>> # Verify the content of the chunk
-        >>> if isinstance(np_array_chunk, np.ndarray):
-        >>>         print(np_array_chunk)
-        >>>         print(np_array_chunk.shape) # Assuming chunk is a list or numpy array
-        [ 0  1  2  3  4  5  6  7  8  9]
+        >>> print(np_array_chunk)
+        [0 1 2 3 4 5 6 7 8 9]
+        >>> print(np_array_chunk.shape)
         (10,)
         """
         return self.schunk.get_chunk(nchunk)
@@ -4922,9 +4921,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import blosc2
-        >>> a = blosc2.full(shape=(1000, ) * 3, fill_value=9, chunks=(500, ) * 3, dtype="f4")
+        >>> a = blosc2.full(shape=(10, ) * 3, fill_value=9, chunks=(5, ) * 3, dtype="f4")
         >>> for info in a.iterchunks_info():
-        ...     print(info.coords)
+        ...     print(tuple(int(coord) for coord in info.coords))
         (0, 0, 0)
         (0, 0, 1)
         (0, 1, 0)
@@ -4988,8 +4987,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> cframe_bytes = a.to_cframe()
         >>> blosc_array = blosc2.ndarray_from_cframe(cframe_bytes)
         >>> print("Shape of the NDArray:", blosc_array.shape)
-        >>> print("Data type of the NDArray:", blosc_array.dtype)
         Shape of the NDArray: (1000, 1000)
+        >>> print("Data type of the NDArray:", blosc_array.dtype)
         Data type of the NDArray: int32
         """
         return super().to_cframe()
@@ -5502,9 +5501,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def squeeze(self, axis: int | Sequence[int]) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
-        This method modifies the array in-place. If mask is None removes any dimensions with size 1.
-        If axis is provided, it should be an int or tuple of ints and the corresponding
-        dimensions (of size 1) will be removed.
+        This method returns a view. The axis argument should be an int
+        or a sequence of ints specifying the dimensions (of size 1) to remove.
 
         Returns
         -------
@@ -5519,8 +5517,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (1, 23, 1, 11, 1)
         >>> # Squeeze the array
-        >>> a.squeeze()
-        >>> a.shape
+        >>> squeezed = a.squeeze(axis=(0, 2, 4))
+        >>> squeezed.shape
         (23, 11)
         """
         return blosc2.squeeze(self, axis=axis)
@@ -5594,7 +5592,7 @@ def squeeze(x: Array, axis: int | Sequence[int]) -> NDArray:
     """
     Remove single-dimensional entries from the shape of the array.
 
-    This method modifies the array in-place.
+    This function returns a view with the selected dimensions removed.
 
     Parameters
     ----------
@@ -5617,8 +5615,8 @@ def squeeze(x: Array, axis: int | Sequence[int]) -> NDArray:
     >>> b.shape
     (1, 23, 1, 11, 1)
     >>> # Squeeze the array
-    >>> blosc2.squeeze(b)
-    >>> b.shape
+    >>> squeezed = blosc2.squeeze(b, axis=(0, 2, 4))
+    >>> squeezed.shape
     (23, 11)
     """
     axis = [axis] if isinstance(axis, int) else axis
@@ -6209,7 +6207,7 @@ def arange(
     >>> import numpy as np
     >>> # Create an array with values from 0 to 10
     >>> array = blosc2.arange(0, 10, 1)
-    >>> print(array)
+    >>> print(array[:])
     [0 1 2 3 4 5 6 7 8 9]
     """
 
@@ -6625,10 +6623,10 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     >>> # Create a copy of the array without changing dtype
     >>> copied_array = blosc2.copy(original_array)
     >>> print("Copied array (default dtype):")
-    >>> print(copied_array)
     Copied array (default dtype):
+    >>> print(copied_array[:])
     [[1.1 2.2 3.3]
-    [4.4 5.5 6.6]]
+     [4.4 5.5 6.6]]
     """
     return array.copy(dtype, **kwargs)
 
@@ -7402,7 +7400,11 @@ class NDField(Operand):
         # And return the field
         return nparr[self.field]
 
-    def __setitem__(self, key: int | slice | Sequence[slice], value: blosc2.Array) -> None:
+    def __setitem__(
+        self,
+        key: int | slice | Sequence[slice],
+        value: blosc2.Array | int | float | complex | bool | str | bytes,
+    ) -> None:
         """
         Set a slice of :paramref:`self` to a value.
 
@@ -7410,12 +7412,12 @@ class NDField(Operand):
         ----------
         key: int or slice or Sequence[slice]
             The slice to be set.
-        value: blosc2.Array
+        value: blosc2.Array or scalar
             The value to be set.
         """
         if isinstance(key, str):
             raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
-        if not isinstance(value, np.ndarray):
+        if not isinstance(value, np.ndarray) and not np.isscalar(value):
             value = value[:]
         # Get the values in the parent NDArray
         nparr = self.ndarr[key]

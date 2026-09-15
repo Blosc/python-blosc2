@@ -208,9 +208,9 @@ def decompress(
     True
     >>> b"" == blosc2.decompress(blosc2.compress(b""))
     True
-    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7))
+    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7, typesize=1))
     True
-    >>> type(blosc2.decompress(blosc2.compress(b"1"*7),
+    >>> type(blosc2.decompress(blosc2.compress(b"1"*7, typesize=1),
     ...                        as_bytearray=True)) is bytearray
     True
     >>> import numpy as np
@@ -1243,6 +1243,7 @@ def set_nthreads(nthreads: int) -> int:
     >>> oldn = blosc2.set_nthreads(2)
     >>> blosc2.set_nthreads(1)
     2
+    >>> _ = blosc2.set_nthreads(oldn)
 
     See also
     --------
@@ -1390,6 +1391,7 @@ def set_releasegil(gilstate: bool) -> bool:
     Examples
     --------
     >>> oldReleaseState = blosc2.set_releasegil(True)
+    >>> _ = blosc2.set_releasegil(oldReleaseState)
     """
     gilstate = bool(gilstate)
     if blosc2.IS_WASM:
@@ -2065,8 +2067,9 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
     >>> data = np.arange(1e6, dtype=np.float32)
     >>> cparams = blosc2.CParams()
     >>> compressed_data = blosc2.compress2(data, cparams=cparams)
-    >>> print(f"Compressed data length: {len(compressed_data)} bytes")
-    Compressed data length: 14129 bytes
+    >>> len(compressed_data) < data.nbytes
+    True
+    >>> np.testing.assert_array_equal(np.frombuffer(blosc2.decompress2(compressed_data), dtype=data.dtype), data)
 
     See also
     --------
@@ -2203,8 +2206,8 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
     >>> cparams = blosc2.CParams(typesize=4)
     >>> schunk = blosc2.SChunk(data=data, cparams=cparams)
     >>> serialized_schunk = schunk.to_cframe()
-    >>> print(f"Serialized SChunk length: {len(serialized_schunk)} bytes")
-    Serialized SChunk length: 14129 bytes
+    >>> len(serialized_schunk) < data.nbytes
+    True
     >>> deserialized_schunk = blosc2.schunk_from_cframe(serialized_schunk)
     >>> start = 1000
     >>> stop = 1005
