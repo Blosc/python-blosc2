@@ -2,7 +2,77 @@
 
 ## Changes from 4.13.0 to 4.13.1
 
-XXX version-specific blurb XXX
+A remote-access follow-up to 4.13.0.  Lazy access is now the default for known
+remote arrays, local HDF5 files are read directly with `h5py`, and warm opens
+of B2Z, Zarr, and HDF5 sources replay a cached bootstrap instead of
+re-discovering the remote object.  Persistent caches created through
+`cache_dir=` get readable paths, so old hash-only entries are no longer reused
+(see below).
+
+### Improvements
+
+#### Remote access
+
+- **Lazy access is the default for known remote arrays.** `blosc2.open()` on a
+  remote `.b2nd` file or a dataset path (HDF5, Zarr, B2Z) now returns a lazy
+  `RemoteArray` without an explicit `lazy=True`. `lazy=False` still requests
+  eager access, and dataset paths reject it with `NotImplementedError` instead
+  of silently downloading. Zarr and HDF5 sources always use lazy access.
+  Passing `cache_dir=` (or `mmap_mode=`, `offset=`) without `lazy` keeps the
+  historical eager localization for single-file containers; pass `lazy=True`
+  to persist fetched chunks in a `RemoteArray` carrier instead.
+- **Local HDF5 files no longer need kerchunk, Zarr, or fsspec.** A local
+  `.h5`/`.hdf5` dataset is read through `h5py` directly: chunked datasets keep
+  their HDF5 chunk layout, contiguous datasets get automatically chosen
+  Blosc2 cache chunks, attributes come from the HDF5 dataset, and the file
+  handle is closed when the source is garbage-collected. Explicit `refs=`
+  still selects the kerchunk reference reader.
+- **Warm opens reuse a cached bootstrap.**
+  * B2Z: the ZIP tail and frame header are persisted in the carrier, so a
+    warm reopen performs no ZIP discovery. HTTP opening now fetches the tail
+    and the object identity in a single bounded range request.
+  * Zarr: the metadata read on first open is replayed from the carrier.
+  * HDF5: the kerchunk reference map is stored in the leaf carrier, and
+    leaves from the same container opened under one `cache_dir=` also share a
+    single on-disk snapshot, avoiding repeated discovery scans.
+- **Whole-member prefetch for small B2Z arrays.** Members up to 64 KiB are
+  fetched whole on open, bringing the frame header, chunks, and trailing
+  vlmeta in one request. The prefetched chunks live in the ordinary chunk
+  cache: they count toward `cache_bytes`, obey `max_cache_bytes`, and can be
+  evicted with `trim_cache()`.
+
+#### Readable disk caches
+
+- **`cache_dir=` caches now use readable source directories.** A cache is laid
+  out as `hierarchy.b2z--03cc6a2f9314/d0/a1.b2nd`, keeping the source basename
+  and dataset hierarchy in the path with a 12-character identity fingerprint
+  (source URL plus a non-reversible hash of the storage options). Unsafe
+  filename characters are encoded and long components are shortened.
+  RemoteStore caches use the same naming for their source directories.
+- Old hash-only entries are neither reused through `cache_dir=` nor deleted;
+  the first open after upgrading creates a new cache. Explicit `cache_path=`
+  and directly opening an existing carrier file keep working. Remove the old
+  entries to reclaim space.
+
+### Bug fixes
+
+- **Embedded frames with an offset.** Opening a local file whose name looks
+  like a container (`.h5`, `.hdf5`, `.b2z`, `.zarr`) with a nonzero `offset`
+  now opens the embedded Blosc2 frame directly instead of trying to parse the
+  file as a container.
+- **`file://` HDF5 URLs.** A `::` dataset suffix survives URL-to-path
+  conversion, so `file:///x.h5::/d0/a2` works on Windows too.
+- **Credential masking.** `RemoteArray.info` and `str()` no longer expose
+  runtime-only signed-URL credentials; `str()` now uses the same masking as
+  `info`. `RemoteArray.info` also works for local B2Z sources instead of
+  raising.
+- **`load_tensor()`** requests eager access explicitly, so it no longer
+  returns a lazy `RemoteArray` as its intermediate for known remote paths.
+- **`numcodecs.Blosc2` HDF5 filter** now decodes whole super-chunk frames
+  returned by `blosc2.from_cframe()`.
+- **HDF5 reference snapshots** are only published when the leaf carrier
+  actually holds one, fixing a crash for local h5py sources opened with a disk
+  cache on Windows drive-letter paths.
 
 ## Changes from 4.12.0 to 4.13.0
 

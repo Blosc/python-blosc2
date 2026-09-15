@@ -104,7 +104,9 @@ Mutable B2Z, Zarr, and HDF5 sources are not supported.
 
 The `lazy` argument defaults to `None`: omitted values select the appropriate mode automatically.
 Known remote array paths (such as `.b2nd`) and dataset paths use lazy access by default; `lazy=True`
-requests a `RemoteArray`, and `lazy=False` requests eager access. Dataset paths currently
+requests a `RemoteArray`, and `lazy=False` requests eager access. A bare `cache_dir=` (or `mmap_mode=`,
+`offset=`) keeps the historical eager localization for single-file containers; pass `lazy=True` to
+persist fetched chunks in a `RemoteArray` carrier instead. Dataset paths currently
 require lazy access, so an explicit `lazy=False` raises `NotImplementedError` instead of being silently overridden.
 
 A `URLPath` always means Caterva2.

@@ -2531,8 +2531,10 @@ def open(
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
             returns a lazy :ref:`RemoteArray`; ``False`` requests eager access.
-            Known remote `.b2nd` arrays default to lazy access. Dataset paths
-            currently require ``lazy=True`` and reject explicit ``False``.
+            Known remote `.b2nd` arrays default to lazy access, but a bare
+            ``cache_dir=`` keeps the historical eager localization for single-file
+            containers; pass ``lazy=True`` to get a cached ``RemoteArray`` instead.
+            Dataset paths currently require ``lazy=True`` and reject explicit ``False``.
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
             the remote dataset and read the byte ranges a slice touches. Neither form opens
             a whole remote store hierarchy. A slice landing in a small part of a large

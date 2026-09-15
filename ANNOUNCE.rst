@@ -1,46 +1,40 @@
-Announcing Python-Blosc2 4.13.0
+Announcing Python-Blosc2 4.13.1
 ===============================
 
-Python-Blosc2 4.13.0 turns remote data access into a comprehensive, portable
-remote data layer. It introduces bounded in-memory and persistent disk caching
-for remote arrays, multi-dataset hierarchy discovery across B2Z, Zarr, and HDF5
-containers over fsspec, portable reference snapshots, the ``.attrs`` metadata
-interface, interactive remote browsing in ``b2view``, and the ``b2nd-to-zarr``
-CLI converter.
+Python-Blosc2 4.13.1 is a remote-access follow-up to 4.13.0.  Lazy access is
+now the default for known remote arrays, local HDF5 files are read directly
+with ``h5py``, and warm opens of B2Z, Zarr, and HDF5 sources replay a cached
+bootstrap instead of re-discovering the remote object.
 
-Note: remote cache protocol should be considered somewhat experimental until it
-has seen more real S3/HTTP usage; feedback is very welcome!
+- **Lazy access is the default for known remote arrays.** ``blosc2.open()`` on
+  a remote ``.b2nd`` file or a dataset path (HDF5, Zarr, B2Z) now returns a
+  lazy ``RemoteArray`` without an explicit ``lazy=True``.  ``lazy=False``
+  still requests eager access, and dataset paths reject it explicitly.  Pass
+  ``cache_dir=`` (or ``mmap_mode=``, ``offset=``) without ``lazy`` to keep the
+  historical eager localization for single-file containers.
 
-- **Unified RemoteArray and bounded caching.** ``blosc2.open(..., lazy=True)``
-  now returns a ``RemoteArray`` with in-memory caching by default (256 MiB quota,
-  automatic LRU eviction). Persistent caching on disk is supported via
-  ``cache_dir`` or ``cache_path``, and stateless streaming via ``CachePolicy.NONE``.
-  ``cache_storage`` is deprecated in favor of ``cache_dir``.
+- **Local HDF5 files without kerchunk, Zarr, or fsspec.** A local
+  ``.h5``/``.hdf5`` dataset is read through ``h5py``; chunked datasets keep
+  their HDF5 chunk layout and contiguous ones get automatically chosen Blosc2
+  cache chunks.  Explicit ``refs=`` still selects the kerchunk reader.
 
-- **Hierarchy discovery and shared caching with RemoteStore.** Discover, navigate,
-  and slice multi-dataset hierarchies in ``.b2z``, ``.zarr`` (v2/v3), and HDF5
-  (``.h5``) containers over fsspec (HTTP/HTTPS, S3, GCS). All leaves share a
-  single cache budget with cross-dataset LRU eviction.
+- **Warm opens reuse a cached bootstrap.**  B2Z persists the ZIP tail and
+  frame header (one HTTP range request also carries the object identity),
+  Zarr persists the metadata read, and HDF5 persists the kerchunk reference
+  map; sibling HDF5 datasets under one ``cache_dir=`` share the reference
+  snapshot.  Small B2Z members (up to 64 KiB) are fetched whole on open, with
+  their chunks counted and evictable like any other cached payload.
 
-- **Portable reference exports and snapshots.** Export portable references and
-  snapshots (``.b2nd`` carriers and ``.b2z`` store archives) with optional warm
-  cached data, and reopen them seamlessly with ``blosc2.open()``.
+- **Readable disk caches.**  ``cache_dir=`` caches now keep the source
+  basename and dataset hierarchy in the path (``data.zarr--a39d11ca41f0/d0/a``)
+  with a short identity fingerprint.  Old hash-only entries are neither reused
+  nor deleted; remove them to reclaim space.
 
-- **On-demand adapters for B2Z, Zarr, and HDF5.** Native chunk/block range reads
-  for B2Z archives (``B2ZNDSource``), Zarr v2/v3 datasets (``ZarrNDSource``), and
-  remote HDF5 datasets via kerchunk (``HDF5NDSource``). Includes a new
-  ``b2nd-to-zarr`` CLI converter.
-
-- **Recommended ``.attrs`` metadata interface.** User-defined metadata across
-  arrays, containers, and proxy sources is now accessible via ``.attrs``
-  (aliased to ``.vlmeta``, which remains fully supported).
-
-- **Interactive remote browsing in ``b2view``.** Explore remote containers and
-  array slices interactively in the terminal with the new ``--cache-dir`` option
-  for persistent caching across sessions.
-
-- **Enhanced AST shape inference.** Extended shape inferencer for subscripts,
-  slices, builtins, and common array methods in ``LazyExpr``.
+- **Bug fixes.**  Embedded frames with an offset open directly even when the
+  file name looks like a container; ``file://`` HDF5 URLs with ``::`` dataset
+  paths survive on Windows; ``info``/``str()`` no longer expose signed-URL
+  credentials; ``load_tensor()`` forces eager access; and the
+  ``numcodecs.Blosc2`` HDF5 filter decodes whole super-chunk frames.
 
 - **Bundled C-Blosc2 3.3.4**, alongside CI stability improvements and test
   deadlock diagnostics.
