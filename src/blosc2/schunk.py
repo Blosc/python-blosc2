@@ -2298,7 +2298,7 @@ def _infer_lazy(lazy: bool, dataset, source_format, urlpath: str) -> bool:
     """Return True when the request inherently requires lazy mode."""
     if lazy:
         return True
-    if dataset is not None or source_format == "hdf5":
+    if dataset is not None or source_format in {"hdf5", "zarr"}:
         return True
     parsed = urlsplit(urlpath)
     url_path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
@@ -2588,7 +2588,8 @@ def open(
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
             a ``.b2z`` path selects B2Z automatically. An explicit value supports
-            suffix-free array paths.
+            suffix-free array paths. Zarr and HDF5 sources automatically enable
+            ``lazy=True``.
         assume_immutable: bool, optional
             With ``lazy=True``, skip remote identity checks before reads. Defaults
             to ``True``; set to ``False`` when the remote object may be replaced.
