@@ -1,43 +1,71 @@
 Announcing Python-Blosc2 4.13.1
 ===============================
 
-Python-Blosc2 4.13.1 is a remote-access follow-up to 4.13.0.  Lazy access is
-now the default for known remote arrays, local HDF5 files are read directly
-with ``h5py``, and warm opens of B2Z, Zarr, and HDF5 sources replay a cached
-bootstrap instead of re-discovering the remote object.
+Python-Blosc2 4.13.1 is a maintenance and performance follow-up to 4.13.0,
+refining the remote data access layer and expanding platform support. Lazy
+access is now the default for remote arrays, local HDF5 files are read
+directly via ``h5py`` without auxiliary dependencies, warm opens replay cached
+bootstrap metadata to eliminate redundant network roundtrips, disk caches use
+human-readable folder hierarchies, and official Windows ARM64 wheels are now
+available.
 
-- **Lazy access is the default for known remote arrays.** ``blosc2.open()`` on
-  a remote ``.b2nd`` file or a dataset path (HDF5, Zarr, B2Z) now returns a
-  lazy ``RemoteArray`` without an explicit ``lazy=True``.  ``lazy=False``
-  still requests eager access, and dataset paths reject it explicitly.  Pass
-  ``cache_dir=`` (or ``mmap_mode=``, ``offset=``) without ``lazy`` to keep the
-  historical eager localization for single-file containers.
+- **Lazy access is the default for remote arrays.** ``blosc2.open()`` on remote
+  ``.b2nd`` files or container datasets (HDF5, Zarr, B2Z) now returns a lazy
+  ``RemoteArray`` without requiring an explicit ``lazy=True``. Dataset paths
+  require lazy access and reject ``lazy=False`` with ``NotImplementedError``.
+  For standalone array files (such as ``.b2nd``), ``cache_dir=`` keeps the
+  default lazy access and persists fetched chunks. Pass ``lazy=False`` to
+  download the complete container there instead. ``mmap_mode=`` or a nonzero
+  ``offset=`` forces eager reading.
 
-- **Local HDF5 files without kerchunk, Zarr, or fsspec.** A local
-  ``.h5``/``.hdf5`` dataset is read through ``h5py``; chunked datasets keep
-  their HDF5 chunk layout and contiguous ones get automatically chosen Blosc2
-  cache chunks.  Explicit ``refs=`` still selects the kerchunk reader.
+- **Direct local HDF5 reads via ``h5py``.** Local ``.h5``/``.hdf5`` datasets
+  are now accessed directly through ``h5py``, eliminating the need for
+  ``kerchunk``, ``zarr``, or ``fsspec`` when reading local files. Chunked
+  datasets preserve their native HDF5 chunk layout, while contiguous datasets
+  automatically receive optimal Blosc2 cache chunks. Explicit ``refs=``
+  arguments continue to select the kerchunk reference reader.
 
-- **Warm opens reuse a cached bootstrap.**  B2Z persists the ZIP tail and
-  frame header (one HTTP range request also carries the object identity),
-  Zarr persists the metadata read, and HDF5 persists the kerchunk reference
-  map; sibling HDF5 datasets under one ``cache_dir=`` share the reference
-  snapshot.  Small B2Z members (up to 64 KiB) are fetched whole on open, with
-  their chunks counted and evictable like any other cached payload.
+- **Faster HTTP discovery and instant warm opens.**
 
-- **Readable disk caches.**  ``cache_dir=`` caches now keep the source
-  basename and dataset hierarchy in the path (``data.zarr--a39d11ca41f0/d0/a``)
-  with a short identity fingerprint.  Old hash-only entries are neither reused
-  nor deleted; remove them to reclaim space.
+  * *Cold HTTP discovery*: Initial HTTP opens for B2Z archives retrieve the ZIP
+    directory tail and object identity within a single bounded range request,
+    halving network round-trips.
+  * *Warm reopens*: Reopening cached B2Z, Zarr, or HDF5 sources replays
+    persisted bootstrap metadata directly from the carrier, completely
+    bypassing remote discovery. Sibling HDF5 datasets under a shared
+    ``cache_dir=`` reuse a single on-disk reference snapshot.
+  * *Small member prefetching*: B2Z members up to 64 KiB are fetched in full on
+    open (header, chunks, and trailing metadata), populating the standard chunk
+    cache with full quota tracking and LRU eviction.
 
-- **Bug fixes.**  Embedded frames with an offset open directly even when the
-  file name looks like a container; ``file://`` HDF5 URLs with ``::`` dataset
-  paths survive on Windows; ``info``/``str()`` no longer expose signed-URL
-  credentials; ``load_tensor()`` forces eager access; and the
-  ``numcodecs.Blosc2`` HDF5 filter decodes whole super-chunk frames.
+- **Human-readable disk cache paths.** Persistent caches under ``cache_dir=``
+  now mirror the source filename and dataset hierarchy (e.g.,
+  ``hierarchy.b2z--03cc6a2f9314/d0/a1.b2nd``) with a 12-character identity
+  fingerprint derived from the source URL and storage options. Old hash-only
+  cache directories are ignored and can be safely deleted to reclaim space.
 
-- **Bundled C-Blosc2 3.3.4**, alongside CI stability improvements and test
-  deadlock diagnostics.
+- **Windows ARM64 wheels and test stability.** Added official build recipes and
+  CI pipelines producing native Windows on ARM64 (``win_arm64``) wheels. Test
+  suite execution is accelerated with logical core utilization in pytest-xdist,
+  per-test doctest workspace isolation, and test deadlock diagnostics.
+
+- **Bug fixes and robustness:**
+
+  * Embedded frames with nonzero byte offsets open directly even when the file
+    name looks like a container.
+  * ``file://`` HDF5 URLs with ``::`` dataset separators survive path conversion
+    on Windows.
+  * ``RemoteArray.info`` and ``str()`` mask sensitive credentials in signed URLs,
+    and ``info`` works reliably on local B2Z sources.
+  * ``load_tensor()`` explicitly requests eager access, avoiding unexpected lazy
+    intermediates for remote paths.
+  * Fixed decoding of HDF5 datasets compressed with the Blosc2 filter (such as
+    via ``hdf5plugin``) when read through kerchunk, properly handling multi-chunk
+    super-chunk frames without an ``AttributeError``.
+  * HDF5 reference snapshot publishing is safely guarded, fixing a crash on
+    Windows drive-letter paths when opening local h5py sources with a disk cache.
+  * Attaching a sparse runtime cache to a read-only legacy B2Z carrier safely
+    rebuilds bootstrap metadata in memory without attempting disk writes.
 
 Install it with::
 

@@ -2219,12 +2219,11 @@ def _resolve_lazy(lazy, dataset, source_format, urlpath):
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
-    Without `cache_dir`, the whole object is fetched in one go and rebuilt in
-    memory, which is the right thing for a one-shot read of a small container but
-    only works for single-file ones.  With `cache_dir`, the container is
-    materialized under that directory and opened as an ordinary local path, so
-    every format, `mmap_mode` and `offset` work.  With `lazy`, nothing is fetched
-    up front and each slice pulls just the chunks it needs.
+    Without lazy access, the whole object is fetched in one go and rebuilt in
+    memory.  Combining `lazy=False` with `cache_dir` instead materializes it as
+    an ordinary local path, so every format, `mmap_mode` and `offset` work.  With
+    lazy access, nothing is fetched up front and each slice pulls just the chunks
+    it needs, retaining them under `cache_dir` when supplied.
     """
     if mode != "r":
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
@@ -2245,12 +2244,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     if source_format is None:
         source_format = detected_format
 
-    # Explicit localization and local-file options retain their eager behavior.
-    if lazy is None and (
-        offset != 0
-        or kwargs.get("mmap_mode") is not None
-        or (cache_dir is not None and dataset is None and source_format not in {"hdf5", "zarr", "b2z"})
-    ):
+    # Local-file options require a complete local copy; cache placement alone
+    # does not choose between lazy access and eager localization.
+    if lazy is None and (offset != 0 or kwargs.get("mmap_mode") is not None):
         lazy = False
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
@@ -2429,12 +2425,11 @@ def open(
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
             returns a lazy :ref:`RemoteArray`; ``False`` requests eager access.
-            Known remote `.b2nd` arrays default to lazy access, but a bare
-            ``cache_dir=`` (or ``mmap_mode=``) keeps the historical eager
-            localization for single-file containers; pass ``lazy=True`` to get a
-            cached ``RemoteArray`` instead. A nonzero ``offset=`` also forces the
-            eager path. Dataset paths currently require ``lazy=True`` and reject
-            explicit ``False``.
+            Known remote `.b2nd` arrays default to lazy access, including when
+            ``cache_dir=`` is supplied. Pass ``lazy=False`` to download the whole
+            container under ``cache_dir`` instead. ``mmap_mode=`` or a nonzero
+            ``offset=`` forces the eager path. Dataset paths currently require
+            ``lazy=True`` and reject explicit ``False``.
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
             the remote dataset and read the byte ranges a slice touches. Neither form opens
             a whole remote store hierarchy. A slice landing in a small part of a large

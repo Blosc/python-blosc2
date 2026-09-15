@@ -2,81 +2,100 @@
 
 ## Changes from 4.13.0 to 4.13.1
 
-A remote-access follow-up to 4.13.0.  Lazy access is now the default for known
-remote arrays, local HDF5 files are read directly with `h5py`, and warm opens
-of B2Z, Zarr, and HDF5 sources replay a cached bootstrap instead of
-re-discovering the remote object.  Persistent caches created through
-`cache_dir=` get readable paths, so old hash-only entries are no longer reused
-(see below).
+A maintenance and performance follow-up to 4.13.0 focused on remote data
+access and expanded platform support. Lazy access is now the default for remote
+arrays and container datasets, local HDF5 files are read directly via `h5py`
+without auxiliary dependencies, warm opens replay cached bootstrap metadata
+to eliminate redundant network discovery, disk caches use human-readable
+directory structures, and native Windows ARM64 wheels are now built and tested.
 
 ### Improvements
 
 #### Remote access
 
-- **Lazy access is the default for known remote arrays.** `blosc2.open()` on a
-  remote `.b2nd` file or a dataset path (HDF5, Zarr, B2Z) now returns a lazy
-  `RemoteArray` without an explicit `lazy=True`. `lazy=False` still requests
-  eager access, and dataset paths reject it with `NotImplementedError` instead
-  of silently downloading. Zarr and HDF5 sources always use lazy access.
-  Passing `cache_dir=` (or `mmap_mode=`) without `lazy` keeps the
-  historical eager localization for single-file containers; pass `lazy=True`
-  to persist fetched chunks in a `RemoteArray` carrier instead. A nonzero
-  `offset=` also forces the eager path.
-- **Local HDF5 files no longer need kerchunk, Zarr, or fsspec.** A local
-  `.h5`/`.hdf5` dataset is read through `h5py` directly: chunked datasets keep
-  their HDF5 chunk layout, contiguous datasets get automatically chosen
-  Blosc2 cache chunks, attributes come from the HDF5 dataset, and the file
-  handle is closed when the source is garbage-collected. Explicit `refs=`
-  still selects the kerchunk reference reader.
-- **Warm opens reuse a cached bootstrap.**
-  * B2Z: the ZIP tail and frame header are persisted in the carrier, so a
-    warm reopen performs no ZIP discovery. HTTP opening now fetches the tail
-    and the object identity in a single bounded range request.
-  * Zarr: the metadata read on first open is replayed from the carrier.
-  * HDF5: the kerchunk reference map is stored in the leaf carrier, and
-    leaves from the same container opened under one `cache_dir=` also share a
-    single on-disk snapshot, avoiding repeated discovery scans.
-- **Whole-member prefetch for small B2Z arrays.** Members up to 64 KiB are
-  fetched whole on open, bringing the frame header, chunks, and trailing
-  vlmeta in one request. The prefetched chunks live in the ordinary chunk
-  cache: they count toward `cache_bytes`, obey `max_cache_bytes`, and can be
-  evicted with `trim_cache()`.
+- **Lazy access is the default for remote arrays and datasets.** `blosc2.open()`
+  on remote `.b2nd` files or container datasets (HDF5, Zarr, B2Z) now returns a
+  lazy `RemoteArray` without requiring an explicit `lazy=True`. Dataset paths
+  require lazy access and reject `lazy=False` with `NotImplementedError` rather
+  than attempting a silent eager download. For standalone array files (such as
+  `.b2nd`), `cache_dir=` keeps the default lazy access and persists fetched chunks
+  in a `RemoteArray` carrier. Pass `lazy=False` to download the complete container
+  there instead. `mmap_mode=` or a nonzero `offset=` forces the eager path.
+- **Direct local HDF5 reads via `h5py`.** Local `.h5`/`.hdf5` datasets are now
+  read directly through `h5py` without requiring `kerchunk`, `zarr`, or
+  `fsspec`. Chunked datasets retain their native HDF5 chunk layout, while
+  contiguous datasets receive automatically chosen Blosc2 cache chunks. Dataset
+  attributes are loaded from HDF5 metadata, and file handles are safely closed
+  when the source object is garbage-collected. Explicit `refs=` arguments
+  continue to select the kerchunk reference reader.
+- **Faster HTTP discovery and instant warm opens.**
+  * *Cold HTTP B2Z discovery*: Opening a remote B2Z archive over HTTP now
+    retrieves the ZIP directory tail and remote object identity in a single
+    bounded range request, halving network round-trips during initial open.
+  * *Warm reopens*: Reopening cached B2Z, Zarr, or HDF5 sources replays persisted
+    bootstrap metadata directly from the carrier file, completely bypassing
+    remote discovery. Sibling HDF5 leaves from the same container under a shared
+    `cache_dir=` reuse a single on-disk reference snapshot.
+  * *Whole-member prefetch for small B2Z arrays*: Members up to 64 KiB are
+    fetched in full on open (frame header, chunks, and trailing metadata in a
+    single request). Prefetched chunks live in the standard chunk cache, count
+    toward `cache_bytes`, respect `max_cache_bytes`, and can be evicted with
+    `trim_cache()`.
 
 #### Readable disk caches
 
-- **`cache_dir=` caches now use readable source directories.** A cache is laid
-  out as `hierarchy.b2z--03cc6a2f9314/d0/a1.b2nd`, keeping the source basename
-  and dataset hierarchy in the path with a 12-character identity fingerprint
-  (source URL plus a non-reversible hash of the storage options). Unsafe
-  filename characters are encoded and long components are shortened.
-  RemoteStore caches use the same naming for their source directories.
-- Old hash-only entries are neither reused through `cache_dir=` nor deleted;
-  the first open after upgrading creates a new cache. Explicit `cache_path=`
-  and directly opening an existing carrier file keep working. Remove the old
-  entries to reclaim space.
+- **Readable source directories for `cache_dir=`.** Persistent disk caches now
+  mirror the source filename and internal dataset hierarchy (e.g.,
+  `hierarchy.b2z--03cc6a2f9314/d0/a1.b2nd`) with a 12-character identity
+  fingerprint computed from the URL and storage options. Unsafe characters are
+  escaped and long components are shortened. `RemoteStore` caches follow the
+  same naming convention. Complete containers localized with `lazy=False` use
+  it too (e.g., `temperatures.b2nd--4908c5e5602a/temperatures.b2nd`).
+- Legacy hash-only cache entries are ignored rather than overwritten or deleted;
+  the first open under 4.13.1 creates a new cache. Explicit `cache_path=` targets
+  and direct opens of existing carrier files continue to work. Legacy cache
+  directories can be safely deleted to reclaim disk space.
+
+#### Packaging and platform support
+
+- **Windows ARM64 builds and wheels.** Added native Windows on ARM64
+  (`win_arm64`) wheel building and testing via GitHub Actions runners,
+  including build configuration adjustments for Clang and runtime fallback for
+  JIT on ARM64.
+- **CI test stability and doctest isolation.** Enhanced test suite stability
+  with logical core utilization in pytest-xdist, per-test workspace isolation
+  for doctests in `conftest.py`, and test deadlock diagnostics.
+- **Remote lazy expression examples.** Added `examples/remote/lazy-expr.py`
+  and documentation illustrating how to evaluate lazy expressions across
+  remote B2Z, Zarr, and HDF5 arrays.
 
 ### Bug fixes
 
 - **Embedded frames with an offset.** Opening a local file whose name looks
   like a container (`.h5`, `.hdf5`, `.b2z`, `.zarr`) with a nonzero `offset`
-  now opens the embedded Blosc2 frame directly instead of trying to parse the
-  file as a container.
-- **`file://` HDF5 URLs.** A `::` dataset suffix survives URL-to-path
-  conversion, so `file:///x.h5::/d0/a2` works on Windows too.
-- **Credential masking.** `RemoteArray.info` and `str()` no longer expose
-  runtime-only signed-URL credentials; `str()` now uses the same masking as
-  `info`. `RemoteArray.info` also works for local B2Z sources instead of
-  raising.
-- **`load_tensor()`** requests eager access explicitly, so it no longer
-  returns a lazy `RemoteArray` as its intermediate for known remote paths.
-- **`numcodecs.Blosc2` HDF5 filter** now decodes whole super-chunk frames
-  returned by `blosc2.from_cframe()`.
-- **HDF5 reference snapshots** are only published when the leaf carrier
-  actually holds one, fixing a crash for local h5py sources opened with a disk
-  cache on Windows drive-letter paths.
+  now opens the embedded Blosc2 frame directly instead of attempting container
+  parsing.
+- **`file://` HDF5 URLs on Windows.** Dataset path separators (`::`) in
+  `file://` URLs survive URL-to-path conversion on Windows platforms
+  (e.g., `file:///C:/path/x.h5::/d0/a2`).
+- **Credential masking.** `RemoteArray.info` and `str()` mask sensitive query
+  parameters and credentials in signed URLs. `RemoteArray.info` now also works
+  reliably for local B2Z sources without raising an error.
+- **`load_tensor()` eager access.** Explicitly requests eager access so it no
+  longer inadvertently returns a lazy `RemoteArray` intermediate when loading
+  known remote paths.
+- **Blosc2-filtered HDF5 decoding.** Fixed decoding of HDF5 datasets
+  compressed with the Blosc2 filter (filter ID 32026, as written by
+  `hdf5plugin`) when read via kerchunk. Chunks containing multi-chunk
+  super-chunk frames decoded via `blosc2.from_cframe()` now handle the resulting
+  bytes correctly, avoiding an `AttributeError` on `.tobytes()`.
+- **HDF5 reference snapshot publishing.** Guarded reference snapshot export so
+  it is only published when the leaf carrier actually holds a kerchunk map,
+  fixing a crash when opening local h5py sources with a disk cache on Windows
+  drive-letter paths.
 - **Read-only portable carriers.** Attaching a sparse runtime cache to a
-  legacy B2Z carrier opened read-only no longer fails while trying to refresh
-  its cached bootstrap; the session uses the rebuilt bootstrap in memory.
+  read-only legacy B2Z carrier no longer fails when refreshing bootstrap
+  metadata; the session safely uses the rebuilt bootstrap in memory.
 
 ## Changes from 4.12.0 to 4.13.0
 

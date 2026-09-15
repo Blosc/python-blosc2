@@ -840,19 +840,15 @@ def storage_options_fingerprint(storage_options: dict | None) -> str:
 
 
 @cache
-def _suffixed_cache_mapper():
-    """fsspec's cache naming, plus the extension `blosc2.open()` dispatches on.
-
-    A `.b2e` store is told apart from a bare SChunk by its name alone, so a cached
-    copy under fsspec's plain hash would silently open as the wrong type.
-    """
+def _basename_cache_mapper():
+    """Keep a localized file's recognizable, dispatchable basename."""
     from fsspec.implementations.cache_mapper import AbstractCacheMapper
 
-    class SuffixedCacheMapper(AbstractCacheMapper):
+    class BasenameCacheMapper(AbstractCacheMapper):
         def __call__(self, path: str) -> str:
-            return hashlib.sha256(path.encode()).hexdigest() + pathlib.PurePosixPath(path).suffix
+            return cache_path_component(urllib.parse.unquote(pathlib.PurePosixPath(path).name))
 
-    return SuffixedCacheMapper()
+    return BasenameCacheMapper()
 
 
 def localize_fsspec_url(
@@ -877,9 +873,9 @@ def localize_fsspec_url(
         # cached copy of an array that changed remotely -- the worst failure mode
         # this feature has, and worth one HEAD per open to avoid.
         opts = {
-            "cache_storage": cache_storage,
+            "cache_storage": fsspec_cache_path(urlpath, cache_storage, storage_options=storage_options),
             "check_files": True,
-            "cache_mapper": _suffixed_cache_mapper(),
+            "cache_mapper": _basename_cache_mapper(),
         }
         with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts, **(storage_options or {})) as f:
             return f.name

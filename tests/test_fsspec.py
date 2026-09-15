@@ -156,8 +156,9 @@ def test_cached_open(tmp_path):
         f.write(a.to_cframe())
 
     b = blosc2.open("memory://c.b2nd", cache_dir=tmp_path)
+    assert isinstance(b, blosc2.RemoteArray)
     assert np.array_equal(b[:], a[:])
-    assert any(tmp_path.iterdir())
+    assert next(tmp_path.glob("c.b2nd--*/c.b2nd")).is_file()
 
 
 def test_cached_open_is_local(tmp_path):
@@ -182,20 +183,21 @@ def test_cache_hit_avoids_refetch(tmp_path, monkeypatch):
         memfs, "_open", lambda self, path, *a, **kw: (fetches.append(path), orig(self, path, *a, **kw))[1]
     )
 
-    blosc2.open("memory://h.b2nd", cache_dir=tmp_path)
+    blosc2.open("memory://h.b2nd", lazy=False, cache_dir=tmp_path)
     assert len(fetches) == 1
-    blosc2.open("memory://h.b2nd", cache_dir=tmp_path)
+    assert next(tmp_path.glob("h.b2nd--*/h.b2nd")).is_file()
+    blosc2.open("memory://h.b2nd", lazy=False, cache_dir=tmp_path)
     assert len(fetches) == 1
 
 
 def test_cache_refetches_when_remote_changes(tmp_path):
     with fsspec.open("memory://s.b2nd", "wb") as f:
         f.write(blosc2.arange(10, dtype="i4").to_cframe())
-    assert blosc2.open("memory://s.b2nd", cache_dir=tmp_path).shape == (10,)
+    assert blosc2.open("memory://s.b2nd", lazy=False, cache_dir=tmp_path).shape == (10,)
 
     with fsspec.open("memory://s.b2nd", "wb") as f:
         f.write(blosc2.arange(20, dtype="i4").to_cframe())
-    assert blosc2.open("memory://s.b2nd", cache_dir=tmp_path).shape == (20,)
+    assert blosc2.open("memory://s.b2nd", lazy=False, cache_dir=tmp_path).shape == (20,)
 
 
 def test_cached_dict_store(tmp_path):
@@ -209,6 +211,7 @@ def test_cached_dict_store(tmp_path):
     with blosc2.open("memory://store.b2d", cache_dir=tmp_path / "cache") as dstore:
         assert sorted(dstore.keys()) == ["/a", "/b"]
         assert np.array_equal(dstore["/a"][:], np.arange(10, dtype="i4"))
+    assert next((tmp_path / "cache").glob("store.b2d--*"), None) is not None
 
 
 def test_cached_dir_refetches_when_remote_changes(tmp_path):
@@ -234,7 +237,7 @@ def test_cached_sparse_frame(tmp_path):
     a = blosc2.arange(1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
     fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
 
-    b = blosc2.open("memory://sparse.b2nd", cache_dir=tmp_path / "cache")
+    b = blosc2.open("memory://sparse.b2nd", lazy=False, cache_dir=tmp_path / "cache")
     assert np.array_equal(b[:], a[:])
 
 
@@ -943,7 +946,7 @@ def test_lazy_cache_preserved_when_corrupt(tmp_path):
 def test_max_concurrency_needs_lazy(tmp_path):
     fsspec.filesystem("memory").pipe_file("/m.b2nd", blosc2.arange(10, dtype="i4").to_cframe())
     with pytest.raises(NotImplementedError, match="max_concurrency"):
-        blosc2.open("memory://m.b2nd", cache_dir=tmp_path, max_concurrency=4)
+        blosc2.open("memory://m.b2nd", lazy=False, cache_dir=tmp_path, max_concurrency=4)
 
 
 def test_storage_mapping_is_normalized(tmp_path):
@@ -1579,7 +1582,7 @@ def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
     url = "memory://nonlazy-b2z/data"
     fsspec.filesystem("memory").pipe_file("nonlazy-b2z/data", archive.read_bytes())
 
-    store = blosc2.open(url, cache_dir=tmp_path / "cache", source_format="b2z")
+    store = blosc2.open(url, lazy=False, cache_dir=tmp_path / "cache", source_format="b2z")
     assert isinstance(store, blosc2.TreeStore)
     np.testing.assert_array_equal(store["/group/a"][:], np.arange(10, dtype="i4"))
 
@@ -1587,4 +1590,6 @@ def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
 def test_non_lazy_cache_dir_rejects_refs(tmp_path):
     fsspec.filesystem("memory").pipe_file("nonlazy-refs/data", b"whatever")
     with pytest.raises(NotImplementedError, match="refs"):
-        blosc2.open("memory://nonlazy-refs/data", cache_dir=tmp_path / "cache", refs={"refs": {}})
+        blosc2.open(
+            "memory://nonlazy-refs/data", lazy=False, cache_dir=tmp_path / "cache", refs={"refs": {}}
+        )
