@@ -73,6 +73,9 @@ re-discovering the remote object.  Persistent caches created through
 - **HDF5 reference snapshots** are only published when the leaf carrier
   actually holds one, fixing a crash for local h5py sources opened with a disk
   cache on Windows drive-letter paths.
+- **Read-only portable carriers.** Attaching a sparse runtime cache to a
+  legacy B2Z carrier opened read-only no longer fails while trying to refresh
+  its cached bootstrap; the session uses the rebuilt bootstrap in memory.
 
 ## Changes from 4.12.0 to 4.13.0
 
