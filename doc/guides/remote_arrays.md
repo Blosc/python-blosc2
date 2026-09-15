@@ -93,6 +93,11 @@ Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the 
 Pre-indexing is performed via `kerchunk`. When opening a single {ref}`RemoteArray`, the resulting reference map is cached inside the array carrier (`schunk.vlmeta["hdf5-refs"]`). When using {ref}`RemoteStore`, indexing is performed once for the entire container and shared across all leaves and sessions.
 Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5 container.
 
+Local HDF5 files use h5py directly, without kerchunk pre-indexing or Zarr/fsspec
+dependencies. For example, `blosc2.open("hierarchy.h5::/d0/a2")` reads the selected
+dataset through h5py and caches converted Blosc2 chunks in memory. Explicit
+`refs=` inputs retain the reference-based reader, including for local files.
+
 `RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
 Mutable B2Z, Zarr, and HDF5 sources are not supported.

@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""A :class:`ProxyNDSource` backed by an immutable HDF5 dataset via kerchunk."""
+"""An immutable HDF5 source using h5py locally and kerchunk for remote files."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import json
 import math
 import os
 import threading
+import weakref
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -36,6 +37,11 @@ def check_hdf5_dependencies() -> None:
             "HDF5 support requires kerchunk; install it with 'pip install blosc2[hdf5]'"
         ) from exc
 
+    _check_h5py_dependencies()
+    _ensure_blosc2_filter_registered()
+
+
+def _check_h5py_dependencies() -> None:
     try:
         import h5py  # noqa: F401
     except ImportError as exc:
@@ -43,8 +49,6 @@ def check_hdf5_dependencies() -> None:
 
     with contextlib.suppress(ImportError):
         import hdf5plugin  # noqa: F401
-
-    _ensure_blosc2_filter_registered()
 
 
 def _register_numcodecs_blosc2() -> None:
@@ -289,7 +293,7 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
     if isinstance(url, dict):
         ref_dict = url.get("refs", url)
     elif isinstance(url, (str, os.PathLike)):
-        url_str = os.fspath(url)
+        url_str = blosc2.core.normalize_urlpath(os.fspath(url))
         if "::" in url_str:
             parts = url_str.split("::", 1)
             if "://" not in parts[1]:
@@ -310,6 +314,16 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
                 with open(url_str) as f:
                     refs = json.load(f)
             ref_dict = refs.get("refs", refs)
+        elif not urlsplit(url_str).scheme or os.path.isabs(url_str):
+            _check_h5py_dependencies()
+            import h5py
+
+            datasets = []
+            with h5py.File(url_str, "r") as file:
+                file.visititems(
+                    lambda name, obj: datasets.append(name) if isinstance(obj, h5py.Dataset) else None
+                )
+            return sorted(datasets)
         else:
             check_hdf5_dependencies()
 
@@ -328,7 +342,11 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
 
 
 class HDF5NDSource(ProxyNDSource):
-    """Read an immutable HDF5 dataset as Blosc2-compressed logical chunks via kerchunk.
+    """Read an immutable HDF5 dataset as Blosc2-compressed logical chunks.
+
+    Local files use h5py directly. Remote files and explicit reference maps use
+    kerchunk and Zarr. Local file handles are released when the source is
+    garbage-collected.
 
     Replacing data beneath the same store identity violates this adapter's
     contract and may leave previously converted chunks stale. Peak working
@@ -344,7 +362,8 @@ class HDF5NDSource(ProxyNDSource):
         Path to the dataset within the HDF5 file (e.g. ``"d0/d1/a2"``).
     refs : dict, str, or path-like, optional
         Pre-computed kerchunk reference dictionary or path to a JSON reference
-        file. If omitted, the HDF5 metadata will be scanned using kerchunk.
+        file. If omitted, local files use h5py directly; remote files are scanned
+        using kerchunk.
     storage_options : dict, optional
         Parameters passed to fsspec or kerchunk when accessing remote files.
     max_concurrency : int, optional
@@ -373,11 +392,9 @@ class HDF5NDSource(ProxyNDSource):
         _traffic: Traffic | None = None,
         _filesystem=None,
     ):
-        check_hdf5_dependencies()
-        check_zarr_fsspec_dependencies()
-
         if isinstance(urlpath, os.PathLike):
             urlpath = os.fspath(urlpath)
+        urlpath = blosc2.core.normalize_urlpath(urlpath)
         if isinstance(urlpath, str):
             if "::" in urlpath:
                 parts = urlpath.split("::", 1)
@@ -409,30 +426,27 @@ class HDF5NDSource(ProxyNDSource):
 
         remote = isinstance(self.urlpath, str) and bool(urlsplit(self.urlpath).scheme)
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
-
-        self._refs = self._load_or_scan_refs(refs, storage_options)
-        self._validate_dataset_presence(dataset)
-        self.array = self._open_array(storage_options, _filesystem)
-
-        self._shape = tuple(int(value) for value in self.array.shape)
-        self._chunks = tuple(int(value) for value in self.array.chunks)
-        try:
-            self._dtype = np.dtype(self.array.dtype)
-        except TypeError as exc:
-            raise TypeError(f"HDF5NDSource only supports fixed-size dtypes, got {self.array.dtype}") from exc
-
-        self._validate_metadata()
-        _, computed_blocks = blosc2.compute_chunks_blocks(
-            self._shape, chunks=self._chunks, blocks=blocks, dtype=self._dtype, cparams=cparams
+        self._local = (
+            (not remote or os.path.isabs(self.urlpath))
+            and "::" not in self.urlpath
+            and refs is None
+            and _filesystem is None
         )
-        self._blocks = tuple(computed_blocks)
-        self._cparams = (
-            blosc2.CParams(typesize=self._dtype.itemsize)
-            if cparams is None
-            else blosc2.CParams(**cparams)
-            if isinstance(cparams, dict)
-            else cparams
-        )
+        self._refs = None
+        with contextlib.ExitStack() as stack:
+            if self._local:
+                file = self._open_local_array(stack)
+            else:
+                check_hdf5_dependencies()
+                check_zarr_fsspec_dependencies()
+                self._refs = self._load_or_scan_refs(refs, storage_options)
+                self._validate_dataset_presence(dataset)
+                self.array = self._open_array(storage_options, _filesystem)
+
+            self._init_geometry(blocks, cparams)
+            if self._local:
+                self._file_finalizer = weakref.finalize(self, file.close)
+                stack.pop_all()
         identity = {
             "encoding_version": self.encoding_version,
             "urlpath": self.urlpath,
@@ -445,6 +459,49 @@ class HDF5NDSource(ProxyNDSource):
         self.stamp = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
+
+    def _open_local_array(self, stack):
+        _check_h5py_dependencies()
+        import h5py
+
+        file = stack.enter_context(h5py.File(self.urlpath, "r"))
+        if (self.dataset or "/") not in file:
+            raise ValueError(f"dataset {self.dataset!r} not found in {self.urlpath!r}")
+        self.array = file[self.dataset or "/"]
+        if not isinstance(self.array, h5py.Dataset):
+            raise ValueError(f"{self.dataset!r} is an HDF5 group; pass the path of a dataset")
+        if self.array.shape is None:
+            raise TypeError("HDF5 null datasets are not supported")
+        return file
+
+    def _init_geometry(self, blocks, cparams):
+        self._shape = tuple(int(value) for value in self.array.shape)
+        self._chunks = self.array.chunks
+        try:
+            self._dtype = np.dtype(self.array.dtype)
+        except TypeError as exc:
+            raise TypeError(f"HDF5NDSource only supports fixed-size dtypes, got {self.array.dtype}") from exc
+        if self._chunks is None:
+            # Contiguous datasets need bounded logical chunks, including for empty axes.
+            self._chunks, _ = blosc2.compute_chunks_blocks(
+                tuple(max(1, size) for size in self._shape),
+                blocks=blocks,
+                dtype=self._dtype,
+                cparams=cparams,
+            )
+        self._chunks = tuple(int(value) for value in self._chunks)
+        self._validate_metadata()
+        _, computed_blocks = blosc2.compute_chunks_blocks(
+            self._shape, chunks=self._chunks, blocks=blocks, dtype=self._dtype, cparams=cparams
+        )
+        self._blocks = tuple(computed_blocks)
+        self._cparams = (
+            blosc2.CParams(typesize=self._dtype.itemsize)
+            if cparams is None
+            else blosc2.CParams(**cparams)
+            if isinstance(cparams, dict)
+            else cparams
+        )
 
     def _load_or_scan_refs(self, refs, storage_options) -> dict:
         if refs is not None:
@@ -552,6 +609,8 @@ class HDF5NDSource(ProxyNDSource):
     @property
     def vlmeta(self) -> dict:
         try:
+            if self._local:
+                return dict(self.array.attrs)
             # Kerchunk adds dimension metadata to the translated Zarr attributes.
             return {key: value for key, value in self.array.attrs.items() if key != "_ARRAY_DIMENSIONS"}
         except Exception:

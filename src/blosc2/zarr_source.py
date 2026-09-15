@@ -81,7 +81,7 @@ def zarr_chunk_to_blosc2(
     dtype: np.dtype,
     cparams,
 ) -> bytes:
-    """Read a Zarr chunk slice and return it as Blosc2 compressed bytes."""
+    """Read a Zarr or h5py array slice and return it as Blosc2 compressed bytes."""
     grid = tuple(math.ceil(size / chunk) for size, chunk in zip(shape, chunks, strict=True))
     total = math.prod(grid)
     if isinstance(nchunk, bool) or not isinstance(nchunk, int) or nchunk < 0 or nchunk >= total:
