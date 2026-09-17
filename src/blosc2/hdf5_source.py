@@ -502,10 +502,6 @@ class HDF5NDSource(ProxyNDSource):
         if self._local:
             self._open_local()
             self._metadata = None
-            if hdf5_index is not None:
-                # Local reads stay on h5py; still validate and retain the explicit
-                # index so no remote-only dependency is needed to accept it.
-                self._hdf5_index = self._load_or_scan_index(hdf5_index)
             shape, physical_chunks, dtype = self.array.shape, self.array.chunks, self.array.dtype
         else:
             check_hdf5_dependencies()
@@ -517,6 +513,10 @@ class HDF5NDSource(ProxyNDSource):
             dtype = dtype_from_value(self._metadata["dtype"])
             self._chunk_records = {tuple(item["offset"]): item for item in self._metadata["allocated"]}
         try:
+            if self._local and hdf5_index is not None:
+                # Local reads stay on h5py; still validate and retain the explicit
+                # index so no remote-only dependency is needed to accept it.
+                self._hdf5_index = self._load_or_scan_index(hdf5_index)
             self._init_geometry(shape, physical_chunks, dtype, blocks, cparams)
             identity = {
                 "encoding_version": self.encoding_version,

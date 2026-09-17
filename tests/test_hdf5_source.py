@@ -283,6 +283,30 @@ def test_local_hdf5_explicit_index(tmp_path):
     np.testing.assert_array_equal(proxy[:], data)
 
 
+def test_local_hdf5_bad_explicit_index_closes_file(tmp_path, monkeypatch):
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    path = tmp_path / "bad-index.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=np.arange(8, dtype="i4"), chunks=(4,))
+    good = scan_hdf5_index(str(path))
+    opened = []
+    original = h5py.File
+
+    def track_file(*args, **kwargs):
+        file = original(*args, **kwargs)
+        opened.append(file.id)
+        return file
+
+    monkeypatch.setattr(h5py, "File", track_file)
+    bad = dict(good, urlpath=str(path) + "-other")
+    with pytest.raises(ValueError, match="does not match") as excinfo:
+        blosc2.HDF5NDSource(path, "data", hdf5_index=bad)
+    assert "does not match" in str(excinfo.value)
+    assert opened
+    assert not opened[-1].valid
+
+
 def test_local_hdf5_explicit_index_without_fsspec(tmp_path, monkeypatch):
     from blosc2.hdf5_source import scan_hdf5_index
 
