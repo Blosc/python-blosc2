@@ -300,14 +300,21 @@ def _validate_dataset_entry(path, meta, file_size):
     """Validate one dataset entry in a native index."""
     if not isinstance(path, str) or not isinstance(meta, dict):
         raise ValueError("Invalid HDF5 dataset entry")
-    shape, chunks = tuple(meta.get("shape", ())), meta.get("chunks")
+    required = {"shape", "dtype", "chunks", "fill_value", "attrs", "filters", "direct", "allocated"}
+    if not required.issubset(meta):
+        missing = sorted(required - set(meta))
+        raise ValueError(f"Incomplete HDF5 dataset entry for {path!r}: missing {missing}")
+    if not isinstance(meta["attrs"], dict):
+        raise ValueError(f"Invalid HDF5 attributes for {path!r}")
+    shape, chunks = tuple(meta["shape"]), meta["chunks"]
     dtype = dtype_from_value(meta["dtype"])
     if len(shape) > blosc2.MAX_DIM or any(
         isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in shape
     ):
         raise ValueError(f"Invalid HDF5 shape for {path!r}")
     if chunks is not None and (
-        len(chunks) != len(shape)
+        not isinstance(chunks, list)
+        or len(chunks) != len(shape)
         or any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in chunks)
     ):
         raise ValueError(f"Invalid HDF5 chunks for {path!r}")

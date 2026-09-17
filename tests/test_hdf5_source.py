@@ -54,6 +54,11 @@ def test_hdf5_native_index():
     del malformed["datasets"]["data"]["allocated"]
     with pytest.raises(ValueError, match="allocation table"):
         validate_hdf5_index(malformed)
+    for field in ("shape", "chunks", "fill_value", "attrs", "dtype"):
+        incomplete = json.loads(json.dumps(index))
+        del incomplete["datasets"]["data"][field]
+        with pytest.raises(ValueError, match="Incomplete"):
+            validate_hdf5_index(incomplete)
 
 
 def test_hdf5_object_ndarray_reconstruction():
