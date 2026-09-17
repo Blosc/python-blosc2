@@ -117,7 +117,11 @@ def _from_json_value(value):
         ]
     if "__object_ndarray__" in value:
         items = [_from_json_value(item) for item in value["__object_ndarray__"]]
-        return np.array(items, dtype=object).reshape(value["shape"])
+        result = np.empty(value["shape"], dtype=object)
+        flat = result.reshape(-1)
+        for index, item in enumerate(items):
+            flat[index] = item
+        return result
     if "__ndarray__" in value:
         return np.frombuffer(
             base64.b64decode(value["__ndarray__"]), dtype=dtype_from_value(value["dtype"])

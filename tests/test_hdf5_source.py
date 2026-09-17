@@ -56,6 +56,26 @@ def test_hdf5_native_index():
         validate_hdf5_index(malformed)
 
 
+def test_hdf5_object_ndarray_reconstruction():
+    from blosc2.hdf5_source import _from_json_value, _json_value
+
+    value = np.empty(2, dtype=object)
+    value[0] = np.array([1, 2])
+    value[1] = np.array([3, 4])
+    restored = _from_json_value(_json_value(value))
+    assert restored.shape == (2,)
+    np.testing.assert_array_equal(restored[0], [1, 2])
+    np.testing.assert_array_equal(restored[1], [3, 4])
+
+    ragged = np.empty(2, dtype=object)
+    ragged[0] = np.array([1, 2])
+    ragged[1] = np.array([3, 4, 5])
+    restored = _from_json_value(_json_value(ragged))
+    assert restored.shape == (2,)
+    np.testing.assert_array_equal(restored[0], [1, 2])
+    np.testing.assert_array_equal(restored[1], [3, 4, 5])
+
+
 def test_hdf5_titled_dtype_roundtrip():
     from blosc2.hdf5_source import dtype_from_value, dtype_value
 
