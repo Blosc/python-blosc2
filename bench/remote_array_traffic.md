@@ -48,17 +48,14 @@ Times are medians; variable counts are shown as ranges.
 
 ## Interpretation and accounting
 
-- In this historical baseline, HDF5 cold opening used the former reference layer:
-  57 requests and 47,332 downloaded bytes, followed by one data request (13,399
-  bytes). Discovery dominated this small slice. The native reader supersedes
-  this path and persists its discovery index.
+- HDF5 cold opening translates the file with Kerchunk: 57 requests and 47,332 downloaded bytes, followed by one data request (13,399 bytes). Discovery dominates this small slice. This supports the planned persistent discovery manifest, which is not implemented yet.
 - B2Z uses five requests and 40,817 bytes on both transports. Opening reads a ZIP tail and member prefix; the first slice adds native frame/chunk reads.
 - Zarr HTTPS uses 4–5 requests overall; S3 uses eight, including four HEAD requests. Data-slice bytes are identical (11,645), but metadata probing/error bodies differ. S3's additional round trips contribute to its higher median latency here. S3 and direct HTTPS both use HTTPS on the wire, but use different endpoints and client paths.
 - Latency varies: one Zarr S3 open took 7.478 s (others 1.400/1.478 s); one Zarr HTTPS open took 6.490 s (others 0.637/0.639 s). The latter trial also issued a second GET for the slice, with unchanged total body bytes. The instrumentation does not establish why that extra send occurred. These trials remain in the raw results; no outliers were discarded.
 - Every format returns the same values, but native compressed representations differ. This regular arange fixture and one small slice do not establish general compression or throughput rankings.
 - Requests are counted at `aiohttp.ClientRequest.send`; successful connection creations at `TCPConnector._create_connection`. Multiple requests reuse connections. These are client send attempts/new connections, not server-side access-log counts.
 - Bytes count response bodies received by `aiohttp.StreamReader.feed_data`, including discovery, missing-key responses and array data. They exclude HTTP headers, TLS/TCP overhead and outgoing bytes. These are body-traffic measurements, not packet-level link usage.
-- Built-in `array.traffic` counters are retained in the raw results but are not used as total network traffic. HDF5 opening reports only 392 bytes there versus 47,332 response-body bytes: standalone HDF5 metadata scanning is currently outside that counter. HEAD requests and failed Zarr metadata probes are also absent from the built-in tally.
+- Built-in `array.traffic` counters are retained in the raw results but are not used as total network traffic. HDF5 opening reports only 392 bytes there versus 47,332 response-body bytes: standalone Kerchunk scanning is currently outside that counter. HEAD requests and failed Zarr metadata probes are also absent from the built-in tally.
 
 ## Fix and validation
 
@@ -66,9 +63,7 @@ The initial HTTPS HDF5 trial failed with `ValueError: Cannot seek streaming HTTP
 
 Existing fsspec/HDF5 tests: 155 passed. The new HTTP metadata/range/warm-cache regression test also passed after correcting its fixture directory. All 18 real-network trials passed value and warm-cache assertions. Ruff check/format and diff whitespace checks passed for changed code. The full repository suite was not run for this measurement task.
 
-Environment: `blosc2 4.13.0.dev0`, `fsspec 2026.7.0`, `s3fs 2026.7.0`,
-`aiohttp 3.14.3`, `zarr 3.3.0`, `h5py 3.16.0`, plus the retired HDF5 reference
-reader used by this baseline.
+Environment: `blosc2 4.13.0.dev0`, `fsspec 2026.7.0`, `s3fs 2026.7.0`, `aiohttp 3.14.3`, `zarr 3.3.0`, `kerchunk 0.2.10`, `h5py 3.16.0`.
 
 ## Reproduce
 

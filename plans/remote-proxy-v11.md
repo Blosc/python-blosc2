@@ -7,7 +7,7 @@ ordinary Blosc2 arrays, B2Z leaves, HDF5 leaves, and saved RemoteProxy arrays.
 Reuse `/api/info` so reading attributes requires no additional endpoint or request.
 
 The preceding Python-Blosc2 change adds `RemoteProxy.attrs` as a read-only alias
-for `RemoteProxy.vlmeta` and filters the former HDF5 reference layer's `_ARRAY_DIMENSIONS` from
+for `RemoteProxy.vlmeta` and filters Kerchunk's `_ARRAY_DIMENSIONS` from
 `HDF5NDSource.vlmeta`.
 
 ## Current behavior and gap

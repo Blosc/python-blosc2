@@ -1,34 +1,34 @@
-# Remote proxy v9: HDF5 remote arrays via reference pre-indexing
+# Remote proxy v9: HDF5 remote arrays via kerchunk pre-indexing
 
 Status: implemented.
 
 Added `HDF5NDSource`, a `ProxyNDSource` adapter that reads remote HDF5 datasets
-via a byte-offset reference index and returns Blosc2 compressed chunks. Reused
+via kerchunk byte-offset indexing and returns Blosc2 compressed chunks. Reused
 the existing `Proxy` and `RemoteProxy` cache implementations, including bounded
 memory caches, portable B2ND carriers, and the sparse runtime caches introduced
 for Caterva2 in v7.
 
 RemoteProxy sources are assumed immutable by default. HDF5 remains immutable-only
-in this version. The former HDF5 reference layer, h5py, and hdf5plugin are optional dependencies configured
+in this version. Kerchunk, h5py, and hdf5plugin are optional dependencies configured
 under `blosc2[hdf5]`. Dataset addressing has been unified across both HDF5 and Zarr
 to support slash (`/`), double-colon (`::`), and keyword (`dataset=`) specifications.
 The adapter lives in Python-Blosc2 and is fully usable without a Caterva2 server.
 
 ## Fixed decisions
 
-- Read HDF5 through reference pre-indexing: scan metadata once, produce a
+- Read HDF5 through kerchunk pre-indexing: scan metadata once, produce a
   reference dict mapping chunk keys to `(url, byte_offset, length)` triples,
   then open that reference as a Zarr store via fsspec's `ReferenceFileSystem`.
   This bypasses HDF5's chatty B-tree traversal at read time.
 - Do not use h5py for chunk-by-chunk data reads over the network. The HDF5 file
   format makes 15–50 sequential synchronous seeks just to open, and every
-  `get_chunk()` call would traverse Python's GIL. The former HDF5 reference layer eliminates this by
+  `get_chunk()` call would traverse Python's GIL. Kerchunk eliminates this by
   turning HDF5 chunk locations into direct HTTP Range GETs.
-- Do not require VirtualiZarr. The former HDF5 reference layer alone produces the reference dict that
+- Do not require VirtualiZarr. Kerchunk alone produces the reference dict that
   fsspec's `ReferenceFileSystem` and Zarr understand.
 - Cache converted Blosc2 chunks in existing B2ND containers. Do not maintain a
   second cache of HDF5 objects.
-- Fetch and convert whole logical HDF5 chunks. Let the former HDF5 reference layer + Zarr resolve
+- Fetch and convert whole logical HDF5 chunks. Let kerchunk + Zarr resolve
   codec pipelines (including Blosc2 via hdf5plugin, gzip, lzf, etc.).
 - Users must specify the dataset path within the HDF5 file. Do not recursively
   discover or auto-select a dataset. Opening a group raises an actionable error.
@@ -82,7 +82,7 @@ User: blosc2.open("s3://blosc2/hierarchy.h5", lazy=True,
                           HDF5NDSource.__init__
           ┌─────────────────────────┤
           ▼                         ▼
-  the former HDF5-to-Zarr translator    Stores reference dict
+  kerchunk.hdf.SingleHdf5ToZarr    Stores reference dict
   (one-time metadata-only scan)    in self._refs (small JSON)
           │
           ▼
@@ -123,7 +123,7 @@ bucket. Extend it to accept `.h5` URLs.
 
 ### Construction and metadata
 
-1. Import `the former HDF5 translation package` and `h5py` with actionable errors pointing to
+1. Import `kerchunk.hdf` and `h5py` with actionable errors pointing to
    `pip install blosc2[hdf5]`. Import `hdf5plugin` silently if available (needed
    for Blosc2-compressed HDF5 chunks; its absence manifests as a codec error
    from Zarr/HDF5 rather than an import error).
@@ -163,7 +163,7 @@ verify that the extraction does not change behavior.
 
 ### `available_datasets(url, storage_options=None) → list[str]`
 
-A module-level function that scans the HDF5 reference index and returns all dataset
+A module-level function that scans the kerchunk reference and returns all dataset
 paths within the HDF5 file. Used in error messages when the user passes a group
 path or omits `dataset`, and useful for interactive discovery.
 
@@ -279,17 +279,17 @@ Export `HDF5NDSource` from `blosc2`, add to `__all__`.
 ## `pyproject.toml`
 
 ```toml
-hdf5 = ["the former HDF5 translation package", "h5py", "hdf5plugin"]
+hdf5 = ["kerchunk", "h5py", "hdf5plugin"]
 ```
 
-the former HDF5 reference layer pulls in `ujson` automatically. `zarr` and `fsspec` are already covered
+Kerchunk pulls in `ujson` automatically. `zarr` and `fsspec` are already covered
 by existing extras. `hdf5plugin` is included directly in `hdf5` so that Blosc2-compressed
 (filter 32026) and other plugin-compressed HDF5 chunks decode seamlessly.
 Remote HDF5 installs: `pip install "blosc2[hdf5,fsspec]" s3fs`.
 
 ## Reference index caching strategy
 
-The HDF5 reference index dict is small (KB–few MB) but the one-time scan costs
+The kerchunk reference dict is small (KB–few MB) but the one-time scan costs
 seconds over the network.
 
 ### Within a session
@@ -324,14 +324,14 @@ arr = blosc2.open(
 )
 ```
 
-This skips the HDF5 metadata scan entirely, useful for large files or repeated opens.
+This skips the kerchunk scan entirely, useful for large files or repeated opens.
 
 ## Test plan
 
 ### Default suite — local HDF5 fixtures (`tests/test_hdf5_source.py`)
 
 All tests create temporary HDF5 files with `h5py` — no network, no S3. Use
-`an optional-import check for the former HDF5 translation package` and `pytest.importorskip("h5py")`.
+`pytest.importorskip("kerchunk")` and `pytest.importorskip("h5py")`.
 
 #### Adapter tests (HDF5NDSource directly)
 
@@ -369,15 +369,15 @@ All tests create temporary HDF5 files with `h5py` — no network, no S3. Use
 | `test_hdf5_carrier_save_load` | `save()` / `to_cframe()` round-trip |
 | `test_hdf5_source_descriptor` | Correct `kind: "hdf5"` descriptor in payload |
 | `test_hdf5_geometry_mismatch` | Changed HDF5 file → geometry validation fails |
-| `test_hdf5_refs_in_vlmeta` | Carrier vlmeta contains compressed HDF5 reference index |
+| `test_hdf5_refs_in_vlmeta` | Carrier vlmeta contains compressed kerchunk reference |
 
 #### Dependency isolation tests
 
 | Test | What it verifies |
 | :--- | :--- |
-| `test_hdf5_missing_reference_layer_error` | Mock missing the former HDF5 reference layer → ImportError mentioning `blosc2[hdf5]` |
+| `test_hdf5_missing_kerchunk_error` | Mock missing kerchunk → ImportError mentioning `blosc2[hdf5]` |
 | `test_hdf5_missing_h5py_error` | Mock missing h5py → ImportError |
-| `test_blosc2_import_without_hdf5` | `import blosc2` works without the former HDF5 reference layer or h5py installed |
+| `test_blosc2_import_without_hdf5` | `import blosc2` works without kerchunk/h5py installed |
 
 ### Network suite — `s3://blosc2/hierarchy.h5` (`@pytest.mark.network`)
 
@@ -445,7 +445,7 @@ python s3-access.py s3://blosc2/hierarchy.h5::d0/a0
 | :--- | :--- |
 | `doc/reference/remoteproxy.rst` | Add `HDF5NDSource`, document `dataset` param |
 | `doc/reference/classes.rst` | Add `HDF5NDSource` to class list |
-| `doc/guides/remote_arrays.md` | Add HDF5 section with usage example and HDF5 indexing explanation |
+| `doc/guides/remote_arrays.md` | Add HDF5 section with usage example and kerchunk explanation |
 | `doc/getting_started/installation.rst` | Document `pip install "blosc2[hdf5,fsspec]" s3fs hdf5plugin` |
 
 ## Implementation sequence and checks
@@ -469,7 +469,7 @@ descriptor, `_from_payload()` reconstruction. Write integration tests using
 
 ### 4. Carrier persistence with reference caching
 
-Store HDF5 reference indexes in vlmeta. Write persistence tests: save, reopen, verify
+Store kerchunk refs in vlmeta. Write persistence tests: save, reopen, verify
 warm reads work without network.
 
 ### 5. Wire into `blosc2.open()` and `schunk.py`
@@ -498,20 +498,20 @@ Update `examples/remote/s3-access.py`, update docs.
 
 Use the `blosc2` conda environment for all Python, installation, and tests. Run
 focused adapter/RemoteProxy/Proxy tests first, then the default suite and
-repository lint checks. Validate optional imports in a subprocess with the former HDF5 reference layer
+repository lint checks. Validate optional imports in a subprocess with kerchunk
 imports blocked.
 
 ## Completion criteria (All Verified)
 
 - [x] A remote HDF5 dataset opens as a RemoteProxy and produces correct slice values.
-- [x] The HDF5 reference index is generated once (metadata-only scan) and cached in
+- [x] The kerchunk reference is generated once (metadata-only scan) and cached in
   the carrier vlmeta for warm reopens.
 - [x] Retained payloads are usable Blosc2 chunks with correct B2ND block layout.
 - [x] A warm hit performs no remote payload or metadata reads.
 - [x] DISK carriers and sparse caches reopen safely; credentials are absent from
   persisted metadata.
 - [x] `s3://blosc2/hierarchy.h5::d0/d1/a2` matches `s3://blosc2/hierarchy.zarr/d0/d1/a2`.
-- [x] the former HDF5 reference layer, h5py, and hdf5plugin are optional in `blosc2[hdf5]`; missing dependencies produce actionable errors.
+- [x] Kerchunk, h5py, and hdf5plugin are optional in `blosc2[hdf5]`; missing dependencies produce actionable errors.
 - [x] Dataset addressing is unified across HDF5 and Zarr (`container.ext/dataset`, `container.ext::dataset`, `dataset="..."`).
 - [x] Existing Blosc2/Zarr/Caterva2 source tests continue to pass (full suite passing).
 

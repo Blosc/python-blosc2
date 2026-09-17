@@ -26,12 +26,12 @@ directory structures, and native Windows ARM64 wheels are now built and tested.
   in a `RemoteArray` carrier. Pass `lazy=False` to download the complete container
   there instead. `mmap_mode=` or a nonzero `offset=` forces the eager path.
 - **Direct local HDF5 reads via `h5py`.** Local `.h5`/`.hdf5` datasets are now
-  read directly through `h5py` without requiring `zarr` or `fsspec`. Chunked
-  datasets retain their native HDF5 chunk layout, while
+  read directly through `h5py` without requiring `kerchunk`, `zarr`, or
+  `fsspec`. Chunked datasets retain their native HDF5 chunk layout, while
   contiguous datasets receive automatically chosen Blosc2 cache chunks. Dataset
   attributes are loaded from HDF5 metadata, and file handles are safely closed
-  when the source object is garbage-collected. Explicit `hdf5_index=` arguments
-  can supply a previously generated native index.
+  when the source object is garbage-collected. Explicit `refs=` arguments
+  continue to select the kerchunk reference reader.
 - **Faster HTTP discovery and instant warm opens.**
   * *Cold HTTP B2Z discovery*: Opening a remote B2Z archive over HTTP now
     retrieves the ZIP directory tail and remote object identity in a single
@@ -39,7 +39,7 @@ directory structures, and native Windows ARM64 wheels are now built and tested.
   * *Warm reopens*: Reopening cached B2Z, Zarr, or HDF5 sources replays persisted
     bootstrap metadata directly from the carrier file, completely bypassing
     remote discovery. Sibling HDF5 leaves from the same container under a shared
-    `cache_dir=` reuse a single on-disk HDF5 index.
+    `cache_dir=` reuse a single on-disk reference snapshot.
   * *Whole-member prefetch for small B2Z arrays*: Members up to 64 KiB are
     fetched in full on open (frame header, chunks, and trailing metadata in a
     single request). Prefetched chunks live in the standard chunk cache, count
@@ -90,11 +90,11 @@ directory structures, and native Windows ARM64 wheels are now built and tested.
   known remote paths.
 - **Blosc2-filtered HDF5 decoding.** Fixed decoding of HDF5 datasets
   compressed with the Blosc2 filter (filter ID 32026, as written by
-  `hdf5plugin`). Chunks containing multi-chunk
+  `hdf5plugin`) when read via kerchunk. Chunks containing multi-chunk
   super-chunk frames decoded via `blosc2.from_cframe()` now handle the resulting
   bytes correctly, avoiding an `AttributeError` on `.tobytes()`.
-- **HDF5 index publishing.** Guarded index export so it is only published when
-  the leaf carrier actually holds a native HDF5 index,
+- **HDF5 reference snapshot publishing.** Guarded reference snapshot export so
+  it is only published when the leaf carrier actually holds a kerchunk map,
   fixing a crash when opening local h5py sources with a disk cache on Windows
   drive-letter paths.
 - **Read-only portable carriers.** Attaching a sparse runtime cache to a
@@ -173,8 +173,8 @@ until it has seen more real S3/HTTP usage; feedback is very welcome!
   * `ZarrNDSource`: Reads remote Zarr v2 and v3 arrays lazily on demand, caching
     converted Blosc2 chunks. Supports scalar and empty arrays, as well as fixed-size
     dtypes.
-  * `HDF5NDSource`: Accesses remote HDF5 datasets lazily through a byte-range
-    index. Unifies dataset syntax across slashes (`file.h5/group/data`), double
+  * `HDF5NDSource`: Accesses remote HDF5 datasets lazily via `kerchunk` reference
+    indexing. Unifies dataset syntax across slashes (`file.h5/group/data`), double
     colons (`file.h5::group/data`), and `dataset="group/data"`. Manifests are
     indexed once per container and shared across leaves.
 

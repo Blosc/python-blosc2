@@ -153,7 +153,7 @@ Implications for the remaining implementation:
   baselines. Zarr's S3 route adds HEAD requests; keep both transports in subsequent
   comparisons and separate discovery from slice traffic.
 - Built-in `array.traffic` is not a complete transport tally: standalone HDF5
-  opening reports 392 bytes versus 47,332 received body bytes because its HDF5 reference layer
+  opening reports 392 bytes versus 47,332 received body bytes because its Kerchunk
   scan is outside that counter. HEAD requests and failed Zarr metadata probes are
   also absent. During shared-source extraction, include discovery in root accounting
   once and document counter semantics. Use transport instrumentation to verify
@@ -321,7 +321,7 @@ Keep discovery metadata separate from evictable payloads:
 | Format | Persisted discovery information |
 | --- | --- |
 | B2Z | Logical hierarchy, attributes, unsupported boundaries, ZIP member offsets/lengths and metadata needed to reopen bounded members |
-| HDF5 | One HDF5 reference index map, hierarchy, attributes, unsupported diagnostics |
+| HDF5 | One Kerchunk reference map, hierarchy, attributes, unsupported diagnostics |
 | Zarr | Discovered groups/arrays, attributes and decoding/layout metadata, including consolidated metadata where available |
 
 Store a versioned, validated source descriptor and serializable discovery data;
@@ -413,7 +413,7 @@ Required behavioral coverage:
 - All three formats: root/subgroup lookup, aliases, attributes, empty groups,
   supported arrays, unsupported siblings, slicing and array expressions.
 - Existing B2Z ZIP64/range checks, partial-block reads and restrictions; existing
-  Zarr layouts/codecs and HDF5 filter/HDF5 filter behavior remain intact.
+  Zarr layouts/codecs and HDF5 filter/Kerchunk behavior remain intact.
 - Read A, read B, revisit A under generous and restrictive shared budgets. Verify
   both returned values and transport hits/misses, aggregate bounds and cross-array
   eviction. Cover duplicate handles, partial chunk replacement and oversized reads.
