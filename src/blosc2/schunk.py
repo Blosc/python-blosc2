@@ -2532,9 +2532,11 @@ def open(
     -----
     * Returned objects can be used as context managers for API consistency.
       For objects with an explicit ``close()`` implementation, exiting the
-      context will close/flush them; for logical handles such as regular
-      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, standalone :class:`RemoteArray`,
-      :class:`Proxy`, and :class:`LazyArray`, exiting the context is currently a
+      context will close/flush them. Standalone HDF5 :class:`RemoteArray`
+      handles close their HDF5 source, so the handle rejects further reads.
+      Other logical handles such as regular :class:`SChunk`, :class:`NDArray`,
+      :class:`C2Array`, standalone non-HDF5 :class:`RemoteArray`,
+      :class:`Proxy`, and :class:`LazyArray` currently treat context exit as a
       no-op.
       Store-derived :class:`RemoteArray` handles release their shared source
       ownership when closed; other handles from that store remain usable.
