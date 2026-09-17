@@ -220,13 +220,24 @@ def _dataset_metadata(dataset):
 
 def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=None, _filesystem=None):
     """Build a versioned native index for one local or remote HDF5 container."""
-    check_hdf5_dependencies()
     import h5py
 
-    fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+    urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
+    local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
+    if local:
+        _check_h5py_dependencies()
+        fs = None
+        path = urlpath
+    else:
+        check_hdf5_dependencies()
+        fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
     groups, datasets = {"": {"attrs": {}}}, {}
     try:
-        with fs.open(path, "rb", block_size=1, cache_type="none") as raw:
+        with contextlib.ExitStack() as stack:
+            if local:
+                raw = stack.enter_context(open(path, "rb"))
+            else:
+                raw = stack.enter_context(fs.open(path, "rb", block_size=1, cache_type="none"))
             fileobj = _CountingFile(raw, traffic) if traffic is not None else raw
             with h5py.File(fileobj, "r") as h5file:
                 groups[""]["attrs"] = {key: _json_value(value) for key, value in h5file.attrs.items()}
@@ -255,9 +266,9 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
 
                 h5file.visititems(visit)
         with contextlib.suppress(Exception):
-            size = int(fs.info(path)["size"])
+            size = os.path.getsize(path) if local else int(fs.info(path)["size"])
     finally:
-        if _filesystem is None:
+        if fs is not None and _filesystem is None:
             _close_owned_filesystem(fs)
     if "size" not in locals():
         size = None
