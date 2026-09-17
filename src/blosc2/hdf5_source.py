@@ -468,19 +468,25 @@ class HDF5NDSource(ProxyNDSource):
             shape, physical_chunks = tuple(self._metadata["shape"]), self._metadata["chunks"]
             dtype = dtype_from_value(self._metadata["dtype"])
             self._chunk_records = {tuple(item["offset"]): item for item in self._metadata["allocated"]}
-        self._init_geometry(shape, physical_chunks, dtype, blocks, cparams)
-        identity = {
-            "encoding_version": self.encoding_version,
-            "urlpath": self.urlpath,
-            "dataset": self.dataset,
-            "shape": self._shape,
-            "chunks": self._chunks,
-            "blocks": self._blocks,
-            "dtype": self._dtype.descr if self._dtype.fields else self._dtype.str,
-        }
-        self.stamp = hashlib.sha256(
-            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        try:
+            self._init_geometry(shape, physical_chunks, dtype, blocks, cparams)
+            identity = {
+                "encoding_version": self.encoding_version,
+                "urlpath": self.urlpath,
+                "dataset": self.dataset,
+                "shape": self._shape,
+                "chunks": self._chunks,
+                "blocks": self._blocks,
+                "dtype": self._dtype.descr if self._dtype.fields else self._dtype.str,
+            }
+            self.stamp = hashlib.sha256(
+                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        except BaseException:
+            # A failed initialization must not leave the h5py file open (and
+            # locked on Windows) until garbage collection gets to it.
+            self.close()
+            raise
 
     @staticmethod
     def _parse_url(urlpath, dataset):
