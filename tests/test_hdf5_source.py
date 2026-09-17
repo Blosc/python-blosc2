@@ -92,6 +92,12 @@ def test_hdf5_url_preserves_query(extension):
     assert parse_container_url(url) == (f"https://host/data.{extension}?version=1", "group/data", "hdf5")
     assert parse_container_url(f"https://host/frame?next=data.{extension}/group/data")[2] is None
 
+    base, dataset = blosc2.HDF5NDSource._parse_url(url, None)
+    assert base == f"https://host/data.{extension}?version=1"
+    assert dataset == "group/data"
+    with pytest.raises(ValueError, match="both URL path and dataset"):
+        blosc2.HDF5NDSource._parse_url(url, "other/data")
+
 
 def test_hdf5_source_through_proxy(tmp_path):
     path = str(tmp_path / "through_proxy.h5")

@@ -484,15 +484,11 @@ class HDF5NDSource(ProxyNDSource):
             if dataset is not None and dataset != embedded:
                 raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
             urlpath, dataset = base.rstrip("/"), embedded
-        lower = urlpath.lower()
-        for ext in (".h5/", ".hdf5/"):
-            index = lower.find(ext)
-            if index != -1:
-                end, embedded = index + len(ext) - 1, urlpath[index + len(ext) :].strip("/")
-                if dataset is not None and dataset != embedded:
-                    raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
-                urlpath, dataset = urlpath[:end], embedded
-                break
+        base, embedded = blosc2.core.split_h5_url(urlpath)
+        if embedded is not None:
+            if dataset is not None and dataset != embedded:
+                raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
+            urlpath, dataset = base, embedded
         if dataset is None:
             raise ValueError("HDF5 sources require a dataset path (e.g., dataset='d0/d1/a2')")
         if not isinstance(dataset, str):
