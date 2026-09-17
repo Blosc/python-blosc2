@@ -56,6 +56,24 @@ def test_hdf5_native_index():
         validate_hdf5_index(malformed)
 
 
+def test_hdf5_index_rejects_malformed_filter_values():
+    from blosc2.hdf5_source import scan_hdf5_index, validate_hdf5_index
+
+    url = make_memory_h5(
+        "shuffle-index.h5",
+        ds={"data": np.arange(20, dtype="i4"), "chunks": (10,), "shuffle": True},
+    )
+    index = scan_hdf5_index(url)
+    validate_hdf5_index(index)
+    shuffle = next(item for item in index["datasets"]["ds"]["filters"] if item["id"] == 2)
+    shuffle["values"] = [0]
+    with pytest.raises(ValueError, match="shuffle"):
+        validate_hdf5_index(index)
+    shuffle["values"] = ["wrong"]
+    with pytest.raises(ValueError, match="filter values"):
+        validate_hdf5_index(index)
+
+
 def test_hdf5_deflate_decode_is_bounded():
     from blosc2.hdf5_source import _decompress_deflate
 

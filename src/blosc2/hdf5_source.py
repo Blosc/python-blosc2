@@ -295,12 +295,28 @@ def _validate_dataset_entry(path, meta, file_size):
         raise ValueError(f"Invalid HDF5 filters for {path!r}")
     if not isinstance(meta.get("direct"), bool):
         raise ValueError(f"Invalid HDF5 read mode for {path!r}")
-    if meta["direct"] and (chunks is None or any(item["id"] not in _DIRECT_FILTERS for item in filters)):
-        raise ValueError(f"Invalid direct HDF5 filter pipeline for {path!r}")
+    if meta["direct"]:
+        _validate_direct_filters(path, chunks, filters)
     allocated = meta.get("allocated")
     if not isinstance(allocated, list):
         raise ValueError(f"Invalid HDF5 allocation table for {path!r}")
     _validate_allocated_records(path, allocated, shape, chunks, filters, file_size)
+
+
+def _validate_direct_filters(path, chunks, filters):
+    """Validate the pipeline a direct chunk reader will decode."""
+    if chunks is None or any(item["id"] not in _DIRECT_FILTERS for item in filters):
+        raise ValueError(f"Invalid direct HDF5 filter pipeline for {path!r}")
+    for item in filters:
+        values = item.get("values")
+        if not isinstance(values, list) or any(
+            isinstance(value, bool) or not isinstance(value, int) for value in values
+        ):
+            raise ValueError(f"Invalid HDF5 filter values for {path!r}")
+        # Shuffle records its element size as the only client value; a bogus
+        # value would make the decoder skip unscrambling and return wrong data.
+        if item["id"] == 2 and values and (len(values) != 1 or values[0] <= 0):
+            raise ValueError(f"Invalid HDF5 shuffle filter for {path!r}")
 
 
 def _validate_allocated_records(path, allocated, shape, chunks, filters, file_size):
