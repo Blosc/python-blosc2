@@ -284,7 +284,6 @@ def _validate_dataset_entry(path, meta, file_size):
         raise ValueError(f"Invalid HDF5 chunks for {path!r}")
     if dtype.hasobject or dtype.itemsize == 0:
         raise ValueError(f"Invalid HDF5 dtype for {path!r}")
-    seen = set()
     filters = meta.get("filters")
     if not isinstance(filters, list) or any(
         not isinstance(item, dict) or isinstance(item.get("id"), bool) or not isinstance(item.get("id"), int)
@@ -295,7 +294,16 @@ def _validate_dataset_entry(path, meta, file_size):
         raise ValueError(f"Invalid HDF5 read mode for {path!r}")
     if meta["direct"] and (chunks is None or any(item["id"] not in _DIRECT_FILTERS for item in filters)):
         raise ValueError(f"Invalid direct HDF5 filter pipeline for {path!r}")
-    for record in meta.get("allocated", ()):
+    allocated = meta.get("allocated")
+    if not isinstance(allocated, list):
+        raise ValueError(f"Invalid HDF5 allocation table for {path!r}")
+    _validate_allocated_records(path, allocated, shape, chunks, filters, file_size)
+
+
+def _validate_allocated_records(path, allocated, shape, chunks, filters, file_size):
+    """Validate the chunk byte ranges recorded in a native index."""
+    seen = set()
+    for record in allocated:
         coord = tuple(record.get("offset", ()))
         byte_offset, length = record.get("byte_offset"), record.get("size")
         if coord in seen or len(coord) != len(shape):

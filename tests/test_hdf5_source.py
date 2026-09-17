@@ -41,13 +41,18 @@ def make_memory_h5(name: str = "test.h5", **datasets) -> str:
 
 
 def test_hdf5_native_index():
-    from blosc2.hdf5_source import HDF5_INDEX_FORMAT, scan_hdf5_index
+    from blosc2.hdf5_source import HDF5_INDEX_FORMAT, scan_hdf5_index, validate_hdf5_index
 
     url = make_memory_h5("native-index.h5", data=(np.arange(12, dtype="i4"), (4,)))
     index = scan_hdf5_index(url)
     assert index["format"] == HDF5_INDEX_FORMAT
     assert index["datasets"]["data"]["direct"] is True
     assert len(index["datasets"]["data"]["allocated"]) == 3
+
+    malformed = json.loads(json.dumps(index))
+    del malformed["datasets"]["data"]["allocated"]
+    with pytest.raises(ValueError, match="allocation table"):
+        validate_hdf5_index(malformed)
 
 
 # ---------------------------------------------------------------------------
