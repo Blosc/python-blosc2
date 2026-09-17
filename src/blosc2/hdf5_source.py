@@ -50,12 +50,12 @@ def _check_h5py_dependencies() -> None:
         import hdf5plugin  # noqa: F401  # registers optional filters with HDF5
 
 
-def _dtype_value(dtype):
+def dtype_value(dtype):
     dtype = np.dtype(dtype)
     return {"descr": dtype.descr} if dtype.fields is not None else {"str": dtype.str}
 
 
-def _dtype_from_value(value):
+def dtype_from_value(value):
     if "str" in value:
         return np.dtype(value["str"])
     return np.dtype([_dtype_field_from_json(field) for field in value["descr"]])
@@ -80,11 +80,11 @@ def _json_value(value):
             }
         return {
             "__ndarray__": base64.b64encode(value.tobytes()).decode(),
-            "dtype": _dtype_value(value.dtype),
+            "dtype": dtype_value(value.dtype),
             "shape": list(value.shape),
         }
     if isinstance(value, np.generic):
-        return {"__scalar__": base64.b64encode(value.tobytes()).decode(), "dtype": _dtype_value(value.dtype)}
+        return {"__scalar__": base64.b64encode(value.tobytes()).decode(), "dtype": dtype_value(value.dtype)}
     if isinstance(value, bytes):
         return {"__bytes__": base64.b64encode(value).decode()}
     if isinstance(value, float) and not math.isfinite(value):
@@ -108,7 +108,7 @@ def _from_json_value(value):
     if "__float__" in value:
         return float(value["__float__"])
     if "__scalar__" in value:
-        return np.frombuffer(base64.b64decode(value["__scalar__"]), dtype=_dtype_from_value(value["dtype"]))[
+        return np.frombuffer(base64.b64decode(value["__scalar__"]), dtype=dtype_from_value(value["dtype"]))[
             0
         ]
     if "__object_ndarray__" in value:
@@ -116,7 +116,7 @@ def _from_json_value(value):
         return np.array(items, dtype=object).reshape(value["shape"])
     if "__ndarray__" in value:
         return np.frombuffer(
-            base64.b64decode(value["__ndarray__"]), dtype=_dtype_from_value(value["dtype"])
+            base64.b64decode(value["__ndarray__"]), dtype=dtype_from_value(value["dtype"])
         ).reshape(value["shape"])
     return {key: _from_json_value(item) for key, item in value.items()}
 
@@ -186,7 +186,7 @@ def _dataset_metadata(dataset):
             )
     return {
         "shape": [int(v) for v in dataset.shape],
-        "dtype": _dtype_value(dataset.dtype),
+        "dtype": dtype_value(dataset.dtype),
         "chunks": chunks,
         "fill_value": _json_value(dataset.fillvalue),
         "attrs": {key: _json_value(value) for key, value in dataset.attrs.items()},
@@ -268,7 +268,7 @@ def _validate_dataset_entry(path, meta, file_size):
     if not isinstance(path, str) or not isinstance(meta, dict):
         raise ValueError("Invalid HDF5 dataset entry")
     shape, chunks = tuple(meta.get("shape", ())), meta.get("chunks")
-    dtype = _dtype_from_value(meta["dtype"])
+    dtype = dtype_from_value(meta["dtype"])
     if len(shape) > blosc2.MAX_DIM or any(
         isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in shape
     ):
@@ -438,7 +438,7 @@ class HDF5NDSource(ProxyNDSource):
             self._validate_dataset_presence(dataset)
             self._metadata = self._hdf5_index["datasets"][self.dataset]
             shape, physical_chunks = tuple(self._metadata["shape"]), self._metadata["chunks"]
-            dtype = _dtype_from_value(self._metadata["dtype"])
+            dtype = dtype_from_value(self._metadata["dtype"])
             self._chunk_records = {tuple(item["offset"]): item for item in self._metadata["allocated"]}
         self._init_geometry(shape, physical_chunks, dtype, blocks, cparams)
         identity = {

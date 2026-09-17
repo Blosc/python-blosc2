@@ -890,6 +890,15 @@ def test_hdf5_vlmeta(tmp_path):
     np.testing.assert_array_equal(attrs["numbers"], np.arange(3, dtype="i8"))
     np.testing.assert_array_equal(attrs["vlen"], ["one", "two"])
 
+    # Array-valued attributes must also survive a portable carrier export.
+    destination = tmp_path / "attrs.b2nd"
+    proxy.save(destination)
+    with blosc2.open(destination) as reopened:
+        attrs = reopened.attrs[:]
+        assert attrs["description"] == "hdf5 dataset"
+        np.testing.assert_array_equal(attrs["numbers"], np.arange(3, dtype="i8"))
+        np.testing.assert_array_equal(attrs["vlen"], ["one", "two"])
+
 
 @pytest.mark.network
 def test_s3_hdf5_matches_zarr():

@@ -837,6 +837,27 @@ def test_hdf5_single_index_preserved(hierarchy, tmp_path, monkeypatch):
     assert len(translations) == 0
 
 
+def test_hdf5_array_attrs_survive_manifest_and_export(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    path = tmp_path / "attrs.h5"
+    with h5py.File(path, "w") as file:
+        file.attrs["numbers"] = np.arange(3, dtype="i8")
+        file.attrs["labels"] = np.array(["alpha", "beta"], dtype=object)
+        file.create_dataset("data", data=np.arange(20, dtype="i4"), chunks=(10,))
+    url = "memory://array-attrs.h5"
+    fsspec.filesystem("memory").pipe_file(url, path.read_bytes())
+
+    snapshot = tmp_path / "array-attrs.b2z"
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "cache") as store:
+        np.testing.assert_array_equal(store.attrs["numbers"], np.arange(3, dtype="i8"))
+        np.testing.assert_array_equal(store.attrs["labels"], ["alpha", "beta"])
+        store.save(snapshot)
+
+    with blosc2.open(snapshot) as restored:
+        np.testing.assert_array_equal(restored.attrs["numbers"], np.arange(3, dtype="i8"))
+        np.testing.assert_array_equal(restored.attrs["labels"], ["alpha", "beta"])
+
+
 def test_mutability_property_and_inheritance(hierarchy):
     url, _ = hierarchy
     with blosc2.RemoteStore(url) as store:

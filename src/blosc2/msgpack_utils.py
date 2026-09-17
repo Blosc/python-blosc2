@@ -28,6 +28,9 @@ _BLOSC2_STRUCTURED_EXT_CODE = 43
 _BLOSC2_STRUCTURED_VERSION = 1
 _BLOSC2_COMPLEX_EXT_CODE = 44
 _BLOSC2_SET_EXT_CODE = 45
+# Reserve code 46 for NumPy arrays: the payload is a msgpack mapping holding either
+# the dtype, shape and raw bytes, or the elements of an object-dtype array.
+_BLOSC2_NDARRAY_EXT_CODE = 46
 
 
 def _encode_structured_reference(obj):
@@ -60,6 +63,30 @@ def _decode_structured_reference(data):
     raise ValueError(f"Unsupported structured Blosc2 msgpack payload kind: {kind!r}")
 
 
+def _encode_ndarray(value):
+    from blosc2.hdf5_source import dtype_value
+
+    if value.dtype.hasobject:
+        payload = {"values": value.ravel().tolist(), "shape": list(value.shape)}
+    else:
+        payload = {
+            "dtype": dtype_value(value.dtype),
+            "shape": list(value.shape),
+            "data": value.tobytes(),
+        }
+    return ExtType(_BLOSC2_NDARRAY_EXT_CODE, packb(payload, use_bin_type=True))
+
+
+def _decode_ndarray(data):
+    from blosc2.hdf5_source import dtype_from_value
+
+    payload = unpackb(data)
+    shape = payload["shape"]
+    if "values" in payload:
+        return np.array(payload["values"], dtype=object).reshape(shape)
+    return np.frombuffer(payload["data"], dtype=dtype_from_value(payload["dtype"])).reshape(shape)
+
+
 def _encode_msgpack_ext(obj):
     import blosc2
 
@@ -76,6 +103,8 @@ def _encode_msgpack_ext(obj):
     structured = _encode_structured_reference(obj)
     if structured is not None:
         return structured
+    if isinstance(obj, np.ndarray):
+        return _encode_ndarray(obj)
     if isinstance(obj, (complex, np.complexfloating)):
         return ExtType(_BLOSC2_COMPLEX_EXT_CODE, struct.pack(">dd", float(obj.real), float(obj.imag)))
     if isinstance(obj, (set, frozenset)):
@@ -109,6 +138,8 @@ def _decode_msgpack_ext(code, data):
     if code == _BLOSC2_COMPLEX_EXT_CODE:
         real, imag = struct.unpack(">dd", data)
         return complex(real, imag)
+    if code == _BLOSC2_NDARRAY_EXT_CODE:
+        return _decode_ndarray(data)
     if code == _BLOSC2_SET_EXT_CODE:
         return set(msgpack_unpackb(data))
     return ExtType(code, data)

@@ -1468,6 +1468,9 @@ def test_remote_array_metadata_complex_and_containers():
         "np_float": np.float32(3.14),
         "np_complex": np.complex128(2.0 + 3.0j),
         "np_bool": np.bool_(True),
+        "np_array": np.arange(6, dtype="i8").reshape(2, 3),
+        "np_object": np.array(["alpha", "beta"], dtype=object),
+        "np_struct": np.array([(1, (0.5, 1.5))], dtype=[("value", "<i4"), ("point", "<f4", (2,))]),
     }
     unpacked = msgpack_unpackb(msgpack_packb(payload))
     assert unpacked["attr0"] is True
@@ -1485,6 +1488,10 @@ def test_remote_array_metadata_complex_and_containers():
     assert isinstance(unpacked["attr9"], set)
     assert unpacked["np_int"] == 42
     assert unpacked["np_bool"] is True
+    np.testing.assert_array_equal(unpacked["np_array"], np.arange(6, dtype="i8").reshape(2, 3))
+    np.testing.assert_array_equal(unpacked["np_object"], np.array(["alpha", "beta"], dtype=object))
+    assert unpacked["np_struct"].dtype == np.dtype([("value", "<i4"), ("point", "<f4", (2,))])
+    assert unpacked["np_struct"]["point"].tolist() == [[0.5, 1.5]]
 
     # Test via RemoteArray and trailer vlmeta
     data = np.arange(10, dtype=np.int32)
@@ -1500,6 +1507,7 @@ def test_remote_array_metadata_complex_and_containers():
         ("attr7", (4, 5, 6)),
         ("attr8", {"key": "val_8", "index": 8}),
         ("attr9", {7, 8, 9}),
+        ("np_array", np.arange(3, dtype="i8")),
     ]:
         arr.vlmeta[k] = v
 
@@ -1520,6 +1528,7 @@ def test_remote_array_metadata_complex_and_containers():
     assert proxy.vlmeta["attr8"] == {"key": "val_8", "index": 8}
     assert proxy.vlmeta["attr9"] == {7, 8, 9}
     assert isinstance(proxy.vlmeta["attr9"], set)
+    np.testing.assert_array_equal(proxy.vlmeta["np_array"], np.arange(3, dtype="i8"))
 
 
 def test_disk_cache_dir_includes_storage_options(tmp_path):
