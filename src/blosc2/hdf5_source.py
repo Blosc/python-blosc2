@@ -63,6 +63,10 @@ def dtype_from_value(value):
 
 def _dtype_field_from_json(field):
     name, spec, *shape = field
+    if isinstance(name, list):
+        # dtype.descr writes a titled field as (title, name); JSON and msgpack
+        # round trips turn that tuple into a list again.
+        name = tuple(name)
     if isinstance(spec, list):
         spec = [_dtype_field_from_json(item) for item in spec]
     return (name, spec, tuple(shape[0])) if shape else (name, spec)

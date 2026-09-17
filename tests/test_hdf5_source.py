@@ -56,6 +56,13 @@ def test_hdf5_native_index():
         validate_hdf5_index(malformed)
 
 
+def test_hdf5_titled_dtype_roundtrip():
+    from blosc2.hdf5_source import dtype_from_value, dtype_value
+
+    dtype = np.dtype([(("title", "value"), "<i4"), ("point", "<f4", (2,))])
+    assert dtype_from_value(json.loads(json.dumps(dtype_value(dtype)))) == dtype
+
+
 def test_hdf5_index_rejects_malformed_filter_values():
     from blosc2.hdf5_source import scan_hdf5_index, validate_hdf5_index
 
