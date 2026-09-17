@@ -791,7 +791,11 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
     with h5py.File(path, "w") as file:
         file.create_dataset("data", data=data, chunks=(1000,))
     with _ranged_server(tmp_path) as (urlbase, _requests):
-        source = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "data")
+        source = blosc2.HDF5NDSource(
+            f"{urlbase}/{path.name}",
+            "data",
+            storage_options={"skip_instance_cache": False},
+        )
         filesystem = source._filesystem
         cached, _ = fsspec.core.url_to_fs(f"{urlbase}/{path.name}")
         assert filesystem is not cached  # Sources own a private filesystem.

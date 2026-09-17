@@ -164,8 +164,10 @@ def _filesystem_and_path(urlpath, storage_options=None, filesystem=None):
         return filesystem, filesystem._strip_protocol(urlpath)
     # Owned filesystems must never be the process-wide fsspec instance: closing
     # one source's session must not invalidate another source for the same URL.
+    # Force privacy even if the caller passed skip_instance_cache=False, since
+    # close() treats the filesystem as owned.
     options = dict(storage_options or {})
-    options.setdefault("skip_instance_cache", True)
+    options["skip_instance_cache"] = True
     return fsspec.core.url_to_fs(urlpath, **options)
 
 
