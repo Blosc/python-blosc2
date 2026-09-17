@@ -74,16 +74,20 @@ def _encode_ndarray(value):
             "shape": list(value.shape),
             "data": value.tobytes(),
         }
-    return ExtType(_BLOSC2_NDARRAY_EXT_CODE, packb(payload, use_bin_type=True))
+    return ExtType(_BLOSC2_NDARRAY_EXT_CODE, msgpack_packb(payload))
 
 
 def _decode_ndarray(data):
     from blosc2.hdf5_source import dtype_from_value
 
-    payload = unpackb(data)
+    payload = msgpack_unpackb(data)
     shape = payload["shape"]
     if "values" in payload:
-        return np.array(payload["values"], dtype=object).reshape(shape)
+        result = np.empty(shape, dtype=object)
+        flat = result.reshape(-1)
+        for index, item in enumerate(payload["values"]):
+            flat[index] = item
+        return result
     return np.frombuffer(payload["data"], dtype=dtype_from_value(payload["dtype"])).reshape(shape)
 
 

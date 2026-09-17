@@ -1470,7 +1470,9 @@ def test_remote_array_metadata_complex_and_containers():
         "np_bool": np.bool_(True),
         "np_array": np.arange(6, dtype="i8").reshape(2, 3),
         "np_object": np.array(["alpha", "beta"], dtype=object),
+        "np_object_nested": np.array([np.arange(2), {"a"}, np.int64(7), 2 + 3j], dtype=object),
         "np_struct": np.array([(1, (0.5, 1.5))], dtype=[("value", "<i4"), ("point", "<f4", (2,))]),
+        "np_titled": np.array([(1,)], dtype=[(("title", "value"), "<i4")]),
     }
     unpacked = msgpack_unpackb(msgpack_packb(payload))
     assert unpacked["attr0"] is True
@@ -1490,8 +1492,17 @@ def test_remote_array_metadata_complex_and_containers():
     assert unpacked["np_bool"] is True
     np.testing.assert_array_equal(unpacked["np_array"], np.arange(6, dtype="i8").reshape(2, 3))
     np.testing.assert_array_equal(unpacked["np_object"], np.array(["alpha", "beta"], dtype=object))
+    nested = unpacked["np_object_nested"]
+    assert nested.dtype == object
+    assert nested.shape == (4,)
+    np.testing.assert_array_equal(nested[0], np.arange(2))
+    assert nested[1] == {"a"}
+    assert nested[2] == 7
+    assert nested[3] == 2 + 3j
     assert unpacked["np_struct"].dtype == np.dtype([("value", "<i4"), ("point", "<f4", (2,))])
     assert unpacked["np_struct"]["point"].tolist() == [[0.5, 1.5]]
+    assert unpacked["np_titled"].dtype == np.dtype([(("title", "value"), "<i4")])
+    assert unpacked["np_titled"]["value"][0] == 1
 
     # Test via RemoteArray and trailer vlmeta
     data = np.arange(10, dtype=np.int32)
