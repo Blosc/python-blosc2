@@ -342,6 +342,9 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
             url_str = url_str[: index + len(ext) - 1]
             break
     if url_str.endswith(".json"):
+        if not urlsplit(url_str).scheme or os.path.isabs(url_str):
+            with open(url_str) as file:
+                return sorted(validate_hdf5_index(json.load(file))["datasets"])
         import fsspec
 
         with fsspec.open(url_str, "r", **(storage_options or {})) as file:

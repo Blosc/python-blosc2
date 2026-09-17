@@ -202,6 +202,26 @@ def test_local_hdf5_special_datasets_and_errors(tmp_path, monkeypatch):
         assert not opened[-1].valid
 
 
+def test_available_datasets_local_json_without_fsspec(tmp_path, monkeypatch):
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    path = tmp_path / "indexed.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=np.arange(8, dtype="i4"), chunks=(4,))
+    index_path = tmp_path / "indexed.json"
+    index_path.write_text(json.dumps(scan_hdf5_index(str(path))))
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.split(".")[0] in {"zarr", "fsspec"}:
+            raise AssertionError(f"Local HDF5 must not import {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    assert blosc2.available_datasets(str(index_path)) == ["data"]
+
+
 def test_local_hdf5_explicit_index(tmp_path):
     from blosc2.hdf5_source import scan_hdf5_index
 
