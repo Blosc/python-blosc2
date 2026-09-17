@@ -328,7 +328,6 @@ def hierarchy(request, tmp_path):
         fs.pipe_file(url, path.read_bytes())
     elif backend == "h5":
         h5py = pytest.importorskip("h5py")
-        pytest.importorskip("kerchunk")
         path = tmp_path / "hierarchy.h5"
         with h5py.File(path, "w") as root:
             root.attrs["title"] = "root"
@@ -510,15 +509,15 @@ def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch
     url, data = hierarchy
     translations = []
     if url.endswith(".h5"):
-        import kerchunk.hdf
+        import blosc2.hdf5_source as hdf5_source
 
-        translate = kerchunk.hdf.SingleHdf5ToZarr.translate
+        scan = hdf5_source.scan_hdf5_index
 
-        def counted(self):
+        def counted(*args, **kwargs):
             translations.append(1)
-            return translate(self)
+            return scan(*args, **kwargs)
 
-        monkeypatch.setattr(kerchunk.hdf.SingleHdf5ToZarr, "translate", counted)
+        monkeypatch.setattr(hdf5_source, "scan_hdf5_index", counted)
 
     with monkeypatch.context() as no_payload:
 
@@ -569,7 +568,7 @@ def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch
             with pytest.raises(ValueError, match="does not match its archive"):
                 blosc2.B2ZNDSource("memory://wrong.b2z", "group/a", _archive=owner.archive)
         elif owner.format == "hdf5":
-            assert other.src._refs is leaf.src._refs is owner.refs
+            assert other.src._hdf5_index is leaf.src._hdf5_index is owner.hdf5_index
             assert translations == [1]
         else:
             assert other.src.array.store is leaf.src.array.store is owner.zstore
@@ -585,7 +584,7 @@ def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch
     leaf.save(export)
     np.testing.assert_array_equal(blosc2.open(export)[:2, :3], data[:2, :3])
     if owner.format == "hdf5":
-        assert translations == [1]  # The standalone export contains its own refs.
+        assert translations == [1]  # The standalone export contains its own index.
 
     root.close()
     root.close()
@@ -808,20 +807,20 @@ def test_subtree_export(hierarchy, tmp_path):
         np.testing.assert_array_equal(sub["b"][:10, :10], data[:10, :10] + 1)
 
 
-def test_hdf5_single_ref_map_preserved(hierarchy, tmp_path, monkeypatch):
+def test_hdf5_single_index_preserved(hierarchy, tmp_path, monkeypatch):
     url, data = hierarchy
     if not url.endswith(".h5"):
         pytest.skip("HDF5 specific test")
-    import kerchunk.hdf
+    import blosc2.hdf5_source as hdf5_source
 
     translations = []
-    orig_translate = kerchunk.hdf.SingleHdf5ToZarr.translate
+    original_scan = hdf5_source.scan_hdf5_index
 
-    def counted(self):
+    def counted(*args, **kwargs):
         translations.append(1)
-        return orig_translate(self)
+        return original_scan(*args, **kwargs)
 
-    monkeypatch.setattr(kerchunk.hdf.SingleHdf5ToZarr, "translate", counted)
+    monkeypatch.setattr(hdf5_source, "scan_hdf5_index", counted)
     snapshot = tmp_path / "h5_snap.b2z"
     with blosc2.RemoteStore(url, cache_dir=tmp_path / "live") as store:
         with store["group/a"] as a:
@@ -834,7 +833,7 @@ def test_hdf5_single_ref_map_preserved(hierarchy, tmp_path, monkeypatch):
         with restored["group/a"] as a, restored["group/b"] as b:
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
             np.testing.assert_array_equal(b[:10, :10], data[:10, :10] + 1)
-            assert a.src._refs is b.src._refs is restored._owner.refs
+            assert a.src._hdf5_index is b.src._hdf5_index is restored._owner.hdf5_index
     assert len(translations) == 0
 
 

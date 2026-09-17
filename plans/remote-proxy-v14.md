@@ -52,7 +52,7 @@ validation, and single-HDF5-map reuse are fully implemented and verified.
     is rejected with an actionable error (`"smaller than retained immutable payload"`). Opening a warm
     snapshot with `CachePolicy.NONE` is rejected. Mutable snapshots opened with a smaller requested budget
     are trimmed via LRU eviction before returning.
-  - Preserves single HDF5 Kerchunk reference map across leaves without repeated translation on reopen.
+  - Preserves single HDF5 HDF5 reference index map across leaves without repeated translation on reopen.
   - Refreshing an immutable artifact is rejected with an actionable error.
 
 - Step 5 (Comprehensive acceptance tests and validation):
@@ -66,7 +66,7 @@ validation, and single-HDF5-map reuse are fully implemented and verified.
     - `chmod 0o444` read-only byte preservation across hits and misses.
     - Budget validation, eviction trimming on mutable reopen, and rejection of smaller budgets on immutable snapshots.
     - Subtree exports with remapped root datasets and relative child keys.
-    - Single HDF5 Kerchunk reference map reuse without repeated translation on reopen.
+    - Single HDF5 HDF5 reference index map reuse without repeated translation on reopen.
     - `.mutable` property hierarchy inheritance and validation.
     - Save destination validation (extension, directory, collision, and live cache nesting).
 
@@ -241,7 +241,7 @@ TreeStore and existing object roots. It should identify:
 - Cache mutability, independent of source immutability and payload inclusion.
 
 Preserve v13 backend metadata reuse: B2Z directory/header locators, one HDF5
-Kerchunk map, and lazily acquired Zarr decoding and listing metadata. Keep
+HDF5 reference map, and lazily acquired Zarr decoding and listing metadata. Keep
 metadata separate from evictable payload. Define `metadata_bytes` as encoded
 descriptor/discovery bytes, excluding ZIP and filesystem overhead.
 

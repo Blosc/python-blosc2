@@ -19,11 +19,11 @@ available.
   ``offset=`` forces eager reading.
 
 - **Direct local HDF5 reads via ``h5py``.** Local ``.h5``/``.hdf5`` datasets
-  are now accessed directly through ``h5py``, eliminating the need for
-  ``kerchunk``, ``zarr``, or ``fsspec`` when reading local files. Chunked
+  are now accessed directly through ``h5py``, without requiring ``zarr`` or
+  ``fsspec`` when reading local files. Chunked
   datasets preserve their native HDF5 chunk layout, while contiguous datasets
-  automatically receive optimal Blosc2 cache chunks. Explicit ``refs=``
-  arguments continue to select the kerchunk reference reader.
+  automatically receive optimal Blosc2 cache chunks. Explicit ``hdf5_index=``
+  arguments can supply a previously generated native index.
 
 - **Faster HTTP discovery and instant warm opens.**
 
@@ -33,7 +33,7 @@ available.
   * *Warm reopens*: Reopening cached B2Z, Zarr, or HDF5 sources replays
     persisted bootstrap metadata directly from the carrier, completely
     bypassing remote discovery. Sibling HDF5 datasets under a shared
-    ``cache_dir=`` reuse a single on-disk reference snapshot.
+    ``cache_dir=`` reuse a single on-disk HDF5 index.
   * *Small member prefetching*: B2Z members up to 64 KiB are fetched in full on
     open (header, chunks, and trailing metadata), populating the standard chunk
     cache with full quota tracking and LRU eviction.
@@ -60,9 +60,9 @@ available.
   * ``load_tensor()`` explicitly requests eager access, avoiding unexpected lazy
     intermediates for remote paths.
   * Fixed decoding of HDF5 datasets compressed with the Blosc2 filter (such as
-    via ``hdf5plugin``) when read through kerchunk, properly handling multi-chunk
+    via ``hdf5plugin``), properly handling multi-chunk
     super-chunk frames without an ``AttributeError``.
-  * HDF5 reference snapshot publishing is safely guarded, fixing a crash on
+  * HDF5 index publishing is safely guarded, fixing a crash on
     Windows drive-letter paths when opening local h5py sources with a disk cache.
   * Attaching a sparse runtime cache to a read-only legacy B2Z carrier safely
     rebuilds bootstrap metadata in memory without attempting disk writes.

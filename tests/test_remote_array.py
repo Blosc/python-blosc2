@@ -873,7 +873,7 @@ def test_persistence_rejects_credentials_and_chained_urls(url):
 @pytest.mark.parametrize(
     "url", ["https://example.org/data.b2nd?token=secret", "https://user@example.org/data.b2nd"]
 )
-def test_fsspec_refs_reject_credentials(url):
+def test_fsspec_references_reject_credentials(url):
     with pytest.raises(ValueError):
         blosc2.Ref.fsspec_ref(url)
 

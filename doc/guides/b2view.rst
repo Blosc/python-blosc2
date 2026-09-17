@@ -97,7 +97,7 @@ objects and chunks. Small objects may fit entirely within a bounded opening read
 ``--profile`` and ``--endpoint-url`` are optional; when omitted, the S3 backend
 uses its normal credential and endpoint configuration. Install ``blosc2[tui]``
 and ``blosc2[fsspec]`` plus ``s3fs`` for S3 access. Zarr requires
-``blosc2[zarr]``; HDF5 requires ``blosc2[hdf5]`` (Kerchunk, h5py, and Zarr).
+``blosc2[zarr]``; HDF5 requires ``blosc2[hdf5]`` (h5py and optional filter plugins).
 B2Z browsing does not require Zarr or HDF5 dependencies.
 
 Format details and limits:
@@ -115,13 +115,12 @@ Format details and limits:
   support and LIST permission. Direct arrays do not require listing their parent.
   Empty groups and attributes are preserved. Unknown codecs and unsupported
   dtypes remain visible; preview support follows the existing Zarr array reader.
-* **HDF5:** Kerchunk translates metadata once per session and all selected leaves
-  reuse those references. Translation can enumerate many chunk references and
-  inline small values; it avoids full-file localization, but is not a constant-cost
-  operation. Empty groups and attributes are preserved. Failed dataset translations
-  become unavailable nodes without hiding supported siblings. The view covers
-  Kerchunk's representation: hard-link aliases may be omitted, and soft/external
-  links and group cycles are not followed.
+* **HDF5:** h5py builds a native metadata and chunk-range index once per session,
+  and all selected leaves reuse it. Indexing can enumerate many allocated chunks;
+  it avoids full-file localization, but is not a constant-cost operation. Empty
+  groups and attributes are preserved. Unsupported datasets remain unavailable
+  nodes without hiding supported siblings. Hard-link aliases may be omitted, and
+  soft/external links and group cycles are not followed.
 
 These internal browser adapters do not change the array-only contract of
 ``blosc2.open(..., lazy=True)`` or add a persisted RemoteArray hierarchy descriptor.

@@ -44,9 +44,8 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
      - Lazy Zarr sources and the ``b2nd-to-zarr`` (or ``blosc2-to-zarr``)
        converter (``zarr``).
    * - ``hdf5``
-     - Reading HDF5 datasets lazily as virtual arrays: ``h5py`` for local
-       files, ``kerchunk`` for remote ones (``kerchunk``, ``h5py``,
-       ``hdf5plugin``).
+     - Reading HDF5 datasets lazily as virtual arrays, locally or through
+       fsspec (``h5py``, ``hdf5plugin``).
    * - ``fsspec``
      - Reading and writing single-file containers through any `fsspec
        <https://filesystem-spec.readthedocs.io>`_ URL.  The HTTP(S) driver is

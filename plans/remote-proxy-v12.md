@@ -19,7 +19,7 @@ no redundant internal root path, and the original source in the header.
 
 All three formats are feasible using existing dependencies and leaf readers.
 B2Z needs archive discovery; Zarr needs group discovery; HDF5 needs its existing
-Kerchunk references retained and reused across dataset selections. The main
+HDF5 reference indexes retained and reused across dataset selections. The main
 shared work is connecting discovery to the browser without opening every leaf.
 
 ## Current behavior and reusable pieces
@@ -51,7 +51,7 @@ shared work is connecting discovery to the browser without opening every leaf.
 - `zarr_source.py:ZarrNDSource` already opens an fsspec-backed Zarr array and
   exposes its attributes. It explicitly rejects groups.
 - `hdf5_source.py:available_datasets()` and `HDF5NDSource` already translate HDF5
-  into Kerchunk references. The source accepts an existing reference dictionary,
+  into HDF5 reference indexes. The source accepts an existing reference dictionary,
   recognizes `.zgroup` and `.zarray`, and opens arrays through a reference store.
   Repeating translation for each selected dataset would waste substantial work.
 - The recent b2view Zarr fix initializes the Numcodecs Blosc mutex before
@@ -82,8 +82,8 @@ shared work is connecting discovery to the browser without opening every leaf.
 6. Keep remote sources immutable for a browsing session. Explicit refresh
    rebuilds discovery state and invalidates cached node metadata and leaf
    objects. Live mutation detection and persistent hierarchy caches are deferred.
-7. Use the existing optional fsspec, Zarr, and HDF5/Kerchunk dependency groups.
-   B2Z browsing must work without Zarr, h5py, or Kerchunk installed.
+7. Use the existing optional fsspec, Zarr, and HDF5 reference-layer dependency groups.
+   B2Z browsing must work without Zarr, h5py, or the former HDF5 reference layer installed.
 
 ## Browser integration
 
@@ -197,7 +197,7 @@ or promise finer data-fetch granularity than the current reader provides.
 
 ## HDF5 discovery
 
-Translate the file to Kerchunk references once per browsing session, reusing the
+Translate the file to HDF5 reference indexes once per browsing session, reusing the
 existing translation and filter-registration path. Factor the shared operation
 out of `available_datasets()` and `_load_or_scan_refs()` only as needed; do not
 add an independent HDF5 traversal implementation inside b2view.
@@ -344,7 +344,7 @@ passed for B2Z, Zarr, and HDF5. The measured root opens were:
 Zarr discovery grew to 6,515 bytes after expanding through ``/d0/d1``. HDF5
 translation remained at 52,976 bytes through hierarchy expansion because its
 references were built once at session start. The request counts reflect the
-installed s3fs/Zarr/Kerchunk versions and the fixture's current metadata layout;
+installed s3fs, Zarr, and HDF5 reference-layer versions and the fixture's current metadata layout;
 they are observations rather than API guarantees.
 
 B2Z embedded arrays and remote CTable previews remain unavailable as planned.

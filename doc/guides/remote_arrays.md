@@ -36,7 +36,7 @@ The argument passed to {func}`blosc2.open` selects the route:
 | A URL string such as `s3://...` or `https://...`                              | fsspec   | A byte-addressable, standalone `.b2nd` file             |
 | A URL containing a `.b2z` path component, or `source_format="b2z"`            | B2Z      | One immutable external NDArray leaf in a `.b2z` archive |
 | A URL containing a `.zarr` path component                                     | Zarr     | One immutable Zarr v2 or v3 array                       |
-| A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5     | One immutable HDF5 dataset (h5py locally, kerchunk remotely) |
+| A URL containing a `.h5` or `.hdf5` path component, or `source_format="hdf5"` | HDF5     | One immutable HDF5 dataset (h5py locally, native range index remotely) |
 | A {ref}`URLPath`                                                              | Caterva2 | One array-like dataset on a Caterva2 server             |
 
 ```python
@@ -67,7 +67,7 @@ h1 = blosc2.open(
 store_b2z = blosc2.RemoteStore("s3://bucket/hierarchy.b2z")
 store_h5 = blosc2.RemoteStore("https://datasets.example.org/hierarchy.h5")
 
-# Reopen an exported reference snapshot (.b2z):
+# Reopen an exported portable snapshot (.b2z):
 store_snap = blosc2.open("snapshot.b2z")
 
 a1.shape, a1.dtype  # metadata is available immediately
@@ -89,13 +89,14 @@ Converted Blosc2 chunks are cached under an immutable source contract, so publis
 Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
 Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
-Pre-indexing is performed via `kerchunk`. When opening a single {ref}`RemoteArray`, the resulting reference map is cached inside the array carrier (`schunk.vlmeta["hdf5-refs"]`). When using {ref}`RemoteStore`, indexing is performed once for the entire container and shared across all leaves and sessions.
+Remote pre-indexing uses h5py to record dataset metadata and allocated chunk byte ranges. When opening a single {ref}`RemoteArray`, the native index is cached inside the array carrier (`schunk.vlmeta["hdf5-index"]`). When using {ref}`RemoteStore`, indexing is performed once for the entire container and shared across all leaves and sessions. Uncompressed, deflate, shuffle, and Blosc2 pipelines are decoded directly after fsspec range reads. Other pipelines use a retained h5py reader, including filters registered by `hdf5plugin`.
 Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5 container.
 
-Local HDF5 files use h5py directly, without kerchunk pre-indexing or Zarr/fsspec
-dependencies. For example, `blosc2.open("hierarchy.h5::/d0/a2")` reads the selected
+Local HDF5 files use h5py directly, without pre-indexing or an fsspec
+dependency. For example, `blosc2.open("hierarchy.h5::/d0/a2")` reads the selected
 dataset through h5py and caches converted Blosc2 chunks in memory. Explicit
-`refs=` inputs retain the reference-based reader, including for local files.
+`hdf5_index=` accepts a native HDF5 index, including for local files. Legacy
+HDF5 reference maps are rejected; omit `hdf5_index=` to regenerate the native index.
 
 `RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
@@ -151,8 +152,9 @@ What differs between the transports is the types of remote objects each can open
 
 `lazy=True` changes *when* data is fetched; it does not expand the underlying storage formats supported by either route.
 
-> [!TIP]
-> **Browse remote hierarchies**: To explore groups, inspect attributes, or preview arrays in remote `.b2z`, `.zarr`, or `.h5` containers interactively in the terminal without downloading the complete container, use {doc}`b2view <b2view>` (e.g. `b2view s3://bucket/hierarchy.b2z`). To navigate containers programmatically in Python, use {ref}`RemoteStore`.
+```{tip}
+**Browse remote hierarchies**: To explore groups, inspect attributes, or preview arrays in remote `.b2z`, `.zarr`, or `.h5` containers interactively in the terminal without downloading the complete container, use {doc}`b2view <b2view>` (e.g. `b2view s3://bucket/hierarchy.b2z`). To navigate containers programmatically in Python, use {ref}`RemoteStore`.
+```
 
 ## Explore remote hierarchies with RemoteStore
 
@@ -203,7 +205,7 @@ with blosc2.RemoteStore(
 ```
 
 When reopening the same store later with the same `cache_dir`:
-- Discovery metadata (such as B2Z member offsets or HDF5 Kerchunk reference maps) is restored from local disk, avoiding repeated remote translation scans. `store.metadata_bytes` reports the encoded manifest size.
+- Discovery metadata (such as B2Z member offsets or native HDF5 indexes) is restored from local disk, avoiding repeated remote scans. `store.metadata_bytes` reports the encoded manifest size.
 - Retained leaf chunks are available immediately from disk without network transfers.
 - Single-owner locks ensure that concurrent processes do not corrupt the shared cache.
 
@@ -468,7 +470,7 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
     store["experiment"].save("experiment_sub.b2z")
 ```
 
-- **Portable reference**: The `.b2z` archive contains the discovered hierarchy, attributes, and source locators (such as the HDF5 Kerchunk reference map or B2Z member offsets), but no secrets or credentials.
+- **Portable reference**: The `.b2z` archive contains the discovered hierarchy, attributes, and source locators (such as the native HDF5 index or B2Z member offsets), but no secrets or credentials.
 - **`include_cache=True` (default)**: Bundles warm cached chunks along with metadata so reading previously fetched slices requires zero network traffic.
 - **`include_cache=False`**: Omits cached payload chunks, producing a minimal reference archive for remote streaming.
 - **Subtree export**: Calling `save()` on a group view exports that subtree with relative child keys and the appropriate source root.
@@ -517,8 +519,9 @@ store.save("writable.b2z", mutable=True)
 | **Immutable** (`mutable=False`, default) | Reads directly in-place from `.b2z` without disk writes. Safe on read-only media (`chmod 0o444`). | Fetched transiently into RAM to satisfy the read; never written to disk or the archive. | `fetch()`, `afetch()`, `trim_cache()`, and `refresh()` are disallowed. |
 | **Mutable** (`mutable=True`) | Staged into an independent writable runtime cache directory. Original `.b2z` stays untouched. | Fetched and cached to disk under standard LRU eviction rules. | Fully supported. Can be opened with a smaller budget, trimming excess chunks. |
 
-> [!TIP]
-> Use **immutable snapshots** (`mutable=False`) for sharing reproducible, read-only reference archives or distributing datasets that should never modify local storage. Use **mutable snapshots** (`mutable=True`) when users should be able to expand the local cache with newly fetched regions over time.
+```{tip}
+Use **immutable snapshots** (`mutable=False`) for sharing reproducible, read-only reference archives or distributing datasets that should never modify local storage. Use **mutable snapshots** (`mutable=True`) when users should be able to expand the local cache with newly fetched regions over time.
+```
 
 ## Retrieve scattered points
 

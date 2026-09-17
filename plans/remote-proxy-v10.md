@@ -70,7 +70,7 @@ values = arr[:10, 0, :5]
 ```
 
 This extends the dataset addressing introduced in v9. It does not require
-kerchunk, Zarr, a Caterva2 server, archive extraction, or conversion of source
+the former HDF5 reference layer, Zarr, a Caterva2 server, archive extraction, or conversion of source
 chunks into a different storage format.
 
 ## Scope and fixed decisions
@@ -329,7 +329,7 @@ S3 tests marked `network` and outside the default suite.
 Use the `blosc2` conda environment for all Python, tests, and build commands.
 Run focused B2Z, fsspec, Proxy, RemoteProxy, and URL parsing tests, followed by the
 default suite and repository lint checks. Verify unrelated local use and native
-remote B2ND reads still work without Zarr, kerchunk, or h5py. Record network or
+remote B2ND reads still work without Zarr, the former HDF5 reference layer, or h5py. Record network or
 optional-dependency checks that could not run.
 
 ## Completion criteria

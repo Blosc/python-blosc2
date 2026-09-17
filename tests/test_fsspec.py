@@ -770,7 +770,6 @@ def _ranged_server(root):
 
 def test_http_hdf5_scan_and_warm_slice(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("kerchunk")
     pytest.importorskip("zarr")
     data = np.arange(10_000, dtype="int32")
     path = tmp_path / "seekable.h5"
@@ -788,7 +787,6 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
 
 def test_http_store_disk_reopen_and_transport_close(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("kerchunk")
     pytest.importorskip("zarr")
     data = np.arange(10_000, dtype="int32")
     path = tmp_path / "store.h5"
@@ -1587,9 +1585,12 @@ def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
     np.testing.assert_array_equal(store["/group/a"][:], np.arange(10, dtype="i4"))
 
 
-def test_non_lazy_cache_dir_rejects_refs(tmp_path):
-    fsspec.filesystem("memory").pipe_file("nonlazy-refs/data", b"whatever")
-    with pytest.raises(NotImplementedError, match="refs"):
+def test_non_lazy_cache_dir_rejects_hdf5_index(tmp_path):
+    fsspec.filesystem("memory").pipe_file("nonlazy-index/data", b"whatever")
+    with pytest.raises(NotImplementedError, match="hdf5_index"):
         blosc2.open(
-            "memory://nonlazy-refs/data", lazy=False, cache_dir=tmp_path / "cache", refs={"refs": {}}
+            "memory://nonlazy-index/data",
+            lazy=False,
+            cache_dir=tmp_path / "cache",
+            hdf5_index={"format": "invalid"},
         )

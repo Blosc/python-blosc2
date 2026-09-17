@@ -5,7 +5,7 @@ RemoteStore
 
 ``RemoteStore`` discovers a read-only B2Z, Zarr or HDF5 hierarchy and returns
 :ref:`RemoteArray` leaves. Groups and arrays share one source session: a B2Z
-archive, an HDF5 reference map, or a Zarr store. Zarr listing remains lazy.
+archive, a native HDF5 index, or a Zarr store. Zarr listing remains lazy.
 
 The default ``CachePolicy.MEMORY`` shares a 256 MiB allowance across all leaves.
 Set ``max_cache_bytes`` to a positive integer to change it. ``CachePolicy.NONE``
@@ -62,7 +62,7 @@ Closing a handle, or exiting its context, releases its ownership. Existing child
 handles remain usable until closed or garbage-collected. The last handle closes
 the owned archive/store wrappers and private HTTP/S3 transport sessions. Operations on an explicitly closed handle raise ``RuntimeError``.
 Standalone ``RemoteArray`` exports remain self-contained references, including
-the HDF5 reference map when applicable.
+the native HDF5 index when applicable.
 
 ``b2view`` uses ``RemoteStore`` for remote hierarchies with one 64 MiB MEMORY
 allowance, and ``RemoteArray`` for selected or directly opened leaves. Switching
@@ -85,7 +85,7 @@ the operating system releases the lock after a process exits or crashes.
 
 Reopening restores all previously created leaf caches and trims them against the
 new aggregate allowance before returning. The manifest preserves B2Z directory
-and bounded metadata reads, one HDF5 reference map, and lazily discovered Zarr
+and bounded metadata reads, one native HDF5 index, and lazily discovered Zarr
 metadata. Metadata reads can contain small inline values or incidental bytes in
 bounded prefixes; they are separate from evictable payload. ``metadata_bytes``
 is the encoded manifest size, and is zero without a disk manifest. Credentials

@@ -58,10 +58,10 @@ the double-colon separator (``.../file.h5::dataset``), or the ``dataset="dataset
 Zarr containers similarly accept all three forms (``.../file.zarr/dataset``, ``.../file.zarr::dataset``,
 or ``dataset="dataset"``).
 HDF5 datasets on a local path are read directly with ``h5py``; remote HDF5 files use
-``kerchunk`` metadata pre-indexing. Like Zarr, HDF5 sources
+native metadata pre-indexing with ``h5py`` and byte ranges through fsspec. Like Zarr, HDF5 sources
 are assumed immutable (``assume_immutable=True``); mutable HDF5 sources are not supported.
-Pre-computed kerchunk references can be supplied via ``refs`` to avoid remote scanning
-(or to use the reference reader for a local file).
+Pre-computed native HDF5 indexes can be supplied via ``hdf5_index`` to avoid remote scanning
+(including when opening a local file through the indexed reader).
 
 .. code-block:: python
 
@@ -91,8 +91,8 @@ the same three addressing forms:
 
 Use ``source_format="b2z"`` for suffix-free archive URLs. The dataset is a logical
 tree key without the member's ``.b2nd`` suffix. The native Blosc2 reader preserves
-source chunks, blocks, dtype, and compression parameters; no kerchunk, Zarr, or
-HDF5 dependencies are needed. Install the fsspec extra and the protocol backend.
+source chunks, blocks, dtype, and compression parameters; no Zarr or HDF5
+dependencies are needed. Install the fsspec extra and the protocol backend.
 
 Opening reads the ZIP directory and selected member's headers. Directory cost
 scales with archive member count. An 8 KiB archive tail and 16 KiB member prefix

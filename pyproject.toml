@@ -52,7 +52,7 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 [project.optional-dependencies]
 parquet = ["pyarrow"]
 zarr = ["zarr>=3.0.9"]
-hdf5 = ["kerchunk", "h5py", "hdf5plugin"]
+hdf5 = ["h5py", "hdf5plugin"]
 # The b2view terminal viewer (the `b2view` script) is opt-in: most users want
 # blosc2 only as a compression library, and the TUI stack has no use under
 # wasm32 (no TTY).  Install with `pip install "blosc2[tui]"`.  This also pulls
@@ -79,7 +79,6 @@ dev = [
     "h5py",
     "hdf5plugin",
     "jupyterlab",
-    "kerchunk",
     "matplotlib",
     "pandas",
     "plotly",
@@ -100,7 +99,6 @@ test = [
     # Exercise the optional remote array sources instead of silently skipping
     # tests/test_zarr_source.py and tests/test_hdf5_source.py.
     "zarr>=3.0.9; platform_machine != 'wasm32'",
-    "kerchunk; platform_machine != 'wasm32'",
     "h5py; platform_machine != 'wasm32'",
     # tests/test_fsspec_s3.py needs a real S3 endpoint (moto, served locally, so
     # still offline) and a real *async* backend (s3fs).  memory:// is neither, and
