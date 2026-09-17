@@ -785,6 +785,24 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
         assert len(requests) == count
 
 
+def test_http_hdf5_source_close_closes_session(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "standalone.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        source = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "data")
+        filesystem = source._filesystem
+        session = filesystem._session
+        assert not session.closed
+        source.close()
+        assert session.closed
+        # fsspec caches HTTP filesystems process-wide; drop the closed instance
+        # so later tests build a fresh session.
+        type(filesystem).clear_instance_cache()
+
+
 def test_http_store_disk_reopen_and_transport_close(tmp_path):
     h5py = pytest.importorskip("h5py")
     pytest.importorskip("zarr")

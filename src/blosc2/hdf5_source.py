@@ -641,6 +641,15 @@ class HDF5NDSource(ProxyNDSource):
             finalizer = getattr(self, "_file_finalizer", None)
             if finalizer is not None:
                 finalizer()
+            filesystem = getattr(self, "_filesystem", None)
+            if filesystem is not None and self._external_filesystem is None:
+                # fsspec's HTTP and S3 clients keep an async session alive after
+                # the file objects it feeds are gone.
+                close = getattr(filesystem, "close_session", None)
+                session = getattr(filesystem, "_s3creator", None) or getattr(filesystem, "_session", None)
+                if close is not None and session is not None:
+                    close(filesystem.loop, session)
+                self._filesystem = None
 
     shape = property(lambda self: self._shape)
     chunks = property(lambda self: self._chunks)
