@@ -389,6 +389,15 @@ def _decode_blosc2(data):
         return values if isinstance(values, bytes) else np.ascontiguousarray(values).tobytes()
 
 
+def _decompress_deflate(data, size):
+    """Decode one deflate chunk with a hard bound on the output size."""
+    decompressor = zlib.decompressobj()
+    values = decompressor.decompress(data, size + 1)
+    if len(values) > size or decompressor.unconsumed_tail or decompressor.unused_data:
+        raise ValueError("Invalid HDF5 deflate chunk")
+    return values + decompressor.flush()
+
+
 def _values_to_chunk(values, chunks, blocks, dtype, cparams):
     values = np.asarray(values, dtype=dtype)
     buffer = np.zeros(chunks, dtype=dtype)
@@ -600,13 +609,14 @@ class HDF5NDSource(ProxyNDSource):
             self.traffic.charge(len(data))
         if len(data) != record["size"]:
             raise OSError(f"Short HDF5 chunk read for {self.dataset!r} at {offsets}")
+        expected = math.prod(self.chunks) * self.dtype.itemsize
         try:
             for position in range(len(self._metadata["filters"]) - 1, -1, -1):
                 if record["filter_mask"] & (1 << position):
                     continue
                 info = self._metadata["filters"][position]
                 if info["id"] == 1:
-                    data = zlib.decompress(data)
+                    data = _decompress_deflate(data, expected)
                 elif info["id"] == 2:
                     data = _unshuffle(data, info["values"][0] if info["values"] else self.dtype.itemsize)
                 elif info["id"] == 32026:
@@ -615,7 +625,6 @@ class HDF5NDSource(ProxyNDSource):
                     raise ValueError(f"Unsupported direct HDF5 filter {info['id']}")
         except Exception as exc:
             raise OSError(f"Cannot decode HDF5 chunk {self.dataset!r} at {offsets}") from exc
-        expected = math.prod(self.chunks) * self.dtype.itemsize
         if len(data) != expected:
             raise ValueError(
                 f"Decoded HDF5 chunk {self.dataset!r} at {offsets} has {len(data)} bytes, expected {expected}"

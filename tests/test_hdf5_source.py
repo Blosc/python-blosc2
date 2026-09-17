@@ -11,6 +11,7 @@ import builtins
 import gc
 import io
 import json
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,17 @@ def test_hdf5_native_index():
     del malformed["datasets"]["data"]["allocated"]
     with pytest.raises(ValueError, match="allocation table"):
         validate_hdf5_index(malformed)
+
+
+def test_hdf5_deflate_decode_is_bounded():
+    from blosc2.hdf5_source import _decompress_deflate
+
+    compressed = zlib.compress(b"a" * 100)
+    assert _decompress_deflate(compressed, 100) == b"a" * 100
+    with pytest.raises(ValueError, match="deflate"):
+        _decompress_deflate(compressed, 10)
+    with pytest.raises(ValueError, match="deflate"):
+        _decompress_deflate(compressed + b"junk", 100)
 
 
 # ---------------------------------------------------------------------------
