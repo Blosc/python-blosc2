@@ -635,8 +635,11 @@ class RemoteArray(blosc2.Operand):
                             seed = read_seed(cached)
             if hdf5_index is None and shared_index_path is not None:
                 # Disposable metadata: an absent or damaged snapshot needs a fresh scan.
+                from blosc2.hdf5_source import validate_hdf5_index
+
                 with contextlib.suppress(OSError, ValueError, RuntimeError):
-                    hdf5_index = json.loads(blosc2.decompress(shared_index_path.read_bytes()))
+                    candidate = json.loads(blosc2.decompress(shared_index_path.read_bytes()))
+                    hdf5_index = validate_hdf5_index(candidate, urlpath)
             self.src, self._source = self._open_source(
                 urlpath,
                 self._max_concurrency,

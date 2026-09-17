@@ -730,7 +730,7 @@ def test_publish_hdf5_index_skips_carriers_without_a_snapshot(tmp_path):
     assert not path.exists()
 
 
-@pytest.mark.parametrize("snapshot", ["new", "legacy", "damaged"])
+@pytest.mark.parametrize("snapshot", ["new", "legacy", "damaged", "invalid"])
 def test_hdf5_disk_cache_shares_index_between_leaves(tmp_path, monkeypatch, snapshot):
     import blosc2.hdf5_source as hdf5_source
 
@@ -754,15 +754,18 @@ def test_hdf5_disk_cache_shares_index_between_leaves(tmp_path, monkeypatch, snap
         assert shared.exists()
     elif snapshot == "damaged":
         shared.write_bytes(b"broken")
+    elif snapshot == "invalid":
+        shared.write_bytes(blosc2.compress(json.dumps({"format": "bad"}).encode(), typesize=1))
     with blosc2.open(url + "::b", cache_dir=tmp_path) as sibling:
         np.testing.assert_array_equal(sibling[:], data + 1)
-    assert len(scans) == (2 if snapshot == "damaged" else 1)
+    rescan = snapshot in {"damaged", "invalid"}
+    assert len(scans) == (2 if rescan else 1)
     assert "b" in json.loads(blosc2.decompress(shared.read_bytes()))["datasets"]
 
     # Different access configurations must not share a container snapshot.
     with blosc2.open(url + "::b", cache_dir=tmp_path, storage_options={"skip_instance_cache": True}):
         pass
-    assert len(scans) == (3 if snapshot == "damaged" else 2)
+    assert len(scans) == (3 if rescan else 2)
 
 
 def test_hdf5_blosc2_filter_decodes_super_chunk():
