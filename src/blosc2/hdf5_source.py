@@ -658,7 +658,7 @@ class HDF5NDSource(ProxyNDSource):
             return self._fallback_h5[self.dataset or "/"]
         import h5py
 
-        if getattr(self, "_filesystem", None) is None:
+        if self._closed:
             raise RuntimeError("HDF5 source is closed")
         raw = self._filesystem.open(self._path, "rb", block_size=1, cache_type="none")
         fileobj = _CountingFile(raw, self.traffic) if self.traffic is not None else raw
@@ -672,15 +672,16 @@ class HDF5NDSource(ProxyNDSource):
         return h5file[self.dataset or "/"]
 
     def _direct_values(self, offsets, selection):
-        record = self._chunk_records.get(offsets)
         valid_shape = tuple(item.stop - item.start for item in selection)
-        if record is None:
-            return np.full(valid_shape, _from_json_value(self._metadata["fill_value"]), dtype=self.dtype)
         # Count in-flight reads so close() can wait for them without serializing
-        # independent direct fetches against each other.
+        # independent direct fetches against each other. The closed check comes
+        # first so sparse fill chunks obey the same contract as allocated ones.
         with self._lifecycle:
-            if getattr(self, "_filesystem", None) is None:
+            if self._closed:
                 raise RuntimeError("HDF5 source is closed")
+            record = self._chunk_records.get(offsets)
+            if record is None:
+                return np.full(valid_shape, _from_json_value(self._metadata["fill_value"]), dtype=self.dtype)
             filesystem = self._filesystem
             self._active_reads += 1
         try:
@@ -724,18 +725,21 @@ class HDF5NDSource(ProxyNDSource):
             if fallback_finalizer is not None:
                 fallback_finalizer()
             self._fallback_h5 = self._fallback_file = None
-            finalizer = getattr(self, "_file_finalizer", None)
-            if finalizer is not None:
-                finalizer()
             fs_finalizer = getattr(self, "_filesystem_finalizer", None)
             if fs_finalizer is not None:
                 fs_finalizer.detach()
                 self._filesystem_finalizer = None
+            # Reject new reads, then wait for local and direct reads to finish
+            # before closing the file or filesystem they are using.
             with self._lifecycle:
+                self._closed = True
                 filesystem = getattr(self, "_filesystem", None)
                 self._filesystem = None
                 while self._active_reads:
                     self._lifecycle.wait()
+            finalizer = getattr(self, "_file_finalizer", None)
+            if finalizer is not None:
+                finalizer()
             if filesystem is not None and self._external_filesystem is None:
                 # fsspec's HTTP and S3 clients keep an async session alive after
                 # the file objects it feeds are gone.
@@ -760,7 +764,16 @@ class HDF5NDSource(ProxyNDSource):
     def get_chunk(self, nchunk: int) -> bytes:
         offsets, selection = _selection(nchunk, self.shape, self.chunks)
         if self._local:
-            values = self.array[selection]
+            with self._lifecycle:
+                if self._closed:
+                    raise RuntimeError("HDF5 source is closed")
+                self._active_reads += 1
+            try:
+                values = self.array[selection]
+            finally:
+                with self._lifecycle:
+                    self._active_reads -= 1
+                    self._lifecycle.notify_all()
         elif self._metadata["direct"]:
             values = self._direct_values(offsets, selection)
         else:

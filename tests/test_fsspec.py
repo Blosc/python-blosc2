@@ -791,6 +791,7 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
     path = tmp_path / "standalone.h5"
     with h5py.File(path, "w") as file:
         file.create_dataset("data", data=data, chunks=(1000,))
+        file.create_dataset("sparse", shape=(100,), chunks=(10,), dtype="int32")
     with _ranged_server(tmp_path) as (urlbase, _requests):
         source = blosc2.HDF5NDSource(
             f"{urlbase}/{path.name}",
@@ -806,6 +807,12 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
         assert session.closed
         with pytest.raises(RuntimeError, match="closed"):
             source.get_chunk(0)
+        # Sparse fill chunks obey the same closed contract as allocated chunks.
+        sparse = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "sparse")
+        assert sparse._metadata["direct"] is True
+        sparse.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            sparse.get_chunk(0)
 
 
 def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):

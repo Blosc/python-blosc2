@@ -227,6 +227,17 @@ def test_local_hdf5_without_remote_dependencies(tmp_path, monkeypatch, layout, s
     assert not file_id.valid
 
 
+def test_local_hdf5_closed_source_rejects_reads(tmp_path):
+    path = tmp_path / "closed-local.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=np.arange(8, dtype="i4"), chunks=(4,))
+    source = blosc2.HDF5NDSource(path, "data")
+    assert source.get_chunk(0)
+    source.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        source.get_chunk(0)
+
+
 def test_local_hdf5_special_datasets_and_errors(tmp_path, monkeypatch):
     path = tmp_path / "special.h5"
     with h5py.File(path, "w") as file:
