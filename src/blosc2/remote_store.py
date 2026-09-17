@@ -78,8 +78,13 @@ class RemoteDiscovery:
         _source_validator=None,
         _manifest_validator=None,
         _max_nodes=None,
+        _source_format=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
+        if _source_format is not None:
+            self.format = _source_format
+        elif manifest is not None:
+            self.format = manifest["source"]["kind"]
         self.root = (dataset or "").strip("/")
         self._validate(self.root)
         self.storage_options = storage_options or {}
@@ -797,6 +802,7 @@ class RemoteStore:
         _source_validator=None,
         _manifest_validator=None,
         _max_nodes=None,
+        _source_format=None,
     ):
         if isinstance(urlpath, os.PathLike):
             urlpath = os.fspath(urlpath)
@@ -819,7 +825,11 @@ class RemoteStore:
             from blosc2.remote_store_cache import StoreDiskCache
 
             base_url, root, kind = parse_container_url(urlpath, dataset)
-            source = {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": kind}
+            source = {
+                "urlpath": base_url,
+                "dataset": (root or "").strip("/"),
+                "kind": _source_format or kind,
+            }
             fingerprint = storage_options_fingerprint(storage_options)
             if fingerprint:
                 # The same URL through another endpoint or account must not
@@ -838,6 +848,7 @@ class RemoteStore:
                 _source_validator=_source_validator,
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
+                _source_format=_source_format,
             )
         except BaseException:
             if disk is not None:
@@ -1155,6 +1166,7 @@ class RemoteStore:
                 _source_validator=owner.source_validator,
                 _manifest_validator=owner.manifest_validator,
                 _max_nodes=owner.max_nodes,
+                _source_format=owner.format,
             )
             try:
                 if not replacement.is_tree:

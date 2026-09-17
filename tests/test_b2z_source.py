@@ -91,7 +91,8 @@ def test_small_member_prefetch_carries_vlmeta(monkeypatch):
 
 @pytest.mark.parametrize("suffix", ["supported", "ignored", "rejected", "malformed"])
 @pytest.mark.parametrize("small", [False, True])
-def test_http_tail_bootstrap(suffix, small):
+@pytest.mark.parametrize("ctable", [False, True])
+def test_http_tail_bootstrap(suffix, small, ctable, tmp_path):
     import http.server
     import threading
 
@@ -100,6 +101,18 @@ def test_http_tail_bootstrap(suffix, small):
     pytest.importorskip("aiohttp")
     url, data = memory_archive(np.zeros((40, 250), dtype="uint8") if small else None)
     body = fsspec.filesystem("memory").cat_file(url)
+    if ctable:
+        import dataclasses
+
+        @dataclasses.dataclass
+        class TextRow:
+            text: str = blosc2.field(blosc2.utf8())
+
+        values = ["", "café", "東京", "🌦️"] * (1 if small else 10000)
+        table = blosc2.CTable(TextRow, [(v,) for v in values], create_summary_index=False)
+        path = tmp_path / "table.b2z"
+        table.to_b2z(path)
+        body = path.read_bytes()
     requests = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -141,13 +154,24 @@ def test_http_tail_bootstrap(suffix, small):
     try:
         url = f"http://127.0.0.1:{server.server_port}/array.b2z"
         options = {"headers": {"X-Test": "preserved"}, "skip_instance_cache": True}
-        with blosc2.open(url + "::/d0/a", storage_options=options) as arr:
+        remote = (
+            blosc2.RemoteCTable(url, storage_options=options)
+            if ctable
+            else blosc2.open(url + "::/d0/a", storage_options=options)
+        )
+        with remote as arr:
             assert requests[0] == ("GET", "bytes=-8192")
             assert sum(method == "HEAD" for method, _ in requests) == (suffix != "supported")
-            if suffix == "supported":
+            if suffix == "supported" and not ctable:
                 assert len(requests) == (1 if small else 2)
                 assert arr.traffic.nbytes == (len(body) if small else 8192 + 16384)
-            np.testing.assert_array_equal(arr[:], data)
+            if ctable:
+                np.testing.assert_array_equal(arr["text"][-4:], values[-4:])
+                before = len(requests)
+                np.testing.assert_array_equal(arr["text"][-4:], values[-4:])
+                assert len(requests) == before
+            else:
+                np.testing.assert_array_equal(arr[:], data)
 
         # A persisted suffix bootstrap must have the same identity as HEAD.
         metadata = {}
@@ -291,11 +315,18 @@ def test_opening_buffer_fallbacks(variant):
     np.testing.assert_array_equal(arr[:], data)
 
 
-@pytest.mark.parametrize("dataset", [None, "", "/", "d0", "missing", "../d0/a", "d0//a", "d0/./a", "d0/\na"])
+@pytest.mark.parametrize("dataset", ["missing", "../d0/a", "d0//a", "d0/./a", "d0/\na"])
 def test_bad_datasets(dataset):
     url, _ = memory_archive()
     with pytest.raises(ValueError):
         blosc2.open(url, lazy=True, dataset=dataset)
+
+
+@pytest.mark.parametrize("dataset", [None, "", "/", "d0"])
+def test_open_b2z_groups(dataset):
+    url, _ = memory_archive()
+    with blosc2.open(url, dataset=dataset) as store:
+        assert isinstance(store, blosc2.RemoteStore)
 
 
 def test_options_and_bad_archives():

@@ -1,7 +1,8 @@
 # RemoteCTable implementation plan
 
 Status: initial fixed-width, read-only implementation completed on 2026-09-17;
-UTF-8, batch-backed columns, persisted indexes and portable references remain follow-ups.
+UTF-8 support was added in the v2 extension (see `remote-ctable-v2.md`);
+batch-backed columns, persisted indexes and portable references remain follow-ups.
 
 ## Objective and architecture
 
@@ -55,8 +56,9 @@ second implementation or building a general remote-object framework.
   NDArrays. The schema and table metadata live in `_meta` SChunk vlmeta.
 - `b2z_source.py`: `B2ZNDSource` reads external, unencrypted ZIP_STORED `.b2nd`
   members. `member_vlmeta()` and `B2ZEmbeddedMetadata` provide metadata reads.
-- `remote_store.py`: discovery already recognizes CTable roots and nested table
-  boundaries, but deliberately marks them unsupported and hides their internals.
+- `remote_store.py`: discovery recognizes CTable roots and nested table
+  boundaries, opens supported table nodes as RemoteCTable objects, and keeps
+  their internals opaque during hierarchy traversal.
 - Persisted index descriptors are currently resolved through local paths and
   ZIP-offset registration. Batch-backed columns use local `.b2b` opening paths.
 
@@ -106,7 +108,9 @@ with blosc2.RemoteStore("s3://bucket/archive.b2z") as store:
   node: `_cols`, `_meta` and index files are not ordinary public children.
 - A standalone table archive is opened with RemoteCTable. RemoteStore retains
   its group-root requirement and gives a diagnostic directing users to it.
-- No automatic change to `blosc2.open()` or `CTable.open()` URL dispatch.
+- The initial release did not change `blosc2.open()` or `CTable.open()` URL
+  dispatch. A subsequent extension adds remote table/group dispatch to
+  `blosc2.open()`; `CTable.open()` remains the local table opener.
 
 ### Supported data and operations
 
@@ -249,7 +253,8 @@ and correct results, not a claim that scan queries avoid reading their operands.
 
 ## Follow-ups, separately scoped
 
-1. UTF-8 columns through remote offsets and bytes, with null/query/size reporting.
+1. UTF-8 columns through remote offsets and bytes, with null/query/size reporting:
+   implemented in the v2 extension described in `remote-ctable-v2.md`.
 2. Remote batch reads for lists, variable-length values and dictionary stores.
 3. Persisted indexes through a remote-aware sidecar resolver, starting with
    SUMMARY indexes and measuring query transfer savings.

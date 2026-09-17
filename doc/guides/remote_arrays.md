@@ -140,6 +140,7 @@ What differs between the transports is the types of remote objects each can open
 | --------------------------------------- | -------------------------------- | ---------------------------- |
 | Standalone contiguous `.b2nd`           | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
 | NDArray leaf inside `.b2z`              | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
+| CTable inside `.b2z`                   | Yes (`blosc2.open` / `RemoteCTable`) | No                        |
 | Zarr v2/v3 array                        | Yes (`blosc2.open` / `RemoteArray`) | No                        |
 | HDF5 dataset                            | Yes (`blosc2.open` / `RemoteArray`) | Yes                       |
 | Lazy or computed array                  | No                               | Yes                          |
@@ -534,6 +535,46 @@ a[mask]
 
 For Caterva2, a bare {ref}`C2Array` can be substantially more efficient for one-off point queries: it sends coordinates to the server, which evaluates the selection and returns only the selected values.
 Prefer direct `C2Array` indexing for sparse, one-off point retrieval; prefer a {ref}`RemoteArray` when reuse through a local cache matters.
+
+## Remote tables
+
+`RemoteCTable` opens a read-only CTable in an immutable remote `.b2z` archive.
+Fixed-width and `blosc2.utf8()` columns are fetched on demand, including their
+null masks. A table inside a hierarchy can also be opened through `RemoteStore`.
+
+`blosc2.open()` dispatches local table archives to `CTable` and remote table
+archives to `RemoteCTable`. Remote `.b2z` groups return `RemoteStore` by default;
+array leaves retain their `RemoteArray` behavior. Use `dataset="group/table"`
+or a `::group/table` URL suffix to select a nested table. For a complete local
+download instead, pass `lazy=False, cache_dir="download-cache"`.
+
+```python
+with blosc2.open("https://example.org/readings.b2z") as table:
+    notes = table["note"][:5]
+    selected = table.where(table["note"] == "café")
+    ids = selected["id"][:]
+```
+
+UTF-8 strings use two compressed arrays: row offsets and encoded bytes. A slice
+first reads its offsets, then its byte span. Both reads use the existing range
+transport, fetching compressed blocks when worthwhile or whole compressed chunks
+otherwise, and decompressing locally. Archive members are ZIP_STORED, as produced
+by the Blosc2 writers; the arrays inside remain Blosc2-compressed.
+
+The backing arrays share the table's cache budget and traffic counters. MEMORY,
+DISK (with `cache_dir`) and NONE policies are supported. Size reporting uses source
+metadata without scanning strings. Small-member metadata prefetch may also fetch
+some payload. Repeated reads can reuse cached blocks; filtering scans the required
+columns because persisted indexes are not used remotely.
+
+Columns and views are borrowed from the root table and require it to remain open.
+Closing a parent RemoteStore leaves a returned table usable; refreshing the store
+invalidates previously returned tables and their columns. Copies and data exports
+produce local tables. Remote writes, batch-backed `vlstring`/lists/objects,
+dictionary columns and portable table-reference export remain unsupported.
+
+See `examples/ctable/remote_handling.py` for a batched archive writer with a nullable
+multilingual UTF-8 column, plus sample row and string-slice traffic measurements.
 
 ## Handle remote changes
 

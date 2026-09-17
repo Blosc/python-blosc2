@@ -15,7 +15,7 @@ The main concrete backends are:
 * :class:`FileTableStorage` — arrays are stored inside a :class:`blosc2.TreeStore`
   rooted at ``urlpath``; logical object metadata lives in ``/_meta`` and table
   data lives under ``/_valid_rows`` and ``/_cols/<name>``.
-* :class:`RemoteTableStorage` — fixed-width arrays are opened lazily as
+* :class:`RemoteTableStorage` — fixed-width and UTF-8 backing arrays are opened lazily as
   :class:`blosc2.RemoteArray` objects from a remote B2Z archive.
 """
 
@@ -645,7 +645,7 @@ class EmbedStoreTableStorage(TableStorage):
 
 
 class RemoteTableStorage(TableStorage):
-    """Read-only fixed-width CTable storage over a shared RemoteStore owner."""
+    """Read-only CTable storage over a shared RemoteStore owner."""
 
     def __init__(self, owner, root_key: str) -> None:
         self._owner = owner
@@ -699,6 +699,24 @@ class RemoteTableStorage(TableStorage):
         raise NotImplementedError(f"Remote CTable list column {name!r} is not supported")
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        if isinstance(spec, UTF8Spec):
+            key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
+            first = len(self._arrays)
+            offsets = self._open_array(key)
+            data = None
+            try:
+                data = self._open_array(key + _UTF8_DATA_SUFFIX)
+                if offsets.ndim != 1 or offsets.dtype != np.dtype("int64") or offsets.shape[0] < 1:
+                    raise ValueError(f"Invalid offsets array for remote UTF-8 column {name!r}")
+                if data.ndim != 1 or data.dtype != np.dtype("uint8"):
+                    raise ValueError(f"Invalid data array for remote UTF-8 column {name!r}")
+                return UTF8Array(spec, offsets, data)
+            except BaseException:
+                for array in (offsets, data):
+                    if array is not None:
+                        array.close()
+                del self._arrays[first:]
+                raise
         raise NotImplementedError(
             f"Remote CTable variable-length column {name!r} ({type(spec).__name__}) is not supported"
         )

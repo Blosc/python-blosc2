@@ -906,17 +906,17 @@ def test_http_store_disk_reopen_and_transport_close(tmp_path):
         assert len(requests) == count
 
 
-def test_zip_store_needs_cache(tmp_path):
-    # A .b2z store is a zip archive, not a cframe, so there is nothing for the
-    # in-memory read to rebuild
+def test_zip_store_lazy_default_and_explicit_localization(tmp_path):
     localpath = str(tmp_path / "t.b2z")
     with blosc2.TreeStore(localpath, mode="w") as tstore:
         tstore["/a"] = blosc2.arange(10, dtype="i4")
     fsspec.filesystem("memory").pipe_file("/t.b2z", pathlib.Path(localpath).read_bytes())
 
-    with pytest.raises(RuntimeError):
-        blosc2.open("memory://t.b2z")
-    with blosc2.open("memory://t.b2z", cache_dir=tmp_path / "cache") as tstore:
+    with blosc2.open("memory://t.b2z") as tstore:
+        assert isinstance(tstore, blosc2.RemoteStore)
+        np.testing.assert_array_equal(tstore["/a"][:], np.arange(10, dtype="i4"))
+    with blosc2.open("memory://t.b2z", cache_dir=tmp_path / "cache", lazy=False) as tstore:
+        assert isinstance(tstore, blosc2.TreeStore)
         assert np.array_equal(tstore["/a"][:], np.arange(10, dtype="i4"))
 
 

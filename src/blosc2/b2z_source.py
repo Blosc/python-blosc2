@@ -241,6 +241,14 @@ class _SeededArchive:
         return data
 
 
+class B2ZArrayNotFoundError(ValueError):
+    """The selected archive path is not an external NDArray member."""
+
+    def __init__(self, dataset, traffic):
+        super().__init__(f"No supported external NDArray at {dataset!r}; specify an external array leaf")
+        self.traffic = traffic
+
+
 class B2ZNDSource(ByteRangeNDSource):
     """Read a stored external NDArray from an immutable B2Z archive via fsspec.
 
@@ -290,9 +298,7 @@ class B2ZNDSource(ByteRangeNDSource):
             object_info = archive.object_info
             matches = [info for info in archive.members if info.filename == dataset + ".b2nd"]
             if not matches:
-                raise ValueError(
-                    f"No supported external NDArray at {dataset!r}; specify an external array leaf"
-                )
+                raise B2ZArrayNotFoundError(dataset, self.traffic)
             if len(matches) != 1:
                 raise ValueError("duplicate B2Z array member")
             self.member_offset, self.member_length = archive.member_window(matches[0], prefetch=True)

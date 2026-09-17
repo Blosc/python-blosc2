@@ -1115,6 +1115,16 @@ class ByteRangeNDSource(ProxyNDSource):
         """
         return [self.read_range(offset, size) for offset, size in spans]
 
+    @property
+    def storage_nbytes(self) -> int:
+        """Uncompressed stored bytes, including padding, as for SChunk.nbytes."""
+        return int(self._header[4])
+
+    @property
+    def cbytes(self) -> int:
+        """Compressed payload bytes recorded in the native frame header."""
+        return int(self._header[5])
+
     def wants_blocks(
         self,
         nchunk: int,

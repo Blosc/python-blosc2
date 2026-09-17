@@ -443,6 +443,7 @@ class UTF8Array:
     """
 
     def __init__(self, spec, offsets=None, data=None) -> None:
+        from blosc2.remote_array import RemoteArray
         from blosc2.schema import UTF8Spec
 
         if not isinstance(spec, UTF8Spec):
@@ -455,6 +456,7 @@ class UTF8Array:
             offsets, data = _new_backend_arrays()
         self._offsets = offsets
         self._data = data
+        self._remote = isinstance(offsets, RemoteArray) or isinstance(data, RemoteArray)
         self._persisted_rows: int = int(offsets.shape[0]) - 1
         # End byte position of the persisted region; resolved lazily because it
         # needs a chunk read from the offsets array.
@@ -466,6 +468,16 @@ class UTF8Array:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _check_open(self) -> None:
+        if self._remote:
+            self._offsets._check_open()
+            self._data._check_open()
+
+    def _check_writable(self) -> None:
+        self._check_open()
+        if self._remote:
+            raise ValueError("Remote UTF8Array is read-only")
 
     @property
     def _bytes_used(self) -> int:
@@ -636,6 +648,7 @@ class UTF8Array:
 
     def append(self, value: Any) -> None:
         """Append one string row (``None`` maps to the null sentinel)."""
+        self._check_writable()
         value = self._coerce(value)
         self._pending.append(value)
         self._pending_chars += len(value)
@@ -649,6 +662,7 @@ class UTF8Array:
         unusual batch of many multi-MB strings can therefore overshoot
         ``_FLUSH_CHARS`` by up to one chunk before a flush is triggered.
         """
+        self._check_writable()
         it = iter(values)
         while True:
             chunk = list(itertools.islice(it, _FLUSH_ROWS))
@@ -666,8 +680,10 @@ class UTF8Array:
 
     def flush(self) -> None:
         """Write pending rows to the backing offsets/data NDArrays."""
+        self._check_open()
         if not self._pending:
             return
+        self._check_writable()
         values, self._pending = self._pending, []
         self._pending_chars = 0
         self._rewrite_from(self._persisted_rows, values)
@@ -680,6 +696,7 @@ class UTF8Array:
         in-memory ``UTF8Array``).  Used by ``sort_by(inplace=True)`` and
         ``compact()`` to rewrite a column in a new row order.
         """
+        self._check_writable()
         coerced = [self._coerce(v) for v in values]
         self._pending = []
         self._pending_chars = 0
@@ -690,12 +707,14 @@ class UTF8Array:
     # ------------------------------------------------------------------
 
     def __len__(self) -> int:
+        self._check_open()
         return self._persisted_rows + len(self._pending)
 
     def __iter__(self) -> Iterator[str]:
         yield from self[:]
 
     def __getitem__(self, index: int | slice | list | tuple | np.ndarray):
+        self._check_open()
         if isinstance(index, (int, np.integer)):
             n = len(self)
             index = int(index)
@@ -730,6 +749,7 @@ class UTF8Array:
         row rewrites the byte blob and offsets of all subsequent rows —
         an O(n - index) operation.
         """
+        self._check_writable()
         if not isinstance(index, (int, np.integer)):
             raise TypeError(f"UTF8Array assignment index must be int, got {type(index)!r}")
         value = self._coerce(value)
@@ -826,11 +846,13 @@ class UTF8Array:
 
     @property
     def spec(self):
+        self._check_open()
         return self._spec
 
     @property
     def dtype(self):
         """The ``StringDType`` used for materialized reads."""
+        self._check_open()
         return self._dtype
 
     @property
@@ -841,6 +863,7 @@ class UTF8Array:
     @property
     def ndim(self) -> int:
         """Always 1: a utf8 array is a flat sequence of strings."""
+        self._check_open()
         return 1
 
     @property
@@ -862,28 +885,35 @@ class UTF8Array:
     @property
     def offsets(self):
         """The underlying ``int64`` NDArray of row offsets (length ``n + 1``)."""
+        self._check_open()
         return self._offsets
 
     @property
     def data(self):
         """The underlying ``uint8`` NDArray with the concatenated UTF-8 bytes."""
+        self._check_open()
         return self._data
 
     @property
     def schunk(self):
+        self._check_open()
         return self._offsets.schunk
 
     @property
     def urlpath(self) -> str | None:
+        self._check_open()
         return getattr(self._offsets, "urlpath", None)
 
     @property
     def nbytes(self) -> int:
+        self._check_open()
+        if self._remote:
+            return self._offsets.src.storage_nbytes + self._data.src.storage_nbytes
         return self._offsets.schunk.nbytes + self._data.schunk.nbytes
 
     @property
     def cbytes(self) -> int:
-        return self._offsets.schunk.cbytes + self._data.schunk.cbytes
+        return self._offsets.cbytes + self._data.cbytes
 
     @property
     def cratio(self) -> float:

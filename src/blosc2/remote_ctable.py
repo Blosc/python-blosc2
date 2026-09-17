@@ -14,7 +14,7 @@ from blosc2.remote_array import CACHE_POLICY_DEFAULT, RemoteMetadataMapping
 
 
 class RemoteCTable(CTable):
-    """A read-only CTable whose fixed-width columns are fetched on demand."""
+    """A read-only CTable whose fixed-width and UTF-8 columns are fetched on demand."""
 
     def __new__(
         cls,

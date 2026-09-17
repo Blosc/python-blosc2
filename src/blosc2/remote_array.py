@@ -1289,6 +1289,15 @@ class RemoteArray(blosc2.Operand):
         return getattr(self.src, "traffic", None)
 
     @property
+    def cbytes(self) -> int:
+        """Compressed source size, when supplied by the source format."""
+        self._check_open()
+        value = getattr(self.src, "cbytes", None)
+        if value is None:
+            raise NotImplementedError("This remote source does not report its compressed size")
+        return int(value)
+
+    @property
     def nbytes(self) -> int:
         """The uncompressed size of the remote array."""
         self._check_open()

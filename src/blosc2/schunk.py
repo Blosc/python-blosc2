@@ -2260,6 +2260,8 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         lazy = False
     if lazy is False and hdf5_index is not None:
         raise NotImplementedError("hdf5_index is only supported with lazy=True")
+    if lazy is None and source_format == "b2z":
+        lazy = True
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
 
@@ -2282,6 +2284,8 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
+        if source_format == "b2z":
+            return _open_remote_b2z(urlpath, remote_array_options)
         return blosc2.RemoteArray(urlpath, **remote_array_options)
 
     _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
@@ -2292,8 +2296,8 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     if source_format == "b2z":
         raise NotImplementedError(
-            "Remote B2Z containers require b2view for browsing, lazy=True with a dataset for arrays, "
-            "or cache_dir= for explicit localization"
+            "Remote B2Z containers require lazy=True for on-demand access, "
+            "or cache_dir= with lazy=False for explicit localization"
         )
 
     if offset != 0:
@@ -2309,6 +2313,44 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         )
     with fsspec_open(urlpath, "rb", storage_options=storage_options) as f:
         return blosc2.from_cframe(f.read())
+
+
+def _open_remote_b2z(urlpath, options):
+    """Keep the array fast path and discover table/group nodes through RemoteStore."""
+    from blosc2.b2z_source import B2ZArrayNotFoundError
+
+    dataset = options.get("dataset")
+    array_error = None
+    if dataset and dataset.strip("/"):
+        try:
+            return blosc2.RemoteArray(urlpath, **options)
+        except B2ZArrayNotFoundError as exc:
+            # Tables and groups have no corresponding .b2nd member.
+            array_error = exc
+    if options["cache_path"] is not None:
+        raise NotImplementedError("Remote tables and stores use cache_dir, not cache_path")
+    if options["max_concurrency"] is not None:
+        raise NotImplementedError("max_concurrency is only supported for remote arrays")
+    if options["assume_immutable"] is not True:
+        raise NotImplementedError("Remote tables and stores require assume_immutable=True")
+    store_options = {
+        key: value
+        for key, value in options.items()
+        if key in {"dataset", "storage_options", "cache_dir", "cache_policy", "max_cache_bytes"}
+    }
+    try:
+        with blosc2.RemoteStore(
+            urlpath, _allow_array_root=True, _source_format="b2z", **store_options
+        ) as store:
+            if array_error is not None:
+                # Include the initial array lookup in shared transfer accounting.
+                store.traffic.nbytes += array_error.traffic.nbytes
+                store.traffic.requests += array_error.traffic.requests
+            return store[""]
+    except KeyError:
+        if array_error is not None:
+            raise array_error from None
+        raise
 
 
 def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
@@ -2391,6 +2433,9 @@ def open(
     | blosc2.ObjectArray
     | blosc2.C2Array
     | blosc2.RemoteArray
+    | blosc2.CTable
+    | blosc2.RemoteCTable
+    | blosc2.RemoteStore
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -2399,7 +2444,7 @@ def open(
 ):
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
     :ref:`RemoteArray`, :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or
-    :ref:`TreeStore`.
+    :ref:`TreeStore`, :class:`CTable`, :class:`RemoteCTable`, or :class:`RemoteStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
 
@@ -2436,15 +2481,16 @@ def open(
     kwargs: dict, optional
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
-            returns a lazy :ref:`RemoteArray`; ``False`` requests eager access.
-            Known remote `.b2nd` arrays default to lazy access, including when
+            returns a lazy remote object; ``False`` requests eager access.
+            Known remote `.b2nd` arrays and `.b2z` archives default to lazy access, including when
             ``cache_dir=`` is supplied. Pass ``lazy=False`` to download the whole
             container under ``cache_dir`` instead. ``mmap_mode=`` or a nonzero
             ``offset=`` forces the eager path. Dataset paths currently require
             ``lazy=True`` and reject explicit ``False``.
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
-            the remote dataset and read the byte ranges a slice touches. Neither form opens
-            a whole remote store hierarchy. A slice landing in a small part of a large
+            the remote array dataset and read the byte ranges a slice touches.
+            B2Z table and group nodes return :class:`RemoteCTable` and :class:`RemoteStore` instead.
+            A slice landing in a small part of a large
             chunk costs only the *blocks* it touches when ranges are available;
             chunks small enough to be one cheap request are still fetched whole.
             What arrives is kept in memory (defaulting to :attr:`CachePolicy.MEMORY`),
@@ -2508,7 +2554,7 @@ def open(
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
         dataset: str, optional
             Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
-            B2Z supports external NDArray leaves in immutable archives.
+            B2Z also supports table and group paths in immutable archives.
             Requires ``lazy=True``.
         hdf5_index: dict | str | PathLike, optional
             Pre-computed native HDF5 index or path to a JSON index file.
@@ -2516,7 +2562,7 @@ def open(
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
             a ``.b2z`` path selects B2Z automatically. An explicit value supports
-            suffix-free array paths. Zarr and HDF5 sources automatically enable
+            suffix-free paths. Zarr, HDF5 and B2Z sources automatically enable
             ``lazy=True``.
         assume_immutable: bool, optional
             With ``lazy=True``, skip remote identity checks before reads. Defaults
@@ -2525,7 +2571,8 @@ def open(
     Returns
     -------
     out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`RemoteArray`,
-        :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
+        :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, :ref:`TreeStore`,
+        :class:`CTable`, :class:`RemoteCTable`, or :class:`RemoteStore`
         The object found in the path.
 
     Notes
@@ -2554,12 +2601,14 @@ def open(
       endpoint URL, region, etc.) can be passed directly via ``storage_options``.
       ``mode != 'r'`` always raises, as object stores have no rename and no locks.
       A plain URL read rebuilds the object from a cframe held in memory, so it
-      covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
-      archive rather than a cframe, and needs ``cache_dir`` like the directory
-      formats do. With ``lazy=True`` and a dataset path, a B2Z archive serves
-      its selected external NDArray by byte range. Lazy opening returns a :ref:`RemoteArray` (using
-      ``CachePolicy.DISK`` with ``cache_dir`` or ``cache_path``, and
-      ``CachePolicy.MEMORY`` otherwise).
+      covers ``.b2nd``, ``.b2f`` and ``.b2e`` only. Remote ``.b2z`` archives
+      default to lazy discovery: table nodes return :class:`RemoteCTable`,
+      groups return :class:`RemoteStore`, and external array leaves return
+      :ref:`RemoteArray`. Select a nested node with ``dataset=`` or ``::path``.
+      Tables and groups use ``cache_dir`` for DISK caching and default to MEMORY
+      otherwise; array leaves additionally support ``cache_path``.
+      Use ``lazy=False, cache_dir=...`` to download a complete archive and open
+      its root locally. Local table archives return :class:`CTable`.
 
     * Persistent data handling follows a no-hidden-writes rule except for an
       explicitly self-caching :ref:`RemoteArray`:

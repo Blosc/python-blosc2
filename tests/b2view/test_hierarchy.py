@@ -50,9 +50,10 @@ def test_b2z_discovery_and_dispatch(tmp_path, monkeypatch):
         return cat_file(self, path, start=start, end=end, **kwargs)
 
     monkeypatch.setattr(type(fs), "cat_file", counted)
-    with pytest.raises(NotImplementedError, match="B2Z containers"):
-        blosc2.open(url)
-    assert reads == []
+    with blosc2.open(url) as store:
+        assert isinstance(store, blosc2.RemoteStore)
+    assert reads
+    reads.clear()
     with StoreBrowser(url) as browser:
         assert browser.is_tree
         assert [n.name for n in browser.list_children()] == ["group"]
@@ -541,7 +542,7 @@ def test_b2z_large_embedded_chunk_notice():
 
 def test_b2z_explicit_localization(tmp_path):
     url, data = b2z_url(tmp_path)
-    with blosc2.open(url, cache_dir=tmp_path / "localized", mode="r") as store:
+    with blosc2.open(url, cache_dir=tmp_path / "localized", mode="r", lazy=False) as store:
         assert isinstance(store, blosc2.TreeStore)
         np.testing.assert_array_equal(store["/group/a"][:2, :3], data[:2, :3])
 
