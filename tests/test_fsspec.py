@@ -770,7 +770,6 @@ def _ranged_server(root):
 
 def test_http_hdf5_scan_and_warm_slice(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("zarr")
     data = np.arange(10_000, dtype="int32")
     path = tmp_path / "seekable.h5"
     with h5py.File(path, "w") as file:
@@ -805,7 +804,6 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
 
 def test_http_store_disk_reopen_and_transport_close(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("zarr")
     data = np.arange(10_000, dtype="int32")
     path = tmp_path / "store.h5"
     with h5py.File(path, "w") as file:
