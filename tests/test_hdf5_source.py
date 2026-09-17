@@ -96,6 +96,9 @@ def test_hdf5_index_rejects_malformed_filter_values():
     shuffle["values"] = [0]
     with pytest.raises(ValueError, match="shuffle"):
         validate_hdf5_index(index)
+    shuffle["values"] = []
+    with pytest.raises(ValueError, match="shuffle"):
+        validate_hdf5_index(index)
     shuffle["values"] = ["wrong"]
     with pytest.raises(ValueError, match="filter values"):
         validate_hdf5_index(index)

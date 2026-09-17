@@ -339,7 +339,7 @@ def _validate_direct_filters(path, chunks, filters):
             raise ValueError(f"Invalid HDF5 filter values for {path!r}")
         # Shuffle records its element size as the only client value; a bogus
         # value would make the decoder skip unscrambling and return wrong data.
-        if item["id"] == 2 and values and (len(values) != 1 or values[0] <= 0):
+        if item["id"] == 2 and (len(values) != 1 or values[0] <= 0):
             raise ValueError(f"Invalid HDF5 shuffle filter for {path!r}")
 
 
