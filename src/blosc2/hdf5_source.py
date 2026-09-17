@@ -215,6 +215,10 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
                             "attrs": {key: _json_value(value) for key, value in obj.attrs.items()}
                         }
                     elif isinstance(obj, h5py.Dataset):
+                        if obj.is_virtual:
+                            raise TypeError("HDF5 virtual datasets are not supported")
+                        if obj.external:
+                            raise TypeError("HDF5 externally stored datasets are not supported")
                         if obj.shape is None:
                             raise TypeError("HDF5 null datasets are not supported")
                         dtype = np.dtype(obj.dtype)

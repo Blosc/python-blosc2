@@ -673,6 +673,28 @@ def test_hdf5_index_in_vlmeta(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_hdf5_rejects_virtual_and_external_datasets(tmp_path):
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    path = tmp_path / "special-layout.h5"
+    data = np.arange(10, dtype="i4")
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(5,))
+        layout = h5py.VirtualLayout(shape=(4,), dtype="i4")
+        layout[:] = h5py.VirtualSource(path, "data", shape=(4,))
+        file.create_virtual_dataset("virt", layout)
+        file.create_dataset("ext", shape=(4,), dtype="i4", external=str(path))
+    url = "memory://special-layout.h5"
+    fsspec.filesystem("memory").pipe_file(url, path.read_bytes())
+    unsupported = {}
+    index = scan_hdf5_index(url, unsupported=unsupported)
+    assert "data" in index["datasets"]
+    assert "virt" not in index["datasets"]
+    assert "ext" not in index["datasets"]
+    assert "virtual datasets are not supported" in unsupported["virt"]
+    assert "externally stored datasets are not supported" in unsupported["ext"]
+
+
 def test_hdf5_rejects_legacy_reference_map():
     url = make_memory_h5("legacy-index.h5", data=(np.arange(10), (5,)))
     with pytest.raises(ValueError, match="Legacy HDF5 reference maps"):
