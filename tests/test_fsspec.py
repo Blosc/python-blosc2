@@ -799,6 +799,8 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
         assert not session.closed
         source.close()
         assert session.closed
+        with pytest.raises(RuntimeError, match="closed"):
+            source.get_chunk(0)
 
 
 def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):

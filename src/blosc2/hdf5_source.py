@@ -493,6 +493,8 @@ class HDF5NDSource(ProxyNDSource):
         self._storage_options, self._external_filesystem = storage_options, _filesystem
         self._fallback_lock = threading.RLock()
         self._fallback_h5 = self._fallback_file = None
+        self._lifecycle = threading.Condition()
+        self._active_reads = 0
         remote = bool(urlsplit(urlpath).scheme)
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
         self._local = (not remote or os.path.isabs(urlpath)) and _filesystem is None
@@ -641,6 +643,8 @@ class HDF5NDSource(ProxyNDSource):
             return self._fallback_h5[self.dataset or "/"]
         import h5py
 
+        if getattr(self, "_filesystem", None) is None:
+            raise RuntimeError("HDF5 source is closed")
         raw = self._filesystem.open(self._path, "rb", block_size=1, cache_type="none")
         fileobj = _CountingFile(raw, self.traffic) if self.traffic is not None else raw
         try:
@@ -657,9 +661,21 @@ class HDF5NDSource(ProxyNDSource):
         valid_shape = tuple(item.stop - item.start for item in selection)
         if record is None:
             return np.full(valid_shape, _from_json_value(self._metadata["fill_value"]), dtype=self.dtype)
-        data = self._filesystem.cat_file(
-            self._path, start=record["byte_offset"], end=record["byte_offset"] + record["size"]
-        )
+        # Count in-flight reads so close() can wait for them without serializing
+        # independent direct fetches against each other.
+        with self._lifecycle:
+            if getattr(self, "_filesystem", None) is None:
+                raise RuntimeError("HDF5 source is closed")
+            filesystem = self._filesystem
+            self._active_reads += 1
+        try:
+            data = filesystem.cat_file(
+                self._path, start=record["byte_offset"], end=record["byte_offset"] + record["size"]
+            )
+        finally:
+            with self._lifecycle:
+                self._active_reads -= 1
+                self._lifecycle.notify_all()
         if self.traffic is not None:
             self.traffic.charge(len(data))
         if len(data) != record["size"]:
@@ -696,12 +712,15 @@ class HDF5NDSource(ProxyNDSource):
             finalizer = getattr(self, "_file_finalizer", None)
             if finalizer is not None:
                 finalizer()
-            filesystem = getattr(self, "_filesystem", None)
+            with self._lifecycle:
+                filesystem = getattr(self, "_filesystem", None)
+                self._filesystem = None
+                while self._active_reads:
+                    self._lifecycle.wait()
             if filesystem is not None and self._external_filesystem is None:
                 # fsspec's HTTP and S3 clients keep an async session alive after
                 # the file objects it feeds are gone.
                 _close_owned_filesystem(filesystem)
-                self._filesystem = None
 
     shape = property(lambda self: self._shape)
     chunks = property(lambda self: self._chunks)
