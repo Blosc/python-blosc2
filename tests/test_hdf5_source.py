@@ -762,8 +762,13 @@ def test_hdf5_rejects_virtual_and_external_datasets(tmp_path):
 
 def test_hdf5_rejects_legacy_reference_map():
     url = make_memory_h5("legacy-index.h5", data=(np.arange(10), (5,)))
-    with pytest.raises(ValueError, match="Legacy HDF5 reference maps"):
-        blosc2.HDF5NDSource(url, "data", hdf5_index={"version": 1, "refs": {}})
+    for index in (
+        {"version": 1, "refs": {}},
+        {".zarray": {}, "data/.zgroup": {}},
+        {".zgroup": {}},
+    ):
+        with pytest.raises(ValueError, match="Legacy HDF5 reference maps"):
+            blosc2.HDF5NDSource(url, "data", hdf5_index=index)
 
 
 def test_hdf5_missing_h5py_error(monkeypatch):

@@ -250,7 +250,10 @@ def validate_hdf5_index(index, urlpath=None):
     if not isinstance(index, dict):
         raise ValueError("Invalid HDF5 index")
     if index.get("format") != HDF5_INDEX_FORMAT:
-        if "refs" in index or any(str(key).endswith("/.zarray") for key in index):
+        legacy_keys = {".zarray", ".zgroup"}
+        if "refs" in index or any(
+            str(key) in legacy_keys or str(key).endswith(("/.zarray", "/.zgroup")) for key in index
+        ):
             raise ValueError(
                 "Legacy HDF5 reference maps are unsupported; omit hdf5_index and rescan the source"
             )
