@@ -71,6 +71,13 @@ def _dtype_field_from_json(field):
 def _json_value(value):
     """Encode HDF5 metadata without pickle or lossy byte coercion."""
     if isinstance(value, np.ndarray):
+        if value.dtype.hasobject:
+            # Object arrays box Python references, so tobytes() would persist
+            # pointers instead of the elements they name.
+            return {
+                "__object_ndarray__": [_json_value(item) for item in value.ravel().tolist()],
+                "shape": list(value.shape),
+            }
         return {
             "__ndarray__": base64.b64encode(value.tobytes()).decode(),
             "dtype": _dtype_value(value.dtype),
@@ -104,6 +111,9 @@ def _from_json_value(value):
         return np.frombuffer(base64.b64decode(value["__scalar__"]), dtype=_dtype_from_value(value["dtype"]))[
             0
         ]
+    if "__object_ndarray__" in value:
+        items = [_from_json_value(item) for item in value["__object_ndarray__"]]
+        return np.array(items, dtype=object).reshape(value["shape"])
     if "__ndarray__" in value:
         return np.frombuffer(
             base64.b64decode(value["__ndarray__"]), dtype=_dtype_from_value(value["dtype"])

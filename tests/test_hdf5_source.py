@@ -866,11 +866,16 @@ def test_hdf5_vlmeta(tmp_path):
         ds = f.create_dataset("d0/data", data=data, chunks=(5, 5))
         ds.attrs["description"] = "hdf5 dataset"
         ds.attrs["sampling_rate"] = 250
+        ds.attrs["_ARRAY_DIMENSIONS"] = ["x", "y"]
+        ds.attrs["numbers"] = np.arange(3, dtype="i8")
+        ds.attrs["vlen"] = np.array(["one", "two"], dtype=object)
 
     src = blosc2.HDF5NDSource(path, "d0/data")
     assert src.vlmeta["description"] == "hdf5 dataset"
     assert src.vlmeta["sampling_rate"] == 250
-    assert "_ARRAY_DIMENSIONS" not in src.vlmeta
+    np.testing.assert_array_equal(src.vlmeta["_ARRAY_DIMENSIONS"], ["x", "y"])
+    np.testing.assert_array_equal(src.vlmeta["numbers"], np.arange(3, dtype="i8"))
+    np.testing.assert_array_equal(src.vlmeta["vlen"], ["one", "two"])
     assert isinstance(src.array, h5py.Dataset)
 
     url = "memory://test_attrs.h5"
@@ -878,7 +883,12 @@ def test_hdf5_vlmeta(tmp_path):
     proxy = blosc2.RemoteArray(url, source_format="hdf5", dataset="d0/data")
     assert not hasattr(proxy.src, "array")
     assert proxy.attrs is proxy.vlmeta
-    assert proxy.attrs[:] == {"description": "hdf5 dataset", "sampling_rate": 250}
+    attrs = proxy.attrs[:]
+    assert attrs["description"] == "hdf5 dataset"
+    assert attrs["sampling_rate"] == 250
+    np.testing.assert_array_equal(attrs["_ARRAY_DIMENSIONS"], ["x", "y"])
+    np.testing.assert_array_equal(attrs["numbers"], np.arange(3, dtype="i8"))
+    np.testing.assert_array_equal(attrs["vlen"], ["one", "two"])
 
 
 @pytest.mark.network
