@@ -13,7 +13,7 @@
 # "SWMR without locking", for the contract this relies on:
 #
 # - A reader's cached shape re-syncs the next time it *touches* the
-#   container -- a data read, a vlmeta lookup, or an explicit
+#   container -- a data read, an attrs lookup, or an explicit
 #   `NDArray.refresh()` poll that doesn't read any data at all.
 # - Growth changes the on-disk length, which is what staleness
 #   detection keys off, so it is reliably picked up.
@@ -24,7 +24,7 @@
 #   This example sidesteps that by only treating a batch as safe to
 #   verify once the *next* batch's resize has started (the same
 #   technique used in tests/test_swmr.py::test_cross_process_growth_hammer),
-#   and by using a vlmeta flag -- itself re-synced on every access -- as
+#   and by using an attrs flag -- itself re-synced on every access -- as
 #   an explicit "the writer is done" signal for the final tail check.
 # - A reader racing the writer without locking can still occasionally hit
 #   a transient read error mid-mutation, even in a region considered
@@ -63,7 +63,7 @@ def writer():
         time.sleep(0.005)  # let readers observe growth in more than one step
     # Set once everything is written: readers use this as the signal that
     # it is safe to read and verify the whole array, tail included.
-    arr.schunk.vlmeta["done"] = True
+    arr.schunk.attrs["done"] = True
 
 
 def reader(rank):
@@ -97,9 +97,9 @@ def reader(rank):
                     )
                 verified = settled
 
-            # "done" in vlmeta re-syncs the container's metadata cache too,
-            # so this also picks up the writer's final vlmeta write.
-            done = "done" in arr.schunk.vlmeta
+            # "done" in attrs re-syncs the container's metadata cache too,
+            # so this also picks up the writer's final attrs write.
+            done = "done" in arr.schunk.attrs
         except RuntimeError:
             # A reader can race the writer mid-mutation and hit a transient
             # read error even here -- retry on the next poll.

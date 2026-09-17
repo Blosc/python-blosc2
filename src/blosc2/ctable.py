@@ -679,6 +679,32 @@ def _rank_index_row_lookup(values_path: str, positions_path: str, table, null_ra
     return rows_for_ranks
 
 
+def _iter_true_segments(arr):
+    """Yield ``(start, size, mask)``; ``mask is None`` means all rows are true."""
+    chunk_size = arr.chunks[0]
+    iter_info = getattr(arr, "iterchunks_info", None)
+    if iter_info is None:
+        for start in range(0, arr.shape[0], chunk_size):
+            size = min(chunk_size, arr.shape[0] - start)
+            mask = np.asarray(arr[start : start + size], dtype=np.bool_)
+            if np.any(mask):
+                yield start, size, None if np.all(mask) else mask
+        return
+
+    for info in iter_info():
+        size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
+        start = info.nchunk * chunk_size
+        if info.special == blosc2.SpecialValue.ZERO:
+            continue
+        if info.special == blosc2.SpecialValue.VALUE:
+            if np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]:
+                yield start, size, None
+            continue
+        mask = np.asarray(arr[start : start + size], dtype=np.bool_)
+        if np.any(mask):
+            yield start, size, None if np.all(mask) else mask
+
+
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     """Translate a logical (valid-row) index into a physical array index.
 
@@ -696,31 +722,14 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
         If the logical index is out of range or the array is inconsistent.
     """
     count = 0
-    chunk_size = arr.chunks[0]
-
-    for info in arr.iterchunks_info():
-        actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-        chunk_start = info.nchunk * chunk_size
-
-        if info.special == blosc2.SpecialValue.ZERO:
-            continue
-
-        if info.special == blosc2.SpecialValue.VALUE:
-            val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-            if not val:
-                continue
-            if count + actual_size <= logical_key:
-                count += actual_size
-                continue
-            return chunk_start + (logical_key - count)
-
-        chunk_data = arr[chunk_start : chunk_start + actual_size]
-        n_true = int(np.count_nonzero(chunk_data))
+    for chunk_start, actual_size, mask in _iter_true_segments(arr):
+        n_true = actual_size if mask is None else int(np.count_nonzero(mask))
         if count + n_true <= logical_key:
             count += n_true
             continue
-
-        return chunk_start + int(np.flatnonzero(chunk_data)[logical_key - count])
+        if mask is None:
+            return chunk_start + logical_key - count
+        return chunk_start + int(np.flatnonzero(mask)[logical_key - count])
 
     raise IndexError("Unexpected error finding physical index.")
 
@@ -1915,26 +1924,9 @@ class Column:
         if self.is_list or self.is_varlen_scalar:
             yield from self._raw_col[np.where(self._valid_rows[:])[0]]
             return
-        arr = self._valid_rows
-        chunk_size = arr.chunks[0]
-
-        for info in arr.iterchunks_info():
-            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-            chunk_start = info.nchunk * chunk_size
-
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                if not val:
-                    continue
-                yield from self._raw_col[chunk_start : chunk_start + actual_size]
-                continue
-
-            mask_chunk = arr[chunk_start : chunk_start + actual_size]
+        for chunk_start, actual_size, mask_chunk in _iter_true_segments(self._valid_rows):
             data_chunk = self._raw_col[chunk_start : chunk_start + actual_size]
-            yield from data_chunk[mask_chunk]
+            yield from data_chunk if mask_chunk is None else data_chunk[mask_chunk]
 
     @staticmethod
     def _format_array_value(value) -> str:
@@ -3004,26 +2996,14 @@ class Column:
             raise TypeError("Column.iter_chunks() is not supported for varlen scalar columns.")
         valid = self._valid_rows
         raw = self._raw_col
-        arr_len = len(valid)
-        phys_chunk = valid.chunks[0]
 
         pending: list[np.ndarray] = []
         pending_count = 0
 
-        for info in valid.iterchunks_info():
-            actual = min(phys_chunk, arr_len - info.nchunk * phys_chunk)
-            start = info.nchunk * phys_chunk
-
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=valid.dtype)[0]
-                if not val:
-                    continue
+        for start, actual, mask in _iter_true_segments(valid):
+            if mask is None:
                 segment = raw[start : start + actual]
             else:
-                mask = valid[start : start + actual]
                 data_part = raw[start : start + actual]
                 if len(data_part) < actual:
                     # Logically-sized storage (utf8) is shorter than the
@@ -7097,7 +7077,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         schema = schema_from_dict(schema_dict)
         col_names = [c["name"] for c in schema_dict["columns"]]
 
-        obj = cls.__new__(cls)
+        obj = object.__new__(cls)
         obj._row_type = None
         obj._validate = True
         obj._table_cparams = None

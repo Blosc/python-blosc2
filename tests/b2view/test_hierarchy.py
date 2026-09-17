@@ -515,12 +515,13 @@ def test_b2z_empty_groups_and_ctable_boundaries(tmp_path, threshold):
         assert [(n.name, n.kind) for n in browser.list_children()] == [
             ("empty", "group"),
             ("ordinary", "group"),
-            ("table", "unsupported"),
+            ("table", "ctable"),
         ]
         assert browser.list_children("/empty") == []
         assert browser.get_info("/empty").user_attrs == {"empty": True}
         assert browser.list_children("/table") == []
-        assert "CTable" in browser.get_info("/table").metadata["preview"]
+        assert browser.get_info("/table").metadata["type"] == "B2Z ctable"
+        np.testing.assert_array_equal(browser.preview("/table", max_rows=1)["data"]["x"], [3])
 
 
 def test_b2z_large_embedded_chunk_notice():

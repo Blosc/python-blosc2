@@ -780,6 +780,7 @@ from .ndarray import (
     var,
     where,
 )
+from .remote_ctable import RemoteCTable
 from .schema import (
     DictionarySpec,
     NDArraySpec,
@@ -915,6 +916,7 @@ __all__ = [  # noqa : RUF022
     "Ref",
     "RemoteMetadataMapping",
     "RemoteArray",
+    "RemoteCTable",
     "RemoteNode",
     "RemoteStore",
     "SChunk",

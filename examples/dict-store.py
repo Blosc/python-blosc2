@@ -17,7 +17,7 @@ with blosc2.DictStore("example_dstore.b2z", mode="w") as dstore:
     arr_remote = blosc2.open(urlpath, mode="r")
     dstore["/dir1/node3"] = arr_remote
     arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-    arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"
+    arr_external.attrs["description"] = "This is metadata for /dir1/node3"
     dstore["/dir2/node4"] = arr_external
 
     print("DictStore keys:", list(dstore.keys()))

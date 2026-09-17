@@ -194,9 +194,9 @@ def main() -> int:
     meta = getattr(arr, "meta", None)
     if meta:
         print(f"{'meta':<12} : {dict(meta)}")
-    vlmeta = getattr(arr, "vlmeta", None)
-    if vlmeta is not None:
-        print(f"{'vlmeta':<12} : {dict(vlmeta) if vlmeta else {}}")
+    attrs = getattr(arr, "attrs", None)
+    if attrs is not None:
+        print(f"{'attrs':<12} : {dict(attrs) if attrs else {}}")
 
     print("\nSample slice data (1st fetch):")
     t0 = time.perf_counter()

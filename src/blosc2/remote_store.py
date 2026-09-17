@@ -141,7 +141,7 @@ class RemoteDiscovery:
             if (
                 not isinstance(entry, (list, tuple))
                 or len(entry) != 2
-                or entry[0] not in {"group", "ndarray", "unsupported"}
+                or entry[0] not in {"group", "ndarray", "ctable", "unsupported"}
             ):
                 raise ValueError("Invalid RemoteStore node")
             self.nodes[path] = tuple(entry)
@@ -191,7 +191,7 @@ class RemoteDiscovery:
         elif self.format == "b2z":
             self.metadata = self.archive.metadata
         nodes = {
-            path: (kind, value if kind == "unsupported" else None)
+            path: (kind, value if kind in {"ctable", "unsupported"} else None)
             for path, (kind, value) in self.nodes.items()
         }
         manifest = {
@@ -245,23 +245,28 @@ class RemoteDiscovery:
     def _find_b2z_ctable_roots(self, members, embedded, registry):
         from blosc2.b2z_source import B2ZEmbeddedMetadata, member_vlmeta
 
-        roots = {key.strip("/") for key in registry}
+        roots = {
+            key.strip("/"): None
+            for key, value in registry.items()
+            if isinstance(value, dict) and value.get("kind") == "ctable"
+        }
         embedded_reader = None
         # Match TreeStore's legacy CTable manifest check using metadata only.
         for name, info in members.items():
-            if (name == "_meta.b2f" or name.endswith("/_meta.b2f")) and member_vlmeta(
-                self.archive, info
-            ).get("kind") in {"ctable", b"ctable"}:
-                roots.add(name.rpartition("/")[0])
+            if name == "_meta.b2f" or name.endswith("/_meta.b2f"):
+                metadata = member_vlmeta(self.archive, info)
+                if metadata.get("kind") in {"ctable", b"ctable"}:
+                    roots[name.rpartition("/")[0]] = metadata
         for key, entry in embedded.items():
             if key.endswith("/_meta"):
                 try:
                     if embedded_reader is None:
                         embedded_reader = B2ZEmbeddedMetadata(self.archive, members["embed.b2e"])
-                    if embedded_reader.attrs(entry).get("kind") in {"ctable", b"ctable"}:
-                        roots.add(key.rpartition("/")[0].strip("/"))
+                    attrs = embedded_reader.attrs(entry)
+                    if attrs.get("kind") in {"ctable", b"ctable"}:
+                        roots[key.rpartition("/")[0].strip("/")] = attrs
                 except NotImplementedError as exc:
-                    roots.add(key.rpartition("/")[0].strip("/"))
+                    roots.setdefault(key.rpartition("/")[0].strip("/"), None)
                     self.notice = f"Partial B2Z metadata: object boundary cannot be verified: {exc}."
         return roots, embedded_reader
 
@@ -347,12 +352,23 @@ class RemoteDiscovery:
 
         roots, embedded_reader = self._find_b2z_ctable_roots(members, embedded, registry)
         if "" in roots:
-            self.nodes[""] = ("unsupported", "CTable access is unavailable for remote B2Z hierarchies")
+            metadata = roots[""]
+            self.nodes[""] = (
+                ("ctable", metadata)
+                if metadata is not None
+                else ("unsupported", "CTable metadata is unavailable")
+            )
+            self.archive._opening_ranges.clear()
+            self.archive.capture_metadata = False
             return
         self._add("", "group")
         for root in sorted(roots, key=len):
             if not any(root.startswith(other + "/") for other in roots if other != root):
-                self._add(root, "unsupported", "CTable access is unavailable for remote B2Z hierarchies")
+                metadata = roots[root]
+                if metadata is None:
+                    self._add(root, "unsupported", "CTable metadata is unavailable")
+                else:
+                    self._add(root, "ctable", metadata)
         self._process_b2z_members(members, roots)
         self._process_b2z_embedded(embedded, roots, embedded_reader, members)
         self.archive._opening_ranges.clear()
@@ -524,6 +540,57 @@ class RemoteDiscovery:
         self.sources[full] = source
         return source
 
+    def open_ctable_array(self, table_path, logical_key):
+        """Open one external NDArray member hidden below a CTable node."""
+        if self.format != "b2z":
+            raise NotImplementedError("Remote CTable access currently requires a B2Z source")
+        full = "/".join(part.strip("/") for part in (table_path, logical_key) if part.strip("/"))
+        self._validate(full)
+        if full in self.sources:
+            return self.sources[full]
+        matches = [info for info in self.archive.members if info.filename == full + ".b2nd"]
+        if len(matches) != 1:
+            raise NotImplementedError(f"Remote CTable array {full!r} is unavailable or not external")
+        info = matches[0]
+        if info.flag_bits & 1 or info.compress_type != 0:
+            raise NotImplementedError(
+                f"Remote CTable array {full!r} requires an unencrypted ZIP_STORED member"
+            )
+        from blosc2.b2z_source import B2ZNDSource
+
+        source = B2ZNDSource(self.urlpath, full, _archive=self.archive)
+        if self.source_validator is not None:
+            self.source_validator(source)
+        self.nodes[full] = ("ndarray", None)
+        self.sources[full] = source
+        return source
+
+    def remote_array(self, full):
+        """Return a RemoteArray sharing this discovery owner's resources."""
+        relative = full[len(self.root) + 1 :] if self.root else full
+        source = self.open_source(relative) if full in self.nodes else None
+        if source is None:
+            raise KeyError(full)
+        descriptor = {
+            "kind": self.format,
+            "version": 1,
+            "urlpath": source.urlpath,
+            "assume_immutable": True,
+        }
+        if self.format in {"b2z", "hdf5"}:
+            descriptor["dataset"] = full
+        return blosc2.RemoteArray(
+            source,
+            _source_descriptor=descriptor,
+            _store_owner=self,
+            cache_policy=self.cache_policy,
+            max_cache_bytes=(
+                self.max_cache_bytes
+                if self.cache_policy is not blosc2.CachePolicy.NONE
+                else CACHE_POLICY_DEFAULT
+            ),
+        )
+
     def acquire(self):
         with self.lock:
             if self._closed:
@@ -646,8 +713,10 @@ class RemoteDiscovery:
         self._closed = True
         if self.archive is not None:
             self.archive.close()
+            self.archive = None
         if self.zstore is not None:
             self.zstore.close()
+            self.zstore = None
         for source in self.sources.values():
             if isinstance(source, blosc2.HDF5NDSource):
                 source.close()
@@ -658,14 +727,14 @@ class RemoteDiscovery:
         self.listed.clear()
         self.hdf5_index = None
         if self.filesystem is not None and self._external_filesystem is None:
-            # fsspec's HTTP and S3 clients expose their own synchronous close hook.
+            # s3fs already registered this exact close through weakref.finalize,
+            # and its aiobotocore cleanup is not idempotent.  Other fsspec
+            # clients (notably HTTP) still need deterministic closure here.
+            session = getattr(self.filesystem, "_session", None)
             close = getattr(self.filesystem, "close_session", None)
-            session = getattr(self.filesystem, "_s3creator", None) or getattr(
-                self.filesystem, "_session", None
-            )
-            if close is not None and session is not None:
+            if close is not None and session is not None and not hasattr(self.filesystem, "_s3creator"):
                 close(self.filesystem.loop, session)
-            self.filesystem = None
+        self.filesystem = None
 
 
 class RemoteStore:
@@ -780,6 +849,8 @@ class RemoteStore:
             owner.close()
             if kind == "unsupported":
                 raise NotImplementedError(str(diagnostic))
+            if kind == "ctable":
+                raise ValueError("RemoteStore requires a group; use RemoteCTable for a table")
             raise ValueError("RemoteStore requires a group; use RemoteArray for an array")
         owner.cache_policy = cache_policy
         owner.max_cache_bytes = limit
@@ -967,28 +1038,12 @@ class RemoteStore:
                 group = object.__new__(type(self))
                 group._attach(self._owner, relative)
                 return group
+            if kind == "ctable":
+                return blosc2.RemoteCTable._from_owner(self._owner, full)
             if kind == "unsupported":
                 raise NotImplementedError(f"{path!r}: {value}")
-            source = self._owner.open_source(relative)
-            descriptor = {
-                "kind": self._owner.format,
-                "version": 1,
-                "urlpath": source.urlpath,
-                "assume_immutable": True,
-            }
-            if self._owner.format in {"b2z", "hdf5"}:
-                descriptor["dataset"] = full
-            return blosc2.RemoteArray(
-                source,
-                _source_descriptor=descriptor,
-                _store_owner=self._owner,
-                cache_policy=self.cache_policy,
-                max_cache_bytes=(
-                    self.max_cache_bytes
-                    if self.cache_policy is not blosc2.CachePolicy.NONE
-                    else CACHE_POLICY_DEFAULT
-                ),
-            )
+            self._owner.open_source(relative)
+            return self._owner.remote_array(full)
 
     def get_info(self, path=""):
         """Return node kind, known attributes and unsupported-node diagnostics."""
@@ -1005,7 +1060,7 @@ class RemoteStore:
             )
 
     def kind(self, path=""):
-        """Return 'group', 'ndarray' or 'unsupported'."""
+        """Return 'group', 'ndarray', 'ctable' or 'unsupported'."""
         return self.get_info(path).kind
 
     @property
@@ -1257,6 +1312,11 @@ class RemoteStore:
     def _collect_export_nodes(self, include_cache):
         group_full = "/".join(p for p in (self._owner.root, self._path.strip("/")) if p)
         prefix = (group_full + "/") if group_full else ""
+        if any(
+            kind == "ctable" and (path == group_full or not prefix or path.startswith(prefix))
+            for path, (kind, _) in self._owner.nodes.items()
+        ):
+            raise NotImplementedError("RemoteStore artifacts do not yet support RemoteCTable nodes")
         exported_source = {
             "urlpath": self._owner.urlpath,
             "dataset": group_full,

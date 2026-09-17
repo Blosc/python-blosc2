@@ -8,13 +8,15 @@
 
 """Storage backends for CTable.
 
-Two concrete backends:
+The main concrete backends are:
 
 * :class:`InMemoryTableStorage` — all arrays live in RAM (default when
   ``urlpath`` is not provided).
 * :class:`FileTableStorage` — arrays are stored inside a :class:`blosc2.TreeStore`
   rooted at ``urlpath``; logical object metadata lives in ``/_meta`` and table
   data lives under ``/_valid_rows`` and ``/_cols/<name>``.
+* :class:`RemoteTableStorage` — fixed-width arrays are opened lazily as
+  :class:`blosc2.RemoteArray` objects from a remote B2Z archive.
 """
 
 from __future__ import annotations
@@ -639,6 +641,159 @@ class EmbedStoreTableStorage(TableStorage):
         return 0
 
     def index_anchor_path(self, col_name: str) -> str | None:
+        return None
+
+
+class RemoteTableStorage(TableStorage):
+    """Read-only fixed-width CTable storage over a shared RemoteStore owner."""
+
+    def __init__(self, owner, root_key: str) -> None:
+        self._owner = owner
+        self._root_key = root_key.strip("/")
+        self._generation = owner.generation
+        self._arrays: list[blosc2.RemoteArray] = []
+        self._closed = False
+        owner.acquire()
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("RemoteCTable handle is closed")
+        if self._generation != self._owner.generation:
+            raise RuntimeError("RemoteCTable handle is stale; look it up again after refresh")
+
+    def _full_key(self, logical_key: str) -> str:
+        return "/".join(part for part in (self._root_key, logical_key.strip("/")) if part)
+
+    def _open_array(self, logical_key: str) -> blosc2.RemoteArray:
+        with self._owner.lock:
+            self._check_open()
+            full = self._full_key(logical_key)
+            self._owner.open_ctable_array(self._root_key, logical_key)
+            array = self._owner.remote_array(full)
+        self._arrays.append(array)
+        return array
+
+    def _metadata(self) -> dict:
+        self._check_open()
+        try:
+            kind, metadata = self._owner.nodes[self._root_key]
+        except KeyError as exc:
+            raise RuntimeError("RemoteCTable source is unavailable") from exc
+        if kind != "ctable" or not isinstance(metadata, dict):
+            raise ValueError(f"Object at {self._root_key!r} is not a CTable")
+        return metadata
+
+    def _has_array(self, logical_key: str) -> bool:
+        self._check_open()
+        member = self._full_key(logical_key) + ".b2nd"
+        return sum(info.filename == member for info in self._owner.archive.members) == 1
+
+    @staticmethod
+    def _not_supported(*args, **kwargs):
+        raise RuntimeError("RemoteTableStorage is read-only")
+
+    def open_column(self, name: str) -> blosc2.RemoteArray:
+        return self._open_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}")
+
+    def open_list_column(self, name: str) -> ListArray:
+        raise NotImplementedError(f"Remote CTable list column {name!r} is not supported")
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        raise NotImplementedError(
+            f"Remote CTable variable-length column {name!r} ({type(spec).__name__}) is not supported"
+        )
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        raise NotImplementedError(f"Remote CTable dictionary column {name!r} is not supported")
+
+    def open_valid_rows(self) -> blosc2.RemoteArray:
+        return self._open_array("_valid_rows")
+
+    def open_null_mask(self, name: str) -> blosc2.RemoteArray:
+        return self._open_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}{_NOTNULL_SUFFIX}")
+
+    def has_null_mask(self, name: str) -> bool:
+        return self._has_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}{_NOTNULL_SUFFIX}")
+
+    def check_kind(self) -> None:
+        kind = self._metadata().get("kind")
+        if isinstance(kind, bytes):
+            kind = kind.decode()
+        if kind != "ctable":
+            raise ValueError(f"Object at {self._root_key!r} is not a CTable (kind={kind!r})")
+
+    def load_schema(self) -> dict[str, Any]:
+        raw = self._metadata().get("schema")
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        if not isinstance(raw, str):
+            raise ValueError(f"Remote CTable at {self._root_key!r} has no schema")
+        return json.loads(raw)
+
+    def load_user_attrs(self) -> dict:
+        self._check_open()
+        member = self._full_key("_vlmeta") + ".b2f"
+        matches = [info for info in self._owner.archive.members if info.filename == member]
+        if not matches:
+            return {}
+        if len(matches) != 1:
+            raise ValueError(f"Duplicate Remote CTable metadata member {member!r}")
+        from blosc2.b2z_source import member_vlmeta
+
+        return dict(member_vlmeta(self._owner.archive, matches[0]))
+
+    def table_exists(self) -> bool:
+        try:
+            return self._metadata().get("kind") in {"ctable", b"ctable"}
+        except (RuntimeError, ValueError):
+            return False
+
+    def is_read_only(self) -> bool:
+        return True
+
+    def open_mode(self) -> str:
+        return "r"
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for array in self._arrays:
+            array.close()
+        self._arrays.clear()
+        self._owner.release()
+
+    discard = close
+
+    create_column = _not_supported
+    install_column = _not_supported
+    create_list_column = _not_supported
+    install_list_column = _not_supported
+    create_varlen_scalar_column = _not_supported
+    create_dictionary_column = _not_supported
+    create_valid_rows = _not_supported
+    create_null_mask = _not_supported
+    install_null_mask = _not_supported
+    delete_null_mask = _not_supported
+    save_schema = _not_supported
+    save_vlmeta = _not_supported
+    delete_column = _not_supported
+    rename_column = _not_supported
+
+    def load_index_catalog(self) -> dict:
+        self._check_open()
+        return {}
+
+    save_index_catalog = _not_supported
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        metadata = self._metadata()
+        return int(metadata.get("value_epoch", 0) or 0), int(metadata.get("visibility_epoch", 0) or 0)
+
+    bump_value_epoch = _not_supported
+    bump_visibility_epoch = _not_supported
+
+    def index_anchor_path(self, col_name: str) -> None:
         return None
 
 

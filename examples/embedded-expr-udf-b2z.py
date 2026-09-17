@@ -58,8 +58,8 @@ with blosc2.open(bundle_path, mode="r") as store:
 
     show("Reopened expr type", type(expr).__name__)
     show("Reopened udf type", type(udf).__name__)
-    show("Expr operand refs", expr.array.schunk.vlmeta["b2o"]["operands"])
-    show("UDF operand refs", udf.array.schunk.vlmeta["b2o"]["operands"])
+    show("Expr operand refs", expr.array.schunk.attrs["b2o"]["operands"])
+    show("UDF operand refs", udf.array.schunk.attrs["b2o"]["operands"])
     show("Expr values", np.round(expr_result[:], 4))
     show("UDF values", udf_result[:])
 

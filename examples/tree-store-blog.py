@@ -21,9 +21,9 @@ with blosc2.TreeStore("my_experiment.b2z", mode="w") as ts:
     # Create a group with a dataset that can be a blosc2 NDArray
     ts["/group1/dataset1"] = blosc2.zeros((10,))
 
-    # You can also store blosc2 arrays directly (vlmeta included)
+    # You can also store blosc2 arrays directly (attrs included)
     ext = blosc2.linspace(0, 1, 10_000, dtype=np.float32)
-    ext.vlmeta["desc"] = "dataset2 metadata"
+    ext.attrs["desc"] = "dataset2 metadata"
     ts["/group1/dataset2"] = ext
 print("Created 'my_experiment.b2z' with initial data.\n")
 
@@ -39,27 +39,27 @@ with blosc2.TreeStore("my_experiment.b2z", mode="r") as ts:
     # Access the external array that has been stored internally
     dataset2 = ts["/group1/dataset2"]
     print("Dataset 2", dataset2[:])
-    print("Dataset 2 metadata:", dataset2.vlmeta[:])
+    print("Dataset 2 metadata:", dataset2.attrs[:])
 
     # List all paths in the store
     print("Paths in TreeStore:", list(ts))
 print()
 
 
-# --- 3. Storing Metadata with `vlmeta` ---
-print("--- 3. Storing Metadata with `vlmeta` ---")
+# --- 3. Storing Metadata with `attrs` ---
+print("--- 3. Storing Metadata with `attrs` ---")
 with blosc2.TreeStore("my_experiment.b2z", mode="a") as ts:  # 'a' for append/modify
     # Add metadata to the root
-    ts.vlmeta["author"] = "The Blosc Team"
-    ts.vlmeta["date"] = "2025-08-17"
+    ts.attrs["author"] = "The Blosc Team"
+    ts.attrs["date"] = "2025-08-17"
 
     # Add metadata to a group
-    ts["/group1"].vlmeta["description"] = "Data from the first run"
+    ts["/group1"].attrs["description"] = "Data from the first run"
 
 # Reading metadata
 with blosc2.TreeStore("my_experiment.b2z", mode="r") as ts:
-    print("Root metadata:", ts.vlmeta[:])
-    print("Group 1 metadata:", ts["/group1"].vlmeta[:])
+    print("Root metadata:", ts.attrs[:])
+    print("Group 1 metadata:", ts["/group1"].attrs[:])
 print()
 
 
@@ -85,7 +85,7 @@ with blosc2.TreeStore("my_experiment.b2z", mode="r") as ts:
         if isinstance(node, blosc2.NDArray):
             print(f"Found dataset at '{path}' with shape {node.shape}")
         else:  # It's a group
-            print(f"Found group at '{path}' with metadata: {node.vlmeta[:]}")
+            print(f"Found group at '{path}' with metadata: {node.attrs[:]}")
 print()
 
 # --- Cleanup ---

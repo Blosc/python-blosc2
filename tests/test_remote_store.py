@@ -4,6 +4,7 @@ import gc
 import json
 import sys
 import weakref
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -621,6 +622,37 @@ def test_subgroup_and_garbage_collection(hierarchy):
     del leaf
     gc.collect()
     assert owner._closed
+
+
+def test_owned_filesystem_session_is_left_to_fsspec_finalizer():
+    from blosc2.remote_store import RemoteDiscovery
+
+    closed = []
+    close_calls = []
+    archive = SimpleNamespace(close=lambda: closed.append(True))
+    filesystem = SimpleNamespace(
+        loop=object(), _s3creator=object(), close_session=lambda *args: close_calls.append(args)
+    )
+    owner = SimpleNamespace(
+        _closed=False,
+        archive=archive,
+        zstore=None,
+        sources={},
+        caches={},
+        nodes={},
+        attrs={},
+        listed={},
+        hdf5_index=None,
+        filesystem=filesystem,
+        _external_filesystem=None,
+    )
+
+    RemoteDiscovery._close_resources(owner)
+
+    assert closed == [True]
+    assert owner.archive is None
+    assert owner.filesystem is None
+    assert close_calls == []
 
 
 def test_zarr_direct_lookup_without_listing(hierarchy, monkeypatch):

@@ -17,7 +17,7 @@
 #
 # The mechanics are identical to `swmr-enlarge.py` -- read that one
 # first for the annotated contract (staleness detection, the
-# "settled vs. just-resized" gap, the vlmeta "done" signal, and why
+# "settled vs. just-resized" gap, the attrs "done" signal, and why
 # reads are retried). This file adds a `multiprocessing.Queue` purely
 # to ship progress numbers from the writer/reader processes back to the
 # one process that owns the terminal and draws the bars; it plays no
@@ -82,7 +82,7 @@ def writer(queue):
         time.sleep(WRITER_DELAY)
     # Signal readers it is safe to trust and verify the whole array, tail
     # included -- see swmr-enlarge.py for why this is needed.
-    arr.schunk.vlmeta["done"] = True
+    arr.schunk.attrs["done"] = True
 
 
 def reader(rank, queue):
@@ -110,7 +110,7 @@ def reader(rank, queue):
                     )
                 verified = settled
                 queue.put((f"reader{rank}", verified * NCOLS * ITEMSIZE))
-            done = "done" in arr.schunk.vlmeta
+            done = "done" in arr.schunk.attrs
         except RuntimeError:
             # A reader can race the writer mid-mutation and hit a transient
             # read error -- retry on the next poll.

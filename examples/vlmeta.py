@@ -16,19 +16,19 @@ for i in range(nchunks):
     nchunks_ = schunk.append_data(buffer)
     assert nchunks_ == (i + 1)
 
-# Initially the vlmeta is empty
+# Initially attrs is empty
 print(len(schunk.attrs))
-# Add a vlmeta
-schunk.attrs["meta1"] = "first vlmetalayer"
+# Add an attribute
+schunk.attrs["meta1"] = "first metadata value"
 print(schunk.attrs.getall())
-# Update the vlmeta
-schunk.attrs["meta1"] = "new vlmetalayer"
+# Update the attribute
+schunk.attrs["meta1"] = "new metadata value"
 print(schunk.attrs.getall())
-# Add another vlmeta
-schunk.attrs["vlmeta2"] = "second vlmeta"
+# Add another attribute
+schunk.attrs["meta2"] = "second metadata value"
 # Check that it has been added
-assert "vlmeta2" in schunk.attrs
+assert "meta2" in schunk.attrs
 
-# Delete a vlmeta
-del schunk.attrs["vlmeta2"]
-assert "vlmeta2" not in schunk.attrs
+# Delete an attribute
+del schunk.attrs["meta2"]
+assert "meta2" not in schunk.attrs
