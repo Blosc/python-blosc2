@@ -417,7 +417,10 @@ def _decompress_deflate(data, size):
     values = decompressor.decompress(data, size + 1)
     if len(values) > size or decompressor.unconsumed_tail or decompressor.unused_data:
         raise ValueError("Invalid HDF5 deflate chunk")
-    return values + decompressor.flush()
+    values += decompressor.flush()
+    if not decompressor.eof or len(values) != size:
+        raise ValueError("Invalid HDF5 deflate chunk")
+    return values
 
 
 def _values_to_chunk(values, chunks, blocks, dtype, cparams):

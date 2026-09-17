@@ -83,6 +83,9 @@ def test_hdf5_deflate_decode_is_bounded():
         _decompress_deflate(compressed, 10)
     with pytest.raises(ValueError, match="deflate"):
         _decompress_deflate(compressed + b"junk", 100)
+    # A truncated stream that yields the right length is still invalid.
+    with pytest.raises(ValueError, match="deflate"):
+        _decompress_deflate(compressed[:-4], 100)
 
 
 # ---------------------------------------------------------------------------
