@@ -8,6 +8,7 @@
 
 import contextlib
 import functools
+import gc
 import hashlib
 import http.server
 import os
@@ -829,6 +830,52 @@ def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):
         assert created
         assert created[0]._session is not None
         assert created[0]._session.closed
+
+
+def test_http_hdf5_failed_init_closes_owned_session(tmp_path, monkeypatch):
+    h5py = pytest.importorskip("h5py")
+    import blosc2.hdf5_source as hdf5_source
+
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "failed-init.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    created = []
+    original = hdf5_source._filesystem_and_path
+
+    def tracking(urlpath, storage_options=None, filesystem=None):
+        fs, path = original(urlpath, storage_options, filesystem)
+        if filesystem is None:  # record only filesystems created by the source
+            created.append(fs)
+        return fs, path
+
+    monkeypatch.setattr(hdf5_source, "_filesystem_and_path", tracking)
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        url = f"{urlbase}/{path.name}"
+        with pytest.raises(ValueError, match="Invalid HDF5 index"):
+            blosc2.HDF5NDSource(url, "data", hdf5_index={"format": "bad"})
+        with pytest.raises(ValueError, match="not found"):
+            blosc2.HDF5NDSource(url, "missing")
+        assert len(created) == 2
+        assert all(fs._session is None or fs._session.closed for fs in created)
+        # The scan in the second attempt did open a session, and it must be closed.
+        assert created[1]._session is not None
+        assert created[1]._session.closed
+
+
+def test_http_hdf5_source_finalizer_closes_session(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "finalizer.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        source = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "data")
+        session = source._filesystem._session
+        assert not session.closed
+        del source
+        gc.collect()
+        assert session.closed
 
 
 def test_http_store_disk_reopen_and_transport_close(tmp_path):

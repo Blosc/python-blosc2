@@ -504,28 +504,34 @@ class HDF5NDSource(ProxyNDSource):
         self._fallback_h5 = self._fallback_file = None
         self._lifecycle = threading.Condition()
         self._active_reads = 0
+        self._closed = False
         remote = bool(urlsplit(urlpath).scheme)
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
         self._local = (not remote or os.path.isabs(urlpath)) and _filesystem is None
         self._hdf5_index = None
-        if self._local:
-            self._open_local()
-            self._metadata = None
-            shape, physical_chunks, dtype = self.array.shape, self.array.chunks, self.array.dtype
-        else:
-            check_hdf5_dependencies()
-            self._filesystem, self._path = _filesystem_and_path(urlpath, storage_options, _filesystem)
-            self._hdf5_index = self._load_or_scan_index(hdf5_index)
-            self._validate_dataset_presence(dataset)
-            self._metadata = self._hdf5_index["datasets"][self.dataset]
-            shape, physical_chunks = tuple(self._metadata["shape"]), self._metadata["chunks"]
-            dtype = dtype_from_value(self._metadata["dtype"])
-            self._chunk_records = {tuple(item["offset"]): item for item in self._metadata["allocated"]}
         try:
-            if self._local and hdf5_index is not None:
-                # Local reads stay on h5py; still validate and retain the explicit
-                # index so no remote-only dependency is needed to accept it.
+            if self._local:
+                self._open_local()
+                self._metadata = None
+                if hdf5_index is not None:
+                    # Local reads stay on h5py; still validate and retain the
+                    # explicit index without needing a remote-only dependency.
+                    self._hdf5_index = self._load_or_scan_index(hdf5_index)
+                shape, physical_chunks, dtype = self.array.shape, self.array.chunks, self.array.dtype
+            else:
+                check_hdf5_dependencies()
+                self._filesystem, self._path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+                if self._external_filesystem is None:
+                    # An abandoned source must not leave its HTTP/S3 session alive.
+                    self._filesystem_finalizer = weakref.finalize(
+                        self, _close_owned_filesystem, self._filesystem
+                    )
                 self._hdf5_index = self._load_or_scan_index(hdf5_index)
+                self._validate_dataset_presence(dataset)
+                self._metadata = self._hdf5_index["datasets"][self.dataset]
+                shape, physical_chunks = tuple(self._metadata["shape"]), self._metadata["chunks"]
+                dtype = dtype_from_value(self._metadata["dtype"])
+                self._chunk_records = {tuple(item["offset"]): item for item in self._metadata["allocated"]}
             self._init_geometry(shape, physical_chunks, dtype, blocks, cparams)
             identity = {
                 "encoding_version": self.encoding_version,
@@ -541,7 +547,7 @@ class HDF5NDSource(ProxyNDSource):
             ).hexdigest()
         except BaseException:
             # A failed initialization must not leave the h5py file open (and
-            # locked on Windows) until garbage collection gets to it.
+            # locked on Windows) or an owned fsspec session alive.
             self.close()
             raise
 
@@ -721,6 +727,10 @@ class HDF5NDSource(ProxyNDSource):
             finalizer = getattr(self, "_file_finalizer", None)
             if finalizer is not None:
                 finalizer()
+            fs_finalizer = getattr(self, "_filesystem_finalizer", None)
+            if fs_finalizer is not None:
+                fs_finalizer.detach()
+                self._filesystem_finalizer = None
             with self._lifecycle:
                 filesystem = getattr(self, "_filesystem", None)
                 self._filesystem = None
