@@ -445,7 +445,18 @@ def _parse_source_from_payload(source):
     return source_kind, urlpath
 
 
-def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
+def _source_format_with_index(urlpath, source_format, hdf5_index):
+    """Fold an explicit HDF5 index into the requested source format."""
+    if hdf5_index is None:
+        return source_format
+    if isinstance(urlpath, (blosc2.URLPath, blosc2.C2Array)):
+        raise ValueError("hdf5_index is not supported for Caterva2 inputs")
+    if source_format not in {None, "hdf5"}:
+        raise ValueError("hdf5_index is only supported for HDF5 sources")
+    return "hdf5"
+
+
+def _resolve_init_dataset_and_url(urlpath, dataset, source_format, hdf5_index=None):
     if isinstance(urlpath, (blosc2.URLPath, blosc2.C2Array)) and source_format is not None:
         raise ValueError("source_format is not supported for Caterva2 inputs")
     urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
@@ -453,6 +464,7 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format):
         dataset = parsed_dataset
     if source_format is None:
         source_format = detected_format
+    source_format = _source_format_with_index(urlpath, source_format, hdf5_index)
     resolved_format = _normalize_source_format(urlpath, source_format)
     if dataset is not None and resolved_format not in {"hdf5", "zarr", "b2z"}:
         raise ValueError("dataset is only supported for HDF5 and Zarr sources or B2Z archives")
@@ -579,7 +591,7 @@ class RemoteArray(blosc2.Operand):
         self._cache_limit = normalize_cache_limit(cache_policy, max_cache_bytes)
         self._max_concurrency = _validate_max_concurrency(max_concurrency)
         urlpath, self._dataset, self._source_format = _resolve_init_dataset_and_url(
-            urlpath, dataset, source_format
+            urlpath, dataset, source_format, hdf5_index
         )
         self._authorized_source = _source_descriptor is not None
         shared_index_path = None

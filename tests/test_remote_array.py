@@ -1586,6 +1586,26 @@ def test_standalone_non_hdf5_close_keeps_handle_usable():
     np.testing.assert_array_equal(proxy[:], data)
 
 
+def test_remote_array_hdf5_index_selects_hdf5(tmp_path):
+    h5py = pytest.importorskip("h5py")
+
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    data = np.arange(10, dtype="i4")
+    path = tmp_path / "indexed.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(5,))
+    url = "memory://direct-index/container"
+    fsspec.filesystem("memory").pipe_file("direct-index/container", path.read_bytes())
+    index = scan_hdf5_index(url)
+
+    proxy = blosc2.RemoteArray(url, dataset="data", hdf5_index=index)
+    np.testing.assert_array_equal(proxy[:], data)
+
+    with pytest.raises(ValueError, match="hdf5_index"):
+        blosc2.RemoteArray("memory://direct-index/other.zarr", dataset="data", hdf5_index=index)
+
+
 def test_readable_cache_paths(tmp_path):
     import re
     from pathlib import Path
