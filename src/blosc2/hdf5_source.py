@@ -532,11 +532,9 @@ class HDF5NDSource(ProxyNDSource):
             else:
                 check_hdf5_dependencies()
                 self._filesystem, self._path = _filesystem_and_path(urlpath, storage_options, _filesystem)
-                if self._external_filesystem is None:
-                    # An abandoned source must not leave its HTTP/S3 session alive.
-                    self._filesystem_finalizer = weakref.finalize(
-                        self, _close_owned_filesystem, self._filesystem
-                    )
+                # No extra session finalizer here: fsspec's HTTP and S3 filesystems
+                # already register one when they create their session, and a second
+                # close makes s3fs/aiobotocore assert on the already-exited client.
                 self._hdf5_index = self._load_or_scan_index(hdf5_index)
                 self._validate_dataset_presence(dataset)
                 self._metadata = self._hdf5_index["datasets"][self.dataset]
@@ -736,10 +734,6 @@ class HDF5NDSource(ProxyNDSource):
             if fallback_finalizer is not None:
                 fallback_finalizer()
             self._fallback_h5 = self._fallback_file = None
-            fs_finalizer = getattr(self, "_filesystem_finalizer", None)
-            if fs_finalizer is not None:
-                fs_finalizer.detach()
-                self._filesystem_finalizer = None
             # Reject new reads, then wait for local and direct reads to finish
             # before closing the file or filesystem they are using.
             with self._lifecycle:
