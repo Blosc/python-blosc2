@@ -2216,6 +2216,20 @@ def _resolve_lazy(lazy, dataset, source_format, urlpath):
     return _infer_lazy(False, dataset, source_format, urlpath) if lazy is None else lazy
 
 
+def _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index):
+    """Infer the container format; an explicit HDF5 index forces HDF5."""
+    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
+    if dataset is None:
+        dataset = parsed_dataset
+    if source_format is None:
+        source_format = detected_format
+    if hdf5_index is not None:
+        if source_format not in {None, "hdf5"}:
+            raise ValueError("hdf5_index is only supported for HDF5 sources")
+        source_format = "hdf5"
+    return urlpath, dataset, source_format
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2238,21 +2252,16 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     assume_immutable = kwargs.pop("assume_immutable", True)
     lazy = kwargs.pop("lazy", None)
 
-    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
-    if dataset is None:
-        dataset = parsed_dataset
-    if source_format is None:
-        source_format = detected_format
+    urlpath, dataset, source_format = _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index)
 
     # Local-file options require a complete local copy; cache placement alone
     # does not choose between lazy access and eager localization.
     if lazy is None and (offset != 0 or kwargs.get("mmap_mode") is not None):
         lazy = False
+    if lazy is False and hdf5_index is not None:
+        raise NotImplementedError("hdf5_index is only supported with lazy=True")
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
-
-    if not lazy and hdf5_index is not None:
-        raise NotImplementedError("hdf5_index is only supported with lazy=True")
 
     _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
     remote_array_options = _remote_array_options(

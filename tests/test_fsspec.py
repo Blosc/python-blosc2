@@ -1670,6 +1670,26 @@ def test_fsspec_ndsource_and_remote_array_storage_options():
     assert np.array_equal(proxy[:], a[:])
 
 
+def test_fsspec_hdf5_index_selects_hdf5_without_suffix(tmp_path):
+    import h5py
+
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    path = tmp_path / "indexed.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=np.arange(10, dtype="i4"), chunks=(5,))
+    fsspec.filesystem("memory").pipe_file("hdf5-index/container", path.read_bytes())
+    url = "memory://hdf5-index/container"
+    index = scan_hdf5_index(url)
+
+    proxy = blosc2.open(url, dataset="data", hdf5_index=index)
+    assert isinstance(proxy, blosc2.RemoteArray)
+    np.testing.assert_array_equal(proxy[:], np.arange(10, dtype="i4"))
+
+    with pytest.raises(ValueError, match="hdf5_index"):
+        blosc2.open("memory://hdf5-index/other.zarr", lazy=True, hdf5_index=index)
+
+
 def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
     archive = tmp_path / "hierarchy.b2z"
     with blosc2.TreeStore(archive, mode="w", threshold=0) as root:
