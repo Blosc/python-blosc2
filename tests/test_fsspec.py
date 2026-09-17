@@ -793,13 +793,36 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
     with _ranged_server(tmp_path) as (urlbase, _requests):
         source = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "data")
         filesystem = source._filesystem
+        cached, _ = fsspec.core.url_to_fs(f"{urlbase}/{path.name}")
+        assert filesystem is not cached  # Sources own a private filesystem.
         session = filesystem._session
         assert not session.closed
         source.close()
         assert session.closed
-        # fsspec caches HTTP filesystems process-wide; drop the closed instance
-        # so later tests build a fresh session.
-        type(filesystem).clear_instance_cache()
+
+
+def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):
+    h5py = pytest.importorskip("h5py")
+    import blosc2.hdf5_source as hdf5_source
+
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "scanned.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    created = []
+    original = hdf5_source._filesystem_and_path
+
+    def tracking(urlpath, storage_options=None, filesystem=None):
+        fs, path = original(urlpath, storage_options, filesystem)
+        created.append(fs)
+        return fs, path
+
+    monkeypatch.setattr(hdf5_source, "_filesystem_and_path", tracking)
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        hdf5_source.scan_hdf5_index(f"{urlbase}/{path.name}")
+        assert created
+        assert created[0]._session is not None
+        assert created[0]._session.closed
 
 
 def test_http_store_disk_reopen_and_transport_close(tmp_path):

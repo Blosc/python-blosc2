@@ -162,7 +162,19 @@ def _filesystem_and_path(urlpath, storage_options=None, filesystem=None):
 
     if filesystem is not None:
         return filesystem, filesystem._strip_protocol(urlpath)
-    return fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+    # Owned filesystems must never be the process-wide fsspec instance: closing
+    # one source's session must not invalidate another source for the same URL.
+    options = dict(storage_options or {})
+    options.setdefault("skip_instance_cache", True)
+    return fsspec.core.url_to_fs(urlpath, **options)
+
+
+def _close_owned_filesystem(filesystem):
+    """Release the async session of an fsspec filesystem this code created."""
+    close = getattr(filesystem, "close_session", None)
+    session = getattr(filesystem, "_s3creator", None) or getattr(filesystem, "_session", None)
+    if close is not None and session is not None:
+        close(filesystem.loop, session)
 
 
 def _dataset_metadata(dataset):
@@ -211,36 +223,40 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
 
     fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
     groups, datasets = {"": {"attrs": {}}}, {}
-    with fs.open(path, "rb", block_size=1, cache_type="none") as raw:
-        fileobj = _CountingFile(raw, traffic) if traffic is not None else raw
-        with h5py.File(fileobj, "r") as h5file:
-            groups[""]["attrs"] = {key: _json_value(value) for key, value in h5file.attrs.items()}
+    try:
+        with fs.open(path, "rb", block_size=1, cache_type="none") as raw:
+            fileobj = _CountingFile(raw, traffic) if traffic is not None else raw
+            with h5py.File(fileobj, "r") as h5file:
+                groups[""]["attrs"] = {key: _json_value(value) for key, value in h5file.attrs.items()}
 
-            def visit(name, obj):
-                try:
-                    if isinstance(obj, h5py.Group):
-                        groups[name] = {
-                            "attrs": {key: _json_value(value) for key, value in obj.attrs.items()}
-                        }
-                    elif isinstance(obj, h5py.Dataset):
-                        if obj.is_virtual:
-                            raise TypeError("HDF5 virtual datasets are not supported")
-                        if obj.external:
-                            raise TypeError("HDF5 externally stored datasets are not supported")
-                        if obj.shape is None:
-                            raise TypeError("HDF5 null datasets are not supported")
-                        dtype = np.dtype(obj.dtype)
-                        if dtype.hasobject or dtype.itemsize == 0:
-                            raise TypeError(f"HDF5NDSource only supports fixed-size dtypes, got {dtype}")
-                        datasets[name] = _dataset_metadata(obj)
-                except Exception as exc:
-                    if unsupported is None:
-                        raise
-                    unsupported[name] = f"{type(exc).__name__}: {exc}"
+                def visit(name, obj):
+                    try:
+                        if isinstance(obj, h5py.Group):
+                            groups[name] = {
+                                "attrs": {key: _json_value(value) for key, value in obj.attrs.items()}
+                            }
+                        elif isinstance(obj, h5py.Dataset):
+                            if obj.is_virtual:
+                                raise TypeError("HDF5 virtual datasets are not supported")
+                            if obj.external:
+                                raise TypeError("HDF5 externally stored datasets are not supported")
+                            if obj.shape is None:
+                                raise TypeError("HDF5 null datasets are not supported")
+                            dtype = np.dtype(obj.dtype)
+                            if dtype.hasobject or dtype.itemsize == 0:
+                                raise TypeError(f"HDF5NDSource only supports fixed-size dtypes, got {dtype}")
+                            datasets[name] = _dataset_metadata(obj)
+                    except Exception as exc:
+                        if unsupported is None:
+                            raise
+                        unsupported[name] = f"{type(exc).__name__}: {exc}"
 
-            h5file.visititems(visit)
-    with contextlib.suppress(Exception):
-        size = int(fs.info(path)["size"])
+                h5file.visititems(visit)
+        with contextlib.suppress(Exception):
+            size = int(fs.info(path)["size"])
+    finally:
+        if _filesystem is None:
+            _close_owned_filesystem(fs)
     if "size" not in locals():
         size = None
     return {
@@ -684,10 +700,7 @@ class HDF5NDSource(ProxyNDSource):
             if filesystem is not None and self._external_filesystem is None:
                 # fsspec's HTTP and S3 clients keep an async session alive after
                 # the file objects it feeds are gone.
-                close = getattr(filesystem, "close_session", None)
-                session = getattr(filesystem, "_s3creator", None) or getattr(filesystem, "_session", None)
-                if close is not None and session is not None:
-                    close(filesystem.loop, session)
+                _close_owned_filesystem(filesystem)
                 self._filesystem = None
 
     shape = property(lambda self: self._shape)
