@@ -490,7 +490,7 @@ def test_optional_dependencies():
 import builtins
 original = builtins.__import__
 def blocked(name, *args, **kwargs):
-    if name.split('.')[0] in {'zarr', 'kerchunk', 'h5py', 'hdf5plugin'}:
+    if name.split('.')[0] in {'zarr', 'h5py', 'hdf5plugin'}:
         raise ImportError('blocked optional dependency')
     return original(name, *args, **kwargs)
 builtins.__import__ = blocked

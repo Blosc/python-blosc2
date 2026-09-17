@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import shutil
 import tempfile
@@ -171,33 +170,24 @@ class RemoteDiscovery:
                 _filesystem=self.filesystem,
             )
         elif self.format == "hdf5":
-            self.refs = self.metadata
-            self._validate_refs()
+            self.hdf5_index = self.metadata
+            self._validate_hdf5_index()
         elif self.format == "zarr" and self.zstore is None:
             self._open_zarr()
         self._check_node_limit()
 
-    def _validate_refs(self):
-        refs = self.refs.get("refs", self.refs)
-        if not isinstance(refs, dict) or self.refs.get("templates"):
-            raise ValueError("Invalid HDF5 manifest references")
-        for value in refs.values():
-            if isinstance(value, list):
-                if (
-                    len(value) != 3
-                    or value[0] != self.urlpath
-                    or any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in value[1:])
-                ):
-                    raise ValueError("HDF5 manifest contains an unsafe reference")
-                validate_persistable_url(value[0])
+    def _validate_hdf5_index(self):
+        from blosc2.hdf5_source import validate_hdf5_index
+
+        validate_hdf5_index(self.hdf5_index, self.urlpath)
 
     def save_manifest(self):
         if self.disk is None or self.restoring or not self.is_mutable:
             return
         # ponytail: publish whole discovery snapshots; add dirty tracking if large maps make this costly.
         if self.format == "hdf5":
-            self._validate_refs()
-            self.metadata = self.refs
+            self._validate_hdf5_index()
+            self.metadata = self.hdf5_index
         elif self.format == "b2z":
             self.metadata = self.archive.metadata
         nodes = {
@@ -369,30 +359,30 @@ class RemoteDiscovery:
         self.archive.capture_metadata = False
 
     def _open_hdf5(self):
-        from blosc2.hdf5_source import scan_hdf5_refs
+        from blosc2.hdf5_source import decode_hdf5_value, scan_hdf5_index
 
         unsupported = {}
-        self.refs = scan_hdf5_refs(
+        self.hdf5_index = scan_hdf5_index(
             self.urlpath,
             self.storage_options,
             unsupported=unsupported,
             traffic=self.traffic,
             _filesystem=self.filesystem,
         )
-        refs = self.refs.get("refs", self.refs)
-        for key, value in refs.items():
-            name = key.rsplit("/", 1)[-1]
-            path = key.rpartition("/")[0]
-            if name in {".zgroup", ".zarray"}:
-                self._add(path, "group" if name == ".zgroup" else "ndarray", json.loads(value))
-            elif name == ".zattrs":
-                self.attrs[path] = {k: v for k, v in json.loads(value).items() if k != "_ARRAY_DIMENSIONS"}
+        for path, metadata in self.hdf5_index["groups"].items():
+            self._add(path, "group")
+            self.attrs[path] = {
+                key: decode_hdf5_value(value) for key, value in metadata.get("attrs", {}).items()
+            }
+        for path, metadata in self.hdf5_index["datasets"].items():
+            self._add(path, "ndarray", metadata)
+            self.attrs[path] = {
+                key: decode_hdf5_value(value) for key, value in metadata.get("attrs", {}).items()
+            }
         for path, message in unsupported.items():
             self._validate(path)
             self.nodes[path] = ("unsupported", message)
-        self.notice = (
-            "HDF5 view includes objects represented by Kerchunk; external and group links are omitted."
-        )
+        self.notice = "HDF5 view includes indexed groups and datasets; external and soft links are omitted."
 
     def _open_zarr(self):
         import zarr
@@ -518,7 +508,7 @@ class RemoteDiscovery:
             source = HDF5NDSource(
                 self.urlpath,
                 full,
-                refs=self.refs,
+                hdf5_index=self.hdf5_index,
                 storage_options=self.storage_options,
                 _traffic=self.traffic,
                 _filesystem=self.filesystem,
@@ -660,13 +650,13 @@ class RemoteDiscovery:
             self.zstore.close()
         for source in self.sources.values():
             if isinstance(source, blosc2.HDF5NDSource):
-                source.array.store.close()
+                source.close()
         self.sources.clear()
         self.caches.clear()
         self.nodes.clear()
         self.attrs.clear()
         self.listed.clear()
-        self.refs = None
+        self.hdf5_index = None
         if self.filesystem is not None and self._external_filesystem is None:
             # fsspec's HTTP and S3 clients expose their own synchronous close hook.
             close = getattr(self.filesystem, "close_session", None)
@@ -1174,8 +1164,8 @@ class RemoteStore:
                     )
 
             if self._owner.format == "hdf5":
-                self._owner._validate_refs()
-                metadata = self._owner.refs
+                self._owner._validate_hdf5_index()
+                metadata = self._owner.hdf5_index
             elif self._owner.format == "b2z":
                 metadata = self._owner.archive.metadata
             else:

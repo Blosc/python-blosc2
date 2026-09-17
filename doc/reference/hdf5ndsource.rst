@@ -4,16 +4,17 @@ HDF5NDSource
 ============
 
 ``HDF5NDSource`` exposes an HDF5 dataset through :ref:`ProxyNDSource`.
-Local files use ``h5py`` directly, without scanning the file with ``kerchunk``.
-Remote files and explicit ``refs=`` inputs use ``kerchunk`` reference maps.
+Local files use ``h5py`` directly. Remote files are scanned once with ``h5py``
+to build a native byte-range index, which can also be supplied through ``hdf5_index=``.
 Individual chunks are fetched on demand
 and converted to Blosc2-compressed chunks stored in the surrounding
 :ref:`Proxy` or :ref:`RemoteArray` cache.
 
 The source is assumed immutable (``assume_immutable=True``). It supports fixed-size
 boolean, integer, floating-point, complex, and fixed-length string arrays.
-HDF5 filters such as Blosc2 (via ``hdf5plugin``), gzip, and uncompressed datasets
-are supported.
+Uncompressed, gzip/deflate, shuffle, and Blosc2 chunks use direct range reads.
+Other filter pipelines fall back to retained ``h5py`` dataset reads;
+``hdf5plugin`` enables its additional registered filters.
 
 Local reads require ``h5py``; ``hdf5plugin`` enables additional HDF5 filters.
 Install the full HDF5 support with ``pip install "blosc2[hdf5]"``. Remote datasets also

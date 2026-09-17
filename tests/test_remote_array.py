@@ -873,7 +873,7 @@ def test_persistence_rejects_credentials_and_chained_urls(url):
 @pytest.mark.parametrize(
     "url", ["https://example.org/data.b2nd?token=secret", "https://user@example.org/data.b2nd"]
 )
-def test_fsspec_refs_reject_credentials(url):
+def test_fsspec_references_reject_credentials(url):
     with pytest.raises(ValueError):
         blosc2.Ref.fsspec_ref(url)
 
@@ -1468,6 +1468,11 @@ def test_remote_array_metadata_complex_and_containers():
         "np_float": np.float32(3.14),
         "np_complex": np.complex128(2.0 + 3.0j),
         "np_bool": np.bool_(True),
+        "np_array": np.arange(6, dtype="i8").reshape(2, 3),
+        "np_object": np.array(["alpha", "beta"], dtype=object),
+        "np_object_nested": np.array([np.arange(2), {"a"}, np.int64(7), 2 + 3j], dtype=object),
+        "np_struct": np.array([(1, (0.5, 1.5))], dtype=[("value", "<i4"), ("point", "<f4", (2,))]),
+        "np_titled": np.array([(1,)], dtype=[(("title", "value"), "<i4")]),
     }
     unpacked = msgpack_unpackb(msgpack_packb(payload))
     assert unpacked["attr0"] is True
@@ -1485,6 +1490,19 @@ def test_remote_array_metadata_complex_and_containers():
     assert isinstance(unpacked["attr9"], set)
     assert unpacked["np_int"] == 42
     assert unpacked["np_bool"] is True
+    np.testing.assert_array_equal(unpacked["np_array"], np.arange(6, dtype="i8").reshape(2, 3))
+    np.testing.assert_array_equal(unpacked["np_object"], np.array(["alpha", "beta"], dtype=object))
+    nested = unpacked["np_object_nested"]
+    assert nested.dtype == object
+    assert nested.shape == (4,)
+    np.testing.assert_array_equal(nested[0], np.arange(2))
+    assert nested[1] == {"a"}
+    assert nested[2] == 7
+    assert nested[3] == 2 + 3j
+    assert unpacked["np_struct"].dtype == np.dtype([("value", "<i4"), ("point", "<f4", (2,))])
+    assert unpacked["np_struct"]["point"].tolist() == [[0.5, 1.5]]
+    assert unpacked["np_titled"].dtype == np.dtype([(("title", "value"), "<i4")])
+    assert unpacked["np_titled"]["value"][0] == 1
 
     # Test via RemoteArray and trailer vlmeta
     data = np.arange(10, dtype=np.int32)
@@ -1500,6 +1518,7 @@ def test_remote_array_metadata_complex_and_containers():
         ("attr7", (4, 5, 6)),
         ("attr8", {"key": "val_8", "index": 8}),
         ("attr9", {7, 8, 9}),
+        ("np_array", np.arange(3, dtype="i8")),
     ]:
         arr.vlmeta[k] = v
 
@@ -1520,6 +1539,7 @@ def test_remote_array_metadata_complex_and_containers():
     assert proxy.vlmeta["attr8"] == {"key": "val_8", "index": 8}
     assert proxy.vlmeta["attr9"] == {7, 8, 9}
     assert isinstance(proxy.vlmeta["attr9"], set)
+    np.testing.assert_array_equal(proxy.vlmeta["np_array"], np.arange(3, dtype="i8"))
 
 
 def test_disk_cache_dir_includes_storage_options(tmp_path):
@@ -1553,6 +1573,37 @@ def test_disk_cache_dir_reuses_same_storage_options(tmp_path):
         np.testing.assert_array_equal(array[:], data)
 
     assert len(list(cache.glob("*/*.b2nd"))) == 1
+
+
+def test_standalone_non_hdf5_close_keeps_handle_usable():
+    data = np.arange(10, dtype="i4")
+    arr = blosc2.asarray(data)
+    fsspec.filesystem("memory").pipe_file("close-noop.b2nd", arr.to_cframe())
+
+    proxy = blosc2.RemoteArray("memory://close-noop.b2nd")
+    np.testing.assert_array_equal(proxy[:], data)
+    proxy.close()
+    np.testing.assert_array_equal(proxy[:], data)
+
+
+def test_remote_array_hdf5_index_selects_hdf5(tmp_path):
+    h5py = pytest.importorskip("h5py")
+
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    data = np.arange(10, dtype="i4")
+    path = tmp_path / "indexed.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(5,))
+    url = "memory://direct-index/container"
+    fsspec.filesystem("memory").pipe_file("direct-index/container", path.read_bytes())
+    index = scan_hdf5_index(url)
+
+    proxy = blosc2.RemoteArray(url, dataset="data", hdf5_index=index)
+    np.testing.assert_array_equal(proxy[:], data)
+
+    with pytest.raises(ValueError, match="hdf5_index"):
+        blosc2.RemoteArray("memory://direct-index/other.zarr", dataset="data", hdf5_index=index)
 
 
 def test_readable_cache_paths(tmp_path):

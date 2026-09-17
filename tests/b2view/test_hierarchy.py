@@ -126,7 +126,8 @@ def test_zarr_hierarchy(version, consolidated):
 
 def test_hdf5_hierarchy(tmp_path, monkeypatch):
     h5py = pytest.importorskip("h5py")
-    kerchunk = pytest.importorskip("kerchunk.hdf")
+    import blosc2.hdf5_source as hdf5_source
+
     path = tmp_path / "hierarchy.h5"
     data = np.arange(600).reshape(30, 20)
     with h5py.File(path, "w") as root:
@@ -139,13 +140,13 @@ def test_hdf5_hierarchy(tmp_path, monkeypatch):
     url = "memory://v12/hierarchy.h5"
     fsspec.filesystem("memory").pipe_file(url, path.read_bytes())
     calls = []
-    translate = kerchunk.SingleHdf5ToZarr.translate
+    scan = hdf5_source.scan_hdf5_index
 
-    def counted(self, *args, **kwargs):
+    def counted(*args, **kwargs):
         calls.append(1)
-        return translate(self, *args, **kwargs)
+        return scan(*args, **kwargs)
 
-    monkeypatch.setattr(kerchunk.SingleHdf5ToZarr, "translate", counted)
+    monkeypatch.setattr(hdf5_source, "scan_hdf5_index", counted)
     with StoreBrowser(url) as browser:
         assert browser.get_info("/").user_attrs == {"title": "root"}
         assert browser.get_info("/group").user_attrs == {"title": "child"}
@@ -313,7 +314,6 @@ def test_zarr_discovery_reads_no_chunks_and_isolates_codec(monkeypatch):
 
 def test_hdf5_unsupported_and_links(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("kerchunk")
     path = tmp_path / "links.h5"
     with h5py.File(path, "w") as file:
         file.create_dataset("a", data=np.arange(10))
@@ -332,7 +332,7 @@ def test_hdf5_unsupported_and_links(tmp_path):
         assert children["empty"] == "group"
         assert "external" not in children
         assert "cycle" not in children
-        assert "Kerchunk" in browser.get_info("/").metadata["notice"]
+        assert "indexed groups" in browser.get_info("/").metadata["notice"]
         np.testing.assert_array_equal(browser.preview("/a", start=0, stop=3)["data"]["value"], np.arange(3))
 
 
@@ -426,7 +426,6 @@ def test_group_decoder_fresh_process(tmp_path, format):
     else:
         h5py = pytest.importorskip("h5py")
         plugin = pytest.importorskip("hdf5plugin")
-        pytest.importorskip("kerchunk")
         with h5py.File(path, "w") as file:
             file.create_dataset("a", data=np.arange(100, dtype="i4"), chunks=(20,), **plugin.Blosc())
     script = """
@@ -474,7 +473,7 @@ import importlib.abc
 import sys
 class BlockOptional(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'zarr', 'h5py', 'kerchunk'}:
+        if fullname.split('.')[0] in {'zarr', 'h5py'}:
             raise ImportError('optional dependency intentionally unavailable')
 sys.meta_path.insert(0, BlockOptional())
 from pathlib import Path

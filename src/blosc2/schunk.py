@@ -1909,18 +1909,18 @@ def _reconstruct_legacy_proxy(proxy_cache, proxy_src):
         )
         return blosc2.Proxy(src, _cache=proxy_cache, _refresh_source=False)
     if source_kind == "hdf5":
-        refs = None
-        raw_refs = getattr(proxy_cache, "schunk", proxy_cache).vlmeta.get("hdf5-refs")
-        if raw_refs is not None:
+        hdf5_index = None
+        raw_index = getattr(proxy_cache, "schunk", proxy_cache).vlmeta.get("hdf5-index")
+        if raw_index is not None:
             try:
                 import ujson as json_mod
             except ImportError:
                 import json as json_mod
-            refs = json_mod.loads(blosc2.decompress(raw_refs).decode("utf-8"))
+            hdf5_index = json_mod.loads(blosc2.decompress(raw_index).decode("utf-8"))
         src = blosc2.HDF5NDSource(
             proxy_src["urlpath"],
             proxy_src["dataset"],
-            refs=refs,
+            hdf5_index=hdf5_index,
             blocks=proxy_cache.blocks,
             cparams=proxy_cache.cparams,
         )
@@ -2069,7 +2069,7 @@ def _remote_array_options(
     source_format=None,
     assume_immutable=True,
     dataset=None,
-    refs=None,
+    hdf5_index=None,
 ):
     """Return the explicit RemoteArray options, or None when remote access was not requested."""
     policy_present = "cache_policy" in kwargs
@@ -2100,16 +2100,16 @@ def _remote_array_options(
         options["source_format"] = source_format
     if dataset is not None:
         options["dataset"] = dataset
-    if refs is not None:
-        options["refs"] = refs
+    if hdf5_index is not None:
+        options["hdf5_index"] = hdf5_index
     return options
 
 
 def _validate_c2_urlpath_options(kwargs: dict):
     if kwargs.pop("dataset", None) is not None:
         raise ValueError("dataset is not supported for Caterva2 inputs")
-    if kwargs.pop("refs", None) is not None:
-        raise ValueError("refs is not supported for Caterva2 inputs")
+    if kwargs.pop("hdf5_index", None) is not None:
+        raise ValueError("hdf5_index is not supported for Caterva2 inputs")
     source_format = kwargs.pop("source_format", None)
     if source_format not in {None, "blosc2", "zarr", "hdf5"}:
         raise ValueError("source_format must be None, 'blosc2', 'zarr', or 'hdf5'")
@@ -2184,7 +2184,7 @@ def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, c
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
 
 
-def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, refs):
+def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, hdf5_index):
     """Dispatch an already-localized fsspec container with its original selection."""
     if source_format == "b2z":
         # The localized archive is a plain local TreeStore now, and an
@@ -2192,8 +2192,8 @@ def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, datas
         from blosc2.tree_store import TreeStore
 
         return _open_treestore_root_object(TreeStore(localized, mode=mode), localized, mode)
-    if dataset is not None or refs is not None:
-        raise NotImplementedError("dataset and refs are only supported with lazy=True")
+    if dataset is not None or hdf5_index is not None:
+        raise NotImplementedError("dataset and hdf5_index are only supported with lazy=True")
     return open(localized, mode, offset, **kwargs)
 
 
@@ -2216,6 +2216,20 @@ def _resolve_lazy(lazy, dataset, source_format, urlpath):
     return _infer_lazy(False, dataset, source_format, urlpath) if lazy is None else lazy
 
 
+def _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index):
+    """Infer the container format; an explicit HDF5 index forces HDF5."""
+    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
+    if dataset is None:
+        dataset = parsed_dataset
+    if source_format is None:
+        source_format = detected_format
+    if hdf5_index is not None:
+        if source_format not in {None, "hdf5"}:
+            raise ValueError("hdf5_index is only supported for HDF5 sources")
+        source_format = "hdf5"
+    return urlpath, dataset, source_format
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2232,22 +2246,20 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     storage_options = kwargs.pop("storage_options", None)
     source_format = kwargs.pop("source_format", None)
     dataset = kwargs.pop("dataset", None)
-    refs = kwargs.pop("refs", None)
+    hdf5_index = kwargs.pop("hdf5_index", None)
     max_concurrency = kwargs.pop("max_concurrency", None)
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
     lazy = kwargs.pop("lazy", None)
 
-    urlpath, parsed_dataset, detected_format = parse_container_url(urlpath, dataset)
-    if dataset is None:
-        dataset = parsed_dataset
-    if source_format is None:
-        source_format = detected_format
+    urlpath, dataset, source_format = _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index)
 
     # Local-file options require a complete local copy; cache placement alone
     # does not choose between lazy access and eager localization.
     if lazy is None and (offset != 0 or kwargs.get("mmap_mode") is not None):
         lazy = False
+    if lazy is False and hdf5_index is not None:
+        raise NotImplementedError("hdf5_index is only supported with lazy=True")
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
 
@@ -2262,7 +2274,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         source_format=source_format,
         assume_immutable=assume_immutable,
         dataset=dataset,
-        refs=refs,
+        hdf5_index=hdf5_index,
     )
     if lazy:
         if offset != 0:
@@ -2276,7 +2288,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     if cache_dir is not None:
         localized = localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options)
-        return _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, refs)
+        return _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, hdf5_index)
 
     if source_format == "b2z":
         raise NotImplementedError(
@@ -2300,7 +2312,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
 
 def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
-    if kwargs.get("source_format") == "hdf5" or "refs" in kwargs:
+    if kwargs.get("source_format") == "hdf5" or "hdf5_index" in kwargs:
         return True
     if not isinstance(urlpath, str):
         return False
@@ -2311,7 +2323,7 @@ def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
 def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
     if os.path.isfile(urlpath) and urlpath.endswith((".b2nd", ".b2frame")) and "dataset" not in kwargs:
         return False
-    if kwargs.get("source_format") in {"hdf5", "zarr"} or "refs" in kwargs:
+    if kwargs.get("source_format") in {"hdf5", "zarr"} or "hdf5_index" in kwargs:
         return True
     if not isinstance(urlpath, str):
         return False
@@ -2342,11 +2354,11 @@ def _try_open_aliased_store(urlpath: str, mode: str, offset: int, kwargs: dict):
     return special, special_path
 
 
-def _normalize_open_target(urlpath, kwargs, dataset, refs):
+def _normalize_open_target(urlpath, kwargs, dataset, hdf5_index):
     if dataset is not None:
         kwargs["dataset"] = dataset
-    if refs is not None:
-        kwargs["refs"] = refs
+    if hdf5_index is not None:
+        kwargs["hdf5_index"] = hdf5_index
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
     urlpath = normalize_urlpath(urlpath)
@@ -2370,7 +2382,7 @@ def open(
     mode: str = "r",
     offset: int = 0,
     dataset: str | None = None,
-    refs: dict | str | os.PathLike | None = None,
+    hdf5_index: dict | str | os.PathLike | None = None,
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2498,9 +2510,8 @@ def open(
             Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
             B2Z supports external NDArray leaves in immutable archives.
             Requires ``lazy=True``.
-        refs: dict | str | PathLike, optional
-            Pre-computed kerchunk reference dictionary or path to a JSON reference
-            file for HDF5 sources.
+        hdf5_index: dict | str | PathLike, optional
+            Pre-computed native HDF5 index or path to a JSON index file.
         source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
@@ -2521,9 +2532,11 @@ def open(
     -----
     * Returned objects can be used as context managers for API consistency.
       For objects with an explicit ``close()`` implementation, exiting the
-      context will close/flush them; for logical handles such as regular
-      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, standalone :class:`RemoteArray`,
-      :class:`Proxy`, and :class:`LazyArray`, exiting the context is currently a
+      context will close/flush them. Standalone HDF5 :class:`RemoteArray`
+      handles close their HDF5 source, so the handle rejects further reads.
+      Other logical handles such as regular :class:`SChunk`, :class:`NDArray`,
+      :class:`C2Array`, standalone non-HDF5 :class:`RemoteArray`,
+      :class:`Proxy`, and :class:`LazyArray` currently treat context exit as a
       no-op.
       Store-derived :class:`RemoteArray` handles release their shared source
       ownership when closed; other handles from that store remain usable.
@@ -2607,12 +2620,12 @@ def open(
     if offset != 0 and not is_fsspec_url(urlpath):
         local_path = normalize_urlpath(os.fspath(urlpath))
         if os.path.isfile(local_path):
-            if dataset is not None or refs is not None:
-                raise ValueError("dataset and refs cannot be combined with an embedded frame offset")
+            if dataset is not None or hdf5_index is not None:
+                raise ValueError("dataset and hdf5_index cannot be combined with an embedded frame offset")
             _set_default_dparams(kwargs)
             return process_opened_object(blosc2_ext.open(local_path, mode, offset, **kwargs))
 
-    urlpath = _normalize_open_target(urlpath, kwargs, dataset, refs)
+    urlpath = _normalize_open_target(urlpath, kwargs, dataset, hdf5_index)
 
     if is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)

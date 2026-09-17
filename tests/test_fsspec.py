@@ -8,6 +8,7 @@
 
 import contextlib
 import functools
+import gc
 import hashlib
 import http.server
 import os
@@ -770,8 +771,6 @@ def _ranged_server(root):
 
 def test_http_hdf5_scan_and_warm_slice(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("kerchunk")
-    pytest.importorskip("zarr")
     data = np.arange(10_000, dtype="int32")
     path = tmp_path / "seekable.h5"
     with h5py.File(path, "w") as file:
@@ -786,10 +785,108 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
         assert len(requests) == count
 
 
+def test_http_hdf5_source_close_closes_session(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "standalone.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+        file.create_dataset("sparse", shape=(100,), chunks=(10,), dtype="int32")
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        source = blosc2.HDF5NDSource(
+            f"{urlbase}/{path.name}",
+            "data",
+            storage_options={"skip_instance_cache": False},
+        )
+        filesystem = source._filesystem
+        cached, _ = fsspec.core.url_to_fs(f"{urlbase}/{path.name}")
+        assert filesystem is not cached  # Sources own a private filesystem.
+        session = filesystem._session
+        assert not session.closed
+        source.close()
+        assert session.closed
+        with pytest.raises(RuntimeError, match="closed"):
+            source.get_chunk(0)
+        # Sparse fill chunks obey the same closed contract as allocated chunks.
+        sparse = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "sparse")
+        assert sparse._metadata["direct"] is True
+        sparse.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            sparse.get_chunk(0)
+
+
+def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):
+    h5py = pytest.importorskip("h5py")
+    import blosc2.hdf5_source as hdf5_source
+
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "scanned.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    created = []
+    original = hdf5_source._filesystem_and_path
+
+    def tracking(urlpath, storage_options=None, filesystem=None):
+        fs, path = original(urlpath, storage_options, filesystem)
+        created.append(fs)
+        return fs, path
+
+    monkeypatch.setattr(hdf5_source, "_filesystem_and_path", tracking)
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        hdf5_source.scan_hdf5_index(f"{urlbase}/{path.name}")
+        assert created
+        assert created[0]._session is not None
+        assert created[0]._session.closed
+
+
+def test_http_hdf5_failed_init_closes_owned_session(tmp_path, monkeypatch):
+    h5py = pytest.importorskip("h5py")
+    import blosc2.hdf5_source as hdf5_source
+
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "failed-init.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    created = []
+    original = hdf5_source._filesystem_and_path
+
+    def tracking(urlpath, storage_options=None, filesystem=None):
+        fs, path = original(urlpath, storage_options, filesystem)
+        if filesystem is None:  # record only filesystems created by the source
+            created.append(fs)
+        return fs, path
+
+    monkeypatch.setattr(hdf5_source, "_filesystem_and_path", tracking)
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        url = f"{urlbase}/{path.name}"
+        with pytest.raises(ValueError, match="Invalid HDF5 index"):
+            blosc2.HDF5NDSource(url, "data", hdf5_index={"format": "bad"})
+        with pytest.raises(ValueError, match="not found"):
+            blosc2.HDF5NDSource(url, "missing")
+        assert len(created) == 2
+        assert all(fs._session is None or fs._session.closed for fs in created)
+        # The scan in the second attempt did open a session, and it must be closed.
+        assert created[1]._session is not None
+        assert created[1]._session.closed
+
+
+def test_http_hdf5_source_finalizer_closes_session(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    data = np.arange(10_000, dtype="int32")
+    path = tmp_path / "finalizer.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(1000,))
+    with _ranged_server(tmp_path) as (urlbase, _requests):
+        source = blosc2.HDF5NDSource(f"{urlbase}/{path.name}", "data")
+        session = source._filesystem._session
+        assert not session.closed
+        del source
+        gc.collect()
+        assert session.closed
+
+
 def test_http_store_disk_reopen_and_transport_close(tmp_path):
     h5py = pytest.importorskip("h5py")
-    pytest.importorskip("kerchunk")
-    pytest.importorskip("zarr")
     data = np.arange(10_000, dtype="int32")
     path = tmp_path / "store.h5"
     with h5py.File(path, "w") as file:
@@ -1573,6 +1670,26 @@ def test_fsspec_ndsource_and_remote_array_storage_options():
     assert np.array_equal(proxy[:], a[:])
 
 
+def test_fsspec_hdf5_index_selects_hdf5_without_suffix(tmp_path):
+    import h5py
+
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    path = tmp_path / "indexed.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=np.arange(10, dtype="i4"), chunks=(5,))
+    fsspec.filesystem("memory").pipe_file("hdf5-index/container", path.read_bytes())
+    url = "memory://hdf5-index/container"
+    index = scan_hdf5_index(url)
+
+    proxy = blosc2.open(url, dataset="data", hdf5_index=index)
+    assert isinstance(proxy, blosc2.RemoteArray)
+    np.testing.assert_array_equal(proxy[:], np.arange(10, dtype="i4"))
+
+    with pytest.raises(ValueError, match="hdf5_index"):
+        blosc2.open("memory://hdf5-index/other.zarr", lazy=True, hdf5_index=index)
+
+
 def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
     archive = tmp_path / "hierarchy.b2z"
     with blosc2.TreeStore(archive, mode="w", threshold=0) as root:
@@ -1587,9 +1704,23 @@ def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
     np.testing.assert_array_equal(store["/group/a"][:], np.arange(10, dtype="i4"))
 
 
-def test_non_lazy_cache_dir_rejects_refs(tmp_path):
-    fsspec.filesystem("memory").pipe_file("nonlazy-refs/data", b"whatever")
-    with pytest.raises(NotImplementedError, match="refs"):
+def test_non_lazy_cache_dir_rejects_hdf5_index(tmp_path):
+    fsspec.filesystem("memory").pipe_file("nonlazy-index/data", b"whatever")
+    with pytest.raises(NotImplementedError, match="hdf5_index"):
         blosc2.open(
-            "memory://nonlazy-refs/data", lazy=False, cache_dir=tmp_path / "cache", refs={"refs": {}}
+            "memory://nonlazy-index/data",
+            lazy=False,
+            cache_dir=tmp_path / "cache",
+            hdf5_index={"format": "invalid"},
         )
+    # The rejection must not depend on the cache options that follow it.
+    with pytest.raises(NotImplementedError, match="hdf5_index"):
+        blosc2.open(
+            "memory://nonlazy-index/data",
+            lazy=False,
+            cache_dir=tmp_path / "cache",
+            cache_policy=blosc2.CachePolicy.DISK,
+            hdf5_index={"format": "invalid"},
+        )
+    with pytest.raises(NotImplementedError, match="hdf5_index"):
+        blosc2.open("memory://nonlazy-index/data", lazy=False, hdf5_index={"format": "invalid"})
