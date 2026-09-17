@@ -449,11 +449,15 @@ class HDF5NDSource(ProxyNDSource):
         self._fallback_h5 = self._fallback_file = None
         remote = bool(urlsplit(urlpath).scheme)
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
-        self._local = (not remote or os.path.isabs(urlpath)) and hdf5_index is None and _filesystem is None
+        self._local = (not remote or os.path.isabs(urlpath)) and _filesystem is None
         self._hdf5_index = None
         if self._local:
             self._open_local()
             self._metadata = None
+            if hdf5_index is not None:
+                # Local reads stay on h5py; still validate and retain the explicit
+                # index so no remote-only dependency is needed to accept it.
+                self._hdf5_index = self._load_or_scan_index(hdf5_index)
             shape, physical_chunks, dtype = self.array.shape, self.array.chunks, self.array.dtype
         else:
             check_hdf5_dependencies()

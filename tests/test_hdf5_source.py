@@ -235,6 +235,28 @@ def test_local_hdf5_explicit_index(tmp_path):
     np.testing.assert_array_equal(proxy[:], data)
 
 
+def test_local_hdf5_explicit_index_without_fsspec(tmp_path, monkeypatch):
+    from blosc2.hdf5_source import scan_hdf5_index
+
+    path = tmp_path / "explicit-no-fsspec.h5"
+    data = np.arange(20, dtype=np.int32)
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=data, chunks=(5,))
+    hdf5_index = scan_hdf5_index(str(path))
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.split(".")[0] in {"zarr", "fsspec"}:
+            raise AssertionError(f"Local HDF5 must not import {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    proxy = blosc2.open(path, dataset="data", hdf5_index=hdf5_index)
+    assert proxy.src._hdf5_index is hdf5_index
+    np.testing.assert_array_equal(proxy[:], data)
+
+
 @pytest.mark.parametrize(
     ("dtype", "data"),
     [
