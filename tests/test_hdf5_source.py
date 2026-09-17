@@ -387,6 +387,9 @@ def test_hdf5_lzf_uses_reused_fallback():
     proxy.close()
     assert proxy.src._fallback_h5 is None
     assert proxy.src._fallback_file is None
+    proxy.close()  # Closing is idempotent.
+    with pytest.raises(RuntimeError, match="closed"):
+        proxy[:]
 
 
 def test_hdf5_plugin_filter_uses_fallback():

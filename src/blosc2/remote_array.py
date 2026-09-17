@@ -641,6 +641,7 @@ class RemoteArray(blosc2.Operand):
         self._expected_cparams = self.src.cparams
         self._refresh_lock = threading.Lock()
         self._operation_lock = threading.RLock()
+        self._closed = False
         self._proxy = None
         self._carrier = _carrier
         self._runtime_cache = _carrier if cache_policy is blosc2.CachePolicy.DISK else None
@@ -694,6 +695,8 @@ class RemoteArray(blosc2.Operand):
                 _store_b2z_seed(self._carrier, self.src._seed)
 
     def _check_open(self):
+        if getattr(self, "_closed", False):
+            raise RuntimeError("RemoteArray handle is closed")
         finalizer = getattr(self, "_store_finalizer", None)
         if finalizer is not None and not finalizer.alive:
             raise RuntimeError("RemoteArray handle is closed")
@@ -701,15 +704,25 @@ class RemoteArray(blosc2.Operand):
             raise RuntimeError("RemoteArray handle is stale; look it up again after refresh")
 
     def close(self):
-        """Release this handle and any HDF5 file resources it owns."""
+        """Release this handle and any HDF5 file resources it owns.
+
+        Closing is idempotent, and the handle rejects further operations.
+        """
+        if getattr(self, "_closed", False):
+            return
         owner = getattr(self, "_store_owner", None)
         if owner is not None:
             with owner.lock, self._operation_lock:
+                self._closed = True
                 self._store_finalizer()
                 self._proxy = None
                 self._runtime_cache = None
-        elif isinstance(getattr(self, "src", None), blosc2.HDF5NDSource):
-            self.src.close()
+        else:
+            with self._operation_lock:
+                # Serialize against in-flight reads before closing the source.
+                self._closed = True
+                if isinstance(getattr(self, "src", None), blosc2.HDF5NDSource):
+                    self.src.close()
 
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
