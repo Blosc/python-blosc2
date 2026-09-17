@@ -1575,6 +1575,17 @@ def test_disk_cache_dir_reuses_same_storage_options(tmp_path):
     assert len(list(cache.glob("*/*.b2nd"))) == 1
 
 
+def test_standalone_non_hdf5_close_keeps_handle_usable():
+    data = np.arange(10, dtype="i4")
+    arr = blosc2.asarray(data)
+    fsspec.filesystem("memory").pipe_file("close-noop.b2nd", arr.to_cframe())
+
+    proxy = blosc2.RemoteArray("memory://close-noop.b2nd")
+    np.testing.assert_array_equal(proxy[:], data)
+    proxy.close()
+    np.testing.assert_array_equal(proxy[:], data)
+
+
 def test_readable_cache_paths(tmp_path):
     import re
     from pathlib import Path

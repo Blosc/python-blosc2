@@ -710,7 +710,8 @@ class RemoteArray(blosc2.Operand):
     def close(self):
         """Release this handle and any HDF5 file resources it owns.
 
-        Closing is idempotent, and the handle rejects further operations.
+        Closing is idempotent. Standalone HDF5 handles reject further
+        operations; other standalone handles keep their no-op close behavior.
         """
         if getattr(self, "_closed", False):
             return
@@ -722,11 +723,12 @@ class RemoteArray(blosc2.Operand):
                 self._proxy = None
                 self._runtime_cache = None
         else:
-            with self._operation_lock:
-                # Serialize against in-flight reads before closing the source.
-                self._closed = True
-                if isinstance(getattr(self, "src", None), blosc2.HDF5NDSource):
-                    self.src.close()
+            hdf5_source = getattr(self, "src", None)
+            if isinstance(hdf5_source, blosc2.HDF5NDSource):
+                with self._operation_lock:
+                    # Serialize against in-flight reads before closing the source.
+                    self._closed = True
+                    hdf5_source.close()
 
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
