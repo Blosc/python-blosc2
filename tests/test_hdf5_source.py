@@ -487,6 +487,29 @@ def test_hdf5_lzf_uses_reused_fallback():
         proxy[:]
 
 
+def test_hdf5_fallback_preserves_transport_errors(monkeypatch):
+    url = make_memory_h5(
+        "fallback-transport.h5",
+        ds={"data": np.arange(20, dtype="i4"), "chunks": (10,), "compression": "lzf"},
+    )
+    proxy = blosc2.open(url, lazy=True, dataset="ds")
+    assert proxy.src._metadata["direct"] is False
+
+    def transport_error(*args, **kwargs):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(proxy.src, "_open_fallback", transport_error)
+    with pytest.raises(OSError, match="network unreachable"):
+        proxy[:]
+
+    def missing_filter(*args, **kwargs):
+        raise OSError("Can't read data (required filter 9999 is not registered)")
+
+    monkeypatch.setattr(proxy.src, "_open_fallback", missing_filter)
+    with pytest.raises(OSError, match="install hdf5plugin"):
+        proxy[:]
+
+
 def test_hdf5_plugin_filter_uses_fallback():
     plugin = pytest.importorskip("hdf5plugin")
     data = np.arange(105, dtype=np.int32).reshape(15, 7)

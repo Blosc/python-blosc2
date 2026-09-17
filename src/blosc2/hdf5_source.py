@@ -781,6 +781,9 @@ class HDF5NDSource(ProxyNDSource):
                 try:
                     values = self._open_fallback()[selection]
                 except OSError as exc:
+                    if "filter" not in str(exc).lower():
+                        # Transport, permission or corruption errors keep their cause.
+                        raise
                     filters = [item["id"] for item in self._metadata["filters"]]
                     raise OSError(
                         f"Cannot decode HDF5 dataset {self.dataset!r} with filters {filters}; "
