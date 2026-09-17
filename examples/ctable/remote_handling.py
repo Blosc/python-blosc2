@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Create or access a fixed-width, mask-nullable remote CTable."""
+"""Create or access a fixed-width, mask-nullable CTable over S3 or HTTP(S)."""
 
 import argparse
 import pprint
@@ -165,7 +165,7 @@ def access_table(args) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("url", nargs="?", help="Remote .b2z CTable URL")
+    parser.add_argument("url", nargs="?", help="Remote .b2z CTable URL (s3://, http://, or https://)")
     parser.add_argument("--write", type=Path, metavar="FILE", help="Create a local .b2z CTable instead")
     parser.add_argument("--rows", type=int, default=1_000_000)
     parser.add_argument("--batch-size", type=int, default=100_000)
