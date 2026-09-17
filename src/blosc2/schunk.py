@@ -2251,6 +2251,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
 
+    if not lazy and hdf5_index is not None:
+        raise NotImplementedError("hdf5_index is only supported with lazy=True")
+
     _validate_fsspec_lazy_options(urlpath, source_format, dataset, lazy)
     remote_array_options = _remote_array_options(
         kwargs,

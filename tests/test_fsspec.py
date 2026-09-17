@@ -1635,3 +1635,14 @@ def test_non_lazy_cache_dir_rejects_hdf5_index(tmp_path):
             cache_dir=tmp_path / "cache",
             hdf5_index={"format": "invalid"},
         )
+    # The rejection must not depend on the cache options that follow it.
+    with pytest.raises(NotImplementedError, match="hdf5_index"):
+        blosc2.open(
+            "memory://nonlazy-index/data",
+            lazy=False,
+            cache_dir=tmp_path / "cache",
+            cache_policy=blosc2.CachePolicy.DISK,
+            hdf5_index={"format": "invalid"},
+        )
+    with pytest.raises(NotImplementedError, match="hdf5_index"):
+        blosc2.open("memory://nonlazy-index/data", lazy=False, hdf5_index={"format": "invalid"})
