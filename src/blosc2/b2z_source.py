@@ -439,6 +439,58 @@ class B2ZNDSource(ByteRangeNDSource):
         return self._read_archive(self.member_offset + offset, size)
 
 
+class B2ZBatchSource:
+    """Internal byte-range source for one external BatchArray member."""
+
+    def __init__(self, archive, dataset):
+        from blosc2.proxy_source import (
+            _chunk_extents,
+            _read_frame_header,
+            _read_frame_metalayers,
+            _read_frame_offsets,
+        )
+
+        self.archive = archive
+        self.dataset = dataset.strip("/")
+        matches = [info for info in archive.members if info.filename == self.dataset + ".b2b"]
+        if len(matches) != 1:
+            raise NotImplementedError(f"Remote CTable batch member {self.dataset!r} is unavailable")
+        self.info = matches[0]
+        self.member_offset, self.member_length = archive.member_window(self.info, prefetch=True)
+        prefix_start, prefix = archive._opening_ranges[-1]
+        start = self.member_offset - prefix_start
+        head = prefix[start:] if 0 <= start < len(prefix) else None
+        raw, self.header, head = _read_frame_header(self.read_range, head=head)
+        if not len(raw) <= self.header[2] <= self.member_length:
+            raise ValueError(f"Batch frame for {self.dataset!r} exceeds its B2Z member bounds")
+        self.meta = _read_frame_metalayers(raw, self.header)
+        self.vlmeta = member_vlmeta(archive, self.info)
+        self.offsets = _read_frame_offsets(self.read_range, self.header, head, len(raw))
+        self.extents = _chunk_extents(self.offsets, self.header)
+        archive._opening_ranges.clear()
+
+    def read_range(self, offset, size):
+        offset, size = operator.index(offset), operator.index(size)
+        if offset < 0 or size < 0:
+            raise ValueError("invalid B2Z batch range")
+        size = max(0, min(size, self.member_length - offset))
+        return self.archive._read_archive(self.member_offset + offset, size)
+
+    def get_chunk(self, index):
+        offset = int(self.offsets[index])
+        if offset < 0:
+            raise ValueError(f"Batch {index} of {self.dataset!r} has an unsupported special offset")
+        chunk = self.read_range(offset, int(self.extents[index]))
+        if len(chunk) < 16:
+            raise ValueError(f"Truncated batch {index} in {self.dataset!r}")
+        cbytes = int.from_bytes(chunk[12:16], "little")
+        if not 16 <= cbytes <= len(chunk):
+            raise ValueError(f"Invalid compressed size for batch {index} in {self.dataset!r}")
+        # ponytail: remote variable-length reads fetch whole batches; add block
+        # transport only if oversized batches prove this granularity insufficient.
+        return chunk[:cbytes]
+
+
 def member_vlmeta(archive, info):
     """Read a member's frame trailer without loading its embedded payload."""
     from blosc2.proxy_source import _parse_trailer_vlmeta

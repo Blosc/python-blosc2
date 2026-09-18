@@ -83,6 +83,32 @@ def test_remote_batch_member_range_experiment(tmp_path, monkeypatch):
         archive.close()
 
 
+def test_internal_remote_batch_reader(tmp_path):
+    from blosc2.b2z_source import B2ZArchive, B2ZBatchSource
+    from blosc2.remote_batch import _RemoteBatchArray
+
+    batches = [[f"batch {batch}: item {item}" for item in range(batch + 1)] for batch in range(8)]
+    source = blosc2.BatchArray(items_per_block=2)
+    source.extend(batches)
+    path = tmp_path / "batch-reader.b2z"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("data.b2b", source.to_cframe())
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("batch-reader.b2z", path.read_bytes())
+
+    archive = B2ZArchive("memory://batch-reader.b2z")
+    try:
+        remote = _RemoteBatchArray(B2ZBatchSource(archive, "data"), "data")
+        assert len(remote) == len(batches)
+        assert remote.items_per_block == 2
+        assert remote.nbytes == source.nbytes
+        assert remote.cbytes == source.cbytes
+        assert remote[-2][:] == batches[-2]
+        assert remote.items[-1] == batches[-1][-1]
+    finally:
+        archive.close()
+
+
 @pytest.mark.parametrize("address", ["::/d0/a", "/d0/a", "keyword"])
 def test_addressing_and_hits(address, monkeypatch):
     url, data = memory_archive()
