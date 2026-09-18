@@ -134,6 +134,15 @@ class StoreDiskCache:
         leaf_path.parent.mkdir(parents=True, exist_ok=True)
         return leaf_path
 
+    def batch_payload_path(self, generation, key):
+        from blosc2.remote_store import RemoteDiscovery
+
+        validate_generation(generation)
+        RemoteDiscovery._validate(key)
+        path = self.path / f"{generation}.b2d" / f"{key}.b2b.cache"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
     def discard_old_generations(self, active):
         active_name = f"{active}.b2d"
         for path in self.path.iterdir():

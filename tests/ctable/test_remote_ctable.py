@@ -346,6 +346,36 @@ def test_remote_ctable_nullable_vlstring_none_cache(tmp_path, monkeypatch):
         assert column[31:34] == values[31:34].tolist()
 
 
+@pytest.mark.parametrize("policy", [blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK])
+def test_remote_ctable_vlstring_cache_and_reopen(tmp_path, policy):
+    @dataclasses.dataclass
+    class Mixed:
+        x: int
+        text: str = blosc2.field(blosc2.vlstring(batch_rows=16))
+
+    rng = np.random.default_rng(7)
+    values = [rng.bytes(1024).hex() for _ in range(128)]
+    local = blosc2.CTable(Mixed, list(enumerate(values)), create_summary_index=False)
+    url = remote_table_url(tmp_path, local, f"vlstring-{policy.value}")
+    options = {"cache_policy": policy, "max_cache_bytes": 48 << 10}
+    if policy is blosc2.CachePolicy.DISK:
+        options["cache_dir"] = tmp_path / "cache"
+
+    with blosc2.RemoteCTable(url, **options) as remote:
+        assert remote["text"][80:85] == values[80:85]
+        requests = remote.traffic.requests
+        assert remote["text"][80:85] == values[80:85]
+        assert remote.traffic.requests == requests
+        np.testing.assert_array_equal(remote["x"][80:85], np.arange(80, 85))
+        assert remote.cache_bytes <= options["max_cache_bytes"]
+
+    if policy is blosc2.CachePolicy.DISK:
+        with blosc2.RemoteCTable(url, **options) as remote:
+            requests = remote.traffic.requests
+            assert remote["text"][80:85] == values[80:85]
+            assert remote.traffic.requests == requests
+
+
 def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
     source = tmp_path / "tree.b2z"
     table = blosc2.CTable(Row, [(1, [1, 2], "one"), (2, [3, 4], "two")], create_summary_index=False)

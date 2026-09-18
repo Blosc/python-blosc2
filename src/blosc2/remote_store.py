@@ -98,6 +98,7 @@ class RemoteDiscovery:
         self.zstore = None
         self.sources = {}
         self.caches = {}
+        self.batch_caches = {}
         self.disk = None
         self.generation = manifest["generation"] if manifest else uuid.uuid4().hex
         self.metadata = manifest["metadata"] if manifest else {}
@@ -574,7 +575,22 @@ class RemoteDiscovery:
         self._validate(full)
         from blosc2.b2z_source import B2ZBatchSource
 
-        return B2ZBatchSource(self.archive, full)
+        self.archive.capture_metadata = True
+        try:
+            source = B2ZBatchSource(self.archive, full)
+        finally:
+            self.archive.capture_metadata = False
+            self.archive._opening_ranges.clear()
+        if self.cache_policy is blosc2.CachePolicy.NONE:
+            return source
+        if full not in self.batch_caches:
+            from blosc2.remote_batch import _RemoteBatchCache
+
+            path = None
+            if self.disk is not None:
+                path = self.disk.batch_payload_path(self.generation, full)
+            self.batch_caches[full] = _RemoteBatchCache(source, full, self.cache_coordinator, path)
+        return self.batch_caches[full]
 
     def load_ctable_attrs(self, table_path):
         """Load one table's user attributes without opening its data arrays."""
@@ -802,6 +818,7 @@ class RemoteDiscovery:
                 source.close()
         self.sources.clear()
         self.caches.clear()
+        getattr(self, "batch_caches", {}).clear()
         self.nodes.clear()
         self.attrs.clear()
         self.listed.clear()

@@ -103,7 +103,7 @@ def run_reads(readers, workers, budget):  # noqa: C901
 def open_columns(storage, table, names, load):  # noqa: C901
     """Fetch column prefixes in bounded groups, then open each column serially."""
     from blosc2.ctable_storage import _column_name_to_relpath
-    from blosc2.schema import UTF8Spec
+    from blosc2.schema import ListSpec, ObjectSpec, StructSpec, UTF8Spec, VLBytesSpec, VLStringSpec
 
     owner = storage._owner
     with owner.lock:
@@ -116,14 +116,19 @@ def open_columns(storage, table, names, load):  # noqa: C901
         def ranges_for(name):
             key = storage._full_key(f"_cols/{_column_name_to_relpath(name)}")
             spec = table._schema.columns_by_name[name].spec
-            keys = (key, key + ".utf8") if isinstance(spec, UTF8Spec) else (key,)
+            if isinstance(spec, UTF8Spec):
+                members_for_column = ((key, ".b2nd"), (key + ".utf8", ".b2nd"))
+            elif isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, ListSpec)):
+                members_for_column = ((key, ".b2b"),)
+            else:
+                members_for_column = ((key, ".b2nd"),)
             ranges = []
-            for key in keys:
-                if key in owner.sources:
+            for key, suffix in members_for_column:
+                if key in owner.sources or key in owner.batch_caches:
                     continue
-                if key in archive.metadata.get("ctable_seeds", {}):
+                if suffix == ".b2nd" and key in archive.metadata.get("ctable_seeds", {}):
                     continue
-                matches = members.get(key + ".b2nd", ())
+                matches = members.get(key + suffix, ())
                 if len(matches) != 1:
                     # The ordinary opener supplies the appropriate diagnostic.
                     return []

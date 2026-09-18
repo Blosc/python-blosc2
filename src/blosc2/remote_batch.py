@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from collections import OrderedDict
+from pathlib import Path
+
 import blosc2
 from blosc2.batch_array import (
     _BATCHARRAY_VLMETA_KEY,
@@ -78,6 +82,73 @@ class _RemoteBatchArray(BatchArray):
 
     def _check_writable(self):
         raise ValueError("Cannot modify a remote BatchArray")
+
+
+class _RemoteBatchCache:
+    """Compressed batch retention using the owner's aggregate cache budget."""
+
+    def __init__(self, source, key, coordinator, path=None):
+        self._source = source
+        self._cache_key = key
+        self._cache_coordinator = coordinator
+        self._path = None if path is None else Path(path)
+        self._memory = {}
+        self._cache_sizes = {}
+        self._cache_lru = OrderedDict()
+        if self._path is not None:
+            self._path.mkdir(parents=True, exist_ok=True)
+            for file in sorted(self._path.glob("*.chunk"), key=lambda item: int(item.stem)):
+                index = int(file.stem)
+                if index < len(source.offsets):
+                    self._cache_sizes[index] = file.stat().st_size
+                    self._cache_lru[index] = None
+        coordinator.register(self)
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+    def _file(self, index):
+        return self._path / f"{index}.chunk"
+
+    def get_chunk(self, index):
+        if index in self._cache_sizes:
+            chunk = self._file(index).read_bytes() if self._path is not None else self._memory[index]
+        else:
+            chunk = self._source.get_chunk(index)
+            if self._path is None:
+                self._memory[index] = chunk
+            else:
+                from blosc2.remote_store_cache import atomic_write
+
+                atomic_write(self._file(index), chunk)
+            self._cache_sizes[index] = len(chunk)
+        self._cache_lru.pop(index, None)
+        self._cache_lru[index] = None
+        self._cache_coordinator.touch(self, index)
+        self._cache_coordinator.enforce()
+        return chunk
+
+    def _sync_evictions(self):
+        pass
+
+    def _retained_cache_bytes(self):
+        return sum(self._cache_sizes.values())
+
+    def _trim_cache(self, target_bytes, *, max_chunks=None):
+        removed = []
+        while self._retained_cache_bytes() > target_bytes and self._cache_lru:
+            if max_chunks is not None and len(removed) >= max_chunks:
+                break
+            index = next(iter(self._cache_lru))
+            if self._path is None:
+                self._memory.pop(index, None)
+            else:
+                os.unlink(self._file(index))
+            self._cache_lru.pop(index)
+            self._cache_sizes.pop(index)
+            self._cache_coordinator.forget(self, index)
+            removed.append(index)
+        return tuple(removed)
 
 
 class _RemoteBatchSChunk:
