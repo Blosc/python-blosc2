@@ -80,6 +80,11 @@ class _RemoteBatchArray(BatchArray):
     def _get_batch(self, index):
         return _RemoteBatch(self, index, self._source.get_chunk(index))
 
+    def _deserialize_msgpack_block(self, payload):
+        from blosc2.msgpack_utils import _safe_msgpack_unpackb
+
+        return _safe_msgpack_unpackb(payload)
+
     def _check_writable(self):
         raise ValueError("Cannot modify a remote BatchArray")
 

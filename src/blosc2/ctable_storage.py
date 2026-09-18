@@ -25,7 +25,7 @@ import contextlib
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
@@ -40,11 +40,8 @@ from blosc2.scalar_array import (
     _ScalarVarLenArray,
     _validate_role_metadata,
 )
-from blosc2.schema import UTF8Spec
+from blosc2.schema import ListSpec, UTF8Spec
 from blosc2.schunk import process_opened_object
-
-if TYPE_CHECKING:
-    from blosc2.schema import ListSpec
 
 # Directory inside the table root that holds per-column index sidecar files.
 _INDEXES_DIR = "_indexes"
@@ -713,7 +710,26 @@ class RemoteTableStorage(TableStorage):
         return self._open_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}")
 
     def open_list_column(self, name: str) -> ListArray:
-        raise NotImplementedError(f"Remote CTable list column {name!r} is not supported")
+        spec = self._schema_spec(name)
+        if spec.storage != "batch":
+            raise NotImplementedError(
+                f"Remote CTable list column {name!r} with storage='vl' is not supported"
+            )
+        return ListArray._from_batch_backend(spec, self._open_batch(name, spec))
+
+    def _schema_spec(self, name):
+        from blosc2.schema_compiler import schema_from_dict
+
+        return schema_from_dict(self.load_schema()).columns_by_name[name].spec
+
+    def _open_batch(self, name, spec, *, suffix=""):
+        from blosc2.remote_batch import _RemoteBatchArray
+
+        key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}{suffix}"
+        backend = _RemoteBatchArray(self._owner.open_ctable_batch(self._full_key(key)), name)
+        if not isinstance(spec, ListSpec):
+            _validate_role_metadata(backend, spec)
+        return backend
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
         if isinstance(spec, UTF8Spec):
@@ -734,16 +750,25 @@ class RemoteTableStorage(TableStorage):
                         array.close()
                 del self._arrays[first:]
                 raise
-        from blosc2.remote_batch import _RemoteBatchArray
-
-        key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
-        full = self._full_key(key)
-        backend = _RemoteBatchArray(self._owner.open_ctable_batch(full), name)
-        _validate_role_metadata(backend, spec)
-        return _ScalarVarLenArray(spec, backend)
+        return _ScalarVarLenArray(spec, self._open_batch(name, spec))
 
     def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
-        raise NotImplementedError(f"Remote CTable dictionary column {name!r} is not supported")
+        from blosc2.schema import VLStringSpec
+
+        first = len(self._arrays)
+        codes = self.open_column(name)
+        try:
+            if codes.ndim != 1 or codes.dtype != np.dtype("int32"):
+                raise ValueError(
+                    f"Remote dictionary column {name!r} requires a one-dimensional int32 code array"
+                )
+            dict_spec = VLStringSpec(nullable=False)
+            backend = self._open_batch(name, dict_spec, suffix=_DICT_SUFFIX)
+            return DictionaryColumn(spec, codes, _ScalarVarLenArray(dict_spec, backend))
+        except BaseException:
+            codes.close()
+            del self._arrays[first:]
+            raise
 
     def open_valid_rows(self) -> blosc2.RemoteArray:
         return self._open_array("_valid_rows")

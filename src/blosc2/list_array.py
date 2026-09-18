@@ -296,6 +296,24 @@ class ListArray:
             self._backend = BatchArray(_from_schunk=schunk)
             self._persisted_row_count = self._persisted_rows_count()
 
+    @classmethod
+    def _from_batch_backend(cls, spec, backend):
+        """Build an internal read wrapper around an already-open BatchArray."""
+        if spec.storage != "batch":
+            raise NotImplementedError("Remote ListArray storage='vl' is not supported")
+        stored = backend.meta.get("listarray")
+        if stored != spec.to_listarray_metadata():
+            raise ValueError("Remote ListArray metadata does not match its table schema")
+        obj = object.__new__(cls)
+        obj.spec = spec
+        obj._pending_cells = []
+        obj._persisted_prefix_cache = None
+        obj._cached_batch_index = None
+        obj._cached_batch_values = None
+        obj._backend = backend
+        obj._persisted_row_count = obj._persisted_rows_count()
+        return obj
+
     def _invalidate_batch_caches(self) -> None:
         self._persisted_prefix_cache = None
         self._cached_batch_index = None

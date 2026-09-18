@@ -151,3 +151,38 @@ def _decode_msgpack_ext(code, data):
 
 def msgpack_unpackb(payload):
     return unpackb(payload, list_hook=decode_tuple_list_hook, ext_hook=_decode_msgpack_ext)
+
+
+def _safe_msgpack_unpackb(payload):
+    """Decode passive values while rejecting executable or referential extensions."""
+
+    def decode_ext(code, data):
+        if code == _BLOSC2_COMPLEX_EXT_CODE:
+            real, imag = struct.unpack(">dd", data)
+            return complex(real, imag)
+        if code == _BLOSC2_SET_EXT_CODE:
+            return set(_safe_msgpack_unpackb(data))
+        if code == _BLOSC2_NDARRAY_EXT_CODE:
+            value = _safe_msgpack_unpackb(data)
+            shape = value.get("shape")
+            if not isinstance(shape, list) or any(
+                isinstance(size, bool) or not isinstance(size, int) or size < 0 for size in shape
+            ):
+                raise ValueError("Unsafe remote NumPy extension shape")
+            count = int(np.prod(shape, dtype=np.int64))
+            if "values" in value:
+                if not isinstance(value["values"], list) or len(value["values"]) != count:
+                    raise ValueError("Invalid remote object-array extension")
+                result = np.empty(shape, dtype=object)
+                result.reshape(-1)[:] = value["values"]
+                return result
+            from blosc2.hdf5_source import dtype_from_value
+
+            dtype = dtype_from_value(value["dtype"])
+            data = value["data"]
+            if dtype.hasobject or not isinstance(data, bytes) or len(data) != count * dtype.itemsize:
+                raise ValueError("Invalid remote NumPy extension payload")
+            return np.frombuffer(data, dtype=dtype).reshape(shape)
+        raise ValueError(f"Unsafe remote MessagePack extension code {code}")
+
+    return unpackb(payload, list_hook=decode_tuple_list_hook, ext_hook=decode_ext)

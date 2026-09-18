@@ -103,7 +103,15 @@ def run_reads(readers, workers, budget):  # noqa: C901
 def open_columns(storage, table, names, load):  # noqa: C901
     """Fetch column prefixes in bounded groups, then open each column serially."""
     from blosc2.ctable_storage import _column_name_to_relpath
-    from blosc2.schema import ListSpec, ObjectSpec, StructSpec, UTF8Spec, VLBytesSpec, VLStringSpec
+    from blosc2.schema import (
+        DictionarySpec,
+        ListSpec,
+        ObjectSpec,
+        StructSpec,
+        UTF8Spec,
+        VLBytesSpec,
+        VLStringSpec,
+    )
 
     owner = storage._owner
     with owner.lock:
@@ -118,6 +126,8 @@ def open_columns(storage, table, names, load):  # noqa: C901
             spec = table._schema.columns_by_name[name].spec
             if isinstance(spec, UTF8Spec):
                 members_for_column = ((key, ".b2nd"), (key + ".utf8", ".b2nd"))
+            elif isinstance(spec, DictionarySpec):
+                members_for_column = ((key, ".b2nd"), (key + "_dict", ".b2b"))
             elif isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, ListSpec)):
                 members_for_column = ((key, ".b2b"),)
             else:

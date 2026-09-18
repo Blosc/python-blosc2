@@ -376,6 +376,86 @@ def test_remote_ctable_vlstring_cache_and_reopen(tmp_path, policy):
             assert remote.traffic.requests == requests
 
 
+def test_remote_ctable_batch_wrappers_and_dictionary(tmp_path):
+    @dataclasses.dataclass
+    class Rich:
+        data: bytes = blosc2.field(blosc2.vlbytes(nullable=True, batch_rows=2))
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int64(), nullable=True, batch_rows=2)
+        )
+        props: dict = blosc2.field(  # noqa: RUF009
+            blosc2.struct({"count": blosc2.int32(), "name": blosc2.vlstring()}, nullable=True)
+        )
+        payload: object = blosc2.field(blosc2.object(nullable=True, batch_rows=2))
+        category: str = blosc2.field(blosc2.dictionary(nullable=True))
+
+    rows = [
+        (b"one", [1, 2], {"count": 1, "name": "one"}, {"x": [1, 2]}, "a"),
+        (None, [], None, ("tuple", 2), None),
+        (b"", None, {"count": 3, "name": "東京"}, np.arange(3), "b"),
+        (b"four", [4], {"count": 4, "name": "four"}, {1, 2}, "a"),
+    ]
+    local = blosc2.CTable(Rich, rows, create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "batch-wrappers")
+    with blosc2.RemoteCTable(url) as remote:
+        assert remote["data"][:] == [row[0] for row in rows]
+        assert remote["tags"][:] == [row[1] for row in rows]
+        assert remote["props"][:] == [row[2] for row in rows]
+        assert remote["payload"][:2] == [row[3] for row in rows[:2]]
+        np.testing.assert_array_equal(remote["payload"][2], np.arange(3))
+        assert remote["payload"][3] == {1, 2}
+        assert remote["category"][:] == [row[4] for row in rows]
+        assert remote.where(remote["category"] == "a")["data"][:] == [b"one", b"four"]
+
+
+def test_remote_ctable_rejects_unsafe_object_extension(tmp_path):
+    @dataclasses.dataclass
+    class Unsafe:
+        payload: object = blosc2.field(blosc2.object())
+
+    nested = blosc2.arange(3)
+    local = blosc2.CTable(Unsafe, [(nested,)], create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "unsafe-object")
+    with blosc2.RemoteCTable(url) as remote:
+        with pytest.raises(ValueError, match="Unsafe remote MessagePack extension code 42"):
+            remote["payload"][0]
+
+
+def test_remote_ctable_rejects_vl_list_storage(tmp_path):
+    @dataclasses.dataclass
+    class Lists:
+        values: list[int] = blosc2.field(blosc2.list(blosc2.int64(), storage="vl"))  # noqa: RUF009
+
+    local = blosc2.CTable(Lists, [([1, 2],), ([],)], create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "vl-list")
+    with blosc2.RemoteCTable(url) as remote:
+        with pytest.raises(NotImplementedError, match="storage='vl'"):
+            remote["values"][:]
+
+
+def test_remote_ctable_missing_dictionary_companion_isolated(tmp_path):
+    @dataclasses.dataclass
+    class Mixed:
+        x: int
+        category: str = blosc2.field(blosc2.dictionary())
+
+    local = blosc2.CTable(Mixed, [(1, "a"), (2, "b")], create_summary_index=False)
+    remote_table_url(tmp_path, local, "missing-dictionary")
+    path = tmp_path / "missing-dictionary.b2z"
+    rewritten = tmp_path / "missing-dictionary-rewritten.b2z"
+    with zipfile.ZipFile(path) as source, zipfile.ZipFile(rewritten, "w") as target:
+        for info in source.infolist():
+            if info.filename != "_cols/category_dict.b2b":
+                target.writestr(info, source.read(info))
+    url = "memory://missing-dictionary.b2z"
+    fsspec.filesystem("memory").pipe(url, rewritten.read_bytes())
+
+    with blosc2.RemoteCTable(url) as remote:
+        np.testing.assert_array_equal(remote["x"][:], [1, 2])
+        with pytest.raises(NotImplementedError, match="category_dict"):
+            remote["category"][:]
+
+
 def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
     source = tmp_path / "tree.b2z"
     table = blosc2.CTable(Row, [(1, [1, 2], "one"), (2, [3, 4], "two")], create_summary_index=False)
