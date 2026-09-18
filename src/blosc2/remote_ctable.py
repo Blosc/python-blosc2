@@ -262,19 +262,13 @@ class RemoteCTable(RemoteObject, CTable):
         elif urlpath is not None:
             raise TypeError("destination and urlpath cannot both be specified")
 
-        from blosc2.remote_store import RemoteStore
-
         storage = self._remote_storage()
-        owner = storage._owner
-        relative = storage._root_key[len(owner.root) + 1 :] if owner.root else storage._root_key
-        selected = object.__new__(RemoteStore)
-        selected._attach(owner, relative)
-        try:
-            return selected.save(
+        with storage._owner.lock:
+            storage._check_open()
+            return storage._owner.save_selection(
+                storage._root_key,
                 destination,
                 include_cache=include_cache,
                 mutable=mutable,
                 overwrite=overwrite,
             )
-        finally:
-            selected.close()

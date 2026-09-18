@@ -382,6 +382,29 @@ def test_remote_ctable_reference_save_roundtrip(tmp_path):
         remote.save(warm_path)
 
 
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("mutable", [False, True])
+def test_reference_max_concurrency(tmp_path, nested, mutable):
+    local = blosc2.CTable(Row, [(1, [1, 2], "one")])
+    source = tmp_path / "source.b2z"
+    if nested:
+        with blosc2.TreeStore(source, mode="w") as tree:
+            tree["table"] = local
+    else:
+        local.to_b2z(source)
+    url = f"memory://{tmp_path.name}-settings.b2z"
+    fsspec.filesystem("memory").pipe(url, source.read_bytes())
+    artifact = tmp_path / "reference.b2z"
+    with blosc2.open(url) as remote:
+        remote.save(artifact, mutable=mutable)
+    options = {"dataset": "table"} if nested else {}
+    with blosc2.open(artifact, max_concurrency=1, **options) as reopened:
+        assert reopened.max_concurrency == 1
+        np.testing.assert_array_equal(reopened["x"][:], [1])
+    with pytest.raises(ValueError, match="max_concurrency must be a positive integer"):
+        blosc2.open(artifact, max_concurrency=0, **options)
+
+
 @pytest.mark.parametrize("mutation", ["metadata", "kind", "schema", "source_kind"])
 def test_remote_ctable_reference_rejects_invalid_manifest(tmp_path, mutation):
     local = blosc2.CTable(Row, [(1, [1, 2], "one")], create_summary_index=False)

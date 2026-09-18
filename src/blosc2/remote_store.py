@@ -807,6 +807,204 @@ class RemoteDiscovery:
                 close(self.filesystem.loop, session)
         self.filesystem = None
 
+    def save_selection(
+        self,
+        full_path,
+        destination: str | os.PathLike,
+        *,
+        include_cache: bool = True,
+        mutable: bool | None = None,
+        overwrite: bool = False,
+    ) -> str:
+        """Export the current store or subtree to a portable .b2z reference archive."""
+        if not isinstance(include_cache, bool):
+            raise TypeError("include_cache must be a boolean")
+        if mutable is not None and not isinstance(mutable, bool):
+            raise TypeError("mutable must be a boolean")
+        dest_abs, dest_dir = self._validate_save_destination(destination, overwrite)
+
+        with self.lock:
+            effective_mutable = self.mutable if mutable is None else mutable
+            if include_cache:
+                retained = self.cache_coordinator.cache_bytes
+                if self.max_cache_bytes is not None and retained > self.max_cache_bytes:
+                    raise ValueError(
+                        f"Retained cache ({retained} bytes) exceeds max_cache_bytes ({self.max_cache_bytes})"
+                    )
+
+            if self.format == "hdf5":
+                self._validate_hdf5_index()
+                metadata = self.hdf5_index
+            elif self.format == "b2z":
+                metadata = self.archive.metadata
+            else:
+                metadata = self.metadata
+
+            src_desc, nodes, attrs, listed, candidates = self._collect_export_nodes(full_path, include_cache)
+
+            staging_dir = tempfile.mkdtemp(prefix="b2z-export-", dir=dest_dir)
+            fd, tmp_zip = tempfile.mkstemp(prefix="export-", suffix=".b2z.tmp", dir=dest_dir)
+            os.close(fd)
+            try:
+                exported_caches = []
+                for orig_key in candidates:
+                    proxy = self.caches.get(orig_key)
+                    if proxy is None or not proxy._cache_sizes:
+                        continue
+                    self._copy_leaf_carrier(orig_key, proxy, staging_dir)
+                    exported_caches.append(orig_key)
+
+                exported_manifest = {
+                    "version": 1,
+                    "source": src_desc,
+                    "generation": self.generation,
+                    "nodes": nodes,
+                    "attrs": attrs,
+                    "listed": listed,
+                    "notice": self.notice,
+                    "metadata": metadata,
+                    "caches": sorted(exported_caches),
+                    "cache_policy": self.cache_policy.value,
+                    "max_cache_bytes": self.max_cache_bytes,
+                    "mutable": effective_mutable,
+                }
+
+                embed_dst = os.path.join(staging_dir, "embed.b2e")
+                st = blosc2.Storage(contiguous=True, urlpath=embed_dst, mode="w")
+                st.meta = {"b2tree": {"version": 1}, "b2remote_store": {"version": 1}}
+                embed = blosc2.SChunk(chunksize=2**13, data=None, storage=st)
+                embed.vlmeta["b2remote_manifest"] = exported_manifest
+                del embed
+
+                filepaths = []
+                for root, _, files in os.walk(staging_dir):
+                    for file in files:
+                        fp = os.path.join(root, file)
+                        if os.path.abspath(fp) != os.path.abspath(embed_dst):
+                            filepaths.append(fp)
+                filepaths.sort(key=os.path.getsize, reverse=True)
+
+                with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as zf:
+                    for fp in filepaths:
+                        arcname = os.path.relpath(fp, staging_dir)
+                        zf.write(fp, arcname)
+                    zf.write(embed_dst, "embed.b2e")
+
+                os.replace(tmp_zip, dest_abs)
+                return dest_abs
+            finally:
+                if os.path.exists(tmp_zip):
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_zip)
+                shutil.rmtree(staging_dir, ignore_errors=True)
+
+    def _validate_save_destination(self, destination, overwrite):
+        destination = os.fspath(destination)
+        if not destination.endswith(".b2z"):
+            raise ValueError("destination must have a .b2z extension")
+        dest_abs = os.path.abspath(destination)
+        if os.path.isdir(dest_abs):
+            raise ValueError("destination must name a file, not a directory")
+        if os.path.exists(dest_abs) and not overwrite:
+            raise FileExistsError(f"'{dest_abs}' already exists. Use overwrite=True to overwrite.")
+        dest_dir = os.path.dirname(dest_abs)
+        if not os.path.exists(dest_dir):
+            raise FileNotFoundError(f"Destination directory '{dest_dir}' does not exist")
+        if self.disk is not None:
+            live_dir = os.path.abspath(str(self.disk.path))
+            cache_root = os.path.abspath(str(self.disk.path.parent))
+            if (
+                dest_abs in (live_dir, cache_root)
+                or dest_abs.startswith(live_dir + os.sep)
+                or dest_abs.startswith(cache_root + os.sep)
+            ):
+                raise ValueError("destination cannot be inside live cache storage")
+        if self.artifact_path is not None and dest_abs == os.path.abspath(self.artifact_path):
+            raise ValueError("destination cannot be the source artifact")
+        return dest_abs, dest_dir
+
+    def _collect_export_nodes(self, group_full, include_cache):
+        prefix = (group_full + "/") if group_full else ""
+        for path, (kind, _) in self.nodes.items():
+            if kind == "ctable" and (path == group_full or not prefix or path.startswith(prefix)):
+                self.load_ctable_attrs(path)
+        exported_source = {
+            "urlpath": self.urlpath,
+            "dataset": group_full,
+            "kind": self.format,
+        }
+        fingerprint = storage_options_fingerprint(getattr(self, "storage_options", None))
+        if fingerprint:
+            exported_source["storage_options"] = fingerprint
+        if prefix:
+            exported_nodes = {
+                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None)
+                for k, v in self.nodes.items()
+                if k == group_full or k.startswith(prefix)
+            }
+            exported_attrs = {k: v for k, v in self.attrs.items() if k == group_full or k.startswith(prefix)}
+            exported_listed = {
+                k: list(v) for k, v in self.listed.items() if k == group_full or k.startswith(prefix)
+            }
+            candidate_caches = [k for k in self.caches if k.startswith(prefix)] if include_cache else []
+        else:
+            exported_nodes = {
+                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None) for k, v in self.nodes.items()
+            }
+            exported_attrs = dict(self.attrs)
+            exported_listed = {k: list(v) for k, v in self.listed.items()}
+            candidate_caches = list(self.caches) if include_cache else []
+        return exported_source, exported_nodes, exported_attrs, exported_listed, candidate_caches
+
+    def _copy_leaf_carrier(self, orig_key, proxy, staging_dir):
+        leaf_filename = f"{orig_key}.b2nd"
+        leaf_dst = os.path.join(staging_dir, leaf_filename)
+        os.makedirs(os.path.dirname(leaf_dst), exist_ok=True)
+        if self.artifact_offsets is not None:
+            with zipfile.ZipFile(self.artifact_path, "r") as zf:
+                zf.extract(leaf_filename, staging_dir)
+        elif self.disk is not None and not getattr(self, "shared", False):
+            src_file = self.disk.payload_path(self.generation, orig_key)
+            if src_file.exists():
+                shutil.copy2(src_file, leaf_dst)
+        elif self.artifact_path is not None and os.path.isdir(self.artifact_path):
+            src_file = os.path.join(self.artifact_path, leaf_filename)
+            if os.path.exists(src_file):
+                shutil.copy2(src_file, leaf_dst)
+        else:
+            # An in-memory proxy cache is an NDArray, so the leaf must be built the
+            # same way a disk leaf is: a matching NDArray carrier, not a bare SChunk.
+            # The ``remote-store`` identity and ``proxy-source`` metalayers are what
+            # the mutable-reopen path validates when it adopts the extracted leaf.
+            meta = {name: proxy._schunk_cache.meta[name] for name in proxy._schunk_cache.meta}
+            meta.pop("b2nd", None)
+            meta["remote-store"] = {"generation": self.generation, "dataset": orig_key}
+            cache = proxy._cache
+            if isinstance(cache, blosc2.NDArray):
+                leaf = blosc2.empty(
+                    cache.shape,
+                    cache.dtype,
+                    chunks=cache.chunks,
+                    blocks=cache.blocks,
+                    cparams=cache.cparams,
+                    urlpath=leaf_dst,
+                    mode="w",
+                    meta=meta,
+                )
+                leaf_schunk = leaf.schunk
+            else:
+                st = blosc2.Storage(contiguous=True, urlpath=leaf_dst, mode="w")
+                st.meta = meta
+                leaf = blosc2.SChunk(chunksize=proxy._schunk_cache.chunksize, storage=st)
+                leaf_schunk = leaf
+            for nchunk in sorted(proxy._cache_sizes):
+                chunk = proxy._schunk_cache.get_chunk(nchunk)
+                if chunk is not None:
+                    leaf_schunk.update_chunk(nchunk, chunk)
+            for key, value in proxy._schunk_cache.vlmeta.items():
+                leaf_schunk.vlmeta[key] = value
+            del leaf
+
 
 class RemoteStore(RemoteObject):
     """Read-only remote B2Z, Zarr or HDF5 hierarchy.
@@ -1260,200 +1458,11 @@ class RemoteStore(RemoteObject):
         overwrite: bool = False,
     ) -> str:
         """Export the current store or subtree to a portable .b2z reference archive."""
-        if not isinstance(include_cache, bool):
-            raise TypeError("include_cache must be a boolean")
-        if mutable is not None and not isinstance(mutable, bool):
-            raise TypeError("mutable must be a boolean")
-        dest_abs, dest_dir = self._validate_save_destination(destination, overwrite)
-
         with self._owner.lock:
-            self._resolve("")
-            effective_mutable = self.mutable if mutable is None else mutable
-            if include_cache:
-                retained = self.cache_bytes
-                if self.max_cache_bytes is not None and retained > self.max_cache_bytes:
-                    raise ValueError(
-                        f"Retained cache ({retained} bytes) exceeds max_cache_bytes ({self.max_cache_bytes})"
-                    )
-
-            if self._owner.format == "hdf5":
-                self._owner._validate_hdf5_index()
-                metadata = self._owner.hdf5_index
-            elif self._owner.format == "b2z":
-                metadata = self._owner.archive.metadata
-            else:
-                metadata = self._owner.metadata
-
-            src_desc, nodes, attrs, listed, candidates = self._collect_export_nodes(include_cache)
-
-            staging_dir = tempfile.mkdtemp(prefix="b2z-export-", dir=dest_dir)
-            fd, tmp_zip = tempfile.mkstemp(prefix="export-", suffix=".b2z.tmp", dir=dest_dir)
-            os.close(fd)
-            try:
-                exported_caches = []
-                for orig_key in candidates:
-                    proxy = self._owner.caches.get(orig_key)
-                    if proxy is None or not proxy._cache_sizes:
-                        continue
-                    self._copy_leaf_carrier(orig_key, proxy, staging_dir)
-                    exported_caches.append(orig_key)
-
-                exported_manifest = {
-                    "version": 1,
-                    "source": src_desc,
-                    "generation": self._owner.generation,
-                    "nodes": nodes,
-                    "attrs": attrs,
-                    "listed": listed,
-                    "notice": self._owner.notice,
-                    "metadata": metadata,
-                    "caches": sorted(exported_caches),
-                    "cache_policy": self.cache_policy.value,
-                    "max_cache_bytes": self.max_cache_bytes,
-                    "mutable": effective_mutable,
-                }
-
-                embed_dst = os.path.join(staging_dir, "embed.b2e")
-                st = blosc2.Storage(contiguous=True, urlpath=embed_dst, mode="w")
-                st.meta = {"b2tree": {"version": 1}, "b2remote_store": {"version": 1}}
-                embed = blosc2.SChunk(chunksize=2**13, data=None, storage=st)
-                embed.vlmeta["b2remote_manifest"] = exported_manifest
-                del embed
-
-                filepaths = []
-                for root, _, files in os.walk(staging_dir):
-                    for file in files:
-                        fp = os.path.join(root, file)
-                        if os.path.abspath(fp) != os.path.abspath(embed_dst):
-                            filepaths.append(fp)
-                filepaths.sort(key=os.path.getsize, reverse=True)
-
-                with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as zf:
-                    for fp in filepaths:
-                        arcname = os.path.relpath(fp, staging_dir)
-                        zf.write(fp, arcname)
-                    zf.write(embed_dst, "embed.b2e")
-
-                os.replace(tmp_zip, dest_abs)
-                return dest_abs
-            finally:
-                if os.path.exists(tmp_zip):
-                    with contextlib.suppress(OSError):
-                        os.unlink(tmp_zip)
-                shutil.rmtree(staging_dir, ignore_errors=True)
-
-    def _validate_save_destination(self, destination, overwrite):
-        destination = os.fspath(destination)
-        if not destination.endswith(".b2z"):
-            raise ValueError("destination must have a .b2z extension")
-        dest_abs = os.path.abspath(destination)
-        if os.path.isdir(dest_abs):
-            raise ValueError("destination must name a file, not a directory")
-        if os.path.exists(dest_abs) and not overwrite:
-            raise FileExistsError(f"'{dest_abs}' already exists. Use overwrite=True to overwrite.")
-        dest_dir = os.path.dirname(dest_abs)
-        if not os.path.exists(dest_dir):
-            raise FileNotFoundError(f"Destination directory '{dest_dir}' does not exist")
-        if self._owner.disk is not None:
-            live_dir = os.path.abspath(str(self._owner.disk.path))
-            cache_root = os.path.abspath(str(self._owner.disk.path.parent))
-            if (
-                dest_abs in (live_dir, cache_root)
-                or dest_abs.startswith(live_dir + os.sep)
-                or dest_abs.startswith(cache_root + os.sep)
-            ):
-                raise ValueError("destination cannot be inside live cache storage")
-        if self._owner.artifact_path is not None and dest_abs == os.path.abspath(self._owner.artifact_path):
-            raise ValueError("destination cannot be the source artifact")
-        return dest_abs, dest_dir
-
-    def _collect_export_nodes(self, include_cache):
-        group_full = "/".join(p for p in (self._owner.root, self._path.strip("/")) if p)
-        prefix = (group_full + "/") if group_full else ""
-        for path, (kind, _) in self._owner.nodes.items():
-            if kind == "ctable" and (path == group_full or not prefix or path.startswith(prefix)):
-                self._owner.load_ctable_attrs(path)
-        exported_source = {
-            "urlpath": self._owner.urlpath,
-            "dataset": group_full,
-            "kind": self._owner.format,
-        }
-        fingerprint = storage_options_fingerprint(getattr(self._owner, "storage_options", None))
-        if fingerprint:
-            exported_source["storage_options"] = fingerprint
-        if prefix:
-            exported_nodes = {
-                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None)
-                for k, v in self._owner.nodes.items()
-                if k == group_full or k.startswith(prefix)
-            }
-            exported_attrs = {
-                k: v for k, v in self._owner.attrs.items() if k == group_full or k.startswith(prefix)
-            }
-            exported_listed = {
-                k: list(v) for k, v in self._owner.listed.items() if k == group_full or k.startswith(prefix)
-            }
-            candidate_caches = (
-                [k for k in self._owner.caches if k.startswith(prefix)] if include_cache else []
+            _, full = self._resolve("")
+            return self._owner.save_selection(
+                full, destination, include_cache=include_cache, mutable=mutable, overwrite=overwrite
             )
-        else:
-            exported_nodes = {
-                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None)
-                for k, v in self._owner.nodes.items()
-            }
-            exported_attrs = dict(self._owner.attrs)
-            exported_listed = {k: list(v) for k, v in self._owner.listed.items()}
-            candidate_caches = list(self._owner.caches) if include_cache else []
-        return exported_source, exported_nodes, exported_attrs, exported_listed, candidate_caches
-
-    def _copy_leaf_carrier(self, orig_key, proxy, staging_dir):
-        leaf_filename = f"{orig_key}.b2nd"
-        leaf_dst = os.path.join(staging_dir, leaf_filename)
-        os.makedirs(os.path.dirname(leaf_dst), exist_ok=True)
-        if self._owner.artifact_offsets is not None:
-            with zipfile.ZipFile(self._owner.artifact_path, "r") as zf:
-                zf.extract(leaf_filename, staging_dir)
-        elif self._owner.disk is not None and not getattr(self._owner, "shared", False):
-            src_file = self._owner.disk.payload_path(self._owner.generation, orig_key)
-            if src_file.exists():
-                shutil.copy2(src_file, leaf_dst)
-        elif self._owner.artifact_path is not None and os.path.isdir(self._owner.artifact_path):
-            src_file = os.path.join(self._owner.artifact_path, leaf_filename)
-            if os.path.exists(src_file):
-                shutil.copy2(src_file, leaf_dst)
-        else:
-            # An in-memory proxy cache is an NDArray, so the leaf must be built the
-            # same way a disk leaf is: a matching NDArray carrier, not a bare SChunk.
-            # The ``remote-store`` identity and ``proxy-source`` metalayers are what
-            # the mutable-reopen path validates when it adopts the extracted leaf.
-            meta = {name: proxy._schunk_cache.meta[name] for name in proxy._schunk_cache.meta}
-            meta.pop("b2nd", None)
-            meta["remote-store"] = {"generation": self._owner.generation, "dataset": orig_key}
-            cache = proxy._cache
-            if isinstance(cache, blosc2.NDArray):
-                leaf = blosc2.empty(
-                    cache.shape,
-                    cache.dtype,
-                    chunks=cache.chunks,
-                    blocks=cache.blocks,
-                    cparams=cache.cparams,
-                    urlpath=leaf_dst,
-                    mode="w",
-                    meta=meta,
-                )
-                leaf_schunk = leaf.schunk
-            else:
-                st = blosc2.Storage(contiguous=True, urlpath=leaf_dst, mode="w")
-                st.meta = meta
-                leaf = blosc2.SChunk(chunksize=proxy._schunk_cache.chunksize, storage=st)
-                leaf_schunk = leaf
-            for nchunk in sorted(proxy._cache_sizes):
-                chunk = proxy._schunk_cache.get_chunk(nchunk)
-                if chunk is not None:
-                    leaf_schunk.update_chunk(nchunk, chunk)
-            for key, value in proxy._schunk_cache.vlmeta.items():
-                leaf_schunk.vlmeta[key] = value
-            del leaf
 
     @classmethod
     def _load_artifact_manifest(cls, urlpath):
@@ -1692,14 +1701,32 @@ class RemoteStore(RemoteObject):
                 urlpath, manifest, artifact_offsets, storage_options, cache_policy, limit, cache_dir
             )
 
-        req_dataset = kwargs.get("dataset")
+        return cls._select_artifact(owner, kwargs.get("dataset"), kwargs.get("max_concurrency"))
+
+    @classmethod
+    def _select_artifact(cls, owner, req_dataset, max_concurrency):
         if owner.nodes[owner.root][0] == "ctable":
             if req_dataset:
                 owner.close()
                 raise ValueError("dataset cannot select below a RemoteCTable artifact root")
-            return blosc2.RemoteCTable._from_owner(owner, owner.root)
-        store = cls.__new__(cls)
-        store._attach(owner, "")
-        if req_dataset:
-            return store[req_dataset]
-        return store
+            result = blosc2.RemoteCTable._from_owner(owner, owner.root)
+        else:
+            result = cls.__new__(cls)
+            result._attach(owner, "")
+            if req_dataset:
+                store = result
+                try:
+                    result = store[req_dataset]
+                finally:
+                    store.close()
+        try:
+            if max_concurrency is not None:
+                if not isinstance(result, blosc2.RemoteCTable):
+                    raise NotImplementedError(
+                        "max_concurrency is only supported for table artifact selections"
+                    )
+                result.max_concurrency = max_concurrency
+            return result
+        except BaseException:
+            result.close()
+            raise

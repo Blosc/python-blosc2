@@ -2381,6 +2381,10 @@ def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
     _, parsed_dataset, hint = parse_container_url(urlpath, kwargs.get("dataset"))
     if hint == "hdf5":
         return True
+    if hint == "b2z" and os.path.exists(urlpath):
+        meta = _meta_from_store(urlpath, 0)
+        if meta is not None and "b2remote_store" in meta:
+            return False
     return (hint in {"zarr", "b2z"} or kwargs.get("source_format") == "b2z") and (
         kwargs.get("lazy") or parsed_dataset is not None or "dataset" in kwargs
     )

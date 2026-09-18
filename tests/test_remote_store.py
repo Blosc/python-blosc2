@@ -1164,7 +1164,7 @@ def test_save_failure_preserves_destination_and_live_cache(hierarchy, tmp_path, 
         destination = tmp_path / "out.b2z"
         destination.write_bytes(b"sentinel")
         with monkeypatch.context() as patch:
-            patch.setattr(blosc2.RemoteStore, "_copy_leaf_carrier", fail)
+            patch.setattr(type(store._owner), "_copy_leaf_carrier", fail)
             with pytest.raises(OSError, match="export failed"):
                 store.save(destination, overwrite=True)
         assert destination.read_bytes() == b"sentinel"
@@ -1172,7 +1172,7 @@ def test_save_failure_preserves_destination_and_live_cache(hierarchy, tmp_path, 
 
         fresh = tmp_path / "fresh.b2z"
         with monkeypatch.context() as patch:
-            patch.setattr(blosc2.RemoteStore, "_copy_leaf_carrier", fail)
+            patch.setattr(type(store._owner), "_copy_leaf_carrier", fail)
             with pytest.raises(OSError, match="export failed"):
                 store.save(fresh)
         assert not fresh.exists()

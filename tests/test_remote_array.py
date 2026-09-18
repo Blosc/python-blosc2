@@ -1121,6 +1121,54 @@ def test_cold_export_cannot_overwrite_live_carrier(tmp_path):
         assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("mutable", [None, False, True])
+def test_warm_export_cannot_overwrite_live_carrier(tmp_path, mutable):
+    url, data = _remote_array("live-export.b2nd", nchunks=2, chunk_size=100)
+    path = tmp_path / "live.b2nd"
+    proxy = blosc2.open(url, lazy=True, cache_path=path)
+    proxy[:100]
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="attached live cache"):
+        proxy.save(path, overwrite=True, mutable=mutable)
+    assert path.read_bytes() == before
+    np.testing.assert_array_equal(proxy[:], data)
+
+
+@pytest.mark.parametrize("contiguous", [False, True])
+@pytest.mark.parametrize("initial_contiguous", [False, True])
+def test_array_export_overwrite(tmp_path, monkeypatch, contiguous, initial_contiguous):
+    import os
+
+    url, data = _remote_array("sparse-export.b2nd", nchunks=2, chunk_size=100)
+    proxy = blosc2.open(url, lazy=True)
+    proxy[:100]
+    path = tmp_path / "reference.b2nd"
+    proxy.save(path, initial_contiguous)
+
+    def snapshot():
+        return path.read_bytes() if path.is_file() else {p.name: p.read_bytes() for p in path.iterdir()}
+
+    before = snapshot()
+    proxy[:]
+    replace = os.replace
+
+    def fail_publication(src, dst):
+        if os.path.basename(src) == "payload":
+            raise OSError("publication failed")
+        return replace(src, dst)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", fail_publication)
+        with pytest.raises(OSError, match="publication failed"):
+            proxy.save(path, contiguous, overwrite=True)
+    assert snapshot() == before
+    proxy.save(path, contiguous, overwrite=True)
+    with blosc2.open(path) as reopened:
+        reopened.traffic.reset()
+        np.testing.assert_array_equal(reopened[:], data)
+        assert reopened.traffic.requests == 0
+
+
 def test_unlimited_disk_cache_does_not_evict(tmp_path):
     url, data = _remote_array("unlimited-disk.b2nd", nchunks=5, chunk_size=20)
     carrier_path = tmp_path / "unlimited.b2nd"

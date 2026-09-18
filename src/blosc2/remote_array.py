@@ -1749,30 +1749,38 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         elif urlpath is not None:
             raise TypeError("destination and urlpath cannot both be specified")
         destination = os.fspath(destination)
-        if (cache_policy is not None or not include_cache) and any(
-            path is not None and os.path.abspath(path) == os.path.abspath(destination)
-            for path in (self.cache_path, self.runtime_cache_path)
-        ):
-            raise ValueError("cold or policy-changing export requires a different destination")
-        carrier = self._export_carrier(include_cache, cache_policy, mutable=mutable)
-        source_path = getattr(carrier.schunk, "urlpath", None)
-        same_live_carrier = source_path is not None and os.path.abspath(source_path) == os.path.abspath(
-            destination
-        )
-        if same_live_carrier:
-            if overwrite:
-                raise ValueError("cannot overwrite the attached live cache")
-            raise ValueError(f"destination {destination!r} already exists; use overwrite=True to replace it")
+        dest_real = os.path.realpath(destination)
+        for attached in (self._carrier, self._runtime_cache):
+            path = None if attached is None else getattr(attached.schunk, "urlpath", None)
+            if path is None:
+                continue
+            live_real = os.path.realpath(path)
+            if (
+                dest_real == live_real
+                or (os.path.exists(destination) and os.path.samefile(destination, path))
+                or (os.path.isdir(path) and dest_real.startswith(live_real + os.sep))
+            ):
+                raise ValueError(
+                    "cannot overwrite the attached live cache; export requires a different destination"
+                )
         if os.path.exists(destination) and not overwrite:
             raise ValueError(f"destination {destination!r} already exists; use overwrite=True to replace it")
         blosc2.blosc2_ext.check_access_mode(destination, "w")
-        if os.path.exists(destination):
-            with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(destination))) as temp_dir:
-                staged = os.path.join(temp_dir, os.path.basename(destination))
-                carrier.save(staged, contiguous=contiguous, **kwargs)
+        carrier = self._export_carrier(include_cache, cache_policy, mutable=mutable)
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(destination))) as temp_dir:
+            staged = os.path.join(temp_dir, "payload")
+            carrier.save(staged, contiguous=contiguous, **kwargs)
+            if os.path.exists(destination) and (os.path.isdir(destination) or not contiguous):
+                # Keep the previous directory until publication succeeds.
+                previous = os.path.join(temp_dir, "previous")
+                os.replace(destination, previous)
+                try:
+                    os.replace(staged, destination)
+                except BaseException:
+                    os.replace(previous, destination)
+                    raise
+            else:
                 os.replace(staged, destination)
-        else:
-            carrier.save(destination, contiguous=contiguous, **kwargs)
         return destination
 
     @classmethod
