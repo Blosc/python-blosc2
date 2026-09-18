@@ -151,6 +151,9 @@ checks. ``save`` exports ordinary portable warm/cold archives. Private sparse
 directories are not portable store artifacts. This protocol targets processes
 sharing a local filesystem, not distributed or network-filesystem ownership.
 
+See :doc:`Working with Remote Data <../guides/remote_objects>` for navigation,
+shared caching, traffic, credentials, and portable reference examples.
+
 .. autoclass:: blosc2.RemoteStore
     :members:
     :special-members: __getitem__, __iter__

@@ -382,6 +382,44 @@ def test_remote_ctable_reference_save_roundtrip(tmp_path):
         remote.save(warm_path)
 
 
+@pytest.mark.parametrize("mutation", ["metadata", "kind", "schema", "source_kind"])
+def test_remote_ctable_reference_rejects_invalid_manifest(tmp_path, mutation):
+    local = blosc2.CTable(Row, [(1, [1, 2], "one")], create_summary_index=False)
+    url = remote_table_url(tmp_path, local, f"invalid-{mutation}")
+    artifact = tmp_path / f"reference-{mutation}.b2z"
+    with blosc2.RemoteCTable(url) as remote:
+        remote.save(artifact)
+
+    unpacked = tmp_path / f"unpacked-{mutation}"
+    with zipfile.ZipFile(artifact) as archive:
+        archive.extractall(unpacked)
+    embed = blosc2.blosc2_ext.open(str(unpacked / "embed.b2e"), "a", 0)
+    manifest = dict(embed.vlmeta["b2remote_manifest"])
+    root = manifest["source"]["dataset"]
+    nodes = dict(manifest["nodes"])
+    metadata = dict(nodes[root][1])
+    if mutation == "metadata":
+        metadata = None
+    elif mutation == "kind":
+        metadata["kind"] = "group"
+    elif mutation == "schema":
+        metadata["schema"] = None
+    else:
+        manifest["source"] = {**manifest["source"], "kind": "hdf5"}
+    nodes[root] = ("ctable", metadata)
+    manifest["nodes"] = nodes
+    embed.vlmeta["b2remote_manifest"] = manifest
+    del embed
+
+    broken = tmp_path / f"broken-{mutation}.b2z"
+    with zipfile.ZipFile(broken, "w", zipfile.ZIP_STORED) as archive:
+        for member in unpacked.rglob("*"):
+            if member.is_file():
+                archive.write(member, member.relative_to(unpacked))
+    with pytest.raises(ValueError, match="Invalid RemoteStore CTable node"):
+        blosc2.open(broken)
+
+
 def test_nested_remote_ctable_reference_save(tmp_path):
     source = tmp_path / "tree.b2z"
     table = blosc2.CTable(Row, [(1, [1, 2], "one"), (2, [3, 4], "two")])
@@ -395,9 +433,18 @@ def test_nested_remote_ctable_reference_save(tmp_path):
 
     with blosc2.RemoteStore(url) as store, store["group/table"] as remote:
         np.testing.assert_array_equal(remote["x"][:], [1, 2])
+        with store["group/sibling"] as sibling:
+            np.testing.assert_array_equal(sibling[:], np.arange(10))
         remote.save(destination)
         with store["group"] as group:
             group.save(group_destination)
+
+    with zipfile.ZipFile(destination) as archive:
+        names = archive.namelist()
+        assert any(name.startswith("group/table/") for name in names)
+        assert not any(name.startswith("group/sibling") for name in names)
+    with zipfile.ZipFile(group_destination) as archive:
+        assert any(name.startswith("group/sibling") for name in archive.namelist())
 
     with blosc2.open(destination) as reopened:
         assert isinstance(reopened, blosc2.RemoteCTable)

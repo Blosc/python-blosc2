@@ -1,0 +1,110 @@
+# Working with Remote Tables
+
+`RemoteCTable` opens a read-only CTable in an immutable remote `.b2z` archive.
+Fixed-width and `blosc2.utf8()` columns are fetched on demand, including their
+null masks. A table inside a hierarchy can also be opened through `RemoteStore`.
+
+`blosc2.open()` dispatches local table archives to `CTable` and remote table
+archives to `RemoteCTable`. Remote `.b2z` groups return `RemoteStore` by default;
+array leaves retain their `RemoteArray` behavior. Use `dataset="group/table"`
+or a `::group/table` URL suffix to select a nested table. For a complete local
+download instead, pass `lazy=False, cache_dir="download-cache"`.
+
+```python
+with blosc2.open("https://example.org/readings.b2z") as table:
+    notes = table["note"][:5]
+    selected = table.where(table["note"] == "café")
+    ids = selected["id"][:]
+```
+
+UTF-8 strings use two compressed arrays: row offsets and encoded bytes. A slice
+first reads its offsets, then its byte span. Both reads use the existing range
+transport, fetching compressed blocks when worthwhile or whole compressed chunks
+otherwise, and decompressing locally. Archive members are ZIP_STORED, as produced
+by the Blosc2 writers; the arrays inside remain Blosc2-compressed.
+
+The backing arrays share the table's cache budget and traffic counters. MEMORY,
+DISK (with `cache_dir`) and NONE policies are supported. Size reporting uses source
+metadata without scanning strings. Small-member metadata prefetch may also fetch
+some payload. Repeated reads can reuse cached blocks; filtering scans the required
+columns because persisted indexes are not used remotely.
+
+Multi-column metadata inspection and row materialization overlap independent
+requests by default, up to eight at once. This includes row iteration, display,
+and batched Arrow/pandas export; single-column access remains lazy. UTF-8 byte
+requests wait for their offsets. Cache publication and decoding stay serialized.
+
+```python
+with blosc2.open(url, max_concurrency=1) as table:  # serial control
+    rows = list(table[:10])
+
+with blosc2.RemoteCTable(
+    url,
+    max_concurrency=8,
+    metadata_buffer_bytes=8 << 20,
+    row_buffer_bytes=64 << 20,
+) as table:
+    table.row_buffer_bytes = 256 << 20  # optional explicit override
+    rows = list(table[:10])
+```
+
+The fixed defaults are 8 MiB of temporary metadata and 64 MiB of temporary row
+data, allocated on demand. They do not depend on CPU count or available RAM.
+Wider reads use bounded batches; a single oversized required unit runs alone.
+These are soft transport budgets, not total RAM limits: decoded output, native
+scratch, HTTP overhead and retained caches are additional. DISK caching does not
+remove the need to bound temporary reads or consume large outputs in batches.
+The buffer keywords belong to RemoteCTable, not `blosc2.open()`; settings may
+also be changed on a returned table, including one obtained from RemoteStore.
+
+The existing 1 MiB compressed-chunk threshold is a block-selection heuristic,
+not a maximum response size. Large selections and unsupported partial-block
+layouts can still fetch whole chunks. Cross-process shared-cache handles and
+read-only artifacts retain their existing guarded row-read paths; standalone
+RemoteArray concurrency and RemoteStore discovery behavior are unchanged.
+
+Columns and views are borrowed from the root table and require it to remain open.
+`table.is_cache_mutable` reports whether the local cache is writable, matching
+the corresponding RemoteStore and RemoteArray property. It is read-only and does
+not imply that the remote table can be modified.
+Closing a parent RemoteStore leaves a returned table usable; refreshing the store
+invalidates previously returned tables and their columns. Copies and data exports
+produce local tables. `save()` writes a portable remote reference containing
+bootstrap metadata and any retained cache; `materialize()`, `copy()`, `to_b2z()`
+and `to_b2d()` produce independent local tables:
+
+```python
+table.save("table-reference.b2z")
+table.save("cold-reference.b2z", include_cache=False)
+local = table.materialize(urlpath="complete-local.b2z")
+table.to_b2d("complete-local.b2d")
+```
+
+Saving a reference does not fetch missing table data. Remote writes and
+batch-backed `vlstring`/lists/objects and dictionary columns remain unsupported.
+
+See `examples/ctable/remote_handling.py` for a batched archive writer with a nullable
+multilingual UTF-8 column, plus sample row and string-slice traffic measurements.
+
+## Refresh a remote table
+
+Remote containers are assumed immutable. A standalone table with a writable
+cache can call `refresh()` to rediscover its schema and replace the cache
+generation while preserving cache limits and parallel-read settings:
+
+```python
+with blosc2.RemoteCTable(url, cache_dir="table-cache") as table:
+    table.refresh()
+    print(table[:5])
+```
+
+Previously obtained columns, arrays, and views become stale after a successful
+refresh. Refresh a table obtained from a {ref}`RemoteStore` through the root
+store, then retrieve the table again. Immutable reference artifacts reject
+`refresh()`.
+
+## See also
+
+- {doc}`remote_objects` — shared caching, traffic, reference, and lifetime behavior.
+- {doc}`remote_arrays` — remote array formats and operations.
+- {ref}`RemoteCTable` and {ref}`CTable` — API reference.

@@ -4,6 +4,30 @@
 
 XXX version-specific blurb XXX
 
+### Improvements
+
+#### Common remote-object API
+
+- Added the public `RemoteObject` base for `RemoteArray`, `RemoteStore`,
+  and `RemoteCTable`. It documents their shared source, attributes, traffic,
+  cache accounting, export mutability, reference saving, and lifetime contract.
+- Remote references now preserve valid warm MEMORY cache chunks by default.
+  Pass `include_cache=False` to produce a cold reference without clearing the
+  live cache.
+- `RemoteCTable.save()` now writes a portable `.b2z` remote reference with
+  retained cache data. `materialize()`, `copy()`, `to_b2z()`, and
+  `to_b2d()` remain the independent local-table operations.
+
+### Compatibility notes
+
+- `RemoteCTable.save()` previously inherited `CTable.save()` and returned
+  `None` after materializing local data. It now returns the reference path.
+  Use `materialize(urlpath=...)` or the table conversion methods when a
+  complete local table is required. Local `CTable.save()` is unchanged.
+- Remote reference destinations are no longer replaced implicitly. Pass
+  `overwrite=True` when replacement is intended; live cache and source
+  artifacts remain protected.
+
 ## Changes from 4.13.0 to 4.13.1
 
 A maintenance and performance follow-up to 4.13.0 focused on remote data

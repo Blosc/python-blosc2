@@ -29,5 +29,8 @@ may include sibling leaves. A table selected from a store owns an independent
 handle, but its columns and views remain borrowed from that table. Refresh a
 nested table through its root store; a standalone table can call ``refresh()``.
 
+See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
+access, filtering, buffering, reference saving, and materialization examples.
+
 .. autoclass:: blosc2.RemoteCTable
     :members:

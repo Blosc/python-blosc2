@@ -26,5 +26,8 @@ remote-write API.  Data-specific operations remain on the concrete classes.
 Arrays and tables provide ``materialize()``; stores are navigated to a leaf that
 can be materialized.
 
+See :doc:`Working with Remote Data <../guides/remote_objects>` for the shared
+cache, traffic, reference-saving, and lifetime behavior.
+
 .. autoclass:: blosc2.RemoteObject
     :members:
