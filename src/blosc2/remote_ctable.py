@@ -134,6 +134,51 @@ class RemoteCTable(CTable):
         if isinstance(storage, RemoteTableStorage):
             storage.close()
 
+    def refresh(self) -> None:
+        """Reload a standalone table and invalidate its old columns and views.
+
+        Preserve the table and its cache on discovery/initialization failure.
+        For tables obtained from a RemoteStore, refresh the root store instead.
+        """
+        storage = self._remote_storage()
+        owner = storage._owner
+        with owner.lock:
+            storage._check_open()
+            if self.base is not None or owner.root != storage._root_key or owner.is_tree:
+                raise ValueError("Refresh the root RemoteStore, then retrieve this table again")
+            replacement = owner.prepare_refresh("ctable")
+            replacement.acquire()  # Keep failed initialization from closing the borrowed disk cache.
+            fresh = None
+            try:
+                fresh = type(self)._from_owner(
+                    replacement,
+                    replacement.root,
+                    max_concurrency=storage.max_concurrency,
+                    metadata_buffer_bytes=storage.metadata_buffer_bytes,
+                    row_buffer_bytes=storage.row_buffer_bytes,
+                )
+                replacement.restoring = False
+                replacement.save_manifest()
+            except BaseException:
+                replacement.disk = None
+                if fresh is not None:
+                    fresh.close()
+                replacement.release()
+                raise
+            replacement.release()
+            replacement._cleanup_dir, owner._cleanup_dir = owner._cleanup_dir, None
+            replacement.artifact_path = owner.artifact_path
+            owner.disk = None
+            owner.generation = replacement.generation
+            state = fresh.__dict__.copy()
+            fresh._storage = None  # Ownership is transferred to this handle.
+            self.__dict__ = state
+            self._cols._table = self
+            storage.close()
+            owner.close()
+            if replacement.disk is not None:
+                replacement.disk.discard_old_generations(replacement.generation)
+
     @property
     def vlmeta(self):
         return RemoteMetadataMapping(self._remote_storage().load_user_attrs())
@@ -160,6 +205,11 @@ class RemoteCTable(CTable):
     @property
     def max_cache_bytes(self):
         return self._remote_storage()._owner.max_cache_bytes
+
+    @property
+    def is_cache_mutable(self) -> bool:
+        """Whether the current local cache is writable, not the remote table."""
+        return self._remote_storage()._owner.is_mutable
 
     @property
     def cache_bytes(self):

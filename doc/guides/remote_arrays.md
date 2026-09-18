@@ -602,6 +602,9 @@ read-only artifacts retain their existing guarded row-read paths; standalone
 RemoteArray concurrency and RemoteStore discovery behavior are unchanged.
 
 Columns and views are borrowed from the root table and require it to remain open.
+`table.is_cache_mutable` reports whether the local cache is writable, matching
+the corresponding RemoteStore and RemoteArray property. It is read-only and does
+not imply that the remote table can be modified.
 Closing a parent RemoteStore leaves a returned table usable; refreshing the store
 invalidates previously returned tables and their columns. Copies and data exports
 produce local tables. Remote writes, batch-backed `vlstring`/lists/objects,
@@ -637,8 +640,21 @@ For B2Z tables and stores, reopening a populated disk cache trusts its saved
 archive identity and metadata: no HEAD/identity request is made. Uncached data
 still requires remote reads. Older caches may perform one identity lookup to
 upgrade their metadata. Do not replace the remote archive while using its cache.
-Use `store.refresh()` after a replacement; for a standalone `RemoteCTable`,
-which has no `refresh()` method, open with a fresh `cache_dir` instead.
+Use `store.refresh()` after a replacement, or `table.refresh()` for a standalone
+`RemoteCTable`. Neither operation writes to the remote source.
+
+```python
+with blosc2.RemoteCTable(url, cache_dir="table-cache") as table:
+    table.refresh()  # rediscover the remote table and replace its cache generation
+    print(table[:5])
+```
+
+Table refresh reloads the schema, row information and column backends while
+preserving cache policy, cache limits and parallel-read settings. Previously
+obtained columns, raw arrays and views become unusable; retrieve them again from
+the refreshed table. Discovery or table initialization failure leaves the old
+table usable. A table obtained from a `RemoteStore` must be refreshed through the
+root store, then retrieved again; it cannot independently refresh shared discovery.
 
 If a remote container is updated on the server—such as adding new datasets or appending data—call `store.refresh()` to update discovery:
 

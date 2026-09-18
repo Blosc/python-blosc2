@@ -717,6 +717,36 @@ class RemoteDiscovery:
             self.save_manifest()
         return self.caches[key]
 
+    def prepare_refresh(self, kind):
+        """Prepare fresh discovery without publishing or retiring the current generation."""
+        if not self.is_mutable:
+            raise ValueError("Cannot refresh an immutable remote artifact; use a writable cache")
+        replacement = RemoteDiscovery(
+            self.urlpath,
+            self.storage_options,
+            dataset=self.root,
+            persist_metadata=self.disk is not None,
+            _filesystem=self._external_filesystem,
+            _source_validator=self.source_validator,
+            _manifest_validator=self.manifest_validator,
+            _max_nodes=self.max_nodes,
+            _source_format=self.format,
+        )
+        try:
+            if replacement.nodes[replacement.root][0] != kind:
+                raise ValueError(f"Refreshed source is no longer a {kind}")
+            replacement.cache_policy = self.cache_policy
+            replacement.max_cache_bytes = self.max_cache_bytes
+            replacement.cache_coordinator = CacheCoordinator(self.max_cache_bytes)
+            replacement.shared = getattr(self, "shared", False)
+            replacement.mutable = self.mutable
+            replacement.restoring = True
+            replacement.disk = self.disk
+            return replacement
+        except BaseException:
+            replacement.close()
+            raise
+
     def close(self):
         if self._closed:
             return
@@ -1175,25 +1205,9 @@ class RemoteStore:
             if self._path:
                 raise ValueError("refresh must be called on the root store handle")
             owner = self._owner
-            replacement = RemoteDiscovery(
-                owner.urlpath,
-                owner.storage_options,
-                dataset=owner.root,
-                persist_metadata=owner.disk is not None,
-                _filesystem=owner._external_filesystem,
-                _source_validator=owner.source_validator,
-                _manifest_validator=owner.manifest_validator,
-                _max_nodes=owner.max_nodes,
-                _source_format=owner.format,
-            )
+            replacement = owner.prepare_refresh("group")
             try:
-                if not replacement.is_tree:
-                    raise ValueError("Refreshed source is no longer a group")
-                replacement.disk = owner.disk
-                replacement.cache_policy = owner.cache_policy
-                replacement.max_cache_bytes = owner.max_cache_bytes
-                replacement.shared = getattr(owner, "shared", False)
-                replacement.mutable = owner.mutable
+                replacement.restoring = False
                 replacement.save_manifest()
                 if replacement.disk is not None:
                     replacement.disk.discard_old_generations(replacement.generation)

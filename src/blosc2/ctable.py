@@ -1400,9 +1400,16 @@ class Column:
     _REPR_PREVIEW_ITEMS = 8
 
     def __init__(self, table: CTable, col_name: str, mask=None):
-        self._table = table
+        self._table_ref = table
+        self._remote_storage_ref = table._remote_read_storage()
         self._col_name = col_name
         self._mask = mask
+
+    @property
+    def _table(self):
+        if self._remote_storage_ref is not None:
+            self._remote_storage_ref._check_open()
+        return self._table_ref
 
     @property
     def _nulls(self) -> NullChannel:
@@ -6494,6 +6501,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _remote_read_storage(self):
         from blosc2.ctable_storage import RemoteTableStorage
 
+        saved = getattr(self, "_remote_view_storage", None)
+        if saved is not None:
+            saved._check_open()
+            return saved
         table = self
         while table.base is not None:
             table = table.base
@@ -7365,6 +7376,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._table_dparams = parent._table_dparams
         obj._storage = None
         obj._read_only = parent._read_only  # inherit: only True for mode="r" disk tables
+        obj._remote_view_storage = parent._remote_read_storage()
         obj._schema = parent._schema
         obj._cols = parent._cols  # shared — views cannot change row structure
         obj._computed_cols = parent._computed_cols  # shared — LazyExpr refs remain valid
@@ -7678,6 +7690,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._table_dparams = self._table_dparams
         obj._storage = None
         obj._read_only = self._read_only
+        obj._remote_view_storage = self._remote_read_storage()
         obj._valid_rows = self._valid_rows
         obj._n_rows = self._known_n_rows()
         obj._last_pos = self._last_pos

@@ -176,6 +176,95 @@ def test_disk_cache_reuses_ctable_bootstrap(tmp_path, monkeypatch, max_concurren
         assert table.traffic.requests > 0
 
 
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
+)
+def test_remote_ctable_refresh(tmp_path, policy):
+    schema = dataclasses.make_dataclass("Sample", [("x", int), ("note", str, blosc2.field(blosc2.utf8()))])
+    local = blosc2.CTable(schema, [(1, "old"), (2, "café")], create_summary_index=False)
+    url = remote_table_url(tmp_path, local)
+    options = {"cache_policy": policy, "max_concurrency": 2, "row_buffer_bytes": 1 << 20}
+    if policy is blosc2.CachePolicy.DISK:
+        options["cache_dir"] = tmp_path / "cache"
+    with blosc2.RemoteCTable(url, **options) as table:
+        column, raw = table["x"], table["x"].raw
+        view, projection = table[:1], table.select("x")
+        assert column[:].tolist() == [1, 2]
+        changed_schema = dataclasses.make_dataclass(
+            "Changed", [("x", int), ("note", str, blosc2.field(blosc2.utf8())), ("active", bool)]
+        )
+        changed_path = str(tmp_path / "changed.b2d")
+        with blosc2.CTable(
+            changed_schema, [(9, "東京", True)], create_summary_index=False, urlpath=changed_path, mode="w"
+        ) as changed:
+            changed.attrs["version"] = 2
+        with blosc2.CTable.open(changed_path) as changed:
+            remote_table_url(tmp_path, changed, "changed")
+        fsspec.filesystem("memory").pipe(url, (tmp_path / "changed.b2z").read_bytes())
+        assert table.refresh() is None
+        assert table.col_names == ["x", "note", "active"]
+        assert table.nrows == 1
+        assert table["x"][:].tolist() == [9]
+        assert table["note"][:].tolist() == ["東京"]
+        assert dict(table.attrs) == {"version": 2}
+        assert table.max_concurrency == 2
+        assert table.row_buffer_bytes == 1 << 20
+        for read in (lambda: column[:], lambda: raw[:], lambda: list(view), lambda: list(projection)):
+            with pytest.raises(RuntimeError, match=r"stale|closed"):
+                read()
+        table.refresh()
+        assert table["x"][:].tolist() == [9]
+    if policy is blosc2.CachePolicy.DISK:
+        with blosc2.RemoteCTable(url, **options) as table:
+            assert table["note"][:].tolist() == ["東京"]
+
+
+@pytest.mark.parametrize("failure", ["discovery", "initialization", "publication"])
+def test_remote_ctable_failed_refresh(tmp_path, monkeypatch, failure):
+    local = blosc2.CTable(dataclasses.make_dataclass("Sample", [("x", int)]), [(1,), (2,)])
+    url = remote_table_url(tmp_path, local)
+    cache = tmp_path / "cache"
+    with blosc2.RemoteCTable(url, cache_dir=cache) as table:
+        column = table["x"]
+        assert column[:].tolist() == [1, 2]
+        owner = table._remote_storage()._owner
+        generation = owner.generation
+
+        def fail(*args, **kwargs):
+            raise OSError("refresh failed")
+
+        with monkeypatch.context() as patch:
+            if failure == "discovery":
+                patch.setattr(type(fsspec.filesystem("memory")), "info", fail)
+            elif failure == "initialization":
+                from blosc2.ctable_storage import RemoteTableStorage
+
+                patch.setattr(RemoteTableStorage, "open_valid_rows", fail)
+            else:
+                patch.setattr(owner.disk, "publish", fail)
+            with pytest.raises(OSError, match="refresh failed"):
+                table.refresh()
+        assert owner.generation == generation
+        assert column[:].tolist() == [1, 2]
+        assert table["x"][:].tolist() == [1, 2]
+        table.refresh()
+        assert table["x"][:].tolist() == [1, 2]
+
+
+def test_remote_ctable_is_cache_mutable(tmp_path, monkeypatch):
+    local = blosc2.CTable(dataclasses.make_dataclass("Sample", [("x", int)]), [(1,)])
+    url = remote_table_url(tmp_path, local)
+    with blosc2.RemoteCTable(url) as table:
+        assert table.is_cache_mutable is True
+        with monkeypatch.context() as patch:
+            patch.setattr(table._remote_storage()._owner, "is_mutable", False)
+            assert table.is_cache_mutable is False
+        with pytest.raises(AttributeError):
+            table.is_cache_mutable = False
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = table.is_cache_mutable
+
+
 def test_remote_ctable_fixed_width_reads_and_queries(tmp_path):
     rows = [
         (1, np.array([1, 2], dtype=np.float32), "one"),
@@ -358,6 +447,8 @@ def test_remote_utf8_nested_lifetime(tmp_path, empty):
         np.testing.assert_array_equal(raw[:], local["nested.text"][:])
         assert raw.nbytes == local["nested.text"].raw.nbytes
         view = table[:1]
+        with pytest.raises(ValueError, match="root RemoteStore"):
+            table.refresh()
         store.refresh()
         for read in (lambda: raw[:0], lambda: raw.shape, lambda: raw.cbytes, lambda: view["nested.text"][:]):
             with pytest.raises(RuntimeError, match="stale"):
