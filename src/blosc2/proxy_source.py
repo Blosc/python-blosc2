@@ -608,7 +608,7 @@ def _frame_offset_reads(header, head, header_len):
     """
     # An empty frame has no chunks, so it has no offsets chunk either: what sits
     # at index_pos is the trailer, and reading it as one fails obscurely
-    if header[8] == 0:  # chunksize
+    if header[4] == 0:  # nbytes; variable-sized chunks use chunksize == 0
         return np.empty(0, dtype=np.int64)
 
     # The offsets live in a Blosc2 chunk of their own, right after the data ones,
@@ -707,7 +707,7 @@ def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     index_pos = header[1] + header[5]
     bounds = np.sort(np.append(offsets[offsets >= 0], index_pos))
     extents = bounds[np.searchsorted(bounds, offsets, side="right")] - offsets
-    return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD)
+    return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD) if header[8] else extents
 
 
 class ByteRangeNDSource(ProxyNDSource):

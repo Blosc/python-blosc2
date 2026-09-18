@@ -1,5 +1,6 @@
 """Native remote reads inside B2Z archives."""
 
+import dataclasses
 import io
 import subprocess
 import sys
@@ -26,6 +27,60 @@ def memory_archive(data=None, *, compression=zipfile.ZIP_STORED, zip64=False):
     fs = fsspec.filesystem("memory")
     fs.pipe_file("v10.b2z", buffer.getvalue())
     return "memory://v10.b2z", data
+
+
+def test_remote_batch_member_range_experiment(tmp_path, monkeypatch):
+    """A distant BatchArray chunk can be decoded without fetching its member."""
+    from blosc2.b2z_source import B2ZArchive, member_vlmeta
+    from blosc2.msgpack_utils import msgpack_unpackb
+    from blosc2.proxy_source import _chunk_extents, _read_frame_header, _read_frame_offsets
+
+    @dataclasses.dataclass
+    class Row:
+        text: str = blosc2.field(blosc2.vlstring(nullable=True, batch_rows=64))
+
+    rng = np.random.default_rng(42)
+    values = [None if i % 17 == 0 else rng.bytes(512).hex() for i in range(640)]
+    table = blosc2.CTable(Row, [(value,) for value in values], create_summary_index=False)
+    path = tmp_path / "remote-batches.b2z"
+    table.to_b2z(path)
+    url = "memory://remote-batches.b2z"
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file(url, path.read_bytes())
+
+    reads = []
+    original = type(fs).cat_file
+
+    def counted(self, path, start=None, end=None, **kwargs):
+        reads.append((start, end))
+        return original(self, path, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(type(fs), "cat_file", counted)
+    archive = B2ZArchive(url)
+    try:
+        info = next(info for info in archive.members if info.filename == "_cols/text.b2b")
+        member_offset, member_length = archive.member_window(info)
+
+        def read_range(offset, size):
+            return archive._read_archive(member_offset + offset, size)
+
+        raw, header, head = _read_frame_header(read_range)
+        offsets = _read_frame_offsets(read_range, header, head, len(raw))
+        metadata = member_vlmeta(archive, info)["_batch_array_metadata"]
+        batch_index = len(metadata["batch_lengths"]) - 2
+        extents = _chunk_extents(offsets, header)
+        chunk = read_range(int(offsets[batch_index]), int(extents[batch_index]))
+        chunk = chunk[: int.from_bytes(chunk[12:16], "little")]
+        decoded = [
+            item for block in blosc2.blosc2_ext.vldecompress(chunk) for item in msgpack_unpackb(block)
+        ]
+
+        start = sum(metadata["batch_lengths"][:batch_index])
+        assert decoded == values[start : start + metadata["batch_lengths"][batch_index]]
+        assert member_length > 64 * 1024
+        assert sum(end - start for start, end in reads) < member_length
+    finally:
+        archive.close()
 
 
 @pytest.mark.parametrize("address", ["::/d0/a", "/d0/a", "keyword"])
