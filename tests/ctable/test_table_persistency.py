@@ -275,6 +275,17 @@ def test_copy_to_b2z_uses_urlpath_extension():
     assert list(copied["id"][:]) == [10, 20]
 
 
+def test_materialize_view_returns_independent_table():
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True)])
+    view = t.where(t["id"] > 1)
+
+    materialized = view.materialize()
+    t.close()
+
+    assert type(materialized) is CTable
+    assert list(materialized["id"][:]) == [2, 3]
+
+
 def test_to_b2d_unpacks_persistent_b2z():
     src_b2d = table_path("to_b2d_src.b2d")
     src_b2z = table_path("to_b2d_src.b2z")

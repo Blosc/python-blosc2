@@ -255,6 +255,13 @@ def test_remote_ctable_is_cache_mutable(tmp_path, monkeypatch):
     local = blosc2.CTable(dataclasses.make_dataclass("Sample", [("x", int)]), [(1,)])
     url = remote_table_url(tmp_path, local)
     with blosc2.RemoteCTable(url) as table:
+        assert isinstance(table, blosc2.RemoteObject)
+        assert isinstance(table, blosc2.CTable)
+        assert table.mutable is False
+        table.mutable = True
+        assert table.mutable is True
+        with pytest.raises(TypeError, match="boolean"):
+            table.mutable = "invalid"
         assert table.is_cache_mutable is True
         with monkeypatch.context() as patch:
             patch.setattr(table._remote_storage()._owner, "is_mutable", False)
@@ -263,6 +270,8 @@ def test_remote_ctable_is_cache_mutable(tmp_path, monkeypatch):
             table.is_cache_mutable = False
     with pytest.raises(RuntimeError, match="closed"):
         _ = table.is_cache_mutable
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = table.mutable
 
 
 def test_remote_ctable_fixed_width_reads_and_queries(tmp_path):
@@ -424,8 +433,22 @@ def test_remote_ctable_deleted_rows_and_disk_cache(tmp_path):
         assert remote["x"].sum() == 10
         assert remote.cache_policy is blosc2.CachePolicy.DISK
 
+        materialized = remote.materialize()
+        assert type(materialized) is blosc2.CTable
+        np.testing.assert_array_equal(materialized["x"][:], [0, 2, 3, 5])
+
+        destination = tmp_path / "materialized.b2z"
+        persisted = remote.materialize(urlpath=destination)
+        assert type(persisted) is blosc2.CTable
+        np.testing.assert_array_equal(persisted["x"][:], [0, 2, 3, 5])
+
     with blosc2.RemoteCTable(url, cache_dir=cache) as reopened:
         np.testing.assert_array_equal(reopened["x"][:], [0, 2, 3, 5])
+
+    np.testing.assert_array_equal(materialized["x"][:], [0, 2, 3, 5])
+    np.testing.assert_array_equal(persisted["x"][:], [0, 2, 3, 5])
+    materialized.close()
+    persisted.close()
 
 
 @pytest.mark.parametrize("empty", [False, True])

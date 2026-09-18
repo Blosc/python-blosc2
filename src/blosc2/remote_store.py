@@ -24,6 +24,7 @@ from blosc2.remote_array import (
     normalize_cache_limit,
     validate_persistable_url,
 )
+from blosc2.remote_object import RemoteObject
 
 RESERVED_NAMES = {"embed.b2e", "__vlmeta__"}
 
@@ -790,7 +791,7 @@ class RemoteDiscovery:
         self.filesystem = None
 
 
-class RemoteStore:
+class RemoteStore(RemoteObject):
     """Read-only remote B2Z, Zarr or HDF5 hierarchy.
 
     Discovery and returned array handles share source resources and traffic.
@@ -1230,12 +1231,8 @@ class RemoteStore:
         with self._owner.lock:
             self._finalizer()
 
-    def __enter__(self):
+    def _check_open(self):
         self._resolve("")
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
 
     def save(
         self,

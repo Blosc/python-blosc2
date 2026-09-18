@@ -14,6 +14,7 @@ import contextlib
 import json
 import math
 import os
+import tempfile
 import threading
 import weakref
 from collections.abc import Mapping
@@ -36,6 +37,7 @@ from blosc2.b2objects import (
 )
 from blosc2.core import fsspec_cache_path, parse_container_url, storage_options_fingerprint
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.remote_object import RemoteObject
 
 DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
 
@@ -506,7 +508,7 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format, hdf5_index=No
     return urlpath, resolved_dataset, resolved_format
 
 
-class RemoteArray(blosc2.Operand):
+class RemoteArray(RemoteObject, blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
     With :attr:`CachePolicy.DISK`, the public constructor uses the persisted
@@ -1056,11 +1058,20 @@ class RemoteArray(blosc2.Operand):
                 _persistent_dirty=self._shared_runtime_cache,
             )
         elif self.cache_policy is blosc2.CachePolicy.MEMORY:
-            self._proxy = blosc2.Proxy(
+            proxy = blosc2.Proxy(
                 self.src,
                 _refresh_source=False,
                 _max_cache_bytes=self._cache_limit,
             )
+            if self._carrier is not None:
+                self._import_warm_seed(self._carrier, proxy._cache)
+                proxy = blosc2.Proxy(
+                    self.src,
+                    _cache=proxy._cache,
+                    _refresh_source=False,
+                    _max_cache_bytes=self._cache_limit,
+                )
+            self._proxy = proxy
         else:
             self._proxy = None
 
@@ -1689,7 +1700,7 @@ class RemoteArray(blosc2.Operand):
                 if key.startswith("proxy-") or key == _B2OBJECT_USER_VLMETA_KEY:
                     carrier.schunk.vlmeta[key] = runtime_schunk.vlmeta[key]
             return carrier
-        if include_cache and self._store_owner is not None and self._proxy is not None:
+        if include_cache and self._proxy is not None:
             carrier = self._to_b2object_carrier(mutable=effective_mutable)
             for nchunk in self._proxy._cache_sizes:
                 carrier.schunk.update_chunk(nchunk, self._proxy.schunk.get_chunk(nchunk))
@@ -1703,7 +1714,7 @@ class RemoteArray(blosc2.Operand):
     def to_cframe(
         self, *, include_cache: bool = True, cache_policy=None, mutable: bool | None = None
     ) -> bytes:
-        """Export a carrier. Only DISK preserves warm chunks by default.
+        """Export a carrier containing retained chunks by default.
 
         An explicit cache_policy exports a cold carrier with that policy.
         """
@@ -1714,33 +1725,55 @@ class RemoteArray(blosc2.Operand):
     @_serialized_operation
     def save(
         self,
-        urlpath: str | os.PathLike,
+        destination: str | os.PathLike | None = None,
         contiguous: bool = True,
         *,
+        urlpath: str | os.PathLike | None = None,
         include_cache: bool = True,
         cache_policy=None,
         mutable: bool | None = None,
+        overwrite: bool = False,
         **kwargs,
     ) -> str:
-        """Save a carrier; MEMORY exports are cold. See :meth:`to_cframe`.
+        """Save a carrier containing retained chunks by default.
 
-        Return the written ``urlpath``.
+        ``urlpath`` is retained as a compatibility alias for ``destination``.
+        Return the written destination.
         """
         if mutable is not None and not isinstance(mutable, bool):
             raise TypeError("mutable must be a boolean")
-        urlpath = os.fspath(urlpath)
+        if destination is None:
+            if urlpath is None:
+                raise TypeError("save() missing required destination")
+            destination = urlpath
+        elif urlpath is not None:
+            raise TypeError("destination and urlpath cannot both be specified")
+        destination = os.fspath(destination)
         if (cache_policy is not None or not include_cache) and any(
-            path is not None and os.path.abspath(path) == os.path.abspath(urlpath)
+            path is not None and os.path.abspath(path) == os.path.abspath(destination)
             for path in (self.cache_path, self.runtime_cache_path)
         ):
             raise ValueError("cold or policy-changing export requires a different destination")
         carrier = self._export_carrier(include_cache, cache_policy, mutable=mutable)
         source_path = getattr(carrier.schunk, "urlpath", None)
-        if source_path is not None and os.path.abspath(source_path) == os.path.abspath(urlpath):
-            return urlpath
-        blosc2.blosc2_ext.check_access_mode(urlpath, "w")
-        carrier.save(urlpath, contiguous=contiguous, **kwargs)
-        return urlpath
+        same_live_carrier = source_path is not None and os.path.abspath(source_path) == os.path.abspath(
+            destination
+        )
+        if same_live_carrier:
+            if overwrite:
+                raise ValueError("cannot overwrite the attached live cache")
+            raise ValueError(f"destination {destination!r} already exists; use overwrite=True to replace it")
+        if os.path.exists(destination) and not overwrite:
+            raise ValueError(f"destination {destination!r} already exists; use overwrite=True to replace it")
+        blosc2.blosc2_ext.check_access_mode(destination, "w")
+        if os.path.exists(destination):
+            with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(destination))) as temp_dir:
+                staged = os.path.join(temp_dir, os.path.basename(destination))
+                carrier.save(staged, contiguous=contiguous, **kwargs)
+                os.replace(staged, destination)
+        else:
+            carrier.save(destination, contiguous=contiguous, **kwargs)
+        return destination
 
     @classmethod
     def _from_payload(cls, payload, carrier):
@@ -1766,7 +1799,7 @@ class RemoteArray(blosc2.Operand):
         source_kind, urlpath = _parse_source_from_payload(source)
         expected = (carrier.shape, carrier.dtype, carrier.chunks, carrier.blocks)
         kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
-        carrier_arg = carrier if policy is blosc2.CachePolicy.DISK else None
+        carrier_arg = carrier if policy in {blosc2.CachePolicy.DISK, blosc2.CachePolicy.MEMORY} else None
         hdf5_index = _hdf5_index_from_carrier(carrier) if source_kind == "hdf5" else None
         carrier_mode = getattr(carrier.schunk, "mode", "r") if carrier is not None else "r"
         is_disk_file = carrier is not None and bool(getattr(carrier.schunk, "urlpath", None))
@@ -1797,14 +1830,6 @@ class RemoteArray(blosc2.Operand):
             if obj._cached_vlmeta is None:
                 obj._cached_vlmeta = read_b2object_user_vlmeta(carrier)
         return obj
-
-    def __enter__(self):
-        self._check_open()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-        return False
 
     def __str__(self):
         return f"RemoteArray({self._display_identity()!r}, cache_policy={self.cache_policy.name})"

@@ -619,6 +619,7 @@ from .proxy import (
     jit,
     as_simpleproxy,
 )
+from .remote_object import RemoteObject
 from .remote_array import RemoteMetadataMapping, RemoteArray
 from .remote_store import RemoteNode, RemoteStore
 from . import linalg
@@ -915,6 +916,7 @@ __all__ = [  # noqa : RUF022
     "ProxySource",
     "Ref",
     "RemoteMetadataMapping",
+    "RemoteObject",
     "RemoteArray",
     "RemoteCTable",
     "RemoteNode",

@@ -115,6 +115,17 @@ codecs, filters, and remote paths.
     URLPath
 
 
+Remote Data
+-----------
+
+.. autosummary::
+
+    RemoteObject
+    RemoteArray
+    RemoteStore
+    RemoteCTable
+
+
 Ancillary / Advanced Classes
 ----------------------------
 
@@ -142,6 +153,7 @@ container APIs above.
     list_array
     objectarray
     proxy
+    remoteobject
     remotearray
     remotestore
     proxysource

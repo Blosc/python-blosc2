@@ -6784,7 +6784,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
         else:
-            self.save(urlpath, overwrite=overwrite)
+            CTable.save(self, urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
     def to_b2d(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
@@ -6840,7 +6840,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
         else:
-            self.save(urlpath, overwrite=overwrite)
+            CTable.save(self, urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
     def to_cframe(self) -> bytes:
@@ -14330,6 +14330,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._n_rows = n
         result._last_pos = n
         return result
+
+    def materialize(
+        self,
+        *,
+        urlpath: str | os.PathLike[str] | None = None,
+        overwrite: bool = False,
+        compact: bool = True,
+        chunks: int | tuple[int, ...] | None = None,
+        blocks: int | tuple[int, ...] | None = None,
+        cparams: dict[str, Any] | None = None,
+    ) -> CTable:
+        """Return an independent local copy of this table or view."""
+        return self.copy(
+            compact=compact,
+            urlpath=urlpath,
+            overwrite=overwrite,
+            chunks=chunks,
+            blocks=blocks,
+            cparams=cparams,
+        )
 
     def copy(  # noqa: C901
         self,

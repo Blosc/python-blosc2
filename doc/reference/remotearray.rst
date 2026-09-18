@@ -144,10 +144,10 @@ is always returned: specifying ``cache_dir`` or ``cache_path`` configures it wit
 
 By default, :meth:`RemoteArray.save <blosc2.RemoteArray.save>` and
 :meth:`RemoteArray.to_cframe <blosc2.RemoteArray.to_cframe>` include valid warm
-chunks for DISK proxies; MEMORY proxies always export cold carriers.
-Pass ``include_cache=False`` for a cold carrier without changing the
-warm original. The cache policy and limit remain in both forms; local paths and
-authentication data are not serialized.
+chunks already retained by DISK or MEMORY proxies. Pass ``include_cache=False``
+for a cold carrier without changing the warm original. The cache policy and
+limit remain in both forms; local paths and authentication data are not
+serialized.
 
 Pass ``cache_policy=blosc2.CachePolicy.NONE`` (or another policy) to either
 export method to produce a cold carrier with an explicit policy, leaving the

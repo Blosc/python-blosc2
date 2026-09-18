@@ -263,7 +263,13 @@ def test_policies_exports_and_identity(tmp_path):
     assert none.traffic.nbytes > before
     memory = blosc2.open(url, dataset="d0/a", lazy=True)
     memory[:2]
-    memory.save(tmp_path / "cold.b2nd")
+    memory.save(tmp_path / "warm.b2nd")
+    warm = blosc2.open(tmp_path / "warm.b2nd")
+    assert warm.cache_bytes > 0
+    warm.traffic.reset()
+    np.testing.assert_array_equal(warm[:2], data[:2])
+    assert warm.traffic.requests == 0
+    memory.save(tmp_path / "cold.b2nd", include_cache=False)
     cold = blosc2.open(tmp_path / "cold.b2nd")
     assert cold.cache_bytes == 0
     np.testing.assert_array_equal(cold.materialize((slice(0, 2),))[:], data[:2])

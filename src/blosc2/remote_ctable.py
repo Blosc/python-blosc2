@@ -13,6 +13,7 @@ import operator
 from blosc2.ctable import CTable
 from blosc2.ctable_storage import RemoteTableStorage
 from blosc2.remote_array import CACHE_POLICY_DEFAULT, RemoteMetadataMapping
+from blosc2.remote_object import RemoteObject
 
 
 def _positive_integer(name, value):
@@ -41,7 +42,7 @@ def _read_setting(name):
     return property(get, set)
 
 
-class RemoteCTable(CTable):
+class RemoteCTable(RemoteObject, CTable):
     """A read-only CTable whose fixed-width and UTF-8 columns are fetched on demand.
 
     Independent column requests overlap by default. ``max_concurrency`` defaults
@@ -129,6 +130,9 @@ class RemoteCTable(CTable):
         storage._check_open()
         return storage
 
+    def _check_open(self) -> None:
+        self._remote_storage()
+
     def close(self) -> None:
         storage = getattr(self, "_storage", None)
         if isinstance(storage, RemoteTableStorage):
@@ -205,6 +209,20 @@ class RemoteCTable(CTable):
     @property
     def max_cache_bytes(self):
         return self._remote_storage()._owner.max_cache_bytes
+
+    @property
+    def mutable(self) -> bool:
+        """The export default mutability for future reference exports."""
+        return self._remote_storage()._owner.mutable
+
+    @mutable.setter
+    def mutable(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("mutable must be a boolean")
+        storage = self._remote_storage()
+        with storage._owner.lock:
+            storage._check_open()
+            storage._owner.mutable = value
 
     @property
     def is_cache_mutable(self) -> bool:

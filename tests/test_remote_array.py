@@ -178,6 +178,9 @@ def test_remote_array_operand_interface():
 
     assert type(proxy).__module__ == "blosc2.remote_array"
     assert type(proxy).__name__ == "RemoteArray"
+    assert isinstance(proxy, blosc2.RemoteObject)
+    assert isinstance(proxy, blosc2.Operand)
+    assert "RemoteObject" in blosc2.__all__
     assert "RemoteArray" in blosc2.__all__
     assert proxy.ndim == 1
     assert len(proxy) == 100
@@ -499,6 +502,15 @@ def test_save_returns_written_path(tmp_path):
     original[:]
     destination = tmp_path / "out.b2nd"
     assert original.save(destination) == str(destination)
+
+    alias = tmp_path / "alias.b2nd"
+    assert original.save(urlpath=alias) == str(alias)
+    with pytest.raises(TypeError, match="cannot both"):
+        original.save(destination, urlpath=alias)
+
+    with pytest.raises(ValueError, match="overwrite=True"):
+        original.save(destination)
+    assert original.save(destination, overwrite=True) == str(destination)
 
 
 def test_dict_store_externalizes_disk_remote_array(tmp_path):
@@ -1071,14 +1083,30 @@ def test_legacy_cache_url_open_preserves_file(tmp_path):
     np.testing.assert_array_equal(blosc2.open(path)[:], data)
 
 
-def test_memory_warm_export_is_cold():
-    url, _ = _remote_array("warm-memory.b2nd", nchunks=1, chunk_size=100)
+def test_memory_warm_export_restores_retained_cache(tmp_path):
+    url, data = _remote_array("warm-memory.b2nd", nchunks=2, chunk_size=100)
     proxy = blosc2.open(url, lazy=True)
-    proxy[:]
-    carrier = blosc2.ndarray_from_cframe(proxy.to_cframe())
+    np.testing.assert_array_equal(proxy[:100], data[:100])
+
+    frame = proxy.to_cframe()
+    carrier = blosc2.ndarray_from_cframe(frame)
     assert carrier.schunk.vlmeta["b2o"]["cache_policy"] == "memory"
-    assert not carrier.schunk.vlmeta.get("proxy-fetched")
+    assert carrier.schunk.vlmeta.get("proxy-fetched")
     assert proxy.cache_bytes > 0
+
+    restored = blosc2.from_cframe(frame)
+    restored.traffic.reset()
+    np.testing.assert_array_equal(restored[:100], data[:100])
+    assert restored.traffic.requests == 0
+    np.testing.assert_array_equal(restored[100:], data[100:])
+    assert restored.traffic.requests > 0
+
+    path = tmp_path / "warm-memory.b2nd"
+    proxy.save(path)
+    reopened = blosc2.open(path)
+    reopened.traffic.reset()
+    np.testing.assert_array_equal(reopened[:100], data[:100])
+    assert reopened.traffic.requests == 0
 
 
 def test_cold_export_cannot_overwrite_live_carrier(tmp_path):

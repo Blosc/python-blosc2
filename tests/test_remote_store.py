@@ -923,9 +923,13 @@ def test_hdf5_array_attrs_survive_manifest_and_export(tmp_path):
 def test_mutability_property_and_inheritance(hierarchy):
     url, _ = hierarchy
     with blosc2.RemoteStore(url) as store:
+        assert isinstance(store, blosc2.RemoteObject)
         assert store.mutable is False
-        assert store["group"].mutable is False
-        assert store["group/a"].mutable is False
+        with store["group"] as group, store["group/a"] as array:
+            assert isinstance(group, blosc2.RemoteObject)
+            assert isinstance(array, blosc2.RemoteObject)
+            assert group.mutable is False
+            assert array.mutable is False
 
         store.mutable = True
         assert store.mutable is True
