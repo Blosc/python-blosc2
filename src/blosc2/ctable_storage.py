@@ -734,9 +734,13 @@ class RemoteTableStorage(TableStorage):
                         array.close()
                 del self._arrays[first:]
                 raise
-        raise NotImplementedError(
-            f"Remote CTable variable-length column {name!r} ({type(spec).__name__}) is not supported"
-        )
+        from blosc2.remote_batch import _RemoteBatchArray
+
+        key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
+        full = self._full_key(key)
+        backend = _RemoteBatchArray(self._owner.open_ctable_batch(full), name)
+        _validate_role_metadata(backend, spec)
+        return _ScalarVarLenArray(spec, backend)
 
     def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
         raise NotImplementedError(f"Remote CTable dictionary column {name!r} is not supported")

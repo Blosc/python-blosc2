@@ -567,6 +567,15 @@ class RemoteDiscovery:
         self.sources[full] = source
         return source
 
+    def open_ctable_batch(self, full):
+        """Open one external BatchArray member hidden below a CTable node."""
+        if self.format != "b2z":
+            raise NotImplementedError("Remote CTable access currently requires a B2Z source")
+        self._validate(full)
+        from blosc2.b2z_source import B2ZBatchSource
+
+        return B2ZBatchSource(self.archive, full)
+
     def load_ctable_attrs(self, table_path):
         """Load one table's user attributes without opening its data arrays."""
         if table_path in self.attrs:

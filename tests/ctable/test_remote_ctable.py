@@ -310,6 +310,42 @@ def test_remote_ctable_fixed_width_reads_and_queries(tmp_path):
         table["tag"][:]
 
 
+def test_remote_ctable_nullable_vlstring_none_cache(tmp_path, monkeypatch):
+    @dataclasses.dataclass
+    class TextRow:
+        text: str = blosc2.field(blosc2.vlstring(nullable=True, batch_rows=32))
+
+    rng = np.random.default_rng(42)
+    values = np.asarray(
+        [
+            None if i % 19 == 0 else "" if i % 23 == 0 else f"café 東京 {i} " + rng.bytes(1024).hex()
+            for i in range(160)
+        ],
+        dtype=object,
+    )
+    local = blosc2.CTable(TextRow, [(value,) for value in values], create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "vlstring-none")
+    fs = fsspec.filesystem("memory")
+    reads = []
+    original = type(fs).cat_file
+
+    def counted(self, path, start=None, end=None, **kwargs):
+        reads.append((start, end))
+        return original(self, path, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(type(fs), "cat_file", counted)
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.NONE) as remote:
+        assert remote.col_names == ["text"]
+        column = remote["text"]
+        reads.clear()
+        assert column[-1] == values[-1]
+        transferred = sum(end - start for start, end in reads)
+        assert transferred < (tmp_path / "vlstring-none.b2z").stat().st_size
+        assert column[0] is None
+        assert column[23] == ""
+        assert column[31:34] == values[31:34].tolist()
+
+
 def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
     source = tmp_path / "tree.b2z"
     table = blosc2.CTable(Row, [(1, [1, 2], "one"), (2, [3, 4], "two")], create_summary_index=False)
@@ -485,7 +521,7 @@ def test_nested_remote_ctable_reference_save(tmp_path):
             assert isinstance(sibling, blosc2.RemoteArray)
 
 
-def test_remote_ctable_unsupported_column_is_lazy(tmp_path):
+def test_remote_ctable_batch_column_is_lazy(tmp_path):
     @dataclasses.dataclass
     class Mixed:
         x: int = 0
@@ -498,8 +534,7 @@ def test_remote_ctable_unsupported_column_is_lazy(tmp_path):
     )
     with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.NONE) as table:
         np.testing.assert_array_equal(table["x"][:], [1, 2])
-        with pytest.raises(NotImplementedError, match="variable-length column 'text'"):
-            table["text"][:]
+        assert table["text"][:] == ["a", "bb"]
 
 
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))

@@ -707,7 +707,8 @@ def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     index_pos = header[1] + header[5]
     bounds = np.sort(np.append(offsets[offsets >= 0], index_pos))
     extents = bounds[np.searchsorted(bounds, offsets, side="right")] - offsets
-    return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD) if header[8] else extents
+    cap = header[8] + 2 * blosc2.MAX_OVERHEAD
+    return np.minimum(extents, cap) if header[8] else extents
 
 
 class ByteRangeNDSource(ProxyNDSource):
