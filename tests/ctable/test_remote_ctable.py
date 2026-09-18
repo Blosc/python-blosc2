@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import os
 import zipfile
 
 import numpy as np
@@ -327,6 +328,91 @@ def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
 
     with blosc2.RemoteCTable(url, dataset="group/table") as direct:
         np.testing.assert_array_equal(direct["x"][:], [1, 2])
+
+
+def test_remote_ctable_reference_save_roundtrip(tmp_path):
+    @dataclasses.dataclass
+    class TextRow:
+        x: int = blosc2.field(blosc2.int64(null_storage="mask"))
+        text: str = blosc2.field(blosc2.utf8())
+
+    local = blosc2.CTable(
+        TextRow,
+        [(1, "café"), (None, "東京"), (3, "three")],
+        create_summary_index=False,
+    )
+    local.attrs["title"] = "remote table"
+    url = remote_table_url(tmp_path, local, "reference-source")
+    warm_path = tmp_path / "warm-reference.b2z"
+    cold_path = tmp_path / "cold-reference.b2z"
+    mutable_path = tmp_path / "mutable-reference.b2z"
+
+    with blosc2.RemoteCTable(url) as remote:
+        np.testing.assert_array_equal(remote["x"][:], [1, 0, 3])
+        assert remote.attrs["title"] == "remote table"
+        before = remote.traffic.requests
+        assert remote.save(warm_path) == os.path.abspath(warm_path)
+        assert remote.save(urlpath=cold_path, include_cache=False) == os.path.abspath(cold_path)
+        remote.save(mutable_path, mutable=True)
+        assert remote.traffic.requests == before
+
+    with blosc2.open(warm_path) as warm:
+        assert isinstance(warm, blosc2.RemoteCTable)
+        assert warm.attrs["title"] == "remote table"
+        warm.traffic.reset()
+        np.testing.assert_array_equal(warm["x"][:], [1, 0, 3])
+        assert warm.traffic.requests == 0
+        assert warm["text"][:].tolist() == ["café", "東京", "three"]
+        assert warm.traffic.requests > 0
+
+    with blosc2.open(cold_path) as cold:
+        assert isinstance(cold, blosc2.RemoteCTable)
+        assert cold.cache_bytes == 0
+        cold.traffic.reset()
+        np.testing.assert_array_equal(cold["x"][:], [1, 0, 3])
+        assert cold.traffic.requests > 0
+
+    with blosc2.open(mutable_path) as mutable:
+        assert isinstance(mutable, blosc2.RemoteCTable)
+        assert mutable.is_cache_mutable
+        mutable.refresh()
+        assert mutable.attrs["title"] == "remote table"
+
+    with blosc2.RemoteCTable(url) as remote, pytest.raises(FileExistsError):
+        remote.save(warm_path)
+
+
+def test_nested_remote_ctable_reference_save(tmp_path):
+    source = tmp_path / "tree.b2z"
+    table = blosc2.CTable(Row, [(1, [1, 2], "one"), (2, [3, 4], "two")])
+    with blosc2.TreeStore(source, mode="w", threshold=0) as root:
+        root["group/table"] = table
+        root["group/sibling"] = blosc2.arange(10)
+    url = f"memory://{tmp_path.name}-reference-tree.b2z"
+    fsspec.filesystem("memory").pipe(url, source.read_bytes())
+    destination = tmp_path / "nested-reference.b2z"
+    group_destination = tmp_path / "group-reference.b2z"
+
+    with blosc2.RemoteStore(url) as store, store["group/table"] as remote:
+        np.testing.assert_array_equal(remote["x"][:], [1, 2])
+        remote.save(destination)
+        with store["group"] as group:
+            group.save(group_destination)
+
+    with blosc2.open(destination) as reopened:
+        assert isinstance(reopened, blosc2.RemoteCTable)
+        assert reopened.source["dataset"] == "group/table"
+        reopened.traffic.reset()
+        np.testing.assert_array_equal(reopened["x"][:], [1, 2])
+        assert reopened.traffic.requests == 0
+
+    with blosc2.open(group_destination) as group:
+        assert isinstance(group, blosc2.RemoteStore)
+        with group["table"] as reopened:
+            assert isinstance(reopened, blosc2.RemoteCTable)
+            np.testing.assert_array_equal(reopened["x"][:], [1, 2])
+        with group["sibling"] as sibling:
+            assert isinstance(sibling, blosc2.RemoteArray)
 
 
 def test_remote_ctable_unsupported_column_is_lazy(tmp_path):

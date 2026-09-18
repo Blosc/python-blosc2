@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import operator
+import os  # noqa: TC003
 
 from blosc2.ctable import CTable
 from blosc2.ctable_storage import RemoteTableStorage
@@ -188,6 +189,11 @@ class RemoteCTable(RemoteObject, CTable):
         return RemoteMetadataMapping(self._remote_storage().load_user_attrs())
 
     @property
+    def attrs(self):
+        """Read-only user attributes."""
+        return self.vlmeta
+
+    @property
     def source(self):
         storage = self._remote_storage()
         return {
@@ -238,3 +244,37 @@ class RemoteCTable(RemoteObject, CTable):
         storage = self._remote_storage()
         storage._owner.save_manifest()
         return storage._owner.metadata_bytes
+
+    def save(
+        self,
+        destination: str | os.PathLike | None = None,
+        *,
+        urlpath: str | os.PathLike | None = None,
+        include_cache: bool = True,
+        mutable: bool | None = None,
+        overwrite: bool = False,
+    ) -> str:
+        """Export this table as a portable remote-reference archive."""
+        if destination is None:
+            if urlpath is None:
+                raise TypeError("save() missing required destination")
+            destination = urlpath
+        elif urlpath is not None:
+            raise TypeError("destination and urlpath cannot both be specified")
+
+        from blosc2.remote_store import RemoteStore
+
+        storage = self._remote_storage()
+        owner = storage._owner
+        relative = storage._root_key[len(owner.root) + 1 :] if owner.root else storage._root_key
+        selected = object.__new__(RemoteStore)
+        selected._attach(owner, relative)
+        try:
+            return selected.save(
+                destination,
+                include_cache=include_cache,
+                mutable=mutable,
+                overwrite=overwrite,
+            )
+        finally:
+            selected.close()

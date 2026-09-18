@@ -567,6 +567,23 @@ class RemoteDiscovery:
         self.sources[full] = source
         return source
 
+    def load_ctable_attrs(self, table_path):
+        """Load one table's user attributes without opening its data arrays."""
+        if table_path in self.attrs:
+            return dict(self.attrs[table_path])
+        member = "/".join(part for part in (table_path, "_vlmeta.b2f") if part)
+        matches = [info for info in self.archive.members if info.filename == member]
+        if len(matches) > 1:
+            raise ValueError(f"Duplicate Remote CTable metadata member {member!r}")
+        if matches:
+            from blosc2.b2z_source import member_vlmeta
+
+            self.attrs[table_path] = dict(member_vlmeta(self.archive, matches[0]))
+        else:
+            self.attrs[table_path] = {}
+        self.save_manifest()
+        return dict(self.attrs[table_path])
+
     def _open_b2z_source(self, full):
         from blosc2.b2z_source import B2ZNDSource
 
@@ -1353,11 +1370,9 @@ class RemoteStore(RemoteObject):
     def _collect_export_nodes(self, include_cache):
         group_full = "/".join(p for p in (self._owner.root, self._path.strip("/")) if p)
         prefix = (group_full + "/") if group_full else ""
-        if any(
-            kind == "ctable" and (path == group_full or not prefix or path.startswith(prefix))
-            for path, (kind, _) in self._owner.nodes.items()
-        ):
-            raise NotImplementedError("RemoteStore artifacts do not yet support RemoteCTable nodes")
+        for path, (kind, _) in self._owner.nodes.items():
+            if kind == "ctable" and (path == group_full or not prefix or path.startswith(prefix)):
+                self._owner.load_ctable_attrs(path)
         exported_source = {
             "urlpath": self._owner.urlpath,
             "dataset": group_full,
@@ -1368,7 +1383,7 @@ class RemoteStore(RemoteObject):
             exported_source["storage_options"] = fingerprint
         if prefix:
             exported_nodes = {
-                k: (v[0], v[1] if v[0] == "unsupported" else None)
+                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None)
                 for k, v in self._owner.nodes.items()
                 if k == group_full or k.startswith(prefix)
             }
@@ -1383,7 +1398,8 @@ class RemoteStore(RemoteObject):
             )
         else:
             exported_nodes = {
-                k: (v[0], v[1] if v[0] == "unsupported" else None) for k, v in self._owner.nodes.items()
+                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None)
+                for k, v in self._owner.nodes.items()
             }
             exported_attrs = dict(self._owner.attrs)
             exported_listed = {k: list(v) for k, v in self._owner.listed.items()}
@@ -1479,7 +1495,7 @@ class RemoteStore(RemoteObject):
         return manifest, artifact_offsets
 
     @staticmethod
-    def _validate_artifact_manifest(manifest):
+    def _validate_artifact_manifest(manifest):  # noqa: C901
         from blosc2.remote_store_cache import validate_generation
 
         validate_generation(manifest.get("generation"))
@@ -1497,9 +1513,18 @@ class RemoteStore(RemoteObject):
             if (
                 not isinstance(entry, (list, tuple))
                 or len(entry) != 2
-                or entry[0] not in {"group", "ndarray", "unsupported"}
+                or entry[0] not in {"group", "ndarray", "ctable", "unsupported"}
             ):
                 raise ValueError("Invalid RemoteStore node")
+            if entry[0] == "ctable":
+                metadata = entry[1]
+                if (
+                    source.get("kind") != "b2z"
+                    or not isinstance(metadata, dict)
+                    or metadata.get("kind") not in {"ctable", b"ctable"}
+                    or not isinstance(metadata.get("schema"), (str, bytes))
+                ):
+                    raise ValueError("Invalid RemoteStore CTable node")
         if root not in nodes:
             raise ValueError("Missing RemoteStore root")
         if any(path not in nodes for field in ("attrs", "listed") for path in manifest[field]):
@@ -1667,9 +1692,14 @@ class RemoteStore(RemoteObject):
                 urlpath, manifest, artifact_offsets, storage_options, cache_policy, limit, cache_dir
             )
 
+        req_dataset = kwargs.get("dataset")
+        if owner.nodes[owner.root][0] == "ctable":
+            if req_dataset:
+                owner.close()
+                raise ValueError("dataset cannot select below a RemoteCTable artifact root")
+            return blosc2.RemoteCTable._from_owner(owner, owner.root)
         store = cls.__new__(cls)
         store._attach(owner, "")
-        req_dataset = kwargs.get("dataset")
         if req_dataset:
             return store[req_dataset]
         return store

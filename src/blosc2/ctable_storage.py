@@ -769,20 +769,7 @@ class RemoteTableStorage(TableStorage):
         self._check_open()
         if hasattr(self, "_user_attrs"):
             return dict(self._user_attrs)
-        if self._root_key in self._owner.attrs:
-            self._user_attrs = dict(self._owner.attrs[self._root_key])
-            return dict(self._user_attrs)
-        member = self._full_key("_vlmeta") + ".b2f"
-        matches = [info for info in self._owner.archive.members if info.filename == member]
-        if not matches:
-            return {}
-        if len(matches) != 1:
-            raise ValueError(f"Duplicate Remote CTable metadata member {member!r}")
-        from blosc2.b2z_source import member_vlmeta
-
-        self._user_attrs = dict(member_vlmeta(self._owner.archive, matches[0]))
-        self._owner.attrs[self._root_key] = self._user_attrs
-        self._owner.save_manifest()
+        self._user_attrs = self._owner.load_ctable_attrs(self._root_key)
         return dict(self._user_attrs)
 
     def table_exists(self) -> bool:

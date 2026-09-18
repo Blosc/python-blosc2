@@ -7094,6 +7094,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 disk_mask[:n_live] = mask[:n_live] if no_deletions else mask[live_pos]
 
         storage.save_schema(self._schema_dict_with_computed())
+        attrs = self.attrs[:]
+        if attrs:
+            vlmeta = blosc2.SChunk()
+            for key, value in attrs.items():
+                vlmeta.vlmeta[key] = value
+            storage.save_vlmeta(vlmeta)
 
     def save(self, urlpath: str, *, overwrite: bool = False) -> None:
         """Persist this table to disk at *urlpath*.
@@ -14536,6 +14542,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             result._n_rows = n_live
             result._last_pos = None  # recomputed lazily on next append
 
+        for key, value in self.attrs[:].items():
+            result.attrs[key] = value
+
         return result
 
     def _empty_copy(
@@ -14749,6 +14758,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         storage = getattr(self, "_storage", None)
         if storage is None:
+            if self.base is not None:
+                return self.base.vlmeta
             raise AttributeError("CTable has no storage backend")
         if not hasattr(storage, "_open_meta"):
             # In-memory table: create a simple SChunk to hold vlmeta lazily

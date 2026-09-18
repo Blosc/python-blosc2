@@ -607,8 +607,19 @@ the corresponding RemoteStore and RemoteArray property. It is read-only and does
 not imply that the remote table can be modified.
 Closing a parent RemoteStore leaves a returned table usable; refreshing the store
 invalidates previously returned tables and their columns. Copies and data exports
-produce local tables. Remote writes, batch-backed `vlstring`/lists/objects,
-dictionary columns and portable table-reference export remain unsupported.
+produce local tables. `save()` writes a portable remote reference containing
+bootstrap metadata and any retained cache; `materialize()`, `copy()`, `to_b2z()`
+and `to_b2d()` produce independent local tables:
+
+```python
+table.save("table-reference.b2z")
+table.save("cold-reference.b2z", include_cache=False)
+local = table.materialize(urlpath="complete-local.b2z")
+table.to_b2d("complete-local.b2d")
+```
+
+Saving a reference does not fetch missing table data. Remote writes and
+batch-backed `vlstring`/lists/objects and dictionary columns remain unsupported.
 
 See `examples/ctable/remote_handling.py` for a batched archive writer with a nullable
 multilingual UTF-8 column, plus sample row and string-slice traffic measurements.

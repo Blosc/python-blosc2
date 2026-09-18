@@ -4,8 +4,9 @@ RemoteStore
 ===========
 
 ``RemoteStore`` discovers a read-only B2Z, Zarr or HDF5 hierarchy and returns
-:ref:`RemoteArray` leaves. Groups and arrays share one source session: a B2Z
-archive, a native HDF5 index, or a Zarr store. Zarr listing remains lazy.
+:ref:`RemoteArray` and :ref:`RemoteCTable` leaves. Groups and leaves share one
+source session: a B2Z archive, a native HDF5 index, or a Zarr store. Zarr listing
+remains lazy.
 
 The default ``CachePolicy.MEMORY`` shares a 256 MiB allowance across all leaves.
 Set ``max_cache_bytes`` to a positive integer to change it. ``CachePolicy.NONE``
@@ -41,10 +42,10 @@ An array root must be opened with ``RemoteArray`` instead.
 ``keys()`` and ``get_info()`` do not construct leaf readers or payload caches.
 Discovery can read archive prefixes, attributes and small HDF5 inline values.
 ``get_info()`` returns a ``RemoteNode`` with a relative path, a kind (``group``,
-``ndarray`` or ``unsupported``), known attributes and a diagnostic. Unknown array
-attributes are ``None``; open the array to retrieve them. Unsupported nodes stay
-discoverable and raise ``NotImplementedError`` when selected. Missing paths raise
-``KeyError``.
+``ndarray``, ``ctable`` or ``unsupported``), known attributes and a diagnostic.
+Unknown array attributes are ``None``; open the array to retrieve them.
+Unsupported nodes stay discoverable and raise ``NotImplementedError`` when
+selected. Missing paths raise ``KeyError``.
 
 Group ``attrs`` mappings are read-only. ``source`` returns the credential-free
 container descriptor and full group path. ``traffic`` is one shared source
