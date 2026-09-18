@@ -567,6 +567,40 @@ metadata without scanning strings. Small-member metadata prefetch may also fetch
 some payload. Repeated reads can reuse cached blocks; filtering scans the required
 columns because persisted indexes are not used remotely.
 
+Multi-column metadata inspection and row materialization overlap independent
+requests by default, up to eight at once. This includes row iteration, display,
+and batched Arrow/pandas export; single-column access remains lazy. UTF-8 byte
+requests wait for their offsets. Cache publication and decoding stay serialized.
+
+```python
+with blosc2.open(url, max_concurrency=1) as table:  # serial control
+    rows = list(table[:10])
+
+with blosc2.RemoteCTable(
+    url,
+    max_concurrency=8,
+    metadata_buffer_bytes=8 << 20,
+    row_buffer_bytes=64 << 20,
+) as table:
+    table.row_buffer_bytes = 256 << 20  # optional explicit override
+    rows = list(table[:10])
+```
+
+The fixed defaults are 8 MiB of temporary metadata and 64 MiB of temporary row
+data, allocated on demand. They do not depend on CPU count or available RAM.
+Wider reads use bounded batches; a single oversized required unit runs alone.
+These are soft transport budgets, not total RAM limits: decoded output, native
+scratch, HTTP overhead and retained caches are additional. DISK caching does not
+remove the need to bound temporary reads or consume large outputs in batches.
+The buffer keywords belong to RemoteCTable, not `blosc2.open()`; settings may
+also be changed on a returned table, including one obtained from RemoteStore.
+
+The existing 1 MiB compressed-chunk threshold is a block-selection heuristic,
+not a maximum response size. Large selections and unsupported partial-block
+layouts can still fetch whole chunks. Cross-process shared-cache handles and
+read-only artifacts retain their existing guarded row-read paths; standalone
+RemoteArray concurrency and RemoteStore discovery behavior are unchanged.
+
 Columns and views are borrowed from the root table and require it to remain open.
 Closing a parent RemoteStore leaves a returned table usable; refreshing the store
 invalidates previously returned tables and their columns. Copies and data exports

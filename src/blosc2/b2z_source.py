@@ -10,6 +10,7 @@ import io
 import operator
 import re
 import zipfile
+from contextlib import contextmanager
 
 from blosc2.core import _import_fsspec
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traffic
@@ -122,6 +123,7 @@ class B2ZArchive:
                 raise ValueError("Invalid cached B2Z metadata range")
         self.capture_metadata = True
         self._opening_ranges = []
+        self._batch_ranges = []
         # ponytail: small directories fit in 8 KiB; larger ones use exact reads.
         tail_start = max(0, size - 8192)
         if bootstrap is None:
@@ -185,16 +187,33 @@ class B2ZArchive:
         for start, data in self.metadata["ranges"] if self.capture_metadata else ():
             if start <= offset and offset + size <= start + len(data):
                 return data[offset - start : offset - start + size]
-        for start, data in self._opening_ranges:
+        for start, data in (*self._opening_ranges, *self._batch_ranges):
             if start <= offset and offset + size <= start + len(data):
                 return data[offset - start : offset - start + size]
-        data = self._fs.cat_file(self._path, start=offset, end=offset + size)
-        if len(data) > size:
-            raise ValueError("B2Z transport did not honor the requested byte range")
-        self.traffic.charge(len(data))
+        data = self.read_transport(offset, size)
         if self.capture_metadata and self.persist_metadata:
             self.metadata["ranges"].append((offset, data))
         return data
+
+    def read_transport(self, offset, size):
+        """Read immutable bytes only; safe while the owner parses other responses."""
+        if not 0 <= offset <= self.size or not 0 <= size <= self.size - offset:
+            raise ValueError("B2Z range exceeds archive bounds")
+        data = self._fs.cat_file(self._path, start=offset, end=offset + size)
+        if len(data) != size:
+            raise ValueError("B2Z transport did not honor the requested byte range")
+        self.traffic.charge(len(data))
+        return data
+
+    @contextmanager
+    def buffered_ranges(self, ranges):
+        """Owner-thread-only prefix reuse while opening a batch of members."""
+        previous = self._batch_ranges
+        self._batch_ranges = ranges
+        try:
+            yield
+        finally:
+            self._batch_ranges = previous
 
     def close(self):
         self.archive.close()
@@ -227,6 +246,11 @@ class _SeededArchive:
         if self.prefix_start <= offset and offset + size <= self.prefix_start + len(self.prefix):
             start = offset - self.prefix_start
             return self.prefix[start : start + size]
+        self.prepare_transport()
+        return self.read_transport(offset, size)
+
+    def prepare_transport(self):
+        """Resolve a seeded transport on the owner thread before parallel reads."""
         if self._fs is None:
             if self._filesystem is None:
                 fs, path = _import_fsspec(self.urlpath).url_to_fs(self.urlpath, **self.storage_options)
@@ -234,8 +258,10 @@ class _SeededArchive:
                 fs = self._filesystem
                 path = fs._strip_protocol(self.urlpath)
             self._path, self._fs = path, fs
+
+    def read_transport(self, offset, size):
         data = self._fs.cat_file(self._path, start=offset, end=offset + size)
-        if len(data) > size:
+        if len(data) != size:
             raise ValueError("B2Z transport did not honor the requested byte range")
         self.traffic.charge(len(data))
         return data

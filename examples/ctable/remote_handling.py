@@ -138,6 +138,11 @@ def access_table(args) -> None:
             "attrs": dict(table.attrs),
         }
         if remote:
+            metadata["max_concurrency"] = table.max_concurrency
+            metadata["temporary_buffers"] = {
+                "metadata": table.metadata_buffer_bytes,
+                "rows": table.row_buffer_bytes,
+            }
             metadata["cache_policy"] = table.cache_policy.name
             metadata["cache_bytes"] = f"{table.cache_bytes} ({table.cache_bytes / 1024:.2f} KiB)"
         metadata_time = time.perf_counter() - started
@@ -151,16 +156,19 @@ def access_table(args) -> None:
                 rendered = "{\n " + rendered[1:]
             print(f"{name:<13}: {rendered}")
 
-        print("\nSample rows (1st fetch):")
+        sample_start = max(0, table.nrows // 2 - 2)
+        sample_stop = min(sample_start + 5, table.nrows)
+        sample_slice = slice(sample_start, sample_stop)
+        print(f"\nSample rows [{sample_start}:{sample_stop}] around the midpoint (1st fetch):")
         started = time.perf_counter()
-        sample = str(table[:5])
+        sample = str(table[sample_slice])
         first_time = time.perf_counter() - started
         first_bytes = table.traffic.nbytes - metadata_bytes if remote else 0
         first_requests = table.traffic.requests - metadata_requests if remote else 0
         print(sample)
 
         started = time.perf_counter()
-        _ = str(table[:5])
+        _ = str(table[sample_slice])
         second_time = time.perf_counter() - started
         second_bytes = table.traffic.nbytes - metadata_bytes - first_bytes if remote else 0
         second_requests = table.traffic.requests - metadata_requests - first_requests if remote else 0
@@ -179,6 +187,8 @@ def access_table(args) -> None:
             f"  - 2nd row fetch : {second_time * 1000:7.1f} ms  "
             f"({second_requests} requests, {second_bytes / 1024:8.2f} KB transferred){cache_hit}"
         )
+        # Sum operation wall times (including decoding/cache work), not printing.
+        total_time = metadata_time + first_time + second_time
         if "note" in table.col_names and table["note"].is_utf8:
             start = max(0, table.nrows - 5)
             print(f"\nUTF-8 note slice [{start}:{table.nrows}] (may overlap warmed blocks in small tables):")
@@ -188,6 +198,7 @@ def access_table(args) -> None:
                 started = time.perf_counter()
                 notes = table["note"][start:]
                 elapsed = time.perf_counter() - started
+                total_time += elapsed
                 transferred = table.traffic.nbytes - before_bytes if remote else 0
                 requests = table.traffic.requests - before_requests if remote else 0
                 print(
@@ -198,10 +209,10 @@ def access_table(args) -> None:
                     print(f"    {notes}")
         if remote:
             print(
-                f"  - Total network : {table.traffic.requests} requests, "
-                f"{table.traffic.nbytes / 1024:8.2f} KB transferred"
+                f"\nTotal network : {total_time * 1000:7.1f} ms  "
+                f"({table.traffic.requests} requests, {table.traffic.nbytes / 1024:8.2f} KB transferred)"
             )
-            print(f"  - Retained cache: {table.cache_bytes / 1024:8.2f} KB")
+            print(f"Retained cache: {table.cache_bytes / 1024:8.2f} KB")
 
 
 def main() -> int:

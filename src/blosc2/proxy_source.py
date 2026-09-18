@@ -585,6 +585,17 @@ def _read_frame_header(read_range, head=None) -> tuple[bytes, list, bytes]:
 
 
 def _read_frame_offsets(read_range, header: list, head: bytes, header_len: int) -> np.ndarray:
+    steps = _frame_offset_reads(header, head, header_len)
+    answer = None
+    while True:
+        try:
+            offset, size = steps.send(answer)
+        except StopIteration as done:
+            return done.value
+        answer = read_range(offset, size)
+
+
+def _frame_offset_reads(header, head, header_len):
     """The absolute position of every chunk of a frame whose header is in hand.
 
     A negative position is not a position at all: it encodes a run-length chunk
@@ -609,10 +620,10 @@ def _read_frame_offsets(read_range, header: list, head: bytes, header_len: int) 
     if len(head) >= frame_len:
         index = head[index_pos:]  # the whole frame arrived in the first read
     else:
-        index = read_range(index_pos, min(frame_len - index_pos, _INDEX_PREFETCH))
+        index = yield index_pos, min(frame_len - index_pos, _INDEX_PREFETCH)
     index_cbytes = struct.unpack("<i", index[12:16])[0]
     if index_cbytes > len(index):
-        index = read_range(index_pos, index_cbytes)
+        index = yield index_pos, index_cbytes
     offsets = np.frombuffer(blosc2.decompress2(index[:index_cbytes]), dtype=np.int64)
     # Offsets are relative to the end of the header
     return np.where(offsets >= 0, offsets + header_len, offsets)
@@ -962,6 +973,21 @@ class ByteRangeNDSource(ProxyNDSource):
     def _offsets(self) -> np.ndarray:
         """Where each chunk begins, negative for one that lives in its offset."""
         return self._frame_index()[0]
+
+    def frame_index_reads(self):
+        """Yield index ranges for an immutable source; parse on the caller thread.
+
+        The caller serializes source access and sends each response back. Ordinary
+        array reads retain their existing locked, synchronous index path.
+        """
+        if self._stale:
+            raise RuntimeError("Batched index reads require an immutable source")
+        if self._index is None:
+            offsets = yield from _frame_offset_reads(self._header, self._head, self._header_len)
+            _check_specials(offsets, self.urlpath)
+            self._index = (offsets, _chunk_extents(offsets, self._header))
+            self._head = None
+        return self._index
 
     @property
     def _extents(self) -> np.ndarray:

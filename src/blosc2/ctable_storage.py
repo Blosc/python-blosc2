@@ -647,13 +647,30 @@ class EmbedStoreTableStorage(TableStorage):
 class RemoteTableStorage(TableStorage):
     """Read-only CTable storage over a shared RemoteStore owner."""
 
-    def __init__(self, owner, root_key: str) -> None:
+    def __init__(
+        self,
+        owner,
+        root_key: str,
+        *,
+        max_concurrency=8,
+        metadata_buffer_bytes=8 << 20,
+        row_buffer_bytes=64 << 20,
+    ) -> None:
+        self.max_concurrency = max_concurrency
+        self.metadata_buffer_bytes = metadata_buffer_bytes
+        self.row_buffer_bytes = row_buffer_bytes
+        self._peak_metadata_buffer_bytes = self._peak_row_buffer_bytes = 0
         self._owner = owner
         self._root_key = root_key.strip("/")
         self._generation = owner.generation
         self._arrays: list[blosc2.RemoteArray] = []
         self._closed = False
         owner.acquire()
+
+    def open_columns(self, table, names, load):
+        from blosc2.ctable_remote_read import open_columns
+
+        return open_columns(self, table, names, load)
 
     def _check_open(self) -> None:
         if self._closed:
@@ -750,6 +767,8 @@ class RemoteTableStorage(TableStorage):
 
     def load_user_attrs(self) -> dict:
         self._check_open()
+        if hasattr(self, "_user_attrs"):
+            return dict(self._user_attrs)
         member = self._full_key("_vlmeta") + ".b2f"
         matches = [info for info in self._owner.archive.members if info.filename == member]
         if not matches:
@@ -758,7 +777,8 @@ class RemoteTableStorage(TableStorage):
             raise ValueError(f"Duplicate Remote CTable metadata member {member!r}")
         from blosc2.b2z_source import member_vlmeta
 
-        return dict(member_vlmeta(self._owner.archive, matches[0]))
+        self._user_attrs = dict(member_vlmeta(self._owner.archive, matches[0]))
+        return dict(self._user_attrs)
 
     def table_exists(self) -> bool:
         try:

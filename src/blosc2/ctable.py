@@ -4353,6 +4353,10 @@ class _LazyColumnDict(dict):
         return dict.__getitem__(self, name)
 
     def _load_all(self) -> None:
+        storage = self._table._remote_read_storage()
+        if storage is not None:
+            storage.open_columns(self._table, self._col_names, self._load)
+            return
         for name in self._col_names:
             self._load(name)
 
@@ -6097,15 +6101,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Only pays off when both slices are non-empty.
         """
         cache = getattr(self, "_display_fetch_cache", None)
-        if cache is None or len(head_pos) == 0 or len(tail_pos) == 0:
+        remote = self._remote_read_storage() is not None
+        if cache is None or (not remote and (len(head_pos) == 0 or len(tail_pos) == 0)):
             return
         real_cols = [n for n in display_cols if n != "..." and (n in self._cols or n in self._computed_cols)]
         if not real_cols:
             return
         nh = len(head_pos)
         combined = np.concatenate([head_pos, tail_pos])
+        if remote:
+            from blosc2.ctable_remote_read import column_values
+
+            columns = column_values(self, real_cols, combined)
         for name in real_cols:
-            vals = self._fetch_col_at_positions_uncached(name, combined)
+            vals = columns[name] if remote else self._fetch_col_at_positions_uncached(name, combined)
             cache[(name, id(head_pos))] = vals[:nh]
             cache[(name, id(tail_pos))] = vals[nh:]
 
@@ -6457,6 +6466,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def __iter__(self):
         """Iterate over live rows in insertion order, yielding namedtuple-like row objects."""
+        storage = self._remote_read_storage()
+        if storage is not None:
+            from blosc2.ctable_remote_read import column_values
+
+            # Bound decoded output independently of the transport budget.
+            for start, _, batch in self._remote_position_batches(1024):
+                values = column_values(self, self.col_names, batch)
+                for j, pos in enumerate(batch):
+                    storage._check_open()
+                    yield self._materialize_row(
+                        start + j,
+                        _physical=int(pos),
+                        _values={name: values[name][j] for name in self.col_names},
+                    )
+            return
         for i in range(self.nrows):
             yield self._materialize_row(i)
 
@@ -6466,6 +6490,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._row_namedtuple_type_cache = _make_namedtuple_row_type(visible)
             self._row_namedtuple_type_cache_cols = visible
         return self._row_namedtuple_type_cache
+
+    def _remote_read_storage(self):
+        from blosc2.ctable_storage import RemoteTableStorage
+
+        table = self
+        while table.base is not None:
+            table = table.base
+        storage = getattr(table, "_storage", None)
+        return storage if isinstance(storage, RemoteTableStorage) else None
+
+    def _remote_position_batches(self, batch_size):
+        """Bounded live selections, preserving a gathered/sorted view's order."""
+        cached = getattr(self, "_cached_live_positions", None)
+        groups = (cached,) if cached is not None else self._iter_live_positions_chunks()
+        logical = 0
+        for positions in groups:
+            for start in range(0, len(positions), batch_size):
+                batch = positions[start : start + batch_size]
+                yield logical, logical + len(batch), batch
+                logical += len(batch)
 
     def _row_namedtuple_type_for_fields(self, fields: tuple[str, ...]):
         cache = getattr(self, "_row_namedtuple_type_cache_by_fields", None)
@@ -6502,27 +6546,47 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return np.datetime64(int(value), spec.unit)
         return value
 
-    def _materialize_row(self, index: int):
+    def _materialize_row(self, index: int, *, _physical=None, _values=None):
         n_rows = self.nrows
         if index < 0:
             index += n_rows
         if not (0 <= index < n_rows):
             raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
         _slp = getattr(self, "_cached_live_positions", None)
-        if _slp is not None and self.base is not None:
+        if _physical is not None:
+            pos = _physical
+        elif _slp is not None and self.base is not None:
             pos = int(_slp[index])
         else:
             pos = _find_physical_index(self._valid_rows, index)
+
+        values = _values
+        if values is None and self._remote_read_storage() is not None:
+            from blosc2.ctable_remote_read import column_values
+
+            columns = column_values(self, self.col_names, np.array([pos], dtype=np.int64))
+            values = {name: columns[name][0] for name in self.col_names}
+
+        def row_value(name):
+            if values is None:
+                return self._physical_row_value(name, int(pos))
+            value = values[name]
+            spec = self._schema.columns_by_name.get(name)
+            if value is not None and spec is not None and isinstance(spec.spec, timestamp):
+                return (
+                    value if isinstance(value, np.datetime64) else np.datetime64(int(value), spec.spec.unit)
+                )
+            return self._normalize_scalar_value(value)
 
         nested_meta = self._schema.metadata.get("nested") if self._schema.metadata else None
         reconstruct = isinstance(nested_meta, dict) and bool(nested_meta.get("reconstruct_rows", False))
         if not reconstruct:
             row_type = self._row_namedtuple_type()
-            return row_type(*(self._physical_row_value(name, int(pos)) for name in self.col_names))
+            return row_type(*(row_value(name) for name in self.col_names))
 
         row_dict: dict[str, Any] = {}
         for name in self.col_names:
-            value = self._physical_row_value(name, int(pos))
+            value = row_value(name)
             parts = split_field_path(name)
             if len(parts) <= 1:
                 row_dict[name] = value
@@ -8092,8 +8156,40 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if any(name in self.col_names and self[name].is_dictionary for name in names):
             dict_real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
 
-        for start in range(0, self._n_rows, batch_size):
-            stop = min(start + batch_size, self._n_rows)
+        remote = self._remote_read_storage()
+        parallel = (
+            remote is not None and remote._owner.is_mutable and not getattr(remote._owner, "shared", False)
+        )
+        batches = (
+            self._remote_position_batches(batch_size)
+            if parallel
+            else (
+                (start, min(start + batch_size, self._n_rows), None)
+                for start in range(0, self._n_rows, batch_size)
+            )
+        )
+        for start, stop, positions in batches:
+            remote_values, remote_nulls = {}, {}
+            if parallel:
+                from blosc2.ctable_remote_read import column_values
+
+                leaves = [name for name in names if name in self.col_names]
+                remote_values = column_values(self, leaves, positions, null_masks=remote_nulls)
+
+            def read_values(name, remote_values=remote_values, start=start, stop=stop):
+                return remote_values[name] if name in remote_values else self[name][start:stop]
+
+            def read_nulls(
+                name, values, remote_values=remote_values, remote_nulls=remote_nulls, start=start, stop=stop
+            ):
+                if name in remote_values:
+                    return (
+                        remote_nulls.get(name)
+                        if self[name]._nulls.kind == NULL_MASK
+                        else self[name]._nulls.mask_for_values(values)
+                    )
+                return self[name]._nulls.null_mask_slice(values, start, stop)
+
             arrays = []
             for name in names:
                 cc = self._schema.columns_by_name.get(name)
@@ -8110,7 +8206,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     spec = self._schema.columns_by_name[name].spec
                     arr8 = self._cols[name]
                     nv = col.null_value
-                    if self.base is None and self._last_pos == self._n_rows and stop <= arr8._persisted_rows:
+                    if (
+                        not parallel
+                        and self.base is None
+                        and self._last_pos == self._n_rows
+                        and stop <= arr8._persisted_rows
+                    ):
                         # Dense root table: logical rows == persisted rows, so
                         # export straight from the offsets/bytes buffers with
                         # no per-row decode (storage is already Arrow layout).
@@ -8118,8 +8219,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                             arr8.arrow_slice(pa, start, stop, nv, valid=col._nulls.valid_slice(start, stop))
                         )
                         continue
-                    values = col[start:stop]  # StringDType array; nulls per this column's channel
-                    null_mask = col._nulls.null_mask_slice(values, start, stop)
+                    values = read_values(name)  # StringDType array; nulls per this column's channel
+                    null_mask = read_nulls(name, values)
                     arrays.append(
                         pa.array(
                             values.astype(object),
@@ -8162,12 +8263,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     continue
                 if col.is_ndarray:
                     spec = self._schema.columns_by_name[name].spec
-                    values = np.asarray(col[start:stop])
+                    values = np.asarray(read_values(name))
                     # Row-level under mask storage.  A sentinel ndarray column
                     # keeps the older, lossier rule -- a row is null only when
                     # *every* element equals the sentinel -- because that is the
                     # only thing its storage can express.
-                    null_mask = col._nulls.null_mask_slice(values, start, stop)
+                    null_mask = read_nulls(name, values)
                     pa_type = self._pa_type_from_spec(pa, spec)
                     flat_values = np.ascontiguousarray(values.reshape(-1))
                     pa_values = pa.array(flat_values, type=pa_type.value_type)
@@ -8179,8 +8280,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         )
                     )
                     continue
-                arr = np.asarray(col[start:stop])
-                null_mask = col._nulls.null_mask_slice(arr, start, stop)
+                arr = np.asarray(read_values(name))
+                null_mask = read_nulls(name, arr)
                 if arr.dtype.kind in "US":
                     # pyarrow reads the mask alongside the values, so the null
                     # slots need no substitution here — under mask storage they
@@ -10188,6 +10289,29 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         import pandas as pd
 
+        remote = self._remote_read_storage()
+        if (
+            remote is not None
+            and remote._owner.is_mutable
+            and not getattr(remote._owner, "shared", False)
+            and self.nrows
+        ):
+            from blosc2.ctable_remote_read import column_values
+
+            frames = []
+            for _, _, positions in self._remote_position_batches(1024):
+                nulls = {}
+                values = column_values(self, self.col_names, positions, null_masks=nulls)
+                data = {}
+                for name in self.col_names:
+                    col = self[name]
+                    raw = list(values[name]) if col.is_ndarray else values[name]
+                    data[name] = self._pandas_values(
+                        pd, col, raw, nulls=nulls.get(name, np.zeros(len(positions), dtype=bool))
+                    )
+                frames.append(pd.DataFrame(data))
+            return pd.concat(frames, ignore_index=True)
+
         data = {}
         for name in self.col_names:
             col = self[name]
@@ -10247,7 +10371,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return cells
 
     @staticmethod
-    def _pandas_values(pd, col, values):
+    def _pandas_values(pd, col, values, *, nulls=None):
         """*values*, with this column's nulls turned into something pandas reads as NA.
 
         A null slot holds the fill under mask storage and the sentinel under a
@@ -10264,7 +10388,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         channel = col._nulls
         kind = channel.kind
         if kind == NULL_MASK:
-            nulls = channel.null_mask()  # one byte per row, off the sidecar
+            if nulls is None:
+                nulls = channel.null_mask()  # one byte per row, off the sidecar
         elif kind == NULL_SENTINEL:
             nulls = channel.mask_for_values(values)  # in band, from what we just read
         else:

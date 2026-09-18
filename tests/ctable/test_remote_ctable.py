@@ -31,6 +31,37 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
+@pytest.mark.parametrize("include_note", [False, True])
+@pytest.mark.parametrize("nrows", [0, 2, 20, 21])
+def test_remote_example_total_timing(tmp_path, capsys, include_note, nrows):
+    import runpy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    fields = [("x", int)]
+    rows = [(i,) for i in range(nrows)]
+    if include_note:
+        fields.append(("note", str, blosc2.field(blosc2.utf8())))
+        rows = [(i, f"café 東京 #{i}") for i in range(nrows)]
+    local = blosc2.CTable(dataclasses.make_dataclass("Sample", fields), rows, create_summary_index=False)
+    url = remote_table_url(tmp_path, local)
+    example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"))
+    ticks = iter(range(10))
+    access = example["access_table"]
+    access.__globals__["time"] = SimpleNamespace(perf_counter=lambda: next(ticks))
+    access(SimpleNamespace(url=url))
+    output = capsys.readouterr().out
+    expected_ms = 5000 if include_note else 3000
+    assert f"\n\nTotal network : {expected_ms:7.1f} ms  (" in output
+    assert "\nRetained cache:" in output
+    assert "  - Total network" not in output
+    start = max(0, nrows // 2 - 2)
+    stop = min(start + 5, nrows)
+    heading = f"Sample rows [{start}:{stop}] around the midpoint (1st fetch):\n"
+    sample = output.split(heading)[1].split("\nTiming & Network Traffic:")[0].strip()
+    assert sample == str(local[start:stop]).strip()
+
+
 def test_remote_ctable_fixed_width_reads_and_queries(tmp_path):
     rows = [
         (1, np.array([1, 2], dtype=np.float32), "one"),
@@ -426,3 +457,273 @@ def test_open_dispatches_remote_table_hierarchy(tmp_path, suffix, monkeypatch):
     with blosc2.open(url, lazy=False, cache_dir=tmp_path / "localized", **format_options) as store:
         assert isinstance(store, blosc2.TreeStore)
         assert store["group/table"]["x"][0] == 1
+
+
+def test_parallel_metadata_benchmark(tmp_path, monkeypatch):
+    import runpy
+    import time
+    from pathlib import Path
+
+    benchmark = runpy.run_path(str(Path(__file__).resolve().parents[2] / "bench/remote_ctable_metadata.py"))
+
+    @dataclasses.dataclass
+    class TextRow:
+        x: int
+        y: float
+        text: str = blosc2.field(blosc2.utf8(null_storage="mask"))
+
+    local = blosc2.CTable(TextRow, [(1, 2.0, "café"), (2, 3.0, None)], create_summary_index=False)
+    url = remote_table_url(tmp_path, local)
+    filesystem_type = type(fsspec.filesystem("memory"))
+    original = filesystem_type.cat_file
+
+    def delayed(self, *args, **kwargs):
+        time.sleep(0.01)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(filesystem_type, "cat_file", delayed)
+    serial, expected = benchmark["run"](url, 1)
+    buffered, buffered_values = benchmark["run"](url, 1)
+    parallel, actual = benchmark["run"](url, 4)
+    assert actual == expected
+    assert buffered_values == expected
+    assert serial["peak_metadata_reads"] == 1
+    assert parallel["peak_metadata_reads"] > 1
+    assert parallel["metadata"]["bytes"] <= serial["metadata"]["bytes"]
+    assert buffered["metadata"]["bytes"] == parallel["metadata"]["bytes"]
+    assert buffered["metadata"]["requests"] == parallel["metadata"]["requests"]
+    with blosc2.open(url) as table:
+        archive = table._remote_storage()._owner.archive
+        original_read = archive._read_archive
+
+        def fail(*args):
+            raise OSError("injected range failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(archive, "_read_archive", fail)
+            with pytest.raises(OSError, match="injected range failure"):
+                benchmark["metadata"](table)
+            assert archive._read_archive is fail
+        assert archive._read_archive == original_read
+        assert benchmark["metadata"](table) == expected[0]
+
+    # Large, uncompressed columns keep payloads out of the metadata prefixes.
+    local = blosc2.CTable(
+        TextRow,
+        [(i, i / 7, None if i % 3 == 0 else f"東京 café {i}") for i in range(20000)],
+        cparams={"clevel": 0},
+        create_summary_index=False,
+    )
+    url = remote_table_url(tmp_path, local, name="row-payloads")
+    serial, expected = benchmark["run"](url, 1, row_workers=1)
+    buffered, buffered_values = benchmark["run"](url, 1)
+    parallel, actual = benchmark["run"](url, 4)
+    assert actual == buffered_values == expected
+    assert serial["peak_row_reads"] == 1
+    assert parallel["peak_row_reads"] > 1
+    for key in ("requests", "bytes"):
+        assert parallel["cold_rows"][key] == buffered["cold_rows"][key] == serial["cold_rows"][key]
+    assert parallel["cache_bytes"] == serial["cache_bytes"]
+    with blosc2.open(url) as table:
+        benchmark["metadata"](table)
+        archive = table._remote_storage()._owner.archive
+        original_read = archive.read_transport
+        with monkeypatch.context() as patch:
+            patch.setattr(archive, "read_transport", fail)
+            with pytest.raises(OSError, match="injected range failure"):
+                list(table[:5])
+            assert archive.read_transport is fail
+        assert archive.read_transport == original_read
+        assert repr(list(table[:5])) == expected[1]
+
+
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
+)
+@pytest.mark.parametrize("budget", [128, 1 << 20])
+def test_parallel_rows_cache_policies(tmp_path, policy, budget):
+    @dataclasses.dataclass
+    class Mixed:
+        x: int = blosc2.field(blosc2.int64(null_storage="mask"))
+        y: float = blosc2.field(blosc2.float64())
+        text: str = blosc2.field(blosc2.utf8(null_storage="mask"))
+
+    local = blosc2.CTable(
+        Mixed,
+        [
+            (None if i % 7 == 0 else i, i / 3, None if i % 5 == 0 else f"🌦 café 東京 {i}")
+            for i in range(20000)
+        ],
+        cparams={"clevel": 0},
+        create_summary_index=False,
+    )
+    local.delete([2, 9])
+    url = remote_table_url(tmp_path, local)
+    options = {"cache_policy": policy, "row_buffer_bytes": budget, "metadata_buffer_bytes": budget}
+    if policy == blosc2.CachePolicy.DISK:
+        options["cache_dir"] = tmp_path / "cache"
+    if policy != blosc2.CachePolicy.NONE:
+        options["max_cache_bytes"] = 1024
+    with blosc2.RemoteCTable(url, **options) as table:
+        for selection in (slice(0, 5), slice(3, 12, 2), slice(8, 1, -2), [15, 0, 15, 3]):
+            assert repr(list(table[selection])) == repr(list(local[selection]))
+        assert repr(table[3]) == repr(local[3])
+        assert table[:4].to_string() == local[:4].to_string()
+        pd = pytest.importorskip("pandas")
+        pd.testing.assert_frame_equal(table[:12].to_pandas(), local[:12].to_pandas())
+        pytest.importorskip("pyarrow")
+        assert table[:12].to_arrow().equals(local[:12].to_arrow())
+        assert table.cache_bytes <= 1024
+        if policy == blosc2.CachePolicy.NONE:
+            assert table.cache_bytes == 0
+
+
+def test_parallel_table_settings(tmp_path):
+    local = blosc2.CTable(Row, [(1, [1, 2], "one")], create_summary_index=False)
+    url = remote_table_url(tmp_path, local)
+    with blosc2.open(url, max_concurrency=2) as table:
+        assert table.max_concurrency == 2
+        assert table.metadata_buffer_bytes == 8 << 20
+        assert table.row_buffer_bytes == 64 << 20
+        table.row_buffer_bytes = 256 << 20
+        assert table[:1]._remote_read_storage().row_buffer_bytes == 256 << 20
+        for name in ("max_concurrency", "metadata_buffer_bytes", "row_buffer_bytes"):
+            for value, error in ((0, ValueError), (-1, ValueError), (True, TypeError), (1.5, TypeError)):
+                with pytest.raises(error):
+                    setattr(table, name, value)
+                with pytest.raises(error):
+                    blosc2.RemoteCTable(url, **{name: value})
+        assert repr(list(table[:1])) == repr(list(local[:1]))
+    for name in ("metadata_buffer_bytes", "row_buffer_bytes"):
+        with pytest.raises((TypeError, NotImplementedError), match=name):
+            blosc2.open(url, **{name: 1024})
+    with blosc2.RemoteStore(url, _allow_array_root=True) as store:
+        first, second = store[""], store[""]
+        first.max_concurrency = 1
+        assert second.max_concurrency == 8
+        first.close()
+        second.close()
+
+
+def test_parallel_scheduler_budget_and_cleanup():
+    import threading
+    import time
+
+    from blosc2.ctable_remote_read import run_reads
+
+    lock = threading.Lock()
+    active = peak = 0
+    closed = []
+
+    def fetch(size):
+        nonlocal active, peak
+        with lock:
+            active += size
+            peak = max(peak, active)
+        try:
+            time.sleep(0.01)
+            return bytes(size)
+        finally:
+            with lock:
+                active -= size
+
+    def reader(i, size):
+        try:
+            data = yield fetch, (size,), size
+            return len(data)
+        finally:
+            closed.append(i)
+
+    values, reserved = run_reads(((i, reader(i, 4)) for i in range(12)), 8, 10)
+    assert values == dict.fromkeys(range(12), 4)
+    assert 4 < peak <= reserved <= 10
+    assert sorted(closed) == list(range(12))
+    values, reserved = run_reads(((i, reader(i, 20)) for i in range(2)), 8, 10)
+    assert reserved == 20  # One oversized unit alone, never two together.
+    assert active == 0
+
+    closed.clear()
+
+    def fail():
+        raise OSError("injected worker failure")
+
+    def broken():
+        try:
+            yield fail, (), 4
+        finally:
+            closed.append("broken")
+
+    with pytest.raises(OSError, match="injected worker failure"):
+        run_reads([(0, broken()), (1, reader(1, 4))], 2, 10)
+    assert active == 0
+    assert set(closed) == {"broken", 1}
+
+
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
+)
+def test_parallel_rows_blocks_and_reopen(tmp_path, monkeypatch, policy):
+    import threading
+
+    @dataclasses.dataclass
+    class Numbers:
+        x: float
+        y: float
+
+    rng = np.random.default_rng(42)
+    local = blosc2.CTable(
+        Numbers,
+        {"x": rng.normal(size=400000), "y": rng.normal(size=400000)},
+        create_summary_index=False,
+    )
+    url = remote_table_url(tmp_path, local)
+    writes = []
+    original = blosc2.Proxy._write_blocks
+
+    def write(self, *args):
+        writes.append(threading.current_thread())
+        return original(self, *args)
+
+    monkeypatch.setattr(blosc2.Proxy, "_write_blocks", write)
+    options = {"cache_policy": policy}
+    if policy == blosc2.CachePolicy.DISK:
+        options["cache_dir"] = tmp_path / "cache"
+    with blosc2.RemoteCTable(url, **options) as table:
+        before = table.traffic.nbytes
+        assert list(table[:10]) == list(local[:10])
+        assert table.traffic.nbytes - before < 2 << 20
+        assert writes
+        assert all(t is threading.current_thread() for t in writes)
+    if policy == blosc2.CachePolicy.DISK:
+        with blosc2.RemoteCTable(url, **options) as table:
+            before = table.traffic.requests
+            assert list(table[:10]) == list(local[:10])
+            assert table.traffic.requests == before
+            assert list(table[399990:]) == list(local[399990:])
+
+
+def test_parallel_timestamp_and_projection(tmp_path):
+    @dataclasses.dataclass
+    class Timed:
+        time: object = blosc2.field(blosc2.timestamp(unit="ns", null_storage="mask"))
+        vec: object = blosc2.field(blosc2.ndarray((2,), dtype=blosc2.float32(), null_storage="mask"))
+        text: str = blosc2.field(blosc2.utf8())
+
+    local = blosc2.CTable(
+        Timed,
+        [(np.datetime64("2025-01-01", "ns"), [1, 2], "東京"), (None, None, "")],
+        create_summary_index=False,
+    )
+    url = remote_table_url(tmp_path, local)
+    with blosc2.open(url) as table:
+        assert repr(list(table)) == repr(list(local))
+        assert table.to_string() == local.to_string()
+        pd = pytest.importorskip("pandas")
+        pd.testing.assert_frame_equal(table.to_pandas(), local.to_pandas())
+        pytest.importorskip("pyarrow")
+        assert table.to_arrow().equals(local.to_arrow())
+    with blosc2.open(url) as table:
+        view = table[["text"]]
+        assert list(view) == list(local[["text"]])
+        assert "_cols/time" not in table._remote_storage()._owner.sources
+        assert "_cols/vec" not in table._remote_storage()._owner.sources

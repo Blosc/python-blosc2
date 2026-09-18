@@ -2329,8 +2329,6 @@ def _open_remote_b2z(urlpath, options):
             array_error = exc
     if options["cache_path"] is not None:
         raise NotImplementedError("Remote tables and stores use cache_dir, not cache_path")
-    if options["max_concurrency"] is not None:
-        raise NotImplementedError("max_concurrency is only supported for remote arrays")
     if options["assume_immutable"] is not True:
         raise NotImplementedError("Remote tables and stores require assume_immutable=True")
     store_options = {
@@ -2346,6 +2344,17 @@ def _open_remote_b2z(urlpath, options):
                 # Include the initial array lookup in shared transfer accounting.
                 store.traffic.nbytes += array_error.traffic.nbytes
                 store.traffic.requests += array_error.traffic.requests
+            if options["max_concurrency"] is not None:
+                _, full = store._resolve("")
+                if store._owner.nodes[full][0] != "ctable":
+                    raise NotImplementedError(
+                        "max_concurrency is only supported for remote arrays and tables"
+                    )
+                return blosc2.RemoteCTable._from_owner(
+                    store._owner,
+                    full,
+                    max_concurrency=options["max_concurrency"],
+                )
             return store[""]
     except KeyError:
         if array_error is not None:
@@ -2417,6 +2426,14 @@ def _normalize_open_target(urlpath, kwargs, dataset, hdf5_index):
         ):
             kwargs["source_format"] = detected_format
     return urlpath
+
+
+def _reject_table_buffer_options(kwargs):
+    table_options = kwargs.keys() & {"metadata_buffer_bytes", "row_buffer_bytes"}
+    if table_options:
+        raise TypeError(
+            f"{', '.join(sorted(table_options))} are RemoteCTable options; use RemoteCTable directly"
+        )
 
 
 def open(
@@ -2496,12 +2513,15 @@ def open(
             What arrives is kept in memory (defaulting to :attr:`CachePolicy.MEMORY`),
             under ``cache_dir``, or at the exact ``cache_path`` (as :attr:`CachePolicy.DISK`).
         max_concurrency: int, optional
-            Only with ``lazy``: how many fetches to run at once, in a thread
+            For lazy remote arrays and RemoteCTable: how many fetches to run at once, in a thread
             pool. A slice against an object store is almost entirely round-trip
             latency, so overlapping the requests is what makes a wide slice
             bearable. Defaults to 8; pass 1 for a protocol with no latency to
             hide, where the pool costs about 10 microseconds per chunk and saves
             nothing.
+            Remote tables overlap independent requests across selected columns;
+            their table-specific temporary buffer settings are available through
+            ``RemoteCTable``, not through this general opener.
         cache_dir: str | pathlib.Path, optional
             For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's
             local copy — either the whole thing, or just the chunks and blocks ``lazy`` has fetched so far
@@ -2663,6 +2683,7 @@ def open(
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    _reject_table_buffer_options(kwargs)
     if isinstance(urlpath, blosc2.URLPath):
         return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 
