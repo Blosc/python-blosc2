@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Create or access a mask-nullable CTable with fixed-width and UTF-8 columns locally or remotely."""
+"""Create or access a CTable with fixed-width, UTF-8, batch-backed and dictionary columns."""
 
 import argparse
 import pprint
@@ -32,6 +32,11 @@ class Reading:
     status: str = blosc2.field(blosc2.string(max_length=8, null_storage="mask"))
     active: bool = blosc2.field(blosc2.bool())
     note: str = blosc2.field(blosc2.utf8(null_storage="mask"))
+    message: str = blosc2.field(blosc2.vlstring(nullable=True, batch_rows=4096))
+    tags: list[int] = blosc2.field(  # noqa: RUF009
+        blosc2.list(blosc2.int16(), nullable=True, batch_rows=4096)
+    )
+    region: str = blosc2.field(blosc2.dictionary(nullable=True))
 
 
 def make_notes(ids):
@@ -81,6 +86,10 @@ def write_table(args) -> None:
             temperature[ids % 17 == 0] = None
             humidity[ids % 29 == 0] = None
             status[ids % 41 == 0] = None
+            messages = [None if i % 47 == 0 else f"sensor {i}: café 東京" for i in ids]
+            tags = [None if i % 53 == 0 else [int(i % 7), int(i % 11)] for i in ids]
+            regions = np.array(["north", "south", "east", "west"], dtype=object)[ids % 4]
+            regions[ids % 59 == 0] = None
             table.extend(
                 {
                     "id": ids,
@@ -90,6 +99,9 @@ def write_table(args) -> None:
                     "status": status,
                     "active": ids % 5 != 0,
                     "note": make_notes(ids),
+                    "message": messages,
+                    "tags": tags,
+                    "region": regions,
                 },
                 validate=False,
             )
@@ -149,6 +161,7 @@ def access_table(args) -> None:
         metadata_time = time.perf_counter() - started
         metadata_bytes = table.traffic.nbytes if remote else 0
         metadata_requests = table.traffic.requests if remote else 0
+        extra_time = 0.0
 
         print(f"\n[Format: Blosc2 B2Z ({type(table).__name__})]")
         for name, value in metadata.items():
@@ -156,6 +169,51 @@ def access_table(args) -> None:
             if name == "attrs" and value:
                 rendered = "{\n " + rendered[1:]
             print(f"{name:<13}: {rendered}")
+
+        probe = slice(0, min(5, table.nrows))
+        if "message" in table.col_names:
+            print("\nBatch-backed message slice (whole compressed batches are the transfer unit):")
+            for label in ("cold", "warm"):
+                before_bytes = table.traffic.nbytes if remote else 0
+                before_requests = table.traffic.requests if remote else 0
+                started = time.perf_counter()
+                messages = table["message"][probe]
+                elapsed = time.perf_counter() - started
+                extra_time += elapsed
+                transferred = table.traffic.nbytes - before_bytes if remote else 0
+                requests = table.traffic.requests - before_requests if remote else 0
+                print(
+                    f"  - {label:<4} batch read: {elapsed * 1000:7.1f} ms  "
+                    f"({requests} requests, {transferred / 1024:8.2f} KB transferred)"
+                )
+            print(f"    {messages}")
+
+        if "region" in table.col_names:
+            dictionary = table["region"].raw
+            print("\nDictionary costs (codes first, then full vocabulary on first decode):")
+            before_bytes = table.traffic.nbytes if remote else 0
+            before_requests = table.traffic.requests if remote else 0
+            started = time.perf_counter()
+            _ = dictionary.codes[probe]
+            elapsed = time.perf_counter() - started
+            extra_time += elapsed
+            print(
+                f"  - code read       : {elapsed * 1000:7.1f} ms  "
+                f"({table.traffic.requests - before_requests if remote else 0} requests, "
+                f"{(table.traffic.nbytes - before_bytes if remote else 0) / 1024:8.2f} KB transferred)"
+            )
+            before_bytes = table.traffic.nbytes if remote else 0
+            before_requests = table.traffic.requests if remote else 0
+            started = time.perf_counter()
+            regions = table["region"][probe]
+            elapsed = time.perf_counter() - started
+            extra_time += elapsed
+            print(
+                f"  - first decode    : {elapsed * 1000:7.1f} ms  "
+                f"({table.traffic.requests - before_requests if remote else 0} requests, "
+                f"{(table.traffic.nbytes - before_bytes if remote else 0) / 1024:8.2f} KB transferred)"
+            )
+            print(f"    {regions}")
 
         sample_start = max(0, table.nrows // 2 - 2)
         sample_stop = min(sample_start + 5, table.nrows)
@@ -189,7 +247,7 @@ def access_table(args) -> None:
             f"({second_requests} requests, {second_bytes / 1024:8.2f} KB transferred){cache_hit}"
         )
         # Sum operation wall times (including decoding/cache work), not printing.
-        total_time = metadata_time + first_time + second_time
+        total_time = metadata_time + first_time + second_time + extra_time
         if "note" in table.col_names and table["note"].is_utf8:
             start = max(0, table.nrows - 5)
             print(f"\nUTF-8 note slice [{start}:{table.nrows}] (may overlap warmed blocks in small tables):")

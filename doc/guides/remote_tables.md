@@ -1,8 +1,9 @@
 # Working with Remote Tables
 
 `RemoteCTable` opens a read-only CTable in an immutable remote `.b2z` archive.
-Fixed-width and `blosc2.utf8()` columns are fetched on demand, including their
-null masks. A table inside a hierarchy can also be opened through `RemoteStore`.
+Fixed-width, `blosc2.utf8()`, batch-backed variable-length, list, struct/object,
+and dictionary columns are fetched on demand, including their null masks. A table
+inside a hierarchy can also be opened through `RemoteStore`.
 
 `blosc2.open()` dispatches local table archives to `CTable` and remote table
 archives to `RemoteCTable`. Remote `.b2z` groups return `RemoteStore` by default;
@@ -28,6 +29,18 @@ DISK (with `cache_dir`) and NONE policies are supported. Size reporting uses sou
 metadata without scanning strings. Small-member metadata prefetch may also fetch
 some payload. Repeated reads can reuse cached blocks; filtering scans the required
 columns because persisted indexes are not used remotely.
+
+Batch-backed columns transfer one whole compressed batch per required batch, then
+decode it locally. A small row selection can therefore fetch and allocate a large
+batch. The compressed payload shares the remote owner's cache limit, but decoded
+Python lists, strings, objects, dictionary maps, result arrays, and decoder scratch
+space do not. Nonempty batch columns require a valid persisted batch-length catalog;
+missing, negative, or inconsistent lengths raise an error naming the column.
+
+Dictionary codes use the usual selective fixed-width reads. The first decoded
+value or string predicate loads the complete vocabulary and builds Python lookup
+maps, costing O(dictionary cardinality) transfer and decoded memory. This is
+separate from the code-array read and remains cached by the column wrapper.
 
 Multi-column metadata inspection and row materialization overlap independent
 requests by default, up to eight at once. This includes row iteration, display,
@@ -80,11 +93,16 @@ local = table.materialize(urlpath="complete-local.b2z")
 table.to_b2d("complete-local.b2d")
 ```
 
-Saving a reference does not fetch missing table data. Remote writes and
-batch-backed `vlstring`/lists/objects and dictionary columns remain unsupported.
+Saving a reference does not fetch missing table data. Remote writes and persisted
+indexes remain unsupported. Lists configured with `storage="vl"` are rejected;
+use the default batch storage. Remote MessagePack object values support passive
+data forms, while embedded Blosc2 containers and serialized references are
+rejected instead of being reconstructed from untrusted remote data.
 
-See `examples/ctable/remote_handling.py` for a batched archive writer with a nullable
-multilingual UTF-8 column, plus sample row and string-slice traffic measurements.
+See `examples/ctable/remote_handling.py` for a batched archive writer with nullable
+multilingual UTF-8 and variable-length strings, a batch-backed list, and a
+dictionary. It reports ordinary batch cold/warm reads and dictionary code/vocabulary
+costs separately.
 
 ## Refresh a remote table
 

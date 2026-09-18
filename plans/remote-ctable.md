@@ -2,7 +2,9 @@
 
 Status: initial fixed-width, read-only implementation completed on 2026-09-17;
 UTF-8 support was added in the v2 extension (see `remote-ctable-v2.md`);
-batch-backed columns, persisted indexes and portable references remain follow-ups.
+batch-backed columns were added in the batch extension (see
+`remote-ctable-batches.md`); persisted indexes and portable references remain
+follow-ups.
 
 ## Objective and architecture
 
@@ -251,11 +253,26 @@ and correct results, not a claim that scan queries avoid reading their operands.
   sample rows were read on demand; the repeated sample read issued zero requests
   and transferred zero bytes from the warm memory cache.
 
+### Results recorded for the batch-backed extension
+
+- The default suite passed with 10,315 tests and 36 skips. The focused remote
+  table suite passed with 90 tests, and Ruff passed for all changed Python files.
+- An instrumented `memory://` experiment used a 55,026,931-byte archive with
+  100,000 rows, 1,024 rows per variable-length batch, and a 20,000-value
+  dictionary. A distant five-row read used 5 requests and 575,310 bytes, retained
+  558,335 compressed bytes, and repeated with 0 requests and 0 bytes.
+- The dictionary code slice used 2 requests and 4,612 bytes. First decode then
+  loaded the vocabulary with 10 requests and 95,494 bytes. The resulting Python
+  strings and lookup maps occupied approximately 4,028,168 bytes by
+  `sys.getsizeof`, outside the compressed transport cache budget. Metadata opening
+  used 2 requests and 9,297 bytes.
+
 ## Follow-ups, separately scoped
 
 1. UTF-8 columns through remote offsets and bytes, with null/query/size reporting:
    implemented in the v2 extension described in `remote-ctable-v2.md`.
-2. Remote batch reads for lists, variable-length values and dictionary stores.
+2. Remote batch reads for lists, variable-length values and dictionary stores:
+   implemented in the extension described in `remote-ctable-batches.md`.
 3. Persisted indexes through a remote-aware sidecar resolver, starting with
    SUMMARY indexes and measuring query transfer savings.
 4. Portable RemoteCTable references, RemoteStore artifact inclusion and sparse

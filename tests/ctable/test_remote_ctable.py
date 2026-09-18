@@ -82,6 +82,30 @@ def test_remote_example_cache_dir(tmp_path, capsys, monkeypatch):
     assert "(0 requests," in output.split("Total network :")[1]
 
 
+def test_remote_example_batch_columns(tmp_path, capsys):
+    import runpy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
+    example = runpy.run_path(str(script))
+    path = tmp_path / "example-batches.b2z"
+    example["write_table"](SimpleNamespace(write=path, rows=100, batch_size=37, overwrite=False))
+    with blosc2.open(path) as local:
+        assert local["message"][47] is None
+        assert local["tags"][53] is None
+        assert local["region"][59] is None
+
+    url = f"memory://{tmp_path.name}-example-batches.b2z"
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    capsys.readouterr()
+    example["access_table"](SimpleNamespace(url=url, cache_dir=None))
+    output = capsys.readouterr().out
+    assert "cold batch read" in output
+    assert "warm batch read" in output
+    assert "Dictionary costs (codes first, then full vocabulary on first decode)" in output
+
+
 def test_disk_cache_metadata_key_order(tmp_path, monkeypatch):
     local = blosc2.CTable(dataclasses.make_dataclass("Sample", [("x", int)]), [(i,) for i in range(20)])
     url = remote_table_url(tmp_path, local)

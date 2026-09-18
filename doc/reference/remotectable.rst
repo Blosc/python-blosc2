@@ -4,9 +4,13 @@ RemoteCTable
 ============
 
 ``RemoteCTable`` is a read-only :class:`blosc2.CTable` backed by a remote B2Z
-archive. Fixed-width, shaped, nullable, and UTF-8 columns are fetched on demand.
+archive. Fixed-width, shaped, nullable, UTF-8, batch-backed variable-length,
+batch-backed list, struct/object, and dictionary columns are fetched on demand.
 Standalone tables can be opened directly; tables inside a hierarchy can be
 selected with ``dataset=`` or through :class:`blosc2.RemoteStore`.
+
+Batch-backed reads transfer and decode whole compressed batches. Dictionary
+codes remain selective, while the full vocabulary is loaded on first use.
 
 Saving and materializing have different meanings:
 

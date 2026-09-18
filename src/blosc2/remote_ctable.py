@@ -44,7 +44,12 @@ def _read_setting(name):
 
 
 class RemoteCTable(RemoteObject, CTable):
-    """A read-only CTable whose fixed-width and UTF-8 columns are fetched on demand.
+    """A read-only CTable whose columns are fetched on demand.
+
+    Supported columns include fixed-width, UTF-8, batch-backed variable-length,
+    batch-backed list, struct/object and dictionary columns. Batch reads transfer
+    one whole compressed batch; dictionary decoding loads the full vocabulary on
+    first use.
 
     Independent column requests overlap by default. ``max_concurrency`` defaults
     to 8; use 1 for serial reads. ``metadata_buffer_bytes`` (8 MiB) and
