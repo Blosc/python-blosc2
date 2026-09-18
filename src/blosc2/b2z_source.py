@@ -442,7 +442,7 @@ class B2ZNDSource(ByteRangeNDSource):
 class B2ZBatchSource:
     """Internal byte-range source for one external BatchArray member."""
 
-    def __init__(self, archive, dataset):
+    def __init__(self, archive, dataset, check_open=None):
         from blosc2.proxy_source import (
             _chunk_extents,
             _read_frame_header,
@@ -452,6 +452,7 @@ class B2ZBatchSource:
 
         self.archive = archive
         self.dataset = dataset.strip("/")
+        self._check = check_open or (lambda: None)
         matches = [info for info in archive.members if info.filename == self.dataset + ".b2b"]
         if len(matches) != 1:
             raise NotImplementedError(f"Remote CTable batch member {self.dataset!r} is unavailable")
@@ -466,6 +467,9 @@ class B2ZBatchSource:
         self.meta = _read_frame_metalayers(raw, self.header)
         self.vlmeta = member_vlmeta(archive, self.info)
         self.offsets = _read_frame_offsets(self.read_range, self.header, head, len(raw))
+        index_pos = self.header[1] + self.header[5]
+        if ((self.offsets < self.header[1]) | (self.offsets >= index_pos)).any():
+            raise ValueError(f"Batch frame for {self.dataset!r} contains an invalid chunk offset")
         self.extents = _chunk_extents(self.offsets, self.header)
         archive._opening_ranges.clear()
 
@@ -477,6 +481,7 @@ class B2ZBatchSource:
         return self.archive._read_archive(self.member_offset + offset, size)
 
     def get_chunk(self, index):
+        self._check()
         offset = int(self.offsets[index])
         if offset < 0:
             raise ValueError(f"Batch {index} of {self.dataset!r} has an unsupported special offset")

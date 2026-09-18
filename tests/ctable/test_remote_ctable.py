@@ -408,6 +408,22 @@ def test_remote_ctable_batch_wrappers_and_dictionary(tmp_path):
         assert remote.where(remote["category"] == "a")["data"][:] == [b"one", b"four"]
 
 
+def test_remote_ctable_arrow_list(tmp_path):
+    pytest.importorskip("pyarrow")
+
+    @dataclasses.dataclass
+    class Lists:
+        values: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int64(), serializer="arrow", nullable=True, batch_rows=2)
+        )
+
+    rows = [([1, 2],), (None,), ([],), ([3],)]
+    local = blosc2.CTable(Lists, rows, create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "arrow-list")
+    with blosc2.RemoteCTable(url) as remote:
+        assert remote["values"][:] == [row[0] for row in rows]
+
+
 def test_remote_ctable_rejects_unsafe_object_extension(tmp_path):
     @dataclasses.dataclass
     class Unsafe:
@@ -454,6 +470,147 @@ def test_remote_ctable_missing_dictionary_companion_isolated(tmp_path):
         np.testing.assert_array_equal(remote["x"][:], [1, 2])
         with pytest.raises(NotImplementedError, match="category_dict"):
             remote["category"][:]
+
+
+def test_remote_batch_reads_mutation_lifetime_and_copy(tmp_path, monkeypatch):
+    @dataclasses.dataclass
+    class Mixed:
+        text: str = blosc2.field(blosc2.vlstring(batch_rows=3))
+        tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), batch_rows=3))  # noqa: RUF009
+        category: str = blosc2.field(blosc2.dictionary())
+
+    rows = [(f"text {i}", [i, i + 1], "even" if i % 2 == 0 else "odd") for i in range(8)]
+    local = blosc2.CTable(Mixed, rows, create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "batch-read-lifetime")
+    fs = fsspec.filesystem("memory")
+    reads = []
+    original = type(fs).cat_file
+
+    def counted(self, path, start=None, end=None, **kwargs):
+        reads.append((start, end))
+        return original(self, path, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(type(fs), "cat_file", counted)
+    remote = blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.NONE)
+    text, tags, category = (remote[name].raw for name in ("text", "tags", "category"))
+    reads.clear()
+    assert tags[[0, 2, 1]] == [[0, 1], [2, 3], [1, 2]]
+    assert len(reads) == 1
+    for item in (slice(None, None, 2), slice(None, None, -1), [7, 0, 7, 3]):
+        assert text[item] == local["text"].raw[item]
+        assert tags[item] == local["tags"].raw[item]
+    assert list(text) == [row[0] for row in rows]
+    assert list(tags) == [row[1] for row in rows]
+    assert remote["category"][:] == [row[2] for row in rows]
+    assert text.nbytes > 0
+    assert text.cbytes > 0
+    assert "text 0" in str(remote[:2])
+
+    for mutate in (
+        lambda: text.append("new"),
+        lambda: text.extend(["new"]),
+        lambda: text.set_all(["new"] * len(text)),
+        lambda: text.__setitem__(0, "new"),
+        lambda: tags.append([9]),
+        lambda: tags.extend([[9]]),
+        lambda: tags.__setitem__(0, [9]),
+        lambda: category.__setitem__(0, "new"),
+    ):
+        with pytest.raises(ValueError, match="read-only"):
+            mutate()
+    assert text._pending == []
+    assert tags._pending_cells == []
+    assert category._value_to_code is not None
+    assert "new" not in category._value_to_code
+    with pytest.raises(TypeError):
+        text._backend.vlmeta["new"] = 1
+
+    detached = remote.copy()
+    cached_batch = tags._backend[0]
+    assert cached_batch[:] == [[0, 1], [1, 2], [2, 3]]
+    remote.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        text[[]]
+    with pytest.raises(RuntimeError, match="closed"):
+        tags[:1]
+    with pytest.raises(RuntimeError, match="closed"):
+        cached_batch[:]
+    detached["text"][0] = "changed"
+    detached["tags"][0] = [99]
+    detached["category"][0] = "changed"
+    assert detached[0].text == "changed"
+    assert detached[0].tags == [99]
+    assert detached[0].category == "changed"
+
+
+def test_remote_batch_refresh_invalidates_raw_wrapper(tmp_path):
+    @dataclasses.dataclass
+    class Text:
+        value: str = blosc2.field(blosc2.vlstring(batch_rows=2))
+
+    url = remote_table_url(
+        tmp_path, blosc2.CTable(Text, [("old",), ("values",)], create_summary_index=False), "batch-refresh"
+    )
+    with blosc2.RemoteCTable(url) as remote:
+        raw = remote["value"].raw
+        assert raw[:] == ["old", "values"]
+        replacement = blosc2.CTable(Text, [("new",)], create_summary_index=False)
+        path = tmp_path / "replacement.b2z"
+        replacement.to_b2z(path)
+        fsspec.filesystem("memory").pipe(url, path.read_bytes())
+        remote.refresh()
+        assert remote["value"][:] == ["new"]
+        with pytest.raises(RuntimeError, match=r"stale|closed"):
+            raw[:]
+
+
+def test_remote_store_batch_table_outlives_parent(tmp_path):
+    @dataclasses.dataclass
+    class Text:
+        value: str = blosc2.field(blosc2.vlstring(batch_rows=2))
+
+    source = tmp_path / "batch-tree.b2z"
+    with blosc2.TreeStore(source, mode="w", threshold=0) as tree:
+        tree["table"] = blosc2.CTable(Text, [("a",), ("b",)], create_summary_index=False)
+    url = "memory://batch-tree.b2z"
+    fsspec.filesystem("memory").pipe(url, source.read_bytes())
+    store = blosc2.RemoteStore(url)
+    remote = store["table"]
+    store.close()
+    assert remote["value"][:] == ["a", "b"]
+    remote.close()
+
+
+@pytest.mark.parametrize("lengths", [None, [-1]])
+def test_remote_batch_invalid_lengths_are_column_local(tmp_path, lengths):
+    @dataclasses.dataclass
+    class Mixed:
+        x: int
+        text: str = blosc2.field(blosc2.vlstring(batch_rows=2))
+
+    local = blosc2.CTable(Mixed, [(1, "a"), (2, "b")], create_summary_index=False)
+    remote_table_url(tmp_path, local, "invalid-lengths")
+    source_path = tmp_path / "invalid-lengths.b2z"
+    broken_path = tmp_path / "invalid-lengths-broken.b2z"
+    with zipfile.ZipFile(source_path) as source:
+        frame = source.read("_cols/text.b2b")
+        schunk = blosc2.schunk_from_cframe(frame, copy=True)
+        if lengths is None:
+            del schunk.vlmeta["_batch_array_metadata"]
+        else:
+            schunk.vlmeta["_batch_array_metadata"] = {"batch_lengths": lengths}
+        replacement = schunk.to_cframe()
+        with zipfile.ZipFile(broken_path, "w") as target:
+            for info in source.infolist():
+                target.writestr(
+                    info, replacement if info.filename == "_cols/text.b2b" else source.read(info)
+                )
+    url = "memory://invalid-lengths.b2z"
+    fsspec.filesystem("memory").pipe(url, broken_path.read_bytes())
+    with blosc2.RemoteCTable(url) as remote:
+        np.testing.assert_array_equal(remote["x"][:], [1, 2])
+        with pytest.raises(ValueError, match=r"column 'text'.*batch length"):
+            remote["text"][:]
 
 
 def test_remote_store_returns_table_with_independent_lifetime(tmp_path):

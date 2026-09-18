@@ -575,9 +575,17 @@ class RemoteDiscovery:
         self._validate(full)
         from blosc2.b2z_source import B2ZBatchSource
 
+        generation = self.generation
+
+        def check_open():
+            if self._closed:
+                raise RuntimeError("RemoteCTable handle is closed")
+            if self.generation != generation:
+                raise RuntimeError("RemoteCTable handle is stale; look it up again after refresh")
+
         self.archive.capture_metadata = True
         try:
-            source = B2ZBatchSource(self.archive, full)
+            source = B2ZBatchSource(self.archive, full, check_open)
         finally:
             self.archive.capture_metadata = False
             self.archive._opening_ranges.clear()

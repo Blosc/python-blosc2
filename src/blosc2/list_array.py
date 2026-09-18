@@ -379,6 +379,7 @@ class ListArray:
 
     def append(self, value: Any) -> int:
         """Append one list cell and return the new number of rows."""
+        self._backend._check_writable()
         cell = coerce_list_cell(self.spec, value)
         if self.spec.storage == "vl":
             self._backend.append(cell)
@@ -394,6 +395,7 @@ class ListArray:
         Set ``validate=False`` only for trusted values that already match this
         array's schema.
         """
+        self._backend._check_writable()
         if validate:
             cells = [coerce_list_cell(self.spec, v) for v in values]
         else:
@@ -417,6 +419,7 @@ class ListArray:
         This requires batch storage with ``serializer='arrow'`` and is intended
         for trusted Arrow/Parquet import paths.
         """
+        self._backend._check_writable()
         pa = _require_pyarrow()
         if isinstance(arrow_array, pa.ChunkedArray):
             chunks = arrow_array.chunks
@@ -441,6 +444,7 @@ class ListArray:
         if self.spec.storage != "batch":
             return
         if self._pending_cells:
+            self._backend._check_writable()
             batch = list(self._pending_cells)
             self._backend.append(batch)
             self._persisted_row_count += len(batch)
@@ -514,7 +518,11 @@ class ListArray:
         # For small selections from block-addressable batches, scalar access is
         # much cheaper than materializing the full containing batch.  This is
         # common for filtered column previews and small logical slices.
-        if getattr(self._backend, "items_per_block", None) is not None and len(indices) <= 1024:
+        if (
+            not getattr(self._backend, "_remote", False)
+            and getattr(self._backend, "items_per_block", None) is not None
+            and len(indices) <= 1024
+        ):
             return [self[index] for index in indices]
         if len(indices) <= 1:
             return self._get_many_grouped(indices)
@@ -531,6 +539,9 @@ class ListArray:
 
     def __getitem__(self, index: int | slice | list[int] | tuple[int, ...] | np.ndarray) -> Any:
         """Return one cell or a list of cells selected by index, slice, or mask."""
+        check = getattr(self._backend, "_check_open", None)
+        if check is not None:
+            check()
         if isinstance(index, slice):
             indices = list(range(*index.indices(len(self))))
             return self._get_many(indices)
@@ -554,6 +565,7 @@ class ListArray:
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Replace one list cell."""
+        self._backend._check_writable()
         cell = coerce_list_cell(self.spec, value)
         index = self._normalize_index(index)
         if self.spec.storage == "vl":
@@ -571,6 +583,9 @@ class ListArray:
 
     def __len__(self) -> int:
         """Return the number of rows."""
+        check = getattr(self._backend, "_check_open", None)
+        if check is not None:
+            check()
         if self.spec.storage == "vl":
             return len(self._backend)
         return self._persisted_row_count + len(self._pending_cells)

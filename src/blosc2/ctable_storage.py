@@ -726,7 +726,9 @@ class RemoteTableStorage(TableStorage):
         from blosc2.remote_batch import _RemoteBatchArray
 
         key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}{suffix}"
-        backend = _RemoteBatchArray(self._owner.open_ctable_batch(self._full_key(key)), name)
+        backend = _RemoteBatchArray(
+            self._owner.open_ctable_batch(self._full_key(key)), name, self._check_open
+        )
         if not isinstance(spec, ListSpec):
             _validate_role_metadata(backend, spec)
         return backend
@@ -1645,7 +1647,8 @@ class TreeStoreTableStorage(TableStorage):
             return UTF8Array(spec, offsets, data)
         urlpath = self._list_col_path(name)
         os.makedirs(os.path.dirname(urlpath), exist_ok=True)
-        return _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+        backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+        return _ScalarVarLenArray(spec, backend)
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
         if isinstance(spec, UTF8Spec):

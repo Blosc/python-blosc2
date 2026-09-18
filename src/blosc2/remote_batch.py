@@ -16,7 +16,16 @@ from blosc2.batch_array import (
 
 
 class _RemoteBatch(Batch):
+    def __getitem__(self, index):
+        self._parent._check_open()
+        return super().__getitem__(index)
+
+    def __len__(self):
+        self._parent._check_open()
+        return super().__len__()
+
     def _payloads(self):
+        self._parent._check_open()
         payloads = getattr(self, "_remote_payloads", None)
         if payloads is None:
             payloads = blosc2.blosc2_ext.vldecompress(self._lazybatch)
@@ -45,7 +54,9 @@ class _RemoteBatch(Batch):
 class _RemoteBatchArray(BatchArray):
     """The BatchArray read surface needed by remote CTable wrappers."""
 
-    def __init__(self, source, column):
+    def __init__(self, source, column, check_open=None):
+        self._remote = True
+        self._owner_check = check_open or (lambda: None)
         try:
             metadata = source.meta["batcharray"]
         except KeyError as exc:
@@ -63,6 +74,10 @@ class _RemoteBatchArray(BatchArray):
         self._item_prefix_sums = None
         self._validate_tag()
 
+    def _check_open(self):
+        self._owner_check()
+        self._source._check()
+
     def _validated_lengths(self, column):
         metadata = self.schunk.vlmeta.get(_BATCHARRAY_VLMETA_KEY, {})
         lengths = metadata.get("batch_lengths")
@@ -78,6 +93,7 @@ class _RemoteBatchArray(BatchArray):
         return lengths
 
     def _get_batch(self, index):
+        self._check_open()
         return _RemoteBatch(self, index, self._source.get_chunk(index))
 
     def _deserialize_msgpack_block(self, payload):
@@ -86,7 +102,37 @@ class _RemoteBatchArray(BatchArray):
         return _safe_msgpack_unpackb(payload)
 
     def _check_writable(self):
-        raise ValueError("Cannot modify a remote BatchArray")
+        self._check_open()
+        raise ValueError("Remote CTable batch columns are read-only")
+
+    def __len__(self):
+        self._check_open()
+        return super().__len__()
+
+    @property
+    def meta(self):
+        self._check_open()
+        return super().meta
+
+    @property
+    def vlmeta(self):
+        self._check_open()
+        return super().vlmeta
+
+    @property
+    def nbytes(self):
+        self._check_open()
+        return super().nbytes
+
+    @property
+    def cbytes(self):
+        self._check_open()
+        return super().cbytes
+
+    @property
+    def cratio(self):
+        self._check_open()
+        return super().cratio
 
 
 class _RemoteBatchCache:
@@ -116,6 +162,7 @@ class _RemoteBatchCache:
         return self._path / f"{index}.chunk"
 
     def get_chunk(self, index):
+        self._source._check()
         if index in self._cache_sizes:
             chunk = self._file(index).read_bytes() if self._path is not None else self._memory[index]
         else:
@@ -158,9 +205,11 @@ class _RemoteBatchCache:
 
 class _RemoteBatchSChunk:
     def __init__(self, source):
+        from blosc2.remote_array import RemoteMetadataMapping
+
         self._source = source
-        self.meta = source.meta
-        self.vlmeta = source.vlmeta
+        self.meta = RemoteMetadataMapping(source.meta)
+        self.vlmeta = RemoteMetadataMapping(source.vlmeta)
         self.mode = "r"
         self.mmap_mode = None
         self.nchunks = len(source.offsets)

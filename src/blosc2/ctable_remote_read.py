@@ -314,10 +314,18 @@ def _array_values(array, positions):  # noqa: C901
     return out
 
 
-def column_values(table, names, positions, *, null_masks=None):
+def column_values(table, names, positions, *, null_masks=None):  # noqa: C901
     """Read a bounded selection of stored columns, returning decoded values."""
     from blosc2._utf8_array import _GATHER_GAP, UTF8Array
-    from blosc2.schema import timestamp
+    from blosc2.schema import (
+        DictionarySpec,
+        ListSpec,
+        ObjectSpec,
+        StructSpec,
+        VLBytesSpec,
+        VLStringSpec,
+        timestamp,
+    )
 
     storage = table._remote_read_storage()
     with storage._owner.lock:
@@ -329,12 +337,15 @@ def column_values(table, names, positions, *, null_masks=None):
             return {name: table._fetch_col_at_positions_uncached(name, positions) for name in names}
         storage.open_columns(table, stored, table._cols.__getitem__)
         masks = {
-            name: table._null_mask(name) if table._schema.columns_by_name[name].spec.uses_mask else None
+            name: table._null_mask(name)
+            if getattr(table._schema.columns_by_name[name].spec, "uses_mask", False)
+            else None
             for name in stored
         }
 
         def reader(name):
             col = table._cols[name]
+            spec = table._schema.columns_by_name[name].spec
             if isinstance(col, UTF8Array):
                 values = np.empty(len(positions), dtype=col.dtype)
                 order = np.argsort(positions, kind="stable")
@@ -353,9 +364,12 @@ def column_values(table, names, positions, *, null_masks=None):
                         a, b = offsets[pos - lo : pos - lo + 2] - first
                         values[order[start + j]] = blob[a:b].decode("utf-8")
                     start += len(cluster)
+            elif isinstance(
+                spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, ListSpec, DictionarySpec)
+            ):
+                values = col[positions]
             else:
                 values = yield from _array_values(col, positions)
-            spec = table._schema.columns_by_name[name].spec
             if isinstance(spec, timestamp):
                 values = values.astype(f"datetime64[{spec.unit}]")
             mask = masks[name]
