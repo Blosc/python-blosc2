@@ -633,6 +633,13 @@ For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to c
 ### Refreshing a RemoteStore
 
 Remote containers (B2Z, Zarr, and HDF5) are assumed immutable by default.
+For B2Z tables and stores, reopening a populated disk cache trusts its saved
+archive identity and metadata: no HEAD/identity request is made. Uncached data
+still requires remote reads. Older caches may perform one identity lookup to
+upgrade their metadata. Do not replace the remote archive while using its cache.
+Use `store.refresh()` after a replacement; for a standalone `RemoteCTable`,
+which has no `refresh()` method, open with a fresh `cache_dir` instead.
+
 If a remote container is updated on the server—such as adding new datasets or appending data—call `store.refresh()` to update discovery:
 
 ```python

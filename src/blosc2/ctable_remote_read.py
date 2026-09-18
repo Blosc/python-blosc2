@@ -121,6 +121,8 @@ def open_columns(storage, table, names, load):  # noqa: C901
             for key in keys:
                 if key in owner.sources:
                     continue
+                if key in archive.metadata.get("ctable_seeds", {}):
+                    continue
                 matches = members.get(key + ".b2nd", ())
                 if len(matches) != 1:
                     # The ordinary opener supplies the appropriate diagnostic.

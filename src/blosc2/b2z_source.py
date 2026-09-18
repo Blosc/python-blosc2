@@ -103,9 +103,14 @@ class B2ZArchive:
 
             if isinstance(self._fs, HTTPFileSystem):
                 bootstrap = sync(self._fs.loop, _http_tail, self._fs, self._path)
-        object_info = self._fs.info(self._path) if bootstrap is None else bootstrap[0]
-        self.object_info = object_info
+        legacy_metadata = bool(_metadata) and "object_info" not in _metadata
+        object_info = (_metadata or {}).get("object_info")
+        if object_info is None:
+            # Old manifests need one identity lookup to acquire this bootstrap.
+            object_info = self._fs.info(self._path) if bootstrap is None else bootstrap[0]
         size = object_info["size"]
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError("Invalid cached B2Z archive size")
         self.size = size
         self.metadata = _metadata if _metadata is not None else {}
         self.persist_metadata = _metadata is not None
@@ -113,6 +118,17 @@ class B2ZArchive:
         if self.metadata and self.metadata.get("identity") != identity:
             raise ValueError("B2Z source changed; refresh the store cache")
         self.metadata.setdefault("identity", identity)
+        # Backend info can contain datetime or other non-msgpack values. Only
+        # size needs its native type; retain per-member stamps before normalizing.
+        self.metadata.setdefault(
+            "object_info", {**{k: str(v) for k, v in object_info.items()}, "size": size}
+        )
+        # New readers (including concurrent sparse-cache handles) must derive
+        # identical stamps from the live and serialized forms. During upgrades,
+        # preserve the old stamp for existing payloads in member_stamps below.
+        self.object_info = (
+            object_info if legacy_metadata or _metadata is None else self.metadata["object_info"]
+        )
         self.metadata.setdefault("ranges", [])
         for offset, data in self.metadata["ranges"]:
             if (
@@ -331,7 +347,14 @@ class B2ZNDSource(ByteRangeNDSource):
             prefix_start, prefix = archive._opening_ranges[-1]
             from fsspec.utils import tokenize
 
-            self.stamp = tokenize(urlpath, object_info, dataset, self.member_offset, self.member_length)
+            # tokenize() uses dict repr: HEAD and range responses can contain
+            # identical fields in different insertion orders.
+            self.stamp = archive.metadata.setdefault("member_stamps", {}).setdefault(
+                dataset,
+                tokenize(
+                    urlpath, sorted(object_info.items()), dataset, self.member_offset, self.member_length
+                ),
+            )
             super().__init__(urlpath, max_concurrency, traffic=self.traffic)
             if b"b2o" in self._header[13][1]:
                 raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")

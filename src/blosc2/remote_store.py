@@ -520,9 +520,7 @@ class RemoteDiscovery:
                 value if isinstance(value, str) else "Array access is unavailable for this node"
             )
         if self.format == "b2z":
-            from blosc2.b2z_source import B2ZNDSource
-
-            source = B2ZNDSource(self.urlpath, full, _archive=self.archive)
+            source = self._open_b2z_source(full)
         elif self.format == "hdf5":
             from blosc2.hdf5_source import HDF5NDSource
 
@@ -561,13 +559,33 @@ class RemoteDiscovery:
             raise NotImplementedError(
                 f"Remote CTable array {full!r} requires an unencrypted ZIP_STORED member"
             )
-        from blosc2.b2z_source import B2ZNDSource
-
-        source = B2ZNDSource(self.urlpath, full, _archive=self.archive)
+        source = self._open_b2z_source(full)
         if self.source_validator is not None:
             self.source_validator(source)
         self.nodes[full] = ("ndarray", None)
         self.sources[full] = source
+        return source
+
+    def _open_b2z_source(self, full):
+        from blosc2.b2z_source import B2ZNDSource
+
+        # Immutable archives trust their persisted identity when restoring leaves.
+        seeds = self.archive.metadata.get("ctable_seeds", {})
+        if full in seeds:
+            return B2ZNDSource(
+                self.urlpath,
+                full,
+                _seed=seeds[full],
+                storage_options=self.storage_options,
+                _filesystem=self.filesystem,
+                _traffic=self.traffic,
+            )
+        source = B2ZNDSource(self.urlpath, full, _archive=self.archive)
+        if self.persist_metadata and any(
+            kind == "ctable" and full.startswith(root + "/" if root else "")
+            for root, (kind, _) in self.nodes.items()
+        ):
+            self.archive.metadata.setdefault("ctable_seeds", {})[full] = source._seed
         return source
 
     def remote_array(self, full):

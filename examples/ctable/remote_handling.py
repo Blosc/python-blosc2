@@ -121,7 +121,8 @@ def access_table(args) -> None:
 
     print(f"Accessing: {args.url}")
     started = time.perf_counter()
-    with blosc2.open(args.url, storage_options=storage_options or None) as table:
+    cache_options = {"cache_dir": args.cache_dir} if args.cache_dir is not None else {}
+    with blosc2.open(args.url, storage_options=storage_options or None, **cache_options) as table:
         if not isinstance(table, blosc2.CTable):
             raise ValueError("input must be a CTable archive")
         remote = isinstance(table, blosc2.RemoteCTable)
@@ -221,6 +222,9 @@ def main() -> int:
         "url", nargs="?", help="Local .b2z CTable path or remote URL (s3://, http://, https://)"
     )
     parser.add_argument("--write", type=Path, metavar="FILE", help="Create a local .b2z CTable instead")
+    parser.add_argument(
+        "--cache-dir", type=Path, metavar="DIR", help="Persist remote data in DIR (default: in-memory cache)"
+    )
     parser.add_argument("--rows", type=int, default=1_000_000)
     parser.add_argument("--batch-size", type=int, default=100_000)
     parser.add_argument("--overwrite", action="store_true")

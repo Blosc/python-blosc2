@@ -49,7 +49,7 @@ def test_remote_example_total_timing(tmp_path, capsys, include_note, nrows):
     ticks = iter(range(10))
     access = example["access_table"]
     access.__globals__["time"] = SimpleNamespace(perf_counter=lambda: next(ticks))
-    access(SimpleNamespace(url=url))
+    access(SimpleNamespace(url=url, cache_dir=None))
     output = capsys.readouterr().out
     expected_ms = 5000 if include_note else 3000
     assert f"\n\nTotal network : {expected_ms:7.1f} ms  (" in output
@@ -60,6 +60,120 @@ def test_remote_example_total_timing(tmp_path, capsys, include_note, nrows):
     heading = f"Sample rows [{start}:{stop}] around the midpoint (1st fetch):\n"
     sample = output.split(heading)[1].split("\nTiming & Network Traffic:")[0].strip()
     assert sample == str(local[start:stop]).strip()
+
+
+def test_remote_example_cache_dir(tmp_path, capsys, monkeypatch):
+    import runpy
+    import sys
+    from pathlib import Path
+
+    local = blosc2.CTable(dataclasses.make_dataclass("Sample", [("x", int)]), [(i,) for i in range(20)])
+    url = remote_table_url(tmp_path, local)
+    cache_dir = tmp_path / "cache"
+    script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
+    example = runpy.run_path(str(script))
+    monkeypatch.setattr(sys, "argv", [str(script), url, "--cache-dir", str(cache_dir)])
+    for _ in range(2):
+        assert example["main"]() == 0
+        output = capsys.readouterr().out
+        assert "cache_policy : DISK" in output
+    assert any(cache_dir.iterdir())
+    assert "(0 requests," in output.split("Total network :")[1]
+
+
+def test_disk_cache_metadata_key_order(tmp_path, monkeypatch):
+    local = blosc2.CTable(dataclasses.make_dataclass("Sample", [("x", int)]), [(i,) for i in range(20)])
+    url = remote_table_url(tmp_path, local)
+    cache_dir = tmp_path / "cache"
+    with blosc2.open(url, cache_dir=cache_dir) as table:
+        np.testing.assert_array_equal(table["x"][:], np.arange(20))
+
+    fs = fsspec.filesystem("memory")
+    original_info = type(fs).info
+
+    def reordered_info(self, path, **kwargs):
+        return dict(reversed(list(original_info(self, path, **kwargs).items())))
+
+    monkeypatch.setattr(type(fs), "info", reordered_info)
+    with blosc2.open(url, cache_dir=cache_dir) as table:
+        np.testing.assert_array_equal(table["x"][:], np.arange(20))
+        assert table.traffic.requests == 0
+
+    def changed_info(self, path, **kwargs):
+        return {**original_info(self, path, **kwargs), "ETag": "changed"}
+
+    monkeypatch.setattr(type(fs), "info", changed_info)
+    # Immutable reopening trusts the persisted identity, even if remote metadata changes.
+    with blosc2.open(url, cache_dir=cache_dir) as table:
+        np.testing.assert_array_equal(table["x"][:], np.arange(20))
+
+
+@pytest.mark.parametrize("max_concurrency", [1, 8])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_disk_cache_reuses_ctable_bootstrap(tmp_path, monkeypatch, max_concurrency, legacy):
+    schema = dataclasses.make_dataclass("Sample", [("x", float), ("note", str, blosc2.field(blosc2.utf8()))])
+    values = np.random.default_rng(42).random(20_000)
+    local = blosc2.CTable(
+        schema,
+        [(x, f"東京 café #{i}") for i, x in enumerate(values)],
+        create_summary_index=False,
+    )
+    local._cols["x"] = blosc2.asarray(values, chunks=(2000,), blocks=(200,))
+    local.attrs["description"] = "Persistent UTF-8 metadata"
+    url = remote_table_url(tmp_path, local)
+    # Export rechunks columns; retain a multi-chunk fixture for cold-row checks.
+    path = tmp_path / "grids.b2z"
+    with zipfile.ZipFile(tmp_path / "table.b2z") as source, zipfile.ZipFile(path, "w") as dest:
+        for info in source.infolist():
+            data = local._cols["x"].to_cframe() if info.filename == "_cols/x.b2nd" else source.read(info)
+            dest.writestr(info, data)
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    cache_dir = tmp_path / "cache"
+    options = {"cache_dir": cache_dir, "max_concurrency": max_concurrency}
+    with blosc2.open(url, **options) as table:
+        nbytes = table.nbytes
+        attrs = dict(table.attrs)
+        sample = list(table[9998:10003])
+        notes = table["note"][-5:].tolist()
+        if legacy:
+            from fsspec.utils import tokenize
+
+            owner = table._remote_storage()._owner
+            # Before object_info was persisted, stamps used native backend types
+            # (including memory:// creation datetimes), not normalized strings.
+            info = owner.archive._fs.info(owner.archive._path)
+            for key, source in owner.sources.items():
+                stamp = tokenize(url, sorted(info.items()), key, source.member_offset, source.member_length)
+                owner.caches[key].schunk.vlmeta["proxy-stamp"] = stamp
+            owner.archive.metadata.pop("ctable_seeds")
+            owner.archive.metadata.pop("object_info")
+            owner.archive.metadata.pop("member_stamps")
+            owner.attrs.clear()
+
+    if legacy:
+        # Old caches acquire bootstraps and attributes on their next access.
+        with blosc2.open(url, **options) as table:
+            assert table.nbytes == nbytes
+            assert dict(table.attrs) == attrs
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("Warm metadata/rows must not download archive bytes")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(fsspec.filesystem("memory")), "cat_file", unexpected_read)
+        patch.setattr(type(fsspec.filesystem("memory")), "info", unexpected_read)
+        with blosc2.open(url, **options) as table:
+            assert table.nbytes == nbytes
+            assert dict(table.attrs) == attrs
+            assert list(table[9998:10003]) == sample
+            assert table["note"][-5:].tolist() == notes
+            assert table.traffic.requests == 0
+
+    # Restored bootstraps must still support transport for uncached rows.
+    with blosc2.open(url, **options) as table:
+        np.testing.assert_array_equal(table["x"][:5], values[:5])
+        assert table["note"][:5].tolist() == [f"東京 café #{i}" for i in range(5)]
+        assert table.traffic.requests > 0
 
 
 def test_remote_ctable_fixed_width_reads_and_queries(tmp_path):

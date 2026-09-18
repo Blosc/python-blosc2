@@ -126,6 +126,34 @@ def test_store_none_rejects_limit():
         )
 
 
+def test_b2z_disk_cache_trusts_snapshot_until_refresh(tmp_path, monkeypatch):
+    path = tmp_path / "source.b2z"
+    url = f"memory://{tmp_path.name}/source.b2z"
+    fs = fsspec.filesystem("memory")
+    cache = tmp_path / "cache"
+    for value in (1, 2):
+        with blosc2.TreeStore(path, mode="w", threshold=0) as tree:
+            tree["a"] = blosc2.asarray(np.full(10, value, dtype="i4"))
+        fs.pipe(url, path.read_bytes())
+        if value == 1:
+            with blosc2.RemoteStore(url, cache_dir=cache) as store, store["a"] as array:
+                np.testing.assert_array_equal(array[:], 1)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Immutable reopening must not contact the remote source")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(fs), "info", forbidden)
+        patch.setattr(type(fs), "cat_file", forbidden)
+        with blosc2.RemoteStore(url, cache_dir=cache) as store, store["a"] as array:
+            np.testing.assert_array_equal(array[:], 1)
+
+    with blosc2.RemoteStore(url, cache_dir=cache) as store:
+        store.refresh()
+        with store["a"] as array:
+            np.testing.assert_array_equal(array[:], 2)
+
+
 def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
     url, data = hierarchy
     parent = tmp_path / "cache"
@@ -145,6 +173,8 @@ def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
             raise AssertionError("reopen fetched remote bytes")
 
         patch.setattr(type(fsspec.filesystem("memory")), "cat_file", forbidden)
+        if url.endswith(".b2z"):
+            patch.setattr(type(fsspec.filesystem("memory")), "info", forbidden)
         reopened = blosc2.RemoteStore(url, cache_dir=parent)
         reopened.close()
     with blosc2.RemoteStore(url, cache_dir=parent) as store:

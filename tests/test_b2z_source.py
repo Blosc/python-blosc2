@@ -173,14 +173,14 @@ def test_http_tail_bootstrap(suffix, small, ctable, tmp_path):
             else:
                 np.testing.assert_array_equal(arr[:], data)
 
-        # A persisted suffix bootstrap must have the same identity as HEAD.
+        # Immutable archive discovery reopens entirely from its saved bootstrap.
         metadata = {}
         archive = B2ZArchive(url, storage_options=options, _metadata=metadata)
         archive.close()
         requests.clear()
         archive = B2ZArchive(url, storage_options=options, _metadata=metadata)
         archive.close()
-        assert requests == [("HEAD", None)]
+        assert requests == []
     finally:
         server.shutdown()
         server.server_close()
