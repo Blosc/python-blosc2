@@ -83,6 +83,63 @@ def test_remote_summary_index_prunes_queries(tmp_path, granularity):
         assert any("_indexes/x/summary." in (array.dataset or "") for array in remote._storage._arrays)
 
 
+@pytest.mark.parametrize("policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY])
+def test_remote_summary_single_payload_request_and_cache(tmp_path, policy):
+    from blosc2.indexing import _open_level_summary_handle
+
+    url, _ = indexed_remote_table_url(tmp_path, "summary", granularity="block")
+    with blosc2.RemoteCTable(url, cache_policy=policy) as remote:
+        descriptor = remote._get_index_catalog()["x"]
+        column = remote._cols["x"]
+        remote.traffic.reset()
+        summary = _open_level_summary_handle(column, descriptor, "block")
+        assert remote.traffic.requests == 1  # sidecar frame metadata
+        remote.traffic.reset()
+        expected = summary[:]
+        assert remote.traffic.requests == (1 if policy is blosc2.CachePolicy.NONE else 0)
+        remote.traffic.reset()
+        np.testing.assert_array_equal(summary[:], expected)
+        assert remote.traffic.requests == (1 if policy is blosc2.CachePolicy.NONE else 0)
+
+
+def test_remote_summary_warm_reference_and_sparse_cache(tmp_path):
+    from blosc2.indexing import _open_level_summary_handle
+
+    url, _ = indexed_remote_table_url(tmp_path, "summary", granularity="block")
+    artifact = tmp_path / "summary-reference.b2z"
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
+        descriptor = remote._get_index_catalog()["x"]
+        summary = _open_level_summary_handle(remote._cols["x"], descriptor, "block")
+        expected = summary[:]
+        remote.save(artifact)
+
+    with blosc2.open(artifact) as reopened:
+        descriptor = reopened._get_index_catalog()["x"]
+        summary = _open_level_summary_handle(reopened._cols["x"], descriptor, "block")
+        reopened.traffic.reset()
+        np.testing.assert_array_equal(summary[:], expected)
+        assert reopened.traffic.requests == 0
+
+    cache = tmp_path / "summary-sparse-cache"
+    with blosc2.RemoteCTable.with_sparse_cache(url, cache) as first:
+        descriptor = first._get_index_catalog()["x"]
+        summary = _open_level_summary_handle(first._cols["x"], descriptor, "block")
+        np.testing.assert_array_equal(summary[:], expected)
+    with blosc2.RemoteCTable.with_sparse_cache(url, cache) as second:
+        descriptor = second._get_index_catalog()["x"]
+        summary = _open_level_summary_handle(second._cols["x"], descriptor, "block")
+        second.traffic.reset()
+        np.testing.assert_array_equal(summary[:], expected)
+        assert second.traffic.requests == 0
+
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as refreshed:
+        descriptor = refreshed._get_index_catalog()["x"]
+        old_summary = _open_level_summary_handle(refreshed._cols["x"], descriptor, "block")
+        refreshed.refresh()
+        with pytest.raises(RuntimeError, match=r"stale|closed"):
+            old_summary[:]
+
+
 def test_sparse_cache_shared_handles_and_refresh(tmp_path):
     local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
     url = remote_table_url(tmp_path, local, "sparse-shared")
