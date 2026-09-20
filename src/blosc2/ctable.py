@@ -4849,11 +4849,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._cached_live_positions = result
         return result
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         row_type: type[RowT],
         new_data=None,
         *,
+        sources: Mapping[str, blosc2.NDArray | blosc2.RemoteArray] | None = None,
         urlpath: str | None = None,
         mode: str = "a",
         expected_size: int | None = None,
@@ -4867,6 +4868,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Parameters
         ----------
+        sources:
+            Mapping from every stored column name to an existing
+            :class:`NDArray` or :class:`RemoteArray`.  The arrays are bound
+            without copying for an in-memory table.  Their dtypes and shapes
+            must exactly match the schema, and the resulting table is
+            read-only.
         create_summary_index:
             If ``True`` (default), SUMMARY indexes are automatically built for
             all eligible scalar columns.  These indexes are extremely cheap to
@@ -4887,6 +4894,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             logical copy and do **not** trigger the build; index the source
             table (or the reopened result) explicitly if you need it.
         """
+        if sources is not None and new_data is not None:
+            raise ValueError("sources and new_data are mutually exclusive")
+        if sources is not None and not isinstance(sources, Mapping):
+            raise TypeError("sources must be a mapping from column names to arrays")
+
         # Auto-size: if the caller didn't specify expected_size and new_data has a
         # known length, pre-allocate just enough (×2 for headroom, min 64).
         # Fall back to 1 M when new_data has no __len__ or is absent.
@@ -4928,9 +4940,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if storage.table_exists() and mode != "w":
             # ---- Open existing persistent table ----
-            if new_data is not None:
+            if new_data is not None or sources is not None:
                 raise ValueError(
-                    "Cannot pass new_data when opening an existing table. Use mode='w' to overwrite."
+                    "Cannot pass new_data or sources when opening an existing table. "
+                    "Use mode='w' to overwrite."
                 )
             storage.check_kind()
             schema_dict = storage.load_schema()
@@ -4978,6 +4991,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 self._schema = _compile_pydantic_schema(row_type)
             self._resolve_nullable_specs(self._schema)
 
+            if sources is not None:
+                n_rows = self._validate_sources(sources)
+                capacity = max(n_rows, 1)
+                default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+                self._valid_rows = storage.create_valid_rows(
+                    shape=(capacity,), chunks=default_chunks, blocks=default_blocks
+                )
+                if n_rows:
+                    self._valid_rows[:n_rows] = True
+                self._n_rows = n_rows
+                self._last_pos = n_rows
+                for col in self._schema.columns:
+                    self.col_names.append(col.name)
+                    self._col_widths[col.name] = max(len(col.name), col.display_width)
+                    self._cols[col.name] = storage.install_column(col.name, sources[col.name])
+                self._read_only = True
+                self._create_summary_index = False
+                self._summary_indexes_built = True
+                storage.save_schema(self._schema_dict_with_computed())
+                return
+
             self._n_rows = 0
             self._last_pos = 0
 
@@ -5009,6 +5043,69 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 # Persist the row count so subsequent opens can skip the
                 # _valid_rows intersection in where().
                 self._save_n_rows_to_meta()
+
+    def _validate_sources(self, sources: Mapping[str, Any]) -> int:  # noqa: C901
+        """Validate source bindings without reading their payloads."""
+        expected = {col.name for col in self._schema.columns}
+        supplied = set(sources)
+        missing = expected - supplied
+        unknown = supplied - expected
+        if missing or unknown:
+            details = []
+            if missing:
+                details.append(f"missing: {', '.join(sorted(missing))}")
+            if unknown:
+                details.append(f"unknown: {', '.join(sorted(unknown))}")
+            raise ValueError(
+                "sources must bind every stored column exactly once (" + "; ".join(details) + ")"
+            )
+        if self._table_cparams is not None or self._table_dparams is not None:
+            raise ValueError("cparams and dparams cannot be specified with sources")
+
+        n_rows = None
+        for col in self._schema.columns:
+            source = sources[col.name]
+            if not isinstance(source, (blosc2.NDArray, blosc2.RemoteArray)):
+                raise TypeError(
+                    f"Source for column {col.name!r} must be an NDArray or RemoteArray, "
+                    f"got {type(source).__name__}"
+                )
+            if (
+                self._is_list_column(col)
+                or self._is_varlen_scalar_column(col)
+                or self._is_dictionary_column(col)
+            ):
+                raise TypeError(f"Source binding for column {col.name!r} requires a fixed-width schema")
+            if getattr(col.spec, "uses_mask", False):
+                raise TypeError(f"Source binding for nullable mask column {col.name!r} is not supported")
+            if self._validate and any(
+                getattr(col.spec, constraint, None) is not None for constraint in ("ge", "gt", "le", "lt")
+            ):
+                raise ValueError(
+                    f"Source binding for constrained column {col.name!r} requires validate=False; "
+                    "source values are not scanned during construction"
+                )
+            if any(
+                option is not None
+                for option in (col.config.chunks, col.config.blocks, col.config.cparams, col.config.dparams)
+            ):
+                raise ValueError(f"Storage options for source-bound column {col.name!r} are not supported")
+
+            shape = tuple(source.shape)
+            wanted = self._column_physical_shape(col, shape[0] if shape else 0)
+            if shape != wanted:
+                raise ValueError(f"Source for column {col.name!r} has shape {shape}, expected {wanted}")
+            if np.dtype(source.dtype) != np.dtype(col.dtype):
+                raise TypeError(
+                    f"Source for column {col.name!r} has dtype {source.dtype}, expected {np.dtype(col.dtype)}"
+                )
+            if n_rows is None:
+                n_rows = shape[0]
+            elif shape[0] != n_rows:
+                raise ValueError(
+                    f"Source columns have different row counts: {col.name!r} has {shape[0]}, expected {n_rows}"
+                )
+        return 0 if n_rows is None else n_rows
 
     def close(self) -> None:
         """Close any persistent backing store held by this table.
