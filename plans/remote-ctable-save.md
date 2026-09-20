@@ -186,7 +186,8 @@ to the materializing default of local CTable.save(). A subsequent extension
 adds opt-in `preserve_sources=True` for source-bound local tables; see
 `ctable-remote-cols.md` for that separate contract.
 
-General remote SUMMARY/scalar index resolution remains a separate follow-up in
-`remote-ctable.md`. Shared sparse runtime caching is available directly through
-`RemoteCTable.with_sparse_cache()` and includes referenced RemoteArray columns
-under the outer table's cache owner and aggregate budget.
+Remote SUMMARY and scalar index resolution is implemented as described in
+`remote-ctable-indexes.md`. Shared sparse runtime caching is available directly
+through `RemoteCTable.with_sparse_cache()` and includes index sidecars and
+referenced RemoteArray columns under the outer table's cache owner and aggregate
+budget.

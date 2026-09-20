@@ -5,8 +5,8 @@ UTF-8 support was added in the v2 extension (see `remote-ctable-v2.md`);
 batch-backed columns were added in the batch extension (see
 `remote-ctable-batches.md`). Portable references and RemoteStore artifact
 inclusion are implemented (see `remote-ctable-save.md`). Remote list membership
-indexes are supported; SUMMARY and other scalar persisted indexes remain
-follow-ups. Status reviewed on 2026-09-20.
+and scalar persisted indexes are supported (see `remote-ctable-indexes.md`).
+Status reviewed on 2026-09-20.
 
 The implementation notes and first-release decisions below describe the initial
 scope. The follow-up status at the end reflects subsequent extensions.
@@ -43,8 +43,9 @@ second implementation or building a general remote-object framework.
 - Added slice-based shared CTable fallbacks needed by remote operands, preserving
   local optimized paths. Scalar and sliced rows, iteration, filtering,
   reductions, fixed-width strings and mask-backed nulls work remotely.
-- Kept persisted indexes disabled for remote tables; queries scan the required
-  columns rather than entering local sidecar paths.
+- Added remote scalar sidecar resolution and query support for SUMMARY, FULL,
+  PARTIAL, OPSI and BUCKET indexes. Existing list membership indexes remain
+  supported.
 - Fixed owned `s3fs` cleanup so its registered finalizer closes the aiobotocore
   session exactly once, while HTTP fsspec sessions retain deterministic closing.
 - Added `examples/ctable/remote_handling.py`. `--write FILE.b2z` generates a
@@ -66,8 +67,8 @@ second implementation or building a general remote-object framework.
 - `remote_store.py`: discovery recognizes CTable roots and nested table
   boundaries, opens supported table nodes as RemoteCTable objects, and keeps
   their internals opaque during hierarchy traversal.
-- Persisted index descriptors are currently resolved through local paths and
-  ZIP-offset registration. Batch-backed columns use local `.b2b` opening paths.
+- Persisted scalar index descriptors use the remote table owner to resolve
+  validated B2Z sidecars. Batch-backed columns use local `.b2b` opening paths.
 
 A disposable probe in the `blosc2` environment created a numeric CTable archive,
 uploaded it to fsspec `memory://`, and opened it through a minimal storage adapter
@@ -278,12 +279,10 @@ and correct results, not a claim that scan queries avoid reading their operands.
    implemented in the v2 extension described in `remote-ctable-v2.md`.
 2. Remote batch reads for lists, variable-length values and dictionary stores:
    implemented in the extension described in `remote-ctable-batches.md`.
-3. Persisted indexes through a remote-aware sidecar resolver, starting with
-   SUMMARY indexes and measuring query transfer savings: still outstanding for
-   SUMMARY and other scalar index kinds. List membership indexes already work:
-   `RemoteTableStorage.load_index_catalog()` admits membership descriptors and
-   `open_membership_postings()` fetches selected posting batches. The test
-   `test_remote_ctable_membership_index_avoids_list_payload` covers this path.
+3. Persisted indexes through a remote-aware sidecar resolver: implemented for
+   SUMMARY, FULL, PARTIAL, OPSI and BUCKET scalar indexes as described in
+   `remote-ctable-indexes.md`. List membership indexes continue to use selective
+   posting reads.
 4. Portable RemoteCTable references, RemoteStore artifact inclusion and sparse
    runtime-cache APIs if needed by actual consumers: reference saving and artifact
    inclusion are implemented. `RemoteCTable.save()` delegates to the shared
@@ -299,6 +298,5 @@ reads (`remote-ctable-parallel.md`), and `sources=` bindings for NDArray and
 RemoteArray columns (`ctable-remote-cols.md`). External column reads use the
 outer RemoteCTable cache owner and budget.
 
-There are no blocking API questions left for the initial fixed-width scope. The
-remaining work is general remote persisted-index support. It is a separate extension rather than a blocker
-for the implemented read-only API.
+There are no blocking API questions or planned feature gaps left for the
+read-only RemoteCTable scope described here.
