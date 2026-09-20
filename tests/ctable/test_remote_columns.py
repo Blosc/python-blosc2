@@ -89,10 +89,12 @@ def test_save_materializes_by_default_and_can_preserve_sources(tmp_path):
 
     materialized_path = tmp_path / "materialized.b2z"
     table.save(materialized_path)
-    materialized = blosc2.open(materialized_path)
+    materialized = blosc2.open(materialized_path, mode="a")
     assert isinstance(materialized._cols["remote"], blosc2.NDArray)
     assert not isinstance(materialized._cols["remote"], blosc2.RemoteArray)
+    assert not materialized._read_only
     np.testing.assert_array_equal(materialized.remote[:], values)
+    materialized.append((6, 6.0))
 
     referenced_path = tmp_path / "referenced.b2z"
     table.save(referenced_path, preserve_sources=True)

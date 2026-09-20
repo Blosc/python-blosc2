@@ -7288,7 +7288,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if n_live > 0:
                 disk_mask[:n_live] = mask[:n_live] if no_deletions else mask[live_pos]
 
-        storage.save_schema(self._schema_dict_with_computed())
+        schema_dict = self._schema_dict_with_computed()
+        schema_dict.pop("source_bindings_version", None)
+        schema_dict.pop("source_columns", None)
+        storage.save_schema(schema_dict)
         attrs = self.attrs[:]
         if attrs:
             vlmeta = blosc2.SChunk()
