@@ -140,6 +140,17 @@ def test_remote_summary_warm_reference_and_sparse_cache(tmp_path):
             old_summary[:]
 
 
+@pytest.mark.parametrize(("expression", "expected"), [("x == 7", [4993]), ("x == 5000", [])])
+def test_remote_full_index_selective_lookup(tmp_path, expression, expected):
+    url, _ = indexed_remote_table_url(tmp_path, "full", rows=5000)
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
+        result = remote.where(expression).y[:]
+        np.testing.assert_array_equal(result, expected)
+        datasets = [array.dataset or "" for array in remote._storage._arrays]
+        assert any("_indexes/x/full.values" in path for path in datasets)
+        assert any("_indexes/x/full.positions" in path for path in datasets)
+
+
 def test_sparse_cache_shared_handles_and_refresh(tmp_path):
     local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
     url = remote_table_url(tmp_path, local, "sparse-shared")

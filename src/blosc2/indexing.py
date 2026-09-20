@@ -5891,8 +5891,8 @@ def _sorted_chunk_boundaries_from_handle(
     for chunk_id in range(nchunks):
         chunk_start = chunk_id * chunk_len
         chunk_stop = min(chunk_start + chunk_len, size)
-        values_sidecar.get_1d_span_numpy(start_value, chunk_id, 0, 1)
-        values_sidecar.get_1d_span_numpy(end_value, chunk_id, chunk_stop - chunk_start - 1, 1)
+        _read_ndarray_linear_span(values_sidecar, chunk_start, start_value)
+        _read_ndarray_linear_span(values_sidecar, chunk_stop - 1, end_value)
         boundaries[chunk_id] = (start_value[0], end_value[0])
     _DATA_CACHE[cache_key] = boundaries
     return boundaries
@@ -5936,7 +5936,7 @@ def _exact_positions_from_sorted_chunks(
         chunk_stop = min(chunk_start + chunk_len, size)
         span_items = chunk_stop - chunk_start
         span_values = np.empty(span_items, dtype=dtype)
-        values_sidecar.get_1d_span_numpy(span_values, int(chunk_id), 0, span_items)
+        _read_ndarray_linear_span(values_sidecar, chunk_start, span_values)
         lo, hi = _search_bounds(span_values, plan)
         if lo >= hi:
             continue
@@ -5986,10 +5986,9 @@ def _exact_positions_from_compact_full_base(
         for block_start_idx, block_stop_idx in span_runs:
             span_start = chunk_start + block_start_idx * block_len
             span_stop = min(chunk_start + block_stop_idx * block_len, chunk_stop)
-            local_start = span_start - chunk_start
             span_items = span_stop - span_start
             span_values = np.empty(span_items, dtype=dtype)
-            values_sidecar.get_1d_span_numpy(span_values, int(chunk_id), local_start, span_items)
+            _read_ndarray_linear_span(values_sidecar, span_start, span_values)
             lo, hi = _search_bounds(span_values, plan)
             if lo >= hi:
                 continue
