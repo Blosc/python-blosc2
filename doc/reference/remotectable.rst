@@ -24,6 +24,13 @@ result projects only other columns, the list payload remains unopened. Indexes
 on nested lists and structs are not supported. ListArray ``storage="vl"`` also
 remains unavailable through RemoteCTable.
 
+Scalar queries automatically use persisted ``SUMMARY``, ``FULL``, ``PARTIAL``,
+``OPSI``, and ``BUCKET`` indexes. Their sidecars are opened lazily and participate
+in the outer table's cache budget and traffic accounting. SUMMARY reads compact
+min/max records before fetching candidate data blocks; positional indexes use
+their navigation data to fetch selected value and row-position ranges. Queries
+retain a correct scan fallback when an index layout or expression is unsupported.
+
 Saving and materializing have different meanings:
 
 .. code-block:: python

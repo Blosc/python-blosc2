@@ -93,11 +93,29 @@ local = table.materialize(urlpath="complete-local.b2z")
 table.to_b2d("complete-local.b2d")
 ```
 
-Saving a reference does not fetch missing table data. Remote writes and persisted
-indexes remain unsupported. Lists configured with `storage="vl"` are rejected;
+Saving a reference does not fetch missing table data. Remote writes remain
+unsupported. Lists configured with `storage="vl"` are rejected;
 use the default batch storage. Remote MessagePack object values support passive
 data forms, while embedded Blosc2 containers and serialized references are
 rejected instead of being reconstructed from untrusted remote data.
+
+## Remote indexes
+
+Persisted `SUMMARY`, `FULL`, `PARTIAL`, `OPSI`, `BUCKET`, and list-membership
+indexes are used automatically by remote queries. Index sidecars are fetched
+through the table's cache owner, so they share its policy, byte limit, traffic
+accounting, reference export, refresh lifecycle, and sparse cache.
+
+`SUMMARY` reads the compact min/max sidecar, then fetches only candidate column
+blocks. Small summary payloads require one range request after their frame
+metadata is known. `FULL`, `PARTIAL`, `OPSI`, and `BUCKET` use their navigation
+sidecars to read selected value and position ranges. Broad or unsupported query
+shapes safely fall back to a scan, and selective reads remain bounded by the
+sidecars' compressed chunk and block layout.
+
+Index construction and rebuilding remain local operations. Create the index
+before publishing the B2Z archive. For a CTable benchmark, materializing its
+Boolean column expression directly provides the scan comparison.
 
 See `examples/ctable/remote_handling.py` for a batched archive writer with nullable
 multilingual UTF-8 and variable-length strings, a batch-backed list, and a
