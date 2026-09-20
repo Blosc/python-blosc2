@@ -31,6 +31,7 @@ import blosc2
 from blosc2.b2objects import (
     _B2OBJECT_USER_VLMETA_KEY,
     make_b2object_carrier,
+    read_b2object_payload,
     read_b2object_user_vlmeta,
     write_b2object_payload,
     write_b2object_user_vlmeta,
@@ -283,34 +284,49 @@ def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, 
     if storage_options is not None:
         raise ValueError("storage_options cannot be used with an authorized source")
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
-    if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls, blosc2.B2ZNDSource)):
+    if not isinstance(
+        urlpath,
+        (blosc2.C2Array, blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls, blosc2.B2ZNDSource),
+    ):
         raise TypeError(
-            "source_descriptor requires an authorized FsspecNDSource, ZarrNDSource, HDF5NDSource, or B2ZNDSource"
+            "source_descriptor requires an authorized C2Array, FsspecNDSource, ZarrNDSource, "
+            "HDF5NDSource, or B2ZNDSource"
         )
     assume_immutable = _validate_assume_immutable(
         source_descriptor.get("assume_immutable"), "source_descriptor assume_immutable"
     )
-    expected = {
-        "kind": (
-            "b2z"
-            if isinstance(urlpath, blosc2.B2ZNDSource)
-            else "hdf5"
-            if isinstance(urlpath, hdf5_cls)
-            else "zarr"
-            if isinstance(urlpath, blosc2.ZarrNDSource)
-            else "fsspec"
-        ),
-        "version": 1,
-        "urlpath": urlpath.urlpath,
-        "assume_immutable": assume_immutable,
-    }
+    if isinstance(urlpath, blosc2.C2Array):
+        expected = {
+            "kind": "caterva2",
+            "version": 1,
+            "path": urlpath.path,
+            "urlbase": urlpath.urlbase,
+            "assume_immutable": assume_immutable,
+        }
+    else:
+        expected = {
+            "kind": (
+                "b2z"
+                if isinstance(urlpath, blosc2.B2ZNDSource)
+                else "hdf5"
+                if isinstance(urlpath, hdf5_cls)
+                else "zarr"
+                if isinstance(urlpath, blosc2.ZarrNDSource)
+                else "fsspec"
+            ),
+            "version": 1,
+            "urlpath": urlpath.urlpath,
+            "assume_immutable": assume_immutable,
+        }
     if isinstance(urlpath, (hdf5_cls, blosc2.B2ZNDSource)):
         expected["dataset"] = urlpath.dataset
     if isinstance(urlpath, blosc2.B2ZNDSource) and urlpath._archive.urlpath != urlpath.urlpath:
         raise ValueError("B2Z source URL does not match its archive")
     if source_descriptor != expected:
         raise ValueError("source_descriptor does not match the supplied source")
-    validate_persistable_url(urlpath.urlpath)
+    persisted_url = urlpath.urlbase if isinstance(urlpath, blosc2.C2Array) else urlpath.urlpath
+    if persisted_url is not None:
+        validate_persistable_url(persisted_url)
     return urlpath, dict(expected)
 
 
@@ -1782,6 +1798,59 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             else:
                 os.replace(staged, destination)
         return destination
+
+    @classmethod
+    def _from_carrier_with_owner(cls, carrier, owner, cache_key):
+        """Open a persisted carrier under a RemoteStore owner's cache policy."""
+        payload = read_b2object_payload(carrier)
+        allowed = {"kind", "version", "source", "cache_policy", "max_cache_bytes", "mutable"}
+        if not set(payload).issubset(allowed) or payload.get("kind") != "remote_array":
+            raise ValueError("CTable source column is not a RemoteArray carrier")
+        if payload.get("version") != 1:
+            raise ValueError(f"Unsupported persisted Blosc2 object version: {payload.get('version')!r}")
+        source = payload.get("source")
+        source_kind, urlpath = _parse_source_from_payload(source)
+        hdf5_index = _hdf5_index_from_carrier(carrier) if source_kind == "hdf5" else None
+        seed = (
+            _zarr_metadata_from_carrier(carrier)
+            if source_kind == "zarr"
+            else _b2z_seed_from_carrier(carrier)
+            if source_kind == "b2z"
+            else None
+        )
+        src, descriptor = cls._open_source(
+            urlpath,
+            None,
+            traffic=owner.traffic,
+            source_format=source_kind if source_kind in {"zarr", "hdf5", "b2z"} else None,
+            assume_immutable=source["assume_immutable"],
+            dataset=source.get("dataset") if source_kind in {"hdf5", "b2z"} else None,
+            hdf5_index=hdf5_index,
+            seed=seed,
+            blocks=carrier.blocks if source_kind in {"zarr", "hdf5"} else None,
+            cparams=carrier.cparams if source_kind in {"zarr", "hdf5"} else None,
+        )
+        expected = (
+            tuple(carrier.shape),
+            np.dtype(carrier.dtype),
+            tuple(carrier.chunks),
+            tuple(carrier.blocks),
+        )
+        actual = cls._geometry(src)
+        if actual != expected:
+            raise ValueError(f"RemoteArray source geometry no longer matches its carrier: {actual!r}")
+        owner.sources[cache_key] = src
+        kwargs = {}
+        if owner.cache_policy is not blosc2.CachePolicy.NONE:
+            kwargs["max_cache_bytes"] = owner.max_cache_bytes
+        return cls(
+            src,
+            cache_policy=owner.cache_policy,
+            _carrier=carrier,
+            _source_descriptor=descriptor,
+            _store_owner=owner,
+            **kwargs,
+        )
 
     @classmethod
     def _from_payload(cls, payload, carrier):

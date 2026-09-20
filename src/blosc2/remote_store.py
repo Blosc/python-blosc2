@@ -568,6 +568,19 @@ class RemoteDiscovery:
         self.sources[full] = source
         return source
 
+    def open_ctable_carrier(self, table_path, logical_key):
+        """Open a RemoteArray carrier stored as a CTable column."""
+        if self.format != "b2z":
+            raise NotImplementedError("Remote CTable access currently requires a B2Z source")
+        full = "/".join(part.strip("/") for part in (table_path, logical_key) if part.strip("/"))
+        self._validate(full)
+        matches = [info for info in self.archive.members if info.filename == full + ".b2nd"]
+        if len(matches) != 1:
+            raise NotImplementedError(f"Remote CTable source carrier {full!r} is unavailable")
+        offset, length = self.archive.member_window(matches[0])
+        carrier = blosc2.ndarray_from_cframe(self.archive._read_archive(offset, length), copy=True)
+        return blosc2.RemoteArray._from_carrier_with_owner(carrier, self, full + ".source")
+
     def open_ctable_batch(self, full):
         """Open one external BatchArray member hidden below a CTable node."""
         if self.format != "b2z":
@@ -682,6 +695,11 @@ class RemoteDiscovery:
             self.restoring = True
             for path in manifest["caches"]:
                 self._validate(path)
+                if path.endswith(".source") and path not in self.nodes:
+                    # External CTable columns are registered lazily when their
+                    # persisted carrier is opened.  get_cache() adopts this
+                    # artifact leaf after that source has been authorized.
+                    continue
                 if path not in self.nodes or self.nodes[path][0] != "ndarray":
                     raise ValueError("Invalid cached RemoteStore leaf")
                 relative = path[len(self.root) + 1 :] if self.root else path
@@ -1583,6 +1601,8 @@ class RemoteStore(RemoteObject):
             raise ValueError("Invalid RemoteStore caches")
         for path in caches:
             RemoteDiscovery._validate(path)
+            if path.endswith(".source") and path not in nodes:
+                continue
             if (
                 path not in nodes
                 or nodes[path][0] != "ndarray"
@@ -1712,7 +1732,14 @@ class RemoteStore(RemoteObject):
                     "use a cold export or a cache policy that permits retained payload."
                 )
         else:
-            cache_policy = blosc2.CachePolicy.DISK
+            try:
+                cache_policy = (
+                    blosc2.CachePolicy.DISK
+                    if manifest.get("mutable", False)
+                    else blosc2.CachePolicy(manifest.get("cache_policy", "disk"))
+                )
+            except ValueError as exc:
+                raise ValueError("RemoteStore artifact has an unsupported cache policy") from exc
 
         if cache_policy is blosc2.CachePolicy.NONE:
             if max_cache_bytes is not None:

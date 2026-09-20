@@ -710,6 +710,12 @@ class RemoteTableStorage(TableStorage):
         raise RuntimeError("RemoteTableStorage is read-only")
 
     def open_column(self, name: str) -> blosc2.RemoteArray:
+        source_columns = set(self.load_schema().get("source_columns", ()))
+        if name in source_columns:
+            logical_key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
+            array = self._owner.open_ctable_carrier(self._root_key, logical_key)
+            self._arrays.append(array)
+            return array
         return self._open_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}")
 
     def open_list_column(self, name: str) -> ListArray:

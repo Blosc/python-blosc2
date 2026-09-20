@@ -125,3 +125,41 @@ def test_treestore_and_cframe_preserve_sources(tmp_path):
     restored = blosc2.ctable_from_cframe(table.to_cframe(preserve_sources=True))
     assert isinstance(restored._cols["remote"], blosc2.RemoteArray)
     np.testing.assert_array_equal(restored.remote[:], values)
+
+
+@pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
+def test_remote_ctable_owns_external_column_cache_policy(tmp_path, policy):
+    values = np.arange(20, dtype=np.float32)
+    source = remote_array(values, chunks=(5,), cache_policy=blosc2.CachePolicy.MEMORY)
+    table = blosc2.CTable(
+        Row,
+        sources={
+            "local": blosc2.asarray(np.arange(20, dtype=np.int32)),
+            "remote": source,
+        },
+    )
+    archive = tmp_path / "referenced.b2z"
+    table.save(archive, preserve_sources=True)
+    archive_name = f"ctable-archive-{uuid4().hex}.b2z"
+    fsspec.filesystem("memory").pipe_file(archive_name, archive.read_bytes())
+
+    kwargs = {"cache_policy": policy}
+    if policy is not blosc2.CachePolicy.NONE:
+        kwargs["max_cache_bytes"] = 1 << 20
+    if policy is blosc2.CachePolicy.DISK:
+        kwargs["cache_dir"] = tmp_path / "cache"
+    remote = blosc2.RemoteCTable(f"memory://{archive_name}", **kwargs)
+    external = remote._cols["remote"]
+
+    assert external.cache_policy is policy
+    assert source.cache_policy is blosc2.CachePolicy.MEMORY
+    np.testing.assert_array_equal(remote.remote[3:13:2], values[3:13:2])
+    np.testing.assert_array_equal(remote[remote.local >= 17].remote[:], values[17:])
+    if policy is not blosc2.CachePolicy.NONE:
+        assert remote.cache_bytes <= remote.max_cache_bytes
+    if policy is blosc2.CachePolicy.MEMORY:
+        artifact = tmp_path / "remote-artifact.b2z"
+        remote.save(artifact)
+        restored = blosc2.open(artifact)
+        assert restored.cache_policy is policy
+        np.testing.assert_array_equal(restored.remote[:], values)

@@ -122,6 +122,8 @@ def open_columns(storage, table, names, load):  # noqa: C901
             members.setdefault(info.filename, []).append(info)
 
         def ranges_for(name):
+            if name in getattr(table, "_source_columns", ()):
+                return []
             key = storage._full_key(f"_cols/{_column_name_to_relpath(name)}")
             spec = table._schema.columns_by_name[name].spec
             if isinstance(spec, UTF8Spec):
@@ -346,6 +348,8 @@ def column_values(table, names, positions, *, null_masks=None):  # noqa: C901
         def reader(name):
             col = table._cols[name]
             spec = table._schema.columns_by_name[name].spec
+            if name in getattr(table, "_source_columns", ()):
+                return col[positions]
             if isinstance(col, UTF8Array):
                 values = np.empty(len(positions), dtype=col.dtype)
                 order = np.argsort(positions, kind="stable")
