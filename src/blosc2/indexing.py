@@ -3092,6 +3092,10 @@ def _read_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, ou
         out_cursor += take
 
 
+def _read_sidecar_chunk_span(sidecar, chunk_id: int, local_start: int, out: np.ndarray) -> None:
+    _read_ndarray_linear_span(sidecar, chunk_id * int(sidecar.chunks[0]) + local_start, out)
+
+
 def _write_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, values: np.ndarray) -> None:
     if len(values) == 0:
         return
@@ -6123,7 +6127,7 @@ def _exact_positions_from_opsi_block_nav(
             local_start = span_start - chunk_id * chunk_len
             span_items = span_stop - span_start
             span_values = np.empty(span_items, dtype=dtype)
-            values_sidecar.get_1d_span_numpy(span_values, chunk_id, local_start, span_items)
+            _read_sidecar_chunk_span(values_sidecar, chunk_id, local_start, span_values)
             lo, hi = _search_bounds(span_values, plan)
             if lo >= hi:
                 continue
@@ -6592,7 +6596,7 @@ def _bucket_masks_from_bucket_chunk_nav_ooc(
             offset_start, offset_stop = _read_offset_pair(offsets_handle, int(chunk_id))
             chunk_items = offset_stop - offset_start
             segment_count = _segment_row_count(chunk_items, nav_segment_len)
-            batch_l2.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
+            _read_sidecar_chunk_span(batch_l2, int(chunk_id), 0, l2_row)
             segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
             batch_candidate_segments += candidate_segments
             if not segment_runs:
@@ -6603,12 +6607,12 @@ def _bucket_masks_from_bucket_chunk_nav_ooc(
                 local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
                 span_items = local_stop - local_start
                 values_view = span_values[:span_items]
-                batch_values.get_1d_span_numpy(values_view, int(chunk_id), local_start, span_items)
+                _read_sidecar_chunk_span(batch_values, int(chunk_id), local_start, values_view)
                 lo, hi = _search_bounds(values_view, search_plan)
                 if lo >= hi:
                     continue
                 bucket_view = bucket_ids[: hi - lo]
-                batch_buckets.get_1d_span_numpy(bucket_view, int(chunk_id), local_start + lo, hi - lo)
+                _read_sidecar_chunk_span(batch_buckets, int(chunk_id), local_start + lo, bucket_view)
                 matched_buckets[bucket_view.astype(np.intp, copy=False)] = True
             if np.any(matched_buckets):
                 batch_results.append((int(chunk_id), matched_buckets))
@@ -6650,25 +6654,26 @@ def _exact_positions_from_partial_chunk_nav_ooc(
     values_sidecar, positions_sidecar, l2_sidecar = _load_partial_sidecar_handles(array, descriptor)
     thread_count = _index_query_thread_count(len(candidate_chunk_ids))
 
-    try:
-        positions, total_candidate_segments = _partial_chunk_nav_positions_cython(
-            partial,
-            offsets_handle,
-            candidate_chunk_ids,
-            thread_count,
-            dtype,
-            chunk_len,
-            nav_segment_len,
-            nsegments_per_chunk,
-            local_position_dtype,
-            l2_boundary_dtype,
-            plan,
-        )
-        if len(positions) == 0:
-            return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
-        return np.sort(positions, kind="stable"), int(candidate_chunk_ids.size), total_candidate_segments
-    except TypeError:
-        pass
+    if not isinstance(values_sidecar, blosc2.RemoteArray):
+        try:
+            positions, total_candidate_segments = _partial_chunk_nav_positions_cython(
+                partial,
+                offsets_handle,
+                candidate_chunk_ids,
+                thread_count,
+                dtype,
+                chunk_len,
+                nav_segment_len,
+                nsegments_per_chunk,
+                local_position_dtype,
+                l2_boundary_dtype,
+                plan,
+            )
+            if len(positions) == 0:
+                return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
+            return np.sort(positions, kind="stable"), int(candidate_chunk_ids.size), total_candidate_segments
+        except TypeError:
+            pass
 
     parts, total_candidate_segments = _partial_chunk_nav_positions_python(
         partial,
@@ -6767,17 +6772,17 @@ def _partial_chunk_nav_positions_python(
         batch_values = (
             values_sidecar
             if partial.get("values_path") is None
-            else blosc2.open(partial["values_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(partial["values_path"], _INDEX_MMAP_MODE)
         )
         batch_positions = (
             positions_sidecar
             if partial.get("positions_path") is None
-            else blosc2.open(partial["positions_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(partial["positions_path"], _INDEX_MMAP_MODE)
         )
         batch_l2 = (
             l2_sidecar
             if partial.get("l2_path") is None
-            else blosc2.open(partial["l2_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(partial["l2_path"], _INDEX_MMAP_MODE)
         )
         batch_parts = []
         batch_candidate_segments = 0
@@ -6788,7 +6793,7 @@ def _partial_chunk_nav_positions_python(
             offset_start, offset_stop = _read_offset_pair(offsets_handle, int(chunk_id))
             chunk_items = offset_stop - offset_start
             segment_count = _segment_row_count(chunk_items, nav_segment_len)
-            batch_l2.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
+            _read_sidecar_chunk_span(batch_l2, int(chunk_id), 0, l2_row)
             segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
             batch_candidate_segments += candidate_segments
             if not segment_runs:
@@ -6798,12 +6803,12 @@ def _partial_chunk_nav_positions_python(
                 local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
                 span_items = local_stop - local_start
                 values_view = span_values[:span_items]
-                batch_values.get_1d_span_numpy(values_view, int(chunk_id), local_start, span_items)
+                _read_sidecar_chunk_span(batch_values, int(chunk_id), local_start, values_view)
                 lo, hi = _search_bounds(values_view, plan)
                 if lo >= hi:
                     continue
                 positions_view = local_positions[: hi - lo]
-                batch_positions.get_1d_span_numpy(positions_view, int(chunk_id), local_start + lo, hi - lo)
+                _read_sidecar_chunk_span(batch_positions, int(chunk_id), local_start + lo, positions_view)
                 batch_parts.append(chunk_id * chunk_len + positions_view.astype(np.int64, copy=False))
         return batch_parts, batch_candidate_segments
 

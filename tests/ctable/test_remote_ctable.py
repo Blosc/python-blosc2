@@ -151,6 +151,15 @@ def test_remote_full_index_selective_lookup(tmp_path, expression, expected):
         assert any("_indexes/x/full.positions" in path for path in datasets)
 
 
+@pytest.mark.parametrize("kind", ["partial", "opsi", "bucket"])
+def test_remote_positional_index_lookup(tmp_path, kind):
+    url, _ = indexed_remote_table_url(tmp_path, kind, rows=5000)
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
+        np.testing.assert_array_equal(remote.where("x == 7").y[:], [4993])
+        np.testing.assert_array_equal(remote.where("(x >= 7) & (x < 10)").y[:], [4993, 4992, 4991])
+        assert any(f"_indexes/x/{kind}." in (array.dataset or "") for array in remote._storage._arrays)
+
+
 def test_sparse_cache_shared_handles_and_refresh(tmp_path):
     local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
     url = remote_table_url(tmp_path, local, "sparse-shared")
