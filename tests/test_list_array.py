@@ -70,6 +70,35 @@ def test_listarray_rejects_invalid_cells():
         arr.append([1, None])
 
 
+@pytest.mark.parametrize("storage", ["vl", "batch"])
+def test_listarray_nullable_items(storage):
+    arr = blosc2.ListArray(item_spec=blosc2.int32(nullable=True), storage=storage, batch_rows=2)
+    values = [[1, None, 3], [], [None]]
+    arr.extend(values)
+    arr.flush()
+    assert arr[:] == values
+
+
+def test_listarray_default_batch_rows_and_explicit_none():
+    spec = blosc2.list(blosc2.int32())
+    assert spec.batch_rows == 2048
+    assert spec.to_metadata_dict()["batch_rows"] == 2048
+
+    legacy = blosc2.schema.ListSpec.from_metadata_dict({"kind": "list", "item": {"kind": "int32"}})
+    assert legacy.batch_rows is None
+
+    managed = blosc2.list(blosc2.int32(), batch_rows=None)
+    assert managed.to_metadata_dict()["batch_rows"] is None
+
+
+def test_listarray_default_batch_boundaries():
+    arr = blosc2.ListArray(item_spec=blosc2.int32())
+    arr.extend([[i] for i in range(4097)])
+    assert arr._backend._load_or_compute_batch_lengths() == [2048, 2048]
+    arr.flush()
+    assert arr._backend._load_or_compute_batch_lengths() == [2048, 2048, 1]
+
+
 def test_listarray_boolean_fancy_indexing():
     arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
     arr.extend([[1], None, [], [2, 3]])

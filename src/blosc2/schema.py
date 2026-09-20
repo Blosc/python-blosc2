@@ -617,7 +617,12 @@ class StructSpec(SchemaSpec):
 
 
 class ListSpec(SchemaSpec):
-    """Logical schema descriptor for a list-valued column."""
+    """Logical schema descriptor for a list-valued column.
+
+    ``batch_rows`` defaults to 2048 list cells for batch storage. Pass ``None``
+    to keep pending cells in one caller-managed batch until ListArray.flush().
+    The option has no effect on ``storage="vl"``.
+    """
 
     python_type = _builtin_list
     dtype = None
@@ -629,7 +634,7 @@ class ListSpec(SchemaSpec):
         nullable: bool = False,
         storage: str = "batch",
         serializer: str = "msgpack",
-        batch_rows: int | None = None,
+        batch_rows: int | None = 2048,
         items_per_block: int | None = None,
     ):
         if not isinstance(item_spec, SchemaSpec):
@@ -662,8 +667,7 @@ class ListSpec(SchemaSpec):
             "storage": self.storage,
             "serializer": self.serializer,
         }
-        if self.batch_rows is not None:
-            d["batch_rows"] = self.batch_rows
+        d["batch_rows"] = self.batch_rows
         if self.items_per_block is not None:
             d["items_per_block"] = self.items_per_block
         return d
@@ -1268,7 +1272,7 @@ def list(
     nullable: bool = False,
     storage: str = "batch",
     serializer: str = "msgpack",
-    batch_rows: int | None = None,
+    batch_rows: int | None = 2048,
     items_per_block: int | None = None,
 ) -> ListSpec:
     """Build a list-valued schema descriptor for CTable and ListArray."""

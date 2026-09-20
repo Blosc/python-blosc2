@@ -122,21 +122,21 @@ def _coerce_struct_item(spec: StructSpec, value: Any) -> dict[str, Any]:
     for name, child_spec in spec.fields.items():
         if name not in value:
             raise ValueError(f"Struct list item is missing field {name!r}")
-        result[name] = None if value[name] is None else _coerce_scalar_item(child_spec, value[name])
+        result[name] = _coerce_scalar_item(child_spec, value[name])
     return result
 
 
 def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
     if value is None:
-        raise ValueError("ListArray does not support nullable items inside a list in V1")
+        if getattr(spec, "nullable", False):
+            return None
+        raise ValueError(f"Null {_spec_label(spec)} list items are not allowed")
 
     if isinstance(spec, StructSpec):
         return _coerce_struct_item(spec, value)
     if isinstance(spec, ListSpec):
         return coerce_list_cell(spec, value)
     if isinstance(spec, DictionarySpec):
-        if value is None:
-            raise ValueError("ListArray does not support nullable items inside a list in V1")
         if not isinstance(value, str):
             value = str(value)
         return value
@@ -211,7 +211,7 @@ class ListArray:
         nullable: bool = False,
         storage: str = "batch",
         serializer: str = "msgpack",
-        batch_rows: int | None = None,
+        batch_rows: int | None = 2048,
         items_per_block: int | None = None,
         _from_schunk=None,
         **kwargs: Any,
@@ -220,7 +220,10 @@ class ListArray:
 
         Parameters may be supplied either as a complete ``spec`` or as an
         ``item_spec`` plus list/storage options. Storage-related keyword
-        arguments are passed to :class:`blosc2.Storage`.
+        arguments are passed to :class:`blosc2.Storage`. Batch storage flushes
+        automatically every ``batch_rows`` list cells (2048 by default). Pass
+        ``None`` for caller-managed batches; :meth:`flush`, :meth:`close`, or
+        context-manager exit persists the partial final batch.
         """
         if _from_schunk is not None:
             if spec is not None or item_spec is not None or kwargs:
@@ -801,7 +804,7 @@ class ListArray:
         nullable: bool = True,
         storage: str = "batch",
         serializer: str = "msgpack",
-        batch_rows: int | None = None,
+        batch_rows: int | None = 2048,
         items_per_block: int | None = None,
         **kwargs: Any,
     ) -> ListArray:

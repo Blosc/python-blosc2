@@ -405,7 +405,7 @@ def test_remote_ctable_batch_wrappers_and_dictionary(tmp_path):
     class Rich:
         data: bytes = blosc2.field(blosc2.vlbytes(nullable=True, batch_rows=2))
         tags: list[int] = blosc2.field(  # noqa: RUF009
-            blosc2.list(blosc2.int64(), nullable=True, batch_rows=2)
+            blosc2.list(blosc2.int64(nullable=True), nullable=True, batch_rows=2)
         )
         props: dict = blosc2.field(  # noqa: RUF009
             blosc2.struct({"count": blosc2.int32(), "name": blosc2.vlstring()}, nullable=True)
@@ -414,7 +414,7 @@ def test_remote_ctable_batch_wrappers_and_dictionary(tmp_path):
         category: str = blosc2.field(blosc2.dictionary(nullable=True))
 
     rows = [
-        (b"one", [1, 2], {"count": 1, "name": "one"}, {"x": [1, 2]}, "a"),
+        (b"one", [1, None, 2], {"count": 1, "name": "one"}, {"x": [1, 2]}, "a"),
         (None, [], None, ("tuple", 2), None),
         (b"", None, {"count": 3, "name": "東京"}, np.arange(3), "b"),
         (b"four", [4], {"count": 4, "name": "four"}, {1, 2}, "a"),
@@ -438,10 +438,10 @@ def test_remote_ctable_arrow_list(tmp_path):
     @dataclasses.dataclass
     class Lists:
         values: list[int] = blosc2.field(  # noqa: RUF009
-            blosc2.list(blosc2.int64(), serializer="arrow", nullable=True, batch_rows=2)
+            blosc2.list(blosc2.int64(nullable=True), serializer="arrow", nullable=True, batch_rows=2)
         )
 
-    rows = [([1, 2],), (None,), ([],), ([3],)]
+    rows = [([1, None, 2],), (None,), ([],), ([3],)]
     local = blosc2.CTable(Lists, rows, create_summary_index=False)
     url = remote_table_url(tmp_path, local, "arrow-list")
     with blosc2.RemoteCTable(url) as remote:
