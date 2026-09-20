@@ -49,9 +49,15 @@ def _require_pyarrow():
 
 
 def _arrow_type_for_spec(pa, spec: SchemaSpec):
+    if isinstance(spec, ListSpec):
+        child = pa.field("item", _arrow_type_for_spec(pa, spec.item_spec), nullable=spec.item_spec.nullable)
+        return pa.list_(child)
     if isinstance(spec, StructSpec):
         return pa.struct(
-            [pa.field(name, _arrow_type_for_spec(pa, child)) for name, child in spec.fields.items()]
+            [
+                pa.field(name, _arrow_type_for_spec(pa, child), nullable=child.nullable)
+                for name, child in spec.fields.items()
+            ]
         )
     mapping = {
         "int8": pa.int8(),
@@ -71,7 +77,7 @@ def _arrow_type_for_spec(pa, spec: SchemaSpec):
     return mapping.get(spec.to_metadata_dict()["kind"])
 
 
-def _arrow_list_item_type_to_spec(pa, value_type):
+def _arrow_list_item_type_to_spec(pa, value_type, *, nullable=False):
     import blosc2.schema as b2s
 
     mapping = {
@@ -91,14 +97,28 @@ def _arrow_list_item_type_to_spec(pa, value_type):
         pa.binary(): b2s.bytes(),
         pa.large_binary(): b2s.bytes(),
     }
+    if pa.types.is_list(value_type) or pa.types.is_large_list(value_type):
+        field = value_type.value_field
+        return b2s.list(
+            _arrow_list_item_type_to_spec(pa, field.type, nullable=field.nullable), nullable=nullable
+        )
     if pa.types.is_struct(value_type):
         return b2s.struct(
-            {field.name: _arrow_list_item_type_to_spec(pa, field.type) for field in value_type}
+            {
+                field.name: _arrow_list_item_type_to_spec(pa, field.type, nullable=field.nullable)
+                for field in value_type
+            },
+            nullable=nullable,
         )
-    return mapping.get(value_type)
+    spec = mapping.get(value_type)
+    if spec is not None:
+        spec.nullable = nullable
+    return spec
 
 
-def _validate_list_spec(spec: ListSpec) -> None:
+def _validate_list_spec(spec: ListSpec, *, _depth=0) -> None:
+    if _depth >= 32:
+        raise ValueError("ListArray nesting exceeds the supported depth of 32")
     if spec.storage not in _SUPPORTED_STORAGES:
         raise ValueError(f"Unsupported list storage: {spec.storage!r}")
     if spec.serializer not in _SUPPORTED_SERIALIZERS:
@@ -108,7 +128,7 @@ def _validate_list_spec(spec: ListSpec) -> None:
     if spec.serializer == "arrow" and spec.storage != "batch":
         raise ValueError("ListArray serializer='arrow' requires storage='batch'")
     if isinstance(spec.item_spec, ListSpec):
-        raise TypeError("Nested list item specs are not supported in V1")
+        _validate_list_spec(spec.item_spec, _depth=_depth + 1)
     if spec.batch_rows is not None and spec.batch_rows <= 0:
         raise ValueError("batch_rows must be a positive integer")
     if spec.items_per_block is not None and spec.items_per_block <= 0:
@@ -375,7 +395,7 @@ class ListArray:
             return
         while len(self._pending_cells) >= batch_rows:
             batch = self._pending_cells[:batch_rows]
-            self._backend.append(batch)
+            self._backend.append(self._typed_batch(batch))
             self._pending_cells = self._pending_cells[batch_rows:]
             self._persisted_row_count += len(batch)
             self._invalidate_batch_caches()
@@ -436,11 +456,13 @@ class ListArray:
         # backend, which would otherwise reorder them ahead of pending cells.
         self.flush()
         for chunk in chunks:
-            if len(chunk) == 0:
-                continue
-            self._backend.append(chunk)
-            self._persisted_row_count += len(chunk)
-            self._invalidate_batch_caches()
+            step = self.batch_rows or len(chunk) or 1
+            for start in range(0, len(chunk), step):
+                part = chunk.slice(start, step)
+                typed = self._typed_batch(part.to_pylist())
+                self._backend.append(typed)
+                self._persisted_row_count += len(part)
+                self._invalidate_batch_caches()
 
     def flush(self) -> None:
         """Persist any pending rows when using the batch backend."""
@@ -449,10 +471,18 @@ class ListArray:
         if self._pending_cells:
             self._backend._check_writable()
             batch = list(self._pending_cells)
-            self._backend.append(batch)
+            self._backend.append(self._typed_batch(batch))
             self._persisted_row_count += len(batch)
             self._pending_cells.clear()
             self._invalidate_batch_caches()
+
+    def _typed_batch(self, values):
+        """Give Arrow batches their declared type so empty/null batches stay stable."""
+        if self.spec.serializer != "arrow":
+            return values
+        pa = _require_pyarrow()
+        item = pa.field("item", self._arrow_item_type(), nullable=self.spec.item_spec.nullable)
+        return pa.array(values, type=pa.list_(item))
 
     def close(self) -> None:
         """Flush pending rows and close the logical container."""
@@ -760,31 +790,7 @@ class ListArray:
         return self._backend.to_cframe()
 
     def _arrow_item_type(self):
-        pa = _require_pyarrow()
-        kind = self.spec.item_spec.to_metadata_dict()["kind"]
-        mapping = {
-            "int8": pa.int8(),
-            "int16": pa.int16(),
-            "int32": pa.int32(),
-            "int64": pa.int64(),
-            "uint8": pa.uint8(),
-            "uint16": pa.uint16(),
-            "uint32": pa.uint32(),
-            "uint64": pa.uint64(),
-            "float32": pa.float32(),
-            "float64": pa.float64(),
-            "bool": pa.bool_(),
-            "string": pa.string(),
-            "bytes": pa.large_binary(),
-        }
-        if isinstance(self.spec.item_spec, StructSpec):
-            return pa.struct(
-                [
-                    pa.field(name, _arrow_type_for_spec(pa, child_spec))
-                    for name, child_spec in self.spec.item_spec.fields.items()
-                ]
-            )
-        return mapping.get(kind)
+        return _arrow_type_for_spec(_require_pyarrow(), self.spec.item_spec)
 
     def to_arrow(self):
         """Return the data as a PyArrow list array."""
@@ -792,7 +798,8 @@ class ListArray:
         self.flush()
         item_type = self._arrow_item_type()
         if item_type is not None:
-            return pa.array(list(self), type=pa.list_(item_type))
+            item = pa.field("item", item_type, nullable=self.spec.item_spec.nullable)
+            return pa.array(list(self), type=pa.list_(item))
         return pa.array(list(self))
 
     @classmethod
@@ -813,32 +820,9 @@ class ListArray:
         if isinstance(arrow_array, pa.ChunkedArray):
             arrow_array = arrow_array.combine_chunks()
         if item_spec is None:
-            value_type = arrow_array.type.value_type
-            import blosc2.schema as b2s
-
-            mapping = {
-                pa.int8(): b2s.int8(),
-                pa.int16(): b2s.int16(),
-                pa.int32(): b2s.int32(),
-                pa.int64(): b2s.int64(),
-                pa.uint8(): b2s.uint8(),
-                pa.uint16(): b2s.uint16(),
-                pa.uint32(): b2s.uint32(),
-                pa.uint64(): b2s.uint64(),
-                pa.float32(): b2s.float32(),
-                pa.float64(): b2s.float64(),
-                pa.bool_(): b2s.bool(),
-                pa.string(): b2s.string(),
-                pa.large_string(): b2s.string(),
-                pa.binary(): b2s.bytes(),
-                pa.large_binary(): b2s.bytes(),
-            }
-            if pa.types.is_struct(value_type):
-                item_spec = b2s.struct(
-                    {field.name: _arrow_list_item_type_to_spec(pa, field.type) for field in value_type}
-                )
-            else:
-                item_spec = mapping.get(value_type)
+            field = arrow_array.type.value_field
+            value_type = field.type
+            item_spec = _arrow_list_item_type_to_spec(pa, value_type, nullable=field.nullable)
             if item_spec is None:
                 raise TypeError(f"Unsupported Arrow list item type {value_type!r}")
         arr = cls(

@@ -238,6 +238,9 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
         if len(args) != 1:
             raise TypeError(f"Column {name!r}: list annotations must specify exactly one item type.")
         item_annotation = args[0]
+        if isinstance(spec.item_spec, ListSpec):
+            validate_annotation_matches_spec(f"{name}[]", item_annotation, spec.item_spec)
+            return
         expected = spec.item_spec.python_type
         if item_annotation is not expected:
             raise TypeError(

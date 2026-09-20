@@ -46,3 +46,18 @@ def test_list_annotation_mismatch_rejected():
 
     with pytest.raises(TypeError, match="list spec"):
         compile_schema(Bad)
+
+
+def test_nested_list_annotation_and_schema_roundtrip():
+    @dataclass
+    class Nested:
+        values: list[list[int]] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.list(blosc2.int32(nullable=True), nullable=True))
+        )
+
+    schema = compile_schema(Nested)
+    restored = schema_from_dict(schema_to_dict(schema))
+    spec = restored.columns_by_name["values"].spec
+    assert isinstance(spec.item_spec, ListSpec)
+    assert spec.item_spec.nullable
+    assert spec.item_spec.item_spec.nullable

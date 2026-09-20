@@ -448,6 +448,29 @@ def test_remote_ctable_arrow_list(tmp_path):
         assert remote["values"][:] == [row[0] for row in rows]
 
 
+@pytest.mark.parametrize("serializer", ["msgpack", "arrow"])
+def test_remote_ctable_nested_list(tmp_path, serializer):
+    if serializer == "arrow":
+        pytest.importorskip("pyarrow")
+
+    @dataclasses.dataclass
+    class Lists:
+        values: list[list[int]] = blosc2.field(  # noqa: RUF009
+            blosc2.list(
+                blosc2.list(blosc2.int64(nullable=True), nullable=True),
+                nullable=True,
+                serializer=serializer,
+                batch_rows=2,
+            )
+        )
+
+    rows = [(None,), ([],), ([None, [], [1, None, 2]],), ([[3]],)]
+    local = blosc2.CTable(Lists, rows, create_summary_index=False)
+    url = remote_table_url(tmp_path, local, f"nested-list-{serializer}")
+    with blosc2.RemoteCTable(url) as remote:
+        assert remote["values"][:] == [row[0] for row in rows]
+
+
 def test_remote_ctable_rejects_unsafe_object_extension(tmp_path):
     @dataclasses.dataclass
     class Unsafe:

@@ -115,6 +115,26 @@ def test_listarray_arrow_roundtrip():
     assert arr.to_arrow().to_pylist() == [["a"], None, ["b", "c"]]
 
 
+@pytest.mark.parametrize("storage", ["vl", "batch"])
+def test_listarray_nested_lists(storage):
+    item = blosc2.list(blosc2.int32(nullable=True), nullable=True)
+    arr = blosc2.ListArray(item_spec=item, nullable=True, storage=storage, batch_rows=2)
+    values = [None, [], [None, [], [1, None, 3]], [[4]]]
+    arr.extend(values)
+    arr.flush()
+    assert arr[:] == values
+    assert arr.spec.display_label() == "list[list[int32]]"
+
+
+def test_listarray_nested_arrow_roundtrip():
+    pa = pytest.importorskip("pyarrow")
+    values = [None, [], [None, [], [1, None, 3]], [[4]]]
+    arrow = pa.array(values, type=pa.list_(pa.field("item", pa.list_(pa.int32()), nullable=True)))
+    arr = blosc2.ListArray.from_arrow(arrow)
+    assert arr[:] == values
+    assert arr.to_arrow().to_pylist() == values
+
+
 def test_listarray_extend_no_validate_keeps_none():
     arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
     arr.extend([[1], None, [2, 3]], validate=False)

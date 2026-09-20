@@ -639,8 +639,6 @@ class ListSpec(SchemaSpec):
     ):
         if not isinstance(item_spec, SchemaSpec):
             raise TypeError("ListSpec item_spec must be a SchemaSpec instance")
-        if isinstance(item_spec, ListSpec):
-            raise TypeError("Nested list item specs are not supported in V1")
         if storage not in {"batch", "vl"}:
             raise ValueError("storage must be 'batch' or 'vl'")
         if serializer not in {"msgpack", "arrow"}:
@@ -678,7 +676,8 @@ class ListSpec(SchemaSpec):
         return d
 
     def display_label(self) -> str:
-        item_kind = self.item_spec.to_metadata_dict().get("kind", type(self.item_spec).__name__)
+        item = self.item_spec.display_label() if isinstance(self.item_spec, ListSpec) else None
+        item_kind = item or self.item_spec.to_metadata_dict().get("kind", type(self.item_spec).__name__)
         return f"list[{item_kind}]"
 
     @classmethod
