@@ -1,7 +1,9 @@
 # RemoteCTable reference saving
 
-Status: deferred proposal for later consideration. This document does not change
-the current save behavior.
+Status: reference saving and RemoteStore artifact inclusion are implemented.
+Status reviewed on 2026-09-20. The implementation steps and verification checklist
+below record the design requirements, rather than results of a new verification
+run during this documentation update.
 
 ## Goal
 
@@ -15,35 +17,36 @@ than introduce a second table-specific reference format.
 
 ## Current behavior and dependencies
 
-- RemoteCTable inherits CTable.save(), which materializes live rows into a local
-  table and returns None.
+- RemoteCTable overrides CTable.save(), writes a remote-reference artifact and
+  returns its absolute output path. CTable.save() materializes by default.
 - RemoteStore.save() writes a portable .b2z reference archive containing its
   source descriptor, discovery metadata and optionally already-retained data.
   It returns the output path and does not fetch all missing data.
-- RemoteStore._collect_export_nodes() explicitly rejects CTable nodes. Its
-  existing export logic also does not preserve CTable schema metadata as needed
-  for reconstructing those nodes. Removing the rejection alone is insufficient.
-- CTable.to_b2z() and to_b2d() dispatch to self.save() on remote root tables.
-  These must retain materializing semantics when RemoteCTable overrides save().
-- No direct RemoteCTable.save() callers were found in the repository during the
-  current audit. test_remote_utf8_nested_lifetime indirectly relies on save()
-  through table.to_b2z(), and verifies an independent local table. External
-  callers are unknown; document the change rather than assuming none exist.
+- RemoteStore._collect_export_nodes() includes CTable nodes and their metadata.
+  Shared artifact validation and dispatch recognize table-root references and
+  tables inside exported groups.
+- CTable.to_b2z() and to_b2d() explicitly call the materializing CTable.save()
+  implementation on remote root tables. copy() also produces a local table.
+- Tests in tests/ctable/test_remote_ctable.py cover root and nested reference
+  saving, warm/cold and mutable artifacts, reopen settings, malformed metadata
+  and independent materialization.
 - RemoteCTable now exposes refresh() and is_cache_mutable. Artifact readers
   must preserve their cache-writability and stale-handle contracts.
 
-## Proposed public contract
+## Implemented public contract
 
-Proposed signature, to confirm when implementing:
+Current signature (type annotations abbreviated):
 
 ```python
-def save(destination, *, include_cache=True, mutable=None, overwrite=False) -> str: ...
+def save(
+    destination=None, *, urlpath=None, include_cache=True, mutable=None, overwrite=False
+) -> str: ...
 ```
 
-Match RemoteStore.save() for accepted options, defaults, .b2z destinations,
-return value, overwrite checks and destination safety. This changes both the
-meaning and return value of the inherited method; note the destination keyword
-change from CTable.save(urlpath=...) as well.
+The method matches RemoteStore.save() for defaults, .b2z destinations, return
+value, overwrite checks and destination safety. It accepts `urlpath=` as an alias
+for `destination`; callers must supply exactly one. Its meaning and return value
+differ from the materializing CTable.save().
 
 - include_cache=True exports only already-retained data, not missing chunks.
 - include_cache=False exports enough metadata to reconstruct the table without
@@ -144,8 +147,9 @@ local = remote.copy()  # independent in-memory CTable
 
 Explain network access, immutability, storage credentials on another machine,
 cache writability and overwrite behavior. State explicitly that local
-CTable.save() remains unchanged. Update the guide's current statement that
-portable table-reference export is unsupported only once implemented and tested.
+CTable.save() retains its materializing default. The reference-saving examples
+are now documented in `doc/reference/remotectable.rst` and
+`doc/guides/remote_tables.md`.
 
 ## Verification
 
@@ -178,5 +182,11 @@ changes the semantics of explicit materialization methods.
 
 No remote writes, automatic change detection, new remote formats, automatic
 full-cache population, reference export of arbitrary table views, or changes
-to local CTable.save(). The proposal is intentionally deferred; revisit the
-public signature and compatibility notes before starting implementation.
+to the materializing default of local CTable.save(). A subsequent extension
+adds opt-in `preserve_sources=True` for source-bound local tables; see
+`ctable-remote-cols.md` for that separate contract.
+
+General remote SUMMARY/scalar index resolution remains a separate follow-up in
+`remote-ctable.md`. Shared sparse runtime caching is available directly through
+`RemoteCTable.with_sparse_cache()` and includes referenced RemoteArray columns
+under the outer table's cache owner and aggregate budget.

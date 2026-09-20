@@ -97,6 +97,7 @@ class RemoteDiscovery:
         self.archive = None
         self.zstore = None
         self.sources = {}
+        self.source_descriptors = {}
         self.caches = {}
         self.batch_caches = {}
         self.disk = None
@@ -712,14 +713,16 @@ class RemoteDiscovery:
         key = next(path for path, value in self.sources.items() if value is source)
         if key not in self.caches:
             if getattr(self, "shared", False):
-                descriptor = {
-                    "kind": self.format,
-                    "version": 1,
-                    "urlpath": source.urlpath,
-                    "assume_immutable": True,
-                }
-                if self.format in {"b2z", "hdf5"}:
-                    descriptor["dataset"] = key
+                descriptor = self.source_descriptors.get(key)
+                if descriptor is None:
+                    descriptor = {
+                        "kind": self.format,
+                        "version": 1,
+                        "urlpath": source.urlpath,
+                        "assume_immutable": True,
+                    }
+                    if self.format in {"b2z", "hdf5"}:
+                        descriptor["dataset"] = key
                 runtime = blosc2.RemoteArray.with_sparse_cache(
                     source,
                     self.disk.payload_path(self.generation, key),
@@ -843,6 +846,7 @@ class RemoteDiscovery:
             if isinstance(source, blosc2.HDF5NDSource):
                 source.close()
         self.sources.clear()
+        getattr(self, "source_descriptors", {}).clear()
         self.caches.clear()
         getattr(self, "batch_caches", {}).clear()
         self.nodes.clear()

@@ -244,6 +244,7 @@ class SharedStoreOperation:
                             owner.zstore.close()
                             owner.zstore = None
                         owner.sources.clear()
+                        owner.source_descriptors.clear()
                     owner.generation = manifest["generation"]
                     owner.metadata = manifest["metadata"]
                     owner.nodes.clear()

@@ -121,6 +121,17 @@ refresh. Refresh a table obtained from a {ref}`RemoteStore` through the root
 store, then retrieve the table again. Immutable reference artifacts reject
 `refresh()`.
 
+For a cache shared by multiple server processes, use the sparse constructor:
+
+```python
+with blosc2.RemoteCTable.with_sparse_cache(url, "shared-table-cache") as table:
+    print(table[:5])
+```
+
+The outer table owns one aggregate cache budget for its ordinary and referenced
+`RemoteArray` columns. Every process using the cache directory must use this
+constructor.
+
 ## See also
 
 - {doc}`remote_objects` — shared caching, traffic, reference, and lifetime behavior.

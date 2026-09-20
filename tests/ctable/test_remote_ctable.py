@@ -32,6 +32,25 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
+def test_sparse_cache_shared_handles_and_refresh(tmp_path):
+    local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
+    url = remote_table_url(tmp_path, local, "sparse-shared")
+    cache = tmp_path / "sparse-cache"
+
+    with blosc2.RemoteCTable.with_sparse_cache(url, cache) as first:
+        with blosc2.RemoteCTable.with_sparse_cache(url, cache) as second:
+            np.testing.assert_array_equal(first.x[:], np.arange(20))
+            second.traffic.reset()
+            np.testing.assert_array_equal(second.x[:], np.arange(20))
+            assert second.traffic.requests == 0
+            assert first.cache_bytes == second.cache_bytes > 0
+            assert second.cache_policy is blosc2.CachePolicy.DISK
+
+            second.refresh()
+            with pytest.raises(RuntimeError, match="stale"):
+                first.x[:]
+
+
 @pytest.mark.parametrize("include_note", [False, True])
 @pytest.mark.parametrize("nrows", [0, 2, 20, 21])
 def test_remote_example_total_timing(tmp_path, capsys, include_note, nrows):
@@ -716,6 +735,11 @@ def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
 
     with blosc2.RemoteCTable(url, dataset="group/table") as direct:
         np.testing.assert_array_equal(direct["x"][:], [1, 2])
+
+    with blosc2.RemoteCTable.with_sparse_cache(
+        url, tmp_path / "nested-sparse-cache", dataset="group/table"
+    ) as sparse:
+        np.testing.assert_array_equal(sparse["x"][:], [1, 2])
 
 
 def test_remote_ctable_reference_save_roundtrip(tmp_path):

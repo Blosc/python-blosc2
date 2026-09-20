@@ -121,6 +121,59 @@ class RemoteCTable(RemoteObject, CTable):
         pass
 
     @classmethod
+    def with_sparse_cache(
+        cls,
+        urlpath,
+        runtime_cache_path,
+        *,
+        dataset=None,
+        manifest=None,
+        max_cache_bytes=None,
+        carrier=None,
+        max_concurrency=8,
+        metadata_buffer_bytes=8 << 20,
+        row_buffer_bytes=64 << 20,
+        _filesystem=None,
+        _source_validator=None,
+        _manifest_validator=None,
+        _max_nodes=None,
+    ):
+        """Attach a remote CTable to a sparse disk cache shared across processes."""
+        settings = {
+            name: _positive_integer(name, value)
+            for name, value in {
+                "max_concurrency": max_concurrency,
+                "metadata_buffer_bytes": metadata_buffer_bytes,
+                "row_buffer_bytes": row_buffer_bytes,
+            }.items()
+        }
+
+        from blosc2.remote_store import RemoteStore
+
+        store = RemoteStore.with_sparse_cache(
+            urlpath,
+            runtime_cache_path,
+            dataset=dataset,
+            manifest=manifest,
+            max_cache_bytes=max_cache_bytes,
+            carrier=carrier,
+            _filesystem=_filesystem,
+            _source_validator=_source_validator,
+            _manifest_validator=_manifest_validator,
+            _max_nodes=_max_nodes,
+        )
+        try:
+            _, full = store._resolve("")
+            kind, diagnostic = store._owner.nodes[full]
+            if kind != "ctable":
+                if kind == "unsupported":
+                    raise NotImplementedError(str(diagnostic))
+                raise ValueError("RemoteCTable requires a CTable node")
+            return cls._from_owner(store._owner, full, **settings)
+        finally:
+            store.close()
+
+    @classmethod
     def _from_owner(cls, owner, full_path, **settings):
         settings = {name: _positive_integer(name, value) for name, value in settings.items()}
         storage = RemoteTableStorage(owner, full_path, **settings)
@@ -181,9 +234,14 @@ class RemoteCTable(RemoteObject, CTable):
                 replacement.release()
                 raise
             replacement.release()
+            if getattr(replacement, "shared", False):
+                from blosc2.remote_store_cache import SharedStoreOperation
+
+                replacement.lock = SharedStoreOperation(replacement)
             replacement._cleanup_dir, owner._cleanup_dir = owner._cleanup_dir, None
             replacement.artifact_path = owner.artifact_path
-            owner.disk = None
+            if not getattr(owner, "shared", False):
+                owner.disk = None
             owner.generation = replacement.generation
             state = fresh.__dict__.copy()
             fresh._storage = None  # Ownership is transferred to this handle.

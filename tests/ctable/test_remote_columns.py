@@ -165,3 +165,28 @@ def test_remote_ctable_owns_external_column_cache_policy(tmp_path, policy):
         restored = blosc2.open(artifact)
         assert restored.cache_policy is policy
         np.testing.assert_array_equal(restored.remote[:], values)
+
+
+def test_remote_ctable_sparse_cache_reuses_external_column(tmp_path):
+    values = np.arange(20, dtype=np.float32)
+    table = blosc2.CTable(
+        Row,
+        sources={
+            "local": blosc2.asarray(np.arange(20, dtype=np.int32)),
+            "remote": remote_array(values, chunks=(5,)),
+        },
+    )
+    archive = tmp_path / "referenced.b2z"
+    table.save(archive, preserve_sources=True)
+    archive_name = f"ctable-sparse-{uuid4().hex}.b2z"
+    url = f"memory://{archive_name}"
+    fsspec.filesystem("memory").pipe_file(archive_name, archive.read_bytes())
+    cache = tmp_path / "sparse-cache"
+
+    with blosc2.RemoteCTable.with_sparse_cache(url, cache) as first:
+        np.testing.assert_array_equal(first.remote[:], values)
+    with blosc2.RemoteCTable.with_sparse_cache(url, cache) as second:
+        remote = second._cols["remote"]
+        second.traffic.reset()
+        np.testing.assert_array_equal(remote[:], values)
+        assert second.traffic.requests == 0

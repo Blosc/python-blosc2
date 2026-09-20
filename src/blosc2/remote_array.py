@@ -1847,6 +1847,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         if actual != expected:
             raise ValueError(f"RemoteArray source geometry no longer matches its carrier: {actual!r}")
         owner.sources[cache_key] = src
+        owner.source_descriptors[cache_key] = descriptor
         kwargs = {}
         if owner.cache_policy is not blosc2.CachePolicy.NONE:
             kwargs["max_cache_bytes"] = owner.max_cache_bytes

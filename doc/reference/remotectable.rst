@@ -49,6 +49,12 @@ A table selected from a store owns an independent handle, but its columns and
 views remain borrowed from that table. Refresh a nested table through its root
 store; a standalone table can call ``refresh()``.
 
+Server processes can share one bounded sparse disk cache with
+``RemoteCTable.with_sparse_cache(url, runtime_cache_path)``. The constructor
+uses the same process-safe cache and aggregate byte limit as
+``RemoteStore.with_sparse_cache()``; all processes using that directory must
+open it through the sparse-cache constructor.
+
 See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
 access, filtering, buffering, reference saving, and materialization examples.
 
