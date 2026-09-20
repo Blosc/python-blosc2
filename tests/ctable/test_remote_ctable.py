@@ -160,6 +160,38 @@ def test_remote_positional_index_lookup(tmp_path, kind):
         assert any(f"_indexes/x/{kind}." in (array.dataset or "") for array in remote._storage._arrays)
 
 
+def test_remote_full_index_merges_incremental_runs(tmp_path):
+    from blosc2.ctable_indexing import _CTableBuildProxy
+    from blosc2.indexing import _store_full_run_descriptor
+
+    path = tmp_path / "full-runs.b2z"
+    with blosc2.CTable(
+        IndexedRow,
+        [(i, 1000 - i) for i in range(1000)],
+        urlpath=path,
+        mode="w",
+        create_summary_index=False,
+    ) as table:
+        table.create_index("x", kind="full")
+        descriptor = table._get_index_catalog()["x"]
+        table.extend([(1000 + i, -i) for i in range(4)])
+        proxy = _CTableBuildProxy(table._cols["x"], table._storage.index_anchor_path("x"))
+        values = np.arange(1000, 1004, dtype=np.int64)
+        positions = np.arange(1000, 1004, dtype=np.int64)
+        run = _store_full_run_descriptor(proxy, descriptor, 0, values, positions)
+        descriptor["full"]["runs"] = [run]
+        descriptor["full"]["next_run_id"] = 1
+        descriptor["stale"] = False
+        descriptor["built_value_epoch"] = table._storage.get_epoch_counters()[0]
+        table._storage.save_index_catalog({"x": descriptor})
+
+    url = f"memory://{tmp_path.name}-full-runs.b2z"
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
+        np.testing.assert_array_equal(remote.where("(x >= 1000) & (x < 1004)").y[:], [0, -1, -2, -3])
+        assert len(remote._get_index_catalog()["x"]["full"]["runs"]) == 1
+
+
 def test_sparse_cache_shared_handles_and_refresh(tmp_path):
     local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
     url = remote_table_url(tmp_path, local, "sparse-shared")
