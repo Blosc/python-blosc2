@@ -10,6 +10,27 @@ independently; rows are never materialised in their entirety unless you
 explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
 :meth:`~blosc2.CTable.__iter__`.
 
+Source-bound columns
+--------------------
+
+Pass ``sources=`` to bind every fixed-width schema column to an existing
+:class:`~blosc2.NDArray` or :class:`~blosc2.RemoteArray` without copying it::
+
+    table = blosc2.CTable(
+        Reading,
+        sources={
+            "station": local_station_ids,
+            "temperature": remote_temperatures,
+        },
+    )
+
+Names, dtypes, item shapes, and row counts must match the compiled schema
+exactly. Source-bound tables are read-only. A local table keeps each
+``RemoteArray`` cache policy; a :class:`~blosc2.RemoteCTable` applies its outer
+policy and shared cache budget to every column. ``save()`` materializes an
+independent table by default; use ``preserve_sources=True`` to retain remote
+references for an unfiltered root table.
+
 List columns
 ------------
 

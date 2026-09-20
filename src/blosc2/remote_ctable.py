@@ -61,6 +61,11 @@ class RemoteCTable(RemoteObject, CTable):
     ``blosc2.open`` accepts ``max_concurrency`` but not the table-specific buffer
     keywords. Use this constructor or the returned table's settings to tune
     buffers. Cache policies and ``max_cache_bytes`` remain independent.
+
+    A RemoteCTable's cache policy applies to every column read through it,
+    including columns backed by independent RemoteArray carriers. Those columns
+    share the table owner's cache budget and traffic accounting; their persisted
+    standalone policies are not used or modified by the table.
     """
 
     def __new__(

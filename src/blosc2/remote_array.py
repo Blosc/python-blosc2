@@ -534,6 +534,13 @@ class RemoteArray(RemoteObject, blosc2.Operand):
     retained in process memory up to a bounded size. With
     :attr:`CachePolicy.NONE`, reads retain no data.
 
+    .. note::
+
+       RemoteArray manages supported remote sources and their portable
+       descriptors, using :ref:`Proxy` internally for reads and caching. For a
+       custom source implementing :ref:`ProxyNDSource` or :ref:`ProxySource`,
+       use Proxy directly; RemoteArray does not accept arbitrary source objects.
+
     Parameters
     ----------
     urlpath: str, URLPath, or C2Array

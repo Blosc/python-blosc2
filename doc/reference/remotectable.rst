@@ -41,9 +41,13 @@ table and reads all data needed for it. ``copy()``, ``to_b2z()``, and ``to_b2d()
 remain local materialization operations inherited from :class:`blosc2.CTable`.
 
 Table cache bytes, limits, and traffic are scoped to the shared remote owner and
-may include sibling leaves. A table selected from a store owns an independent
-handle, but its columns and views remain borrowed from that table. Refresh a
-nested table through its root store; a standalone table can call ``refresh()``.
+may include sibling leaves. This also applies when a table column is itself a
+``RemoteArray`` reference to another fsspec or Caterva2 URL: the outer table
+policy overrides the carrier policy for that handle, and all such columns share
+one budget. Standalone instances of those arrays keep their original policies.
+A table selected from a store owns an independent handle, but its columns and
+views remain borrowed from that table. Refresh a nested table through its root
+store; a standalone table can call ``refresh()``.
 
 See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
 access, filtering, buffering, reference saving, and materialization examples.

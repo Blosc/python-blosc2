@@ -7336,6 +7336,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         overwrite:
             If ``False`` (default), raise :exc:`ValueError` when *urlpath*
             already exists.  Set to ``True`` to replace an existing table.
+        preserve_sources:
+            Keep RemoteArray columns as references instead of materializing
+            them. This is valid only for an unfiltered source-bound root table.
+            The default writes an independent local copy.
 
         Raises
         ------
