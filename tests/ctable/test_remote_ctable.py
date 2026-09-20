@@ -24,12 +24,52 @@ class Row:
     tag: str = blosc2.field(blosc2.string(max_length=8), default="")
 
 
+@dataclasses.dataclass
+class IndexedRow:
+    x: int
+    y: int
+
+
 def remote_table_url(tmp_path, table, name="table"):
     path = tmp_path / f"{name}.b2z"
     table.to_b2z(path)
     url = f"memory://{tmp_path.name}-{name}.b2z"
     fsspec.filesystem("memory").pipe(url, path.read_bytes())
     return url
+
+
+def indexed_remote_table_url(tmp_path, kind, *, name=None, rows=1000, **kwargs):
+    name = name or f"indexed-{kind}"
+    path = tmp_path / f"{name}.b2z"
+    with blosc2.CTable(
+        IndexedRow,
+        [(i, rows - i) for i in range(rows)],
+        urlpath=path,
+        mode="w",
+        create_summary_index=False,
+    ) as table:
+        table.create_index("x", kind=kind, **kwargs)
+    url = f"memory://{tmp_path.name}-{name}.b2z"
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    return url, path
+
+
+def test_remote_scalar_index_catalog_is_lazy_and_resolvable(tmp_path):
+    from blosc2.indexing import _open_level_summary_handle
+
+    url, path = indexed_remote_table_url(tmp_path, "summary", granularity="block")
+    with blosc2.RemoteCTable(url) as remote:
+        opened = len(remote._remote_storage()._arrays)
+        catalog = remote._get_index_catalog()
+        assert catalog["x"]["kind"] == "summary"
+        assert catalog["x"]["levels"]["block"]["path"].startswith("remote-index://")
+        assert len(remote._remote_storage()._arrays) == opened
+        column = remote._cols["x"]
+        summaries = _open_level_summary_handle(column, catalog["x"], "block")
+        assert summaries.shape[0] > 0
+
+    with blosc2.open(path) as local:
+        np.testing.assert_array_equal(local[local.x < 3].y[:], [1000, 999, 998])
 
 
 def test_sparse_cache_shared_handles_and_refresh(tmp_path):

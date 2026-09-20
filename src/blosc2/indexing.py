@@ -128,6 +128,10 @@ _PERSISTENT_FINGERPRINTS: dict[str, tuple[int, int]] = {}
 # Populated by the storage layer so indexing code can open sidecars without
 # extracting them to a temporary directory first.
 _SIDECAR_ZIP_REGISTRY: dict[str, tuple[str, int]] = {}
+# Remote CTable sidecars use the same readers as local sidecars.  The storage
+# object owns the returned RemoteArray and unregisters the synthetic path when
+# the table closes.
+_SIDECAR_REMOTE_REGISTRY: dict[str, tuple[object, str]] = {}
 _HOT_CACHE_GLOBAL_SCOPE = ("global", 0)
 
 FULL_OOC_RUN_ITEMS = 10_000_000
@@ -302,8 +306,12 @@ def evict_cached_index_handles(root: str | None) -> None:
             handles.pop(path, None)
 
 
-def _open_sidecar_file(path: str, mmap_mode=None) -> blosc2.NDArray:
+def _open_sidecar_file(path: str, mmap_mode=None) -> blosc2.NDArray | blosc2.RemoteArray:
     """Open an index sidecar file, using zip-offset access when registered."""
+    remote = _SIDECAR_REMOTE_REGISTRY.get(path)
+    if remote is not None:
+        storage, logical_key = remote
+        return storage._open_array(logical_key)
     reg = _SIDECAR_ZIP_REGISTRY.get(path)
     if reg is not None:
         b2z_path, offset = reg

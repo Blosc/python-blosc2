@@ -664,6 +664,7 @@ class RemoteTableStorage(TableStorage):
         self._root_key = root_key.strip("/")
         self._generation = owner.generation
         self._arrays: list[blosc2.RemoteArray] = []
+        self._registered_index_paths: list[str] = []
         self._closed = False
         owner.acquire()
 
@@ -828,6 +829,11 @@ class RemoteTableStorage(TableStorage):
         if self._closed:
             return
         self._closed = True
+        from blosc2.indexing import _SIDECAR_REMOTE_REGISTRY
+
+        for path in self._registered_index_paths:
+            _SIDECAR_REMOTE_REGISTRY.pop(path, None)
+        self._registered_index_paths.clear()
         for array in self._arrays:
             array.close()
         self._arrays.clear()
@@ -857,7 +863,30 @@ class RemoteTableStorage(TableStorage):
             return {}
         catalog = {}
         for name, descriptor in raw.items():
-            if not isinstance(descriptor, dict) or descriptor.get("kind") != "membership":
+            if not isinstance(descriptor, dict):
+                continue
+            kind = descriptor.get("kind")
+            if kind in {"summary", "bucket", "partial", "full", "opsi"}:
+                if descriptor.get("version") != 1 or not isinstance(descriptor.get("token"), str):
+                    raise ValueError(f"Malformed remote index for column {name!r}")
+                resolved = copy.deepcopy(descriptor)
+                from blosc2.indexing import _SIDECAR_REMOTE_REGISTRY
+
+                for obj, key in FileTableStorage._walk_descriptor_paths(resolved):
+                    path = obj[key]
+                    parts = pathlib.PurePosixPath(path).parts
+                    if os.path.isabs(path) or ".." in parts or not path.endswith(".b2nd"):
+                        raise ValueError(f"Unsafe remote index path for column {name!r}")
+                    logical = path[:-5].strip("/")
+                    if not self._has_array(logical):
+                        raise ValueError(f"Missing remote index sidecar for column {name!r}")
+                    remote_path = f"remote-index://{id(self)}/{path}"
+                    _SIDECAR_REMOTE_REGISTRY[remote_path] = (self, logical)
+                    self._registered_index_paths.append(remote_path)
+                    obj[key] = remote_path
+                catalog[name] = resolved
+                continue
+            if kind != "membership":
                 continue
             payload = descriptor.get("membership")
             if not isinstance(payload, dict):
