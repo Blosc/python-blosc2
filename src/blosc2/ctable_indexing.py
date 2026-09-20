@@ -1493,7 +1493,7 @@ class _CTableIndexingMixin:
             indexed_arrays[col_name] = (root_cols[col_name], descriptor)
 
         for operand in operands.values():
-            if not isinstance(operand, blosc2.NDArray):
+            if not isinstance(operand, (blosc2.NDArray, blosc2.RemoteArray)):
                 continue
             for col_name, (col_arr, descriptor) in indexed_arrays.items():
                 if col_name in seen or col_arr is not operand:

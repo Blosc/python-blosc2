@@ -489,7 +489,7 @@ def _copy_descriptor_for_token(array: blosc2.NDArray, token: str) -> dict:
 
 
 def _is_persistent_array(array: blosc2.NDArray) -> bool:
-    return getattr(array, "urlpath", None) is not None
+    return not isinstance(array, blosc2.RemoteArray) and getattr(array, "urlpath", None) is not None
 
 
 def _tmpdir_for_array(array: blosc2.NDArray) -> str | None:
@@ -3071,6 +3071,9 @@ def _read_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, ou
     if isinstance(array, np.ndarray):
         out[...] = array[start : start + len(out)]
         return
+    if not hasattr(array, "get_1d_span_numpy"):
+        out[...] = array[start : start + len(out)]
+        return
     chunk_len = int(array.chunks[0])
     cursor = int(start)
     out_cursor = 0
@@ -5115,7 +5118,11 @@ def _descriptor_for_target(
         partial = descriptor.get("partial", {})
         if partial.get("layout") != "chunk-local-v1" or "values_path" not in partial:
             return None
-    if tuple(descriptor.get("shape", ())) != tuple(array.shape):
+    descriptor_shape = tuple(descriptor.get("shape", ()))
+    if isinstance(array, blosc2.RemoteArray):
+        if len(descriptor_shape) != 1 or descriptor_shape[0] < array.shape[0]:
+            return None
+    elif descriptor_shape != tuple(array.shape):
         return None
     if tuple(descriptor.get("chunks", ())) != tuple(array.chunks):
         return None
@@ -5349,7 +5356,7 @@ def _intervals_from_sorted(values: np.ndarray, op: str, value, dtype: np.dtype) 
 def _operand_target(operand) -> tuple[blosc2.NDArray, str | None] | None:
     if isinstance(operand, blosc2.NDField):
         return operand.ndarr, operand.field
-    if isinstance(operand, blosc2.NDArray):
+    if isinstance(operand, (blosc2.NDArray, blosc2.RemoteArray)):
         return operand, None
     return None
 

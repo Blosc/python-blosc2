@@ -26,8 +26,8 @@ class Row:
 
 @dataclasses.dataclass
 class IndexedRow:
-    x: int
-    y: int
+    x: int = blosc2.field(blosc2.int64(), chunks=(256,), blocks=(64,))
+    y: int = blosc2.field(blosc2.int64(), chunks=(256,), blocks=(64,))
 
 
 def remote_table_url(tmp_path, table, name="table"):
@@ -70,6 +70,17 @@ def test_remote_scalar_index_catalog_is_lazy_and_resolvable(tmp_path):
 
     with blosc2.open(path) as local:
         np.testing.assert_array_equal(local[local.x < 3].y[:], [1000, 999, 998])
+
+
+@pytest.mark.parametrize("granularity", ["chunk", "block"])
+def test_remote_summary_index_prunes_queries(tmp_path, granularity):
+    url, _ = indexed_remote_table_url(
+        tmp_path, "summary", name=f"summary-{granularity}", granularity=granularity
+    )
+    with blosc2.RemoteCTable(url) as remote:
+        indexed = remote[remote.x < 10].y[:]
+        np.testing.assert_array_equal(indexed, np.arange(1000, 990, -1))
+        assert any("_indexes/x/summary." in (array.dataset or "") for array in remote._storage._arrays)
 
 
 def test_sparse_cache_shared_handles_and_refresh(tmp_path):
