@@ -6,6 +6,17 @@ XXX version-specific blurb XXX
 
 ### Improvements
 
+#### ListArray V2
+
+- List elements can be nullable, and ListSpec values can be nested recursively.
+- ListArray and CTable list columns provide `contains()` and `overlaps()` row
+  predicates.
+- Optional `kind="membership"` indexes accelerate flat scalar-list predicates
+  locally and through RemoteCTable.
+- New ListArray schemas use `batch_rows=2048` by default. Explicit `None` keeps
+  caller-managed batching, and existing stored schemas without the field retain
+  their previous behavior when reopened.
+
 #### Common remote-object API
 
 - Added the public `RemoteObject` base for `RemoteArray`, `RemoteStore`,
@@ -19,6 +30,10 @@ XXX version-specific blurb XXX
   `to_b2d()` remain the independent local-table operations.
 
 ### Compatibility notes
+
+- The ListArray construction default changed from caller-managed batches to
+  2048 rows per batch. Pass `batch_rows=None` to retain the previous behavior.
+  Existing arrays are not rewritten and keep their stored boundaries.
 
 - `RemoteCTable.save()` previously inherited `CTable.save()` and returned
   `None` after materializing local data. It now returns the reference path.

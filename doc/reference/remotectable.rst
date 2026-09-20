@@ -11,6 +11,18 @@ selected with ``dataset=`` or through :class:`blosc2.RemoteStore`.
 
 Batch-backed reads transfer and decode whole compressed batches. Dictionary
 codes remain selective, while the full vocabulary is loaded on first use.
+ListArray batches contain 2048 list cells by default. Smaller batches reduce
+overfetch for sparse reads; larger batches usually improve scans and compression.
+The row limit is not a byte limit, so one unusually large list can still require
+a large transfer. See :ref:`ListArray` for batching controls.
+
+Nullable list elements, nested lists, and ``contains``/``overlaps`` predicates
+have the same semantics as local tables. Without an index a predicate scans the
+remote list batches. A persisted ``kind="membership"`` index on a flat scalar
+list fetches only the compressed posting batches for requested values. If the
+result projects only other columns, the list payload remains unopened. Indexes
+on nested lists and structs are not supported. ListArray ``storage="vl"`` also
+remains unavailable through RemoteCTable.
 
 Saving and materializing have different meanings:
 

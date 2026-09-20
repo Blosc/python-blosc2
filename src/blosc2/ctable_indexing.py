@@ -527,7 +527,29 @@ class _CTableIndexingMixin:
             return None
         self._validate_index_descriptor(col_name, descriptor)
         payload = descriptor["membership"]
-        directory = {key: (int(index), int(count)) for key, index, count in payload.get("keys", [])}
+        raw_keys = payload.get("keys", [])
+        if not isinstance(raw_keys, list):
+            raise ValueError(f"Malformed membership index for column {col_name!r}: invalid key directory")
+        directory = {}
+        previous = None
+        for entry in raw_keys:
+            if (
+                not isinstance(entry, (list, tuple))
+                or len(entry) != 3
+                or not isinstance(entry[0], bytes)
+                or isinstance(entry[1], bool)
+                or not isinstance(entry[1], int)
+                or entry[1] < 0
+                or isinstance(entry[2], bool)
+                or not isinstance(entry[2], int)
+                or entry[2] < 0
+                or (previous is not None and entry[0] <= previous)
+            ):
+                raise ValueError(
+                    f"Malformed membership index for column {col_name!r}: invalid key directory"
+                )
+            directory[entry[0]] = (entry[1], entry[2])
+            previous = entry[0]
         spec = self._schema.columns_by_name[col_name].spec
         wanted = {key for value in values if (key := list_item_key(spec.item_spec, value)) is not None}
         indexes = sorted({directory[key][0] for key in wanted if key in directory})
@@ -545,7 +567,15 @@ class _CTableIndexingMixin:
                 raise ValueError(f"Malformed membership index for column {col_name!r}: missing postings")
             store = blosc2.open(path, mode="r")
             chunks = [store[index][:] for index in indexes]
-        return np.unique(np.concatenate([np.asarray(chunk, dtype=np.int64) for chunk in chunks]))
+        counts = dict(directory.values())
+        for index, chunk in zip(indexes, chunks, strict=True):
+            expected = counts[index]
+            if len(chunk) != expected:
+                raise ValueError(f"Malformed membership index for column {col_name!r}: posting length")
+        positions = np.unique(np.concatenate([np.asarray(chunk, dtype=np.int64) for chunk in chunks]))
+        if positions.size and (positions[0] < 0 or positions[-1] >= len(self._valid_rows)):
+            raise ValueError(f"Malformed membership index for column {col_name!r}: posting row range")
+        return positions
 
     def _normalize_table_expression_target(
         self, expression: str, operands: dict | None = None

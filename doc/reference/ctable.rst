@@ -10,6 +10,22 @@ independently; rows are never materialised in their entirety unless you
 explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
 :meth:`~blosc2.CTable.__iter__`.
 
+List columns
+------------
+
+Declare list columns with :func:`blosc2.list`. Batch storage uses 2048 outer
+rows per compressed batch by default; override ``batch_rows`` to trade remote
+read granularity against request count and compression. ``batch_rows=None``
+keeps caller-managed boundaries, while CTable still flushes the pending final
+batch when it persists or closes the table. Arrow/Parquet input batch size and
+the persisted ListArray ``batch_rows`` setting are separate controls.
+
+List item specs may themselves be nullable or lists. Use
+:meth:`Column.contains` and :meth:`Column.overlaps` for membership filtering,
+and ``create_index(name, kind="membership")`` for repeated selective queries on
+flat scalar lists. Membership indexes are marked stale after table mutation;
+queries then use the scan path until the index is rebuilt.
+
 .. currentmodule:: blosc2
 
 .. autoclass:: blosc2.CTable

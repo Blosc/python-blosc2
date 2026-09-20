@@ -105,6 +105,7 @@ def write_table(args) -> None:
                 },
                 validate=False,
             )
+        table.create_index("tags", kind="membership")
 
     with blosc2.CTable.open(str(output)) as table:
         assert len(table) == args.rows
@@ -187,6 +188,24 @@ def access_table(args) -> None:
                     f"({requests} requests, {transferred / 1024:8.2f} KB transferred)"
                 )
             print(f"    {messages}")
+
+        if (
+            "tags" in table.col_names
+            and table._get_index_catalog().get("tags", {}).get("kind") == "membership"
+        ):
+            before_bytes = table.traffic.nbytes if remote else 0
+            before_requests = table.traffic.requests if remote else 0
+            started = time.perf_counter()
+            matching_ids = table[table["tags"].contains(3)]["id"][:5]
+            elapsed = time.perf_counter() - started
+            extra_time += elapsed
+            print("\nIndexed list membership (posting batches; tags stay unopened for an id projection):")
+            print(
+                f"  - contains(3)     : {elapsed * 1000:7.1f} ms  "
+                f"({table.traffic.requests - before_requests if remote else 0} requests, "
+                f"{(table.traffic.nbytes - before_bytes if remote else 0) / 1024:8.2f} KB transferred)"
+            )
+            print(f"    first ids: {matching_ids}")
 
         if "region" in table.col_names:
             dictionary = table["region"].raw

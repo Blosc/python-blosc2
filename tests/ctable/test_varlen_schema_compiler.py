@@ -39,6 +39,16 @@ def test_list_schema_roundtrip():
     assert restored.columns_by_name["tags"].spec.batch_rows == 32
 
 
+def test_legacy_list_schema_without_batch_rows_keeps_caller_managed_batches():
+    restored = schema_from_dict(
+        {
+            "version": 1,
+            "columns": [{"name": "tags", "kind": "list", "item": {"kind": "int32"}}],
+        }
+    )
+    assert restored.columns_by_name["tags"].spec.batch_rows is None
+
+
 def test_list_annotation_mismatch_rejected():
     @dataclass
     class Bad:

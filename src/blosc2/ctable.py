@@ -9497,13 +9497,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if cls._is_list_column(col):
                 if getattr(col.spec, "storage", None) == "batch":
                     col.spec.serializer = list_serializer
-                    if blosc2_batch_size is not None:
-                        col.spec.batch_rows = blosc2_batch_size
+                    col.spec.batch_rows = blosc2_batch_size
                     if blosc2_items_per_block is not None:
                         col.spec.items_per_block = blosc2_items_per_block
             elif cls._is_varlen_scalar_column(col):
-                if blosc2_batch_size is not None:
-                    col.spec.batch_rows = blosc2_batch_size
+                col.spec.batch_rows = blosc2_batch_size
                 if blosc2_items_per_block is not None:
                     col.spec.items_per_block = blosc2_items_per_block
         metadata = cls._arrow_schema_metadata(schema)
