@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -133,6 +134,32 @@ def test_listarray_nested_arrow_roundtrip():
     arr = blosc2.ListArray.from_arrow(arrow)
     assert arr[:] == values
     assert arr.to_arrow().to_pylist() == values
+
+
+def test_listarray_contains_and_overlaps():
+    item = blosc2.list(blosc2.int32(nullable=True), nullable=True)
+    arr = blosc2.ListArray(item_spec=item, nullable=True, batch_rows=2)
+    arr.extend([None, [], [None, [1, 2]], [[3]], [[1, 2], [3]]])
+
+    np.testing.assert_array_equal(arr.contains([1, 2]), [False, False, True, False, True])
+    np.testing.assert_array_equal(arr.contains(None), [False, False, True, False, False])
+    np.testing.assert_array_equal(arr.overlaps([[3], [4]]), [False, False, False, True, True])
+    np.testing.assert_array_equal(arr.overlaps([]), np.zeros(5, dtype=np.bool_))
+
+
+def test_ctable_list_predicates_compose():
+    @dataclass
+    class Rows:
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int32(nullable=True), nullable=True, batch_rows=2)
+        )
+        value: int = blosc2.field(blosc2.int32())
+
+    rows = [([1, None], 0), (None, 1), ([], 2), ([2, 3], 3), ([3], 4)]
+    table = blosc2.CTable(Rows, rows, create_summary_index=False)
+    assert table[table["tags"].contains(None)]["value"][:].tolist() == [0]
+    assert table[table["tags"].overlaps([2, 9]) & (table["value"] > 2)]["value"][:].tolist() == [3]
+    assert table[~table["tags"].contains(3)]["value"][:].tolist() == [0, 1, 2]
 
 
 def test_listarray_extend_no_validate_keeps_none():

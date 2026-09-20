@@ -469,6 +469,8 @@ def test_remote_ctable_nested_list(tmp_path, serializer):
     url = remote_table_url(tmp_path, local, f"nested-list-{serializer}")
     with blosc2.RemoteCTable(url) as remote:
         assert remote["values"][:] == [row[0] for row in rows]
+        assert remote[remote["values"].contains([1, None, 2])]["values"][:] == [[None, [], [1, None, 2]]]
+        assert remote[remote["values"].overlaps([[3], [4]])]["values"][:] == [[[3]]]
 
 
 def test_remote_ctable_rejects_unsafe_object_extension(tmp_path):

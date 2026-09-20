@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
@@ -214,6 +215,29 @@ def coerce_list_cell(spec: ListSpec, value: Any) -> list[Any] | None:
     if not isinstance(value, Iterable):
         raise TypeError("ListArray cells must be list-like")
     return [_coerce_scalar_item(spec.item_spec, item) for item in list(value)]
+
+
+def _list_item_equal(left: Any, right: Any) -> bool:
+    """Structural equality used by list membership predicates."""
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(_list_item_equal(a, b) for a, b in zip(left, right, strict=True))
+        )
+    if isinstance(left, dict) or isinstance(right, dict):
+        return (
+            isinstance(left, dict)
+            and isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_list_item_equal(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, (float, np.floating)) and math.isnan(left):
+        return False
+    if isinstance(right, (float, np.floating)) and math.isnan(right):
+        return False
+    return bool(left == right)
 
 
 class ListArray:
@@ -435,6 +459,34 @@ class ListArray:
             return
         self._pending_cells.extend(cells)
         self._flush_full_batches()
+
+    def contains(self, value: Any) -> np.ndarray:
+        """Return one Boolean per row indicating immediate-child membership.
+
+        Null outer lists and empty lists return false. Nested lists compare
+        structurally and are not flattened.
+        """
+        needle = _coerce_scalar_item(self.spec.item_spec, value)
+        return np.fromiter(
+            (cell is not None and any(_list_item_equal(item, needle) for item in cell) for cell in self),
+            dtype=np.bool_,
+            count=len(self),
+        )
+
+    def overlaps(self, values: Iterable[Any]) -> np.ndarray:
+        """Return one Boolean per row when any immediate child is in *values*."""
+        if isinstance(values, (str, bytes, bytearray, memoryview)) or not isinstance(values, Iterable):
+            raise TypeError("ListArray.overlaps() expects an iterable of list items")
+        needles = [_coerce_scalar_item(self.spec.item_spec, value) for value in values]
+        return np.fromiter(
+            (
+                cell is not None
+                and any(_list_item_equal(item, needle) for item in cell for needle in needles)
+                for cell in self
+            ),
+            dtype=np.bool_,
+            count=len(self),
+        )
 
     def extend_arrow(self, arrow_array) -> None:
         """Append a PyArrow list array without materializing Python cells.

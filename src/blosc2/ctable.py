@@ -1589,6 +1589,26 @@ class Column:
         """
         return self._values_from_key(key)
 
+    def contains(self, value):
+        """Return a Boolean row predicate for list cells containing *value*."""
+        if not self.is_list:
+            raise TypeError("Column.contains() is only supported for list columns")
+        physical = self._raw_col.contains(value)
+        positions = self._resolve_live_positions()
+        mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+        mask[positions] = physical[positions]
+        return blosc2.asarray(mask)
+
+    def overlaps(self, values):
+        """Return a Boolean row predicate for list cells sharing any value."""
+        if not self.is_list:
+            raise TypeError("Column.overlaps() is only supported for list columns")
+        physical = self._raw_col.overlaps(values)
+        positions = self._resolve_live_positions()
+        mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+        mask[positions] = physical[positions]
+        return blosc2.asarray(mask)
+
     def _values_from_key(self, key, *, check_stale: bool = True):  # noqa: C901
         """Materialise values for a logical index key."""
         if check_stale:
