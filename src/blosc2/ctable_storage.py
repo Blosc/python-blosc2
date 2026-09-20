@@ -69,7 +69,9 @@ class TableStorage:
     ) -> blosc2.NDArray:
         raise NotImplementedError
 
-    def install_column(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(
+        self, name: str, ndarray: blosc2.NDArray | blosc2.RemoteArray
+    ) -> blosc2.NDArray | blosc2.RemoteArray:
         """Store a pre-built NDArray as column *name*, preserving its storage config.
 
         Faster than create_column + fill when the caller already has the fully
@@ -268,7 +270,7 @@ class InMemoryTableStorage(TableStorage):
             kwargs["dparams"] = dparams
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
-    def install_column(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(self, name, ndarray: blosc2.NDArray | blosc2.RemoteArray):
         """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
         return ndarray
 
@@ -1011,7 +1013,7 @@ class FileTableStorage(TableStorage):
         store[self._col_key(name)] = col
         return store[self._col_key(name)]
 
-    def install_column(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(self, name, ndarray: blosc2.NDArray | blosc2.RemoteArray):
         """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
         store = self._open_store()
         store[self._col_key(name)] = ndarray
@@ -1596,7 +1598,11 @@ class TreeStoreTableStorage(TableStorage):
         self._store._modified = True
         return col
 
-    def install_column(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(self, name: str, ndarray: blosc2.NDArray | blosc2.RemoteArray):
+        if isinstance(ndarray, blosc2.RemoteArray):
+            key = self._table_key(self._col_logical_key(name))
+            self._store[key] = ndarray
+            return self._store[key]
         dest_path = self._dest_path(self._col_logical_key(name), ".b2nd")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         saved = ndarray.copy(urlpath=dest_path)

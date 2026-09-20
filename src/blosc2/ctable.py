@@ -4923,7 +4923,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self.auto_compact = compact
         self._create_summary_index = create_summary_index
         self._summary_indexes_built = False
+        self._source_bound = False
+        self._source_columns: set[str] = set()
         self.base = None
+
+        source_n_rows = None
+        if sources is not None:
+            if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
+                self._schema = compile_schema(row_type)
+            else:
+                self._schema = _compile_pydantic_schema(row_type)
+            self._resolve_nullable_specs(self._schema)
+            source_n_rows = self._validate_sources(sources)
 
         # Choose storage backend
         if urlpath is not None:
@@ -4947,6 +4958,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             storage.check_kind()
             schema_dict = storage.load_schema()
+            self._load_source_binding_metadata(schema_dict)
             self._schema: CompiledSchema = schema_from_dict(schema_dict)
             self._schema = CompiledSchema(
                 row_cls=row_type,
@@ -4974,6 +4986,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # Restore auto-index preference from the schema.
             self._create_summary_index = schema_dict.get("create_summary_index", True)
             self._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
+            if self._source_bound:
+                self._read_only = True
+                self._create_summary_index = False
+                self._summary_indexes_built = True
         else:
             # ---- Create new table ----
             if storage.is_read_only():
@@ -4984,15 +5000,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "use mode='w' to create a new one."
                 )
 
-            # Build compiled schema from either a dataclass or a legacy Pydantic model
-            if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
-                self._schema = compile_schema(row_type)
-            else:
-                self._schema = _compile_pydantic_schema(row_type)
-            self._resolve_nullable_specs(self._schema)
+            # Build compiled schema from either a dataclass or a legacy Pydantic model.
+            # Source-bound schemas were compiled before storage selection so a
+            # validation failure cannot overwrite a destination.
+            if sources is None:
+                if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
+                    self._schema = compile_schema(row_type)
+                else:
+                    self._schema = _compile_pydantic_schema(row_type)
+                self._resolve_nullable_specs(self._schema)
 
             if sources is not None:
-                n_rows = self._validate_sources(sources)
+                n_rows = source_n_rows
                 capacity = max(n_rows, 1)
                 default_chunks, default_blocks = compute_chunks_blocks((capacity,))
                 self._valid_rows = storage.create_valid_rows(
@@ -5006,6 +5025,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     self.col_names.append(col.name)
                     self._col_widths[col.name] = max(len(col.name), col.display_width)
                     self._cols[col.name] = storage.install_column(col.name, sources[col.name])
+                self._source_bound = True
+                self._source_columns = {
+                    name for name, source in sources.items() if isinstance(source, blosc2.RemoteArray)
+                }
                 self._read_only = True
                 self._create_summary_index = False
                 self._summary_indexes_built = True
@@ -5106,6 +5129,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"Source columns have different row counts: {col.name!r} has {shape[0]}, expected {n_rows}"
                 )
         return 0 if n_rows is None else n_rows
+
+    def _load_source_binding_metadata(self, schema_dict: Mapping[str, Any]) -> None:
+        version = schema_dict.get("source_bindings_version")
+        if version is None:
+            self._source_bound = False
+            self._source_columns = set()
+            return
+        if version != 1:
+            raise ValueError(f"Unsupported CTable source bindings version: {version!r}")
+        self._source_bound = True
+        self._source_columns = set(schema_dict.get("source_columns", ()))
 
     def close(self) -> None:
         """Close any persistent backing store held by this table.
@@ -6862,7 +6896,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise FileNotFoundError(f"No CTable found at {urlpath!r}")
         return cls._open_from_storage(storage)
 
-    def to_b2z(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
+    def to_b2z(
+        self,
+        urlpath: str,
+        *,
+        overwrite: bool = False,
+        compact: bool = False,
+        preserve_sources: bool = False,
+    ) -> str:
         """Write this table to a compact ``.b2z`` container.
 
         ``.b2z`` is the compact zip-backed CTable format.  For persistent,
@@ -6896,6 +6937,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if not str(urlpath).endswith(".b2z"):
             raise ValueError("urlpath must have a .b2z extension")
+        if preserve_sources and self.base is not None:
+            raise ValueError("preserve_sources requires an unfiltered root table")
 
         storage = getattr(self, "_storage", None)
         can_physical_pack = (
@@ -6903,6 +6946,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             and self.base is None
             and isinstance(storage, FileTableStorage)
             and not str(storage._root).endswith(".b2z")
+            and (preserve_sources or not self._source_bound)
         )
         if can_physical_pack:
             self._flush_varlen_columns()
@@ -6916,10 +6960,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
         else:
-            CTable.save(self, urlpath, overwrite=overwrite)
+            CTable.save(self, urlpath, overwrite=overwrite, preserve_sources=preserve_sources)
         return os.path.abspath(urlpath)
 
-    def to_b2d(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
+    def to_b2d(
+        self,
+        urlpath: str,
+        *,
+        overwrite: bool = False,
+        compact: bool = False,
+        preserve_sources: bool = False,
+    ) -> str:
         """Write this table to a directory-backed store.
 
         Directory-backed CTable stores may use any path that does not end in
@@ -6960,6 +7011,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             and isinstance(storage, FileTableStorage)
             and str(storage._root).endswith(".b2z")
             and storage.open_mode() == "r"
+            and (preserve_sources or not self._source_bound)
         )
         if can_physical_unpack:
             store = blosc2.TreeStore(storage._root, mode="r")
@@ -6972,10 +7024,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
         else:
-            CTable.save(self, urlpath, overwrite=overwrite)
+            CTable.save(self, urlpath, overwrite=overwrite, preserve_sources=preserve_sources)
         return os.path.abspath(urlpath)
 
-    def to_cframe(self) -> bytes:
+    def to_cframe(self, *, preserve_sources: bool = False) -> bytes:
         """Serialize this table to a bytes buffer (a CFrame).
 
         This is the Blosc2-bytes counterpart of :meth:`to_b2z`, mirroring
@@ -7020,7 +7072,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         meta = blosc2.SChunk()
         meta.vlmeta["kind"] = "ctable"
         meta.vlmeta["version"] = 1
-        meta.vlmeta["schema"] = json.dumps(src._schema_dict_with_computed())
+        schema_dict = src._schema_dict_with_computed()
+        if not preserve_sources:
+            schema_dict.pop("source_bindings_version", None)
+            schema_dict.pop("source_columns", None)
+        meta.vlmeta["schema"] = json.dumps(schema_dict)
         estore["/_meta"] = meta
         estore["/_valid_rows"] = src._valid_rows
 
@@ -7045,7 +7101,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 estore[key] = arr._backend
             else:
                 # Scalar NDArray or ListArray — both serialize via to_cframe().
-                estore[key] = arr
+                if isinstance(arr, blosc2.RemoteArray):
+                    estore[key] = (
+                        arr._export_carrier(include_cache=False)
+                        if preserve_sources
+                        else blosc2.asarray(arr[:])
+                    )
+                else:
+                    estore[key] = arr
 
         # Validity sidecars travel beside their columns; a column without one
         # simply contributes no entry, which reconstructs as all-valid.
@@ -7233,7 +7296,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 vlmeta.vlmeta[key] = value
             storage.save_vlmeta(vlmeta)
 
-    def save(self, urlpath: str, *, overwrite: bool = False) -> None:
+    def _save_sources_to_storage(self, storage: TableStorage) -> None:
+        """Persist identity-mapped source bindings without reading remote payloads."""
+        if self.base is not None:
+            raise ValueError("preserve_sources requires an unfiltered root table")
+        n_rows = len(self)
+        capacity = max(n_rows, 1)
+        chunks, blocks = compute_chunks_blocks((capacity,))
+        valid = storage.create_valid_rows(shape=(capacity,), chunks=chunks, blocks=blocks)
+        if n_rows:
+            valid[:n_rows] = True
+        for name in self.col_names:
+            storage.install_column(name, self._cols[name])
+        storage.save_schema(self._schema_dict_with_computed())
+        attrs = self.attrs[:]
+        if attrs:
+            vlmeta = blosc2.SChunk()
+            for key, value in attrs.items():
+                vlmeta.vlmeta[key] = value
+            storage.save_vlmeta(vlmeta)
+
+    def save(self, urlpath: str, *, overwrite: bool = False, preserve_sources: bool = False) -> None:
         """Persist this table to disk at *urlpath*.
 
         This writes a standalone copy and returns ``None``; use :meth:`copy`
@@ -7259,6 +7342,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ValueError
             If *urlpath* already exists and ``overwrite=False``.
         """
+        if preserve_sources and self.base is not None:
+            raise ValueError("preserve_sources requires an unfiltered root table")
         if self.base is not None:
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
@@ -7274,7 +7359,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 os.remove(target_path)
 
-        self._save_to_storage(file_storage)
+        if preserve_sources:
+            if not self._source_bound:
+                raise ValueError("preserve_sources requires a source-bound CTable")
+            self._save_sources_to_storage(file_storage)
+        else:
+            self._save_to_storage(file_storage)
         file_storage.close()
 
     @classmethod
@@ -7297,6 +7387,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._table_dparams = None
         obj._storage = storage
         obj._read_only = storage.is_read_only()
+        obj._load_source_binding_metadata(schema_dict)
+        if obj._source_bound:
+            obj._read_only = True
         obj._schema = schema
         obj._cols = {}
         obj._col_widths = {}
@@ -7304,6 +7397,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj.auto_compact = False
         obj._create_summary_index = schema_dict.get("create_summary_index", True)
         obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
+        if obj._source_bound:
+            obj._create_summary_index = False
+            obj._summary_indexes_built = True
         obj.base = None
 
         obj._valid_rows = storage.open_valid_rows()
@@ -7337,7 +7433,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized._save_to_treestore(store, full_key)
             return
         storage = TreeStoreTableStorage(store, full_key, mode="a", owns_store=False)
-        self._save_to_storage(storage)
+        if self._source_bound:
+            self._save_sources_to_storage(storage)
+        else:
+            self._save_to_storage(storage)
         # storage is non-owning; outer store handles persistence
 
     @classmethod
@@ -11925,6 +12024,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _schema_dict_with_computed(self) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""
         d = schema_to_dict(self._schema)
+        if getattr(self, "_source_bound", False):
+            d["source_bindings_version"] = 1
+            d["source_columns"] = sorted(self._source_columns)
         n_rows = self._known_n_rows()
         if n_rows is not None:
             d["n_rows"] = n_rows

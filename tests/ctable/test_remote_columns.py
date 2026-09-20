@@ -75,3 +75,53 @@ def test_constrained_source_requires_validation_opt_out():
         blosc2.CTable(Constrained, sources={"value": source})
     table = blosc2.CTable(Constrained, sources={"value": source}, validate=False)
     np.testing.assert_array_equal(table.value[:], np.arange(3, dtype=np.int32))
+
+
+def test_save_materializes_by_default_and_can_preserve_sources(tmp_path):
+    values = np.arange(6, dtype=np.float32)
+    table = blosc2.CTable(
+        Row,
+        sources={
+            "local": blosc2.asarray(np.arange(6, dtype=np.int32)),
+            "remote": remote_array(values),
+        },
+    )
+
+    materialized_path = tmp_path / "materialized.b2z"
+    table.save(materialized_path)
+    materialized = blosc2.open(materialized_path)
+    assert isinstance(materialized._cols["remote"], blosc2.NDArray)
+    assert not isinstance(materialized._cols["remote"], blosc2.RemoteArray)
+    np.testing.assert_array_equal(materialized.remote[:], values)
+
+    referenced_path = tmp_path / "referenced.b2z"
+    table.save(referenced_path, preserve_sources=True)
+    referenced = blosc2.open(referenced_path)
+    assert isinstance(referenced._cols["remote"], blosc2.RemoteArray)
+    assert referenced._read_only
+    np.testing.assert_array_equal(referenced.remote[:], values)
+    with pytest.raises(ValueError, match="read-only"):
+        referenced.append((6, 6.0))
+
+
+def test_treestore_and_cframe_preserve_sources(tmp_path):
+    values = np.arange(4, dtype=np.float32)
+    table = blosc2.CTable(
+        Row,
+        sources={
+            "local": blosc2.asarray(np.arange(4, dtype=np.int32)),
+            "remote": remote_array(values),
+        },
+    )
+
+    path = tmp_path / "table-tree.b2z"
+    with blosc2.TreeStore(path, mode="w") as tree:
+        tree["table"] = table
+    with blosc2.TreeStore(path, mode="r") as tree:
+        reopened = tree["table"]
+        assert isinstance(reopened._cols["remote"], blosc2.RemoteArray)
+        np.testing.assert_array_equal(reopened.remote[:], values)
+
+    restored = blosc2.ctable_from_cframe(table.to_cframe(preserve_sources=True))
+    assert isinstance(restored._cols["remote"], blosc2.RemoteArray)
+    np.testing.assert_array_equal(restored.remote[:], values)
