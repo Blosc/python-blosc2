@@ -473,6 +473,42 @@ def test_remote_ctable_nested_list(tmp_path, serializer):
         assert remote[remote["values"].overlaps([[3], [4]])]["values"][:] == [[[3]]]
 
 
+def test_remote_ctable_membership_index_avoids_list_payload(tmp_path, monkeypatch):
+    @dataclasses.dataclass
+    class Rows:
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int32(nullable=True), nullable=True, batch_rows=2)
+        )
+        value: int = blosc2.field(blosc2.int32())
+
+    rows = [([1, None], 0), (None, 1), ([], 2), ([2, 3], 3), ([3], 4)]
+    local = blosc2.CTable(
+        Rows,
+        rows,
+        urlpath=tmp_path / "membership-index.b2d",
+        mode="w",
+        create_summary_index=False,
+    )
+    local.create_index("tags", kind="membership")
+    url = remote_table_url(tmp_path, local, "membership-index")
+
+    fs = fsspec.filesystem("memory")
+    reads = []
+    original = type(fs).cat_file
+
+    def counted(self, path, start=None, end=None, **kwargs):
+        reads.append((start, end))
+        return original(self, path, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(type(fs), "cat_file", counted)
+    with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.NONE) as remote:
+        reads.clear()
+        assert remote._get_index_catalog()["tags"]["kind"] == "membership"
+        assert remote[remote["tags"].contains(3)]["value"][:].tolist() == [3, 4]
+        assert reads
+        assert not dict.__contains__(remote._cols, "tags")
+
+
 def test_remote_ctable_rejects_unsafe_object_extension(tmp_path):
     @dataclasses.dataclass
     class Unsafe:

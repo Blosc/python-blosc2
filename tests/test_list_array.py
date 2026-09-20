@@ -162,6 +162,29 @@ def test_ctable_list_predicates_compose():
     assert table[~table["tags"].contains(3)]["value"][:].tolist() == [0, 1, 2]
 
 
+def test_ctable_membership_index_matches_scan(tmp_path):
+    @dataclass
+    class Rows:
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int32(nullable=True), nullable=True, batch_rows=2)
+        )
+        value: int = blosc2.field(blosc2.int32())
+
+    rows = [([1, None, 1], 0), (None, 1), ([], 2), ([2, 3], 3), ([3], 4)]
+    path = tmp_path / "membership.b2d"
+    table = blosc2.CTable(Rows, rows, urlpath=path, mode="w", create_summary_index=False)
+    expected = table[table["tags"].overlaps([None, 3])]["value"][:].tolist()
+
+    index = table.create_index("tags", kind="membership")
+    assert index.kind == "membership"
+    assert table[table["tags"].overlaps([None, 3])]["value"][:].tolist() == expected
+    assert table[table["tags"].contains(9)]["value"][:].tolist() == []
+
+    table["tags"][0] = [9]
+    assert table._get_index_catalog()["tags"]["stale"] is True
+    assert table[table["tags"].contains(9)]["value"][:].tolist() == [0]
+
+
 def test_listarray_extend_no_validate_keeps_none():
     arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
     arr.extend([[1], None, [2, 3]], validate=False)

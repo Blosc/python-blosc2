@@ -1593,6 +1593,12 @@ class Column:
         """Return a Boolean row predicate for list cells containing *value*."""
         if not self.is_list:
             raise TypeError("Column.contains() is only supported for list columns")
+        positions = self._table._membership_positions(self._col_name, [value])
+        if positions is not None:
+            mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask[positions] = True
+            mask &= self._valid_rows[:]
+            return blosc2.asarray(mask)
         physical = self._raw_col.contains(value)
         positions = self._resolve_live_positions()
         mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
@@ -1603,6 +1609,15 @@ class Column:
         """Return a Boolean row predicate for list cells sharing any value."""
         if not self.is_list:
             raise TypeError("Column.overlaps() is only supported for list columns")
+        if isinstance(values, (str, bytes, bytearray, memoryview)) or not isinstance(values, Iterable):
+            raise TypeError("Column.overlaps() expects an iterable of list items")
+        values = list(values)
+        positions = self._table._membership_positions(self._col_name, values)
+        if positions is not None:
+            mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask[positions] = True
+            mask &= self._valid_rows[:]
+            return blosc2.asarray(mask)
         physical = self._raw_col.overlaps(values)
         positions = self._resolve_live_positions()
         mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)

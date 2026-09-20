@@ -240,6 +240,23 @@ def _list_item_equal(left: Any, right: Any) -> bool:
     return bool(left == right)
 
 
+def list_item_key(spec: SchemaSpec, value: Any) -> bytes | None:
+    """Return the stable persisted membership key for one validated list item.
+
+    NaN has no key because membership follows ordinary equality and never
+    matches it. Signed zero is normalized before MessagePack encoding.
+    """
+    from blosc2.msgpack_utils import msgpack_packb
+
+    value = _coerce_scalar_item(spec, value)
+    if isinstance(value, (float, np.floating)):
+        if math.isnan(value):
+            return None
+        if value == 0:
+            value = 0.0
+    return msgpack_packb(value)
+
+
 class ListArray:
     """A row-oriented container for list-valued data.
 

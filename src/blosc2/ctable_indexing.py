@@ -385,7 +385,7 @@ class _CTableIndexingMixin:
         if not isinstance(token, str) or not token:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing token.")
         kind = descriptor.get("kind")
-        if kind not in {"summary", "bucket", "partial", "full", "opsi"}:
+        if kind not in {"summary", "bucket", "partial", "full", "opsi", "membership"}:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: invalid kind {kind!r}.")
         if kind == "bucket" and not isinstance(descriptor.get("bucket"), dict):
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing bucket payload.")
@@ -393,6 +393,10 @@ class _CTableIndexingMixin:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing partial payload.")
         if kind == "full" and not isinstance(descriptor.get("full"), dict):
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing full payload.")
+        if kind == "membership" and not isinstance(descriptor.get("membership"), dict):
+            raise ValueError(
+                f"Malformed index metadata for column {col_name!r}: missing membership payload."
+            )
 
     def _drop_index_descriptor(self, col_name: str, descriptor: dict) -> None:
         """Delete sidecars/cache for a catalog descriptor without touching the column mapping."""
@@ -408,6 +412,14 @@ class _CTableIndexingMixin:
         )
 
         token = descriptor["token"]
+        if descriptor.get("kind") == "membership":
+            path = descriptor["membership"].get("postings_path")
+            if path:
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+                with contextlib.suppress(OSError):
+                    os.rmdir(os.path.dirname(path))
+            return
         col_arr = None
         with contextlib.suppress(Exception):
             col_arr = self._index_target_array(col_name, descriptor)
@@ -458,6 +470,82 @@ class _CTableIndexingMixin:
         if target.get("source") == "expression":
             kwargs["expression"] = target.get("expression")
         return kwargs
+
+    def _create_membership_index(self, col_name: str, *, name: str | None = None):
+        """Build one compressed posting-list batch per distinct scalar item."""
+        from blosc2.list_array import list_item_key
+
+        spec = self._schema.columns_by_name[col_name].spec
+        if not isinstance(spec, ListSpec):
+            raise ValueError("kind='membership' is only supported for list columns")
+        if isinstance(spec.item_spec, (ListSpec, StructSpec)):
+            raise ValueError("Membership indexes currently require a scalar list item type")
+
+        postings: dict[bytes, list[int]] = {}
+        for row, cell in enumerate(self._cols[col_name]):
+            if cell is None:
+                continue
+            row_keys = {key for item in cell if (key := list_item_key(spec.item_spec, item)) is not None}
+            for key in row_keys:
+                postings.setdefault(key, []).append(row)
+
+        entries = sorted(postings.items())
+        anchor = self._storage.index_anchor_path(col_name)
+        path = None if anchor is None else os.path.join(os.path.dirname(anchor), "membership.b2b")
+        membership: dict[str, Any] = {"version": 1, "keys": []}
+        if path is None:
+            membership["postings"] = [rows for _, rows in entries]
+        else:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            store = blosc2.BatchArray(urlpath=path, mode="w")
+            for _, rows in entries:
+                store.append(rows)
+            membership["postings_path"] = path
+        membership["keys"] = [[key, index, len(rows)] for index, (key, rows) in enumerate(entries)]
+
+        value_epoch, _ = self._storage.get_epoch_counters()
+        descriptor = {
+            "kind": "membership",
+            "token": col_name,
+            "name": name or "",
+            "membership": membership,
+            "built_value_epoch": value_epoch,
+            "stale": False,
+        }
+        catalog = self._get_index_catalog()
+        catalog[col_name] = descriptor
+        self._storage.save_index_catalog(catalog)
+        self._invalidate_index_catalog_cache()
+        return blosc2.Index._from_table(self, col_name, descriptor)
+
+    def _membership_positions(self, col_name: str, values) -> np.ndarray | None:
+        """Return indexed physical rows, or None when a scan is required."""
+        from blosc2.list_array import list_item_key
+
+        descriptor = self._get_index_catalog().get(col_name)
+        if not descriptor or descriptor.get("kind") != "membership" or descriptor.get("stale"):
+            return None
+        self._validate_index_descriptor(col_name, descriptor)
+        payload = descriptor["membership"]
+        directory = {key: (int(index), int(count)) for key, index, count in payload.get("keys", [])}
+        spec = self._schema.columns_by_name[col_name].spec
+        wanted = {key for value in values if (key := list_item_key(spec.item_spec, value)) is not None}
+        indexes = sorted({directory[key][0] for key in wanted if key in directory})
+        if not indexes:
+            return np.empty(0, dtype=np.int64)
+
+        inline = payload.get("postings")
+        if inline is not None:
+            chunks = [inline[index] for index in indexes]
+        elif hasattr(self._storage, "open_membership_postings"):
+            chunks = self._storage.open_membership_postings(col_name, descriptor, indexes)
+        else:
+            path = payload.get("postings_path")
+            if not isinstance(path, str):
+                raise ValueError(f"Malformed membership index for column {col_name!r}: missing postings")
+            store = blosc2.open(path, mode="r")
+            chunks = [store[index][:] for index in indexes]
+        return np.unique(np.concatenate([np.asarray(chunk, dtype=np.int64) for chunk in chunks]))
 
     def _normalize_table_expression_target(
         self, expression: str, operands: dict | None = None
@@ -818,7 +906,7 @@ class _CTableIndexingMixin:
         field: str | None = None,
         expression: str | None = None,
         operands: dict | None = None,
-        kind: blosc2.IndexKind | None = None,
+        kind: blosc2.IndexKind | str | None = None,
         optlevel: int = 5,
         name: str | None = None,
         build: str = "auto",
@@ -891,6 +979,15 @@ class _CTableIndexingMixin:
         col_name = field if field is not None else col_name
         if col_name is not None:
             col_name = self._logical_to_physical_name(col_name)
+
+        if kind == "membership":
+            if expression is not None or col_name is None:
+                raise ValueError("Membership indexes require a stored list column")
+            if col_name not in self._cols:
+                raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
+            if col_name in self._get_index_catalog():
+                raise ValueError(f"Index already exists for column {col_name!r}.")
+            return self._create_membership_index(col_name, name=name)
 
         from blosc2.indexing import (
             _IN_MEMORY_INDEXES,

@@ -25,6 +25,7 @@ import contextlib
 import copy
 import json
 import os
+import pathlib
 from typing import Any
 
 import numpy as np
@@ -843,7 +844,35 @@ class RemoteTableStorage(TableStorage):
 
     def load_index_catalog(self) -> dict:
         self._check_open()
-        return {}
+        raw = self._metadata().get("index_catalog")
+        if not isinstance(raw, dict):
+            return {}
+        catalog = {}
+        for name, descriptor in raw.items():
+            if not isinstance(descriptor, dict) or descriptor.get("kind") != "membership":
+                continue
+            payload = descriptor.get("membership")
+            if not isinstance(payload, dict):
+                raise ValueError(f"Malformed remote membership index for column {name!r}")
+            path = payload.get("postings_path")
+            if path is not None and (
+                not isinstance(path, str) or os.path.isabs(path) or ".." in pathlib.PurePosixPath(path).parts
+            ):
+                raise ValueError(f"Unsafe remote membership index path for column {name!r}")
+            catalog[name] = copy.deepcopy(descriptor)
+        return catalog
+
+    def open_membership_postings(self, name: str, descriptor: dict, indexes: list[int]):
+        """Read only the compressed posting-list batches needed by a query."""
+        from blosc2.remote_batch import _RemoteBatchArray
+
+        path = descriptor["membership"].get("postings_path")
+        if not isinstance(path, str) or not path.endswith(".b2b"):
+            raise ValueError(f"Malformed remote membership index for column {name!r}")
+        logical = path[:-4].strip("/")
+        source = self._owner.open_ctable_batch(self._full_key(logical))
+        backend = _RemoteBatchArray(source, f"{name} membership index", self._check_open)
+        return [backend[index][:] for index in indexes]
 
     save_index_catalog = _not_supported
 
