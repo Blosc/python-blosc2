@@ -141,6 +141,8 @@ class RemoteDiscovery:
         self.source_descriptors = {}
         self.caches = {}
         self.batch_caches = {}
+        self.linked_stores = {}
+        self.linked_artifacts = {}
         self.disk = None
         self.generation = manifest["generation"] if manifest else uuid.uuid4().hex
         self.metadata = manifest["metadata"] if manifest else {}
@@ -896,6 +898,9 @@ class RemoteDiscovery:
 
     def _close_resources(self):
         self._closed = True
+        for store in getattr(self, "linked_stores", {}).values():
+            store.close()
+        getattr(self, "linked_stores", {}).clear()
         if self.archive is not None:
             self.archive.close()
             self.archive = None
@@ -970,6 +975,8 @@ class RemoteDiscovery:
                     self._copy_leaf_carrier(orig_key, proxy, staging_dir)
                     exported_caches.append(orig_key)
 
+                linked_exports = self._export_linked_stores(full_path, staging_dir) if include_cache else {}
+
                 exported_manifest = {
                     "version": 1,
                     "source": src_desc,
@@ -983,6 +990,7 @@ class RemoteDiscovery:
                     "cache_policy": self.cache_policy.value,
                     "max_cache_bytes": self.max_cache_bytes,
                     "mutable": effective_mutable,
+                    "linked": linked_exports,
                 }
 
                 embed_dst = os.path.join(staging_dir, "embed.b2e")
@@ -1013,6 +1021,27 @@ class RemoteDiscovery:
                     with contextlib.suppress(OSError):
                         os.unlink(tmp_zip)
                 shutil.rmtree(staging_dir, ignore_errors=True)
+
+    def _export_linked_stores(self, full_path, staging_dir):
+        exports = {}
+        for mount, store in self.linked_stores.items():
+            if full_path and mount != full_path and not mount.startswith(full_path + "/"):
+                continue
+            nested_file = os.path.join(staging_dir, f"linked-{len(exports)}.b2z")
+            store.save(nested_file, include_cache=True, overwrite=True)
+            manifest, offsets = RemoteStore._load_artifact_manifest(nested_file)
+            prefix = f"__remote_links__/{hashlib.sha256(mount.encode()).hexdigest()}"
+            with zipfile.ZipFile(nested_file) as nested_zip:
+                for name in offsets:
+                    if name == "embed.b2e":
+                        continue
+                    destination = os.path.join(staging_dir, prefix, name)
+                    os.makedirs(os.path.dirname(destination), exist_ok=True)
+                    with nested_zip.open(name) as src, open(destination, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+            os.unlink(nested_file)
+            exports[mount] = {"manifest": manifest, "prefix": prefix}
+        return exports
 
     def _validate_save_destination(self, destination, overwrite):
         destination = os.fspath(destination)
@@ -1295,6 +1324,8 @@ class RemoteStore(RemoteObject):
         runtime = dict(getattr(self, "_deferred_runtime", {}))
         parent = runtime.pop("_parent_owner", None)
         namespace = runtime.pop("_cache_namespace", "")
+        mount = runtime.pop("_mount", None)
+        artifact = runtime.pop("_artifact", None)
         resolver = runtime.pop("_storage_options_resolver", None)
         if "storage_options" not in runtime:
             if callable(resolver):
@@ -1309,7 +1340,28 @@ class RemoteStore(RemoteObject):
         else:
             runtime.pop("max_cache_bytes", None)
         requested_policy = runtime["cache_policy"]
-        if requested_policy is blosc2.CachePolicy.DISK and "cache_dir" not in runtime and parent is not None:
+        if artifact is not None and parent is not None:
+            prefix = artifact["prefix"].rstrip("/") + "/"
+            offsets = {
+                name[len(prefix) :]: info
+                for name, info in parent.artifact_offsets.items()
+                if name.startswith(prefix)
+            }
+            opened_owner = type(self)._open_immutable_artifact(
+                parent.artifact_path,
+                artifact["manifest"],
+                offsets,
+                runtime["storage_options"],
+                requested_policy,
+                parent.max_cache_bytes,
+                None,
+                _traffic=parent.traffic,
+            )
+            opened = object.__new__(type(self))
+            opened._attach(opened_owner, "")
+        elif (
+            requested_policy is blosc2.CachePolicy.DISK and "cache_dir" not in runtime and parent is not None
+        ):
             identity = hashlib.sha256(
                 f"{namespace}\0{descriptor['kind']}\0{descriptor['urlpath']}\0{descriptor['dataset']}".encode()
             ).hexdigest()
@@ -1355,6 +1407,14 @@ class RemoteStore(RemoteObject):
             owner.cache_coordinator = parent.cache_coordinator
             owner.cache_namespace = namespace
             owner.nested_storage_options = parent.nested_storage_options
+            if mount is not None and mount not in parent.linked_stores:
+                anchor = object.__new__(type(self))
+                anchor._reference_parent = None
+                anchor._reference_parent_finalizer = None
+                anchor._deferred_reference = None
+                anchor._deferred_closed = False
+                anchor._attach(owner, path)
+                parent.linked_stores[mount] = anchor
         self._attach(owner, path)
         opened.close()
         self._deferred_reference = None
@@ -1536,16 +1596,31 @@ class RemoteStore(RemoteObject):
         return None
 
     def _linked_store(self, mount, descriptor, **overrides):
+        existing = self._owner.linked_stores.get(mount)
+        if existing is not None:
+            store = object.__new__(type(self))
+            store._reference_parent = self._owner
+            store._reference_generation = self._owner.generation
+            self._owner.acquire()
+            store._reference_parent_finalizer = weakref.finalize(store, self._owner.release)
+            store._deferred_reference = None
+            store._deferred_closed = False
+            store._attach(existing._owner, existing._path)
+            return store
         resolver = self._owner.nested_storage_options
         runtime = {
             "_storage_options_resolver": resolver,
             "cache_policy": self._owner.cache_policy,
             "_parent_owner": self._owner,
             "_cache_namespace": f"{self._owner.generation}:{mount}",
+            "_mount": mount,
         }
         if self._owner.cache_policy is not blosc2.CachePolicy.NONE:
             runtime["max_cache_bytes"] = self._owner.max_cache_bytes
         runtime.update(overrides)
+        artifact = self._owner.linked_artifacts.get(mount)
+        if artifact is not None:
+            runtime["_artifact"] = artifact
         return type(self)._from_reference(descriptor, **runtime)
 
     def keys(self):
@@ -1850,6 +1925,23 @@ class RemoteStore(RemoteObject):
                 or (root and not path.startswith(root + "/"))
             ):
                 raise ValueError("Invalid cached RemoteStore leaf")
+        linked = manifest.get("linked", {})
+        if not isinstance(linked, dict):
+            raise ValueError("Invalid nested RemoteStore artifacts")
+        for mount, entry in linked.items():
+            RemoteDiscovery._validate(mount)
+            if (
+                mount not in nodes
+                or nodes[mount][0] != "remote_store"
+                or not isinstance(entry, dict)
+                or not isinstance(entry.get("prefix"), str)
+                or not isinstance(entry.get("manifest"), dict)
+            ):
+                raise ValueError("Invalid nested RemoteStore artifact")
+            RemoteDiscovery._validate(entry["prefix"])
+            if not entry["prefix"].startswith("__remote_links__/"):
+                raise ValueError("Invalid nested RemoteStore artifact prefix")
+            RemoteStore._validate_artifact_manifest(entry["manifest"])
 
     @classmethod
     def _open_mutable_artifact(cls, urlpath, manifest, storage_options, cache_policy, limit, cache_dir):
@@ -1911,7 +2003,16 @@ class RemoteStore(RemoteObject):
 
     @classmethod
     def _open_immutable_artifact(
-        cls, urlpath, manifest, artifact_offsets, storage_options, cache_policy, limit, cache_dir
+        cls,
+        urlpath,
+        manifest,
+        artifact_offsets,
+        storage_options,
+        cache_policy,
+        limit,
+        cache_dir,
+        *,
+        _traffic=None,
     ):
         if cache_dir is not None:
             raise ValueError("cache_dir cannot be specified for an immutable RemoteStore artifact")
@@ -1922,12 +2023,14 @@ class RemoteStore(RemoteObject):
             dataset=source_desc.get("dataset"),
             manifest=manifest,
             persist_metadata=False,
+            _traffic=_traffic,
         )
         owner.disk = None
         owner.is_mutable = False
         owner.mutable = False
         owner.artifact_path = os.path.abspath(urlpath)
         owner.artifact_offsets = artifact_offsets
+        owner.linked_artifacts = manifest.get("linked", {})
         owner.cache_policy = cache_policy
         owner.max_cache_bytes = limit
         owner.cache_coordinator = CacheCoordinator(None)

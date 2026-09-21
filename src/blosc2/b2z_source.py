@@ -147,8 +147,7 @@ class B2ZArchive:
         else:
             tail = bootstrap[1]
             self.traffic.charge(len(tail))
-            if self.persist_metadata:
-                self.metadata["ranges"].append((tail_start, tail))
+            self.metadata["ranges"].append((tail_start, tail))
         self._opening_ranges.append((tail_start, tail))
         self.file = _ArchiveFile(self, size)
         self.archive = zipfile.ZipFile(self.file)
@@ -207,7 +206,7 @@ class B2ZArchive:
             if start <= offset and offset + size <= start + len(data):
                 return data[offset - start : offset - start + size]
         data = self.read_transport(offset, size)
-        if self.capture_metadata and self.persist_metadata:
+        if self.capture_metadata:
             self.metadata["ranges"].append((offset, data))
         return data
 

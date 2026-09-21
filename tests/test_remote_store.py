@@ -511,6 +511,45 @@ def test_nested_remote_store_ctable_index_uses_outer_cache(tmp_path):
             assert remote_table.traffic is outer.traffic
 
 
+def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path):
+    data = np.arange(200, dtype="int32")
+    target = tmp_path / "artifact-target.b2z"
+    with blosc2.TreeStore(target, mode="w") as tree:
+        tree["/group/data"] = blosc2.asarray(data, chunks=(50,), blocks=(10,))
+    target_url = f"memory://{tmp_path.name}-artifact-target.b2z"
+    fs = fsspec.filesystem("memory")
+    fs.pipe(target_url, target.read_bytes())
+
+    host = tmp_path / "artifact-host.b2z"
+    with blosc2.RemoteStore(target_url, dataset="group") as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/linked"] = linked
+    host_url = f"memory://{tmp_path.name}-artifact-host.b2z"
+    fs.pipe(host_url, host.read_bytes())
+
+    cold = tmp_path / "nested-cold.b2z"
+    warm = tmp_path / "nested-warm.b2z"
+    with blosc2.RemoteStore(host_url) as outer:
+        outer.traffic.reset()
+        outer.save(cold, include_cache=False)
+        assert outer.traffic.requests == 0
+        with outer["linked/data"] as array:
+            np.testing.assert_array_equal(array[:20], data[:20])
+        outer.traffic.reset()
+        outer.save(warm, include_cache=True)
+        assert outer.traffic.requests == 0
+
+    with blosc2.open(cold) as reopened:
+        np.testing.assert_array_equal(reopened["linked/data"][:20], data[:20])
+
+    fs.rm(target_url)
+    with blosc2.open(warm) as reopened:
+        with reopened["linked/data"] as array:
+            reopened.traffic.reset()
+            np.testing.assert_array_equal(array[:20], data[:20])
+            assert reopened.traffic.requests == 0
+
+
 def test_sparse_store_shared_handles(hierarchy, tmp_path):
     url, data = hierarchy
     parent = tmp_path / "shared"
