@@ -3779,10 +3779,14 @@ cdef class slice_flatter:
 
 cdef class NDArray:
     cdef b2nd_array_t* array
+    cdef PyThread_type_lock read_lock
 
     def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
+        self.read_lock = PyThread_allocate_lock()
+        if self.read_lock == NULL:
+            raise MemoryError("Could not allocate NDArray read lock")
         self.base = base # add reference to base if NDArray is a view
 
     @property
@@ -3851,11 +3855,16 @@ cdef class NDArray:
             buffershape_[i] = stop_[i] - start_[i]
 
         cdef Py_buffer view
+        cdef int rc
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
-        _check_rc(b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                         <void *> view.buf, buffershape_, view.len),
-                  "Error while getting the buffer")
+        PyThread_acquire_lock(self.read_lock, 1)
+        try:
+            rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                        <void *> view.buf, buffershape_, view.len)
+        finally:
+            PyThread_release_lock(self.read_lock)
         PyBuffer_Release(&view)
+        _check_rc(rc, "Error while getting the buffer")
 
         return arr
 
@@ -4548,6 +4557,8 @@ cdef class NDArray:
     def __dealloc__(self):
         if self.array != NULL:
             _check_rc(b2nd_free(self.array), "Error while freeing the array")
+        if self.read_lock != NULL:
+            PyThread_free_lock(self.read_lock)
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
