@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import io
 import itertools
 import os
 import zipfile
@@ -36,6 +37,39 @@ def remote_table_url(tmp_path, table, name="table"):
     url = f"memory://{tmp_path.name}-{name}.b2z"
     fsspec.filesystem("memory").pipe(url, path.read_bytes())
     return url
+
+
+def pytables_hdf5_url(name="pytables-table.h5"):
+    h5py = pytest.importorskip("h5py")
+    data = np.array(
+        [(1, 1.5, b"one"), (2, 2.5, b"two"), (3, 3.5, b"three")],
+        dtype=[("id", "<i4"), ("value", "<f8"), ("label", "S8")],
+    )
+    buffer = io.BytesIO()
+    with h5py.File(buffer, "w") as h5file:
+        table = h5file.create_dataset("table", data=data, chunks=(2,))
+        table.attrs["CLASS"] = np.bytes_(b"TABLE")
+        table.attrs["VERSION"] = np.bytes_(b"2.7")
+        table.attrs["NROWS"] = np.int64(len(data))
+        table.attrs["TITLE"] = np.bytes_(b"example")
+        table.attrs["owner"] = "test"
+        for index, field in enumerate(data.dtype.names):
+            table.attrs[f"FIELD_{index}_NAME"] = np.bytes_(field.encode())
+    url = f"memory://{name}"
+    fsspec.filesystem("memory").pipe(url, buffer.getvalue())
+    return url, data
+
+
+def test_remote_pytables_table_scan_and_shared_records():
+    url, data = pytables_hdf5_url()
+    with blosc2.RemoteCTable(url, dataset="table", cache_policy=blosc2.CachePolicy.MEMORY) as table:
+        assert table.col_names == ["id", "value", "label"]
+        np.testing.assert_array_equal(table.id[:], data["id"])
+        np.testing.assert_array_equal(table.where("id >= 2").label[:], data["label"][1:])
+        assert table.attrs["owner"] == "test"
+        assert table.attrs["TITLE"] == b"example"
+        assert table._cols["id"].records is table._cols["label"].records
+        assert sum(isinstance(array, blosc2.RemoteArray) for array in table._storage._arrays) == 1
 
 
 def indexed_remote_table_url(tmp_path, kind, *, name=None, rows=1000, **kwargs):

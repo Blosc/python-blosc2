@@ -27,6 +27,42 @@ from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
 
 HDF5_INDEX_FORMAT = "blosc2-hdf5-index"
 HDF5_INDEX_VERSION = 1
+
+
+def _pytables_table_schema(dtype, shape):
+    """Return a source-bound CTable schema for a supported PyTables Table."""
+    dtype = np.dtype(dtype)
+    if len(shape) != 1 or dtype.names is None:
+        raise TypeError("PyTables tables require a one-dimensional compound dataset")
+    columns = []
+    for name in dtype.names:
+        field = dtype.fields[name][0]
+        if field.fields is not None or field.subdtype is not None:
+            raise TypeError(f"PyTables field {name!r} must be a scalar")
+        if field.kind == "S":
+            spec = {"kind": "bytes", "max_length": field.itemsize}
+        elif field.kind == "b":
+            spec = {"kind": "bool"}
+        elif field.kind in "iu":
+            prefix = "int" if field.kind == "i" else "uint"
+            spec = {"kind": f"{prefix}{field.itemsize * 8}"}
+        elif field.kind in "fc":
+            prefix = "float" if field.kind == "f" else "complex"
+            spec = {"kind": f"{prefix}{field.itemsize * 8}"}
+        else:
+            raise TypeError(f"Unsupported PyTables field {name!r} with dtype {field}")
+        columns.append({"name": name, **spec})
+    return {
+        "version": 1,
+        "columns": columns,
+        "source_bindings_version": 1,
+        "source_columns": list(dtype.names),
+        "n_rows": int(shape[0]),
+        "create_summary_index": False,
+        "summary_indexes_built": True,
+    }
+
+
 _DIRECT_FILTERS = {1, 2, 32026}  # deflate, shuffle, Blosc2
 
 
@@ -67,7 +103,7 @@ def _dtype_field_from_json(field):
         # dtype.descr writes a titled field as (title, name); JSON and msgpack
         # round trips turn that tuple into a list again.
         name = tuple(name)
-    if isinstance(spec, list) and len(spec) == 2 and isinstance(spec[1], dict):
+    if isinstance(spec, (list, tuple)) and len(spec) == 2 and isinstance(spec[1], dict):
         # h5py annotates fixed-width HDF5 strings as (dtype, metadata).
         # NumPy includes that pair in dtype.descr, but does not accept it when
         # reconstructing a structured dtype.  The storage dtype is the first
@@ -214,7 +250,7 @@ def _dataset_metadata(dataset):
                     "size": int(info.size),
                 }
             )
-    return {
+    metadata = {
         "shape": [int(v) for v in dataset.shape],
         "dtype": dtype_value(dataset.dtype),
         "chunks": chunks,
@@ -224,6 +260,11 @@ def _dataset_metadata(dataset):
         "direct": direct,
         "allocated": allocated,
     }
+    table_class = dataset.attrs.get("CLASS")
+    if table_class in {"TABLE", b"TABLE", np.bytes_(b"TABLE")}:
+        metadata["kind"] = "ctable"
+        metadata["schema"] = json.dumps(_pytables_table_schema(dataset.dtype, dataset.shape))
+    return metadata
 
 
 def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=None, _filesystem=None):

@@ -644,6 +644,53 @@ class EmbedStoreTableStorage(TableStorage):
         return None
 
 
+class _RemoteHDF5Field(blosc2.Operand):
+    """One field of a shared remote HDF5 compound dataset."""
+
+    def __init__(self, records, name):
+        self.records = records
+        self.field = name
+        self._dtype = np.dtype(records.dtype.fields[name][0])
+        self._shape = records.shape
+        self.chunks = records.chunks
+        self.blocks = records.blocks
+
+    dtype = property(lambda self: self._dtype)
+    shape = property(lambda self: self._shape)
+    ndim = property(lambda self: len(self._shape))
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, key):
+        return self.records[key][self.field]
+
+
+class _AllValidRows(blosc2.Operand):
+    """Virtual validity column for immutable row-complete sources."""
+
+    def __init__(self, size, source_chunks):
+        chunk = source_chunks[0] if source_chunks else max(1, min(size, 1 << 16))
+        self._shape = (size,)
+        self.chunks = (chunk,)
+        self.blocks = (chunk,)
+        self._dtype = np.dtype(np.bool_)
+
+    dtype = property(lambda self: self._dtype)
+    shape = property(lambda self: self._shape)
+    ndim = property(lambda self: 1)
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, key):
+        if isinstance(key, (int, np.integer)):
+            if not -self.shape[0] <= key < self.shape[0]:
+                raise IndexError("row index out of range")
+            return np.bool_(True)
+        return np.ones(self.shape[0], dtype=bool)[key]
+
+
 class RemoteTableStorage(TableStorage):
     """Read-only CTable storage over a shared RemoteStore owner."""
 
@@ -666,9 +713,16 @@ class RemoteTableStorage(TableStorage):
         self._arrays: list[blosc2.RemoteArray] = []
         self._registered_index_paths: list[str] = []
         self._closed = False
+        self._hdf5_records = None
         owner.acquire()
 
     def open_columns(self, table, names, load):
+        if self._owner.format == "hdf5":
+            with self._owner.lock:
+                self._check_open()
+                for name in names:
+                    load(name)
+            return None
         from blosc2.ctable_remote_read import open_columns
 
         return open_columns(self, table, names, load)
@@ -703,6 +757,8 @@ class RemoteTableStorage(TableStorage):
 
     def _has_array(self, logical_key: str) -> bool:
         self._check_open()
+        if self._owner.format == "hdf5":
+            return False
         member = self._full_key(logical_key) + ".b2nd"
         return sum(info.filename == member for info in self._owner.archive.members) == 1
 
@@ -711,6 +767,11 @@ class RemoteTableStorage(TableStorage):
         raise RuntimeError("RemoteTableStorage is read-only")
 
     def open_column(self, name: str) -> blosc2.RemoteArray:
+        if self._owner.format == "hdf5":
+            if self._hdf5_records is None:
+                self._hdf5_records = self._owner.remote_array(self._root_key)
+                self._arrays.append(self._hdf5_records)
+            return _RemoteHDF5Field(self._hdf5_records, name)
         source_columns = set(self.load_schema().get("source_columns", ()))
         if name in source_columns:
             logical_key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
@@ -783,6 +844,9 @@ class RemoteTableStorage(TableStorage):
             raise
 
     def open_valid_rows(self) -> blosc2.RemoteArray:
+        if self._owner.format == "hdf5":
+            metadata = self._metadata()
+            return _AllValidRows(metadata["shape"][0], metadata["chunks"])
         return self._open_array("_valid_rows")
 
     def open_null_mask(self, name: str) -> blosc2.RemoteArray:
@@ -811,6 +875,12 @@ class RemoteTableStorage(TableStorage):
         if hasattr(self, "_user_attrs"):
             return dict(self._user_attrs)
         self._user_attrs = self._owner.load_ctable_attrs(self._root_key)
+        if self._owner.format == "hdf5":
+            self._user_attrs = {
+                key: value
+                for key, value in self._user_attrs.items()
+                if key not in {"CLASS", "VERSION", "NROWS"} and not key.startswith("FIELD_")
+            }
         return dict(self._user_attrs)
 
     def table_exists(self) -> bool:

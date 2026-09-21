@@ -459,7 +459,7 @@ class RemoteDiscovery:
                 key: decode_hdf5_value(value) for key, value in metadata.get("attrs", {}).items()
             }
         for path, metadata in self.hdf5_index["datasets"].items():
-            self._add(path, "ndarray", metadata)
+            self._add(path, "ctable" if metadata.get("kind") == "ctable" else "ndarray", metadata)
             self.attrs[path] = {
                 key: decode_hdf5_value(value) for key, value in metadata.get("attrs", {}).items()
             }
@@ -578,7 +578,7 @@ class RemoteDiscovery:
         if full in self.sources:
             return self.sources[full]
         kind, value = self.nodes[full]
-        if kind != "ndarray":
+        if kind != "ndarray" and not (kind == "ctable" and self.format == "hdf5"):
             raise NotImplementedError(
                 value if isinstance(value, str) else "Array access is unavailable for this node"
             )
