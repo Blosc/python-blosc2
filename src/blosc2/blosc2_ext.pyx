@@ -3874,11 +3874,10 @@ cdef class NDArray:
         cdef int32_t chunk_nbytes
         cdef int32_t chunk_cbytes
         cdef int32_t block_nbytes
-        cdef blosc2_context *dctx = self.array.sc.dctx
+        cdef blosc2_context *dctx
         cdef Py_buffer view
         cdef int rc
         cdef int32_t lazychunk_cbytes
-        cdef c_bool owns_dctx = False
         cdef int32_t want_nbytes
 
         lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
@@ -3902,9 +3901,16 @@ cdef class NDArray:
                 free(chunk)
             raise ValueError("destination buffer is smaller than the requested decoded span")
 
-        if dctx == NULL:
-            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-            owns_dctx = True
+        # A Blosc2 decompression context is mutable.  This method is used by
+        # the indexing planner from several Python workers, so it must not
+        # borrow the SChunk's shared context.  It still needs to be
+        # associated with the SChunk (not just BLOSC2_DPARAMS_DEFAULTS),
+        # since some codecs/filters resolve per-schunk state (e.g.
+        # dictionaries) through dparams.schunk during decompression.
+        cdef blosc2_dparams dparams = BLOSC2_DPARAMS_DEFAULTS
+        dparams.schunk = self.array.sc
+        dparams.typesize = self.array.sc.typesize
+        dctx = blosc2_create_dctx(dparams)
         if dctx == NULL:
             PyBuffer_Release(&view)
             if needs_free:
@@ -3920,8 +3926,7 @@ cdef class NDArray:
         rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
                                       start * self.array.sc.typesize, want_nbytes,
                                       view.buf, view.len)
-        if owns_dctx:
-            blosc2_free_ctx(dctx)
+        blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)
         if needs_free:
             free(chunk)
