@@ -928,6 +928,8 @@ class RemoteTableStorage(TableStorage):
 
     def load_index_catalog(self) -> dict:
         self._check_open()
+        if self._owner.format == "hdf5":
+            return self._load_pytables_index_catalog()
         raw = self._metadata().get("index_catalog")
         if not isinstance(raw, dict):
             return {}
@@ -970,6 +972,73 @@ class RemoteTableStorage(TableStorage):
             ):
                 raise ValueError(f"Unsafe remote membership index path for column {name!r}")
             catalog[name] = copy.deepcopy(descriptor)
+        return catalog
+
+    def _load_pytables_index_catalog(self) -> dict:
+        from blosc2.indexing import _build_descriptor, _field_target_descriptor, _store_array_sidecar
+
+        catalog = {}
+        for name, source in self._metadata().get("pytables_indexes", {}).items():
+            column = self.open_column(name)
+            opened = []
+            try:
+                for key in ("sorted", "indices", "sortedLR", "indicesLR"):
+                    array = self._owner.remote_array(source[key])
+                    self._arrays.append(array)
+                    opened.append(array)
+                tail = int(source["tail"])
+                values = np.concatenate((opened[0][:].reshape(-1), opened[2][:tail]))
+                raw_positions = np.concatenate((opened[1][:].reshape(-1), opened[3][:tail]))
+                if raw_positions.dtype.kind != "u" or raw_positions.itemsize != 8:
+                    continue
+                if len(raw_positions) and int(raw_positions.max()) >= len(column):
+                    continue
+                positions = raw_positions.astype(np.int64)
+                chunk_len = max(1, int(source["slicesize"]))
+                last = np.minimum(np.arange(chunk_len, len(values) + chunk_len, chunk_len), len(values)) - 1
+                mins = values[::chunk_len]
+                maxs = values[last]
+                target = _field_target_descriptor(None)
+                token = name
+                opsi = {
+                    "chunk_len": chunk_len,
+                    "block_len": chunk_len,
+                    "chunk_multiplier": 1,
+                    "nblocks": len(mins),
+                    "cycles": int(source["optlevel"]),
+                    "attempted_cycles": int(source["optlevel"]),
+                    "max_cycles": int(source["optlevel"]),
+                    "is_csi": bool(source["is_csi"]),
+                }
+                for category, sidecar_name, data in (
+                    ("opsi", "values", values),
+                    ("opsi", "positions", positions),
+                    ("opsi_nav", "mins", mins),
+                    ("opsi_nav", "maxs", maxs),
+                ):
+                    geometry = {"chunks": (chunk_len,), "blocks": (chunk_len,)} if category == "opsi" else {}
+                    info = _store_array_sidecar(
+                        column, token, "opsi", category, sidecar_name, data, False, **geometry
+                    )
+                    opsi[f"{sidecar_name}_path"] = info["path"]
+                catalog[name] = _build_descriptor(
+                    column,
+                    target,
+                    token,
+                    "opsi",
+                    int(source["optlevel"]),
+                    False,
+                    False,
+                    None,
+                    column.dtype,
+                    {},
+                    None,
+                    None,
+                    None,
+                    opsi=opsi,
+                )
+            except (KeyError, OSError, TypeError, ValueError):
+                continue
         return catalog
 
     def open_membership_postings(self, name: str, descriptor: dict, indexes: list[int]):

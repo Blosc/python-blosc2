@@ -39,12 +39,14 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
-def pytables_hdf5_url(name="pytables-table.h5"):
+def pytables_hdf5_url(name="pytables-table.h5", *, indexed=False, indexed_field="id", index_dtype="u8"):
     h5py = pytest.importorskip("h5py")
-    data = np.array(
-        [(1, 1.5, b"one"), (2, 2.5, b"two"), (3, 3.5, b"three")],
-        dtype=[("id", "<i4"), ("value", "<f8"), ("label", "S8")],
-    )
+    rows = [(1, 1.5, b"one"), (2, 2.5, b"two"), (3, 3.5, b"three")]
+    if indexed:
+        rows = [
+            (value, value + 0.5, str(value).encode()) for value in np.random.default_rng(4).permutation(21)
+        ]
+    data = np.array(rows, dtype=[("id", "<i4"), ("value", "<f8"), ("label", "S8")])
     buffer = io.BytesIO()
     with h5py.File(buffer, "w") as h5file:
         table = h5file.create_dataset("table", data=data, chunks=(2,))
@@ -55,6 +57,22 @@ def pytables_hdf5_url(name="pytables-table.h5"):
         table.attrs["owner"] = "test"
         for index, field in enumerate(data.dtype.names):
             table.attrs[f"FIELD_{index}_NAME"] = np.bytes_(field.encode())
+        if indexed:
+            group = h5file.create_group(f"_i_table/{indexed_field}")
+            group.attrs["CLASS"] = np.bytes_(b"INDEX")
+            group.attrs["DIRTY"] = np.int32(0)
+            group.attrs["slicesize"] = np.uint32(16)
+            group.attrs["chunksize"] = np.uint32(8)
+            group.attrs["optlevel"] = np.int32(6)
+            group.attrs["is_csi"] = np.uint8(0)
+            regular_order = np.argsort(data[indexed_field][:16], kind="stable")
+            tail_order = np.argsort(data[indexed_field][16:], kind="stable")
+            group.create_dataset("sorted", data=data[indexed_field][:16][regular_order].reshape(1, 16))
+            group.create_dataset("indices", data=regular_order.astype(index_dtype).reshape(1, 16))
+            sorted_lr = group.create_dataset("sortedLR", data=data[indexed_field][16:][tail_order])
+            indices_lr = group.create_dataset("indicesLR", data=(tail_order + 16).astype(index_dtype))
+            sorted_lr.attrs["nelements"] = np.int32(5)
+            indices_lr.attrs["nelements"] = np.int32(5)
     url = f"memory://{name}"
     fsspec.filesystem("memory").pipe(url, buffer.getvalue())
     return url, data
@@ -70,6 +88,32 @@ def test_remote_pytables_table_scan_and_shared_records():
         assert table.attrs["TITLE"] == b"example"
         assert table._cols["id"].records is table._cols["label"].records
         assert sum(isinstance(array, blosc2.RemoteArray) for array in table._storage._arrays) == 1
+
+
+def test_remote_pytables_full_index_is_native_opsi():
+    url, data = pytables_hdf5_url("pytables-indexed.h5", indexed=True)
+    with blosc2.RemoteCTable(url, dataset="table", cache_policy=blosc2.CachePolicy.MEMORY) as table:
+        descriptor = table._get_index_catalog()["id"]
+        assert descriptor["kind"] == "opsi"
+        assert descriptor["opsi"]["values_path"] is None
+        expected = data["label"][(data["id"] >= 5) & (data["id"] < 9)]
+        np.testing.assert_array_equal(table.where("(id >= 5) & (id < 9)").label[:], expected)
+
+
+def test_remote_pytables_light_index_falls_back_to_scan():
+    url, data = pytables_hdf5_url("pytables-light.h5", indexed=True, index_dtype="u1")
+    with blosc2.RemoteCTable(url, dataset="table") as table:
+        assert table._get_index_catalog() == {}
+        np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
+
+
+def test_remote_pytables_fixed_string_full_index():
+    url, data = pytables_hdf5_url("pytables-string-index.h5", indexed=True, indexed_field="label")
+    with blosc2.RemoteCTable(url, dataset="table") as table:
+        assert table._get_index_catalog()["label"]["kind"] == "opsi"
+        np.testing.assert_array_equal(
+            table.where(table.label == b"5").id[:], data["id"][data["label"] == b"5"]
+        )
 
 
 def indexed_remote_table_url(tmp_path, kind, *, name=None, rows=1000, **kwargs):

@@ -63,6 +63,48 @@ def _pytables_table_schema(dtype, shape):
     }
 
 
+def _decoded_attr(metadata, name, default=None):
+    value = metadata.get("attrs", {}).get(name, default)
+    return _from_json_value(value)
+
+
+def _pytables_full_indexes(datasets, groups, table_path, nrows, dtype):
+    parent, _, table_name = table_path.rpartition("/")
+    index_root = "/".join(part for part in (parent, f"_i_{table_name}") if part)
+    indexes = {}
+    for name in dtype.names or ():
+        group_path = f"{index_root}/{name}"
+        group = groups.get(group_path)
+        paths = {leaf: f"{group_path}/{leaf}" for leaf in ("sorted", "indices", "sortedLR", "indicesLR")}
+        if group is None or any(path not in datasets for path in paths.values()):
+            continue
+        indices = datasets[paths["indices"]]
+        if dtype_from_value(indices["dtype"]).itemsize != 8 or bool(_decoded_attr(group, "DIRTY", 1)):
+            continue
+        tail = int(_decoded_attr(datasets[paths["indicesLR"]], "nelements", 0))
+        regular = math.prod(datasets[paths["indices"]]["shape"])
+        if regular + tail != nrows:
+            continue
+        indexes[name] = {
+            **paths,
+            "tail": tail,
+            "slicesize": int(_decoded_attr(group, "slicesize", datasets[paths["indices"]]["shape"][-1])),
+            "optlevel": int(_decoded_attr(group, "optlevel", 0)),
+            "is_csi": bool(_decoded_attr(group, "is_csi", 0)),
+        }
+    return indexes
+
+
+def _attach_pytables_indexes(datasets, groups):
+    for table_path, metadata in datasets.items():
+        if metadata.get("kind") != "ctable":
+            continue
+        dtype = dtype_from_value(metadata["dtype"])
+        metadata["pytables_indexes"] = _pytables_full_indexes(
+            datasets, groups, table_path, metadata["shape"][0], dtype
+        )
+
+
 _DIRECT_FILTERS = {1, 2, 32026}  # deflate, shuffle, Blosc2
 
 
@@ -314,6 +356,7 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
                         unsupported[name] = f"{type(exc).__name__}: {exc}"
 
                 h5file.visititems(visit)
+        _attach_pytables_indexes(datasets, groups)
         with contextlib.suppress(Exception):
             size = os.path.getsize(path) if local else int(fs.info(path)["size"])
     finally:

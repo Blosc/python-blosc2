@@ -715,8 +715,25 @@ class RemoteDiscovery:
 
     def remote_array(self, full):
         """Return a RemoteArray sharing this discovery owner's resources."""
-        relative = full[len(self.root) + 1 :] if self.root else full
-        source = self.open_source(relative) if full in self.nodes else None
+        if self.format == "hdf5" and full in self.nodes:
+            from blosc2.hdf5_source import HDF5NDSource
+
+            source = self.sources.get(full)
+            if source is None:
+                source = HDF5NDSource(
+                    self.urlpath,
+                    full,
+                    hdf5_index=self.hdf5_index,
+                    storage_options=self.storage_options,
+                    _traffic=self.traffic,
+                    _filesystem=self.filesystem,
+                )
+                if self.source_validator is not None:
+                    self.source_validator(source)
+                self.sources[full] = source
+        else:
+            relative = full[len(self.root) + 1 :] if self.root else full
+            source = self.open_source(relative) if full in self.nodes else None
         if source is None:
             raise KeyError(full)
         descriptor = {
