@@ -795,15 +795,17 @@ class RemoteDiscovery:
                 if self.format == "hdf5":
                     from blosc2.hdf5_source import HDF5NDSource
 
-                    source = HDF5NDSource(
-                        self.urlpath,
-                        path,
-                        hdf5_index=self.hdf5_index,
-                        storage_options=self.storage_options,
-                        _traffic=self.traffic,
-                        _filesystem=self.filesystem,
-                    )
-                    self.sources[path] = source
+                    source = self.sources.get(path)
+                    if source is None:
+                        source = HDF5NDSource(
+                            self.urlpath,
+                            path,
+                            hdf5_index=self.hdf5_index,
+                            storage_options=self.storage_options,
+                            _traffic=self.traffic,
+                            _filesystem=self.filesystem,
+                        )
+                        self.sources[path] = source
                     self.get_cache(source)
                     continue
                 relative = path[len(self.root) + 1 :] if self.root else path
