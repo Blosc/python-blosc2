@@ -42,7 +42,8 @@ An array root must be opened with ``RemoteArray`` instead.
 ``keys()`` and ``get_info()`` do not construct leaf readers or payload caches.
 Discovery can read archive prefixes, attributes and small HDF5 inline values.
 ``get_info()`` returns a ``RemoteNode`` with a relative path, a kind (``group``,
-``ndarray``, ``ctable`` or ``unsupported``), known attributes and a diagnostic.
+``ndarray``, ``ctable``, ``remote_store`` or ``unsupported``), known attributes
+and a diagnostic.
 Unknown array attributes are ``None``; open the array to retrieve them.
 Unsupported nodes stay discoverable and raise ``NotImplementedError`` when
 selected. Missing paths raise ``KeyError``.
@@ -64,6 +65,33 @@ handles remain usable until closed or garbage-collected. The last handle closes
 the owned archive/store wrappers and private HTTP/S3 transport sessions. Operations on an explicitly closed handle raise ``RuntimeError``.
 Standalone ``RemoteArray`` exports remain self-contained references, including
 the native HDF5 index when applicable.
+
+Nested stores
+-------------
+
+Assigning a ``RemoteStore`` to a ``TreeStore`` persists a lazy, credential-free
+reference at the exact path supplied by the caller::
+
+    with blosc2.RemoteStore("s3://weather/europe.zarr", dataset="spain") as remote:
+        with blosc2.TreeStore("catalog.b2z", mode="w") as tree:
+            tree["/external/weather"] = remote
+
+Remote B2Z discovery reports that object root as ``remote_store`` without opening
+the linked source. Lookup through the mount supports direct and chained paths.
+B2Z, HDF5, Zarr v2 and Zarr v3 targets and subgroup references are supported.
+
+The outer ``RemoteStore`` overrides saved cache defaults and owns one policy,
+traffic counter and aggregate allowance across mounted sources. Pass
+``nested_storage_options`` as a URL-to-options mapping or a callable accepting a
+source descriptor when mounted sources need different credentials. A local
+``TreeStore`` can open one reference with runtime options through
+``open_remote()``.
+
+``save()`` preserves nested references and includes only already-retained warm
+payload from mounts that were opened. It never opens an unvisited mount to save
+it. ``materialize(destination)`` follows all reachable mounts and writes one
+independent local ``.b2z`` or ``.b2d`` TreeStore. Materialization detects cycles,
+limits nesting to 64 levels, and publishes the destination atomically.
 
 ``b2view`` uses ``RemoteStore`` for remote hierarchies with one 64 MiB MEMORY
 allowance, and ``RemoteArray`` for selected or directly opened leaves. Switching

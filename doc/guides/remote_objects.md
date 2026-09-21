@@ -47,7 +47,7 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
 
     # 2. Inspect a node's kind and attributes
     info = store.get_info("experiment")
-    print(info.kind)  # "group", "ndarray", "ctable", or "unsupported"
+    print(info.kind)  # "group", "ndarray", "ctable", "remote_store", or "unsupported"
 
     # 3. Read user metadata on groups or arrays
     print(store["experiment"].attrs[:])
@@ -63,10 +63,39 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
 - **Relative paths**: Lookups can use slash paths or chained indexing interchangeably (`store["experiment/temperature"]` is equivalent to `store["experiment"]["temperature"]`). Leaves return a {ref}`RemoteArray` or {ref}`RemoteCTable` according to their kind.
 - **Node inspection with `RemoteNode`**: Call `store.get_info(name)` to inspect a node without creating leaf readers or allocating cache memory. A `RemoteNode` provides:
   - `path`: relative dataset path.
-  - `kind`: `"group"`, `"ndarray"`, `"ctable"`, or `"unsupported"`.
+  - `kind`: `"group"`, `"ndarray"`, `"ctable"`, `"remote_store"`, or `"unsupported"`.
   - `attrs`: user metadata mapping (or `None` if array attributes require opening the leaf).
   - `diagnostic`: explanation for unsupported nodes (e.g. non-array objects or unsupported codecs).
 - **Graceful degradation**: Unsupported nodes remain visible during discovery and raise an informative `NotImplementedError` only when selected as arrays, allowing you to browse mixed containers without errors.
+
+### Mount one remote hierarchy inside another
+
+A `TreeStore` can persist a `RemoteStore` reference at an explicit path. The path
+is always chosen by the application; it is not derived from the remote filename.
+The reference may select a complete B2Z, HDF5, or Zarr hierarchy, or a subgroup
+selected with `dataset=`:
+
+```python
+with blosc2.RemoteStore("s3://weather/europe.zarr", dataset="spain") as weather:
+    with blosc2.TreeStore("catalog.b2z", mode="w") as catalog:
+        catalog["/external/weather"] = weather
+
+with blosc2.RemoteStore("catalog.b2z") as catalog:
+    print(catalog.get_info("external/weather").kind)  # "remote_store"
+    values = catalog["external/weather/temperature"][:100]
+```
+
+Opening the catalog discovers the mount descriptor without opening its target.
+The target opens on the first lookup below the mount. Direct slash lookup and
+chained lookup have the same result, and nested mounts can contain further mounts.
+
+The outer `RemoteStore` owns the cache policy, aggregate byte allowance, traffic
+counter, and eviction across local and mounted leaves. Defaults saved in the
+reference apply only when opening it directly from a local `TreeStore`. For
+authenticated mounts, pass `nested_storage_options` to the outer store as either
+a mapping keyed by URL or a callable receiving each credential-free descriptor.
+Credentials are never persisted. A local catalog can instead use
+`tree.open_remote(path, storage_options=...)` for one mount.
 
 ### Persistent disk caching with `cache_dir`
 
@@ -258,9 +287,10 @@ For a `RemoteStore`, `store.traffic` reports cumulative traffic across discovery
 the selected cache. It does not fetch missing payload. `include_cache=False`
 writes a cold reference containing only the source and bootstrap metadata.
 
-Arrays and tables also provide `materialize()`, which reads everything required
-for an independent local object. Stores have no recursive materialization API;
-navigate to an array or table leaf first.
+Arrays and tables provide `materialize()`, which reads everything required for
+an independent local object. `RemoteStore.materialize()` and
+`TreeStore.materialize()` recursively expand mounted stores into one local `.b2z`
+or `.b2d` tree.
 
 ```python
 # Table example: .b2z references and local materialization
@@ -272,6 +302,9 @@ table.to_b2d("local.b2d")
 # Array example: .b2nd reference and selected materialization
 array.save("reference.b2nd")
 subset = array.materialize(item=slice(0, 100))
+
+# Store example: expand local and mounted leaves into one independent hierarchy
+store.materialize("complete-tree.b2z")
 ```
 
 An array reports its own retained payload. Stores and tables report their shared
@@ -301,6 +334,14 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
 - **`include_cache=True` (default)**: Bundles warm cached chunks along with metadata so reading previously fetched slices requires zero network traffic.
 - **`include_cache=False`**: Omits cached payload chunks, producing a minimal reference archive for remote streaming.
 - **Subtree export**: Calling `save()` on a group view exports that subtree with relative child keys and the appropriate source root.
+
+Mounted stores remain references in a saved snapshot. Warm data already retained
+by an opened mount is included when `include_cache=True`; saving does not open an
+unvisited mount or fetch missing payload. Materialization follows every reachable
+mount, copies arrays in chunk-sized slabs, and rebuilds persisted CTable indexes.
+Repeated targets are copied at each explicit mount. A reference cycle or a chain
+deeper than 64 mounts raises `ValueError`, and a failed materialization leaves an
+existing destination unchanged.
 
 ### Reopen reference files with `blosc2.open()`
 
