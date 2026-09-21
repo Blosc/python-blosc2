@@ -119,6 +119,10 @@ def _encode_msgpack_ext(obj):
         return float(obj)
     if isinstance(obj, np.bool_):
         return bool(obj)
+    if isinstance(obj, np.bytes_):
+        return bytes(obj)
+    if isinstance(obj, np.str_):
+        return str(obj)
     return blosc2_ext.encode_tuple(obj)
 
 

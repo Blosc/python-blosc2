@@ -172,6 +172,15 @@ class RemoteDiscovery:
             self.filesystem = _filesystem
             if self.filesystem is None:
                 self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
+            if manifest and self.format == "hdf5":
+                from blosc2.hdf5_source import hdf5_source_state
+
+                current_state = hdf5_source_state(self.urlpath, self.storage_options, self.filesystem)
+                if manifest["metadata"].get("source_state") != current_state:
+                    manifest = None
+                    self.generation = uuid.uuid4().hex
+                    self.metadata = {}
+            self.restored_manifest = manifest
             if manifest:
                 self._restore_manifest(manifest)
             elif self.format == "b2z":
@@ -778,8 +787,25 @@ class RemoteDiscovery:
                     # persisted carrier is opened.  get_cache() adopts this
                     # artifact leaf after that source has been authorized.
                     continue
-                if path not in self.nodes or self.nodes[path][0] != "ndarray":
+                if path not in self.nodes or (
+                    self.nodes[path][0] != "ndarray"
+                    and not (self.format == "hdf5" and self.nodes[path][0] == "ctable")
+                ):
                     raise ValueError("Invalid cached RemoteStore leaf")
+                if self.format == "hdf5":
+                    from blosc2.hdf5_source import HDF5NDSource
+
+                    source = HDF5NDSource(
+                        self.urlpath,
+                        path,
+                        hdf5_index=self.hdf5_index,
+                        storage_options=self.storage_options,
+                        _traffic=self.traffic,
+                        _filesystem=self.filesystem,
+                    )
+                    self.sources[path] = source
+                    self.get_cache(source)
+                    continue
                 relative = path[len(self.root) + 1 :] if self.root else path
                 self.resolve(relative)
                 self.get_cache(self.open_source(relative))
@@ -1300,6 +1326,7 @@ class RemoteStore(RemoteObject):
                 _source_format=_source_format,
                 _traffic=_traffic,
             )
+            manifest = owner.restored_manifest
         except BaseException:
             if disk is not None:
                 disk.close()

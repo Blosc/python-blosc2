@@ -6,6 +6,7 @@ import dataclasses
 import io
 import itertools
 import os
+import pathlib
 import zipfile
 
 import numpy as np
@@ -39,12 +40,15 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
-def pytables_hdf5_url(name="pytables-table.h5", *, indexed=False, indexed_field="id", index_dtype="u8"):
+def pytables_hdf5_url(
+    name="pytables-table.h5", *, indexed=False, indexed_field="id", index_dtype="u8", indexed_rows=21
+):
     h5py = pytest.importorskip("h5py")
     rows = [(1, 1.5, b"one"), (2, 2.5, b"two"), (3, 3.5, b"three")]
     if indexed:
         rows = [
-            (value, value + 0.5, str(value).encode()) for value in np.random.default_rng(4).permutation(21)
+            (value, value + 0.5, str(value).encode())
+            for value in np.random.default_rng(4).permutation(indexed_rows)
         ]
     data = np.array(rows, dtype=[("id", "<i4"), ("value", "<f8"), ("label", "S8")])
     buffer = io.BytesIO()
@@ -65,14 +69,19 @@ def pytables_hdf5_url(name="pytables-table.h5", *, indexed=False, indexed_field=
             group.attrs["chunksize"] = np.uint32(8)
             group.attrs["optlevel"] = np.int32(6)
             group.attrs["is_csi"] = np.uint8(0)
-            regular_order = np.argsort(data[indexed_field][:16], kind="stable")
-            tail_order = np.argsort(data[indexed_field][16:], kind="stable")
-            group.create_dataset("sorted", data=data[indexed_field][:16][regular_order].reshape(1, 16))
-            group.create_dataset("indices", data=regular_order.astype(index_dtype).reshape(1, 16))
-            sorted_lr = group.create_dataset("sortedLR", data=data[indexed_field][16:][tail_order])
-            indices_lr = group.create_dataset("indicesLR", data=(tail_order + 16).astype(index_dtype))
-            sorted_lr.attrs["nelements"] = np.int32(5)
-            indices_lr.attrs["nelements"] = np.int32(5)
+            regular = len(data) // 16 * 16
+            regular_order = np.argsort(data[indexed_field][:regular].reshape(-1, 16), axis=1, kind="stable")
+            regular_values = np.take_along_axis(
+                data[indexed_field][:regular].reshape(-1, 16), regular_order, axis=1
+            )
+            offsets = np.arange(0, regular, 16)[:, None]
+            tail_order = np.argsort(data[indexed_field][regular:], kind="stable")
+            group.create_dataset("sorted", data=regular_values)
+            group.create_dataset("indices", data=(regular_order + offsets).astype(index_dtype))
+            sorted_lr = group.create_dataset("sortedLR", data=data[indexed_field][regular:][tail_order])
+            indices_lr = group.create_dataset("indicesLR", data=(tail_order + regular).astype(index_dtype))
+            sorted_lr.attrs["nelements"] = np.int32(len(tail_order))
+            indices_lr.attrs["nelements"] = np.int32(len(tail_order))
     url = f"memory://{name}"
     fsspec.filesystem("memory").pipe(url, buffer.getvalue())
     return url, data
@@ -114,6 +123,52 @@ def test_remote_pytables_fixed_string_full_index():
         np.testing.assert_array_equal(
             table.where(table.label == b"5").id[:], data["id"][data["label"] == b"5"]
         )
+
+
+def test_remote_pytables_index_disk_cache_reuse(tmp_path):
+    url, _ = pytables_hdf5_url("pytables-disk-index.h5", indexed=True)
+    options = {"dataset": "table", "cache_policy": blosc2.CachePolicy.DISK, "cache_dir": tmp_path}
+    with blosc2.RemoteCTable(url, **options) as table:
+        descriptor = table._get_index_catalog()["id"]
+        marker = pathlib.Path(descriptor["opsi"]["values_path"]).parent / "complete.json"
+        assert marker.is_file()
+
+    with blosc2.RemoteCTable(url, **options) as table:
+        table.traffic.reset()
+        descriptor = table._get_index_catalog()["id"]
+        assert descriptor["persistent"]
+        assert table.traffic.requests == 0
+
+
+def test_remote_pytables_incomplete_index_import_is_rebuilt(tmp_path):
+    url, data = pytables_hdf5_url("pytables-interrupted-index.h5", indexed=True)
+    options = {"dataset": "table", "cache_policy": blosc2.CachePolicy.DISK, "cache_dir": tmp_path}
+    with blosc2.RemoteCTable(url, **options) as table:
+        descriptor = table._get_index_catalog()["id"]
+        values_path = pathlib.Path(descriptor["opsi"]["values_path"])
+        marker = values_path.parent / "complete.json"
+    marker.write_text("interrupted")
+    values_path.unlink()
+
+    with blosc2.RemoteCTable(url, **options) as table:
+        descriptor = table._get_index_catalog()["id"]
+        assert pathlib.Path(descriptor["opsi"]["values_path"]).is_file()
+        np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
+
+
+def test_remote_pytables_source_change_invalidates_indexes(tmp_path):
+    name = "pytables-changing-index.h5"
+    url, _ = pytables_hdf5_url(name, indexed=True)
+    options = {"dataset": "table", "cache_policy": blosc2.CachePolicy.DISK, "cache_dir": tmp_path}
+    with blosc2.RemoteCTable(url, **options) as table:
+        table._get_index_catalog()
+        generation = table._storage._owner.generation
+
+    url, data = pytables_hdf5_url(name, indexed=True, indexed_rows=25)
+    with blosc2.RemoteCTable(url, **options) as table:
+        assert table._storage._owner.generation != generation
+        assert len(table) == 25
+        np.testing.assert_array_equal(table.where("id >= 22").id[:], data["id"][data["id"] >= 22])
 
 
 def indexed_remote_table_url(tmp_path, kind, *, name=None, rows=1000, **kwargs):

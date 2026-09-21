@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import pathlib
+import uuid
 from typing import Any
 
 import numpy as np
@@ -980,6 +982,10 @@ class RemoteTableStorage(TableStorage):
         catalog = {}
         for name, source in self._metadata().get("pytables_indexes", {}).items():
             column = self.open_column(name)
+            cached = self._load_cached_pytables_index(name, column)
+            if cached is not None:
+                catalog[name] = cached
+                continue
             opened = []
             try:
                 for key in ("sorted", "indices", "sortedLR", "indicesLR"):
@@ -1010,24 +1016,30 @@ class RemoteTableStorage(TableStorage):
                     "max_cycles": int(source["optlevel"]),
                     "is_csi": bool(source["is_csi"]),
                 }
-                for category, sidecar_name, data in (
+                sidecars = (
                     ("opsi", "values", values),
                     ("opsi", "positions", positions),
                     ("opsi_nav", "mins", mins),
                     ("opsi_nav", "maxs", maxs),
-                ):
+                )
+                paths = self._pytables_index_paths(name)
+                for category, sidecar_name, data in sidecars:
                     geometry = {"chunks": (chunk_len,), "blocks": (chunk_len,)} if category == "opsi" else {}
-                    info = _store_array_sidecar(
-                        column, token, "opsi", category, sidecar_name, data, False, **geometry
-                    )
-                    opsi[f"{sidecar_name}_path"] = info["path"]
-                catalog[name] = _build_descriptor(
+                    if paths is None:
+                        info = _store_array_sidecar(
+                            column, token, "opsi", category, sidecar_name, data, False, **geometry
+                        )
+                        opsi[f"{sidecar_name}_path"] = info["path"]
+                    else:
+                        self._write_pytables_sidecar(paths[sidecar_name], data, **geometry)
+                        opsi[f"{sidecar_name}_path"] = str(paths[sidecar_name])
+                descriptor = _build_descriptor(
                     column,
                     target,
                     token,
                     "opsi",
                     int(source["optlevel"]),
-                    False,
+                    paths is not None,
                     False,
                     None,
                     column.dtype,
@@ -1037,9 +1049,66 @@ class RemoteTableStorage(TableStorage):
                     None,
                     opsi=opsi,
                 )
+                if paths is not None:
+                    from blosc2.remote_store_cache import atomic_write
+
+                    marker = {
+                        "version": 1,
+                        "root": self._root_key,
+                        "column": name,
+                        "descriptor": descriptor,
+                    }
+                    atomic_write(paths["marker"], json.dumps(marker).encode())
+                catalog[name] = descriptor
             except (KeyError, OSError, TypeError, ValueError):
                 continue
         return catalog
+
+    def _pytables_index_paths(self, name):
+        if self._owner.disk is None:
+            return None
+        digest = hashlib.sha256(f"{self._root_key}\0{name}".encode()).hexdigest()
+        prefix = f"_pytables_indexes/{digest}"
+        paths = {
+            key: self._owner.disk.payload_path(self._generation, f"{prefix}/{key}")
+            for key in ("values", "positions", "mins", "maxs")
+        }
+        paths["marker"] = paths["values"].parent / "complete.json"
+        return paths
+
+    def _load_cached_pytables_index(self, name, column):
+        paths = self._pytables_index_paths(name)
+        if paths is None or not paths["marker"].is_file():
+            return None
+        try:
+            marker = json.loads(paths["marker"].read_text())
+            descriptor = marker["descriptor"]
+            opsi = descriptor["opsi"]
+            valid = (
+                marker.get("version") == 1
+                and marker.get("root") == self._root_key
+                and marker.get("column") == name
+                and descriptor.get("kind") == "opsi"
+                and tuple(descriptor.get("shape", ())) == tuple(column.shape)
+                and tuple(descriptor.get("chunks", ())) == tuple(column.chunks)
+                and all(
+                    opsi.get(f"{key}_path") == str(paths[key]) and paths[key].is_file()
+                    for key in ("values", "positions", "mins", "maxs")
+                )
+            )
+            return descriptor if valid else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+            return None
+
+    @staticmethod
+    def _write_pytables_sidecar(path, data, **geometry):
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.b2nd")
+        try:
+            array = blosc2.asarray(np.asarray(data), urlpath=str(temporary), mode="w", **geometry)
+            del array
+            os.replace(temporary, path)
+        finally:
+            blosc2.remove_urlpath(str(temporary))
 
     def open_membership_postings(self, name: str, descriptor: dict, indexes: list[int]):
         """Read only the compressed posting-list batches needed by a query."""
