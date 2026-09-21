@@ -138,6 +138,7 @@ class B2ZArchive:
             ):
                 raise ValueError("Invalid cached B2Z metadata range")
         self.capture_metadata = True
+        self._captured_ranges = []
         self._opening_ranges = []
         self._batch_ranges = []
         # ponytail: small directories fit in 8 KiB; larger ones use exact reads.
@@ -147,7 +148,9 @@ class B2ZArchive:
         else:
             tail = bootstrap[1]
             self.traffic.charge(len(tail))
-            self.metadata["ranges"].append((tail_start, tail))
+            self._captured_ranges.append((tail_start, tail))
+            if self.persist_metadata:
+                self.metadata["ranges"].append((tail_start, tail))
         self._opening_ranges.append((tail_start, tail))
         self.file = _ArchiveFile(self, size)
         self.archive = zipfile.ZipFile(self.file)
@@ -207,7 +210,9 @@ class B2ZArchive:
                 return data[offset - start : offset - start + size]
         data = self.read_transport(offset, size)
         if self.capture_metadata:
-            self.metadata["ranges"].append((offset, data))
+            self._captured_ranges.append((offset, data))
+            if self.persist_metadata:
+                self.metadata["ranges"].append((offset, data))
         return data
 
     def read_transport(self, offset, size):

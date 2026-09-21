@@ -491,9 +491,11 @@ def test_nested_remote_store_credentials_and_refresh(hierarchy, tmp_path):
 def test_nested_remote_store_ctable_index_uses_outer_cache(tmp_path):
     target = tmp_path / "nested-table-target.b2z"
     table = blosc2.CTable(NestedIndexedRow, [(i,) for i in range(200)], create_summary_index=False)
-    table.create_index("value", kind="summary")
     with blosc2.TreeStore(target, mode="w") as tree:
         tree["/measurements"] = table
+        inline = tree["/measurements"]
+        inline.create_index("value", kind="summary")
+        inline.close()
     target_url = f"memory://{tmp_path.name}-nested-table-target.b2z"
     fsspec.filesystem("memory").pipe(target_url, target.read_bytes())
 
@@ -509,6 +511,12 @@ def test_nested_remote_store_ctable_index_uses_outer_cache(tmp_path):
             np.testing.assert_array_equal(remote_table.where("value >= 197").value[:], [197, 198, 199])
             assert remote_table.cache_policy is outer.cache_policy
             assert remote_table.traffic is outer.traffic
+        materialized = tmp_path / "nested-table-materialized.b2z"
+        outer.materialize(materialized)
+    with blosc2.open(materialized) as local:
+        table = local["/remote/measurements"]
+        assert table._get_index_catalog()["value"]["kind"] == "summary"
+        np.testing.assert_array_equal(table.where("value >= 197").value[:], [197, 198, 199])
 
 
 def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path):
@@ -548,6 +556,116 @@ def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path):
             reopened.traffic.reset()
             np.testing.assert_array_equal(array[:20], data[:20])
             assert reopened.traffic.requests == 0
+
+
+def test_nested_remote_store_materialize_mixed_source(hierarchy, tmp_path):
+    url, data = hierarchy
+    host = tmp_path / "materialize-host.b2z"
+    with blosc2.RemoteStore(url, dataset="group") as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/remote"] = linked
+            tree["/repeat"] = linked
+            tree["/local"] = np.arange(4)
+    host_url = f"memory://{tmp_path.name}-materialize-host.b2z"
+    fs = fsspec.filesystem("memory")
+    fs.pipe(host_url, host.read_bytes())
+
+    destination = tmp_path / "materialized.b2z"
+    with blosc2.RemoteStore(host_url) as outer:
+        outer.materialize(destination)
+    fs.rm(url, recursive=True)
+    fs.rm(host_url)
+
+    with blosc2.open(destination) as local:
+        assert all(info.get("kind") != "remote_store" for info in local._objects_registry().values())
+        assert local.get_subtree("/remote").attrs["title"] == "child"
+        np.testing.assert_array_equal(local["/remote/a"][:2, :3], data[:2, :3])
+        np.testing.assert_array_equal(local["/remote/b"][:2, :3], data[:2, :3] + 1)
+        np.testing.assert_array_equal(local["/repeat/a"][:2, :3], data[:2, :3])
+        np.testing.assert_array_equal(local["/local"][:], np.arange(4))
+
+
+def test_local_tree_materialize_remote_reference_to_b2d(tmp_path):
+    remote = _nested_materialize_source(tmp_path)
+    catalog = tmp_path / "local-catalog.b2z"
+    with remote:
+        with blosc2.TreeStore(catalog, mode="w") as tree:
+            tree["/mount"] = remote
+    destination = tmp_path / "local-materialized.b2d"
+    with blosc2.TreeStore(catalog, mode="r") as tree:
+        tree.materialize(destination)
+    with blosc2.open(destination) as local:
+        np.testing.assert_array_equal(local["/mount/data"][:], np.arange(20))
+
+
+def test_nested_remote_store_materialize_multiple_levels(tmp_path):
+    source = _nested_materialize_source(tmp_path)
+    middle_path = tmp_path / "middle.b2z"
+    with source:
+        with blosc2.TreeStore(middle_path, mode="w") as middle:
+            middle["/inner"] = source
+    middle_url = f"memory://{tmp_path.name}-middle.b2z"
+    fsspec.filesystem("memory").pipe(middle_url, middle_path.read_bytes())
+
+    outer_path = tmp_path / "outer.b2z"
+    with blosc2.RemoteStore(middle_url) as middle:
+        with blosc2.TreeStore(outer_path, mode="w") as outer:
+            outer["/middle"] = middle
+    outer_url = f"memory://{tmp_path.name}-outer.b2z"
+    fsspec.filesystem("memory").pipe(outer_url, outer_path.read_bytes())
+
+    destination = tmp_path / "multiple-levels.b2z"
+    with blosc2.RemoteStore(outer_url) as outer:
+        outer.materialize(destination)
+    with blosc2.open(destination) as local:
+        np.testing.assert_array_equal(local["/middle/inner/data"][:], np.arange(20))
+
+
+def _nested_materialize_source(tmp_path):
+    target = tmp_path / "materialize-source.b2z"
+    with blosc2.TreeStore(target, mode="w") as tree:
+        tree["/data"] = np.arange(20)
+    url = f"memory://{tmp_path.name}-materialize-source.b2z"
+    fsspec.filesystem("memory").pipe(url, target.read_bytes())
+    return blosc2.RemoteStore(url)
+
+
+def test_nested_remote_store_materialize_cycle_preserves_destination(tmp_path):
+    fs = fsspec.filesystem("memory")
+    url_a = f"memory://{tmp_path.name}-cycle-a.b2z"
+    url_b = f"memory://{tmp_path.name}-cycle-b.b2z"
+
+    def descriptor(url):
+        return {
+            "kind": "b2z",
+            "version": 1,
+            "urlpath": url,
+            "dataset": "",
+            "assume_immutable": True,
+        }
+
+    for name, mount, linked_url, remote_url in (
+        ("a", "/b", url_b, url_a),
+        ("b", "/a", url_a, url_b),
+    ):
+        path = tmp_path / f"cycle-{name}.b2z"
+        with blosc2.TreeStore(path, mode="w") as tree:
+            tree._register_object(
+                mount,
+                kind="remote_store",
+                version=1,
+                layout="reference",
+                source=descriptor(linked_url),
+                strict=True,
+            )
+        fs.pipe(remote_url, path.read_bytes())
+
+    destination = tmp_path / "existing.b2z"
+    destination.write_bytes(b"existing")
+    with blosc2.RemoteStore(url_a) as root:
+        with pytest.raises(ValueError, match="cycle"):
+            root.materialize(destination, overwrite=True)
+    assert destination.read_bytes() == b"existing"
 
 
 def test_sparse_store_shared_handles(hierarchy, tmp_path):

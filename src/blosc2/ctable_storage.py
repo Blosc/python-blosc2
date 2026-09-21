@@ -878,6 +878,9 @@ class RemoteTableStorage(TableStorage):
                     if os.path.isabs(path) or ".." in parts or not path.endswith(".b2nd"):
                         raise ValueError(f"Unsafe remote index path for column {name!r}")
                     logical = path[:-5].strip("/")
+                    prefix = self._root_key + "/" if self._root_key else ""
+                    if prefix and logical.startswith(prefix):
+                        logical = logical[len(prefix) :]
                     if not self._has_array(logical):
                         raise ValueError(f"Missing remote index sidecar for column {name!r}")
                     remote_path = f"remote-index://{id(self)}/{path}"

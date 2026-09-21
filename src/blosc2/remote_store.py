@@ -928,6 +928,26 @@ class RemoteDiscovery:
                 close(self.filesystem.loop, session)
         self.filesystem = None
 
+    def _export_metadata(self):
+        if self.format == "hdf5":
+            self._validate_hdf5_index()
+            return self.hdf5_index
+        if self.format != "b2z":
+            return self.metadata
+        metadata = dict(self.archive.metadata)
+        ranges = list(metadata.get("ranges", ()))
+        for offset, data in (
+            *self.archive._captured_ranges,
+            *self.archive._opening_ranges,
+            *self.archive._batch_ranges,
+        ):
+            if not any(
+                start <= offset and offset + len(data) <= start + len(saved) for start, saved in ranges
+            ):
+                ranges.append((offset, data))
+        metadata["ranges"] = ranges
+        return metadata
+
     def save_selection(
         self,
         full_path,
@@ -953,13 +973,7 @@ class RemoteDiscovery:
                         f"Retained cache ({retained} bytes) exceeds max_cache_bytes ({self.max_cache_bytes})"
                     )
 
-            if self.format == "hdf5":
-                self._validate_hdf5_index()
-                metadata = self.hdf5_index
-            elif self.format == "b2z":
-                metadata = self.archive.metadata
-            else:
-                metadata = self.metadata
+            metadata = self._export_metadata()
 
             src_desc, nodes, attrs, listed, candidates = self._collect_export_nodes(full_path, include_cache)
 
@@ -1829,6 +1843,13 @@ class RemoteStore(RemoteObject):
             return self._owner.save_selection(
                 full, destination, include_cache=include_cache, mutable=mutable, overwrite=overwrite
             )
+
+    def materialize(self, destination, *, overwrite=False):
+        """Write this hierarchy and reachable store references as one local TreeStore."""
+        from blosc2.store_materialize import materialize_store
+
+        self._ensure_open()
+        return materialize_store(self, destination, overwrite=overwrite)
 
     @classmethod
     def _load_artifact_manifest(cls, urlpath):

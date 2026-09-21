@@ -190,6 +190,12 @@ class TreeStore(DictStore):
             self._known_object_roots_cache: set[str] | None = None
             self._effective_object_roots_cache: tuple[str, set[str]] | None = None
 
+    def materialize(self, destination, *, overwrite=False):
+        """Write this tree and all RemoteStore references as one local TreeStore."""
+        from blosc2.store_materialize import materialize_store
+
+        return materialize_store(self, destination, overwrite=overwrite)
+
     # ------------------------------------------------------------------
     # Object registry helpers
     # ------------------------------------------------------------------
