@@ -383,6 +383,29 @@ def hierarchy(request, tmp_path):
     return url, data
 
 
+def test_nested_remote_store_discovery_and_traversal(hierarchy, tmp_path):
+    url, data = hierarchy
+    host = tmp_path / "nested-host.b2z"
+    with blosc2.RemoteStore(url, dataset="group") as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/external/weather"] = linked
+            tree["/local"] = np.arange(3)
+
+    host_url = f"memory://{tmp_path.name}-nested-host.b2z"
+    fsspec.filesystem("memory").pipe(host_url, host.read_bytes())
+    with blosc2.RemoteStore(host_url) as outer:
+        assert outer.keys() == ["external", "local"]
+        assert outer.kind("external/weather") == "remote_store"
+        linked = outer["external/weather"]
+        assert linked._owner is None
+        assert linked.keys() == ["a", "b", "empty"]
+        with linked["a"] as array:
+            np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
+        with outer["external/weather/b"] as array:
+            np.testing.assert_array_equal(array[:2, :3], data[:2, :3] + 1)
+        np.testing.assert_array_equal(outer["local"][:], np.arange(3))
+
+
 def test_sparse_store_shared_handles(hierarchy, tmp_path):
     url, data = hierarchy
     parent = tmp_path / "shared"

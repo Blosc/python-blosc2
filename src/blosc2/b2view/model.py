@@ -366,7 +366,7 @@ class StoreBrowser:
         """Return direct children for *path*."""
         path = self.normalize_path(path)
         if isinstance(self.store, blosc2.RemoteStore):
-            if self.store.kind(path) != "group":
+            if self.store.kind(path) not in {"group", "remote_store"}:
                 return []
             with self.store[path] as group:
                 children = []
@@ -377,7 +377,7 @@ class StoreBrowser:
                             path=self.normalize_path(path.rstrip("/") + "/" + name),
                             name=name,
                             kind=kind,
-                            has_children=kind == "group",
+                            has_children=kind in {"group", "remote_store"},
                         )
                     )
                 self._remote_child_counts[path] = len(children)
@@ -454,7 +454,7 @@ class StoreBrowser:
             attrs = self._attrs_dict(obj.vlmeta)
         else:
             self._release_remote_leaf()
-            if node.kind == "group" and path in self._remote_child_counts:
+            if node.kind in {"group", "remote_store"} and path in self._remote_child_counts:
                 metadata["children"] = self._remote_child_counts[path]
             if node.diagnostic:
                 metadata["preview" if node.kind == "unsupported" else "notice"] = node.diagnostic

@@ -188,7 +188,7 @@ class RemoteDiscovery:
             if (
                 not isinstance(entry, (list, tuple))
                 or len(entry) != 2
-                or entry[0] not in {"group", "ndarray", "ctable", "unsupported"}
+                or entry[0] not in {"group", "ndarray", "ctable", "remote_store", "unsupported"}
             ):
                 raise ValueError("Invalid RemoteStore node")
             self.nodes[path] = tuple(entry)
@@ -238,7 +238,7 @@ class RemoteDiscovery:
         elif self.format == "b2z":
             self.metadata = self.archive.metadata
         nodes = {
-            path: (kind, value if kind in {"ctable", "unsupported"} else None)
+            path: (kind, value if kind in {"ctable", "remote_store", "unsupported"} else None)
             for path, (kind, value) in self.nodes.items()
         }
         manifest = {
@@ -289,7 +289,7 @@ class RemoteDiscovery:
         if self.max_nodes is not None and len(self.nodes) > self.max_nodes:
             raise ValueError("RemoteStore discovery exceeds the node limit")
 
-    def _find_b2z_ctable_roots(self, members, embedded, registry):
+    def _find_b2z_object_roots(self, members, embedded, registry):
         from blosc2.b2z_source import B2ZEmbeddedMetadata, member_vlmeta
 
         roots = {
@@ -315,7 +315,18 @@ class RemoteDiscovery:
                 except NotImplementedError as exc:
                     roots.setdefault(key.rpartition("/")[0].strip("/"), None)
                     self.notice = f"Partial B2Z metadata: object boundary cannot be verified: {exc}."
-        return roots, embedded_reader
+        references = {}
+        for key, value in registry.items():
+            if not isinstance(value, dict) or value.get("kind") != "remote_store":
+                continue
+            path = key.strip("/")
+            try:
+                if value.get("version") != 1 or value.get("layout") != "reference":
+                    raise ValueError("unsupported registry entry")
+                references[path] = ("remote_store", validate_remote_store_reference(value.get("source")))
+            except ValueError as exc:
+                references[path] = ("unsupported", f"Invalid RemoteStore reference: {exc}")
+        return roots, references, embedded_reader
 
     def _process_b2z_members(self, members, roots):
         from blosc2.b2z_source import member_vlmeta
@@ -397,7 +408,7 @@ class RemoteDiscovery:
             embedded = meta.get("estore_metadata", {}).get("embed_map", {})
             registry = meta.get("_object_registry", {})
 
-        roots, embedded_reader = self._find_b2z_ctable_roots(members, embedded, registry)
+        roots, references, embedded_reader = self._find_b2z_object_roots(members, embedded, registry)
         if "" in roots:
             metadata = roots[""]
             self.nodes[""] = (
@@ -416,8 +427,12 @@ class RemoteDiscovery:
                     self._add(root, "unsupported", "CTable metadata is unavailable")
                 else:
                     self._add(root, "ctable", metadata)
-        self._process_b2z_members(members, roots)
-        self._process_b2z_embedded(embedded, roots, embedded_reader, members)
+        object_roots = {*roots, *references}
+        for path, (kind, value) in references.items():
+            if not any(path.startswith(other + "/") for other in object_roots if other != path):
+                self._add(path, kind, value)
+        self._process_b2z_members(members, object_roots)
+        self._process_b2z_embedded(embedded, object_roots, embedded_reader, members)
         self.archive._opening_ranges.clear()
         self.archive.capture_metadata = False
 
@@ -1033,7 +1048,7 @@ class RemoteDiscovery:
             exported_source["storage_options"] = fingerprint
         if prefix:
             exported_nodes = {
-                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None)
+                k: (v[0], v[1] if v[0] in {"ctable", "remote_store", "unsupported"} else None)
                 for k, v in self.nodes.items()
                 if k == group_full or k.startswith(prefix)
             }
@@ -1044,7 +1059,8 @@ class RemoteDiscovery:
             candidate_caches = [k for k in self.caches if k.startswith(prefix)] if include_cache else []
         else:
             exported_nodes = {
-                k: (v[0], v[1] if v[0] in {"ctable", "unsupported"} else None) for k, v in self.nodes.items()
+                k: (v[0], v[1] if v[0] in {"ctable", "remote_store", "unsupported"} else None)
+                for k, v in self.nodes.items()
             }
             exported_attrs = dict(self.attrs)
             exported_listed = {k: list(v) for k, v in self.listed.items()}
@@ -1420,6 +1436,20 @@ class RemoteStore(RemoteObject):
         joined = "/".join(part for part in (self._path, relative) if part)
         return joined, self._owner.resolve(joined)
 
+    def _linked_path(self, path):
+        if not isinstance(path, str):
+            raise TypeError("RemoteStore paths must be strings")
+        relative = path.strip("/")
+        self._owner._validate(relative)
+        joined = "/".join(part for part in (self._path, relative) if part)
+        parts = joined.split("/") if joined else []
+        for end in range(len(parts), 0, -1):
+            mount = "/".join(parts[:end])
+            node = self._owner.nodes.get(mount)
+            if node is not None and node[0] == "remote_store":
+                return mount, "/".join(parts[end:]), node[1]
+        return None
+
     def keys(self):
         """Return sorted immediate child names, using only discovery metadata."""
         self._ensure_open()
@@ -1435,6 +1465,11 @@ class RemoteStore(RemoteObject):
     def __getitem__(self, path):
         self._ensure_open()
         with self._owner.lock:
+            linked = self._linked_path(path)
+            if linked is not None:
+                _, suffix, descriptor = linked
+                store = type(self)._from_reference(descriptor)
+                return store if not suffix else store[suffix]
             relative, full = self._resolve(path)
             self._owner.save_manifest()
             kind, value = self._owner.nodes[full]
@@ -1453,6 +1488,14 @@ class RemoteStore(RemoteObject):
         """Return node kind, known attributes and unsupported-node diagnostics."""
         self._ensure_open()
         with self._owner.lock:
+            linked = self._linked_path(path)
+            if linked is not None:
+                mount, suffix, descriptor = linked
+                if not suffix:
+                    return RemoteNode(path.strip("/"), "remote_store", None, None)
+                with type(self)._from_reference(descriptor) as store:
+                    info = store.get_info(suffix)
+                    return RemoteNode(path.strip("/"), info.kind, info.attrs, info.diagnostic)
             _, full = self._resolve(path)
             kind, value = self._owner.nodes[full]
             attrs = self._owner.attrs.get(full, {} if kind == "group" else None)
@@ -1465,7 +1508,7 @@ class RemoteStore(RemoteObject):
             )
 
     def kind(self, path=""):
-        """Return 'group', 'ndarray', 'ctable' or 'unsupported'."""
+        """Return the discovered node kind."""
         return self.get_info(path).kind
 
     @property
@@ -1666,7 +1709,7 @@ class RemoteStore(RemoteObject):
             if (
                 not isinstance(entry, (list, tuple))
                 or len(entry) != 2
-                or entry[0] not in {"group", "ndarray", "ctable", "unsupported"}
+                or entry[0] not in {"group", "ndarray", "ctable", "remote_store", "unsupported"}
             ):
                 raise ValueError("Invalid RemoteStore node")
             if entry[0] == "ctable":
@@ -1678,6 +1721,8 @@ class RemoteStore(RemoteObject):
                     or not isinstance(metadata.get("schema"), (str, bytes))
                 ):
                     raise ValueError("Invalid RemoteStore CTable node")
+            if entry[0] == "remote_store":
+                validate_remote_store_reference(entry[1])
         if root not in nodes:
             raise ValueError("Missing RemoteStore root")
         if any(path not in nodes for field in ("attrs", "listed") for path in manifest[field]):
