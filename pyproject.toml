@@ -100,6 +100,8 @@ test = [
     # tests/test_zarr_source.py and tests/test_hdf5_source.py.
     "zarr>=3.0.9; platform_machine != 'wasm32'",
     "h5py; platform_machine != 'wasm32'",
+    # Exercise interoperability against files and indexes written by PyTables itself.
+    "tables; platform_machine != 'wasm32'",
     # tests/test_hdf5_source.py exercises the optional Blosc2 HDF5 filter through
     # it; without the plugin those paths skip instead of running in the default job.
     "hdf5plugin; platform_machine != 'wasm32'",
