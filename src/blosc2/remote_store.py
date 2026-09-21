@@ -29,6 +29,45 @@ from blosc2.remote_object import RemoteObject
 RESERVED_NAMES = {"embed.b2e", "__vlmeta__"}
 
 
+def validate_remote_store_reference(descriptor):
+    """Validate and normalize a persisted RemoteStore reference."""
+    if not isinstance(descriptor, dict):
+        raise ValueError("RemoteStore reference must be a mapping")
+    if descriptor.get("version") != 1:
+        raise ValueError("Unsupported RemoteStore reference version")
+    kind = descriptor.get("kind")
+    if kind not in {"b2z", "hdf5", "zarr"}:
+        raise ValueError("Invalid RemoteStore reference kind")
+    urlpath = descriptor.get("urlpath")
+    if not isinstance(urlpath, str):
+        raise ValueError("RemoteStore reference urlpath must be a string")
+    validate_persistable_url(urlpath)
+    dataset = descriptor.get("dataset", "")
+    if not isinstance(dataset, str):
+        raise ValueError("RemoteStore reference dataset must be a string")
+    dataset = dataset.strip("/")
+    RemoteDiscovery._validate(dataset)
+    policy = descriptor.get("cache_policy", blosc2.CachePolicy.MEMORY.value)
+    try:
+        policy = blosc2.CachePolicy(policy)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid RemoteStore reference cache policy") from exc
+    if policy is blosc2.CachePolicy.DISK:
+        policy = blosc2.CachePolicy.MEMORY
+    limit = descriptor.get("max_cache_bytes")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
+        raise ValueError("Invalid RemoteStore reference cache limit")
+    return {
+        "kind": kind,
+        "version": 1,
+        "urlpath": urlpath,
+        "dataset": dataset,
+        "assume_immutable": True,
+        "cache_policy": policy.value,
+        "max_cache_bytes": limit,
+    }
+
+
 def get_zip_offsets(zip_path: str) -> dict[str, dict[str, int]]:
     """Get offset, length, and storage status of files in a .b2z archive."""
     offsets = {}
@@ -1196,6 +1235,36 @@ class RemoteStore(RemoteObject):
             raise
         self._attach(owner, "")
 
+    @classmethod
+    def _from_reference(cls, descriptor, **runtime):
+        obj = object.__new__(cls)
+        obj._deferred_reference = validate_remote_store_reference(descriptor)
+        obj._deferred_runtime = runtime
+        obj._deferred_closed = False
+        obj._owner = None
+        return obj
+
+    def _ensure_open(self):
+        if getattr(self, "_deferred_closed", False):
+            raise RuntimeError("RemoteStore handle is closed")
+        descriptor = getattr(self, "_deferred_reference", None)
+        if descriptor is None:
+            return
+        runtime = dict(getattr(self, "_deferred_runtime", {}))
+        runtime.setdefault("storage_options", None)
+        runtime.setdefault("cache_policy", blosc2.CachePolicy(descriptor["cache_policy"]))
+        runtime.setdefault("max_cache_bytes", descriptor["max_cache_bytes"])
+        opened = type(self)(
+            descriptor["urlpath"],
+            dataset=descriptor["dataset"] or None,
+            _source_format=descriptor["kind"],
+            **runtime,
+        )
+        owner, path = opened._owner, opened._path
+        self._attach(owner, path)
+        opened.close()
+        self._deferred_reference = None
+
     def _attach(self, owner, path):
         owner.acquire()
         self._owner = owner
@@ -1330,6 +1399,7 @@ class RemoteStore(RemoteObject):
 
     def read_cached(self, path, item=(), *, nchunk=None):
         """Return ``(hit, result)`` atomically without fetching missing payload."""
+        self._ensure_open()
         with self._owner.lock:
             _, full = self._resolve(path)
             if full not in self._owner.caches:
@@ -1338,6 +1408,7 @@ class RemoteStore(RemoteObject):
                 return array.read_cached(item, nchunk=nchunk)
 
     def _resolve(self, path):
+        self._ensure_open()
         if not self._finalizer.alive:
             raise RuntimeError("RemoteStore handle is closed")
         if self._generation != self._owner.generation:
@@ -1351,6 +1422,7 @@ class RemoteStore(RemoteObject):
 
     def keys(self):
         """Return sorted immediate child names, using only discovery metadata."""
+        self._ensure_open()
         with self._owner.lock:
             path, _ = self._resolve("")
             result = [key.rsplit("/", 1)[-1] for key in self._owner.list_children(path)]
@@ -1361,6 +1433,7 @@ class RemoteStore(RemoteObject):
         return iter(self.keys())
 
     def __getitem__(self, path):
+        self._ensure_open()
         with self._owner.lock:
             relative, full = self._resolve(path)
             self._owner.save_manifest()
@@ -1378,6 +1451,7 @@ class RemoteStore(RemoteObject):
 
     def get_info(self, path=""):
         """Return node kind, known attributes and unsupported-node diagnostics."""
+        self._ensure_open()
         with self._owner.lock:
             _, full = self._resolve(path)
             kind, value = self._owner.nodes[full]
@@ -1402,6 +1476,9 @@ class RemoteStore(RemoteObject):
     @property
     def source(self):
         """Credential-free source descriptor, including this group's full path."""
+        descriptor = getattr(self, "_deferred_reference", None)
+        if descriptor is not None:
+            return {k: descriptor[k] for k in ("kind", "version", "urlpath", "dataset", "assume_immutable")}
         with self._owner.lock:
             _, full = self._resolve("")
             return {
@@ -1435,6 +1512,7 @@ class RemoteStore(RemoteObject):
     @property
     def cache_bytes(self):
         """Retained payload bytes; NONE retains no payload between reads."""
+        self._ensure_open()
         with self._owner.lock:
             self._resolve("")
             return self._owner.cache_coordinator.cache_bytes
@@ -1442,6 +1520,7 @@ class RemoteStore(RemoteObject):
     @property
     def metadata_bytes(self):
         """Encoded discovery manifest size, separate from retained payload."""
+        self._ensure_open()
         with self._owner.lock:
             self._resolve("")
             self._owner.save_manifest()
@@ -1468,6 +1547,7 @@ class RemoteStore(RemoteObject):
 
     def refresh(self):
         """Rebuild root discovery atomically; existing child handles become stale."""
+        self._ensure_open()
         with self._owner.lock:
             self._resolve("")
             if not getattr(self._owner, "is_mutable", True):
@@ -1499,10 +1579,17 @@ class RemoteStore(RemoteObject):
 
     def close(self):
         """Release this handle; the last dependent handle closes shared resources."""
+        if getattr(self, "_deferred_reference", None) is not None:
+            self._deferred_closed = True
+            return
         with self._owner.lock:
             self._finalizer()
 
     def _check_open(self):
+        if getattr(self, "_deferred_reference", None) is not None:
+            if self._deferred_closed:
+                raise RuntimeError("RemoteStore handle is closed")
+            return
         self._resolve("")
 
     def save(
@@ -1514,6 +1601,7 @@ class RemoteStore(RemoteObject):
         overwrite: bool = False,
     ) -> str:
         """Export the current store or subtree to a portable .b2z reference archive."""
+        self._ensure_open()
         with self._owner.lock:
             _, full = self._resolve("")
             return self._owner.save_selection(
