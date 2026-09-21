@@ -509,6 +509,29 @@ class TreeStore(DictStore):
         )
         self._modified = True
 
+    def open_remote(
+        self,
+        key: str,
+        *,
+        storage_options=None,
+        cache_policy=None,
+        max_cache_bytes=None,
+        cache_dir=None,
+    ) -> blosc2.RemoteStore:
+        """Open a stored RemoteStore reference with runtime-specific options."""
+        key = self._validate_key(key)
+        info = self._object_info(self._translate_key_to_full(key))
+        if not isinstance(info, dict) or info.get("kind") != "remote_store":
+            raise KeyError(f"Key '{key}' is not a RemoteStore reference")
+        runtime = {"storage_options": storage_options}
+        if cache_policy is not None:
+            runtime["cache_policy"] = cache_policy
+        if max_cache_bytes is not None:
+            runtime["max_cache_bytes"] = max_cache_bytes
+        if cache_dir is not None:
+            runtime["cache_dir"] = cache_dir
+        return blosc2.RemoteStore._from_reference(info["source"], **runtime)
+
     def _set_ctable_object(self, key: str, value: blosc2.CTable) -> None:
         """Materialise a CTable inline into this store at *key*."""
         if self.mode == "r":

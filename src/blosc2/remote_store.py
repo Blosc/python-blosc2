@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import tempfile
@@ -119,6 +120,7 @@ class RemoteDiscovery:
         _manifest_validator=None,
         _max_nodes=None,
         _source_format=None,
+        _traffic=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         if _source_format is not None:
@@ -128,7 +130,7 @@ class RemoteDiscovery:
         self.root = (dataset or "").strip("/")
         self._validate(self.root)
         self.storage_options = storage_options or {}
-        self.traffic = Traffic()
+        self.traffic = _traffic if _traffic is not None else Traffic()
         self.nodes = {}
         self.attrs = {}
         self.listed = {}
@@ -157,6 +159,8 @@ class RemoteDiscovery:
         self._cleanup_dir = None
         self._users = 0
         self._closed = False
+        self.cache_namespace = ""
+        self.nested_storage_options = None
         # ponytail: serialize store operations; finer locks if multi-leaf throughput matters.
         self.lock = threading.RLock()
         try:
@@ -765,6 +769,7 @@ class RemoteDiscovery:
 
     def get_cache(self, source, *, seed=None):
         key = next(path for path, value in self.sources.items() if value is source)
+        coordinator_key = f"{self.cache_namespace}:{key}" if self.cache_namespace else key
         if key not in self.caches:
             if getattr(self, "shared", False):
                 descriptor = self.source_descriptors.get(key)
@@ -788,7 +793,7 @@ class RemoteDiscovery:
                 if proxy is None:
                     raise ValueError("Shared store caching requires a stable source identity")
                 proxy._cache_coordinator = self.cache_coordinator
-                proxy._cache_key = key
+                proxy._cache_key = coordinator_key
                 self.cache_coordinator.register(proxy)
                 self.caches[key] = proxy
                 self.save_manifest()
@@ -819,7 +824,7 @@ class RemoteDiscovery:
                     mode="r",
                     _refresh_source=False,
                     _cache_coordinator=self.cache_coordinator,
-                    _cache_key=key,
+                    _cache_key=coordinator_key,
                     _persistent_dirty=False,
                 )
                 return self.caches[key]
@@ -833,7 +838,7 @@ class RemoteDiscovery:
                 mode="a",
                 _refresh_source=False,
                 _cache_coordinator=self.cache_coordinator,
-                _cache_key=key,
+                _cache_key=coordinator_key,
                 _persistent_dirty=self.disk is not None,
                 meta={"remote-store": identity} if path is not None and not exists else None,
             )
@@ -862,6 +867,7 @@ class RemoteDiscovery:
             if replacement.nodes[replacement.root][0] != kind:
                 raise ValueError(f"Refreshed source is no longer a {kind}")
             replacement.cache_policy = self.cache_policy
+            replacement.nested_storage_options = self.nested_storage_options
             replacement.max_cache_bytes = self.max_cache_bytes
             replacement.cache_coordinator = CacheCoordinator(self.max_cache_bytes)
             replacement.shared = getattr(self, "shared", False)
@@ -1162,6 +1168,11 @@ class RemoteStore(RemoteObject):
         limit = normalize_cache_limit(cache_policy, max_cache_bytes)
         return cache_policy, limit
 
+    @staticmethod
+    def _validate_nested_storage_options(value):
+        if value is not None and not callable(value) and not isinstance(value, dict):
+            raise TypeError("nested_storage_options must be a mapping or callable")
+
     def __init__(
         self,
         urlpath,
@@ -1178,6 +1189,8 @@ class RemoteStore(RemoteObject):
         _manifest_validator=None,
         _max_nodes=None,
         _source_format=None,
+        _traffic=None,
+        nested_storage_options=None,
     ):
         if isinstance(urlpath, os.PathLike):
             urlpath = os.fspath(urlpath)
@@ -1191,6 +1204,7 @@ class RemoteStore(RemoteObject):
             return
         if dataset is not None and not isinstance(dataset, str):
             raise TypeError("dataset must be a string")
+        self._validate_nested_storage_options(nested_storage_options)
         cache_policy, limit = self._validate_cache_config(cache_policy, max_cache_bytes, cache_dir)
         base_url, _, _ = parse_container_url(urlpath, dataset)
         validate_persistable_url(base_url)
@@ -1224,6 +1238,7 @@ class RemoteStore(RemoteObject):
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _source_format=_source_format,
+                _traffic=_traffic,
             )
         except BaseException:
             if disk is not None:
@@ -1241,6 +1256,7 @@ class RemoteStore(RemoteObject):
         owner.cache_policy = cache_policy
         owner.max_cache_bytes = limit
         owner.cache_coordinator = CacheCoordinator(limit)
+        owner.nested_storage_options = nested_storage_options
         try:
             owner.restore_caches(manifest)
             owner.save_manifest()
@@ -1258,25 +1274,87 @@ class RemoteStore(RemoteObject):
         obj._deferred_runtime = runtime
         obj._deferred_closed = False
         obj._owner = None
+        parent = runtime.get("_parent_owner")
+        obj._reference_parent = parent
+        obj._reference_generation = None if parent is None else parent.generation
+        obj._reference_parent_finalizer = None
+        if parent is not None:
+            parent.acquire()
+            obj._reference_parent_finalizer = weakref.finalize(obj, parent.release)
         return obj
 
     def _ensure_open(self):
         if getattr(self, "_deferred_closed", False):
             raise RuntimeError("RemoteStore handle is closed")
+        parent = getattr(self, "_reference_parent", None)
+        if parent is not None and self._reference_generation != parent.generation:
+            raise RuntimeError("RemoteStore handle is stale; look it up again after refresh")
         descriptor = getattr(self, "_deferred_reference", None)
         if descriptor is None:
             return
         runtime = dict(getattr(self, "_deferred_runtime", {}))
-        runtime.setdefault("storage_options", None)
+        parent = runtime.pop("_parent_owner", None)
+        namespace = runtime.pop("_cache_namespace", "")
+        resolver = runtime.pop("_storage_options_resolver", None)
+        if "storage_options" not in runtime:
+            if callable(resolver):
+                runtime["storage_options"] = resolver(dict(descriptor))
+            elif resolver is not None:
+                runtime["storage_options"] = resolver.get(descriptor["urlpath"])
+            else:
+                runtime["storage_options"] = None
         runtime.setdefault("cache_policy", blosc2.CachePolicy(descriptor["cache_policy"]))
-        runtime.setdefault("max_cache_bytes", descriptor["max_cache_bytes"])
-        opened = type(self)(
-            descriptor["urlpath"],
-            dataset=descriptor["dataset"] or None,
-            _source_format=descriptor["kind"],
-            **runtime,
-        )
+        if runtime["cache_policy"] is not blosc2.CachePolicy.NONE:
+            runtime.setdefault("max_cache_bytes", descriptor["max_cache_bytes"] or CACHE_POLICY_DEFAULT)
+        else:
+            runtime.pop("max_cache_bytes", None)
+        requested_policy = runtime["cache_policy"]
+        if requested_policy is blosc2.CachePolicy.DISK and "cache_dir" not in runtime and parent is not None:
+            identity = hashlib.sha256(
+                f"{namespace}\0{descriptor['kind']}\0{descriptor['urlpath']}\0{descriptor['dataset']}".encode()
+            ).hexdigest()
+            if getattr(parent, "shared", False):
+                opened = type(self).with_sparse_cache(
+                    descriptor["urlpath"],
+                    parent.disk.parent / "nested" / identity,
+                    dataset=descriptor["dataset"] or None,
+                    max_cache_bytes=parent.max_cache_bytes,
+                    storage_options=runtime["storage_options"],
+                    _traffic=parent.traffic,
+                )
+            elif parent.disk is not None:
+                runtime["cache_dir"] = parent.disk.path / "nested" / identity
+                opened = type(self)(
+                    descriptor["urlpath"],
+                    dataset=descriptor["dataset"] or None,
+                    _source_format=descriptor["kind"],
+                    _traffic=parent.traffic,
+                    **runtime,
+                )
+            else:
+                runtime["cache_policy"] = blosc2.CachePolicy.MEMORY
+                opened = type(self)(
+                    descriptor["urlpath"],
+                    dataset=descriptor["dataset"] or None,
+                    _source_format=descriptor["kind"],
+                    _traffic=parent.traffic,
+                    **runtime,
+                )
+        else:
+            opened = type(self)(
+                descriptor["urlpath"],
+                dataset=descriptor["dataset"] or None,
+                _source_format=descriptor["kind"],
+                _traffic=None if parent is None else parent.traffic,
+                **runtime,
+            )
         owner, path = opened._owner, opened._path
+        if parent is not None:
+            owner.cache_policy = requested_policy
+            owner.max_cache_bytes = parent.max_cache_bytes
+            owner.cache_coordinator = parent.cache_coordinator
+            owner.cache_namespace = namespace
+            owner.nested_storage_options = parent.nested_storage_options
         self._attach(owner, path)
         opened.close()
         self._deferred_reference = None
@@ -1298,10 +1376,12 @@ class RemoteStore(RemoteObject):
         manifest=None,
         max_cache_bytes=None,
         carrier=None,
+        storage_options=None,
         _filesystem=None,
         _source_validator=None,
         _manifest_validator=None,
         _max_nodes=None,
+        _traffic=None,
     ):
         """Attach an immutable remote hierarchy to a cache shared across processes.
 
@@ -1317,6 +1397,9 @@ class RemoteStore(RemoteObject):
         base, root, kind = parse_container_url(urlpath, dataset)
         validate_persistable_url(base)
         source = {"urlpath": base, "dataset": (root or "").strip("/"), "kind": kind}
+        fingerprint = storage_options_fingerprint(storage_options)
+        if fingerprint:
+            source["storage_options"] = fingerprint
         disk = SharedStoreCache(runtime_cache_path, source)
         with disk.guard():
             current = disk.load()
@@ -1332,6 +1415,7 @@ class RemoteStore(RemoteObject):
                 current = dict(manifest, caches=[], generation=uuid.uuid4().hex)
             owner = RemoteDiscovery(
                 base,
+                storage_options,
                 dataset=root,
                 manifest=current,
                 persist_metadata=True,
@@ -1339,6 +1423,7 @@ class RemoteStore(RemoteObject):
                 _source_validator=_source_validator,
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
+                _traffic=_traffic,
             )
             owner.disk = disk
             owner.shared = True
@@ -1450,6 +1535,19 @@ class RemoteStore(RemoteObject):
                 return mount, "/".join(parts[end:]), node[1]
         return None
 
+    def _linked_store(self, mount, descriptor, **overrides):
+        resolver = self._owner.nested_storage_options
+        runtime = {
+            "_storage_options_resolver": resolver,
+            "cache_policy": self._owner.cache_policy,
+            "_parent_owner": self._owner,
+            "_cache_namespace": f"{self._owner.generation}:{mount}",
+        }
+        if self._owner.cache_policy is not blosc2.CachePolicy.NONE:
+            runtime["max_cache_bytes"] = self._owner.max_cache_bytes
+        runtime.update(overrides)
+        return type(self)._from_reference(descriptor, **runtime)
+
     def keys(self):
         """Return sorted immediate child names, using only discovery metadata."""
         self._ensure_open()
@@ -1468,7 +1566,7 @@ class RemoteStore(RemoteObject):
             linked = self._linked_path(path)
             if linked is not None:
                 _, suffix, descriptor = linked
-                store = type(self)._from_reference(descriptor)
+                store = self._linked_store(linked[0], descriptor)
                 return store if not suffix else store[suffix]
             relative, full = self._resolve(path)
             self._owner.save_manifest()
@@ -1493,7 +1591,7 @@ class RemoteStore(RemoteObject):
                 mount, suffix, descriptor = linked
                 if not suffix:
                     return RemoteNode(path.strip("/"), "remote_store", None, None)
-                with type(self)._from_reference(descriptor) as store:
+                with self._linked_store(mount, descriptor) as store:
                     info = store.get_info(suffix)
                     return RemoteNode(path.strip("/"), info.kind, info.attrs, info.diagnostic)
             _, full = self._resolve(path)
@@ -1624,9 +1722,15 @@ class RemoteStore(RemoteObject):
         """Release this handle; the last dependent handle closes shared resources."""
         if getattr(self, "_deferred_reference", None) is not None:
             self._deferred_closed = True
+            finalizer = getattr(self, "_reference_parent_finalizer", None)
+            if finalizer is not None:
+                finalizer()
             return
         with self._owner.lock:
             self._finalizer()
+        finalizer = getattr(self, "_reference_parent_finalizer", None)
+        if finalizer is not None:
+            finalizer()
 
     def _check_open(self):
         if getattr(self, "_deferred_reference", None) is not None:

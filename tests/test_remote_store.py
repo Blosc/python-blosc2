@@ -1,5 +1,6 @@
 """Public remote discovery, shared readers and dependent handle lifetime."""
 
+import dataclasses
 import gc
 import json
 import sys
@@ -12,6 +13,11 @@ import pytest
 import blosc2
 
 fsspec = pytest.importorskip("fsspec")
+
+
+@dataclasses.dataclass
+class NestedIndexedRow:
+    value: int = blosc2.field(blosc2.int64(), chunks=(64,), blocks=(16,))
 
 
 def test_shared_memory_lru_and_revisit(hierarchy):
@@ -404,6 +410,105 @@ def test_nested_remote_store_discovery_and_traversal(hierarchy, tmp_path):
         with outer["external/weather/b"] as array:
             np.testing.assert_array_equal(array[:2, :3], data[:2, :3] + 1)
         np.testing.assert_array_equal(outer["local"][:], np.arange(3))
+
+
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
+)
+def test_nested_remote_store_uses_outer_cache_owner(hierarchy, tmp_path, policy):
+    url, data = hierarchy
+    host = tmp_path / f"nested-cache-{policy.value}.b2z"
+    with blosc2.RemoteStore(url, dataset="group") as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/left"] = linked
+            tree["/right"] = linked
+    host_url = f"memory://{tmp_path.name}-nested-cache-{policy.value}.b2z"
+    fsspec.filesystem("memory").pipe(host_url, host.read_bytes())
+
+    kwargs = {"cache_dir": tmp_path / "outer-cache"} if policy is blosc2.CachePolicy.DISK else {}
+    with blosc2.RemoteStore(host_url, cache_policy=policy, **kwargs) as outer:
+        with outer["left/a"] as left, outer["right/a"] as right:
+            np.testing.assert_array_equal(left[:2, :3], data[:2, :3])
+            np.testing.assert_array_equal(right[:2, :3], data[:2, :3])
+            assert left.cache_policy is right.cache_policy is policy
+            assert left.traffic is right.traffic is outer.traffic
+            if policy is not blosc2.CachePolicy.NONE:
+                assert left._proxy._cache_coordinator is outer._owner.cache_coordinator
+                assert right._proxy._cache_coordinator is outer._owner.cache_coordinator
+                assert left._proxy._cache_key != right._proxy._cache_key
+                assert outer.cache_bytes == left.cache_bytes + right.cache_bytes
+            else:
+                assert outer.cache_bytes == 0
+
+
+def test_nested_remote_store_sparse_cache_reuse(hierarchy, tmp_path):
+    url, data = hierarchy
+    host = tmp_path / "nested-sparse.b2z"
+    with blosc2.RemoteStore(url, dataset="group") as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/linked"] = linked
+    host_url = f"memory://{tmp_path.name}-nested-sparse.b2z"
+    fsspec.filesystem("memory").pipe(host_url, host.read_bytes())
+    cache = tmp_path / "shared-nested"
+
+    with blosc2.RemoteStore.with_sparse_cache(host_url, cache) as first:
+        with first["linked/a"] as array:
+            np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
+    with blosc2.RemoteStore.with_sparse_cache(host_url, cache) as second:
+        with second["linked/a"] as array:
+            second.traffic.reset()
+            np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
+        assert second.traffic.requests == 0
+
+
+def test_nested_remote_store_credentials_and_refresh(hierarchy, tmp_path):
+    url, _ = hierarchy
+    host = tmp_path / "nested-runtime.b2z"
+    with blosc2.RemoteStore(url, dataset="group") as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/linked"] = linked
+            local = tree.open_remote("/linked", storage_options={"marker": "local"})
+            assert local._deferred_runtime["storage_options"] == {"marker": "local"}
+            local.close()
+    host_url = f"memory://{tmp_path.name}-nested-runtime.b2z"
+    fsspec.filesystem("memory").pipe(host_url, host.read_bytes())
+    seen = []
+
+    def resolve(descriptor):
+        seen.append(descriptor["urlpath"])
+        return {}
+
+    with blosc2.RemoteStore(host_url, nested_storage_options=resolve) as outer:
+        linked = outer["linked"]
+        assert seen == []
+        assert linked.keys()
+        assert seen == [url]
+        outer.refresh()
+        with pytest.raises(RuntimeError, match="stale"):
+            linked.keys()
+
+
+def test_nested_remote_store_ctable_index_uses_outer_cache(tmp_path):
+    target = tmp_path / "nested-table-target.b2z"
+    table = blosc2.CTable(NestedIndexedRow, [(i,) for i in range(200)], create_summary_index=False)
+    table.create_index("value", kind="summary")
+    with blosc2.TreeStore(target, mode="w") as tree:
+        tree["/measurements"] = table
+    target_url = f"memory://{tmp_path.name}-nested-table-target.b2z"
+    fsspec.filesystem("memory").pipe(target_url, target.read_bytes())
+
+    host = tmp_path / "nested-table-host.b2z"
+    with blosc2.RemoteStore(target_url) as linked:
+        with blosc2.TreeStore(host, mode="w") as tree:
+            tree["/remote"] = linked
+    host_url = f"memory://{tmp_path.name}-nested-table-host.b2z"
+    fsspec.filesystem("memory").pipe(host_url, host.read_bytes())
+
+    with blosc2.RemoteStore(host_url, max_cache_bytes=1024**2) as outer:
+        with outer["remote/measurements"] as remote_table:
+            np.testing.assert_array_equal(remote_table.where("value >= 197").value[:], [197, 198, 199])
+            assert remote_table.cache_policy is outer.cache_policy
+            assert remote_table.traffic is outer.traffic
 
 
 def test_sparse_store_shared_handles(hierarchy, tmp_path):
