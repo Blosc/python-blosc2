@@ -1959,10 +1959,18 @@ class RemoteStore(RemoteObject):
             if entry[0] == "ctable":
                 metadata = entry[1]
                 if (
-                    source.get("kind") != "b2z"
+                    source.get("kind") not in {"b2z", "hdf5"}
                     or not isinstance(metadata, dict)
                     or metadata.get("kind") not in {"ctable", b"ctable"}
                     or not isinstance(metadata.get("schema"), (str, bytes))
+                    or (
+                        source.get("kind") == "hdf5"
+                        and (
+                            not isinstance(metadata.get("shape"), (list, tuple))
+                            or len(metadata["shape"]) != 1
+                            or not isinstance(metadata.get("dtype"), dict)
+                        )
+                    )
                 ):
                     raise ValueError("Invalid RemoteStore CTable node")
             if entry[0] == "remote_store":
@@ -1986,8 +1994,11 @@ class RemoteStore(RemoteObject):
                 continue
             if (
                 path not in nodes
-                or nodes[path][0] != "ndarray"
-                or (root and not path.startswith(root + "/"))
+                or (
+                    nodes[path][0] != "ndarray"
+                    and not (source.get("kind") == "hdf5" and nodes[path][0] == "ctable")
+                )
+                or (source.get("kind") != "hdf5" and root and not path.startswith(root + "/"))
             ):
                 raise ValueError("Invalid cached RemoteStore leaf")
         linked = manifest.get("linked", {})

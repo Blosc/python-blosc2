@@ -97,6 +97,10 @@ def test_remote_pytables_table_scan_and_shared_records():
         assert table.attrs["TITLE"] == b"example"
         assert table._cols["id"].records is table._cols["label"].records
         assert sum(isinstance(array, blosc2.RemoteArray) for array in table._storage._arrays) == 1
+        assert table.nbytes == data.nbytes + len(data)
+        assert table.cbytes == 0
+        sliced = table.slice(1, 3)
+        np.testing.assert_array_equal(sliced.label[:], data["label"][1:3])
 
 
 def test_remote_pytables_full_index_is_native_opsi():

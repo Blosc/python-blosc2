@@ -25,6 +25,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import math
 import os
 import pathlib
 import uuid
@@ -660,12 +661,19 @@ class _RemoteHDF5Field(blosc2.Operand):
     dtype = property(lambda self: self._dtype)
     shape = property(lambda self: self._shape)
     ndim = property(lambda self: len(self._shape))
+    nbytes = property(lambda self: math.prod(self._shape) * self._dtype.itemsize)
+    cbytes = property(lambda self: 0)
 
     def __len__(self):
         return self.shape[0]
 
     def __getitem__(self, key):
         return self.records[key][self.field]
+
+    def _take_numpy(self, indices, /, *, axis=None):
+        if axis not in (None, 0, -1):
+            raise ValueError("axis is out of bounds for a one-dimensional column")
+        return np.ascontiguousarray(self[indices])
 
 
 class _AllValidRows(blosc2.Operand):
@@ -681,6 +689,8 @@ class _AllValidRows(blosc2.Operand):
     dtype = property(lambda self: self._dtype)
     shape = property(lambda self: self._shape)
     ndim = property(lambda self: 1)
+    nbytes = property(lambda self: self._shape[0])
+    cbytes = property(lambda self: 0)
 
     def __len__(self):
         return self.shape[0]
@@ -691,6 +701,11 @@ class _AllValidRows(blosc2.Operand):
                 raise IndexError("row index out of range")
             return np.bool_(True)
         return np.ones(self.shape[0], dtype=bool)[key]
+
+    def _take_numpy(self, indices, /, *, axis=None):
+        if axis not in (None, 0, -1):
+            raise ValueError("axis is out of bounds for a one-dimensional column")
+        return np.ones(np.asarray(indices).shape, dtype=bool)
 
 
 class RemoteTableStorage(TableStorage):
