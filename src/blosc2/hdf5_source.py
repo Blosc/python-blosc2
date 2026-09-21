@@ -67,7 +67,13 @@ def _dtype_field_from_json(field):
         # dtype.descr writes a titled field as (title, name); JSON and msgpack
         # round trips turn that tuple into a list again.
         name = tuple(name)
-    if isinstance(spec, list):
+    if isinstance(spec, list) and len(spec) == 2 and isinstance(spec[1], dict):
+        # h5py annotates fixed-width HDF5 strings as (dtype, metadata).
+        # NumPy includes that pair in dtype.descr, but does not accept it when
+        # reconstructing a structured dtype.  The storage dtype is the first
+        # item; encoding metadata does not change the bytes on disk.
+        spec = spec[0]
+    elif isinstance(spec, list):
         spec = [_dtype_field_from_json(item) for item in spec]
     return (name, spec, tuple(shape[0])) if shape else (name, spec)
 
@@ -112,9 +118,11 @@ def _from_json_value(value):
     if "__float__" in value:
         return float(value["__float__"])
     if "__scalar__" in value:
-        return np.frombuffer(base64.b64decode(value["__scalar__"]), dtype=dtype_from_value(value["dtype"]))[
-            0
-        ]
+        data = base64.b64decode(value["__scalar__"])
+        dtype = dtype_from_value(value["dtype"])
+        if dtype.itemsize == 0:
+            return np.array(data, dtype=dtype)[()]
+        return np.frombuffer(data, dtype=dtype)[0]
     if "__object_ndarray__" in value:
         items = [_from_json_value(item) for item in value["__object_ndarray__"]]
         result = np.empty(value["shape"], dtype=object)

@@ -92,6 +92,17 @@ def test_hdf5_titled_dtype_roundtrip():
     assert dtype_from_value(json.loads(json.dumps(dtype_value(dtype)))) == dtype
 
 
+def test_hdf5_fixed_string_metadata_and_empty_scalar_roundtrip():
+    import h5py
+
+    from blosc2.hdf5_source import _from_json_value, _json_value, dtype_from_value, dtype_value
+
+    dtype = np.dtype([("name", h5py.string_dtype("ascii", 8)), ("value", "<i4")])
+    restored = dtype_from_value(json.loads(json.dumps(dtype_value(dtype))))
+    assert restored == np.dtype([("name", "S8"), ("value", "<i4")])
+    assert _from_json_value(_json_value(np.bytes_(b""))) == b""
+
+
 def test_hdf5_index_rejects_malformed_filter_values():
     from blosc2.hdf5_source import scan_hdf5_index, validate_hdf5_index
 
