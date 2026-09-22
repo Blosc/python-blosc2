@@ -68,15 +68,17 @@ Converted Blosc2 chunks are cached under an immutable source contract, so publis
 Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
 Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
-Remote pre-indexing uses h5py to record dataset metadata and allocated chunk byte ranges. When opening a single {ref}`RemoteArray`, the native index is cached inside the array carrier (`schunk.vlmeta["hdf5-index"]`). When using {ref}`RemoteStore`, indexing is performed once for the entire container and shared across all leaves and sessions. Uncompressed, deflate, shuffle, and Blosc2 pipelines are decoded directly after fsspec range reads. Other pipelines use a retained h5py reader, including filters registered by `hdf5plugin`.
+Remote HDF5 reads cache discovery metadata and fetch dataset chunks as needed.
+Uncompressed, deflate, shuffle, and Blosc2 pipelines are supported directly;
+other pipelines use h5py, including filters registered by `hdf5plugin`.
 Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5 container.
 
-An explicitly selected dataset is discovered directly; unrelated siblings and
-PyTables index groups are deferred. Complete hierarchy opens discover all nodes,
-but allocated-chunk maps are built only when a leaf is first read. Remote HDF5
-objects up to 8 MiB are fetched once and retained for the source session, because
-one bounded transfer is cheaper than many metadata ranges. A warm disk cache
-restores discovery metadata without downloading the complete source again.
+Small remote HDF5 files (up to 8 MiB) are downloaded once during discovery.
+With `cache_dir=` and `CachePolicy.DISK`, that copy is shared across datasets
+and later processes, so a subsequent table preview needs no further download.
+These source copies are excluded from `max_cache_bytes`, which is not a total
+disk-space limit. For implementation details and cleanup, see
+{doc}`../development/remote_cache_design`.
 
 For published immutable data, a native index can be generated once and served as
 an explicit JSON sidecar. The sidecar is Blosc2 metadata; the HDF5 file is not

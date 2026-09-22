@@ -344,6 +344,8 @@ def _open_url_source(
     seed=None,
     blocks=None,
     cparams=None,
+    hdf5_cache_dir=None,
+    hdf5_index_explicit=True,
 ):
     if persistable:
         validate_persistable_url(urlpath)
@@ -372,6 +374,8 @@ def _open_url_source(
             urlpath,
             dataset,
             hdf5_index=hdf5_index,
+            _source_cache_dir=hdf5_cache_dir,
+            _index_explicit=hdf5_index_explicit,
             _traffic=traffic,
             blocks=blocks,
             cparams=cparams,
@@ -620,6 +624,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             urlpath, dataset, source_format, hdf5_index
         )
         self._authorized_source = _source_descriptor is not None
+        hdf5_index_explicit = hdf5_index is not None
         shared_index_path = None
         if (
             not self._authorized_source
@@ -678,6 +683,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 seed=seed,
                 blocks=_source_blocks,
                 cparams=_source_cparams,
+                hdf5_cache_dir=cache_dir if cache_policy is blosc2.CachePolicy.DISK else None,
+                hdf5_index_explicit=hdf5_index_explicit,
             )
         self._assume_immutable = assume_immutable
         self._storage_options = storage_options
@@ -701,6 +708,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
         self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
 
+        self._publish_hdf5_source()
+
         _publish_hdf5_index(shared_index_path, self._carrier, scanned=hdf5_index is None)
 
         if self._carrier is not None:
@@ -713,6 +722,22 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             _store_owner.acquire()
             self._store_owner = _store_owner
             self._store_finalizer = weakref.finalize(self, _store_owner.release)
+
+    def _publish_hdf5_source(self):
+        if (
+            not self._authorized_source
+            and isinstance(self.src, blosc2.HDF5NDSource)
+            and self.src._source_cache_path is not None
+        ):
+            from blosc2.hdf5_source import publish_hdf5_source_cache
+
+            _store_hdf5_index(self._carrier, self.src._hdf5_index)
+            publish_hdf5_source_cache(
+                self.src._source_cache_path,
+                self.src._blob,
+                self.src._hdf5_index,
+                expected=self.src._source_cache_marker,
+            )
 
     def _initialize_runtime_cache(self, cache_dir, cache_path, _runtime_cache_path):
         if self._store_owner is not None and self.cache_policy is not blosc2.CachePolicy.NONE:
@@ -829,6 +854,16 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 if stored is not None and current is not None and stored != current
                 else "reused"
             )
+            if (
+                status == "invalidated/rebuilt"
+                and isinstance(self.src, blosc2.HDF5NDSource)
+                and self.src._source_cache_path is not None
+                and self._geometry(carrier) != self._geometry(self.src)
+            ):
+                del carrier
+                return self._to_b2object_carrier(
+                    urlpath=path, contiguous=True, mode="w", mutable=True
+                ), status
             if status == "reused":
                 if self._cached_meta is None:
                     self._cached_meta = self._meta_from_carrier(carrier)
@@ -1114,6 +1149,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         seed=None,
         blocks=None,
         cparams=None,
+        hdf5_cache_dir=None,
+        hdf5_index_explicit=True,
     ):
         if isinstance(urlpath, blosc2.C2Array):
             if source_format not in {None, "blosc2"}:
@@ -1162,6 +1199,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 seed=seed,
                 blocks=blocks,
                 cparams=cparams,
+                hdf5_cache_dir=hdf5_cache_dir,
+                hdf5_index_explicit=hdf5_index_explicit,
             )
         else:
             raise TypeError("RemoteArray requires a URL string, URLPath, or C2Array")

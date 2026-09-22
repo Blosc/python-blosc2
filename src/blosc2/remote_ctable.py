@@ -232,6 +232,7 @@ class RemoteCTable(RemoteObject, CTable):
                 )
                 replacement.restoring = False
                 replacement.save_manifest()
+                replacement.publish_hdf5_source(refresh=True)
             except BaseException:
                 replacement.disk = None
                 if fresh is not None:

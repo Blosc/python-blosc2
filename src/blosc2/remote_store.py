@@ -147,6 +147,7 @@ class RemoteDiscovery:
         self.archive = None
         self.zstore = None
         self.hdf5_blob = None
+        self.hdf5_source_cache_path = None
         if _hdf5_blob is not None:
             self.hdf5_blob = _hdf5_blob
         self.sources = {}
@@ -238,6 +239,10 @@ class RemoteDiscovery:
         elif self.format == "hdf5":
             self.hdf5_index = self.metadata
             self._validate_hdf5_index()
+            # JSON round trips lose the shared table metadata used by lazy index discovery.
+            for path, (kind, _) in self.nodes.items():
+                if kind == "ctable":
+                    self.nodes[path] = (kind, self.hdf5_index["datasets"][path])
         elif self.format == "zarr" and self.zstore is None:
             self._open_zarr()
         self._check_node_limit()
@@ -469,6 +474,7 @@ class RemoteDiscovery:
                 _filesystem=self.filesystem,
                 _lazy_allocations=True,
                 _return_blob=True,
+                _blob=self.hdf5_blob,
             )
         else:
             self.hdf5_index = load_hdf5_index(
@@ -510,6 +516,27 @@ class RemoteDiscovery:
                 )
                 self.save_manifest()
             return metadata
+
+    def attach_hdf5_source_cache(self, path, marker):
+        self.hdf5_source_cache_path = path
+        self.hdf5_source_cache_marker = marker
+        if path is not None and self.hdf5_blob is not None:
+            self.hdf5_index = dict(self.hdf5_index)
+            self.hdf5_index["source_sha256"] = hashlib.sha256(self.hdf5_blob).hexdigest()
+        elif marker is not None:
+            self.hdf5_index["source_cache_version"] = marker["token"]
+
+    def publish_hdf5_source(self, *, refresh=False):
+        if self.hdf5_source_cache_path is not None:
+            from blosc2.hdf5_source import publish_hdf5_source_cache
+
+            publish_hdf5_source_cache(
+                self.hdf5_source_cache_path,
+                self.hdf5_blob,
+                self.hdf5_index,
+                expected=getattr(self, "hdf5_source_cache_marker", None),
+                refresh=refresh,
+            )
 
     def ensure_pytables_indexes(self, table_path):
         """Discover one table's hidden PyTables index nodes on first use."""
@@ -995,6 +1022,13 @@ class RemoteDiscovery:
             replacement.mutable = self.mutable
             replacement.restoring = True
             replacement.disk = self.disk
+            replacement.hdf5_source_cache_path = self.hdf5_source_cache_path
+            if self.hdf5_source_cache_path is not None and replacement.hdf5_blob is None:
+                # A large replacement has no retained bytes, but must invalidate
+                # sibling scopes that still describe the previous small source.
+                replacement.hdf5_index["source_cache_version"] = hashlib.sha256(
+                    uuid.uuid4().bytes
+                ).hexdigest()
             return replacement
         except BaseException:
             replacement.close()
@@ -1360,10 +1394,9 @@ class RemoteStore(RemoteObject):
         _traffic=None,
         nested_storage_options=None,
     ):
-        if isinstance(urlpath, os.PathLike):
-            urlpath = os.fspath(urlpath)
-        if not isinstance(urlpath, str):
+        if not isinstance(urlpath, (str, os.PathLike)):
             raise TypeError("RemoteStore requires a remote URL string")
+        urlpath = os.fspath(urlpath)
         hdf5_index, _source_format = _resolve_hdf5_options(hdf5_index, _hdf5_index, _source_format)
         artifact = self._try_open_artifact(
             urlpath, dataset, storage_options, cache_policy, max_cache_bytes, cache_dir, _allow_array_root
@@ -1378,6 +1411,7 @@ class RemoteStore(RemoteObject):
         base_url, _, _ = parse_container_url(urlpath, dataset)
         validate_persistable_url(base_url)
         disk = None
+        source_cache_path = source_cache_marker = None
         manifest = _manifest
         if cache_policy is blosc2.CachePolicy.DISK:
             from blosc2.remote_store_cache import StoreDiskCache
@@ -1396,6 +1430,21 @@ class RemoteStore(RemoteObject):
             disk = StoreDiskCache(cache_dir, source)
         try:
             manifest = disk.load() if disk is not None else manifest
+            if disk is not None and source["kind"] == "hdf5" and cache_dir is not None:
+                from blosc2.hdf5_source import prepare_hdf5_source_cache
+
+                source_cache_path, source_cache_marker, _hdf5_blob, hdf5_index, manifest = (
+                    prepare_hdf5_source_cache(
+                        base_url,
+                        root or None,
+                        cache_dir,
+                        storage_options,
+                        hdf5_index,
+                        manifest,
+                        _hdf5_blob,
+                        explicit=_hdf5_index is None,
+                    )
+                )
             owner = RemoteDiscovery(
                 urlpath,
                 storage_options,
@@ -1412,6 +1461,7 @@ class RemoteStore(RemoteObject):
                 _traffic=_traffic,
             )
             manifest = owner.restored_manifest
+            owner.attach_hdf5_source_cache(source_cache_path, source_cache_marker)
         except BaseException:
             if disk is not None:
                 disk.close()
@@ -1432,6 +1482,7 @@ class RemoteStore(RemoteObject):
         try:
             owner.restore_caches(manifest)
             owner.save_manifest()
+            owner.publish_hdf5_source()
             if disk is not None:
                 disk.discard_old_generations(owner.generation)
         except BaseException:
@@ -1920,6 +1971,7 @@ class RemoteStore(RemoteObject):
             try:
                 replacement.restoring = False
                 replacement.save_manifest()
+                replacement.publish_hdf5_source(refresh=True)
                 if replacement.disk is not None:
                     replacement.disk.discard_old_generations(replacement.generation)
             except BaseException:

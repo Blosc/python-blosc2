@@ -13,6 +13,7 @@ import hashlib
 import http.server
 import os
 import pathlib
+import subprocess
 import sys
 import threading
 
@@ -751,6 +752,7 @@ def _ranged_server(root):
             return None
 
         def do_HEAD(self):
+            self.server.head_requests.append(self.path)
             body = (root / self.path.lstrip("/")).read_bytes()
             self.send_response(200)
             self.send_header("Accept-Ranges", "bytes")
@@ -761,6 +763,7 @@ def _ranged_server(root):
     handler = functools.partial(Ranged, directory=str(root))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.requests = []
+    server.head_requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", server.requests
@@ -782,6 +785,41 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
         count = len(requests)
         np.testing.assert_array_equal(remote[:10], data[:10])
         assert len(requests) == count
+
+
+def test_http_hdf5_source_cache_across_processes(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    data = np.zeros(100, dtype=[("id", "i4"), ("value", "f8")])
+    data["id"] = np.arange(len(data))
+    path = tmp_path / "table.h5"
+    with h5py.File(path, "w") as file:
+        table = file.create_dataset("table", data=data, chunks=(10,))
+        table.attrs["CLASS"] = np.bytes_(b"TABLE")
+    cache = tmp_path / "cache"
+    with _ranged_server(tmp_path) as (urlbase, requests):
+        script = (
+            "import blosc2, sys; "
+            "t=blosc2.open(sys.argv[1], cache_dir=sys.argv[2]); "
+            "print(t.info if sys.argv[3] == 'info' else t); "
+            "print('requests', t.traffic.requests); t.close()"
+        )
+        url = f"{urlbase}/{path.name}::table"
+        subprocess.run(
+            [sys.executable, "-c", script, url, str(cache), "info"], check=True, capture_output=True
+        )
+        assert requests == [None]
+        requests.clear()
+        # Reject all HTTP activity, including metadata HEADs, in the second process.
+        offline = "import socket; socket.socket.connect=lambda *a, **k: (_ for _ in ()).throw(RuntimeError('network')); "
+        result = subprocess.run(
+            [sys.executable, "-c", offline + script, url, str(cache), "table"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "requests 0" in result.stdout
+        assert "100 rows" in result.stdout
+        assert requests == []
 
 
 def test_http_large_hdf5_keeps_range_reads(tmp_path):

@@ -25,6 +25,22 @@ def validate_generation(generation):
         raise ValueError("Invalid RemoteStore generation")
 
 
+def lock_cache_file(file, *, blocking=False):
+    """Lock an open cache lockfile until it is closed."""
+    if os.name == "nt":
+        import msvcrt
+
+        if not file.tell():
+            file.write(b"\0")
+            file.flush()
+        file.seek(0)
+        msvcrt.locking(file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(file.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+
+
 class StoreDiskCache:
     def __init__(self, parent, source, *, blocking=False):
         self.source = source
@@ -33,18 +49,7 @@ class StoreDiskCache:
         self.path.mkdir(parents=True, exist_ok=True)
         self.file = (self.path / "owner.lock").open("a+b")
         try:
-            if os.name == "nt":
-                import msvcrt
-
-                if not self.file.tell():
-                    self.file.write(b"\0")
-                    self.file.flush()
-                self.file.seek(0)
-                msvcrt.locking(self.file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(self.file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            lock_cache_file(self.file, blocking=blocking)
 
             if (self.path / "manifest.msgpack").exists():
                 raise ValueError(

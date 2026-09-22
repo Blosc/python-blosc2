@@ -7,3 +7,4 @@ Development
    contributing
    code-of-conduct
    roadmap
+   remote_cache_design

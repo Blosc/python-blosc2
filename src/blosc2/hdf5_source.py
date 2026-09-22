@@ -18,6 +18,7 @@ import os
 import threading
 import weakref
 import zlib
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -29,6 +30,125 @@ HDF5_INDEX_FORMAT = "blosc2-hdf5-index"
 HDF5_INDEX_VERSION = 2
 _HDF5_INDEX_VERSIONS = {1, HDF5_INDEX_VERSION}
 _SMALL_REMOTE_FILE = 8 << 20
+
+
+def hdf5_source_cache_path(urlpath, cache_dir, storage_options=None):
+    """Resolve a source artifact independently of dataset-scoped carriers."""
+    return Path(
+        blosc2.core.fsspec_cache_path(
+            urlpath, Path(cache_dir) / "hdf5-sources", ".hdf5-source", storage_options=storage_options
+        )
+    )
+
+
+def _source_marker(path):
+    try:
+        with path.with_suffix(path.suffix + ".json").open("rb") as file:
+            marker = json.loads(file.read(4097))
+        size, token = marker["size"], marker["token"]
+        if marker["version"] != 1 or type(size) is not int or size <= 0:
+            return None
+        if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+            return None
+        if marker["sha256"] != (token if size <= _SMALL_REMOTE_FILE else None):
+            return None
+        return marker
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def load_hdf5_source_cache(path):
+    """Return verified bytes and version metadata, including large-source tombstones."""
+    marker = _source_marker(path)
+    if marker is None or marker["size"] > _SMALL_REMOTE_FILE:
+        return None, marker
+    try:
+        with path.open("rb") as file:
+            if os.fstat(file.fileno()).st_size != marker["size"]:
+                return None, marker
+            blob = file.read(_SMALL_REMOTE_FILE + 1)
+        if len(blob) == marker["size"] and hashlib.sha256(blob).hexdigest() == marker["sha256"]:
+            return blob, marker
+    except OSError:
+        pass
+    return None, marker
+
+
+def hdf5_source_version(index):
+    return index.get("source_cache_version", index.get("source_sha256"))
+
+
+def reconcile_hdf5_index(index, urlpath, dataset, storage_options, blob, marker, *, explicit):
+    """Reject stale explicit indexes; rescan disposable generated indexes."""
+    if index is None:
+        return None
+    index = load_hdf5_index(index, urlpath, storage_options, dataset=dataset)
+    if marker is None:
+        return index
+    version = hdf5_source_version(index)
+    mismatch = index.get("size") != marker["size"] or version != marker["token"]
+    if explicit:
+        if index.get("size") != marker["size"] or (version is not None and mismatch):
+            raise ValueError("HDF5 source version does not match hdf5_index; regenerate the sidecar")
+        return index
+    return None if mismatch else index
+
+
+def publish_hdf5_source_cache(path, blob, index, *, expected=None, refresh=False):
+    """Publish an optional complete source, or an invalidation marker after refresh."""
+    from blosc2.remote_store_cache import lock_cache_file
+
+    # Serialize the version check and replacement against concurrent refresh.
+    # Readers use checksums; no store/array locks are acquired under this lock.
+    with path.with_suffix(path.suffix + ".lock").open("a+b") as lock:
+        lock_cache_file(lock, blocking=True)
+        _publish_source_cache(path, blob, index, expected, refresh)
+
+
+def _publish_source_cache(path, blob, index, expected, refresh):
+    from blosc2.remote_store_cache import atomic_write
+
+    current = _source_marker(path)
+    token = hdf5_source_version(index)
+    if not refresh and current != expected and (current or {}).get("token") != token:
+        raise RuntimeError("HDF5 source cache changed during open; retry the operation")
+    if blob is None and not refresh:
+        return
+    size = index["size"]
+    marker = {"version": 1, "size": size, "token": token, "sha256": index.get("source_sha256")}
+    if blob is not None:
+        if len(blob) != size or size > _SMALL_REMOTE_FILE or hashlib.sha256(blob).hexdigest() != token:
+            raise ValueError("Invalid HDF5 source-cache bytes")
+        if current == marker:
+            existing, _ = load_hdf5_source_cache(path)
+            if existing is not None:
+                return
+        atomic_write(path, blob)
+    atomic_write(path.with_suffix(path.suffix + ".json"), json.dumps(marker).encode())
+    if blob is None:
+        path.unlink(missing_ok=True)
+
+
+def prepare_hdf5_source_cache(
+    urlpath, dataset, cache_dir, storage_options, index, manifest, blob, *, explicit
+):
+    """Resolve source bytes and discard a stale store manifest before opening leaves."""
+    path = hdf5_source_cache_path(urlpath, cache_dir, storage_options)
+    cached_blob, marker = load_hdf5_source_cache(path)
+    if cached_blob is not None:
+        blob = cached_blob
+    elif blob is not None and marker is not None and hashlib.sha256(blob).hexdigest() != marker["token"]:
+        blob = None
+    index = reconcile_hdf5_index(index, urlpath, dataset, storage_options, blob, marker, explicit=explicit)
+    if (
+        manifest is not None
+        and reconcile_hdf5_index(
+            manifest["metadata"], urlpath, dataset, storage_options, blob, marker, explicit=False
+        )
+        is None
+    ):
+        manifest = None
+    return path, marker, blob, index, manifest
 
 
 def _pytables_table_schema(dtype, shape, boolean_fields=()):
@@ -421,6 +541,7 @@ def scan_hdf5_index(
     _filesystem=None,
     _lazy_allocations=False,
     _return_blob=False,
+    _blob=None,
 ):
     """Build a native byte-range index for a local or remote HDF5 source.
 
@@ -454,10 +575,12 @@ def scan_hdf5_index(
         check_hdf5_dependencies()
         fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
     groups, datasets = {"": {"attrs": {}}}, {}
-    blob = None
+    blob = _blob
     try:
-        size = os.path.getsize(path) if local else int(fs.info(path)["size"])
-        if not local and size <= _SMALL_REMOTE_FILE:
+        size = (
+            len(blob) if blob is not None else os.path.getsize(path) if local else int(fs.info(path)["size"])
+        )
+        if blob is None and not local and size <= _SMALL_REMOTE_FILE:
             blob = fs.cat_file(path)
             if len(blob) != size:
                 raise OSError(f"Short HDF5 read: expected {size} bytes, got {len(blob)}")
@@ -479,6 +602,8 @@ def scan_hdf5_index(
         "groups": groups,
         "datasets": datasets,
     }
+    if blob is not None:
+        index["source_sha256"] = hashlib.sha256(blob).hexdigest()
     return (index, blob) if _return_blob else index
 
 
@@ -518,6 +643,12 @@ def validate_hdf5_index(index, urlpath=None, *, dataset=None):
             )
         raise ValueError("Invalid HDF5 index format")
     version = index.get("version")
+    for field in ("source_sha256", "source_cache_version"):
+        value = index.get(field)
+        if value is not None and (
+            not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+        ):
+            raise ValueError(f"Invalid HDF5 {field}")
     if version not in _HDF5_INDEX_VERSIONS:
         raise ValueError(f"Unsupported HDF5 index version {index.get('version')!r}")
     if urlpath is not None and index.get("urlpath") != os.fspath(urlpath):
@@ -808,6 +939,8 @@ class HDF5NDSource(ProxyNDSource):
         _filesystem=None,
         _blob=None,
         _ensure_allocations=None,
+        _source_cache_dir=None,
+        _index_explicit=True,
     ):
         urlpath, dataset = self._parse_url(urlpath, dataset)
         self.urlpath, self.dataset, self.max_concurrency = urlpath, dataset, max_concurrency
@@ -823,6 +956,8 @@ class HDF5NDSource(ProxyNDSource):
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
         self._local = (not remote or os.path.isabs(urlpath)) and _filesystem is None
         self._hdf5_index = None
+        self._source_cache_path = None
+        self._source_cache_marker = None
         try:
             if self._local:
                 self._open_local()
@@ -835,10 +970,30 @@ class HDF5NDSource(ProxyNDSource):
             else:
                 check_hdf5_dependencies()
                 self._filesystem, self._path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+                if _source_cache_dir is not None:
+                    self._source_cache_path = hdf5_source_cache_path(
+                        urlpath, _source_cache_dir, storage_options
+                    )
+                    self._blob, self._source_cache_marker = load_hdf5_source_cache(self._source_cache_path)
+                    hdf5_index = reconcile_hdf5_index(
+                        hdf5_index,
+                        urlpath,
+                        dataset,
+                        storage_options,
+                        self._blob,
+                        self._source_cache_marker,
+                        explicit=_index_explicit,
+                    )
                 # No extra session finalizer here: fsspec's HTTP and S3 filesystems
                 # already register one when they create their session, and a second
                 # close makes s3fs/aiobotocore assert on the already-exited client.
                 self._hdf5_index = self._load_or_scan_index(hdf5_index)
+                if self._source_cache_path is not None and self._blob is not None:
+                    self._hdf5_index = dict(self._hdf5_index)
+                    self._hdf5_index["source_sha256"] = hashlib.sha256(self._blob).hexdigest()
+                if self._source_cache_marker is not None and self._blob is None:
+                    self._hdf5_index = dict(self._hdf5_index)
+                    self._hdf5_index["source_cache_version"] = self._source_cache_marker["token"]
                 self._validate_dataset_presence(dataset)
                 self._metadata = self._hdf5_index["datasets"][self.dataset]
                 if self._metadata["direct"] and self._metadata["allocated"] is None:
@@ -866,6 +1021,8 @@ class HDF5NDSource(ProxyNDSource):
                 "blocks": self._blocks,
                 "dtype": self._dtype.descr if self._dtype.fields else self._dtype.str,
             }
+            if self._hdf5_index is not None and hdf5_source_version(self._hdf5_index) is not None:
+                identity["source_version"] = hdf5_source_version(self._hdf5_index)
             self.stamp = hashlib.sha256(
                 json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
@@ -922,6 +1079,7 @@ class HDF5NDSource(ProxyNDSource):
                 traffic=self.traffic,
                 _filesystem=self._filesystem,
                 _return_blob=True,
+                _blob=self._blob,
             )
             hdf5_index, blob = result
             if self._blob is None:

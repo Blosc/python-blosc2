@@ -164,6 +164,35 @@ def test_small_remote_pytables_file_is_retained():
         assert table.traffic.requests == 1
 
 
+def test_pytables_source_cache_survives_reopen_and_failed_refresh(tmp_path, monkeypatch):
+    import blosc2.hdf5_source as hs
+
+    url, data = pytables_hdf5_url("pytables-disk-source.h5", indexed=True)
+    with blosc2.open(url + "::table", cache_dir=tmp_path) as table:
+        # Discovery alone must leave the source available for later index conversion.
+        assert table.traffic.requests == 1
+    with blosc2.RemoteCTable(url, dataset="table", cache_dir=tmp_path) as table:
+        repr(table.info)
+        assert table._get_index_catalog()["id"]["kind"] == "opsi"
+        np.testing.assert_array_equal(table.id[:], data["id"])
+        assert table.traffic.requests == 0
+        path = hs.hdf5_source_cache_path(url, tmp_path)
+        before = hs.load_hdf5_source_cache(path)
+        owner = table._storage._owner
+        generation = owner.generation
+
+        def fail(*args, **kwargs):
+            raise OSError("refresh failed")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(hs, "scan_hdf5_index", fail)
+            with pytest.raises(OSError, match="refresh failed"):
+                table.refresh()
+        assert owner.generation == generation
+        assert hs.load_hdf5_source_cache(path) == before
+        np.testing.assert_array_equal(table.id[:], data["id"])
+
+
 def test_remote_pytables_fixed_string_full_index():
     url, data = pytables_hdf5_url("pytables-string-index.h5", indexed=True, indexed_field="label")
     with blosc2.RemoteCTable(url, dataset="table") as table:
