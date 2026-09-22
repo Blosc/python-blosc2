@@ -724,7 +724,7 @@ def test_http_stamp_prefers_etag_and_falls_back_to_modified_size():
 
 
 @contextlib.contextmanager
-def _ranged_server(root):
+def _ranged_server(root, *, head_requests=None):
     """A web server over *root* that honours `Range`, which the stock one does not."""
 
     class Ranged(http.server.SimpleHTTPRequestHandler):
@@ -763,7 +763,7 @@ def _ranged_server(root):
     handler = functools.partial(Ranged, directory=str(root))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.requests = []
-    server.head_requests = []
+    server.head_requests = [] if head_requests is None else head_requests
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", server.requests
@@ -796,7 +796,8 @@ def test_http_hdf5_source_cache_across_processes(tmp_path):
         table = file.create_dataset("table", data=data, chunks=(10,))
         table.attrs["CLASS"] = np.bytes_(b"TABLE")
     cache = tmp_path / "cache"
-    with _ranged_server(tmp_path) as (urlbase, requests):
+    head_requests = []
+    with _ranged_server(tmp_path, head_requests=head_requests) as (urlbase, requests):
         script = (
             "import blosc2, sys; "
             "t=blosc2.open(sys.argv[1], cache_dir=sys.argv[2]); "
@@ -804,22 +805,25 @@ def test_http_hdf5_source_cache_across_processes(tmp_path):
             "print('requests', t.traffic.requests); t.close()"
         )
         url = f"{urlbase}/{path.name}::table"
-        subprocess.run(
-            [sys.executable, "-c", script, url, str(cache), "info"], check=True, capture_output=True
+        result = subprocess.run(
+            [sys.executable, "-c", script, url, str(cache), "info"], capture_output=True, text=True
         )
+        assert result.returncode == 0, result.stderr
         assert requests == [None]
         requests.clear()
-        # Reject all HTTP activity, including metadata HEADs, in the second process.
-        offline = "import socket; socket.socket.connect=lambda *a, **k: (_ for _ in ()).throw(RuntimeError('network')); "
+        head_requests.clear()
+        # Observe HTTP requests instead of blocking socket.connect: Windows asyncio
+        # needs internal loopback connections to create its wakeup socket pair.
         result = subprocess.run(
-            [sys.executable, "-c", offline + script, url, str(cache), "table"],
-            check=True,
+            [sys.executable, "-c", script, url, str(cache), "table"],
             capture_output=True,
             text=True,
         )
+        assert result.returncode == 0, result.stderr
         assert "requests 0" in result.stdout
         assert "100 rows" in result.stdout
         assert requests == []
+        assert head_requests == []
 
 
 def test_http_large_hdf5_keeps_range_reads(tmp_path):
