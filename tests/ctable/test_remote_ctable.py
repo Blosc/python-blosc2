@@ -1698,7 +1698,7 @@ def test_parallel_metadata_benchmark(tmp_path, monkeypatch):
     original = filesystem_type.cat_file
 
     def delayed(self, *args, **kwargs):
-        time.sleep(0.01)
+        time.sleep(0.002)
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(filesystem_type, "cat_file", delayed)
@@ -1768,12 +1768,11 @@ def test_parallel_rows_cache_policies(tmp_path, policy, budget):
         y: float = blosc2.field(blosc2.float64())
         text: str = blosc2.field(blosc2.utf8(null_storage="mask"))
 
+    # Only the first 16 live rows are selected; keep export after deletion cheap.
+    # Uncompressed columns still exceed the 128-byte buffer and 1 KiB cache budgets.
     local = blosc2.CTable(
         Mixed,
-        [
-            (None if i % 7 == 0 else i, i / 3, None if i % 5 == 0 else f"🌦 café 東京 {i}")
-            for i in range(20000)
-        ],
+        [(None if i % 7 == 0 else i, i / 3, None if i % 5 == 0 else f"🌦 café 東京 {i}") for i in range(128)],
         cparams={"clevel": 0},
         create_summary_index=False,
     )
