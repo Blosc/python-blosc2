@@ -1376,6 +1376,31 @@ def test_remote_ctable_utf8(tmp_path, policy, null_storage, deleted):
             read()
 
 
+@pytest.mark.parametrize("deleted", [[], [1, 4], list(range(3, 11)), list(range(11))])
+def test_remote_ctable_info_with_validity_mask(tmp_path, deleted):
+    local = blosc2.CTable(
+        Row, urlpath=str(tmp_path / "source.b2d"), mode="w", expected_size=11, create_summary_index=False
+    )
+    # Exercise multiple mask chunks, including a partial tail chunk.
+    local._valid_rows = local._storage.create_valid_rows(shape=(11,), chunks=(4,), blocks=(2,))
+    local.extend([(i, [i, i + 1], str(i)) for i in range(11)])
+    if deleted:
+        local.delete(deleted)
+    live = np.flatnonzero(local._valid_rows[:])
+    expected = int(live[-1]) + 1 if len(live) else 0
+    url = remote_table_url(tmp_path, local)
+    local.close()
+    with blosc2.open(url, cache_dir=tmp_path / "cache") as remote:
+        assert isinstance(remote._valid_rows, blosc2.RemoteArray)
+        assert remote._resolve_last_pos() == expected
+        assert remote._last_pos == expected
+        remote._last_pos = None  # Exercise resolution through the report, too.
+        info = dict(remote.info_items)
+        assert ("valid_rows" in info) == (expected > len(live))
+        assert info["nrows"] == len(live)
+        assert "RemoteCTable" in repr(remote.info)
+
+
 def test_remote_ctable_deleted_rows_and_disk_cache(tmp_path):
     source = str(tmp_path / "deleted.b2d")
     table = blosc2.CTable(Row, urlpath=source, mode="w", expected_size=8, create_summary_index=False)

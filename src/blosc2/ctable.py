@@ -6023,7 +6023,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Returns the cached ``_last_pos`` when available.  After a deletion
         ``_last_pos`` is ``None``; this method then walks chunk metadata of
         ``_valid_rows`` from the end (no full decompression) to find the last
-        ``True`` position, caches the result, and returns it.
+        ``True`` position, caches the result, and returns it. Readers without
+        chunk metadata are scanned backwards one chunk at a time instead.
         """
         if self._last_pos is not None:
             return self._last_pos
@@ -6033,6 +6034,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._last_pos = arr.shape[0]
             return self._last_pos
         chunk_size = arr.chunks[0]
+        if not hasattr(arr, "iterchunks_info"):
+            last_pos = 0
+            for start in reversed(range(0, arr.shape[0], chunk_size)):
+                nonzero = np.flatnonzero(arr[start : min(start + chunk_size, arr.shape[0])])
+                if len(nonzero):
+                    last_pos = start + int(nonzero[-1]) + 1
+                    break
+            self._last_pos = last_pos
+            return self._last_pos
         last_true_pos = -1
 
         for info in reversed(list(arr.iterchunks_info())):
