@@ -120,6 +120,21 @@ def test_remote_pytables_light_index_falls_back_to_scan():
         np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
 
 
+def test_open_dispatches_remote_pytables_table(tmp_path):
+    url, data = pytables_hdf5_url(f"{tmp_path.name}-open-pytables.h5")
+    cache = tmp_path / "cache"
+
+    with blosc2.open(url, lazy=True, cache_dir=cache) as store:
+        assert isinstance(store, blosc2.RemoteStore)
+        assert "table" in store
+
+    for target, options in ((url, {"dataset": "table"}), (url + "::table", {})):
+        with blosc2.open(target, lazy=True, cache_dir=cache, **options) as table:
+            assert isinstance(table, blosc2.RemoteCTable)
+            np.testing.assert_array_equal(table["id"][:], data["id"])
+            assert "RemoteCTable" in str(table.info)
+
+
 def test_remote_pytables_fixed_string_full_index():
     url, data = pytables_hdf5_url("pytables-string-index.h5", indexed=True, indexed_field="label")
     with blosc2.RemoteCTable(url, dataset="table") as table:
@@ -160,7 +175,7 @@ def test_remote_pytables_incomplete_index_import_is_rebuilt(tmp_path):
         np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
 
 
-def test_remote_pytables_source_change_invalidates_indexes(tmp_path):
+def test_remote_pytables_source_change_requires_refresh(tmp_path):
     name = "pytables-changing-index.h5"
     url, _ = pytables_hdf5_url(name, indexed=True)
     options = {"dataset": "table", "cache_policy": blosc2.CachePolicy.DISK, "cache_dir": tmp_path}
@@ -170,6 +185,9 @@ def test_remote_pytables_source_change_invalidates_indexes(tmp_path):
 
     url, data = pytables_hdf5_url(name, indexed=True, indexed_rows=25)
     with blosc2.RemoteCTable(url, **options) as table:
+        assert table._storage._owner.generation == generation
+        assert len(table) != 25
+        table.refresh()
         assert table._storage._owner.generation != generation
         assert len(table) == 25
         np.testing.assert_array_equal(table.where("id >= 22").id[:], data["id"][data["id"] >= 22])
@@ -406,7 +424,7 @@ def test_remote_example_batch_columns(tmp_path, capsys):
     script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
     example = runpy.run_path(str(script))
     path = tmp_path / "example-batches.b2z"
-    example["write_table"](SimpleNamespace(write=path, rows=100, batch_size=37, overwrite=False))
+    example["write_table"](SimpleNamespace(write=path, rows=100, batch_size=37, overwrite=False, full=None))
     with blosc2.open(path) as local:
         assert local["message"][47] is None
         assert local["tags"][53] is None

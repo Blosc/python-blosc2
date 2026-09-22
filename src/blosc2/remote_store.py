@@ -120,6 +120,7 @@ class RemoteDiscovery:
         _manifest_validator=None,
         _max_nodes=None,
         _source_format=None,
+        _hdf5_index=None,
         _traffic=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
@@ -172,21 +173,13 @@ class RemoteDiscovery:
             self.filesystem = _filesystem
             if self.filesystem is None:
                 self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
-            if manifest and self.format == "hdf5":
-                from blosc2.hdf5_source import hdf5_source_state
-
-                current_state = hdf5_source_state(self.urlpath, self.storage_options, self.filesystem)
-                if manifest["metadata"].get("source_state") != current_state:
-                    manifest = None
-                    self.generation = uuid.uuid4().hex
-                    self.metadata = {}
             self.restored_manifest = manifest
             if manifest:
                 self._restore_manifest(manifest)
             elif self.format == "b2z":
                 self._open_b2z()
             elif self.format == "hdf5":
-                self._open_hdf5()
+                self._open_hdf5(_hdf5_index)
             else:
                 self._open_zarr()
             self._check_node_limit()
@@ -451,17 +444,21 @@ class RemoteDiscovery:
         self.archive._opening_ranges.clear()
         self.archive.capture_metadata = False
 
-    def _open_hdf5(self):
+    def _open_hdf5(self, hdf5_index=None):
         from blosc2.hdf5_source import decode_hdf5_value, scan_hdf5_index
 
         unsupported = {}
-        self.hdf5_index = scan_hdf5_index(
-            self.urlpath,
-            self.storage_options,
-            unsupported=unsupported,
-            traffic=self.traffic,
-            _filesystem=self.filesystem,
-        )
+        if hdf5_index is None:
+            self.hdf5_index = scan_hdf5_index(
+                self.urlpath,
+                self.storage_options,
+                unsupported=unsupported,
+                traffic=self.traffic,
+                _filesystem=self.filesystem,
+            )
+        else:
+            self.hdf5_index = hdf5_index
+            self._validate_hdf5_index()
         for path, metadata in self.hdf5_index["groups"].items():
             self._add(path, "group")
             self.attrs[path] = {
@@ -1277,6 +1274,7 @@ class RemoteStore(RemoteObject):
         _manifest_validator=None,
         _max_nodes=None,
         _source_format=None,
+        _hdf5_index=None,
         _traffic=None,
         nested_storage_options=None,
     ):
@@ -1326,6 +1324,7 @@ class RemoteStore(RemoteObject):
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _source_format=_source_format,
+                _hdf5_index=_hdf5_index,
                 _traffic=_traffic,
             )
             manifest = owner.restored_manifest

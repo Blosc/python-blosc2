@@ -179,8 +179,7 @@ def test_disk_reopen_all_leaves_and_refresh(hierarchy, tmp_path, monkeypatch):
             raise AssertionError("reopen fetched remote bytes")
 
         patch.setattr(type(fsspec.filesystem("memory")), "cat_file", forbidden)
-        if url.endswith(".b2z"):
-            patch.setattr(type(fsspec.filesystem("memory")), "info", forbidden)
+        patch.setattr(type(fsspec.filesystem("memory")), "info", forbidden)
         reopened = blosc2.RemoteStore(url, cache_dir=parent)
         reopened.close()
     with blosc2.RemoteStore(url, cache_dir=parent) as store:

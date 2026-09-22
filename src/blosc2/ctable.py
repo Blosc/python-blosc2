@@ -6023,6 +6023,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return self._last_pos
 
         arr = self._valid_rows
+        if getattr(arr, "_all_valid", False):
+            self._last_pos = arr.shape[0]
+            return self._last_pos
         chunk_size = arr.chunks[0]
         last_true_pos = -1
 

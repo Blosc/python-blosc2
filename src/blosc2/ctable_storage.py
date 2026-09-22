@@ -681,6 +681,8 @@ class _RemoteHDF5Field(blosc2.Operand):
 class _AllValidRows(blosc2.Operand):
     """Virtual validity column for immutable row-complete sources."""
 
+    _all_valid = True
+
     def __init__(self, size, source_chunks):
         chunk = source_chunks[0] if source_chunks else max(1, min(size, 1 << 16))
         self._shape = (size,)

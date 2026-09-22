@@ -259,23 +259,6 @@ def _filesystem_and_path(urlpath, storage_options=None, filesystem=None):
     return fsspec.core.url_to_fs(urlpath, **options)
 
 
-def hdf5_source_state(urlpath, storage_options=None, filesystem=None):
-    """Return the stable fsspec identity used to invalidate cached discovery."""
-    fs, path = _filesystem_and_path(urlpath, storage_options, filesystem)
-    try:
-        info = fs.info(path)
-        state = {"size": int(info["size"])}
-        with contextlib.suppress(Exception):
-            state["ukey"] = str(fs.ukey(path))
-        for key in ("etag", "version_id", "mtime"):
-            if info.get(key) is not None:
-                state[key] = str(info[key])
-        return state
-    finally:
-        if filesystem is None:
-            _close_owned_filesystem(fs)
-
-
 def _close_owned_filesystem(filesystem):
     """Release the async session of an fsspec filesystem this code created."""
     close = getattr(filesystem, "close_session", None)
@@ -386,7 +369,6 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
         _attach_pytables_indexes(datasets, groups)
         with contextlib.suppress(Exception):
             size = os.path.getsize(path) if local else int(fs.info(path)["size"])
-        source_state = None if local else hdf5_source_state(urlpath, storage_options, fs)
     finally:
         if fs is not None and _filesystem is None:
             _close_owned_filesystem(fs)
@@ -397,7 +379,6 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
         "version": HDF5_INDEX_VERSION,
         "urlpath": os.fspath(urlpath),
         "size": size,
-        "source_state": source_state,
         "groups": groups,
         "datasets": datasets,
     }

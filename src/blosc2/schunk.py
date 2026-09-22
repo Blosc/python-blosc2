@@ -2230,6 +2230,14 @@ def _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index):
     return urlpath, dataset, source_format
 
 
+def _open_lazy_fsspec(urlpath, source_format, options):
+    if source_format == "b2z":
+        return _open_remote_b2z(urlpath, options)
+    if source_format == "hdf5":
+        return _open_remote_hdf5(urlpath, options)
+    return blosc2.RemoteArray(urlpath, **options)
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2284,9 +2292,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        if source_format == "b2z":
-            return _open_remote_b2z(urlpath, remote_array_options)
-        return blosc2.RemoteArray(urlpath, **remote_array_options)
+        return _open_lazy_fsspec(urlpath, source_format, remote_array_options)
 
     _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
@@ -2360,6 +2366,53 @@ def _open_remote_b2z(urlpath, options):
         if array_error is not None:
             raise array_error from None
         raise
+
+
+def _open_remote_hdf5(urlpath, options):
+    """Discover HDF5 groups and PyTables tables while retaining array-only options."""
+    if (
+        not is_fsspec_url(urlpath)
+        or options["cache_path"] is not None
+        or "hdf5_index" in options
+        or options["assume_immutable"] is not True
+    ):
+        return blosc2.RemoteArray(urlpath, **options)
+    dataset = options.get("dataset")
+    hdf5_index = None
+    traffic = None
+    if dataset:
+        array = blosc2.RemoteArray(urlpath, **options)
+        metadata = array.src._hdf5_index["datasets"][array.dataset]
+        if metadata.get("kind") != "ctable":
+            return array
+        hdf5_index = array.src._hdf5_index
+        traffic = array.traffic
+        array.close()
+    store_options = {
+        key: value
+        for key, value in options.items()
+        if key in {"dataset", "storage_options", "cache_dir", "cache_policy", "max_cache_bytes"}
+    }
+    with blosc2.RemoteStore(
+        urlpath,
+        _allow_array_root=True,
+        _source_format="hdf5",
+        _hdf5_index=hdf5_index,
+        _traffic=traffic,
+        **store_options,
+    ) as store:
+        _, full = store._resolve("")
+        kind = store._owner.nodes[full][0]
+        max_concurrency = options["max_concurrency"]
+        if max_concurrency is not None:
+            if kind != "ctable":
+                raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+            return blosc2.RemoteCTable._from_owner(
+                store._owner,
+                full,
+                max_concurrency=max_concurrency,
+            )
+        return store[""]
 
 
 def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
@@ -2510,7 +2563,8 @@ def open(
             ``lazy=True`` and reject explicit ``False``.
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
             the remote array dataset and read the byte ranges a slice touches.
-            B2Z table and group nodes return :class:`RemoteCTable` and :class:`RemoteStore` instead.
+            B2Z and HDF5 table and group nodes return :class:`RemoteCTable` and
+            :class:`RemoteStore` instead.
             A slice landing in a small part of a large
             chunk costs only the *blocks* it touches when ranges are available;
             chunks small enough to be one cheap request are still fetched whole.
@@ -2578,7 +2632,7 @@ def open(
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
         dataset: str, optional
             Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
-            B2Z also supports table and group paths in immutable archives.
+            B2Z and HDF5 also support table and group paths in immutable containers.
             Requires ``lazy=True``.
         hdf5_index: dict | str | PathLike, optional
             Pre-computed native HDF5 index or path to a JSON index file.

@@ -179,7 +179,7 @@ PyTables predicate engine on the server is not part of this proposal.
    local caching; verify scan queries and read-only lifecycle behavior.
 3. [x] Import clean, fully covering full/CSI indexes into native OPSI sidecars and
    register them with the existing planner. Keep unsupported-index scan fallback.
-4. [x] Add conversion reuse, source-version invalidation, and interrupted-import checks.
+4. [x] Add conversion reuse, explicit-refresh invalidation, and interrupted-import checks.
 5. [x] Integrate the same representation into Caterva2 and measure cold/warm behavior.
 
 ## Implementation status
@@ -192,8 +192,9 @@ Implemented on 2026-09-21 in these sequence commits:
    `RemoteCTable` access.
 3. `d5c1ffab` — imported clean, fully covering 64-bit full indexes into native
    OPSI sidecars, including fixed-width byte-string indexes.
-4. `27bd0ef0` — persisted converted sidecars, added completion-marker recovery,
-   and invalidated generations using the fsspec source identity.
+4. `27bd0ef0` — persisted converted sidecars and added completion-marker recovery.
+   Cached generations now remain valid until explicit refresh, matching the
+   immutable-source contract.
 5. `36602d09` in Python-Blosc2 and `501c108` in Caterva2 — enabled portable
    HDF5 CTable stores and Caterva2 metadata/filter/fetch handling through
    `RemoteCTable`.
@@ -234,7 +235,7 @@ PyTables' checked-in fixtures. PyTables itself was not installed in that environ
 
 Implemented automated checks cover lazy shared record access, scan fallback,
 numeric and fixed-width byte-string OPSI queries, rejection of light indexes,
-disk conversion reuse, incomplete-publication rebuild, source replacement,
+disk conversion reuse, incomplete-publication rebuild, explicit source refresh,
 portable-store validation, Caterva2 metadata/fetch integration, and sliced CTable
 materialization. The Caterva2 cold/warm check records HDF5 chunk reads for the
 first indexed request and verifies that repeating the request adds zero HDF5

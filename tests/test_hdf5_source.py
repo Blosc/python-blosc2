@@ -606,10 +606,11 @@ def test_hdf5_auto_detection(tmp_path):
     assert mem_proxy.source["kind"] == "hdf5"
 
 
-def test_hdf5_requires_dataset():
+def test_hdf5_without_dataset_opens_store():
     url = make_memory_h5("no_ds.h5", data=np.arange(10))
-    with pytest.raises(ValueError, match="HDF5 sources require a dataset path"):
-        blosc2.open(url, lazy=True)
+    with blosc2.open(url, lazy=True) as store:
+        assert isinstance(store, blosc2.RemoteStore)
+        assert store.keys() == ["data"]
 
 
 def test_hdf5_url_syntax_variants(tmp_path):
