@@ -39,6 +39,7 @@ def b2z_url(tmp_path, *, threshold=0):
     return url, data
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_b2z_discovery_and_dispatch(tmp_path, monkeypatch):
     url, data = b2z_url(tmp_path)
     fs = fsspec.filesystem("memory")
@@ -256,6 +257,7 @@ async def test_remote_tui_lifecycle(tmp_path, monkeypatch):
         await pilot.press("q")
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_embedded_b2z_index_is_bounded(tmp_path, monkeypatch):
     url, data = b2z_url(tmp_path, threshold=10**9)
     fs = fsspec.filesystem("memory")

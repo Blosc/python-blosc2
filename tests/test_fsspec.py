@@ -7,6 +7,7 @@
 #######################################################################
 
 import contextlib
+import dataclasses
 import functools
 import gc
 import hashlib
@@ -740,7 +741,10 @@ def _ranged_server(root, *, head_requests=None):
                 return super().do_GET()
             body = (root / self.path.lstrip("/")).read_bytes()
             first, _, last = span.removeprefix("bytes=").partition("-")
-            first, last = int(first), int(last) if last else len(body) - 1
+            if not first:
+                first, last = max(0, len(body) - int(last)), len(body) - 1
+            else:
+                first, last = int(first), int(last) if last else len(body) - 1
             part = body[first : last + 1]
             self.send_response(206)
             self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
@@ -787,14 +791,25 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
         assert len(requests) == count
 
 
-def test_http_hdf5_source_cache_across_processes(tmp_path):
-    h5py = pytest.importorskip("h5py")
+@pytest.mark.parametrize("format", ["hdf5", "b2z"])
+def test_http_source_cache_across_processes(tmp_path, format):
     data = np.zeros(100, dtype=[("id", "i4"), ("value", "f8")])
     data["id"] = np.arange(len(data))
-    path = tmp_path / "table.h5"
-    with h5py.File(path, "w") as file:
-        table = file.create_dataset("table", data=data, chunks=(10,))
-        table.attrs["CLASS"] = np.bytes_(b"TABLE")
+    if format == "hdf5":
+        h5py = pytest.importorskip("h5py")
+        path = tmp_path / "table.h5"
+        with h5py.File(path, "w") as file:
+            table = file.create_dataset("table", data=data, chunks=(10,))
+            table.attrs["CLASS"] = np.bytes_(b"TABLE")
+    else:
+        path = tmp_path / "table.b2z"
+        schema = dataclasses.make_dataclass(
+            "Row", [("id", int), ("value", float), ("note", str, blosc2.field(blosc2.utf8()))]
+        )
+        rng = np.random.default_rng(42)
+        rows = [(i, 0.0, rng.bytes(1500).hex()) for i in range(100)]
+        blosc2.CTable(schema, rows, create_summary_index=False).to_b2z(path)
+        assert path.stat().st_size > 64 * 1024
     cache = tmp_path / "cache"
     head_requests = []
     with _ranged_server(tmp_path, head_requests=head_requests) as (urlbase, requests):
@@ -804,12 +819,14 @@ def test_http_hdf5_source_cache_across_processes(tmp_path):
             "print(t.info if sys.argv[3] == 'info' else t); "
             "print('requests', t.traffic.requests); t.close()"
         )
-        url = f"{urlbase}/{path.name}::table"
+        url = f"{urlbase}/{path.name}" + ("::table" if format == "hdf5" else "")
         result = subprocess.run(
             [sys.executable, "-c", script, url, str(cache), "info"], capture_output=True, text=True
         )
         assert result.returncode == 0, result.stderr
-        assert requests == [None]
+        assert requests == (
+            [None] if format == "hdf5" else ["bytes=-8192", f"bytes=0-{path.stat().st_size - 1}"]
+        )
         requests.clear()
         head_requests.clear()
         # Observe HTTP requests instead of blocking socket.connect: Windows asyncio

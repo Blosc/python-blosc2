@@ -317,6 +317,7 @@ def test_remote_summary_index_prunes_queries(tmp_path, granularity):
 
 
 @pytest.mark.parametrize("policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY])
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_remote_summary_single_payload_request_and_cache(tmp_path, policy):
     from blosc2.indexing import _open_level_summary_handle
 
@@ -547,6 +548,7 @@ def test_disk_cache_metadata_key_order(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("max_concurrency", [1, 8])
 @pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_disk_cache_reuses_ctable_bootstrap(tmp_path, monkeypatch, max_concurrency, legacy):
     schema = dataclasses.make_dataclass("Sample", [("x", float), ("note", str, blosc2.field(blosc2.utf8()))])
     values = np.random.default_rng(42).random(20_000)
@@ -885,6 +887,7 @@ def test_remote_ctable_nested_list(tmp_path, serializer):
         assert remote[remote["values"].overlaps([[3], [4]])]["values"][:] == [[[3]]]
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_remote_ctable_membership_index_avoids_list_payload(tmp_path, monkeypatch):
     @dataclasses.dataclass
     class Rows:
@@ -969,6 +972,7 @@ def test_remote_ctable_missing_dictionary_companion_isolated(tmp_path):
             remote["category"][:]
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_remote_batch_reads_mutation_lifetime_and_copy(tmp_path, monkeypatch):
     @dataclasses.dataclass
     class Mixed:
@@ -1135,6 +1139,7 @@ def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
         np.testing.assert_array_equal(sparse["x"][:], [1, 2])
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_remote_ctable_reference_save_roundtrip(tmp_path):
     @dataclasses.dataclass
     class TextRow:
@@ -1508,6 +1513,7 @@ def test_remote_utf8_invalid_companion(tmp_path, bad_data):
 
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
 @pytest.mark.parametrize("blocks", [False, True])
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_remote_utf8_bounded_transfer(tmp_path, monkeypatch, policy, blocks):
     from blosc2 import proxy_source
     from blosc2._utf8_array import UTF8Array
@@ -1672,6 +1678,7 @@ def test_open_dispatches_remote_table_hierarchy(tmp_path, suffix, monkeypatch):
         assert store["group/table"]["x"][0] == 1
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_parallel_metadata_benchmark(tmp_path, monkeypatch):
     import runpy
     import time

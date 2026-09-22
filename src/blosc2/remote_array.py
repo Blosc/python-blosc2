@@ -344,7 +344,7 @@ def _open_url_source(
     seed=None,
     blocks=None,
     cparams=None,
-    hdf5_cache_dir=None,
+    source_cache_dir=None,
     hdf5_index_explicit=True,
 ):
     if persistable:
@@ -374,7 +374,7 @@ def _open_url_source(
             urlpath,
             dataset,
             hdf5_index=hdf5_index,
-            _source_cache_dir=hdf5_cache_dir,
+            _source_cache_dir=source_cache_dir,
             _index_explicit=hdf5_index_explicit,
             _traffic=traffic,
             blocks=blocks,
@@ -391,7 +391,9 @@ def _open_url_source(
     elif source_format == "b2z":
         if not assume_immutable:
             raise NotImplementedError("mutable B2Z sources are not supported")
-        src = blosc2.B2ZNDSource(urlpath, dataset, _traffic=traffic, _seed=seed, **kwargs)
+        src = blosc2.B2ZNDSource(
+            urlpath, dataset, _traffic=traffic, _seed=seed, _source_cache_dir=source_cache_dir, **kwargs
+        )
         source = {
             "kind": "b2z",
             "version": 1,
@@ -683,7 +685,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 seed=seed,
                 blocks=_source_blocks,
                 cparams=_source_cparams,
-                hdf5_cache_dir=cache_dir if cache_policy is blosc2.CachePolicy.DISK else None,
+                source_cache_dir=cache_dir if cache_policy is blosc2.CachePolicy.DISK else None,
                 hdf5_index_explicit=hdf5_index_explicit,
             )
         self._assume_immutable = assume_immutable
@@ -708,7 +710,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
         self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
 
-        self._publish_hdf5_source()
+        self._publish_source_cache()
 
         _publish_hdf5_index(shared_index_path, self._carrier, scanned=hdf5_index is None)
 
@@ -723,7 +725,11 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             self._store_owner = _store_owner
             self._store_finalizer = weakref.finalize(self, _store_owner.release)
 
-    def _publish_hdf5_source(self):
+    def _publish_source_cache(self):
+        if not self._authorized_source and isinstance(self.src, blosc2.B2ZNDSource):
+            publish = getattr(self.src._archive, "publish_source", None)
+            if publish is not None:
+                publish()
         if (
             not self._authorized_source
             and isinstance(self.src, blosc2.HDF5NDSource)
@@ -856,8 +862,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             )
             if (
                 status == "invalidated/rebuilt"
-                and isinstance(self.src, blosc2.HDF5NDSource)
-                and self.src._source_cache_path is not None
+                and isinstance(self.src, (blosc2.HDF5NDSource, blosc2.B2ZNDSource))
                 and self._geometry(carrier) != self._geometry(self.src)
             ):
                 del carrier
@@ -1149,7 +1154,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         seed=None,
         blocks=None,
         cparams=None,
-        hdf5_cache_dir=None,
+        source_cache_dir=None,
         hdf5_index_explicit=True,
     ):
         if isinstance(urlpath, blosc2.C2Array):
@@ -1199,7 +1204,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 seed=seed,
                 blocks=blocks,
                 cparams=cparams,
-                hdf5_cache_dir=hdf5_cache_dir,
+                source_cache_dir=source_cache_dir,
                 hdf5_index_explicit=hdf5_index_explicit,
             )
         else:

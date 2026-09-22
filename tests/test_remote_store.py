@@ -219,7 +219,16 @@ def test_disk_cache_partitions_storage_options(hierarchy, tmp_path):
                 np.testing.assert_array_equal(a[:2, :2], data[:2, :2])
 
     # Different backends must not share a manifest or its leaf payloads.
-    assert len([path for path in cache.iterdir() if path.is_dir() and path.name != "hdf5-sources"]) == 2
+    assert (
+        len(
+            [
+                path
+                for path in cache.iterdir()
+                if path.is_dir() and path.name not in {"hdf5-sources", "b2z-sources"}
+            ]
+        )
+        == 2
+    )
 
 
 def test_artifact_keeps_storage_options_identity(hierarchy, tmp_path):
@@ -820,6 +829,7 @@ def test_sparse_store_processes_and_crash(tmp_path):
         np.testing.assert_array_equal(array[:], np.arange(10000, dtype="i4"))
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch):
     url, data = hierarchy
     translations = []

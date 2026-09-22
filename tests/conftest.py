@@ -38,6 +38,14 @@ def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
 
 
+@pytest.fixture
+def b2z_range_reads(monkeypatch):
+    """Exercise the large-archive range path using small, inexpensive fixtures."""
+    import blosc2.b2z_source
+
+    monkeypatch.setattr(blosc2.b2z_source, "SMALL_REMOTE_FILE", 0)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _fast_textual_idle():
     """Speed up the b2view (tui) tests by shrinking Textual's idle poll.

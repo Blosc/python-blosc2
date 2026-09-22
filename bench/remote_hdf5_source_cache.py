@@ -1,4 +1,4 @@
-"""Compare metadata-only and persisted-source HDF5 caches across fresh processes.
+"""Compare metadata-only and persisted-source container caches across fresh processes.
 
 Run with the blosc2 environment, e.g.:
     conda run -n blosc2 python bench/remote_hdf5_source_cache.py --repeats 3
@@ -20,6 +20,10 @@ def worker(args):
     if args.mode == "metadata-only":
         # Reproduce the previous cache policy while keeping discovery identical.
         hdf5_source.publish_hdf5_source_cache = lambda *a, **kw: None
+        # B2Z previously used range reads, even for a small archive.
+        import blosc2.b2z_source as b2z_source
+
+        b2z_source.SMALL_REMOTE_FILE = 0
     start = time.perf_counter()
     with blosc2.open(args.url, cache_dir=args.cache) as table:
         opened = time.perf_counter()

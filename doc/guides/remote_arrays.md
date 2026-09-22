@@ -55,7 +55,12 @@ a1[100:110, :50]  # data is fetched now
 
 Remote B2Z needs `pip install "blosc2[fsspec]"`.
 HTTP and HTTPS URLs work out of the box; cloud object stores need their respective protocol driver (such as `s3fs` for S3, `gcsfs` for GCS, or `adlfs` for Azure).
-It accesses external `ZIP_STORED` NDArray members in `.b2z` archives using native Blosc2 chunk and block range reads without decompressing or downloading the archive.
+It accesses external `ZIP_STORED` NDArray members using native Blosc2 chunk and
+block reads. Archives up to 8 MiB are downloaded eagerly; larger archives use
+range reads. With `cache_dir=` and `CachePolicy.DISK`, the small-archive copy is
+shared across members and later processes. Source copies are excluded from
+`max_cache_bytes`; see {doc}`../development/remote_cache_design` for accounting
+and cleanup details.
 For a suffix-free URL, pass `source_format="b2z"`.
 Embedded leaves and CTable columns are not supported as lazy NDArrays.
 

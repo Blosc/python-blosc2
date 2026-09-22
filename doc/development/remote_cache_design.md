@@ -17,11 +17,11 @@ distinguished:
 | --- | --- | --- |
 | Discovery metadata | Reconstruct readers, locate data, and navigate containers | Array carriers and store manifests; format-specific headers, indexes, or metadata objects |
 | Compressed payload | Reuse fetched or converted data | Native Blosc2 chunks/blocks, or chunks converted from HDF5/Zarr |
-| Complete source object | Reuse original bytes across dataset scopes | Small HDF5 files only |
+| Complete source object | Reuse original bytes across dataset scopes | HDF5 files and B2Z archives up to 8 MiB |
 
 A warm metadata cache does not imply a warm payload cache. Reopening may avoid
-discovery requests but still fetch data for a preview. HDF5's complete-source
-cache bridges that gap for small files; the other routes do not provide a
+discovery requests but still fetch data for a preview. HDF5 and B2Z complete-source
+caches bridge that gap for small files; the other routes do not provide a
 general persistent copy of the remote source.
 
 ### Identity and ownership
@@ -73,7 +73,7 @@ Explicit table/store refresh prepares new discovery before replacing the active
 generation and invalidating derived caches. Failure during preparation leaves
 the previous generation usable. Existing child handles of a refreshed store
 become stale and must be reacquired. Other independently opened scopes are not
-automatically refreshed; HDF5's shared-source version check adds the specific
+automatically refreshed; HDF5/B2Z shared-source version checks add the specific
 reopen behavior described below. Immutable reference snapshots cannot refresh.
 
 ## Native Blosc2 arrays and B2Z containers
@@ -104,11 +104,17 @@ reader to be reconstructed without fetching its header again. A populated
 table/store cache trusts the saved archive identity on reopen; older caches
 may need an identity lookup when upgrading their metadata.
 
-Bounded opening prefetch can happen to contain a complete small member. Its
-payload is transferred to the normal chunk cache, while the persistent leaf
-bootstrap keeps the metadata it needs. This is not an archive-wide source cache:
-uncached members or chunks still require remote reads. Replacing an archive at
-the same URL requires explicit refresh or cache replacement.
+Cold discovery eagerly downloads archives up to 8 MiB and retains the bytes for
+all members. HTTP discovery first requests the ZIP tail to learn the object size;
+if the tail contains the whole archive it is reused, otherwise a second request
+fetches the complete small archive. Larger archives keep the range-read path.
+With an explicit DISK cache directory, the shared source copy survives reopening.
+All archive read paths, including parallel table reads, can use these bytes.
+
+Bounded member prefetch can also contain a complete small member. Its payload is
+transferred to the normal chunk cache, while the persistent leaf bootstrap keeps
+the metadata it needs. This remains useful for large archives without a source
+copy. Replacing an archive at the same URL requires refresh or cache replacement.
 
 ## Zarr stores
 
@@ -153,31 +159,36 @@ For objects up to 8 MiB, discovery fetches the complete file once: one bounded
 transfer avoids many latency-bound metadata reads. Retaining these bytes lets
 later reads and PyTables index conversion reuse the same download.
 
-### Shared complete-source cache
+## Shared complete-source cache (HDF5 and B2Z)
 
 The complete source bytes, discovery metadata, and converted Blosc2 chunks have
 different lifetimes. Source bytes are shared across dataset scopes; metadata and
 converted payload remain in their existing array/store caches.
 
 With an explicit `cache_dir` and `CachePolicy.DISK`, source bytes persist under
-`cache_dir/hdf5-sources/`. The source identity reuses `fsspec_cache_path()`:
+`cache_dir/hdf5-sources/` or `cache_dir/b2z-sources/`. Both readers reuse the
+integrity, publication, and locking helpers in `remote_source_cache.py`.
+The source identity reuses `fsspec_cache_path()`:
 normalized base URL plus the non-reversible `storage_options` fingerprint,
 without the dataset scope. Different datasets in one file share a single copy;
 different cache directories, URLs, or credential fingerprints remain isolated.
 
-Each source has a `.hdf5-source` file, a JSON marker, and a publication lock.
+Each source has a `.hdf5-source` or `.b2z-source` file, a JSON marker, and a publication lock.
 The marker records its schema version, byte size, SHA-256, and version token.
 These names and fields are private implementation details.
 
 Source copies do not count against `max_cache_bytes`. The 8 MiB ceiling is per
 file; aggregate source-cache disk usage is unbounded. They survive individual
 dataset-generation cleanup. Close active cache users before removing
-`cache_dir/hdf5-sources/` to clear source copies, or the whole cache directory to
+the corresponding `hdf5-sources/` or `b2z-sources/` directory to clear source copies,
+or the whole cache directory to
 reset all caches. There is no automatic source eviction or freshness check.
 
-MEMORY/NONE policies, `cache_path`-only opens, and portable references without
-an explicit shared cache root retain their previous behavior. B2Z and Zarr do
-not use this source cache.
+MEMORY/NONE policies can retain prefetched source bytes for the current session,
+but do not persist them. `cache_path`-only opens and portable references without
+an explicit shared root do not gain a persistent source copy. Saved metadata
+alone does not force a whole-archive download on portable B2Z reference reopen.
+Zarr does not use this source cache.
 
 ### Publication and reuse
 
@@ -195,10 +206,12 @@ size lookup or download.
 
 ### Version compatibility and refresh
 
-Generated indexes record `source_sha256` when complete bytes are available.
+Generated HDF5 indexes and B2Z discovery metadata record `source_sha256` when
+complete bytes are available. Small B2Z member stamps derive from that content
+identity rather than transport-dependent header fields.
 An index incompatible with the shared source must be rebuilt, and its derived
-payload invalidated. Generated legacy indexes without a digest are rebound by
-rebuilding once when a shared source becomes available.
+payload invalidated. Legacy small-source disk metadata without a digest is
+rebound by rebuilding discovery and invalidating derived payload once.
 
 Table/store refresh bypasses the retained bytes and prepares fresh discovery.
 A preparation failure leaves the old live generation usable. Successful refresh
@@ -206,7 +219,7 @@ publishes replacement metadata and source bytes; other scopes check compatibilit
 on their next open. Existing handles may retain their old immutable snapshot.
 
 If the refreshed file exceeds 8 MiB, publication replaces the old marker with a
-new version token and null checksum, then removes the old blob. Generated indexes
+new version token and null checksum, then removes the old blob. Discovery metadata
 record this token as `source_cache_version`, so sibling scopes invalidate old
 metadata and payload even though there is no replacement cached blob.
 
@@ -219,11 +232,11 @@ contract: matching sizes alone cannot prove version compatibility.
 ## Boundaries and future work
 
 The common model does not imply identical bootstrap costs or invalidation
-mechanisms across formats. In particular, the 8 MiB complete-source threshold,
-checksum marker, and cross-scope source-version reconciliation are HDF5-only.
+mechanisms across formats. The 8 MiB complete-source threshold, checksum marker,
+and cross-scope source-version reconciliation apply to HDF5 and B2Z, not to
+standalone `.b2nd` files or Zarr stores.
 
-A persistent small-archive source cache for B2Z remains deferred pending
-measurements. Zarr would require an object-level policy rather than copying
-HDF5's single-file design. Automatic freshness checks for containers, aggregate
+Zarr would require an object-level policy rather than this single-file design.
+Automatic freshness checks for containers, aggregate
 source-cache eviction, and a global disk-space budget are not implemented by
 this design.

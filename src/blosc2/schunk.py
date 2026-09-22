@@ -2344,7 +2344,11 @@ def _open_remote_b2z(urlpath, options):
     }
     try:
         with blosc2.RemoteStore(
-            urlpath, _allow_array_root=True, _source_format="b2z", **store_options
+            urlpath,
+            _allow_array_root=True,
+            _source_format="b2z",
+            _b2z_blob=array_error.blob if array_error is not None else None,
+            **store_options,
         ) as store:
             if array_error is not None:
                 # Include the initial array lookup in shared transfer accounting.

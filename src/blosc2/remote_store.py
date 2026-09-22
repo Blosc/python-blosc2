@@ -130,6 +130,9 @@ class RemoteDiscovery:
         _hdf5_index=None,
         _hdf5_blob=None,
         _traffic=None,
+        _source_cache_dir=None,
+        _refresh_source=False,
+        _b2z_blob=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         if _source_format is not None:
@@ -139,6 +142,33 @@ class RemoteDiscovery:
         self.root = (dataset or "").strip("/")
         self._validate(self.root)
         self.storage_options = storage_options or {}
+        self.source_cache_dir = _source_cache_dir
+        self.refresh_source = _refresh_source
+        self.b2z_source_cache = (None, None, None)
+        if self.format == "b2z":
+            from blosc2.b2z_source import SMALL_REMOTE_FILE, b2z_source_cache
+            from blosc2.remote_source_cache import source_version
+
+            self.b2z_source_cache = b2z_source_cache(
+                self.urlpath, _source_cache_dir, self.storage_options, refresh=_refresh_source
+            )
+            marker = self.b2z_source_cache[1]
+            if (
+                self.b2z_source_cache[2] is None
+                and _b2z_blob is not None
+                and (marker is None or hashlib.sha256(_b2z_blob).hexdigest() == marker["token"])
+            ):
+                self.b2z_source_cache = (*self.b2z_source_cache[:2], _b2z_blob)
+            if manifest and marker and source_version(manifest["metadata"]) != marker["token"]:
+                manifest = None
+            if (
+                manifest
+                and _source_cache_dir is not None
+                and not source_version(manifest["metadata"])
+                and SMALL_REMOTE_FILE
+                and manifest["metadata"].get("object_info", {}).get("size", 0) <= SMALL_REMOTE_FILE
+            ):
+                manifest = None  # Rebind legacy metadata/payload to the source digest once.
         self.traffic = _traffic if _traffic is not None else Traffic()
         self.nodes = {}
         self.attrs = {}
@@ -235,6 +265,8 @@ class RemoteDiscovery:
                 _traffic=self.traffic,
                 _metadata=self.metadata,
                 _filesystem=self.filesystem,
+                _source_cache=self.b2z_source_cache,
+                _refresh=self.refresh_source,
             )
         elif self.format == "hdf5":
             self.hdf5_index = self.metadata
@@ -412,6 +444,8 @@ class RemoteDiscovery:
             _traffic=self.traffic,
             _metadata=self.metadata if self.persist_metadata else None,
             _filesystem=self.filesystem,
+            _source_cache=self.b2z_source_cache,
+            _refresh=self.refresh_source,
         )
         self.archive.capture_metadata = True
         members = {}
@@ -526,7 +560,9 @@ class RemoteDiscovery:
         elif marker is not None:
             self.hdf5_index["source_cache_version"] = marker["token"]
 
-    def publish_hdf5_source(self, *, refresh=False):
+    def publish_source_cache(self, *, refresh=False):
+        if self.format == "b2z" and self.archive is not None:
+            self.archive.publish_source(refresh=refresh)
         if self.hdf5_source_cache_path is not None:
             from blosc2.hdf5_source import publish_hdf5_source_cache
 
@@ -802,7 +838,7 @@ class RemoteDiscovery:
 
         # Immutable archives trust their persisted identity when restoring leaves.
         seeds = self.archive.metadata.get("ctable_seeds", {})
-        if full in seeds:
+        if full in seeds and self.archive.blob is None:
             return B2ZNDSource(
                 self.urlpath,
                 full,
@@ -1010,6 +1046,8 @@ class RemoteDiscovery:
             _manifest_validator=self.manifest_validator,
             _max_nodes=self.max_nodes,
             _source_format=self.format,
+            _source_cache_dir=self.source_cache_dir,
+            _refresh_source=True,
         )
         try:
             if replacement.nodes[replacement.root][0] != kind:
@@ -1393,6 +1431,7 @@ class RemoteStore(RemoteObject):
         _hdf5_blob=None,
         _traffic=None,
         nested_storage_options=None,
+        _b2z_blob=None,
     ):
         if not isinstance(urlpath, (str, os.PathLike)):
             raise TypeError("RemoteStore requires a remote URL string")
@@ -1459,6 +1498,8 @@ class RemoteStore(RemoteObject):
                 _hdf5_index=hdf5_index,
                 _hdf5_blob=_hdf5_blob,
                 _traffic=_traffic,
+                _source_cache_dir=cache_dir if disk is not None else None,
+                _b2z_blob=_b2z_blob,
             )
             manifest = owner.restored_manifest
             owner.attach_hdf5_source_cache(source_cache_path, source_cache_marker)
@@ -1482,7 +1523,7 @@ class RemoteStore(RemoteObject):
         try:
             owner.restore_caches(manifest)
             owner.save_manifest()
-            owner.publish_hdf5_source()
+            owner.publish_source_cache()
             if disk is not None:
                 disk.discard_old_generations(owner.generation)
         except BaseException:
@@ -1971,7 +2012,7 @@ class RemoteStore(RemoteObject):
             try:
                 replacement.restoring = False
                 replacement.save_manifest()
-                replacement.publish_hdf5_source(refresh=True)
+                replacement.publish_source_cache(refresh=True)
                 if replacement.disk is not None:
                     replacement.disk.discard_old_generations(replacement.generation)
             except BaseException:
