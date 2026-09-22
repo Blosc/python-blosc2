@@ -14,7 +14,7 @@ import uuid
 import zipfile
 from contextlib import contextmanager
 
-from blosc2.core import _import_fsspec
+from blosc2.core import _import_fsspec, resolve_dataset_path
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traffic
 from blosc2.remote_source_cache import (
     SMALL_REMOTE_FILE,
@@ -368,7 +368,8 @@ class B2ZArrayNotFoundError(ValueError):
 class B2ZNDSource(ByteRangeNDSource):
     """Read a stored external NDArray from an immutable B2Z archive via fsspec.
 
-    ``dataset`` is a logical tree key, e.g. ``d0/a3``, without the member's
+    ``path`` (or its supported alias ``dataset``) is a logical tree key,
+    e.g. ``d0/a3``, without the member's
     ``.b2nd`` suffix. Embedded leaves and ZIP-compressed members are unsupported.
     Opening uses bounded metadata prefetch; native chunks and blocks are fetched
     on demand. Replacing the archive requires replacing its cache.
@@ -377,9 +378,10 @@ class B2ZNDSource(ByteRangeNDSource):
     def __init__(
         self,
         urlpath,
-        dataset,
+        dataset=None,
         max_concurrency=REMOTE_MAX_CONCURRENCY,
         *,
+        path=None,
         storage_options=None,
         _filesystem=None,
         _traffic=None,
@@ -387,6 +389,7 @@ class B2ZNDSource(ByteRangeNDSource):
         _seed=None,
         _source_cache_dir=None,
     ):
+        dataset = resolve_dataset_path(dataset, path)
         if not isinstance(dataset, str) or not dataset.strip("/"):
             raise ValueError("B2Z sources require a dataset path (e.g. dataset='d0/a3')")
         dataset = dataset.strip("/")

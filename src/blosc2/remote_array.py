@@ -576,9 +576,14 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         an fsspec URL.
     source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
         Format of a URL source, inferred from its container suffix when omitted.
-    dataset: str, optional
+    path: str, optional
         Array path within an HDF5, Zarr, or B2Z container. B2Z supports external
-        NDArray leaves in immutable archives, e.g. ``dataset="d0/a3"``.
+        NDArray leaves in immutable archives, e.g. ``path="d0/a3"``.
+        None leaves selection unspecified; ``""`` and ``"/"`` select the root.
+        Do not combine with a selector embedded in the URL.
+    dataset: str, optional
+        Supported alias of ``path``. If both are given, they must agree after
+        stripping leading/trailing slashes.
     hdf5_index: dict, str, or path-like, optional
         Pre-computed native HDF5 index for the dataset, or a local or remote
         fsspec URL to its JSON encoding. It must match the source URL and dataset
@@ -602,6 +607,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         source_format: str | None = None,
         assume_immutable: bool = True,
         dataset: str | None = None,
+        path: str | None = None,
         hdf5_index=None,
         _carrier=None,
         _runtime_cache_path=None,
@@ -611,6 +617,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         _store_owner=None,
         _runtime_is_mutable: bool = True,
     ):
+        dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
         assume_immutable = _validate_assume_immutable(assume_immutable)

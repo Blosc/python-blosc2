@@ -7,7 +7,7 @@ inside a hierarchy can also be opened through `RemoteStore`.
 
 `blosc2.open()` dispatches local table archives to `CTable` and remote table
 archives to `RemoteCTable`. Remote `.b2z` groups return `RemoteStore` by default;
-array leaves retain their `RemoteArray` behavior. Use `dataset="group/table"`
+array leaves retain their `RemoteArray` behavior. Use `path="group/table"`
 or a `::group/table` URL suffix to select a nested table. For a complete local
 download instead, pass `lazy=False, cache_dir="download-cache"`.
 

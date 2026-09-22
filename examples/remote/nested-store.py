@@ -15,7 +15,7 @@ def main():
     parser.add_argument("leaf", help="Array below the mounted group")
     args = parser.parse_args()
 
-    with blosc2.RemoteStore(args.url, dataset=args.dataset) as remote:
+    with blosc2.RemoteStore(args.url, path=args.dataset) as remote:
         with blosc2.TreeStore("catalog.b2z", mode="w") as tree:
             tree["/external/weather"] = remote
 

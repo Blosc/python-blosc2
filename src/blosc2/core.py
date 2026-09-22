@@ -708,6 +708,25 @@ def _parse_b2z_url(urlpath, dataset):
     return None
 
 
+def resolve_dataset_path(dataset, path):
+    """Resolve the public path alias without changing persisted dataset names.
+
+    None means unspecified. Empty strings and slash-only strings select the
+    root; retain them until URL parsing so duplicate URL selectors still fail.
+    """
+    if path is None:
+        return dataset
+    if not isinstance(path, str):
+        raise TypeError("path must be a string or None")
+    if dataset is not None:
+        if not isinstance(dataset, str):
+            raise TypeError("dataset must be a string or None")
+        if dataset.strip("/") != path.strip("/"):
+            raise ValueError("Conflicting dataset and path parameters")
+        return dataset
+    return path
+
+
 def parse_container_url(
     urlpath: object,
     dataset: str | None = None,

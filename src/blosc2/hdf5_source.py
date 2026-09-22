@@ -470,6 +470,7 @@ def scan_hdf5_index(
     storage_options=None,
     *,
     dataset=None,
+    path=None,
     unsupported=None,
     traffic=None,
     _filesystem=None,
@@ -479,7 +480,7 @@ def scan_hdf5_index(
 ):
     """Build a native byte-range index for a local or remote HDF5 source.
 
-    ``dataset`` limits discovery to one dataset, or one group subtree, plus its ancestor groups. The
+    ``path`` limits discovery to one dataset, or one group subtree, plus its ancestor groups. The
     returned dictionary is JSON-compatible and can be supplied via
     ``hdf5_index=`` on later opens.
 
@@ -489,15 +490,18 @@ def scan_hdf5_index(
         Local path or fsspec URL of the immutable HDF5 source.
     storage_options: dict, optional
         Options passed to the fsspec filesystem.
-    dataset: str, optional
+    path: str, optional
         Build a scoped index for this dataset or group subtree. By default,
         index the complete container.
+    dataset: str, optional
+        Supported alias of ``path``; both must agree after stripping outer slashes.
 
     Returns
     -------
     dict
         A JSON-compatible native HDF5 index.
     """
+    dataset = blosc2.core.resolve_dataset_path(dataset, path)
     urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
     dataset = None if dataset is None else str(dataset).strip("/")
     local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
@@ -558,13 +562,14 @@ def load_hdf5_index(index, urlpath, storage_options=None, *, filesystem=None, da
     return validate_hdf5_index(index, urlpath, dataset=dataset)
 
 
-def validate_hdf5_index(index, urlpath=None, *, dataset=None):
+def validate_hdf5_index(index, urlpath=None, *, dataset=None, path=None):
     """Validate and return a native HDF5 index.
 
-    ``urlpath`` checks the recorded source URL. ``dataset`` additionally checks
+    ``urlpath`` checks the recorded source URL. ``path`` (or ``dataset``) additionally checks
     that a scoped index describes the requested dataset. Version-1 and version-2
     native indexes are accepted.
     """
+    dataset = blosc2.core.resolve_dataset_path(dataset, path)
     if not isinstance(index, dict):
         raise ValueError("Invalid HDF5 index")
     if index.get("format") != HDF5_INDEX_FORMAT:
@@ -852,7 +857,11 @@ def _close_hdf5_file(h5file, raw):
 
 
 class HDF5NDSource(ProxyNDSource):
-    """Read one immutable HDF5 dataset as Blosc2-compressed logical chunks."""
+    """Read one immutable HDF5 dataset as Blosc2-compressed logical chunks.
+
+    Select it with keyword-only ``path`` or the supported ``dataset`` alias.
+    If both are supplied they must agree after stripping outer slashes.
+    """
 
     serves_blocks = False
     # The logical Blosc2 cache chunks are unchanged from the former reader, so
@@ -862,8 +871,9 @@ class HDF5NDSource(ProxyNDSource):
     def __init__(
         self,
         urlpath,
-        dataset: str,
+        dataset: str | None = None,
         *,
+        path: str | None = None,
         hdf5_index=None,
         storage_options=None,
         max_concurrency=REMOTE_MAX_CONCURRENCY,
@@ -876,6 +886,7 @@ class HDF5NDSource(ProxyNDSource):
         _source_cache_dir=None,
         _index_explicit=True,
     ):
+        dataset = blosc2.core.resolve_dataset_path(dataset, path)
         urlpath, dataset = self._parse_url(urlpath, dataset)
         self.urlpath, self.dataset, self.max_concurrency = urlpath, dataset, max_concurrency
         self._storage_options, self._external_filesystem = storage_options, _filesystem

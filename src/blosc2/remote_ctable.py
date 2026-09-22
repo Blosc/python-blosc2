@@ -69,6 +69,11 @@ class RemoteCTable(RemoteObject, CTable):
 
     ``hdf5_index`` accepts a native index dictionary or a local/remote JSON
     path for PyTables/HDF5 sources. Supplying one skips HDF5 discovery.
+
+    ``path`` selects the table within the source. ``dataset`` remains a supported
+    alias; when both are supplied they must agree after stripping outer slashes.
+    None leaves selection unspecified; an empty string or slash selects the root.
+    Selector keywords cannot be combined with a selector embedded in the URL.
     """
 
     def __new__(
@@ -76,6 +81,7 @@ class RemoteCTable(RemoteObject, CTable):
         urlpath=None,
         *,
         dataset=None,
+        path=None,
         storage_options=None,
         cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
@@ -102,6 +108,7 @@ class RemoteCTable(RemoteObject, CTable):
         store = RemoteStore(
             urlpath,
             dataset=dataset,
+            path=path,
             storage_options=storage_options,
             cache_policy=cache_policy,
             max_cache_bytes=max_cache_bytes,
@@ -132,6 +139,7 @@ class RemoteCTable(RemoteObject, CTable):
         runtime_cache_path,
         *,
         dataset=None,
+        path=None,
         manifest=None,
         max_cache_bytes=None,
         carrier=None,
@@ -143,7 +151,10 @@ class RemoteCTable(RemoteObject, CTable):
         _manifest_validator=None,
         _max_nodes=None,
     ):
-        """Attach a remote CTable to a sparse disk cache shared across processes."""
+        """Attach a remote CTable to a sparse disk cache shared across processes.
+
+        ``path`` and ``dataset`` select the table as in the ordinary constructor.
+        """
         settings = {
             name: _positive_integer(name, value)
             for name, value in {
@@ -159,6 +170,7 @@ class RemoteCTable(RemoteObject, CTable):
             urlpath,
             runtime_cache_path,
             dataset=dataset,
+            path=path,
             manifest=manifest,
             max_cache_bytes=max_cache_bytes,
             carrier=carrier,

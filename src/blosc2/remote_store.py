@@ -1371,6 +1371,11 @@ class RemoteStore(RemoteObject):
 
     ``hdf5_index`` accepts a native index dictionary or a local/remote JSON path
     for HDF5 sources. Supplying one skips HDF5 discovery.
+
+    ``path`` selects a group within the source. ``dataset`` remains a supported
+    alias; when both are supplied they must agree after stripping outer slashes.
+    None leaves selection unspecified; an empty string or slash selects the root.
+    Selector keywords cannot be combined with a selector embedded in the URL.
     """
 
     @classmethod
@@ -1415,6 +1420,7 @@ class RemoteStore(RemoteObject):
         urlpath,
         *,
         dataset=None,
+        path=None,
         storage_options=None,
         cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
@@ -1433,6 +1439,7 @@ class RemoteStore(RemoteObject):
         nested_storage_options=None,
         _b2z_blob=None,
     ):
+        dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(urlpath, (str, os.PathLike)):
             raise TypeError("RemoteStore requires a remote URL string")
         urlpath = os.fspath(urlpath)
@@ -1668,6 +1675,7 @@ class RemoteStore(RemoteObject):
         runtime_cache_path,
         *,
         dataset=None,
+        path=None,
         manifest=None,
         max_cache_bytes=None,
         carrier=None,
@@ -1685,9 +1693,11 @@ class RemoteStore(RemoteObject):
         allowance. The caller authorizes the supplied filesystem and manifest;
         no credentials or filesystem objects are persisted. Portable artifacts
         are exported with ``save`` rather than opened as mutable runtime storage.
+        ``path`` and ``dataset`` select the group as in the ordinary constructor.
         """
         from blosc2.remote_store_cache import SharedStoreCache, SharedStoreOperation
 
+        dataset = blosc2.core.resolve_dataset_path(dataset, path)
         limit = normalize_cache_limit(blosc2.CachePolicy.DISK, max_cache_bytes)
         base, root, kind = parse_container_url(urlpath, dataset)
         validate_persistable_url(base)

@@ -73,10 +73,10 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
 A `TreeStore` can persist a `RemoteStore` reference at an explicit path. The path
 is always chosen by the application; it is not derived from the remote filename.
 The reference may select a complete B2Z, HDF5, or Zarr hierarchy, or a subgroup
-selected with `dataset=`:
+selected with `path=` (`dataset=` remains a supported alias):
 
 ```python
-with blosc2.RemoteStore("s3://weather/europe.zarr", dataset="spain") as weather:
+with blosc2.RemoteStore("s3://weather/europe.zarr", path="spain") as weather:
     with blosc2.TreeStore("catalog.b2z", mode="w") as catalog:
         catalog["/external/weather"] = weather
 

@@ -2509,6 +2509,8 @@ def open(
     offset: int = 0,
     dataset: str | None = None,
     hdf5_index: dict | str | os.PathLike | None = None,
+    *,
+    path: str | None = None,
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2640,10 +2642,15 @@ def open(
         storage_options: dict, optional
             Parameters passed to the underlying ``fsspec`` filesystem when opening
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
-        dataset: str, optional
-            Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
+        path: str, optional
+            Node path within HDF5, Zarr, or B2Z containers (e.g. ``path="d0/d1/a2"``).
             B2Z and HDF5 also support table and group paths in immutable containers.
             Requires ``lazy=True``.
+            None leaves selection unspecified; ``""`` and ``"/"`` select the root.
+            Do not combine with a selector embedded in the URL.
+        dataset: str, optional
+            Supported alias of ``path``. Both may be supplied if they agree after
+            stripping leading/trailing slashes; conflicting values raise ValueError.
         hdf5_index: dict | str | PathLike, optional
             Pre-computed native HDF5 index, or a local path or remote fsspec URL
             to its JSON encoding. It must match the source HDF5 URL and dataset
@@ -2694,7 +2701,7 @@ def open(
       covers ``.b2nd``, ``.b2f`` and ``.b2e`` only. Remote ``.b2z`` archives
       default to lazy discovery: table nodes return :class:`RemoteCTable`,
       groups return :class:`RemoteStore`, and external array leaves return
-      :ref:`RemoteArray`. Select a nested node with ``dataset=`` or ``::path``.
+      :ref:`RemoteArray`. Select a nested node with ``path=`` or ``::path``.
       Tables and groups use ``cache_dir`` for DISK caching and default to MEMORY
       otherwise; array leaves additionally support ``cache_path``.
       Use ``lazy=False, cache_dir=...`` to download a complete archive and open
@@ -2753,6 +2760,7 @@ def open(
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    dataset = blosc2.core.resolve_dataset_path(dataset, path)
     _reject_table_buffer_options(kwargs)
     if isinstance(urlpath, blosc2.URLPath):
         return _open_c2_urlpath(urlpath, mode, offset, kwargs)

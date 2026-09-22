@@ -35,11 +35,11 @@ b = blosc2.open(
 )
 
 # Open individual datasets inside containers (B2Z, Zarr, or HDF5)
-# Datasets can be named using slashes (/), container separators (::), or dataset=:
+# Datasets can be named using slashes (/), container separators (::), or path=:
 b1 = blosc2.open("s3://bucket/hierarchy.b2z/d0/d1/a2", lazy=True)
 c1 = blosc2.open("https://datasets.example.org/hierarchy.zarr::d0/d1/a2", lazy=True)
 h1 = blosc2.open(
-    "https://datasets.example.org/hierarchy.h5", lazy=True, dataset="d0/d1/a2"
+    "https://datasets.example.org/hierarchy.h5", lazy=True, path="d0/d1/a2"
 )
 
 # Open whole hierarchies with RemoteStore to discover and navigate containers:
@@ -52,6 +52,18 @@ store_snap = blosc2.open("snapshot.b2z")
 a1.shape, a1.dtype  # metadata is available immediately
 a1[100:110, :50]  # data is fetched now
 ```
+
+`path=` selects a node **inside** the source, not the source URL or local filename.
+It is keyword-only and works in `blosc2.open()` (including local containers),
+`RemoteArray`, `RemoteStore`, `RemoteCTable`, and the store/table
+`with_sparse_cache()` factories. `dataset=` remains supported without deprecation.
+If both names are supplied, they must agree after stripping leading and trailing
+slashes. `None` leaves selection unspecified; `""` and `"/"` select the container
+root (which must match the requested object type). Do not combine a selector
+keyword with one embedded in the URL, even if they name the same node.
+Both spellings share cache identities and portable artifacts.
+The exported `B2ZNDSource`, `HDF5NDSource`, `scan_hdf5_index()` and
+`validate_hdf5_index()` APIs also accept `path=` alongside `dataset=`.
 
 Remote B2Z needs `pip install "blosc2[fsspec]"`.
 HTTP and HTTPS URLs work out of the box; cloud object stores need their respective protocol driver (such as `s3fs` for S3, `gcsfs` for GCS, or `adlfs` for Azure).
@@ -66,13 +78,13 @@ Embedded leaves and CTable columns are not supported as lazy NDArrays.
 
 Remote Zarr needs `pip install "blosc2[zarr,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
-Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr` separator, or via `dataset="sub/arr"`.
+Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr` separator, or via `path="sub/arr"`.
 For a suffix-free URL, pass `source_format="zarr"`.
 Converted Blosc2 chunks are cached under an immutable source contract, so publish changed data at a new URL or replace its cache.
 
 Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
-Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `dataset="d0/d1/a2"` parameter.
+Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `path="d0/d1/a2"` parameter.
 Remote HDF5 reads cache discovery metadata and fetch dataset chunks as needed.
 Uncompressed, deflate, shuffle, and Blosc2 pipelines are supported directly;
 other pipelines use h5py, including filters registered by `hdf5plugin`.
@@ -107,7 +119,7 @@ table = blosc2.open(
 
 `hdf5_index=` accepts a dictionary, local JSON path, or remote fsspec URL and
 works for arrays, PyTables tables, and hierarchy stores. `scan_hdf5_index()`
-creates a complete container index by default; pass `dataset=` to create an index
+creates a complete container index by default; pass `path=` to create an index
 scoped to one dataset or group subtree. A scoped index can only open that exact
 dataset, or a store rooted at that group. The
 recorded source URL must exactly match the URL being opened. Regenerate the
