@@ -650,10 +650,11 @@ class EmbedStoreTableStorage(TableStorage):
 class _RemoteHDF5Field(blosc2.Operand):
     """One field of a shared remote HDF5 compound dataset."""
 
-    def __init__(self, records, name):
+    def __init__(self, records, name, dtype=None):
         self.records = records
         self.field = name
-        self._dtype = np.dtype(records.dtype.fields[name][0])
+        self._storage_dtype = np.dtype(records.dtype.fields[name][0])
+        self._dtype = self._storage_dtype if dtype is None else np.dtype(dtype)
         self._shape = records.shape
         self.chunks = records.chunks
         self.blocks = records.blocks
@@ -668,7 +669,8 @@ class _RemoteHDF5Field(blosc2.Operand):
         return self.shape[0]
 
     def __getitem__(self, key):
-        return self.records[key][self.field]
+        values = self.records[key][self.field]
+        return values if self._dtype == self._storage_dtype else values.astype(self._dtype, copy=False)
 
     def _take_numpy(self, indices, /, *, axis=None):
         if axis not in (None, 0, -1):
@@ -788,7 +790,7 @@ class RemoteTableStorage(TableStorage):
             if self._hdf5_records is None:
                 self._hdf5_records = self._owner.remote_array(self._root_key)
                 self._arrays.append(self._hdf5_records)
-            return _RemoteHDF5Field(self._hdf5_records, name)
+            return _RemoteHDF5Field(self._hdf5_records, name, self._schema_spec(name).dtype)
         source_columns = set(self.load_schema().get("source_columns", ()))
         if name in source_columns:
             logical_key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"

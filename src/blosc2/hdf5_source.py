@@ -29,7 +29,7 @@ HDF5_INDEX_FORMAT = "blosc2-hdf5-index"
 HDF5_INDEX_VERSION = 1
 
 
-def _pytables_table_schema(dtype, shape):
+def _pytables_table_schema(dtype, shape, boolean_fields=()):
     """Return a source-bound CTable schema for a supported PyTables Table."""
     dtype = np.dtype(dtype)
     if len(shape) != 1 or dtype.names is None:
@@ -39,7 +39,9 @@ def _pytables_table_schema(dtype, shape):
         field = dtype.fields[name][0]
         if field.fields is not None or field.subdtype is not None:
             raise TypeError(f"PyTables field {name!r} must be a scalar")
-        if field.kind == "S":
+        if name in boolean_fields:
+            spec = {"kind": "bool"}
+        elif field.kind == "S":
             spec = {"kind": "bytes", "max_length": field.itemsize}
         elif field.kind == "b":
             spec = {"kind": "bool"}
@@ -321,8 +323,16 @@ def _dataset_metadata(dataset):
     }
     table_class = dataset.attrs.get("CLASS")
     if table_class in {"TABLE", b"TABLE", np.bytes_(b"TABLE")}:
+        from h5py import h5t
+
+        hdf5_type = dataset.id.get_type()
+        boolean_fields = {
+            dataset.dtype.names[index]
+            for index in range(hdf5_type.get_nmembers())
+            if hdf5_type.get_member_type(index).get_class() == h5t.BITFIELD
+        }
         metadata["kind"] = "ctable"
-        metadata["schema"] = json.dumps(_pytables_table_schema(dataset.dtype, dataset.shape))
+        metadata["schema"] = json.dumps(_pytables_table_schema(dataset.dtype, dataset.shape, boolean_fields))
     return metadata
 
 

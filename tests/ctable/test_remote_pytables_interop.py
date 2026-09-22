@@ -49,8 +49,13 @@ def test_native_pytables_table_and_full_indexes(tmp_path):
     with blosc2.RemoteCTable(url, dataset="table") as table:
         catalog = table._get_index_catalog()
         assert catalog["id"]["kind"] == catalog["label"]["kind"] == "opsi"
+        assert table.schema_dict()["columns"][2]["kind"] == "bool"
         assert table.attrs["owner"] == b"pytables"
+        assert "label" in str(table[:3])
         np.testing.assert_array_equal(table.where("(id >= 15) & (id < 25)").id[:], expected["id"])
+        np.testing.assert_array_equal(
+            table.where("(id >= 15) & active").id[:], data["id"][(data["id"] >= 15) & data["active"]]
+        )
         np.testing.assert_array_equal(
             table.where(table.label == b"5").id[:], data["id"][data["label"] == b"5"]
         )

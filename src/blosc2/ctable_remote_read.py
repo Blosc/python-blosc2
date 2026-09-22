@@ -114,6 +114,7 @@ def open_columns(storage, table, names, load):  # noqa: C901
     )
 
     owner = storage._owner
+    source_columns = _source_columns(table)
     with owner.lock:
         storage._check_open()
         archive = owner.archive
@@ -122,7 +123,7 @@ def open_columns(storage, table, names, load):  # noqa: C901
             members.setdefault(info.filename, []).append(info)
 
         def ranges_for(name):
-            if name in getattr(table, "_source_columns", ()):
+            if name in source_columns:
                 return []
             key = storage._full_key(f"_cols/{_column_name_to_relpath(name)}")
             spec = table._schema.columns_by_name[name].spec
@@ -236,6 +237,12 @@ def _array_items(source, positions):
         yield (selected, *spans), (positions[selected], *spans)
 
 
+def _source_columns(table):
+    while table.base is not None:
+        table = table.base
+    return getattr(table, "_source_columns", ())
+
+
 def _array_values(array, positions):  # noqa: C901
     """Fetch and decode one chunk's selected rows before cache eviction can run."""
     source = array.src
@@ -330,6 +337,7 @@ def column_values(table, names, positions, *, null_masks=None):  # noqa: C901
     )
 
     storage = table._remote_read_storage()
+    source_columns = _source_columns(table)
     with storage._owner.lock:
         storage._check_open()
         stored = [name for name in names if name not in table._computed_cols]
@@ -348,7 +356,7 @@ def column_values(table, names, positions, *, null_masks=None):  # noqa: C901
         def reader(name):
             col = table._cols[name]
             spec = table._schema.columns_by_name[name].spec
-            if name in getattr(table, "_source_columns", ()):
+            if name in source_columns:
                 return col[positions]
             if isinstance(col, UTF8Array):
                 values = np.empty(len(positions), dtype=col.dtype)
