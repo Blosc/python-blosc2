@@ -15072,8 +15072,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if stats is None:
                 suffix = "(size=n/a, sidecars not directly addressable)"
             else:
-                _, cbytes, _ = stats
-                suffix = f"({format_nbytes_human(cbytes)})"
+                _, cbytes, cratio = stats
+                suffix = f"(cbytes: {format_nbytes_human(cbytes)}, cratio: {cratio:.2f}x)"
             index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
         items = [

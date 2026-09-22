@@ -47,6 +47,12 @@ def test_scalar_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data >= 120_000) & (data < 125_000)])
 
 
+def test_membership_index_is_ctable_only():
+    arr = blosc2.arange(10)
+    with pytest.raises(ValueError, match="only supported by CTable list columns"):
+        arr.create_index(kind=blosc2.IndexKind.MEMBERSHIP)
+
+
 def test_opsi_accepts_non_multiple_chunk_block():
     rng = np.random.default_rng(42)
     data = rng.random(5_000, dtype=np.float64)

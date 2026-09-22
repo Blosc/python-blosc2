@@ -984,6 +984,14 @@ class _CTableIndexingMixin:
         lightest kind; it may still skip segments for broad range
         queries but cannot accelerate ``sort_by``.
 
+        ``MEMBERSHIP`` is specific to stored ``list()`` columns. It maps each
+        distinct scalar list item to the rows containing it and accelerates
+        :meth:`Column.contains` and :meth:`Column.overlaps` predicates. Nested
+        lists and struct items are not supported. For example::
+
+            table.create_index("tags", kind=blosc2.IndexKind.MEMBERSHIP)
+            selected = table[table["tags"].overlaps(["python", "numpy"])]
+
         When *kind* is omitted it defaults to ``BUCKET``, except on ``utf8()``
         and ``dictionary()`` columns, which are indexed by alphabetical rank and
         only ever consulted through a ``FULL`` index — there the default is
@@ -1010,7 +1018,7 @@ class _CTableIndexingMixin:
         if col_name is not None:
             col_name = self._logical_to_physical_name(col_name)
 
-        if kind == "membership":
+        if kind in ("membership", blosc2.IndexKind.MEMBERSHIP):
             if expression is not None or col_name is None:
                 raise ValueError("Membership indexes require a stored list column")
             if col_name not in self._cols:

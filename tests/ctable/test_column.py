@@ -938,7 +938,7 @@ def test_info_schema_expands_unicode_dtype_labels():
     assert "U16 (Unicode)" in info
 
 
-def test_info_indexes_only_report_cbytes(tmp_path):
+def test_info_indexes_report_cbytes_and_cratio(tmp_path):
     @dataclass
     class IndexedRow:
         id: int = blosc2.field(blosc2.int32())
@@ -951,11 +951,24 @@ def test_info_indexes_only_report_cbytes(tmp_path):
 
     info = repr(t.info)
     index_block = re.split(r"\nindexes\s+:", info, maxsplit=1)[1]
-    # Indexes report only their (compressed) on-disk size, no nbytes/cratio.
     assert "[full]" in index_block
-    assert re.search(r"\[full\] \([\d.]+ (?:B|KiB|MiB|GiB)\)", index_block)
+    assert re.search(r"\[full\] \(cbytes: [\d.]+ (?:B|KiB|MiB|GiB), cratio: \d+\.\d{2}x\)", index_block)
     assert "nbytes" not in index_block
-    assert "cratio" not in index_block
+
+
+def test_info_reports_membership_index_size(tmp_path):
+    @dataclass
+    class MembershipRow:
+        tags: list[int] = blosc2.field(blosc2.list(blosc2.int32(), batch_rows=2))  # noqa: RUF009
+
+    path = str(tmp_path / "membership.b2z")
+    with CTable(MembershipRow, urlpath=path, mode="w") as table:
+        table.extend({"tags": [[1, 2], [2], [3, 4]]})
+        table.create_index("tags", kind=blosc2.IndexKind.MEMBERSHIP)
+
+    with CTable.open(path) as table:
+        info = repr(table.info)
+        assert re.search(r"\[membership\] \(cbytes: [\d.]+ (?:B|KiB|MiB|GiB), cratio: \d+\.\d{2}x\)", info)
 
 
 def test_info_cratio_uses_two_decimals_with_suffix():

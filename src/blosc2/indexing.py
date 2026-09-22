@@ -4154,6 +4154,8 @@ def create_index(
         raise TypeError(f"unexpected keyword argument(s): {unexpected}")
     if not isinstance(kind, blosc2.IndexKind):
         raise TypeError("kind must be a blosc2.IndexKind")
+    if kind is blosc2.IndexKind.MEMBERSHIP:
+        raise ValueError("IndexKind.MEMBERSHIP is only supported by CTable list columns")
     kind = _normalize_index_kind(kind)
     build = _normalize_build_mode(build)
     if opsi_max_cycles_arg is None:
@@ -4300,9 +4302,16 @@ def _resolve_index_token(store: dict, field: str | None, name: str | None) -> st
 
 
 def iter_index_components(array: blosc2.NDArray, descriptor: dict):
-    for level in descriptor["levels"]:
-        level_info = descriptor["levels"][level]
+    levels = descriptor.get("levels") or {}
+    for level in levels:
+        level_info = levels[level]
         yield IndexComponent(f"summary.{level}", "summary", level, level_info.get("path"))
+
+    membership = descriptor.get("membership")
+    if membership is not None:
+        yield IndexComponent(
+            "membership.postings", "membership", "postings", membership.get("postings_path")
+        )
 
     bucket = descriptor.get("bucket")
     if bucket is not None:
@@ -4353,6 +4362,8 @@ def iter_index_components(array: blosc2.NDArray, descriptor: dict):
 
 def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
+        if component.category == "membership":
+            return int(blosc2.BatchArray(urlpath=component.path, mode="r").nbytes)
         return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).nbytes)
     token = descriptor["token"]
     return int(_load_array_sidecar(array, token, component.category, component.name, component.path).nbytes)
@@ -4360,6 +4371,8 @@ def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexC
 
 def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
+        if component.category == "membership":
+            return int(blosc2.BatchArray(urlpath=component.path, mode="r").cbytes)
         return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).cbytes)
     token = descriptor["token"]
     sidecar = _load_array_sidecar(array, token, component.category, component.name, component.path)
@@ -4531,7 +4544,7 @@ class Index(Mapping):
         if idx < 0:
             raise KeyError(f"Cannot resolve index component path {path!r} inside table store.")
         relpath = normalized[idx:]
-        for suffix in (".b2nd", ".b2f"):
+        for suffix in (".b2nd", ".b2f", ".b2b"):
             if relpath.endswith(suffix):
                 relpath = relpath[: -len(suffix)]
                 break

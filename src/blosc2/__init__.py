@@ -228,6 +228,8 @@ class IndexKind(Enum):
     FULL = "full"
     #: Tunable iterative-ordering payloads for exact filtering; not a full/CSI index.
     OPSI = "opsi"
+    #: Value-to-row postings for CTable list columns; not supported on NDArray.
+    MEMBERSHIP = "membership"
 
 
 class CachePolicy(Enum):
