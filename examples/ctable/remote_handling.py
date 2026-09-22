@@ -12,7 +12,7 @@ import argparse
 import pprint
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +39,9 @@ class Reading:
     region: str = blosc2.field(blosc2.dictionary(nullable=True))
 
 
+FULL_INDEX_UNSUPPORTED = {"message", "tags"}
+
+
 def make_notes(ids):
     notes = np.array(["", "café", "東京の観測", "🌦️ weather improving"], dtype=object)[ids % 4]
     notes = np.array(
@@ -56,6 +59,22 @@ def write_table(args) -> None:
         raise ValueError("--rows and --batch-size must be positive")
     if output.exists() and not args.overwrite:
         raise FileExistsError(f"{output} already exists; pass --overwrite to replace it")
+    column_names = [field.name for field in fields(Reading)]
+    indexed_columns = []
+    if args.full is not None:
+        indexed_columns = (
+            [name for name in column_names if name not in FULL_INDEX_UNSUPPORTED]
+            if args.full == "*"
+            else [name.strip() for name in args.full.split(",")]
+        )
+        unknown = set(indexed_columns) - set(column_names)
+        unsupported = set(indexed_columns) & FULL_INDEX_UNSUPPORTED
+        if not all(indexed_columns) or unknown:
+            raise ValueError(f"invalid --full columns: {', '.join(sorted(unknown)) or args.full!r}")
+        if unsupported:
+            raise ValueError(f"FULL indexes are not supported for: {', '.join(sorted(unsupported))}")
+        if len(indexed_columns) != len(set(indexed_columns)):
+            raise ValueError("--full columns must not contain duplicates")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(42)
@@ -105,7 +124,11 @@ def write_table(args) -> None:
                 },
                 validate=False,
             )
-        table.create_index("tags", kind="membership")
+        if indexed_columns:
+            started = time.perf_counter()
+            for name in indexed_columns:
+                table.create_index(name, kind="full")
+            print(f"Created FULL indexes in {time.perf_counter() - started:.2f} s")
 
     with blosc2.CTable.open(str(output)) as table:
         assert len(table) == args.rows
@@ -118,8 +141,10 @@ def write_table(args) -> None:
         expected[sample_ids % 43 == 0] = ""
         np.testing.assert_array_equal(table["note"][: len(sample_ids)], expected)
         assert null_counts["note"] == (args.rows + 42) // 43
+        assert all(table._get_index_catalog()[name]["kind"] == "full" for name in indexed_columns)
 
     print(f"Created {output} ({output.stat().st_size / 1_000_000:.1f} MB, {args.rows:,} rows)")
+    print(f"FULL indexes: {', '.join(indexed_columns) if indexed_columns else 'none'}")
     print(f"Mask-backed null counts: {null_counts}")
     print(f"Now upload {output} to your cloud object storage.")
 
@@ -300,6 +325,13 @@ def main() -> int:
     )
     parser.add_argument("--write", type=Path, metavar="FILE", help="Create a local .b2z CTable instead")
     parser.add_argument(
+        "--full",
+        nargs="?",
+        const="*",
+        metavar="COL1,COL2",
+        help="Create FULL indexes for every supported column, or only the comma-separated columns",
+    )
+    parser.add_argument(
         "--cache-dir", type=Path, metavar="DIR", help="Persist remote data in DIR (default: in-memory cache)"
     )
     parser.add_argument("--rows", type=int, default=1_000_000)
@@ -313,6 +345,8 @@ def main() -> int:
         parser.error("URL cannot be combined with --write")
     if args.write is None and args.url is None:
         parser.error("provide a local path or remote URL, or use --write FILE.b2z")
+    if args.full is not None and args.write is None:
+        parser.error("--full requires --write")
 
     try:
         write_table(args) if args.write is not None else access_table(args)
