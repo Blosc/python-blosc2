@@ -104,6 +104,26 @@ def test_remote_pytables_table_scan_and_shared_records():
         np.testing.assert_array_equal(sliced.label[:], data["label"][1:3])
 
 
+def test_remote_pytables_info_omits_shared_column_sizes(tmp_path):
+    url, data = pytables_hdf5_url("pytables-info.h5", indexed=True)
+    with blosc2.RemoteCTable(url, dataset="table", cache_dir=tmp_path) as table:
+        for read in (False, True):
+            if read:
+                np.testing.assert_array_equal(table.id[:], data["id"])
+            info = dict(table.info_items)
+            assert info["cbytes"] == info["cratio"] == "n/a"
+            assert "nbytes" in info
+            for name, summary in info["columns"].items():
+                assert "cbytes" not in repr(summary)
+                assert "cratio" not in repr(summary)
+                column_info = dict(table[name].info_items)
+                assert "cbytes" not in column_info
+                assert "cratio" not in column_info
+                assert "nbytes" in column_info
+            assert "[opsi]" in info["indexes"]["id"]
+            assert "cbytes:" in info["indexes"]["id"]
+
+
 def test_remote_pytables_full_index_is_native_opsi():
     url, data = pytables_hdf5_url("pytables-indexed.h5", indexed=True)
     with blosc2.RemoteCTable(url, dataset="table", cache_policy=blosc2.CachePolicy.MEMORY) as table:

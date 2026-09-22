@@ -54,6 +54,7 @@ from blosc2.ctable_storage import (
     InMemoryTableStorage,
     TableStorage,
     TreeStoreTableStorage,
+    column_cbytes_for_info,
     join_field_path,
     split_field_path,
 )
@@ -2056,7 +2057,7 @@ class Column:
             f"  dtype      : {self.dtype}",
             f"  storage    : NDArray shape={getattr(raw, 'shape', None)}, chunks={getattr(raw, 'chunks', None)}, blocks={getattr(raw, 'blocks', None)}",
         ]
-        cbytes = getattr(raw, "cbytes", None)
+        cbytes = column_cbytes_for_info(raw)
         if cbytes is not None:
             lines.append(f"  cbytes     : {format_nbytes_info(cbytes)}")
         if rows and self.dtype is not None and self.dtype.kind in "biufc":
@@ -2149,8 +2150,8 @@ class Column:
             items.append(("blocks", blocks))
 
         nbytes = getattr(raw, "nbytes", None)
-        cbytes = getattr(raw, "cbytes", None)
-        cratio = getattr(raw, "cratio", None)
+        cbytes = column_cbytes_for_info(raw)
+        cratio = getattr(raw, "cratio", None) if cbytes is not None else None
         if nbytes is not None:
             items.append(("nbytes", format_nbytes_info(nbytes)))
         if cbytes is not None:
@@ -4286,7 +4287,7 @@ class NestedColumn:
                 dtype_label = table._dtype_info_label(
                     getattr(table._cols[name], "dtype", None), spec
                 ) + table._null_info_tag(spec)
-                cbytes = getattr(table._cols[name], "cbytes", None)
+                cbytes = column_cbytes_for_info(table._cols[name])
                 if cbytes is not None:
                     nbytes = getattr(table._cols[name], "nbytes", None)
                     detail = f"cbytes: {format_nbytes_human(cbytes)}"
@@ -4297,6 +4298,11 @@ class NestedColumn:
                     column_summary[rel_name] = _InfoLiteral(dtype_label)
 
         descendant = set(self._descendant_col_names())
+        compression_available = all(
+            column_cbytes_for_info(table._cols[name]) is not None
+            for name in descendant
+            if name in table._cols
+        )
         index_summary = {}
         for idx in table.indexes:
             if idx.col_name not in descendant:
@@ -4316,8 +4322,8 @@ class NestedColumn:
             ("storage", storage_type),
             ("nrows", self.nrows),
             ("nbytes", format_nbytes_info(self.nbytes)),
-            ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}x"),
+            ("cbytes", format_nbytes_info(self.cbytes) if compression_available else "n/a"),
+            ("cratio", f"{self.cratio:.2f}x" if compression_available else "n/a"),
             ("columns", column_summary),
             ("indexes", index_summary if index_summary else "none"),
         ]
@@ -15057,7 +15063,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 dtype_label = self._dtype_info_label(
                     getattr(self._cols[name], "dtype", None), spec
                 ) + self._null_info_tag(spec)
-                cbytes = getattr(self._cols[name], "cbytes", None)
+                cbytes = column_cbytes_for_info(self._cols[name])
                 if cbytes is not None:
                     nbytes = getattr(self._cols[name], "nbytes", None)
                     detail = f"cbytes: {format_nbytes_human(cbytes)}"
@@ -15079,6 +15085,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 suffix = f"(cbytes: {format_nbytes_human(cbytes)}, cratio: {cratio:.2f}x)"
             index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
+        compression_available = all(column_cbytes_for_info(col) is not None for col in self._cols.values())
         items = [
             ("type", self.__class__.__name__),
             ("storage", storage_type),
@@ -15088,8 +15095,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ("chunks", self.chunks if self.chunks is not None else "none (no fixed-size columns)"),
             ("blocks", self.blocks if self.blocks is not None else "none (no fixed-size columns)"),
             ("nbytes", format_nbytes_info(self.nbytes)),
-            ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}x"),
+            ("cbytes", format_nbytes_info(self.cbytes) if compression_available else "n/a"),
+            ("cratio", f"{self.cratio:.2f}x" if compression_available else "n/a"),
             ("columns", column_summary),
             ("indexes", index_summary if index_summary else "none"),
         ]

@@ -647,6 +647,11 @@ class EmbedStoreTableStorage(TableStorage):
         return None
 
 
+def column_cbytes_for_info(column):
+    """Do not present shared HDF5 record storage as a per-field compressed size."""
+    return None if isinstance(column, _RemoteHDF5Field) else getattr(column, "cbytes", None)
+
+
 class _RemoteHDF5Field(blosc2.Operand):
     """One field of a shared remote HDF5 compound dataset."""
 
