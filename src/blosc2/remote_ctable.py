@@ -66,6 +66,9 @@ class RemoteCTable(RemoteObject, CTable):
     including columns backed by independent RemoteArray carriers. Those columns
     share the table owner's cache budget and traffic accounting; their persisted
     standalone policies are not used or modified by the table.
+
+    ``hdf5_index`` accepts a native index dictionary or a local/remote JSON
+    path for PyTables/HDF5 sources. Supplying one skips HDF5 discovery.
     """
 
     def __new__(
@@ -77,6 +80,7 @@ class RemoteCTable(RemoteObject, CTable):
         cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
         cache_dir=None,
+        hdf5_index=None,
         max_concurrency=8,
         metadata_buffer_bytes=8 << 20,
         row_buffer_bytes=64 << 20,
@@ -102,6 +106,7 @@ class RemoteCTable(RemoteObject, CTable):
             cache_policy=cache_policy,
             max_cache_bytes=max_cache_bytes,
             cache_dir=cache_dir,
+            hdf5_index=hdf5_index,
             _allow_array_root=True,
             _filesystem=_filesystem,
         )

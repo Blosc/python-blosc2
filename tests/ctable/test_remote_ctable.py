@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import itertools
+import json
 import os
 import pathlib
 import zipfile
@@ -133,6 +134,34 @@ def test_open_dispatches_remote_pytables_table(tmp_path):
             assert isinstance(table, blosc2.RemoteCTable)
             np.testing.assert_array_equal(table["id"][:], data["id"])
             assert "RemoteCTable" in str(table.info)
+
+
+def test_open_dispatches_remote_pytables_table_with_json_sidecar(monkeypatch):
+    import blosc2.hdf5_source as hdf5_source
+
+    url, data = pytables_hdf5_url("pytables-sidecar.h5", indexed=True)
+    sidecar = "memory://pytables-sidecar.json"
+    fsspec.filesystem("memory").pipe(sidecar, json.dumps(blosc2.scan_hdf5_index(url)).encode())
+    monkeypatch.setattr(
+        hdf5_source,
+        "scan_hdf5_index",
+        lambda *args, **kwargs: pytest.fail("explicit sidecar must skip source discovery"),
+    )
+    with blosc2.open(url + "::table", hdf5_index=sidecar) as table:
+        assert isinstance(table, blosc2.RemoteCTable)
+        np.testing.assert_array_equal(table.id[:], data["id"])
+        assert table._get_index_catalog()["id"]["kind"] == "opsi"
+    with blosc2.RemoteCTable(url, dataset="table", hdf5_index=sidecar) as table:
+        np.testing.assert_array_equal(table.id[:], data["id"])
+
+
+def test_small_remote_pytables_file_is_retained():
+    url, _ = pytables_hdf5_url("pytables-retained.h5", indexed=True, indexed_rows=2049)
+    with blosc2.open(url + "::table") as table:
+        assert table.traffic.requests == 1
+        str(table)
+        table._get_index_catalog()
+        assert table.traffic.requests == 1
 
 
 def test_remote_pytables_fixed_string_full_index():

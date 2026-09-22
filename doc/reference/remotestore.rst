@@ -16,6 +16,11 @@ DISK accepts ``max_cache_bytes=None`` for unbounded retention.
 Sources must be immutable. Generic ``blosc2.open(..., lazy=True, dataset=...)``
 continues to open a single array.
 
+For HDF5, ``hdf5_index=`` accepts a native index dictionary, local JSON path, or
+remote fsspec URL. An explicit index skips hierarchy discovery and must match the
+source URL and selected scope. See :doc:`../guides/remote_arrays` for the
+sidecar-generation workflow.
+
 .. code-block:: python
 
     with blosc2.RemoteStore(

@@ -71,11 +71,53 @@ Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the 
 Remote pre-indexing uses h5py to record dataset metadata and allocated chunk byte ranges. When opening a single {ref}`RemoteArray`, the native index is cached inside the array carrier (`schunk.vlmeta["hdf5-index"]`). When using {ref}`RemoteStore`, indexing is performed once for the entire container and shared across all leaves and sessions. Uncompressed, deflate, shuffle, and Blosc2 pipelines are decoded directly after fsspec range reads. Other pipelines use a retained h5py reader, including filters registered by `hdf5plugin`.
 Use `blosc2.available_datasets(url)` to inspect datasets in an HDF5 container.
 
+An explicitly selected dataset is discovered directly; unrelated siblings and
+PyTables index groups are deferred. Complete hierarchy opens discover all nodes,
+but allocated-chunk maps are built only when a leaf is first read. Remote HDF5
+objects up to 8 MiB are fetched once and retained for the source session, because
+one bounded transfer is cheaper than many metadata ranges. A warm disk cache
+restores discovery metadata without downloading the complete source again.
+
+For published immutable data, a native index can be generated once and served as
+an explicit JSON sidecar. The sidecar is Blosc2 metadata; the HDF5 file is not
+modified, and the filename has no required convention:
+
+```python
+import json
+
+import blosc2
+
+source = "https://example.com/readings.h5"
+index = blosc2.scan_hdf5_index(source)
+with open("readings.h5.b2index.json", "w") as file:
+    json.dump(index, file)
+
+table = blosc2.open(
+    source + "::readings",
+    hdf5_index="https://example.com/readings.h5.b2index.json",
+)
+```
+
+`hdf5_index=` accepts a dictionary, local JSON path, or remote fsspec URL and
+works for arrays, PyTables tables, and hierarchy stores. `scan_hdf5_index()`
+creates a complete container index by default; pass `dataset=` to create an index
+scoped to one dataset or group subtree. A scoped index can only open that exact
+dataset, or a store rooted at that group. The
+recorded source URL must exactly match the URL being opened. Regenerate the
+sidecar whenever the source object changes; remote HDF5 sources otherwise follow
+the same immutable-URL contract as the cache. `storage_options` are used for
+both source and sidecar URLs.
+
+Sidecars are never probed automatically: an explicit `hdf5_index=` avoids adding
+a failed metadata request to sources that do not publish one. Version-1 native
+indexes remain readable; legacy Kerchunk/reference maps are not native indexes
+and are rejected.
+
 Local HDF5 files use h5py directly, without pre-indexing or an fsspec
 dependency. For example, `blosc2.open("hierarchy.h5::/d0/a2")` reads the selected
 dataset through h5py and caches converted Blosc2 chunks in memory. Explicit
-`hdf5_index=` accepts a native HDF5 index, including for local files. Legacy
-HDF5 reference maps are rejected; omit `hdf5_index=` to regenerate the native index.
+`hdf5_index=` also accepts a native HDF5 index for local files. Legacy HDF5
+reference maps are rejected; omit it to regenerate the native index.
 
 `RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.

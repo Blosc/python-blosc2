@@ -607,7 +607,7 @@ from .proxy_source import (
 )
 from .zarr_source import ZarrNDSource
 from .b2z_source import B2ZNDSource
-from .hdf5_source import HDF5NDSource, available_datasets
+from .hdf5_source import HDF5NDSource, available_datasets, scan_hdf5_index, validate_hdf5_index
 from .indexing import Index
 
 from .schunk import SChunk, load, open
@@ -947,6 +947,8 @@ __all__ = [  # noqa : RUF022
     "arange",
     "array",
     "available_datasets",
+    "scan_hdf5_index",
+    "validate_hdf5_index",
     "arccos",
     "arccosh",
     "arcsin",

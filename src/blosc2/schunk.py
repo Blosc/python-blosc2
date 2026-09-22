@@ -2373,12 +2373,12 @@ def _open_remote_hdf5(urlpath, options):
     if (
         not is_fsspec_url(urlpath)
         or options["cache_path"] is not None
-        or "hdf5_index" in options
         or options["assume_immutable"] is not True
     ):
         return blosc2.RemoteArray(urlpath, **options)
     dataset = options.get("dataset")
-    hdf5_index = None
+    hdf5_index = options.get("hdf5_index")
+    hdf5_blob = None
     traffic = None
     if dataset:
         array = blosc2.RemoteArray(urlpath, **options)
@@ -2386,6 +2386,7 @@ def _open_remote_hdf5(urlpath, options):
         if metadata.get("kind") != "ctable":
             return array
         hdf5_index = array.src._hdf5_index
+        hdf5_blob = array.src._blob
         traffic = array.traffic
         array.close()
     store_options = {
@@ -2398,21 +2399,26 @@ def _open_remote_hdf5(urlpath, options):
         _allow_array_root=True,
         _source_format="hdf5",
         _hdf5_index=hdf5_index,
+        _hdf5_blob=hdf5_blob,
         _traffic=traffic,
         **store_options,
     ) as store:
         _, full = store._resolve("")
         kind = store._owner.nodes[full][0]
         max_concurrency = options["max_concurrency"]
-        if max_concurrency is not None:
-            if kind != "ctable":
-                raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+        if kind == "ctable":
             return blosc2.RemoteCTable._from_owner(
                 store._owner,
                 full,
-                max_concurrency=max_concurrency,
+                **({} if max_concurrency is None else {"max_concurrency": max_concurrency}),
             )
-        return store[""]
+        result = store[""]
+        if max_concurrency is not None:
+            if not isinstance(result, blosc2.RemoteArray):
+                result.close()
+                raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+            result.src.max_concurrency = max_concurrency
+        return result
 
 
 def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
@@ -2635,7 +2641,9 @@ def open(
             B2Z and HDF5 also support table and group paths in immutable containers.
             Requires ``lazy=True``.
         hdf5_index: dict | str | PathLike, optional
-            Pre-computed native HDF5 index or path to a JSON index file.
+            Pre-computed native HDF5 index, or a local path or remote fsspec URL
+            to its JSON encoding. It must match the source HDF5 URL and dataset
+            scope. Arrays, PyTables tables, and hierarchy stores are supported.
         source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;

@@ -8,6 +8,9 @@ archive. Fixed-width, shaped, nullable, UTF-8, batch-backed variable-length,
 batch-backed list, struct/object, and dictionary columns are fetched on demand.
 Standalone tables can be opened directly; tables inside a hierarchy can be
 selected with ``dataset=`` or through :class:`blosc2.RemoteStore`.
+PyTables/HDF5 sources may supply ``hdf5_index=`` as a native index dictionary,
+local JSON path, or remote fsspec URL. This skips source discovery and does not
+modify the HDF5 file; see :doc:`../guides/remote_arrays`.
 
 Batch-backed reads transfer and decode whole compressed batches. Dictionary
 codes remain selective, while the full vocabulary is loaded on first use.

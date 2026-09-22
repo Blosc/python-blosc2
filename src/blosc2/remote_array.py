@@ -574,9 +574,10 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         Array path within an HDF5, Zarr, or B2Z container. B2Z supports external
         NDArray leaves in immutable archives, e.g. ``dataset="d0/a3"``.
     hdf5_index: dict, str, or path-like, optional
-        Pre-computed native HDF5 index for the dataset, or the path to a JSON
-        encoding of one. It must match the source URL. Legacy HDF5 reference
-        maps are rejected; omit it to rescan and build a native index.
+        Pre-computed native HDF5 index for the dataset, or a local or remote
+        fsspec URL to its JSON encoding. It must match the source URL and dataset
+        scope. Legacy HDF5 reference maps are rejected; omit it to scan the
+        source and build a native index.
     assume_immutable: bool, optional
         Skip remote identity checks before reads. Defaults to ``True``. Set to
         ``False`` when the object at the URL may be replaced.

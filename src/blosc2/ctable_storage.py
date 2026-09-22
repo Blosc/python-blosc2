@@ -998,6 +998,7 @@ class RemoteTableStorage(TableStorage):
     def _load_pytables_index_catalog(self) -> dict:
         from blosc2.indexing import _build_descriptor, _field_target_descriptor, _store_array_sidecar
 
+        self._owner.ensure_pytables_indexes(self._root_key)
         catalog = {}
         for name, source in self._metadata().get("pytables_indexes", {}).items():
             column = self.open_column(name)

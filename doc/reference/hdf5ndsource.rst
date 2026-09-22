@@ -28,6 +28,10 @@ garbage-collected.
 
 .. autofunction:: blosc2.available_datasets
 
+.. autofunction:: blosc2.scan_hdf5_index
+
+.. autofunction:: blosc2.validate_hdf5_index
+
 .. autoclass:: blosc2.HDF5NDSource
 
     .. automethod:: __init__

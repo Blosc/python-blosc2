@@ -60,8 +60,11 @@ or ``dataset="dataset"``).
 HDF5 datasets on a local path are read directly with ``h5py``; remote HDF5 files use
 native metadata pre-indexing with ``h5py`` and byte ranges through fsspec. Like Zarr, HDF5 sources
 are assumed immutable (``assume_immutable=True``); mutable HDF5 sources are not supported.
-Pre-computed native HDF5 indexes can be supplied via ``hdf5_index`` to avoid remote scanning
-(including when opening a local file through the indexed reader).
+Pre-computed native HDF5 indexes can be supplied via ``hdf5_index`` to avoid
+remote scanning (including when opening a local file through the indexed
+reader). It accepts a dictionary, local JSON path, or remote fsspec URL. The
+index must match the source URL and selected dataset scope. See
+:doc:`../guides/remote_arrays` for generation and publication.
 
 .. code-block:: python
 

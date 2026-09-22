@@ -104,6 +104,13 @@ class RemoteNode:
     diagnostic: str | None = None
 
 
+def _resolve_hdf5_options(hdf5_index, private_index, source_format):
+    if hdf5_index is not None and private_index is not None:
+        raise TypeError("hdf5_index was supplied twice")
+    index = hdf5_index if hdf5_index is not None else private_index
+    return index, "hdf5" if index is not None and source_format is None else source_format
+
+
 class RemoteDiscovery:
     """Shared metadata and source resources, independent of browser presentation."""
 
@@ -121,6 +128,7 @@ class RemoteDiscovery:
         _max_nodes=None,
         _source_format=None,
         _hdf5_index=None,
+        _hdf5_blob=None,
         _traffic=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
@@ -138,6 +146,9 @@ class RemoteDiscovery:
         self.notice = None
         self.archive = None
         self.zstore = None
+        self.hdf5_blob = None
+        if _hdf5_blob is not None:
+            self.hdf5_blob = _hdf5_blob
         self.sources = {}
         self.source_descriptors = {}
         self.caches = {}
@@ -234,7 +245,7 @@ class RemoteDiscovery:
     def _validate_hdf5_index(self):
         from blosc2.hdf5_source import validate_hdf5_index
 
-        validate_hdf5_index(self.hdf5_index, self.urlpath)
+        validate_hdf5_index(self.hdf5_index, self.urlpath, dataset=self.root or None)
 
     def save_manifest(self):
         if self.disk is None or self.restoring or not self.is_mutable:
@@ -445,20 +456,28 @@ class RemoteDiscovery:
         self.archive.capture_metadata = False
 
     def _open_hdf5(self, hdf5_index=None):
-        from blosc2.hdf5_source import decode_hdf5_value, scan_hdf5_index
+        from blosc2.hdf5_source import decode_hdf5_value, load_hdf5_index, scan_hdf5_index
 
         unsupported = {}
         if hdf5_index is None:
-            self.hdf5_index = scan_hdf5_index(
+            self.hdf5_index, self.hdf5_blob = scan_hdf5_index(
                 self.urlpath,
                 self.storage_options,
+                dataset=self.root or None,
                 unsupported=unsupported,
                 traffic=self.traffic,
                 _filesystem=self.filesystem,
+                _lazy_allocations=True,
+                _return_blob=True,
             )
         else:
-            self.hdf5_index = hdf5_index
-            self._validate_hdf5_index()
+            self.hdf5_index = load_hdf5_index(
+                hdf5_index,
+                self.urlpath,
+                self.storage_options,
+                filesystem=self.filesystem,
+                dataset=self.root or None,
+            )
         for path, metadata in self.hdf5_index["groups"].items():
             self._add(path, "group")
             self.attrs[path] = {
@@ -473,6 +492,58 @@ class RemoteDiscovery:
             self._validate(path)
             self.nodes[path] = ("unsupported", message)
         self.notice = "HDF5 view includes indexed groups and datasets; external and soft links are omitted."
+
+    def ensure_hdf5_allocations(self, path):
+        """Populate one deferred HDF5 allocation map and return its metadata."""
+        from blosc2.hdf5_source import scan_hdf5_allocations
+
+        with self.lock:
+            metadata = self.hdf5_index["datasets"][path]
+            if metadata["allocated"] is None:
+                metadata["allocated"] = scan_hdf5_allocations(
+                    self.urlpath,
+                    path,
+                    self.storage_options,
+                    traffic=self.traffic,
+                    _filesystem=self.filesystem,
+                    _blob=self.hdf5_blob,
+                )
+                self.save_manifest()
+            return metadata
+
+    def ensure_pytables_indexes(self, table_path):
+        """Discover one table's hidden PyTables index nodes on first use."""
+        from blosc2.hdf5_source import decode_hdf5_value, scan_pytables_indexes
+
+        with self.lock:
+            metadata = self.hdf5_index["datasets"][table_path]
+            if "pytables_indexes" in metadata:
+                return
+            groups, datasets, indexes = scan_pytables_indexes(
+                self.urlpath,
+                table_path,
+                metadata,
+                self.storage_options,
+                traffic=self.traffic,
+                _filesystem=self.filesystem,
+                _blob=self.hdf5_blob,
+            )
+            self.hdf5_index["groups"].update(groups)
+            self.hdf5_index["datasets"].update(datasets)
+            metadata["pytables_indexes"] = indexes
+            for path, item in groups.items():
+                if path not in self.nodes:
+                    self._add(path, "group")
+                self.attrs[path] = {
+                    key: decode_hdf5_value(value) for key, value in item.get("attrs", {}).items()
+                }
+            for path, item in datasets.items():
+                if path not in self.nodes:
+                    self._add(path, "ndarray")
+                self.attrs[path] = {
+                    key: decode_hdf5_value(value) for key, value in item.get("attrs", {}).items()
+                }
+            self.save_manifest()
 
     def _open_zarr(self):
         import zarr
@@ -600,6 +671,8 @@ class RemoteDiscovery:
                 storage_options=self.storage_options,
                 _traffic=self.traffic,
                 _filesystem=self.filesystem,
+                _blob=self.hdf5_blob,
+                _ensure_allocations=self.ensure_hdf5_allocations,
             )
         else:
             from blosc2.zarr_source import ZarrNDSource
@@ -733,6 +806,8 @@ class RemoteDiscovery:
                     storage_options=self.storage_options,
                     _traffic=self.traffic,
                     _filesystem=self.filesystem,
+                    _blob=self.hdf5_blob,
+                    _ensure_allocations=self.ensure_hdf5_allocations,
                 )
                 if self.source_validator is not None:
                     self.source_validator(source)
@@ -801,6 +876,8 @@ class RemoteDiscovery:
                             storage_options=self.storage_options,
                             _traffic=self.traffic,
                             _filesystem=self.filesystem,
+                            _blob=self.hdf5_blob,
+                            _ensure_allocations=self.ensure_hdf5_allocations,
                         )
                         self.sources[path] = source
                     self.get_cache(source)
@@ -1219,6 +1296,9 @@ class RemoteStore(RemoteObject):
     ``keys()`` lists immediate children; ``get_info()`` inspects metadata without
     creating an array cache. Paths are relative to this group. Closing a handle
     leaves its previously returned arrays and group handles usable.
+
+    ``hdf5_index`` accepts a native index dictionary or a local/remote JSON path
+    for HDF5 sources. Supplying one skips HDF5 discovery.
     """
 
     @classmethod
@@ -1267,6 +1347,7 @@ class RemoteStore(RemoteObject):
         cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
         cache_dir=None,
+        hdf5_index=None,
         _allow_array_root=False,
         _filesystem=None,
         _manifest=None,
@@ -1275,6 +1356,7 @@ class RemoteStore(RemoteObject):
         _max_nodes=None,
         _source_format=None,
         _hdf5_index=None,
+        _hdf5_blob=None,
         _traffic=None,
         nested_storage_options=None,
     ):
@@ -1282,6 +1364,7 @@ class RemoteStore(RemoteObject):
             urlpath = os.fspath(urlpath)
         if not isinstance(urlpath, str):
             raise TypeError("RemoteStore requires a remote URL string")
+        hdf5_index, _source_format = _resolve_hdf5_options(hdf5_index, _hdf5_index, _source_format)
         artifact = self._try_open_artifact(
             urlpath, dataset, storage_options, cache_policy, max_cache_bytes, cache_dir, _allow_array_root
         )
@@ -1324,7 +1407,8 @@ class RemoteStore(RemoteObject):
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _source_format=_source_format,
-                _hdf5_index=_hdf5_index,
+                _hdf5_index=hdf5_index,
+                _hdf5_blob=_hdf5_blob,
                 _traffic=_traffic,
             )
             manifest = owner.restored_manifest

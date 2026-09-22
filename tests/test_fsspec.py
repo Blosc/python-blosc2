@@ -778,11 +778,22 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
     with _ranged_server(tmp_path) as (urlbase, requests):
         remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data")
         np.testing.assert_array_equal(remote[:10], data[:10])
-        assert requests
-        assert all(requests)  # Metadata and payload both use bounded ranges.
+        assert requests == [None]  # The small source is retained by one full GET.
         count = len(requests)
         np.testing.assert_array_equal(remote[:10], data[:10])
         assert len(requests) == count
+
+
+def test_http_large_hdf5_keeps_range_reads(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    path = tmp_path / "large-seekable.h5"
+    with h5py.File(path, "w") as file:
+        file.create_dataset("data", data=np.zeros(9 << 20, dtype="u1"), chunks=(1 << 20,))
+    with _ranged_server(tmp_path) as (urlbase, requests):
+        remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data")
+        assert remote[0] == 0
+        assert requests
+        assert all(request is not None for request in requests)
 
 
 def test_http_hdf5_source_close_closes_session(tmp_path):

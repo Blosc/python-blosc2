@@ -890,7 +890,10 @@ def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch
     np.testing.assert_array_equal(leaf[:2, :3], data[:2, :3])
     before = root.traffic.nbytes
     np.testing.assert_array_equal(alias[:2, :3], data[:2, :3])
-    assert root.traffic.nbytes > before  # NONE fetches again.
+    if owner.format == "hdf5":
+        assert root.traffic.nbytes == before  # Retained small-file bytes serve later reads.
+    else:
+        assert root.traffic.nbytes > before  # NONE fetches again.
     assert leaf.cache is None
     assert leaf.cache_bytes == root.cache_bytes == 0
     np.testing.assert_array_equal((leaf + 2)[:], data + 2)
