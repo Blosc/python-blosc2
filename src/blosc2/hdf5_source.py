@@ -757,6 +757,60 @@ def scan_pytables_indexes(
             _close_owned_filesystem(fs)
 
 
+def read_pytables_index_arrays(arrays, tail):
+    """Read a PyTables index with bounded, merged source ranges."""
+    sources = [array.src for array in arrays]
+    if any(
+        source._local or source._blob is not None or not source._metadata["direct"] for source in sources
+    ):
+        return [arrays[0][:], arrays[1][:], arrays[2][:tail], arrays[3][:tail]]
+
+    shapes = [source.shape if i < 2 else (tail,) for i, source in enumerate(sources)]
+    outputs = [
+        np.full(shape, _from_json_value(source._metadata["fill_value"]), dtype=source.dtype)
+        for source, shape in zip(sources, shapes, strict=True)
+    ]
+    chunks = []
+    for source, output in zip(sources, outputs, strict=True):
+        for record in source._metadata["allocated"]:
+            offsets = tuple(record["offset"])
+            if offsets[0] >= output.shape[0]:
+                continue
+            selection = tuple(
+                slice(offset, min(offset + length, extent))
+                for offset, length, extent in zip(offsets, source.chunks, output.shape, strict=True)
+            )
+            start = record["byte_offset"]
+            chunks.append((start, start + record["size"], source, output, offsets, selection))
+    chunks.sort(key=lambda chunk: chunk[0])
+
+    def read_group(start, end, members):
+        data = sources[0]._filesystem.cat_file(sources[0]._path, start=start, end=end)
+        if len(data) != end - start:
+            raise OSError(f"Short PyTables index read: expected {end - start} bytes, got {len(data)}")
+        if sources[0].traffic is not None:
+            sources[0].traffic.charge(len(data))
+        for chunk_start, chunk_end, source, output, offsets, selection in members:
+            payload = data[chunk_start - start : chunk_end - start]
+            output[selection] = source._direct_values(offsets, selection, data=payload)
+
+    start = end = None
+    members = []
+    for chunk in chunks:
+        chunk_start, chunk_end = chunk[:2]
+        if members and (chunk_start - end > 64 << 10 or max(end, chunk_end) - start > 8 << 20):
+            read_group(start, end, members)
+            members = []
+        if not members:
+            start, end = chunk_start, chunk_end
+        else:
+            end = max(end, chunk_end)
+        members.append(chunk)
+    if members:
+        read_group(start, end, members)
+    return outputs
+
+
 # Kept while callers migrate from the old internal name.
 def available_datasets(url, storage_options: dict | None = None) -> list[str]:
     """Return all dataset paths in an HDF5 file or native index."""
@@ -1109,8 +1163,9 @@ class HDF5NDSource(ProxyNDSource):
         self._fallback_finalizer = weakref.finalize(self, _close_hdf5_file, h5file, raw)
         return h5file[self.dataset or "/"]
 
-    def _direct_values(self, offsets, selection):
+    def _direct_values(self, offsets, selection, data=None):
         valid_shape = tuple(item.stop - item.start for item in selection)
+        prefetched = data is not None
         # Count in-flight reads so close() can wait for them without serializing
         # independent direct fetches against each other. The closed check comes
         # first so sparse fill chunks obey the same contract as allocated ones.
@@ -1124,18 +1179,19 @@ class HDF5NDSource(ProxyNDSource):
             blob = self._blob
             self._active_reads += 1
         try:
-            if blob is not None:
-                start = record["byte_offset"]
-                data = blob[start : start + record["size"]]
-            else:
-                data = filesystem.cat_file(
-                    self._path, start=record["byte_offset"], end=record["byte_offset"] + record["size"]
-                )
+            if not prefetched:
+                if blob is not None:
+                    start = record["byte_offset"]
+                    data = blob[start : start + record["size"]]
+                else:
+                    data = filesystem.cat_file(
+                        self._path, start=record["byte_offset"], end=record["byte_offset"] + record["size"]
+                    )
         finally:
             with self._lifecycle:
                 self._active_reads -= 1
                 self._lifecycle.notify_all()
-        if blob is None and self.traffic is not None:
+        if not prefetched and blob is None and self.traffic is not None:
             self.traffic.charge(len(data))
         if len(data) != record["size"]:
             raise OSError(f"Short HDF5 chunk read for {self.dataset!r} at {offsets}")

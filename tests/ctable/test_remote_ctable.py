@@ -42,7 +42,13 @@ def remote_table_url(tmp_path, table, name="table"):
 
 
 def pytables_hdf5_url(
-    name="pytables-table.h5", *, indexed=False, indexed_field="id", index_dtype="u8", indexed_rows=21
+    name="pytables-table.h5",
+    *,
+    indexed=False,
+    indexed_field="id",
+    index_dtype="u8",
+    indexed_rows=21,
+    padding=0,
 ):
     h5py = pytest.importorskip("h5py")
     rows = [(1, 1.5, b"one"), (2, 2.5, b"two"), (3, 3.5, b"three")]
@@ -77,12 +83,24 @@ def pytables_hdf5_url(
             )
             offsets = np.arange(0, regular, 16)[:, None]
             tail_order = np.argsort(data[indexed_field][regular:], kind="stable")
-            group.create_dataset("sorted", data=regular_values)
-            group.create_dataset("indices", data=(regular_order + offsets).astype(index_dtype))
-            sorted_lr = group.create_dataset("sortedLR", data=data[indexed_field][regular:][tail_order])
-            indices_lr = group.create_dataset("indicesLR", data=(tail_order + regular).astype(index_dtype))
+            group.create_dataset("sorted", data=regular_values, chunks=(1, 16) if padding else None)
+            group.create_dataset(
+                "indices",
+                data=(regular_order + offsets).astype(index_dtype),
+                chunks=(1, 16) if padding else None,
+            )
+            sorted_lr = group.create_dataset(
+                "sortedLR", data=data[indexed_field][regular:][tail_order], chunks=(1,) if padding else None
+            )
+            indices_lr = group.create_dataset(
+                "indicesLR",
+                data=(tail_order + regular).astype(index_dtype),
+                chunks=(1,) if padding else None,
+            )
             sorted_lr.attrs["nelements"] = np.int32(len(tail_order))
             indices_lr.attrs["nelements"] = np.int32(len(tail_order))
+        if padding:
+            h5file.create_dataset("padding", data=np.zeros(padding, dtype="u1"))
     url = f"memory://{name}"
     fsspec.filesystem("memory").pipe(url, buffer.getvalue())
     return url, data
@@ -133,6 +151,22 @@ def test_remote_pytables_full_index_is_native_opsi():
         assert descriptor["opsi"]["values_path"] is None
         expected = data["label"][(data["id"] >= 5) & (data["id"] < 9)]
         np.testing.assert_array_equal(table.where("(id >= 5) & (id < 9)").label[:], expected)
+
+
+def test_remote_pytables_index_merged_ranges():
+    url, data = pytables_hdf5_url(
+        "pytables-merged-index.h5", indexed=True, indexed_rows=2049, padding=9 << 20
+    )
+    with blosc2.RemoteCTable(url, dataset="table") as table:
+        owner = table._storage._owner
+        owner.ensure_pytables_indexes("table")
+        for path in owner.hdf5_index["datasets"]["table"]["pytables_indexes"]["id"].values():
+            if isinstance(path, str):
+                owner.ensure_hdf5_allocations(path)
+        table.traffic.reset()
+        assert table._get_index_catalog()["id"]["kind"] == "opsi"
+        assert table.traffic.requests <= 2
+        np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
 
 
 def test_remote_pytables_light_index_falls_back_to_scan():

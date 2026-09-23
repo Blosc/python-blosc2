@@ -1001,6 +1001,7 @@ class RemoteTableStorage(TableStorage):
         return catalog
 
     def _load_pytables_index_catalog(self) -> dict:
+        from blosc2.hdf5_source import read_pytables_index_arrays
         from blosc2.indexing import _build_descriptor, _field_target_descriptor, _store_array_sidecar
 
         self._owner.ensure_pytables_indexes(self._root_key)
@@ -1018,8 +1019,11 @@ class RemoteTableStorage(TableStorage):
                     self._arrays.append(array)
                     opened.append(array)
                 tail = int(source["tail"])
-                values = np.concatenate((opened[0][:].reshape(-1), opened[2][:tail]))
-                raw_positions = np.concatenate((opened[1][:].reshape(-1), opened[3][:tail]))
+                sorted_values, sorted_positions, tail_values, tail_positions = read_pytables_index_arrays(
+                    opened, tail
+                )
+                values = np.concatenate((sorted_values.reshape(-1), tail_values))
+                raw_positions = np.concatenate((sorted_positions.reshape(-1), tail_positions))
                 if raw_positions.dtype.kind != "u" or raw_positions.itemsize != 8:
                     continue
                 if len(raw_positions) and int(raw_positions.max()) >= len(column):
