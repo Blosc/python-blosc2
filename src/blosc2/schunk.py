@@ -2172,7 +2172,11 @@ def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bo
         raise ValueError("HDF5 sources require lazy=True")
 
 
-def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency):
+def _validate_non_lazy_fsspec_options(
+    immutable_present, remote_array_options, cache_path, max_concurrency, shared_cache
+):
+    if shared_cache:
+        raise ValueError("shared_cache=True requires lazy=True")
     if immutable_present:
         raise NotImplementedError("assume_immutable requires lazy=True")
     if remote_array_options is not None:
@@ -2230,7 +2234,44 @@ def _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index):
     return urlpath, dataset, source_format
 
 
-def _open_lazy_fsspec(urlpath, source_format, options):
+def _open_shared_remote(urlpath, source_format, options):
+    """Discover a container through its process-shared sparse cache."""
+    if options["cache_dir"] is None:
+        raise ValueError("shared_cache=True requires cache_dir")
+    if source_format not in {"b2z", "hdf5", "zarr"}:
+        raise NotImplementedError("shared_cache=True requires a remote B2Z, HDF5, or Zarr container")
+    if options["cache_policy"] is not blosc2.CachePolicy.DISK:
+        raise ValueError("shared_cache=True requires cache_policy=CachePolicy.DISK")
+    if options["assume_immutable"] is not True:
+        raise ValueError("shared_cache=True requires assume_immutable=True")
+    store_options = {
+        key: value
+        for key, value in options.items()
+        if key in {"dataset", "storage_options", "max_cache_bytes"}
+    }
+    with blosc2.RemoteStore.with_sparse_cache(
+        urlpath,
+        options["cache_dir"],
+        _source_format=source_format,
+        _hdf5_index=options.get("hdf5_index"),
+        **store_options,
+    ) as store:
+        result = store[""]
+        concurrency = options["max_concurrency"]
+        if concurrency is not None:
+            if isinstance(result, blosc2.RemoteCTable):
+                result.max_concurrency = concurrency
+            elif isinstance(result, blosc2.RemoteArray):
+                result.src.max_concurrency = concurrency
+            else:
+                result.close()
+                raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+        return result
+
+
+def _open_lazy_fsspec(urlpath, source_format, options, shared_cache=False):
+    if shared_cache:
+        return _open_shared_remote(urlpath, source_format, options)
     if source_format == "b2z":
         return _open_remote_b2z(urlpath, options)
     if source_format == "hdf5":
@@ -2251,6 +2292,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
+    shared_cache = kwargs.pop("shared_cache", False)
     storage_options = kwargs.pop("storage_options", None)
     source_format = kwargs.pop("source_format", None)
     dataset = kwargs.pop("dataset", None)
@@ -2292,9 +2334,11 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        return _open_lazy_fsspec(urlpath, source_format, remote_array_options)
+        return _open_lazy_fsspec(urlpath, source_format, remote_array_options, shared_cache)
 
-    _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
+    _validate_non_lazy_fsspec_options(
+        immutable_present, remote_array_options, cache_path, max_concurrency, shared_cache
+    )
 
     if cache_dir is not None:
         localized = localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options)
@@ -2514,6 +2558,15 @@ def _reject_table_buffer_options(kwargs):
         )
 
 
+def _validate_shared_cache_request(urlpath, shared_cache, kwargs):
+    if not isinstance(shared_cache, bool):
+        raise TypeError("shared_cache must be a bool")
+    if shared_cache:
+        if not isinstance(urlpath, str) or not is_fsspec_url(urlpath):
+            raise ValueError("shared_cache=True requires a remote container URL")
+        kwargs["shared_cache"] = True
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
@@ -2522,6 +2575,7 @@ def open(
     hdf5_index: dict | str | os.PathLike | None = None,
     *,
     path: str | None = None,
+    shared_cache: bool = False,
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2575,6 +2629,16 @@ def open(
         (e.g. in a file containing several such objects).
         A nonzero offset in a local file opens the embedded Blosc2 frame
         directly, bypassing filename-based container format detection.
+    shared_cache: bool, optional
+        Share an on-demand disk cache between processes. Defaults to False.
+        Requires ``cache_dir`` and a remote B2Z, HDF5, or Zarr container with
+        lazy access, ``CachePolicy.DISK``, and ``assume_immutable=True``.
+        Returns the selected table, group, or array using sparse cache storage
+        and operation-scoped locks. Operations on the same store serialize.
+        All processes using this cache must enable sharing; use a separate
+        directory from ordinary exclusive caches. The aggregate retained
+        compressed-payload budget defaults to 256 MiB; ``max_cache_bytes=None``
+        disables eviction. This does not bound total disk usage or peak RAM.
     kwargs: dict, optional
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
@@ -2773,6 +2837,7 @@ def open(
     """
     dataset = blosc2.core.resolve_dataset_path(dataset, path)
     _reject_table_buffer_options(kwargs)
+    _validate_shared_cache_request(urlpath, shared_cache, kwargs)
     if isinstance(urlpath, blosc2.URLPath):
         return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 

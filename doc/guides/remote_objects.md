@@ -120,27 +120,45 @@ Ordinary `RemoteStore` and `RemoteCTable` disk caches have **exclusive ownership
 Another process can reuse the same cache entry after its owner and dependent
 handles close, but opening that entry while it is still owned raises
 `RuntimeError: RemoteStore cache is already owned`. This also applies to stores
-and tables opened through `blosc2.open(..., cache_dir=...)`.
+and tables opened through `blosc2.open(..., cache_dir=...)` with the default
+`shared_cache=False`.
 
 ### Sharing a cache between simultaneous processes
 
-Use `with_sparse_cache()` when multiple processes need to keep the same store
-or table open:
+Use `blosc2.open(..., cache_dir=..., shared_cache=True)` when multiple processes
+need to keep the same store or table open:
 
 ```python
-with blosc2.RemoteCTable.with_sparse_cache(
+with blosc2.open(
     "https://datasets.example.org/data.h5",
-    "./shared-table-cache",
+    cache_dir="./shared-table-cache",
+    shared_cache=True,
     path="readings",
 ) as table:
     print(table.info)
 ```
 
-For hierarchies, use `RemoteStore.with_sparse_cache()` instead. These constructors
-use operation-scoped locks: handles can coexist across processes, but operations
-on the same store serialize. Every process using that cache must use the shared
-constructor; do not mix it with ordinary `cache_dir=` access. Use a separate
-directory for the shared cache.
+The same opener returns groups and array leaves selected within remote B2Z,
+HDF5, or Zarr containers. Sharing requires lazy access, `CachePolicy.DISK`, and
+an immutable source (`assume_immutable=True`). Standalone `.b2nd` and Caterva2
+sources are not supported by this option.
+
+Shared caches use sparse frames (separate chunk files) and operation-scoped
+locks: handles can coexist across processes, but operations on the same store
+serialize. Ordinary table/store disk caches use contiguous array cache files
+and lifetime ownership locks. **Both fetch data on demand.** Every process using
+the shared directory must enable sharing; do not mix it with ordinary exclusive
+`cache_dir=` access. Use a separate directory for the shared cache.
+
+Both modes default to a **256 MiB aggregate compressed-payload budget** across
+the owner's leaves. Set `max_cache_bytes` to a positive byte count to change it,
+or explicitly pass `None` for unlimited retention. The budget applies after
+operations; it does not bound metadata, total disk footprint, or peak RAM.
+
+`RemoteStore.with_sparse_cache()` and `RemoteCTable.with_sparse_cache()` remain
+available for advanced attachment with manifests, seed carriers, or authorized
+filesystems. They use the same 256 MiB default; explicit `max_cache_bytes=None`
+keeps the previous unlimited behavior.
 
 See {doc}`../reference/remotestore` ("Shared sparse runtime caches") for locking
 and refresh details, and {doc}`remote_tables` for table usage.

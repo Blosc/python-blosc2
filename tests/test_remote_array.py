@@ -266,6 +266,13 @@ def test_disk_bound_shrinks_self_caching_carrier(tmp_path):
     assert reopened.cache_bytes <= 120_000
 
 
+@pytest.mark.parametrize(("options", "expected"), [({}, 256 << 20), ({"max_cache_bytes": None}, None)])
+def test_sparse_cache_default_budget(tmp_path, options, expected):
+    url, _ = _remote_array("sparse-default.b2nd")
+    with blosc2.RemoteArray.with_sparse_cache(url, tmp_path / "cache", **options) as array:
+        assert array.max_cache_bytes == expected
+
+
 def test_server_sparse_cache_reopens_and_exports_portable_carriers(tmp_path):
     url, data = _remote_array("server-sparse.b2nd", nchunks=3, chunk_size=100_000)
     runtime_path = tmp_path / "private-runtime"

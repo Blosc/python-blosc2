@@ -141,7 +141,7 @@ class RemoteCTable(RemoteObject, CTable):
         dataset=None,
         path=None,
         manifest=None,
-        max_cache_bytes=None,
+        max_cache_bytes=CACHE_POLICY_DEFAULT,
         carrier=None,
         max_concurrency=8,
         metadata_buffer_bytes=8 << 20,
@@ -154,6 +154,9 @@ class RemoteCTable(RemoteObject, CTable):
         """Attach a remote CTable to a sparse disk cache shared across processes.
 
         ``path`` and ``dataset`` select the table as in the ordinary constructor.
+        The aggregate compressed-payload budget defaults to 256 MiB; pass
+        ``max_cache_bytes=None`` for unlimited retention. For ordinary shared
+        caching, prefer ``blosc2.open(url, cache_dir=..., shared_cache=True)``.
         """
         settings = {
             name: _positive_integer(name, value)

@@ -676,11 +676,19 @@ def test_nested_remote_store_materialize_cycle_preserves_destination(tmp_path):
     assert destination.read_bytes() == b"existing"
 
 
-def test_sparse_store_shared_handles(hierarchy, tmp_path):
+@pytest.mark.parametrize("api", ["factory", "open"])
+def test_sparse_store_shared_handles(hierarchy, tmp_path, api):
     url, data = hierarchy
     parent = tmp_path / "shared"
-    with blosc2.RemoteStore.with_sparse_cache(url, parent) as first:
-        with blosc2.RemoteStore.with_sparse_cache(url, parent) as second:
+
+    def open_shared():
+        if api == "open":
+            return blosc2.open(url, cache_dir=parent, shared_cache=True)
+        return blosc2.RemoteStore.with_sparse_cache(url, parent)
+
+    with open_shared() as first:
+        assert first.max_cache_bytes == 256 << 20
+        with open_shared() as second:
             with first["group/a"] as a, second["group/a"] as b:
                 np.testing.assert_array_equal(a[:], data)
                 second.traffic.reset()
@@ -691,6 +699,63 @@ def test_sparse_store_shared_handles(hierarchy, tmp_path):
             second.refresh()
             with pytest.raises(RuntimeError, match="stale"):
                 first.keys()
+
+
+@pytest.mark.parametrize("limit", [None, 1])
+def test_open_shared_cache_budget_and_selected_array(hierarchy, tmp_path, limit):
+    url, data = hierarchy
+    with blosc2.open(url, cache_dir=tmp_path / "cache", shared_cache=True, max_cache_bytes=limit) as store:
+        assert store.max_cache_bytes == limit
+        with store["group/a"] as array:
+            np.testing.assert_array_equal(array[:], data)
+        assert (store.cache_bytes > 0) if limit is None else (store.cache_bytes <= limit)
+    with blosc2.open(
+        url, path="group/a", cache_dir=tmp_path / "selected", shared_cache=True, max_concurrency=2
+    ) as array:
+        assert isinstance(array, blosc2.RemoteArray)
+        np.testing.assert_array_equal(array[:], data)
+        assert array._proxy._cache.schunk.contiguous is False
+        assert array.src.max_concurrency == 2
+
+
+def test_open_shared_cache_explicit_source_format(tmp_path):
+    path = tmp_path / "source.b2z"
+    with blosc2.TreeStore(path, mode="w") as store:
+        store["a"] = blosc2.arange(10)
+    url = f"memory://{tmp_path.name}/no-suffix"
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    for _ in range(2):
+        with blosc2.open(url, source_format="b2z", cache_dir=tmp_path / "cache", shared_cache=True) as store:
+            with store["a"] as array:
+                np.testing.assert_array_equal(array[:], np.arange(10))
+
+
+@pytest.mark.parametrize(
+    ("url", "options", "error", "message"),
+    [
+        ("memory://table.b2z", {"shared_cache": 1}, TypeError, "shared_cache must be a bool"),
+        ("local.b2z", {}, ValueError, "remote container URL"),
+        ("memory://table.b2z", {"cache_dir": None}, ValueError, "requires cache_dir"),
+        ("memory://table.b2z", {"lazy": False}, ValueError, "requires lazy=True"),
+        ("memory://table.b2z", {"assume_immutable": False}, ValueError, "assume_immutable=True"),
+        (
+            "memory://table.b2z",
+            {"cache_policy": blosc2.CachePolicy.MEMORY},
+            ValueError,
+            "CachePolicy.DISK",
+        ),
+        ("memory://array.b2nd", {}, NotImplementedError, "B2Z, HDF5, or Zarr"),
+        ("memory://table.b2z", {"cache_path": "cache.b2nd"}, ValueError, "mutually exclusive"),
+        ("memory://table.b2z", {"mode": "a"}, NotImplementedError, "mode='r'"),
+        ("memory://table.b2z", {"offset": 1, "lazy": True}, NotImplementedError, "offset"),
+        ("memory://table.b2z", {"mmap_mode": "r"}, ValueError, "requires lazy=True"),
+    ],
+)
+def test_open_shared_cache_invalid_options(tmp_path, url, options, error, message):
+    kwargs = {"cache_dir": tmp_path / "cache", "shared_cache": True, **options}
+    with pytest.raises(error, match=message):
+        blosc2.open(url, **kwargs)
+    assert not (tmp_path / "cache").exists()
 
 
 def test_sparse_store_trim_export_recovery(hierarchy, tmp_path):

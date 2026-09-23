@@ -190,16 +190,17 @@ def test_remote_pytables_light_index_falls_back_to_scan():
         np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
 
 
-def test_open_dispatches_remote_pytables_table(tmp_path):
+@pytest.mark.parametrize("shared_cache", [False, True])
+def test_open_dispatches_remote_pytables_table(tmp_path, shared_cache):
     url, data = pytables_hdf5_url(f"{tmp_path.name}-open-pytables.h5")
     cache = tmp_path / "cache"
 
-    with blosc2.open(url, lazy=True, cache_dir=cache) as store:
+    with blosc2.open(url, lazy=True, cache_dir=cache, shared_cache=shared_cache) as store:
         assert isinstance(store, blosc2.RemoteStore)
         assert "table" in store
 
     for target, options in ((url, {"dataset": "table"}), (url + "::table", {})):
-        with blosc2.open(target, lazy=True, cache_dir=cache, **options) as table:
+        with blosc2.open(target, lazy=True, cache_dir=cache, shared_cache=shared_cache, **options) as table:
             assert isinstance(table, blosc2.RemoteCTable)
             np.testing.assert_array_equal(table["id"][:], data["id"])
             assert "RemoteCTable" in str(table.info)
@@ -217,7 +218,8 @@ def test_open_remote_pytables_table_uses_one_cache_directory(tmp_path):
     assert len(list(cache.glob(f"{name}--*"))) == 1
 
 
-def test_open_dispatches_remote_pytables_table_with_json_sidecar(monkeypatch):
+@pytest.mark.parametrize("shared_cache", [False, True])
+def test_open_dispatches_remote_pytables_table_with_json_sidecar(monkeypatch, tmp_path, shared_cache):
     import blosc2.hdf5_source as hdf5_source
 
     url, data = pytables_hdf5_url("pytables-sidecar.h5", indexed=True)
@@ -228,7 +230,9 @@ def test_open_dispatches_remote_pytables_table_with_json_sidecar(monkeypatch):
         "scan_hdf5_index",
         lambda *args, **kwargs: pytest.fail("explicit sidecar must skip source discovery"),
     )
-    with blosc2.open(url + "::table", hdf5_index=sidecar) as table:
+    with blosc2.open(
+        url + "::table", hdf5_index=sidecar, cache_dir=tmp_path / "cache", shared_cache=shared_cache
+    ) as table:
         assert isinstance(table, blosc2.RemoteCTable)
         np.testing.assert_array_equal(table.id[:], data["id"])
         assert table._get_index_catalog()["id"]["kind"] == "opsi"
@@ -487,13 +491,21 @@ def test_remote_full_index_merges_incremental_runs(tmp_path):
         assert len(remote._get_index_catalog()["x"]["full"]["runs"]) == 1
 
 
-def test_sparse_cache_shared_handles_and_refresh(tmp_path):
+@pytest.mark.parametrize("api", ["factory", "open"])
+def test_sparse_cache_shared_handles_and_refresh(tmp_path, api):
     local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
     url = remote_table_url(tmp_path, local, "sparse-shared")
     cache = tmp_path / "sparse-cache"
 
-    with blosc2.RemoteCTable.with_sparse_cache(url, cache) as first:
-        with blosc2.RemoteCTable.with_sparse_cache(url, cache) as second:
+    def open_shared():
+        if api == "open":
+            return blosc2.open(url, cache_dir=cache, shared_cache=True, max_concurrency=2)
+        return blosc2.RemoteCTable.with_sparse_cache(url, cache, max_concurrency=2)
+
+    with open_shared() as first:
+        assert first.max_cache_bytes == 256 << 20
+        assert first.max_concurrency == 2
+        with open_shared() as second:
             np.testing.assert_array_equal(first.x[:], np.arange(20))
             second.traffic.reset()
             np.testing.assert_array_equal(second.x[:], np.arange(20))
@@ -504,6 +516,16 @@ def test_sparse_cache_shared_handles_and_refresh(tmp_path):
             second.refresh()
             with pytest.raises(RuntimeError, match="stale"):
                 first.x[:]
+
+
+@pytest.mark.parametrize("limit", [None, 1])
+def test_sparse_table_cache_budget(tmp_path, limit):
+    local = blosc2.CTable(Row, [(i, (i, i + 1), f"r{i}") for i in range(20)])
+    url = remote_table_url(tmp_path, local)
+    with blosc2.RemoteCTable.with_sparse_cache(url, tmp_path / "cache", max_cache_bytes=limit) as table:
+        assert table.max_cache_bytes == limit
+        np.testing.assert_array_equal(table.x[:], np.arange(20))
+        assert (table.cache_bytes > 0) if limit is None else (table.cache_bytes <= limit)
 
 
 @pytest.mark.parametrize("include_note", [False, True])

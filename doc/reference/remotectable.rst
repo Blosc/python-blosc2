@@ -60,10 +60,16 @@ views remain borrowed from that table. Refresh a nested table through its root
 store; a standalone table can call ``refresh()``.
 
 Server processes can share one bounded sparse disk cache with
-``RemoteCTable.with_sparse_cache(url, runtime_cache_path)``. The constructor
-uses the same process-safe cache and aggregate byte limit as
-``RemoteStore.with_sparse_cache()``; all processes using that directory must
-open it through the sparse-cache constructor.
+``blosc2.open(url, cache_dir="shared-cache", shared_cache=True)``. All processes
+using that directory must enable sharing. Operations serialize per store,
+and the aggregate compressed-payload budget defaults to 256 MiB; explicitly
+pass ``max_cache_bytes=None`` for unlimited retention. Use a separate directory
+from ordinary exclusive caches. The budget does not bound total disk usage or
+peak RAM.
+
+``RemoteCTable.with_sparse_cache(url, runtime_cache_path)`` remains available
+for advanced attachment with manifests or seed carriers, with the same default
+budget and shared-cache implementation.
 
 See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
 access, filtering, buffering, reference saving, and materialization examples.

@@ -1695,7 +1695,7 @@ class RemoteStore(RemoteObject):
         dataset=None,
         path=None,
         manifest=None,
-        max_cache_bytes=None,
+        max_cache_bytes=CACHE_POLICY_DEFAULT,
         carrier=None,
         storage_options=None,
         _filesystem=None,
@@ -1703,6 +1703,8 @@ class RemoteStore(RemoteObject):
         _manifest_validator=None,
         _max_nodes=None,
         _traffic=None,
+        _source_format=None,
+        _hdf5_index=None,
     ):
         """Attach an immutable remote hierarchy to a cache shared across processes.
 
@@ -1712,12 +1714,17 @@ class RemoteStore(RemoteObject):
         no credentials or filesystem objects are persisted. Portable artifacts
         are exported with ``save`` rather than opened as mutable runtime storage.
         ``path`` and ``dataset`` select the group as in the ordinary constructor.
+        The aggregate compressed-payload budget defaults to 256 MiB; pass
+        ``max_cache_bytes=None`` for unlimited retention. For ordinary shared
+        caching, prefer ``blosc2.open(url, cache_dir=..., shared_cache=True)``.
         """
         from blosc2.remote_store_cache import SharedStoreCache, SharedStoreOperation
 
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         limit = normalize_cache_limit(blosc2.CachePolicy.DISK, max_cache_bytes)
         base, root, kind = parse_container_url(urlpath, dataset)
+        if _source_format is not None:
+            kind = _source_format
         validate_persistable_url(base)
         source = {"urlpath": base, "dataset": (root or "").strip("/"), "kind": kind}
         fingerprint = storage_options_fingerprint(storage_options)
@@ -1747,6 +1754,8 @@ class RemoteStore(RemoteObject):
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _traffic=_traffic,
+                _source_format=kind,
+                _hdf5_index=_hdf5_index,
             )
             owner.disk = disk
             owner.shared = True

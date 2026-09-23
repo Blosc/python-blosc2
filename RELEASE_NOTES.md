@@ -19,6 +19,10 @@ XXX version-specific blurb XXX
 
 #### Common remote-object API
 
+- Added `blosc2.open(url, cache_dir=..., shared_cache=True)` for process-shared
+  sparse caches of remote B2Z, HDF5, and Zarr tables, groups, and array leaves.
+  This is the preferred entry point for ordinary shared caching;
+  `with_sparse_cache()` remains available for advanced attachment.
 - Added the public `RemoteObject` base for `RemoteArray`, `RemoteStore`,
   and `RemoteCTable`. It documents their shared source, attributes, traffic,
   cache accounting, export mutability, reference saving, and lifetime contract.
@@ -31,6 +35,11 @@ XXX version-specific blurb XXX
 
 ### Compatibility notes
 
+- `RemoteCTable.with_sparse_cache()` and `RemoteStore.with_sparse_cache()` now
+  default to a 256 MiB aggregate compressed-payload budget, matching `open()`
+  and `RemoteArray.with_sparse_cache()`. Explicitly pass `max_cache_bytes=None`
+  to retain unlimited caching. Internal leaf caches still share one aggregate
+  allowance rather than receiving independent 256 MiB limits.
 - The ListArray construction default changed from caller-managed batches to
   2048 rows per batch. Pass `batch_rows=None` to retain the previous behavior.
   Existing arrays are not rewritten and keep their stored boundaries.

@@ -139,16 +139,22 @@ refresh. Refresh a table obtained from a {ref}`RemoteStore` through the root
 store, then retrieve the table again. Immutable reference artifacts reject
 `refresh()`.
 
-For a cache shared by multiple server processes, use the sparse constructor:
+For a cache shared by multiple processes, enable `shared_cache` in the opener:
 
 ```python
-with blosc2.RemoteCTable.with_sparse_cache(url, "shared-table-cache") as table:
+with blosc2.open(url, cache_dir="shared-table-cache", shared_cache=True) as table:
     print(table[:5])
 ```
 
 The outer table owns one aggregate cache budget for its ordinary and referenced
-`RemoteArray` columns. Every process using the cache directory must use this
-constructor.
+`RemoteArray` columns: 256 MiB of retained compressed payload by default.
+Pass `max_cache_bytes=None` for unlimited retention. The budget does not bound
+total disk usage or peak RAM. Every process using the cache directory must
+enable sharing; use a separate directory from ordinary exclusive caches.
+Handles can coexist, but operations on the same store serialize.
+
+`RemoteCTable.with_sparse_cache()` remains available for advanced attachment
+with a manifest or seed carrier, and now has the same 256 MiB default.
 
 ## See also
 

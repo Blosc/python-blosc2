@@ -143,13 +143,16 @@ uses POSIX flock or Windows byte locking; Windows execution remains a CI check.
 Shared sparse runtime caches
 ----------------------------
 
-Services and multiple local processes can use ``RemoteStore.with_sparse_cache``
+Services and multiple local processes can use ``blosc2.open(..., shared_cache=True)``
 to keep simultaneous handles to the same private runtime cache:
 
 .. code-block:: python
 
-    with blosc2.RemoteStore.with_sparse_cache(
-        "https://host/data.b2z", "shared-runtime", max_cache_bytes=64 << 20
+    with blosc2.open(
+        "https://host/data.b2z",
+        cache_dir="shared-runtime",
+        shared_cache=True,
+        max_cache_bytes=64 << 20,
     ) as store:
         with store["experiment/temperature"] as array:
             values = array[:100]
@@ -159,8 +162,15 @@ This mode stores leaf payload in sparse RemoteArray caches. Each operation
 acquires a store-wide OS lock, reloads discovery and leaf accounting, and applies
 one aggregate payload allowance. Handles may coexist across processes, while
 operations within a store serialize. All users of that directory must use the
-shared constructor. A process-local memory cache or the ordinary exclusive
+shared mode. A process-local memory cache or the ordinary exclusive
 ``cache_dir`` constructor must not write to it.
+
+The default aggregate compressed-payload budget is 256 MiB. Explicitly pass
+``max_cache_bytes=None`` to disable eviction. This is a post-operation payload
+bound, not a bound on metadata, total disk usage, or peak RAM.
+``RemoteStore.with_sparse_cache()`` remains available for advanced attachment
+with manifests, seed carriers, and authorized filesystems; it uses the same
+default budget. Use a separate directory from ordinary exclusive caches.
 
 Manifests and generation pointers are published atomically. A process that dies
 during an operation causes the next owner to discard the disposable payload

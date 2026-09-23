@@ -1020,6 +1020,9 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         directory must construct it through this method so frame locking and
         interrupted-mutation recovery remain enabled.
 
+        The compressed-payload budget defaults to 256 MiB; pass
+        ``max_cache_bytes=None`` for unlimited retention.
+
         ``carrier`` is the portable RemoteArray carrier.  If it contains valid
         warm chunks when the sparse runtime cache is first created, those chunks
         are copied into the runtime cache.  Both copies continue to exist until
