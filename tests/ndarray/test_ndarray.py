@@ -122,6 +122,28 @@ def test_asarray_chunks_larger_than_shape(shape, chunks, blocks):
     assert not blosc2.are_partitions_behaved(shape, chunks, blocks)
 
 
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "behaved"),
+    [
+        # blocks divide the chunk but are not C-contiguous runs of it
+        ((256, 32, 16, 32), (256, 32, 16, 32), (32, 1, 16, 32), False),
+        ((64, 64, 64, 16), (64, 64, 64, 16), (8, 2, 64, 16), False),
+        # contiguous blocks keep the fast path
+        ((256, 32, 16, 32), (256, 32, 16, 32), (1, 4, 16, 32), True),
+    ],
+)
+def test_asarray_blocks_not_contiguous_in_chunk(shape, chunks, blocks, behaved):
+    # Above 16 MB, asarray copies whole chunks with update_data, which is only
+    # valid when every block is a C-contiguous run of its chunk
+    a = np.arange(math.prod(shape), dtype=np.float64).reshape(shape)
+    assert a.nbytes > 2**24
+
+    b = blosc2.asarray(a, chunks=chunks, blocks=blocks)
+
+    np.testing.assert_array_equal(b[:], a)
+    assert blosc2.are_partitions_behaved(shape, chunks, blocks) == behaved
+
+
 def test_asarray_persists_copy_with_urlpath(tmp_path):
     array = blosc2.asarray(np.arange(10, dtype=np.int64), chunks=(5,), blocks=(2,))
     path = tmp_path / "persisted_copy.b2nd"

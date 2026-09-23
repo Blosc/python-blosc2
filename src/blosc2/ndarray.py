@@ -322,7 +322,19 @@ def are_partitions_behaved(shape, chunks, blocks):
             return False
         return builtins.all(size % unit == 0 for size, unit in zip(container[:-1], part[:-1], strict=True))
 
-    return check_contiguity(chunks, blocks) and check_contiguity(shape, chunks)
+    def blocks_contiguous(chunks, blocks):
+        # A block is a C-contiguous run of its chunk only if its leading dims are 1,
+        # then one dim divides the chunk's, and the rest are equal to the chunk's.
+        # Same rule as nchunk_fastpath() in C-Blosc2's b2nd.c.
+        k = 0
+        for i, (size, unit) in enumerate(zip(chunks, blocks, strict=True)):
+            if size % unit != 0 or (i > k and size != unit):
+                return False
+            if i == k and unit == 1:
+                k += 1
+        return True
+
+    return blocks_contiguous(chunks, blocks) and check_contiguity(shape, chunks)
 
 
 def get_flat_slices_orig(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
