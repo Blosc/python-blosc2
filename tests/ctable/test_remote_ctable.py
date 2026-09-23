@@ -143,12 +143,26 @@ def test_remote_pytables_info_omits_shared_column_sizes(tmp_path):
         np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
 
 
-def test_remote_pytables_full_index_is_native_opsi():
-    url, data = pytables_hdf5_url("pytables-indexed.h5", indexed=True)
+def test_remote_pytables_full_index_is_native_opsi(monkeypatch):
+    from blosc2 import hdf5_source
+
+    scans = []
+    scan = hdf5_source.scan_hdf5_allocations_many
+
+    def count_scan(*args, **kwargs):
+        scans.append(args[1])
+        return scan(*args, **kwargs)
+
+    monkeypatch.setattr(hdf5_source, "scan_hdf5_allocations_many", count_scan)
+    url, data = pytables_hdf5_url(
+        "pytables-batched-allocations.h5", indexed=True, indexed_rows=2049, padding=9 << 20
+    )
     with blosc2.RemoteCTable(url, dataset="table", cache_policy=blosc2.CachePolicy.MEMORY) as table:
         descriptor = table._get_index_catalog()["id"]
         assert descriptor["kind"] == "opsi"
         assert descriptor["opsi"]["values_path"] is None
+        paths = table._storage._owner.hdf5_index["datasets"]["table"]["pytables_indexes"]["id"]
+        assert scans == [[paths[key] for key in ("sorted", "indices", "sortedLR", "indicesLR")]]
         expected = data["label"][(data["id"] >= 5) & (data["id"] < 9)]
         np.testing.assert_array_equal(table.where("(id >= 5) & (id < 9)").label[:], expected)
 

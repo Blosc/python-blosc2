@@ -551,6 +551,25 @@ class RemoteDiscovery:
                 self.save_manifest()
             return metadata
 
+    def ensure_hdf5_allocations_many(self, paths):
+        """Populate deferred HDF5 allocation maps in one scan."""
+        from blosc2.hdf5_source import scan_hdf5_allocations_many
+
+        with self.lock:
+            missing = [path for path in paths if self.hdf5_index["datasets"][path]["allocated"] is None]
+            if missing:
+                allocations = scan_hdf5_allocations_many(
+                    self.urlpath,
+                    missing,
+                    self.storage_options,
+                    traffic=self.traffic,
+                    _filesystem=self.filesystem,
+                    _blob=self.hdf5_blob,
+                )
+                for path, allocated in allocations.items():
+                    self.hdf5_index["datasets"][path]["allocated"] = allocated
+                self.save_manifest()
+
     def attach_hdf5_source_cache(self, path, marker):
         self.hdf5_source_cache_path = path
         self.hdf5_source_cache_marker = marker

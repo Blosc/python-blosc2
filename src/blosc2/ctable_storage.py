@@ -1012,9 +1012,11 @@ class RemoteTableStorage(TableStorage):
             if cached is not None:
                 catalog[name] = cached
                 continue
+            keys = ("sorted", "indices", "sortedLR", "indicesLR")
+            self._owner.ensure_hdf5_allocations_many(source[key] for key in keys)
             opened = []
             try:
-                for key in ("sorted", "indices", "sortedLR", "indicesLR"):
+                for key in keys:
                     array = self._owner.remote_array(source[key])
                     self._arrays.append(array)
                     opened.append(array)

@@ -302,8 +302,8 @@ class _CountingFile(io.IOBase):
 
 
 @contextlib.contextmanager
-def _open_hdf5_file(path, *, local=False, filesystem=None, traffic=None, blob=None):
-    """Open one HDF5 file from local storage, retained bytes, or exact ranges."""
+def _open_hdf5_file(path, *, local=False, filesystem=None, traffic=None, blob=None, buffered=False):
+    """Open one HDF5 file from local storage, retained bytes, or remote ranges."""
     import h5py
 
     with contextlib.ExitStack() as stack:
@@ -312,8 +312,23 @@ def _open_hdf5_file(path, *, local=False, filesystem=None, traffic=None, blob=No
         elif local:
             raw = stack.enter_context(open(path, "rb"))
         else:
-            raw = stack.enter_context(filesystem.open(path, "rb", block_size=1, cache_type="none"))
-            if traffic is not None:
+            options = (
+                {"block_size": 64 << 10, "cache_type": "blockcache", "cache_options": {"maxblocks": 32}}
+                if buffered
+                else {"block_size": 1, "cache_type": "none"}
+            )
+            raw = stack.enter_context(filesystem.open(path, "rb", **options))
+            cache = getattr(raw, "cache", None) if buffered else None
+            if traffic is not None and cache is not None and hasattr(cache, "fetcher"):
+                fetcher = cache.fetcher
+
+                def counted_fetch(start, end):
+                    data = fetcher(start, end)
+                    traffic.charge(len(data))
+                    return data
+
+                cache.fetcher = counted_fetch
+            elif traffic is not None:
                 raw = _CountingFile(raw, traffic)
         yield stack.enter_context(h5py.File(raw, "r"))
 
@@ -707,6 +722,27 @@ def scan_hdf5_allocations(
         with _open_hdf5_file(path, local=local, filesystem=fs, traffic=traffic, blob=_blob) as h5file:
             obj = h5file[str(dataset).strip("/")]
             return _allocated_chunks(obj)
+    finally:
+        if fs is not None and _filesystem is None:
+            _close_owned_filesystem(fs)
+
+
+def scan_hdf5_allocations_many(
+    urlpath, datasets, storage_options=None, *, traffic=None, _filesystem=None, _blob=None
+):
+    """Scan several HDF5 allocation maps through one bounded metadata cache."""
+    urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
+    local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
+    fs = None
+    path = urlpath
+    try:
+        if not local:
+            check_hdf5_dependencies()
+            fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+        with _open_hdf5_file(
+            path, local=local, filesystem=fs, traffic=traffic, blob=_blob, buffered=True
+        ) as h5file:
+            return {dataset: _allocated_chunks(h5file[dataset]) for dataset in datasets}
     finally:
         if fs is not None and _filesystem is None:
             _close_owned_filesystem(fs)
