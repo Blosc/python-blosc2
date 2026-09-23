@@ -105,16 +105,45 @@ Specify `cache_dir` when creating a `RemoteStore` to persist discovery metadata 
 with blosc2.RemoteStore(
     "https://datasets.example.org/data.h5",
     cache_dir="./b2store_cache",
-    max_cache_bytes=512 * 2**20,  # 512 MiB shared disk limit
+    max_cache_bytes=512 * 2**20,  # 512 MiB aggregate payload limit
 ) as store:
     temp = store["experiment/temperature"]
     values = temp[:100]
 ```
 
 When reopening the same store later with the same `cache_dir`:
+
 - Discovery metadata (such as B2Z member offsets or native HDF5 indexes) is restored from local disk, avoiding repeated remote scans. `store.metadata_bytes` reports the encoded manifest size.
 - Retained leaf chunks are available immediately from disk without network transfers.
-- Single-owner locks ensure that concurrent processes do not corrupt the shared cache.
+
+Ordinary `RemoteStore` and `RemoteCTable` disk caches have **exclusive ownership**.
+Another process can reuse the same cache entry after its owner and dependent
+handles close, but opening that entry while it is still owned raises
+`RuntimeError: RemoteStore cache is already owned`. This also applies to stores
+and tables opened through `blosc2.open(..., cache_dir=...)`.
+
+### Sharing a cache between simultaneous processes
+
+Use `with_sparse_cache()` when multiple processes need to keep the same store
+or table open:
+
+```python
+with blosc2.RemoteCTable.with_sparse_cache(
+    "https://datasets.example.org/data.h5",
+    "./shared-table-cache",
+    path="readings",
+) as table:
+    print(table.info)
+```
+
+For hierarchies, use `RemoteStore.with_sparse_cache()` instead. These constructors
+use operation-scoped locks: handles can coexist across processes, but operations
+on the same store serialize. Every process using that cache must use the shared
+constructor; do not mix it with ordinary `cache_dir=` access. Use a separate
+directory for the shared cache.
+
+See {doc}`../reference/remotestore` ("Shared sparse runtime caches") for locking
+and refresh details, and {doc}`remote_tables` for table usage.
 
 ### Lifetime and clean shutdown
 
