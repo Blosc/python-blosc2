@@ -2384,10 +2384,19 @@ def _open_remote_hdf5(urlpath, options):
     hdf5_index = options.get("hdf5_index")
     hdf5_blob = None
     traffic = None
-    if dataset:
-        array = blosc2.RemoteArray(urlpath, **options)
+    cached_store = False
+    if dataset and options["cache_dir"] is not None and hdf5_index is None:
+        from blosc2.remote_store_cache import StoreDiskCache
+
+        source = blosc2.RemoteStore._cache_source(urlpath, dataset, "hdf5", options.get("storage_options"))
+        cached_store = (
+            StoreDiskCache.path_for(options["cache_dir"], source) / "active_generation.json"
+        ).exists()
+    if dataset and not cached_store:
+        array = blosc2.RemoteArray(urlpath, _defer_cache=True, **options)
         metadata = array.src._hdf5_index["datasets"][array.dataset]
         if metadata.get("kind") != "ctable":
+            array._complete_deferred_cache()
             return array
         hdf5_index = array.src._hdf5_index
         hdf5_blob = array.src._blob
@@ -2416,6 +2425,8 @@ def _open_remote_hdf5(urlpath, options):
                 full,
                 **({} if max_concurrency is None else {"max_concurrency": max_concurrency}),
             )
+        if cached_store and kind == "ndarray":
+            return blosc2.RemoteArray(urlpath, **options)
         result = store[""]
         if max_concurrency is not None:
             if not isinstance(result, blosc2.RemoteArray):

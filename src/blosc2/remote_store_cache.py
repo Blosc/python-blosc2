@@ -42,10 +42,14 @@ def lock_cache_file(file, *, blocking=False):
 
 
 class StoreDiskCache:
+    @staticmethod
+    def path_for(parent, source):
+        identity = msgpack.packb(source, use_bin_type=True)
+        return Path(parent) / cache_directory_name(source["urlpath"], identity)
+
     def __init__(self, parent, source, *, blocking=False):
         self.source = source
-        identity = msgpack.packb(source, use_bin_type=True)
-        self.path = Path(parent) / cache_directory_name(source["urlpath"], identity)
+        self.path = self.path_for(parent, source)
         self.path.mkdir(parents=True, exist_ok=True)
         self.file = (self.path / "owner.lock").open("a+b")
         try:

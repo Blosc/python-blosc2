@@ -824,6 +824,7 @@ def fsspec_cache_path(
     *,
     dataset: str | None = None,
     storage_options: dict | None = None,
+    create_parent: bool = True,
 ) -> str:
     """Readable source directory and optional dataset path, creating parent directories."""
     identity = urlpath
@@ -841,7 +842,8 @@ def fsspec_cache_path(
         path = directory.joinpath(*parts)
     else:
         path = directory
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 
 

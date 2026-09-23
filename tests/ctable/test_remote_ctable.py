@@ -205,6 +205,18 @@ def test_open_dispatches_remote_pytables_table(tmp_path):
             assert "RemoteCTable" in str(table.info)
 
 
+def test_open_remote_pytables_table_uses_one_cache_directory(tmp_path):
+    name = f"{tmp_path.name}-one-cache.h5"
+    url, data = pytables_hdf5_url(name, indexed=True)
+    cache = tmp_path / "cache"
+
+    with blosc2.open(url + "::table", cache_dir=cache) as table:
+        np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
+    with blosc2.open(url + "::table", cache_dir=cache) as table:
+        assert table.traffic.requests == 0
+    assert len(list(cache.glob(f"{name}--*"))) == 1
+
+
 def test_open_dispatches_remote_pytables_table_with_json_sidecar(monkeypatch):
     import blosc2.hdf5_source as hdf5_source
 

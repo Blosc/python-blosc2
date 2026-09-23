@@ -616,6 +616,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         _source_cparams=None,
         _store_owner=None,
         _runtime_is_mutable: bool = True,
+        _defer_cache: bool = False,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(cache_policy, blosc2.CachePolicy):
@@ -643,7 +644,13 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             and hdf5_index is None
         ):
             shared_index_path = Path(
-                fsspec_cache_path(urlpath, cache_dir, ".hdf5-index.b2", storage_options=storage_options)
+                fsspec_cache_path(
+                    urlpath,
+                    cache_dir,
+                    ".hdf5-index.b2",
+                    storage_options=storage_options,
+                    create_parent=not _defer_cache,
+                )
             )
         if self._authorized_source:
             self.src, self._source = _validate_authorized_source(
@@ -665,7 +672,9 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             ):
                 # A DISK carrier already holds the container bootstrap from a
                 # previous run; reuse it rather than redoing the remote discovery.
-                path = self._carrier_path(cache_dir, cache_path, urlpath, storage_options)
+                path = self._carrier_path(
+                    cache_dir, cache_path, urlpath, storage_options, create_parent=not _defer_cache
+                )
                 if os.path.exists(path):
                     with contextlib.suppress(Exception):
                         cached = blosc2.blosc2_ext.open(path, "r", 0, dparams=blosc2.DParams(nthreads=1))
@@ -715,22 +724,34 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         self._runtime_is_mutable = _runtime_is_mutable
         self._mutable = False
 
-        self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
-
-        self._publish_source_cache()
-
-        _publish_hdf5_index(shared_index_path, self._carrier, scanned=hdf5_index is None)
-
-        if self._carrier is not None:
-            if self._cached_meta is None:
-                self._cached_meta = self._meta_from_carrier(self._carrier)
-            if self._cached_vlmeta is None:
-                self._cached_vlmeta = read_b2object_user_vlmeta(self._carrier)
+        self._deferred_cache = (
+            cache_dir,
+            cache_path,
+            _runtime_cache_path,
+            shared_index_path,
+            hdf5_index is None,
+        )
+        if not _defer_cache:
+            self._complete_deferred_cache()
 
         if _store_owner is not None:
             _store_owner.acquire()
             self._store_owner = _store_owner
             self._store_finalizer = weakref.finalize(self, _store_owner.release)
+
+    def _complete_deferred_cache(self):
+        if self._deferred_cache is None:
+            return
+        cache_dir, cache_path, runtime_cache_path, shared_index_path, scanned = self._deferred_cache
+        self._initialize_runtime_cache(cache_dir, cache_path, runtime_cache_path)
+        self._publish_source_cache()
+        _publish_hdf5_index(shared_index_path, self._carrier, scanned=scanned)
+        if self._carrier is not None:
+            if self._cached_meta is None:
+                self._cached_meta = self._meta_from_carrier(self._carrier)
+            if self._cached_vlmeta is None:
+                self._cached_vlmeta = read_b2object_user_vlmeta(self._carrier)
+        self._deferred_cache = None
 
     def _publish_source_cache(self):
         if not self._authorized_source and isinstance(self.src, blosc2.B2ZNDSource):
@@ -828,7 +849,9 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             tuple(src.blocks),
         )
 
-    def _carrier_path(self, cache_dir, cache_path, urlpath=None, storage_options=None):
+    def _carrier_path(
+        self, cache_dir, cache_path, urlpath=None, storage_options=None, *, create_parent=True
+    ):
         if cache_path is not None:
             path = os.fspath(cache_path)
             if os.path.isdir(path):
@@ -841,7 +864,12 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             parsed = urlsplit(urlpath)
             urlpath = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")[: -len(self._dataset) - 1]))
         return fsspec_cache_path(
-            urlpath, cache_dir, ".b2nd", dataset=self._dataset, storage_options=storage_options
+            urlpath,
+            cache_dir,
+            ".b2nd",
+            dataset=self._dataset,
+            storage_options=storage_options,
+            create_parent=create_parent,
         )
 
     def _open_or_create_carrier(self, cache_dir, cache_path):

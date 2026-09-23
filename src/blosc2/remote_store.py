@@ -1419,6 +1419,15 @@ class RemoteStore(RemoteObject):
         return cls._open_artifact(urlpath, **kwargs)
 
     @staticmethod
+    def _cache_source(urlpath, dataset, source_format, storage_options):
+        base_url, root, kind = parse_container_url(urlpath, dataset)
+        source = {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": source_format or kind}
+        fingerprint = storage_options_fingerprint(storage_options)
+        if fingerprint:
+            source["storage_options"] = fingerprint
+        return source
+
+    @staticmethod
     def _validate_cache_config(cache_policy, max_cache_bytes, cache_dir):
         if cache_policy is CACHE_POLICY_DEFAULT:
             cache_policy = blosc2.CachePolicy.DISK if cache_dir is not None else blosc2.CachePolicy.MEMORY
@@ -1481,17 +1490,7 @@ class RemoteStore(RemoteObject):
         if cache_policy is blosc2.CachePolicy.DISK:
             from blosc2.remote_store_cache import StoreDiskCache
 
-            base_url, root, kind = parse_container_url(urlpath, dataset)
-            source = {
-                "urlpath": base_url,
-                "dataset": (root or "").strip("/"),
-                "kind": _source_format or kind,
-            }
-            fingerprint = storage_options_fingerprint(storage_options)
-            if fingerprint:
-                # The same URL through another endpoint or account must not
-                # reuse this manifest and its leaf payloads.
-                source["storage_options"] = fingerprint
+            source = self._cache_source(urlpath, dataset, _source_format, storage_options)
             disk = StoreDiskCache(cache_dir, source)
         try:
             manifest = disk.load() if disk is not None else manifest
@@ -1501,7 +1500,7 @@ class RemoteStore(RemoteObject):
                 source_cache_path, source_cache_marker, _hdf5_blob, hdf5_index, manifest = (
                     prepare_hdf5_source_cache(
                         base_url,
-                        root or None,
+                        source["dataset"] or None,
                         cache_dir,
                         storage_options,
                         hdf5_index,
