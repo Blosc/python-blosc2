@@ -15083,17 +15083,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 else:
                     column_summary[name] = _InfoLiteral(dtype_label)
 
-        index_summary = {}
-        for idx in self.indexes:
-            stale = " stale" if idx.stale else ""
-            label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
-            stats = idx.storage_stats()
-            if stats is None:
-                suffix = "(size=n/a, sidecars not directly addressable)"
-            else:
-                _, cbytes, cratio = stats
-                suffix = f"(cbytes: {format_nbytes_human(cbytes)}, cratio: {cratio:.2f}x)"
-            index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
+        remote_storage = self._remote_read_storage()
+        if remote_storage is not None and remote_storage._owner.format == "hdf5":
+            remote_storage._owner.ensure_pytables_indexes(remote_storage._root_key)
+            index_summary = dict.fromkeys(remote_storage._metadata().get("pytables_indexes", {}), "[opsi]")
+        else:
+            index_summary = {}
+            for idx in self.indexes:
+                stale = " stale" if idx.stale else ""
+                label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
+                stats = idx.storage_stats()
+                if stats is None:
+                    suffix = "(size=n/a, sidecars not directly addressable)"
+                else:
+                    _, cbytes, cratio = stats
+                    suffix = f"(cbytes: {format_nbytes_human(cbytes)}, cratio: {cratio:.2f}x)"
+                index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
         compression_available = all(column_cbytes_for_info(col) is not None for col in self._cols.values())
         items = [

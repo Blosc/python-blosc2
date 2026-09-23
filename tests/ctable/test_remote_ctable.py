@@ -120,8 +120,9 @@ def test_remote_pytables_info_omits_shared_column_sizes(tmp_path):
                 assert "cbytes" not in column_info
                 assert "cratio" not in column_info
                 assert "nbytes" in column_info
-            assert "[opsi]" in info["indexes"]["id"]
-            assert "cbytes:" in info["indexes"]["id"]
+            assert info["indexes"]["id"] == "[opsi]"
+            assert getattr(table, "_cached_index_catalog", None) is None
+        np.testing.assert_array_equal(table.where("id < 3").id[:], data["id"][data["id"] < 3])
 
 
 def test_remote_pytables_full_index_is_native_opsi():
