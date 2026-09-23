@@ -444,6 +444,102 @@ def test_open_urlpath_cache_options_need_lazy(tmp_path, server):
         blosc2.open(urlpath, max_concurrency=2)
 
 
+@pytest.mark.parametrize("context_auth", [False, True])
+@pytest.mark.parametrize("options", [{}, {"lazy": None}, {"lazy": True}])
+def test_open_shared_caterva_cache(tmp_path, server, any_chunk_wants_blocks, context_auth, options):
+    token = "session=shared-secret"
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), cookie=token)
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase, auth_token=token)
+    context = contextlib.nullcontext()
+    if context_auth:
+        urlpath = blosc2.URLPath(array.path)
+        context = blosc2.c2context(urlbase=array.urlbase, auth_token=token)
+    with context:
+        first = blosc2.open(
+            urlpath, cache_dir=tmp_path / "cache", shared_cache=True, max_concurrency=2, **options
+        )
+        assert first.max_cache_bytes == 256 << 20
+        assert first.schunk.contiguous is False
+        assert first.src.max_concurrency == 2
+        np.testing.assert_array_equal(first[:5, :10], data[:5, :10])
+        second = blosc2.open(urlpath, cache_dir=tmp_path / "cache", shared_cache=True)
+        srv.log.clear()
+        np.testing.assert_array_equal(second[:5, :10], data[:5, :10])
+        assert srv.log == []
+        np.testing.assert_array_equal(second[100:105, :10], data[100:105, :10])
+        srv.log.clear()
+        np.testing.assert_array_equal(first[100:105, :10], data[100:105, :10])
+        assert srv.log == []
+        assert token not in repr(first.source)
+        for path in (tmp_path / "cache").rglob("*"):
+            assert token not in str(path)
+            if path.is_file():
+                assert token.encode() not in path.read_bytes()
+
+
+def _shared_caterva_reader(urlpath, cache, barrier, results):
+    try:
+        barrier.wait(timeout=30)
+        with blosc2.open(urlpath, cache_dir=cache, shared_cache=True) as array:
+            array.traffic.reset()
+            np.testing.assert_array_equal(array[:100], np.arange(100))
+            requests = array.traffic.requests
+            barrier.wait(timeout=30)
+            array.traffic.reset()
+            np.testing.assert_array_equal(array[:100], np.arange(100))
+            results.put((requests, array.traffic.requests))
+    except BaseException as exc:
+        results.put(repr(exc))
+
+
+def test_open_shared_caterva_processes(tmp_path, server):
+    import multiprocessing
+
+    array, _ = server(np.arange(200), chunks=(100,), blocks=(100,), accept_ranges="none", cookie="key=1")
+    urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase, auth_token="key=1")
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(4), ctx.Queue()
+    workers = [
+        ctx.Process(target=_shared_caterva_reader, args=(urlpath, tmp_path / "cache", barrier, results))
+        for _ in range(4)
+    ]
+    try:
+        for worker in workers:
+            worker.start()
+        reports = [results.get(timeout=45) for _ in workers]
+        for worker in workers:
+            worker.join(timeout=10)
+            assert worker.exitcode == 0
+        assert all(isinstance(report, tuple) for report in reports), reports
+        assert sum(cold for cold, _ in reports) == 1
+        assert all(warm == 0 for _, warm in reports)
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join()
+
+
+@pytest.mark.parametrize(
+    ("options", "error", "message"),
+    [
+        ({"cache_dir": None}, ValueError, "requires cache_dir"),
+        ({"lazy": False}, ValueError, "requires lazy=True"),
+        ({"cache_policy": blosc2.CachePolicy.NONE}, ValueError, "CachePolicy.DISK"),
+        ({"assume_immutable": False}, ValueError, "assume_immutable=True"),
+        ({"cache_path": "cache.b2nd"}, ValueError, "mutually exclusive"),
+        ({"mode": "a"}, NotImplementedError, "mode='r'"),
+        ({"offset": 1}, NotImplementedError, "offset"),
+    ],
+)
+def test_open_shared_caterva_invalid_options(tmp_path, options, error, message):
+    urlpath = blosc2.URLPath("@public/array.b2nd", urlbase="https://example.org")
+    with pytest.raises(error, match=message):
+        blosc2.open(urlpath, **{"cache_dir": tmp_path / "cache", "shared_cache": True, **options})
+    assert not (tmp_path / "cache").exists()
+
+
 def test_blocks_are_read_over_ranges(server, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))

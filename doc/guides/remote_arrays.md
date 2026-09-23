@@ -146,9 +146,43 @@ A `URLPath` always means Caterva2.
 If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`.
 Other transports can be added with a custom {ref}`ByteRangeNDSource`; see [Use your own transport](#use-your-own-transport).
 
+## Share a disk cache between processes
+
+Use `shared_cache=True` to share downloaded chunks of a standalone `.b2nd`
+array, a Caterva2 dataset, or an array inside a remote container:
+
+```python
+a = blosc2.open(
+    "https://datasets.example.org/big.b2nd",
+    cache_dir="shared-array-cache",
+    shared_cache=True,
+)
+b = blosc2.open(
+    blosc2.URLPath("@public/big.b2nd", urlbase="https://cat2.cloud/demo"),
+    cache_dir="shared-caterva-cache",
+    shared_cache=True,
+)
+```
+
+The cache uses sparse storage, with locks protecting initialization and
+operations across processes. Missing chunks or blocks are fetched on demand.
+The default retained compressed-payload limit is **256 MiB**; pass
+`max_cache_bytes=None` for unlimited retention. A table/store shares one budget
+across its leaves; independently opened arrays each have their own budget.
+Metadata, total disk footprint, and peak RAM are outside this limit.
+
+Sharing requires `cache_dir`, disk caching, and `assume_immutable=True`.
+Shared caching selects lazy access for every remote source when `lazy` is
+omitted or `None`; explicit `lazy=False` is rejected.
+Authentication from `URLPath` or `c2context` remains
+in process memory. Authenticated users must use separate cache directories.
+All handles using a shared cache must enable sharing. For advanced attachment
+with seed carriers or authorized sources, `RemoteArray.with_sparse_cache()`
+remains available.
+
 ## Operating with remote arrays
 
-Remote arrays can be operands in lazy expressions. Opening an array and building the expression only reads metadata; data is fetched when the expression is sliced or computed. A shared `cache_dir` keeps downloaded chunks locally between runs:
+Remote arrays can be operands in lazy expressions. Opening an array and building the expression only reads metadata; data is fetched when the expression is sliced or computed. A persistent `cache_dir` keeps downloaded chunks locally between runs:
 
 ![Remote hierarchical compute across HDF5, Zarr, and B2Z datasets with tiered caching and lazy evaluation.](../tutorials/images/remote_lazy_expr_architecture.png)
 

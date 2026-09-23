@@ -478,8 +478,8 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_new(blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t len, c_bool copy)
-    blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset)
-    blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio)
+    blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset) nogil
+    blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio) nogil
 
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
@@ -1741,12 +1741,12 @@ cdef class SChunk:
             create_storage(&storage, kwargs)
 
         if self.mode == "r":
-            offset = 0
-            if storage.io != NULL:
-                # mmap or locking: open through the user-defined io
-                self.schunk = blosc2_schunk_open_offset_udio(storage.urlpath, offset, storage.io)
-            else:
-                self.schunk = blosc2_schunk_open_offset(storage.urlpath, offset)
+            with nogil:  # A lock holder in another thread must be able to resume.
+                if storage.io != NULL:
+                    # mmap or locking: open through the user-defined io
+                    self.schunk = blosc2_schunk_open_offset_udio(storage.urlpath, 0, storage.io)
+                else:
+                    self.schunk = blosc2_schunk_open_offset(storage.urlpath, 0)
 
             if kwargs is not None:
                 check_schunk_params(self.schunk, kwargs)
@@ -3384,6 +3384,8 @@ def meta_keys(self):
 
 def open(urlpath, mode, offset, **kwargs):
     urlpath_ = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+    cdef const char* path = urlpath_
+    cdef int64_t frame_offset = offset
     cdef blosc2_schunk* schunk
     cdef blosc2_stdio_mmap* mmap_file
     cdef blosc2_io* io
@@ -3407,10 +3409,12 @@ def open(urlpath, mode, offset, **kwargs):
             raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
 
     if mmap_mode is None:
-        if locking:
-            schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, &_locking_io)
-        else:
-            schunk = blosc2_schunk_open_offset(urlpath_, offset)
+        io = &_locking_io if locking else NULL
+        with nogil:  # Opening can wait for another Python thread's frame lock.
+            if io != NULL:
+                schunk = blosc2_schunk_open_offset_udio(path, frame_offset, io)
+            else:
+                schunk = blosc2_schunk_open_offset(path, frame_offset)
     else:
         mmap_file = <blosc2_stdio_mmap *>malloc(sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
         memcpy(mmap_file, &BLOSC2_STDIO_MMAP_DEFAULTS, sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
@@ -3424,7 +3428,8 @@ def open(urlpath, mode, offset, **kwargs):
         io = <blosc2_io *>malloc(sizeof(blosc2_io))
         io.id = BLOSC2_IO_FILESYSTEM_MMAP
         io.params = mmap_file
-        schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, io)
+        with nogil:
+            schunk = blosc2_schunk_open_offset_udio(path, frame_offset, io)
 
     if schunk == NULL:
         if mmap_mode is not None:

@@ -126,7 +126,7 @@ and tables opened through `blosc2.open(..., cache_dir=...)` with the default
 ### Sharing a cache between simultaneous processes
 
 Use `blosc2.open(..., cache_dir=..., shared_cache=True)` when multiple processes
-need to keep the same store or table open:
+need to keep the same array, store, or table open:
 
 ```python
 with blosc2.open(
@@ -138,24 +138,43 @@ with blosc2.open(
     print(table.info)
 ```
 
-The same opener returns groups and array leaves selected within remote B2Z,
-HDF5, or Zarr containers. Sharing requires lazy access, `CachePolicy.DISK`, and
-an immutable source (`assume_immutable=True`). Standalone `.b2nd` and Caterva2
-sources are not supported by this option.
+The same opener supports standalone `.b2nd` URLs, Caterva2 `URLPath` sources,
+and groups or array leaves selected within remote B2Z, HDF5, or Zarr containers.
+Sharing requires lazy access, `CachePolicy.DISK`, and an immutable source
+(`assume_immutable=True`). For every remote source, `shared_cache=True` selects
+lazy access when `lazy` is omitted or `None`; explicit `lazy=False` is rejected.
+This also applies to fsspec URLs without a recognizable filename suffix.
+
+```python
+array = blosc2.open(
+    "https://datasets.example.org/array.b2nd",
+    cache_dir="shared-array-cache",
+    shared_cache=True,
+)
+caterva_array = blosc2.open(
+    blosc2.URLPath("@public/array.b2nd", urlbase="https://cat2.cloud/demo"),
+    cache_dir="shared-caterva-cache",
+    shared_cache=True,
+)
+```
+
+Caterva2 honors explicit authentication tokens and `c2context` settings without
+persisting credentials. Authenticated users must use separate cache directories.
 
 Shared caches use sparse frames (separate chunk files) and operation-scoped
-locks: handles can coexist across processes, but operations on the same store
+locks: handles can coexist across processes, but operations on the same cache
 serialize. Ordinary table/store disk caches use contiguous array cache files
 and lifetime ownership locks. **Both fetch data on demand.** Every process using
 the shared directory must enable sharing; do not mix it with ordinary exclusive
 `cache_dir=` access. Use a separate directory for the shared cache.
 
-Both modes default to a **256 MiB aggregate compressed-payload budget** across
-the owner's leaves. Set `max_cache_bytes` to a positive byte count to change it,
+Both modes default to a **256 MiB compressed-payload budget** per standalone
+array, or in aggregate across a table/store owner's leaves.
+Set `max_cache_bytes` to a positive byte count to change it,
 or explicitly pass `None` for unlimited retention. The budget applies after
 operations; it does not bound metadata, total disk footprint, or peak RAM.
 
-`RemoteStore.with_sparse_cache()` and `RemoteCTable.with_sparse_cache()` remain
+The `RemoteArray`, `RemoteStore`, and `RemoteCTable` `with_sparse_cache()` factories remain
 available for advanced attachment with manifests, seed carriers, or authorized
 filesystems. They use the same 256 MiB default; explicit `max_cache_bytes=None`
 keeps the previous unlimited behavior.

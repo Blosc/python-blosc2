@@ -70,6 +70,36 @@ def test_no_sidecar_by_default(tmp_path, contiguous):
     blosc2.remove_urlpath(str(urlpath))
 
 
+@pytest.mark.parametrize("contiguous", [False, True])
+@pytest.mark.parametrize("opener", ["open", "SChunk"])
+def test_open_locked_frame_releases_gil(tmp_path, contiguous, opener):
+    path = tmp_path / "threaded-open.b2frame"
+    create_schunk(path, contiguous=contiguous, locking=True)
+    script = """
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+import blosc2
+
+holder = blosc2.open(sys.argv[1], locking=True)
+started = threading.Event()
+def open_frame():
+    started.set()
+    return getattr(blosc2, sys.argv[2])(urlpath=sys.argv[1], mode="r", locking=True)
+
+with ThreadPoolExecutor(max_workers=1) as pool:
+    with holder.holding_lock():
+        future = pool.submit(open_frame)
+        assert started.wait(timeout=5)
+        time.sleep(0.05)
+        assert not future.done()
+    assert future.result(timeout=5).nchunks == holder.nchunks
+"""
+    # A GIL deadlock must fail this test rather than hang the pytest worker.
+    subprocess.run([sys.executable, "-c", script, str(path), opener], check=True, timeout=15)
+
+
 def test_two_handles_coherent(tmp_path):
     # The Python twin of c-blosc2's examples/file-locking.c: a mutation through
     # one locked handle is picked up coherently by another one

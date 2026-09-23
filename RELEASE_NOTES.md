@@ -20,9 +20,15 @@ XXX version-specific blurb XXX
 #### Common remote-object API
 
 - Added `blosc2.open(url, cache_dir=..., shared_cache=True)` for process-shared
-  sparse caches of remote B2Z, HDF5, and Zarr tables, groups, and array leaves.
+  sparse caches of standalone `.b2nd` URLs, Caterva2 `URLPath` sources, and
+  remote B2Z, HDF5, and Zarr tables, groups, and array leaves.
   This is the preferred entry point for ordinary shared caching;
   `with_sparse_cache()` remains available for advanced attachment.
+- Shared caches select lazy access for every remote source when `lazy` is
+  omitted or `None`, including suffix-free fsspec URLs. Explicit `lazy=False`
+  is rejected. Sparse array cache initialization is
+  serialized so simultaneous first openers cannot overwrite each other's cache.
+  Locked frame opens release the GIL so another Python thread can finish its read.
 - Added the public `RemoteObject` base for `RemoteArray`, `RemoteStore`,
   and `RemoteCTable`. It documents their shared source, attributes, traffic,
   cache accounting, export mutability, reference saving, and lifetime contract.

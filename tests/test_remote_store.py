@@ -734,7 +734,7 @@ def test_open_shared_cache_explicit_source_format(tmp_path):
     ("url", "options", "error", "message"),
     [
         ("memory://table.b2z", {"shared_cache": 1}, TypeError, "shared_cache must be a bool"),
-        ("local.b2z", {}, ValueError, "remote container URL"),
+        ("local.b2z", {}, ValueError, "remote URL or Caterva2 URLPath"),
         ("memory://table.b2z", {"cache_dir": None}, ValueError, "requires cache_dir"),
         ("memory://table.b2z", {"lazy": False}, ValueError, "requires lazy=True"),
         ("memory://table.b2z", {"assume_immutable": False}, ValueError, "assume_immutable=True"),
@@ -744,11 +744,10 @@ def test_open_shared_cache_explicit_source_format(tmp_path):
             ValueError,
             "CachePolicy.DISK",
         ),
-        ("memory://array.b2nd", {}, NotImplementedError, "B2Z, HDF5, or Zarr"),
         ("memory://table.b2z", {"cache_path": "cache.b2nd"}, ValueError, "mutually exclusive"),
         ("memory://table.b2z", {"mode": "a"}, NotImplementedError, "mode='r'"),
         ("memory://table.b2z", {"offset": 1, "lazy": True}, NotImplementedError, "offset"),
-        ("memory://table.b2z", {"mmap_mode": "r"}, ValueError, "requires lazy=True"),
+        ("memory://table.b2z", {"mmap_mode": "r"}, NotImplementedError, "mmap_mode"),
     ],
 )
 def test_open_shared_cache_invalid_options(tmp_path, url, options, error, message):

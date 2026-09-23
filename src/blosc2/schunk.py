@@ -2139,6 +2139,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         raise NotImplementedError("offset is not supported for Caterva2 arrays")
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
+    shared_cache = kwargs.pop("shared_cache", False)
     max_concurrency = kwargs.pop("max_concurrency", None)
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
@@ -2157,7 +2158,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
             urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
         )
 
-    return blosc2.RemoteArray(urlpath, **remote_array_options)
+    return _open_lazy_remote(urlpath, None, remote_array_options, shared_cache)
 
 
 def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):
@@ -2172,11 +2173,7 @@ def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bo
         raise ValueError("HDF5 sources require lazy=True")
 
 
-def _validate_non_lazy_fsspec_options(
-    immutable_present, remote_array_options, cache_path, max_concurrency, shared_cache
-):
-    if shared_cache:
-        raise ValueError("shared_cache=True requires lazy=True")
+def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency):
     if immutable_present:
         raise NotImplementedError("assume_immutable requires lazy=True")
     if remote_array_options is not None:
@@ -2235,15 +2232,15 @@ def _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index):
 
 
 def _open_shared_remote(urlpath, source_format, options):
-    """Discover a container through its process-shared sparse cache."""
+    """Open remote arrays or containers through a process-shared sparse cache."""
     if options["cache_dir"] is None:
         raise ValueError("shared_cache=True requires cache_dir")
-    if source_format not in {"b2z", "hdf5", "zarr"}:
-        raise NotImplementedError("shared_cache=True requires a remote B2Z, HDF5, or Zarr container")
     if options["cache_policy"] is not blosc2.CachePolicy.DISK:
         raise ValueError("shared_cache=True requires cache_policy=CachePolicy.DISK")
     if options["assume_immutable"] is not True:
         raise ValueError("shared_cache=True requires assume_immutable=True")
+    if source_format not in {"b2z", "hdf5", "zarr"}:
+        return blosc2.RemoteArray(urlpath, _shared_cache=True, **options)
     store_options = {
         key: value
         for key, value in options.items()
@@ -2269,7 +2266,7 @@ def _open_shared_remote(urlpath, source_format, options):
         return result
 
 
-def _open_lazy_fsspec(urlpath, source_format, options, shared_cache=False):
+def _open_lazy_remote(urlpath, source_format, options, shared_cache=False):
     if shared_cache:
         return _open_shared_remote(urlpath, source_format, options)
     if source_format == "b2z":
@@ -2334,11 +2331,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        return _open_lazy_fsspec(urlpath, source_format, remote_array_options, shared_cache)
+        return _open_lazy_remote(urlpath, source_format, remote_array_options, shared_cache)
 
-    _validate_non_lazy_fsspec_options(
-        immutable_present, remote_array_options, cache_path, max_concurrency, shared_cache
-    )
+    _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
     if cache_dir is not None:
         localized = localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options)
@@ -2562,9 +2557,15 @@ def _validate_shared_cache_request(urlpath, shared_cache, kwargs):
     if not isinstance(shared_cache, bool):
         raise TypeError("shared_cache must be a bool")
     if shared_cache:
-        if not isinstance(urlpath, str) or not is_fsspec_url(urlpath):
-            raise ValueError("shared_cache=True requires a remote container URL")
+        if not isinstance(urlpath, blosc2.URLPath) and (
+            not isinstance(urlpath, str) or not is_fsspec_url(urlpath)
+        ):
+            raise ValueError("shared_cache=True requires a remote URL or Caterva2 URLPath")
         kwargs["shared_cache"] = True
+        if kwargs.get("lazy") is False:
+            raise ValueError("shared_cache=True requires lazy=True")
+        if kwargs.get("lazy") is None:
+            kwargs["lazy"] = True
 
 
 def open(
@@ -2631,14 +2632,19 @@ def open(
         directly, bypassing filename-based container format detection.
     shared_cache: bool, optional
         Share an on-demand disk cache between processes. Defaults to False.
-        Requires ``cache_dir`` and a remote B2Z, HDF5, or Zarr container with
-        lazy access, ``CachePolicy.DISK``, and ``assume_immutable=True``.
+        Requires ``cache_dir`` and a remote source: a standalone ``.b2nd`` URL,
+        a B2Z, HDF5, or Zarr container, or a Caterva2 :ref:`URLPath`.
+        Requires lazy access, ``CachePolicy.DISK``, and ``assume_immutable=True``.
+        Enables lazy access for every remote source when ``lazy`` is omitted or None;
+        explicit ``lazy=False`` is rejected.
         Returns the selected table, group, or array using sparse cache storage
-        and operation-scoped locks. Operations on the same store serialize.
+        and operation-scoped locks. Operations on the same cache serialize.
         All processes using this cache must enable sharing; use a separate
         directory from ordinary exclusive caches. The aggregate retained
-        compressed-payload budget defaults to 256 MiB; ``max_cache_bytes=None``
-        disables eviction. This does not bound total disk usage or peak RAM.
+        compressed-payload budget defaults to 256 MiB per standalone array or
+        table/store owner; ``max_cache_bytes=None`` disables eviction.
+        This does not bound total disk usage or peak RAM. Authenticated Caterva2
+        users must use separate cache directories; tokens are not persisted.
     kwargs: dict, optional
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
@@ -2761,8 +2767,8 @@ def open(
       ownership when closed; other handles from that store remain usable.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
-      must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
-      returns a :ref:`C2Array`. With ``lazy=True``, it returns a :ref:`RemoteArray`
+      must be 'r' and :paramref:`offset` must be 0. By default it returns a
+      :ref:`C2Array`. With ``lazy=True`` or ``shared_cache=True``, it returns a :ref:`RemoteArray`
       (defaulting to ``CachePolicy.DISK`` when ``cache_dir`` or ``cache_path`` is
       provided, and ``CachePolicy.MEMORY`` otherwise).
       Authenticated users sharing a machine must use separate caches.

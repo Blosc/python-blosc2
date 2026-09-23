@@ -273,6 +273,89 @@ def test_sparse_cache_default_budget(tmp_path, options, expected):
         assert array.max_cache_bytes == expected
 
 
+@pytest.mark.parametrize(
+    ("options", "limit"), [({}, 256 << 20), ({"max_cache_bytes": None}, None), ({"max_cache_bytes": 1}, 1)]
+)
+def test_open_shared_b2nd(tmp_path, options, limit):
+    from pathlib import Path
+
+    url, data = _remote_array("shared-open.b2nd", nchunks=2, chunk_size=1000)
+    cache_dir = tmp_path / "cache"
+    with blosc2.open(url, cache_dir=cache_dir, shared_cache=True, **options) as first:
+        assert first.max_cache_bytes == limit
+        assert first.schunk.contiguous is False
+        assert Path(first.runtime_cache_path).is_dir()
+        np.testing.assert_array_equal(first[:1000], data[:1000])
+        with blosc2.open(url, cache_dir=cache_dir, shared_cache=True, **options) as second:
+            second.traffic.reset()
+            np.testing.assert_array_equal(second[:1000], data[:1000])
+            assert (second.traffic.requests > 0) if limit == 1 else (second.traffic.requests == 0)
+            np.testing.assert_array_equal(second[1000:], data[1000:])
+            first.traffic.reset()
+            np.testing.assert_array_equal(first[1000:], data[1000:])
+            assert (first.traffic.requests > 0) if limit == 1 else (first.traffic.requests == 0)
+        assert first.cache_bytes <= limit if limit is not None else first.cache_bytes > 0
+
+
+def test_open_shared_b2nd_storage_options(tmp_path):
+    url, data = _remote_array("shared-options.b2nd", nchunks=1, chunk_size=100)
+    paths = []
+    for account in ("one", "two", "one"):
+        with blosc2.open(
+            url, cache_dir=tmp_path, shared_cache=True, storage_options={"account": account}
+        ) as array:
+            paths.append(array.runtime_cache_path)
+            array.traffic.reset()
+            np.testing.assert_array_equal(array[:], data)
+            assert array.traffic.requests == 0 if len(paths) == 3 else array.traffic.requests > 0
+    assert paths[0] == paths[2] != paths[1]
+
+
+@pytest.mark.parametrize("options", [{}, {"lazy": None}, {"lazy": True}])
+def test_open_shared_suffix_free_url(tmp_path, options):
+    url, data = _remote_array("shared-no-suffix", nchunks=1, chunk_size=100)
+    with blosc2.open(url, cache_dir=tmp_path, shared_cache=True, **options) as array:
+        assert isinstance(array, blosc2.RemoteArray)
+        assert not array.schunk.contiguous
+        np.testing.assert_array_equal(array[:], data)
+    with pytest.raises(ValueError, match="shared_cache=True requires lazy=True"):
+        blosc2.open(url, cache_dir=tmp_path, shared_cache=True, lazy=False)
+    # Ordinary suffix-free URLs retain their existing eager default.
+    assert isinstance(blosc2.open(url), blosc2.NDArray)
+
+
+@pytest.mark.parametrize("api", ["open", "factory"])
+def test_sparse_cache_simultaneous_creation(tmp_path, monkeypatch, api):
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    url, data = _remote_array("shared-creation.b2nd", nchunks=1, chunk_size=100)
+    original = blosc2.RemoteArray._to_b2object_carrier
+    creations = []
+
+    def slow_create(self, *args, **kwargs):
+        creations.append(kwargs["urlpath"])
+        time.sleep(0.05)  # Expose a second creator after the existence check.
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(blosc2.RemoteArray, "_to_b2object_carrier", slow_create)
+    barrier = threading.Barrier(4)
+
+    def read():
+        barrier.wait(timeout=10)
+        array = (
+            blosc2.open(url, cache_dir=tmp_path, shared_cache=True)
+            if api == "open"
+            else blosc2.RemoteArray.with_sparse_cache(url, tmp_path / "runtime")
+        )
+        np.testing.assert_array_equal(array[:], data)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: read(), range(4)))
+    assert len(creations) == 1
+
+
 def test_server_sparse_cache_reopens_and_exports_portable_carriers(tmp_path):
     url, data = _remote_array("server-sparse.b2nd", nchunks=3, chunk_size=100_000)
     runtime_path = tmp_path / "private-runtime"

@@ -534,10 +534,11 @@ class RemoteArray(RemoteObject, blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
     With :attr:`CachePolicy.DISK`, the public constructor uses the persisted
-    B2ND carrier itself as the bounded cache.  Server code can instead use
-    :meth:`with_sparse_cache` to keep a private directory-backed runtime cache
-    beside a portable carrier. With :attr:`CachePolicy.MEMORY`, chunks are
-    retained in process memory up to a bounded size. With
+    B2ND carrier itself as the bounded cache. Use
+    ``blosc2.open(url, cache_dir=..., shared_cache=True)`` for a process-shared
+    sparse runtime cache. Server code can also use :meth:`with_sparse_cache`
+    for advanced attachment beside a portable carrier. With
+    :attr:`CachePolicy.MEMORY`, chunks are retained in process memory up to a bounded size. With
     :attr:`CachePolicy.NONE`, reads retain no data.
 
     .. note::
@@ -617,6 +618,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         _store_owner=None,
         _runtime_is_mutable: bool = True,
         _defer_cache: bool = False,
+        _shared_cache: bool = False,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(cache_policy, blosc2.CachePolicy):
@@ -706,6 +708,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             )
         self._assume_immutable = assume_immutable
         self._storage_options = storage_options
+        if _shared_cache:
+            _runtime_cache_path = self._carrier_path(cache_dir, None) + ".cache"
         self._runtime_urlpath = self._runtime_source(urlpath)
         self._expected_geometry = self._geometry(self.src)
         self._expected_cparams = self.src.cparams
@@ -919,28 +923,39 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         This is deliberately separate from ``cache_path`` in the public
         constructor: portable RemoteArray carriers remain contiguous files.
         """
+        from blosc2.remote_store_cache import lock_cache_file
+
+        # The frame lock cannot protect a directory that does not exist yet.
+        lock_path = Path(os.fspath(cache_path) + ".init.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock:
+            lock_cache_file(lock, blocking=True)
+            return self._open_sparse_cache(cache_path)
+
+    def _open_sparse_cache(self, cache_path):
         path = os.fspath(cache_path)
         if os.path.exists(path):
             if not os.path.isdir(path):
                 raise ValueError("runtime_cache_path must name a sparse frame directory")
             runtime = blosc2.blosc2_ext.open(path, "a", 0, dparams=blosc2.DParams(nthreads=1), locking=True)
-            if runtime.schunk.vlmeta.get("b2o") != self._payload(mutable=True):
-                raise ValueError(f"the sparse runtime cache at {path} has a different specification")
-            self._validate_geometry(
-                (runtime.shape, runtime.dtype, runtime.chunks, runtime.blocks), src=self.src
-            )
-            stored = runtime.schunk.vlmeta.get("proxy-stamp")
-            current = getattr(self.src, "stamp", None)
-            status = (
-                "invalidated/rebuilt"
-                if stored is not None and current is not None and stored != current
-                else "reused"
-            )
-            if status == "reused":
-                if self._cached_meta is None:
-                    self._cached_meta = self._meta_from_carrier(runtime)
-                if self._cached_vlmeta is None:
-                    self._cached_vlmeta = read_b2object_user_vlmeta(runtime)
+            with runtime.holding_lock():
+                if runtime.schunk.vlmeta.get("b2o") != self._payload(mutable=True):
+                    raise ValueError(f"the sparse runtime cache at {path} has a different specification")
+                self._validate_geometry(
+                    (runtime.shape, runtime.dtype, runtime.chunks, runtime.blocks), src=self.src
+                )
+                stored = runtime.schunk.vlmeta.get("proxy-stamp")
+                current = getattr(self.src, "stamp", None)
+                status = (
+                    "invalidated/rebuilt"
+                    if stored is not None and current is not None and stored != current
+                    else "reused"
+                )
+                if status == "reused":
+                    if self._cached_meta is None:
+                        self._cached_meta = self._meta_from_carrier(runtime)
+                    if self._cached_vlmeta is None:
+                        self._cached_vlmeta = read_b2object_user_vlmeta(runtime)
             return runtime, status
 
         if self._carrier is not None:
@@ -1022,6 +1037,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
         The compressed-payload budget defaults to 256 MiB; pass
         ``max_cache_bytes=None`` for unlimited retention.
+        For ordinary shared caching, prefer
+        ``blosc2.open(url, cache_dir=..., shared_cache=True)``.
 
         ``carrier`` is the portable RemoteArray carrier.  If it contains valid
         warm chunks when the sparse runtime cache is first created, those chunks

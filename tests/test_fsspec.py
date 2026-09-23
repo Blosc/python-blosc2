@@ -667,6 +667,38 @@ def test_http_url_is_read_through_fsspec(tmp_path):
 
 
 @_http_server_skip
+@pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+def test_http_shared_b2nd_cache_across_processes(tmp_path):
+    pytest.importorskip("aiohttp")
+    blosc2.asarray(
+        np.arange(20000, dtype="i4"),
+        chunks=(10000,),
+        blocks=(10000,),
+        urlpath=tmp_path / "array.b2nd",
+    )
+    script = """
+import sys
+import blosc2
+import numpy as np
+with blosc2.open(sys.argv[1], cache_dir=sys.argv[2], shared_cache=True) as array:
+    assert not array.schunk.contiguous
+    array.traffic.reset()
+    np.testing.assert_array_equal(array[:10000], np.arange(10000))
+    print(array.traffic.requests)
+"""
+    with _ranged_server(tmp_path) as (urlbase, _):
+        for repeat in range(2):
+            result = subprocess.run(
+                [sys.executable, "-c", script, f"{urlbase}/array.b2nd", str(tmp_path / "cache")],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode == 0, result.stderr
+            assert int(result.stdout) == 0 if repeat else int(result.stdout) > 0
+
+
+@_http_server_skip
 def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     pytest.importorskip("aiohttp")
     path = tmp_path / "www"
