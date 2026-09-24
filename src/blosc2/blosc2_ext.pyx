@@ -3784,11 +3784,22 @@ cdef class slice_flatter:
 
 cdef class NDArray:
     cdef b2nd_array_t* array
+    cdef PyThread_type_lock read_lock
+    cdef c_bool owns_read_lock
 
     def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
         self.base = base # add reference to base if NDArray is a view
+        if base is None:
+            self.read_lock = PyThread_allocate_lock()
+            if self.read_lock == NULL:
+                raise MemoryError("Could not allocate NDArray read lock")
+            self.owns_read_lock = True
+        else:
+            # expand_dims/squeeze views share the base SChunk, so reads through
+            # all aliases must be protected by the same lock.
+            self.read_lock = (<NDArray>base).read_lock
 
     @property
     def c_array(self):
@@ -3856,11 +3867,19 @@ cdef class NDArray:
             buffershape_[i] = stop_[i] - start_[i]
 
         cdef Py_buffer view
+        cdef int rc
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
-        _check_rc(b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                         <void *> view.buf, buffershape_, view.len),
-                  "Error while getting the buffer")
+        # Waiting for a reader already using this SChunk must not retain the
+        # GIL: that reader can need the GIL again from a Python postfilter.
+        with nogil:
+            PyThread_acquire_lock(self.read_lock, 1)
+        try:
+            rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                        <void *> view.buf, buffershape_, view.len)
+        finally:
+            PyThread_release_lock(self.read_lock)
         PyBuffer_Release(&view)
+        _check_rc(rc, "Error while getting the buffer")
 
         return arr
 
@@ -3879,11 +3898,10 @@ cdef class NDArray:
         cdef int32_t chunk_nbytes
         cdef int32_t chunk_cbytes
         cdef int32_t block_nbytes
-        cdef blosc2_context *dctx = self.array.sc.dctx
+        cdef blosc2_context *dctx
         cdef Py_buffer view
         cdef int rc
         cdef int32_t lazychunk_cbytes
-        cdef c_bool owns_dctx = False
         cdef int32_t want_nbytes
 
         lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
@@ -3907,9 +3925,16 @@ cdef class NDArray:
                 free(chunk)
             raise ValueError("destination buffer is smaller than the requested decoded span")
 
-        if dctx == NULL:
-            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-            owns_dctx = True
+        # A Blosc2 decompression context is mutable.  This method is used by
+        # the indexing planner from several Python workers, so it must not
+        # borrow the SChunk's shared context.  It still needs to be
+        # associated with the SChunk (not just BLOSC2_DPARAMS_DEFAULTS),
+        # since some codecs/filters resolve per-schunk state (e.g.
+        # dictionaries) through dparams.schunk during decompression.
+        cdef blosc2_dparams dparams = dereference(self.array.sc.storage.dparams)
+        dparams.schunk = self.array.sc
+        dparams.typesize = self.array.sc.typesize
+        dctx = blosc2_create_dctx(dparams)
         if dctx == NULL:
             PyBuffer_Release(&view)
             if needs_free:
@@ -3925,8 +3950,7 @@ cdef class NDArray:
         rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
                                       start * self.array.sc.typesize, want_nbytes,
                                       view.buf, view.len)
-        if owns_dctx:
-            blosc2_free_ctx(dctx)
+        blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)
         if needs_free:
             free(chunk)
@@ -4548,6 +4572,8 @@ cdef class NDArray:
     def __dealloc__(self):
         if self.array != NULL:
             _check_rc(b2nd_free(self.array), "Error while freeing the array")
+        if self.owns_read_lock and self.read_lock != NULL:
+            PyThread_free_lock(self.read_lock)
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
