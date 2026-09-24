@@ -698,6 +698,37 @@ def test_disk_cache_reuses_ctable_bootstrap(tmp_path, monkeypatch, max_concurren
         assert table.traffic.requests > 0
 
 
+@pytest.mark.parametrize("max_concurrency", [1, 8])
+@pytest.mark.usefixtures("b2z_range_reads")
+def test_disk_cache_reuses_batch_column_prefixes(tmp_path, monkeypatch, max_concurrency):
+    @dataclasses.dataclass
+    class Mixed:
+        x: int
+        message: str = blosc2.field(blosc2.vlstring(batch_rows=32))
+        tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), batch_rows=32))  # noqa: RUF009
+        region: str = blosc2.field(blosc2.dictionary())
+
+    local = blosc2.CTable(
+        Mixed,
+        [(i, f"message {i}", [i, i + 1], "east" if i % 2 else "west") for i in range(2000)],
+        cparams={"clevel": 0},
+        create_summary_index=False,
+    )
+    url = remote_table_url(tmp_path, local)
+    options = {"cache_dir": tmp_path / "cache", "max_concurrency": max_concurrency}
+    with blosc2.open(url, **options) as table:
+        expected = list(table.where("x < 3"))
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("Warm batch column metadata must not download archive bytes")
+
+    monkeypatch.setattr(type(fsspec.filesystem("memory")), "cat_file", unexpected_read)
+    monkeypatch.setattr(type(fsspec.filesystem("memory")), "info", unexpected_read)
+    with blosc2.open(url, **options) as table:
+        assert list(table.where("x < 3")) == expected
+        assert table.traffic.requests == 0
+
+
 @pytest.mark.parametrize(
     "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
 )

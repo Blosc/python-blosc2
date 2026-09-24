@@ -159,7 +159,15 @@ def open_columns(storage, table, names, load):  # noqa: C901
             return ranges
 
         def reader(offset, size):
-            return (yield archive.read_transport, (offset, size), size)
+            for start, data in archive.metadata["ranges"]:
+                if start <= offset and offset + size <= start + len(data):
+                    return data[offset - start : offset - start + size]
+            data = yield archive.read_transport, (offset, size), size
+            # Preserve prefetched prefixes on the owner thread: buffered reads
+            # during column opening otherwise bypass metadata capture.
+            if archive.persist_metadata:
+                archive.metadata["ranges"].append((offset, data))
+            return data
 
         def consume(batch, ranges):
             prefixes, _ = run_reads(
