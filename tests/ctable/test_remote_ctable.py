@@ -547,7 +547,12 @@ def test_remote_positional_index_lookup(tmp_path, kind):
 
 def test_remote_full_index_merges_incremental_runs(tmp_path):
     from blosc2.ctable_indexing import _CTableBuildProxy
-    from blosc2.indexing import _store_full_run_descriptor
+    from blosc2.indexing import (
+        _DATA_CACHE,
+        _DESCRIPTOR_OWNERS,
+        _IN_MEMORY_INDEXES,
+        _store_full_run_descriptor,
+    )
 
     path = tmp_path / "full-runs.b2z"
     with blosc2.CTable(
@@ -575,6 +580,13 @@ def test_remote_full_index_merges_incremental_runs(tmp_path):
     with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
         np.testing.assert_array_equal(remote.where("(x >= 1000) & (x < 1004)").y[:], [0, -1, -2, -3])
         assert len(remote._get_index_catalog()["x"]["full"]["runs"]) == 1
+        key = id(remote._cols["x"])
+        scope = ("memory", key)
+        assert any(cache_key[0] == scope for cache_key in _DATA_CACHE)
+
+    assert key not in _IN_MEMORY_INDEXES
+    assert not any(cache_key[0] == scope for cache_key in _DATA_CACHE)
+    assert not any(owner_key[0] == scope for owner_key in _DESCRIPTOR_OWNERS)
 
 
 @pytest.mark.parametrize("api", ["factory", "open"])

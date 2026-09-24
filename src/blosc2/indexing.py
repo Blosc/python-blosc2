@@ -155,7 +155,9 @@ def _sanitize_token(token: str) -> str:
 
 def _cleanup_in_memory_store(key: int) -> None:
     _IN_MEMORY_INDEXES.pop(key, None)
-    _IN_MEMORY_INDEX_FINALIZERS.pop(key, None)
+    finalizer = _IN_MEMORY_INDEX_FINALIZERS.pop(key, None)
+    if finalizer is not None:
+        finalizer.detach()
     scope = ("memory", key)
     stale_data = [cache_key for cache_key in tuple(_DATA_CACHE) if cache_key[0] == scope]
     for cache_key in stale_data:
@@ -163,7 +165,14 @@ def _cleanup_in_memory_store(key: int) -> None:
     stale_handles = [cache_key for cache_key in tuple(_SIDECAR_HANDLE_CACHE) if cache_key[0] == scope]
     for cache_key in stale_handles:
         _SIDECAR_HANDLE_CACHE.pop(cache_key, None)
+    for owner_key in [owner_key for owner_key in tuple(_DESCRIPTOR_OWNERS) if owner_key[0] == scope]:
+        _DESCRIPTOR_OWNERS.pop(owner_key, None)
     _hot_cache_clear(scope=("memory", key))
+
+
+def evict_in_memory_index_cache(array: blosc2.NDArray) -> None:
+    """Release process-wide index state for an array owned by a closing table."""
+    _cleanup_in_memory_store(id(array))
 
 
 def _persistent_cache_path_exists(path: str | int) -> bool:
