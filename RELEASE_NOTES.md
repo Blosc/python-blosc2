@@ -6,8 +6,9 @@ Python-Blosc2 4.14.0 is a major release introducing remote columnar tables (`Rem
 a unified `RemoteObject` architecture, native remote HDF5 indexing with direct range reads
 (eliminating Kerchunk and Zarr dependencies for HDF5), native PyTables table interoperability,
 remote column indexes, ListArray V2 with recursive nesting and membership predicates,
-nested remote stores in `TreeStore`, bundled C-Blosc2 upgraded to 3.3.5, and critical
-bug fixes including partition contiguity verification for arrays larger than 16 MB.
+nested remote stores in `TreeStore`, bundled C-Blosc2 upgraded to 3.3.5, thread-safety
+enhancements for concurrent reads, and critical bug fixes including partition contiguity
+verification for arrays larger than 16 MB.
 
 ### Improvements
 
@@ -105,11 +106,31 @@ bug fixes including partition contiguity verification for arrays larger than 16 
 - **Persistent caches for local sources**: Local data sources can now utilize persistent disk
   caches across runs.
 
+#### Documentation and examples
+
+- **Runnable CTable query and sorting examples**: Added tested doctest examples to `CTable.where()`
+  and `CTable.sort_by()` demonstrating basic queries, compound boolean filtering, column
+  projection, lazy sort views, and multi-key sorting (#650, PR #711). Thanks to @armutlutost.
+
 ### Bug fixes
 
+- **Concurrent `NDArray` read safety and free-threaded Python support**: Fixed two thread-safety
+  bugs blocking free-threaded Python support (#555, PR #713). Thanks to @Johnny-Kao:
+  - Fixed a race condition and segfault in `NDArray.get_slice_numpy` during concurrent reads
+    on the same array or its views (such as those created by `expand_dims`) by synchronizing
+    reads with a per-instance lock acquired without holding the GIL, avoiding deadlocks when
+    postfilters execute Python code.
+  - Fixed thread-unsafe sharing of the mutable decompression context (`dctx`) in
+    `NDArray.get_1d_span_numpy` during multi-threaded reads (e.g. from the indexing query planner);
+    each call now allocates an independent context bound to the chunk's decompression parameters.
+- **Remote index cache and sidecar cleanup**: Fixed stale handles remaining in `_SIDECAR_HANDLE_CACHE`
+  and ensured process-wide in-memory index caches (`_DATA_CACHE`, `_IN_MEMORY_INDEXES`,
+  `_DESCRIPTOR_OWNERS`) and finalizers are properly evicted via `evict_in_memory_index_cache()`
+  when a remote table or table storage closes, preventing memory leaks and stale handle retention.
 - **Array partitioning and block contiguity**: Fixed a critical bug (#723, PR #724) in
   `are_partitions_behaved()` where block shapes dividing a chunk but not forming C-contiguous
   runs caused `blosc2.asarray()` to silently scramble data for arrays larger than 16 MB.
+  Thanks to @jeandet.
 - **fsspec session cleanup**: Avoided double-closing owned fsspec sessions in HTTP and S3 sources.
 - **Windows compatibility**: Fixed local array refresh on Windows; ensured dataset separators
   (`::`) in `file://` URLs survive conversion on Windows.
