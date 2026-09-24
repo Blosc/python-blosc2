@@ -117,6 +117,9 @@ def test_local_array_refresh(tmp_path, format, placement, monkeypatch):
         np.testing.assert_array_equal(array[:], old)
         carrier = array.cache_path
         write(replacement, new)
+        if format == "h5":
+            # Release h5py's file handle before replacing the source on Windows.
+            array.src.close()
         if source.is_dir():
             shutil.rmtree(source)
         os.replace(replacement, source)

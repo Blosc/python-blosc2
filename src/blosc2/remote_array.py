@@ -884,10 +884,13 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
             urlpath = self._runtime_urlpath
             if isinstance(urlpath, str) and self._source_format == "zarr" and self._dataset:
-                parsed = urlsplit(urlpath)
-                suffix = f"/{self._dataset}"
-                if parsed.path.endswith(suffix):
-                    urlpath = urlunsplit(parsed._replace(path=parsed.path[: -len(suffix)]))
+                if self._local_source:
+                    urlpath = str(Path(urlpath).parents[len(self._dataset.split("/")) - 1])
+                else:
+                    parsed = urlsplit(urlpath)
+                    suffix = f"/{self._dataset}"
+                    if parsed.path.endswith(suffix):
+                        urlpath = urlunsplit(parsed._replace(path=parsed.path[: -len(suffix)]))
             options = {
                 "cache_policy": self.cache_policy,
                 "max_concurrency": self._max_concurrency,
