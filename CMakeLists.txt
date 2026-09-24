@@ -16,7 +16,7 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.3.0)
-set(BLOSC2_BUNDLED_VERSION v3.3.4)
+set(BLOSC2_BUNDLED_VERSION v3.3.5)
 #set(BLOSC2_BUNDLED_VERSION a54e259aeb1c0e62d6bbea28934369d4831e4046)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
