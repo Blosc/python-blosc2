@@ -466,6 +466,8 @@ class _CTableIndexingMixin:
             kwargs["method"] = descriptor.get("full", {}).get("build_method", "global-sort")
         if descriptor.get("kind") == "opsi":
             kwargs["opsi_max_cycles"] = descriptor.get("opsi", {}).get("max_cycles")
+        if descriptor.get("kind") == "summary" and len(descriptor.get("levels", {})) == 1:
+            kwargs["granularity"] = next(iter(descriptor["levels"]))
         target = descriptor.get("target") or {}
         if target.get("source") == "expression":
             kwargs["expression"] = target.get("expression")
@@ -678,7 +680,12 @@ class _CTableIndexingMixin:
         path = descriptor.get("expr_values_path")
         if path is None:
             raise KeyError(f"No backing array found for expression index {token!r}.")
-        arr = blosc2.open(path, mode="r" if root._read_only else "a")
+        if root._read_only:
+            from blosc2.indexing import _open_sidecar_file
+
+            arr = _open_sidecar_file(path)
+        else:
+            arr = blosc2.open(path, mode="a")
         root._expr_index_arrays[token] = arr
         return arr
 
@@ -1415,7 +1422,14 @@ class _CTableIndexingMixin:
 
     def _try_expression_index_where(self, expr_result: blosc2.LazyExpr, catalog: dict) -> np.ndarray | None:
         """Attempt to resolve *expr_result* via a direct table expression index."""
-        from blosc2.indexing import evaluate_bucket_query, evaluate_segment_query, plan_query
+        from blosc2.indexing import (
+            _clear_cached_data,
+            _load_store,
+            _register_descriptor_owner,
+            evaluate_bucket_query,
+            evaluate_segment_query,
+            plan_query,
+        )
 
         expression = expr_result.expression
         operands = dict(expr_result.operands)
@@ -1427,9 +1441,18 @@ class _CTableIndexingMixin:
             if rewritten is None:
                 continue
             expr_arr = self._index_target_array(lookup_key, descriptor)
+            # The table catalog rebases paths after moving or packing a store;
+            # the expression array's own metadata still names its original files.
+            store = _load_store(expr_arr)
+            if store["indexes"].get(lookup_key) is not descriptor:
+                _clear_cached_data(expr_arr, lookup_key)
+            store["indexes"][lookup_key] = descriptor
+            _register_descriptor_owner(expr_arr, lookup_key)
             where_dict = {"_where_x": expr_arr}
             merged_operands = {"_where_x": expr_arr}
-            plan = plan_query(rewritten, merged_operands, where_dict)
+            plan = plan_query(
+                rewritten, merged_operands, where_dict, array_to_col={id(expr_arr): lookup_key}
+            )
             if not plan.usable:
                 continue
             if plan.exact_positions is not None:

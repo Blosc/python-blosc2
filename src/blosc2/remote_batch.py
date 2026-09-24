@@ -138,21 +138,30 @@ class _RemoteBatchArray(BatchArray):
 class _RemoteBatchCache:
     """Compressed batch retention using the owner's aggregate cache budget."""
 
-    def __init__(self, source, key, coordinator, path=None):
+    def __init__(self, source, key, coordinator, path=None, *, read_only=False, artifact=None):
         self._source = source
         self._cache_key = key
         self._cache_coordinator = coordinator
         self._path = None if path is None else Path(path)
+        self._read_only = read_only
+        self._artifact = artifact
         self._memory = {}
         self._cache_sizes = {}
         self._cache_lru = OrderedDict()
         if self._path is not None:
-            self._path.mkdir(parents=True, exist_ok=True)
+            if not read_only:
+                self._path.mkdir(parents=True, exist_ok=True)
             for file in sorted(self._path.glob("*.chunk"), key=lambda item: int(item.stem)):
                 index = int(file.stem)
-                if index < len(source.offsets):
+                if 0 <= index < len(source.offsets):
                     self._cache_sizes[index] = file.stat().st_size
                     self._cache_lru[index] = None
+        if artifact is not None:
+            for index, info in artifact[1].items():
+                if not 0 <= index < len(source.offsets):
+                    raise ValueError("Invalid cached batch index")
+                self._cache_sizes[index] = info["length"]
+                self._cache_lru[index] = None
         coordinator.register(self)
 
     def __getattr__(self, name):
@@ -161,12 +170,27 @@ class _RemoteBatchCache:
     def _file(self, index):
         return self._path / f"{index}.chunk"
 
+    def read_cached_chunk(self, index):
+        """Read retained bytes without fetching or changing cache recency."""
+        if self._artifact is not None:
+            path, offsets = self._artifact
+            info = offsets[index]
+            with open(path, "rb") as file:
+                file.seek(info["offset"])
+                data = file.read(info["length"])
+            if len(data) != info["length"]:
+                raise ValueError("Truncated cached batch")
+            return data
+        return self._file(index).read_bytes() if self._path is not None else self._memory[index]
+
     def get_chunk(self, index):
         self._source._check()
         if index in self._cache_sizes:
-            chunk = self._file(index).read_bytes() if self._path is not None else self._memory[index]
+            chunk = self.read_cached_chunk(index)
         else:
             chunk = self._source.get_chunk(index)
+            if self._read_only:
+                return chunk
             if self._path is None:
                 self._memory[index] = chunk
             else:
@@ -187,6 +211,8 @@ class _RemoteBatchCache:
         return sum(self._cache_sizes.values())
 
     def _trim_cache(self, target_bytes, *, max_chunks=None):
+        if self._read_only and self._retained_cache_bytes() > target_bytes:
+            raise ValueError("Cannot trim an immutable batch cache")
         removed = []
         while self._retained_cache_bytes() > target_bytes and self._cache_lru:
             if max_chunks is not None and len(removed) >= max_chunks:

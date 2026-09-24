@@ -2478,7 +2478,7 @@ def _open_local_hdf5(urlpath, options):
     """Use table discovery only for PyTables nodes; keep ordinary datasets on h5py."""
     import h5py
 
-    dataset = options.get("dataset")
+    dataset = (options.get("dataset") or "").strip("/")
     is_table = False
     is_group = False
     if dataset:
@@ -2486,7 +2486,7 @@ def _open_local_hdf5(urlpath, options):
             node = h5file.get(dataset.strip("/"))
             is_group = isinstance(node, h5py.Group)
             is_table = isinstance(node, h5py.Dataset) and node.attrs.get("CLASS") in {"TABLE", b"TABLE"}
-    if is_table or is_group or dataset is None:
+    if is_table or is_group or not dataset:
         if not is_table and options["max_concurrency"] is not None:
             raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
         if options["cache_path"] is not None:
@@ -2521,11 +2521,13 @@ def _open_local_hdf5(urlpath, options):
 
 def _open_remote_hdf5(urlpath, options):
     """Discover HDF5 groups and PyTables tables while retaining array-only options."""
+    from blosc2.hdf5_source import HDF5GroupError
+
     if not is_fsspec_url(urlpath):
         return _open_local_hdf5(urlpath, options)
     if options["cache_path"] is not None or options["assume_immutable"] is not True:
         return blosc2.RemoteArray(urlpath, **options)
-    dataset = options.get("dataset")
+    dataset = (options.get("dataset") or "").strip("/")
     hdf5_index = options.get("hdf5_index")
     hdf5_blob = None
     traffic = None
@@ -2538,15 +2540,19 @@ def _open_remote_hdf5(urlpath, options):
             StoreDiskCache.path_for(options["cache_dir"], source) / "active_generation.json"
         ).exists()
     if dataset and not cached_store:
-        array = blosc2.RemoteArray(urlpath, _defer_cache=True, **options)
-        metadata = array.src._hdf5_index["datasets"][array.dataset]
-        if metadata.get("kind") != "ctable":
-            array._complete_deferred_cache()
-            return array
-        hdf5_index = array.src._hdf5_index
-        hdf5_blob = array.src._blob
-        traffic = array.traffic
-        array.close()
+        try:
+            array = blosc2.RemoteArray(urlpath, _defer_cache=True, **options)
+        except HDF5GroupError as exc:
+            hdf5_index, hdf5_blob, traffic = exc.index, exc.blob, exc.traffic
+        else:
+            metadata = array.src._hdf5_index["datasets"][array.dataset]
+            if metadata.get("kind") != "ctable":
+                array._complete_deferred_cache()
+                return array
+            hdf5_index = array.src._hdf5_index
+            hdf5_blob = array.src._blob
+            traffic = array.traffic
+            array.close()
     store_options = {
         key: value
         for key, value in options.items()

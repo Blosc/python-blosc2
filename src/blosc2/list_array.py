@@ -366,7 +366,11 @@ class ListArray:
         if spec.storage != "batch":
             raise NotImplementedError("Remote ListArray storage='vl' is not supported")
         stored = backend.meta.get("listarray")
-        if stored != spec.to_listarray_metadata():
+        if (
+            not isinstance(stored, dict)
+            or stored.get("version") != 1
+            or ListSpec.from_metadata_dict(stored).to_listarray_metadata() != spec.to_listarray_metadata()
+        ):
             raise ValueError("Remote ListArray metadata does not match its table schema")
         obj = object.__new__(cls)
         obj.spec = spec
@@ -524,11 +528,12 @@ class ListArray:
         # Persist pending rows first: chunks are appended straight to the
         # backend, which would otherwise reorder them ahead of pending cells.
         self.flush()
+        item = pa.field("item", self._arrow_item_type(), nullable=self.spec.item_spec.nullable)
         for chunk in chunks:
             step = self.batch_rows or len(chunk) or 1
             for start in range(0, len(chunk), step):
                 part = chunk.slice(start, step)
-                typed = self._typed_batch(part.to_pylist())
+                typed = part.cast(pa.list_(item))
                 self._backend.append(typed)
                 self._persisted_row_count += len(part)
                 self._invalidate_batch_caches()

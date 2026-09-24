@@ -140,3 +140,27 @@ def test_path_other_formats(tmp_path, format):
             np.testing.assert_array_equal(array[:], data)
     with blosc2.RemoteStore(url, path="group") as store:
         assert store.keys() == ["array"]
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_remote_hdf5_group_dispatch(tmp_path, cached):
+    h5py = pytest.importorskip("h5py")
+    source = tmp_path / "groups.h5"
+    with h5py.File(source, "w") as file:
+        file.create_dataset("group/data", data=np.arange(4))
+    url = f"memory://{tmp_path.name}-groups.h5"
+    fsspec.filesystem("memory").pipe(url, source.read_bytes())
+    options = {"cache_dir": tmp_path / "cache"} if cached else {}
+    for _ in range(2):
+        with blosc2.open(url, path="group", **options) as group:
+            assert isinstance(group, blosc2.RemoteStore)
+            assert group.keys() == ["data"]
+            with group["data"] as array:
+                np.testing.assert_array_equal(array[:], np.arange(4))
+    for target in (url, source):
+        for root in (None, "", "/"):
+            with blosc2.open(target, path=root, **options) as group:
+                assert isinstance(group, blosc2.RemoteStore)
+                assert group.keys() == ["group"]
+    with pytest.raises(ValueError, match="not found"):
+        blosc2.open(url, path="missing")

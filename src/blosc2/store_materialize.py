@@ -131,6 +131,7 @@ def _copy_array(source, target, path, staging):
         chunks=source.chunks,
         blocks=source.blocks,
         cparams=source.cparams,
+        meta={key: value for key, value in source.meta.items() if key != "b2nd"},
         urlpath=local_path,
         mode="w",
     )
@@ -142,19 +143,22 @@ def _copy_array(source, target, path, staging):
         for start in range(0, source.shape[0], step):
             item = (slice(start, min(start + step, source.shape[0])), *tail)
             local[item] = source[item]
+    for key, value in source.attrs.items():
+        local.schunk.vlmeta[key] = value
     target[path] = local
 
 
 def _copy_table(table, target, path):
-    indexes = {name: descriptor["kind"] for name, descriptor in table._get_index_catalog().items()}
+    indexes = dict(table._get_index_catalog())
     local = table.copy(compact=True)
     local._source_bound = False
     local._source_columns = set()
     target[path] = local
     local.close()
     materialized = target[path]
-    for name, kind in indexes.items():
-        materialized.create_index(name, kind=kind)
-    if indexes and not materialized._get_index_catalog():
-        raise RuntimeError(f"Failed to rebuild CTable indexes at {path!r}")
-    materialized.close()
+    try:
+        for name, descriptor in indexes.items():
+            options = table._index_create_kwargs_from_descriptor(descriptor)
+            materialized.create_index(None if "expression" in options else name, **options)
+    finally:
+        materialized.close()

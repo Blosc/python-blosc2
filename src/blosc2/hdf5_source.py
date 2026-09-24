@@ -43,6 +43,16 @@ HDF5_INDEX_VERSION = 2
 _HDF5_INDEX_VERSIONS = {1, HDF5_INDEX_VERSION}
 
 
+class HDF5GroupError(ValueError):
+    """An array lookup found a group; retain discovery for container dispatch."""
+
+    def __init__(self, message, source):
+        super().__init__(message)
+        self.index = source._hdf5_index
+        self.blob = source._blob
+        self.traffic = source.traffic
+
+
 def hdf5_source_cache_path(urlpath, cache_dir, storage_options=None):
     return source_cache_path(urlpath, cache_dir, storage_options, kind="hdf5")
 
@@ -1132,8 +1142,9 @@ class HDF5NDSource(ProxyNDSource):
 
     def _validate_dataset_presence(self, raw_dataset):
         if self.dataset in self._hdf5_index["groups"]:
-            raise ValueError(
-                f"{raw_dataset!r} is an HDF5 group; pass the path of a dataset. Available datasets: {available_datasets(self._hdf5_index)}"
+            raise HDF5GroupError(
+                f"{raw_dataset!r} is an HDF5 group; pass the path of a dataset. Available datasets: {available_datasets(self._hdf5_index)}",
+                self,
             )
         if self.dataset not in self._hdf5_index["datasets"]:
             raise ValueError(

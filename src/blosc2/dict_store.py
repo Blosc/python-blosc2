@@ -673,7 +673,12 @@ class DictStore:
                     source_path = (
                         value.cache_path if isinstance(value, blosc2.RemoteArray) else value.urlpath
                     )
-                    shutil.copy2(source_path, tmp_path)
+                    if zipfile.is_zipfile(source_path):
+                        # A member's urlpath names the archive, not its own frame.
+                        with open(tmp_path, "wb") as file:
+                            file.write(value.to_cframe())
+                    else:
+                        shutil.copy2(source_path, tmp_path)
                 os.replace(tmp_path, dest_path)
 
                 # Store relative path from tree directory

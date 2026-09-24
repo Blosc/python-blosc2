@@ -12,7 +12,7 @@ import uuid
 import weakref
 import zipfile
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit, urlunsplit
 
 import blosc2
@@ -309,6 +309,7 @@ class RemoteDiscovery:
             "notice": self.notice,
             "metadata": self.metadata,
             "caches": sorted(self.caches),
+            "batch_caches": sorted(self.batch_caches),
             "cache_policy": getattr(self, "cache_policy", blosc2.CachePolicy.DISK).value,
             "max_cache_bytes": getattr(self, "max_cache_bytes", None),
             "mutable": getattr(self, "mutable", False),
@@ -807,6 +808,8 @@ class RemoteDiscovery:
 
     def open_ctable_batch(self, full):
         """Open one external BatchArray member hidden below a CTable node."""
+        if full in self.batch_caches:
+            return self.batch_caches[full]
         if self.format != "b2z":
             raise NotImplementedError("Remote CTable access currently requires a B2Z source")
         self._validate(full)
@@ -828,13 +831,29 @@ class RemoteDiscovery:
             self.archive._opening_ranges.clear()
         if self.cache_policy is blosc2.CachePolicy.NONE:
             return source
-        if full not in self.batch_caches:
-            from blosc2.remote_batch import _RemoteBatchCache
+        from blosc2.remote_batch import _RemoteBatchCache
 
-            path = None
-            if self.disk is not None:
-                path = self.disk.batch_payload_path(self.generation, full)
-            self.batch_caches[full] = _RemoteBatchCache(source, full, self.cache_coordinator, path)
+        path = None
+        artifact = None
+        if self.disk is not None:
+            path = self.disk.batch_payload_path(self.generation, full)
+        elif not self.is_mutable:
+            if self.artifact_offsets is not None:
+                prefix = f"{full}.b2b.cache/"
+                offsets = {}
+                for name, info in self.artifact_offsets.items():
+                    if name.startswith(prefix):
+                        suffix = name[len(prefix) :]
+                        if not suffix.endswith(".chunk") or not suffix[:-6].isdigit():
+                            raise ValueError("Invalid cached batch member")
+                        offsets[int(suffix[:-6])] = info
+                artifact = self.artifact_path, offsets
+            elif self.artifact_path is not None:
+                path = os.path.join(self.artifact_path, f"{full}.b2b.cache")
+        key = f"{self.cache_namespace}:{full}" if self.cache_namespace else full
+        self.batch_caches[full] = _RemoteBatchCache(
+            source, key, self.cache_coordinator, path, read_only=not self.is_mutable, artifact=artifact
+        )
         return self.batch_caches[full]
 
     def load_ctable_attrs(self, table_path):
@@ -969,6 +988,8 @@ class RemoteDiscovery:
                 relative = path[len(self.root) + 1 :] if self.root else path
                 self.resolve(relative)
                 self.get_cache(self.open_source(relative))
+            for path in manifest.get("batch_caches", []):
+                self.open_ctable_batch(path)
             self.cache_coordinator.enforce()
             self.restoring = False
 
@@ -1204,6 +1225,8 @@ class RemoteDiscovery:
                     self._copy_leaf_carrier(orig_key, proxy, staging_dir)
                     exported_caches.append(orig_key)
 
+                exported_batches = self._export_batch_caches(full_path, staging_dir) if include_cache else []
+
                 linked_exports = self._export_linked_stores(full_path, staging_dir) if include_cache else {}
 
                 exported_manifest = {
@@ -1216,6 +1239,7 @@ class RemoteDiscovery:
                     "notice": self.notice,
                     "metadata": metadata,
                     "caches": sorted(exported_caches),
+                    "batch_caches": sorted(exported_batches),
                     "cache_policy": self.cache_policy.value,
                     "max_cache_bytes": self.max_cache_bytes,
                     "mutable": effective_mutable,
@@ -1250,6 +1274,20 @@ class RemoteDiscovery:
                     with contextlib.suppress(OSError):
                         os.unlink(tmp_zip)
                 shutil.rmtree(staging_dir, ignore_errors=True)
+
+    def _export_batch_caches(self, full_path, staging_dir):
+        exported = []
+        for key, cache in self.batch_caches.items():
+            if full_path and not key.startswith(full_path + "/"):
+                continue
+            if not cache._cache_sizes:
+                continue
+            folder = Path(staging_dir) / f"{key}.b2b.cache"
+            folder.mkdir(parents=True, exist_ok=True)
+            for index in cache._cache_sizes:
+                (folder / f"{index}.chunk").write_bytes(cache.read_cached_chunk(index))
+            exported.append(key)
+        return exported
 
     def _export_linked_stores(self, full_path, staging_dir):
         exports = {}
@@ -1601,7 +1639,7 @@ class RemoteStore(RemoteObject):
             obj._reference_parent_finalizer = weakref.finalize(obj, parent.release)
         return obj
 
-    def _ensure_open(self):
+    def _ensure_open(self):  # noqa: C901
         if getattr(self, "_deferred_closed", False):
             raise RuntimeError("RemoteStore handle is closed")
         parent = getattr(self, "_reference_parent", None)
@@ -1695,6 +1733,10 @@ class RemoteStore(RemoteObject):
             owner.max_cache_bytes = parent.max_cache_bytes
             owner.cache_coordinator = parent.cache_coordinator
             owner.cache_namespace = namespace
+            for key, cache in (*owner.caches.items(), *owner.batch_caches.items()):
+                cache._cache_coordinator = parent.cache_coordinator
+                cache._cache_key = f"{namespace}:{key}"
+                parent.cache_coordinator.register(cache)
             owner.nested_storage_options = parent.nested_storage_options
             if mount is not None and mount not in parent.linked_stores:
                 anchor = object.__new__(type(self))
@@ -2245,6 +2287,20 @@ class RemoteStore(RemoteObject):
                 or (source.get("kind") != "hdf5" and root and not path.startswith(root + "/"))
             ):
                 raise ValueError("Invalid cached RemoteStore leaf")
+        batches = manifest.get("batch_caches", [])
+        if not isinstance(batches, list):
+            raise ValueError("Invalid RemoteStore batch caches")
+        for path in batches:
+            RemoteDiscovery._validate(path)
+            if (
+                source.get("kind") != "b2z"
+                or (root and not path.startswith(root + "/"))
+                or not any(
+                    kind == "ctable" and (not table or path.startswith(table + "/"))
+                    for table, (kind, _) in nodes.items()
+                )
+            ):
+                raise ValueError("Invalid cached RemoteStore batch")
         linked = manifest.get("linked", {})
         if not isinstance(linked, dict):
             raise ValueError("Invalid nested RemoteStore artifacts")
@@ -2390,7 +2446,9 @@ class RemoteStore(RemoteObject):
         if cache_policy is not None:
             if not isinstance(cache_policy, blosc2.CachePolicy):
                 raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
-            if cache_policy is blosc2.CachePolicy.NONE and manifest.get("caches"):
+            if cache_policy is blosc2.CachePolicy.NONE and (
+                manifest.get("caches") or manifest.get("batch_caches")
+            ):
                 raise ValueError(
                     "Cannot reopen a warm RemoteStore artifact with CachePolicy.NONE; "
                     "use a cold export or a cache policy that permits retained payload."

@@ -32,8 +32,8 @@ by the Blosc2 writers; the arrays inside remain Blosc2-compressed.
 The backing arrays share the table's cache budget and traffic counters. MEMORY,
 DISK (with `cache_dir`) and NONE policies are supported. Size reporting uses source
 metadata without scanning strings. Small-member metadata prefetch may also fetch
-some payload. Repeated reads can reuse cached blocks; filtering scans the required
-columns because persisted indexes are not used remotely.
+some payload. Repeated reads can reuse cached blocks; filtering uses supported
+persisted indexes when available and scans the required columns otherwise.
 
 Batch-backed columns transfer one whole compressed batch per required batch, then
 decode it locally. A small row selection can therefore fetch and allocate a large

@@ -286,7 +286,7 @@ class RemoteCTable(RemoteObject, CTable):
     def source(self):
         storage = self._remote_storage()
         return {
-            "kind": "b2z",
+            "kind": storage._owner.format,
             "version": 1,
             "urlpath": storage._owner.urlpath,
             "dataset": storage._root_key,

@@ -23,8 +23,8 @@ and tables report their shared owner's retained payload.
 
 ``RemoteObject`` is not a factory, storage backend, serialization format, or
 remote-write API.  Data-specific operations remain on the concrete classes.
-Arrays and tables provide ``materialize()``; stores are navigated to a leaf that
-can be materialized.
+Arrays and tables provide ``materialize()``; stores provide recursive
+``materialize()`` to expand their contents and mounted stores into a local tree.
 
 See :doc:`Working with Remote Data <../guides/remote_objects>` for the shared
 cache, traffic, reference-saving, and lifetime behavior.

@@ -2076,3 +2076,83 @@ def test_parallel_timestamp_and_projection(tmp_path):
         assert list(view) == list(local[["text"]])
         assert "_cols/time" not in table._remote_storage()._owner.sources
         assert "_cols/vec" not in table._remote_storage()._owner.sources
+
+
+@pytest.mark.parametrize("policy", [blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK])
+@pytest.mark.parametrize("mutable", [False, True])
+def test_batch_reference_preserves_warm_payload(tmp_path, policy, mutable):
+    @dataclasses.dataclass
+    class Payload:
+        value: bytes = blosc2.field(blosc2.vlbytes(batch_rows=1))
+
+    values = [np.random.default_rng(i).bytes(128_000) for i in range(2)]
+    local = blosc2.CTable(Payload, [(value,) for value in values], create_summary_index=False)
+    url = remote_table_url(tmp_path, local, "warm-batches")
+    options = {"cache_dir": tmp_path / "cache"} if policy is blosc2.CachePolicy.DISK else {}
+    artifact = tmp_path / "warm.b2z"
+    cold = tmp_path / "cold.b2z"
+    with blosc2.RemoteCTable(url, cache_policy=policy, **options) as table:
+        assert table["value"][0] == values[0]
+        retained = table.cache_bytes
+        table.traffic.reset()
+        table.save(artifact, mutable=mutable)
+        table.save(cold, include_cache=False)
+        assert table.traffic.requests == 0
+    with blosc2.open(cold) as table:
+        assert table.cache_bytes == 0
+    with pytest.raises(ValueError, match="warm RemoteStore"):
+        blosc2.open(artifact, cache_policy=blosc2.CachePolicy.NONE)
+    if not mutable:
+        with pytest.raises(ValueError, match="smaller than retained"):
+            blosc2.open(artifact, max_cache_bytes=1)
+    fsspec.filesystem("memory").rm(url)
+    again = tmp_path / "again.b2z"
+    with blosc2.open(artifact) as table:
+        assert table.cache_bytes == retained
+        table.traffic.reset()
+        assert table["value"][0] == values[0]
+        assert table.traffic.requests == 0
+        table.save(again)
+        with pytest.raises(FileNotFoundError):
+            table["value"][1]
+    with blosc2.open(again) as table:
+        assert table["value"][0] == values[0]
+
+
+def test_remote_legacy_list_metadata(tmp_path, monkeypatch):
+    from blosc2.schema import ListSpec
+
+    @dataclasses.dataclass
+    class Lists:
+        tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), batch_rows=None))  # noqa: RUF009
+
+    original = ListSpec.to_metadata_dict
+
+    def legacy_metadata(spec):
+        result = original(spec)
+        if result.get("batch_rows") is None:
+            result.pop("batch_rows", None)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ListSpec, "to_metadata_dict", legacy_metadata)
+        local = blosc2.CTable(Lists, [([1, 2],), ([3],)], create_summary_index=False)
+        url = remote_table_url(tmp_path, local, "legacy-list")
+    with blosc2.open(url) as table:
+        assert table["tags"][:] == [[1, 2], [3]]
+
+
+def test_hdf5_table_source_and_virtual_validity():
+    from blosc2.ctable_storage import _AllValidRows
+
+    url, _ = pytables_hdf5_url("source-kind.h5")
+    with blosc2.open(url, path="table") as table:
+        assert table.source["kind"] == "hdf5"
+    # Slicing a billion-row virtual mask must not allocate a billion-byte buffer.
+    valid = _AllValidRows(10**9, (1024,))
+    selected = valid[10:20]
+    assert selected.strides == (0,)
+    assert selected.all()
+    np.testing.assert_array_equal(valid[[-1, 0]], [True, True])
+    with pytest.raises(IndexError):
+        valid[[10**9]]

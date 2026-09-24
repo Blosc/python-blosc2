@@ -1626,3 +1626,69 @@ def test_artifact_reopens_in_fresh_process(tmp_path):
         server.shutdown()
         server.server_close()
     assert int(result.stdout.strip()) == int(data[:10, :10].sum())
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_materialize_preserves_metadata_and_expression_indexes(tmp_path, remote):
+    source = tmp_path / "materialize-metadata.b2z"
+    data = blosc2.arange(8, meta={"units": "metres"})
+    data.attrs["description"] = "distance"
+    with blosc2.TreeStore(source, mode="w") as tree:
+        tree["array"] = data
+        tree["table"] = blosc2.CTable(NestedIndexedRow, [(i,) for i in range(8)], create_summary_index=False)
+        table = tree["table"]
+        table.create_index(expression="value * 2", kind="full", name="double")
+        table.create_index("value", kind="summary", granularity="chunk", name="values")
+        table.close()
+    if remote:
+        url = f"memory://{tmp_path.name}-materialize-metadata.b2z"
+        fsspec.filesystem("memory").pipe(url, source.read_bytes())
+        store = blosc2.RemoteStore(url)
+    else:
+        store = blosc2.TreeStore(source, mode="r")
+    destination = tmp_path / "materialized.b2z"
+    with store:
+        store.materialize(destination)
+    with blosc2.open(destination) as tree:
+        array = tree["array"]
+        assert array.schunk.meta["units"] == "metres"
+        assert array.attrs["description"] == "distance"
+        np.testing.assert_array_equal(array[:], np.arange(8))
+        table = tree["table"]
+        assert table.index(expression="value * 2").name == "double"
+        assert table.index("value").name == "values"
+        assert set(table.index("value").descriptor["levels"]) == {"chunk"}
+        np.testing.assert_array_equal(table.where("value * 2 >= 10")["value"][:], [5, 6, 7])
+        table.close()
+
+
+def test_nested_reference_preserves_batch_cache(tmp_path):
+    @dataclasses.dataclass
+    class Payload:
+        value: bytes = blosc2.field(blosc2.vlbytes(batch_rows=1))
+
+    value = np.random.default_rng(1).bytes(128_000)
+    source = tmp_path / "batch-source.b2z"
+    with blosc2.TreeStore(source, mode="w", threshold=0) as tree:
+        tree["table"] = blosc2.CTable(Payload, [(value,)], create_summary_index=False)
+    fs = fsspec.filesystem("memory")
+    source_url = f"memory://{tmp_path.name}-batch-source.b2z"
+    fs.pipe(source_url, source.read_bytes())
+    host = tmp_path / "batch-host.b2z"
+    with blosc2.RemoteStore(source_url) as remote, blosc2.TreeStore(host, mode="w") as tree:
+        tree["linked"] = remote
+    host_url = f"memory://{tmp_path.name}-batch-host.b2z"
+    fs.pipe(host_url, host.read_bytes())
+    snapshot = tmp_path / "batch-snapshot.b2z"
+    with blosc2.RemoteStore(host_url) as root:
+        with root["linked/table"] as table:
+            assert table["value"][0] == value
+        retained = root.cache_bytes
+        root.save(snapshot)
+    fs.rm(source_url)
+    fs.rm(host_url)
+    with blosc2.open(snapshot) as root:
+        with root["linked/table"] as table:
+            assert root.cache_bytes == retained
+            assert table["value"][0] == value
+            assert root.traffic.requests == 0

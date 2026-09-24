@@ -709,7 +709,7 @@ class _AllValidRows(blosc2.Operand):
             if not -self.shape[0] <= key < self.shape[0]:
                 raise IndexError("row index out of range")
             return np.bool_(True)
-        return np.ones(self.shape[0], dtype=bool)[key]
+        return np.broadcast_to(np.bool_(True), self.shape)[key]
 
     def _take_numpy(self, indices, /, *, axis=None):
         if axis not in (None, 0, -1):

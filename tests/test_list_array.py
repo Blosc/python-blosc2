@@ -340,3 +340,19 @@ def test_listarray_extend_arrow_flushes_pending_rows():
     arr.extend_arrow(pa.array([[3, 4], [5, 6]], type=pa.list_(pa.int64())))
     arr.flush()
     assert arr[:] == [[1, 2], [3, 4], [5, 6]]
+
+
+def test_extend_arrow_preserves_typed_batches_without_python_cells(monkeypatch):
+    pa = pytest.importorskip("pyarrow")
+    arr = blosc2.ListArray(
+        item_spec=blosc2.int64(nullable=True), nullable=True, serializer="arrow", batch_rows=2
+    )
+
+    def reject_python_cells(*args):
+        raise AssertionError("Arrow input must stay in Arrow")
+
+    monkeypatch.setattr(arr, "_typed_batch", reject_python_cells)
+    values = [[1, None], [], None, [3]]
+    arr.extend_arrow(pa.chunked_array([pa.array(values, type=pa.list_(pa.int32()))]))
+    assert arr[:] == values
+    assert arr._backend._batch_lengths == [2, 2]
