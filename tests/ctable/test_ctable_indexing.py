@@ -1224,6 +1224,22 @@ def test_wide_sidecar_span_read_is_not_short():
     assert out.tolist() == values[128 + 5 : 128 + 105].tolist()
 
 
+def test_span_read_preserves_schunk_postfilter():
+    """Private span contexts must retain the SChunk's dparams."""
+    values = np.arange(16, dtype=np.int32)
+    arr = blosc2.asarray(values, chunks=(16,))
+    arr.schunk.dparams = blosc2.DParams(nthreads=1)
+
+    @arr.schunk.postfilter(np.int32, np.int32)
+    def add_offset(input, output, offset):
+        output[:] = input + 100
+
+    out = np.empty(6, dtype=np.int32)
+    arr.get_1d_span_numpy(out, 0, 4, len(out))
+
+    np.testing.assert_array_equal(out, values[4:10] + 100)
+
+
 def test_coalesce_spans_merges_within_a_block():
     """Spans closer than one block must merge: reading them apart re-reads the block."""
     coalesce = blosc2.indexing._coalesce_spans

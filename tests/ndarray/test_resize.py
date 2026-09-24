@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 
@@ -95,3 +97,21 @@ def test_expand_dims(shape, axis, chunks, blocks, fill_value):
     del bloscview
     del bloscarr_
     assert bloscview2[()].shape == bloscview2.shape  # shouldn't fail because still have access to bloscarr_
+
+
+def test_expand_dims_aliases_support_concurrent_reads():
+    """Views and their base must synchronize reads through their shared SChunk."""
+    expected = np.arange(64 * 32, dtype=np.int64).reshape(64, 32)
+    base = blosc2.asarray(expected, chunks=(16, 16))
+    view = blosc2.expand_dims(base, axis=0)
+
+    def read_base():
+        for _ in range(20):
+            np.testing.assert_array_equal(base[:], expected)
+
+    def read_view():
+        for _ in range(20):
+            np.testing.assert_array_equal(view[:], expected[np.newaxis, :])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda read: read(), (read_base, read_view)))

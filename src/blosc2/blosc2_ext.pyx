@@ -3780,14 +3780,21 @@ cdef class slice_flatter:
 cdef class NDArray:
     cdef b2nd_array_t* array
     cdef PyThread_type_lock read_lock
+    cdef c_bool owns_read_lock
 
     def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
-        self.read_lock = PyThread_allocate_lock()
-        if self.read_lock == NULL:
-            raise MemoryError("Could not allocate NDArray read lock")
         self.base = base # add reference to base if NDArray is a view
+        if base is None:
+            self.read_lock = PyThread_allocate_lock()
+            if self.read_lock == NULL:
+                raise MemoryError("Could not allocate NDArray read lock")
+            self.owns_read_lock = True
+        else:
+            # expand_dims/squeeze views share the base SChunk, so reads through
+            # all aliases must be protected by the same lock.
+            self.read_lock = (<NDArray>base).read_lock
 
     @property
     def c_array(self):
@@ -3916,7 +3923,7 @@ cdef class NDArray:
         # associated with the SChunk (not just BLOSC2_DPARAMS_DEFAULTS),
         # since some codecs/filters resolve per-schunk state (e.g.
         # dictionaries) through dparams.schunk during decompression.
-        cdef blosc2_dparams dparams = BLOSC2_DPARAMS_DEFAULTS
+        cdef blosc2_dparams dparams = dereference(self.array.sc.storage.dparams)
         dparams.schunk = self.array.sc
         dparams.typesize = self.array.sc.typesize
         dctx = blosc2_create_dctx(dparams)
@@ -4557,7 +4564,7 @@ cdef class NDArray:
     def __dealloc__(self):
         if self.array != NULL:
             _check_rc(b2nd_free(self.array), "Error while freeing the array")
-        if self.read_lock != NULL:
+        if self.owns_read_lock and self.read_lock != NULL:
             PyThread_free_lock(self.read_lock)
 
 
