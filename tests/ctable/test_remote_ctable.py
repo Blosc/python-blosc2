@@ -472,7 +472,7 @@ def test_remote_summary_single_payload_request_and_cache(tmp_path, policy):
 
 
 def test_remote_summary_warm_reference_and_sparse_cache(tmp_path):
-    from blosc2.indexing import _open_level_summary_handle
+    from blosc2.indexing import _SIDECAR_HANDLE_CACHE, _open_level_summary_handle
 
     url, _ = indexed_remote_table_url(tmp_path, "summary", granularity="block")
     artifact = tmp_path / "summary-reference.b2z"
@@ -481,6 +481,9 @@ def test_remote_summary_warm_reference_and_sparse_cache(tmp_path):
         summary = _open_level_summary_handle(remote._cols["x"], descriptor, "block")
         expected = summary[:]
         remote.save(artifact)
+        assert any(handle is summary for handle in _SIDECAR_HANDLE_CACHE.values())
+
+    assert all(handle is not summary for handle in _SIDECAR_HANDLE_CACHE.values())
 
     with blosc2.open(artifact) as reopened:
         descriptor = reopened._get_index_catalog()["x"]

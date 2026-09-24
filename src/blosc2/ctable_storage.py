@@ -925,8 +925,12 @@ class RemoteTableStorage(TableStorage):
         if self._closed:
             return
         self._closed = True
-        from blosc2.indexing import _SIDECAR_REMOTE_REGISTRY
+        from blosc2.indexing import _SIDECAR_HANDLE_CACHE, _SIDECAR_REMOTE_REGISTRY
 
+        paths = set(self._registered_index_paths)
+        for key in tuple(_SIDECAR_HANDLE_CACHE):
+            if key[-1] in paths:
+                _SIDECAR_HANDLE_CACHE.pop(key, None)
         for path in self._registered_index_paths:
             _SIDECAR_REMOTE_REGISTRY.pop(path, None)
         self._registered_index_paths.clear()
