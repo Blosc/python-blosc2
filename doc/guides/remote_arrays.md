@@ -132,11 +132,14 @@ a failed metadata request to sources that do not publish one. Version-1 native
 indexes remain readable; legacy Kerchunk/reference maps are not native indexes
 and are rejected.
 
-Local HDF5 files use h5py directly, without pre-indexing or an fsspec
+Local HDF5 datasets use h5py directly, without pre-indexing or an fsspec
 dependency. For example, `blosc2.open("hierarchy.h5::/d0/a2")` reads the selected
-dataset through h5py and caches converted Blosc2 chunks in memory. Explicit
-`hdf5_index=` also accepts a native HDF5 index for local files. Legacy HDF5
-reference maps are rejected; omit it to regenerate the native index.
+dataset through h5py and caches converted Blosc2 chunks in memory. A selected
+PyTables table returns `RemoteCTable`, so `blosc2.open("readings.h5", path="readings").where("humidity < 10")`
+uses the same query API as a remote table. Local tables also use h5py and support
+MEMORY or NONE caching; disk caches are not supported. Explicit `hdf5_index=`
+accepts a native HDF5 index for local files. Legacy HDF5 reference maps are
+rejected; omit it to regenerate the native index.
 
 `RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.

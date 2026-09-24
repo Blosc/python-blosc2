@@ -325,7 +325,9 @@ def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, 
     if source_descriptor != expected:
         raise ValueError("source_descriptor does not match the supplied source")
     persisted_url = urlpath.urlbase if isinstance(urlpath, blosc2.C2Array) else urlpath.urlpath
-    if persisted_url is not None:
+    if persisted_url is not None and not (
+        store_attachment and isinstance(urlpath, hdf5_cls) and urlpath._local
+    ):
         validate_persistable_url(persisted_url)
     return urlpath, dict(expected)
 

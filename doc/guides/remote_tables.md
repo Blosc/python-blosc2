@@ -5,8 +5,9 @@ Fixed-width, `blosc2.utf8()`, batch-backed variable-length, list, struct/object,
 and dictionary columns are fetched on demand, including their null masks. A table
 inside a hierarchy can also be opened through `RemoteStore`.
 
-`blosc2.open()` dispatches local table archives to `CTable` and remote table
-archives to `RemoteCTable`. Remote `.b2z` groups return `RemoteStore` by default;
+`blosc2.open()` dispatches local B2Z table archives to `CTable`, and remote B2Z
+archives and selected local or remote PyTables tables to `RemoteCTable`.
+Remote `.b2z` groups return `RemoteStore` by default;
 array leaves retain their `RemoteArray` behavior. Use `path="group/table"`
 or a `::group/table` URL suffix to select a nested table. For a complete local
 download instead, pass `lazy=False, cache_dir="download-cache"`.

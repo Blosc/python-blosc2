@@ -465,6 +465,28 @@ def test_local_hdf5_without_remote_dependencies(tmp_path, monkeypatch, layout, s
     assert not file_id.valid
 
 
+@pytest.mark.parametrize("syntax", ["path", "separator"])
+def test_local_pytables_table_opens_as_ctable(tmp_path, monkeypatch, syntax):
+    path = tmp_path / "table.h5"
+    data = np.array([(0, 3), (1, 12), (2, 7)], dtype=[("id", "i4"), ("humidity", "i4")])
+    with h5py.File(path, "w") as file:
+        table = file.create_dataset("readings", data=data, chunks=(2,))
+        table.attrs["CLASS"] = "TABLE"
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.split(".")[0] == "fsspec":
+            raise AssertionError("Local HDF5 must not import fsspec")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    table = blosc2.open(path, path="readings") if syntax == "path" else blosc2.open(f"{path}::readings")
+    assert isinstance(table, blosc2.RemoteCTable)
+    assert table.where("humidity < 10")["id"][:].tolist() == [0, 2]
+    table.close()
+
+
 def test_local_hdf5_closed_source_rejects_reads(tmp_path):
     path = tmp_path / "closed-local.h5"
     with h5py.File(path, "w") as file:

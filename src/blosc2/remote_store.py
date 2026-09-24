@@ -209,11 +209,11 @@ class RemoteDiscovery:
         # ponytail: serialize store operations; finer locks if multi-leaf throughput matters.
         self.lock = threading.RLock()
         try:
-            import fsspec
-
-            options = {**self.storage_options, "skip_instance_cache": True}
             self.filesystem = _filesystem
-            if self.filesystem is None:
+            if self.filesystem is None and not (self.format == "hdf5" and os.path.isfile(self.urlpath)):
+                import fsspec
+
+                options = {**self.storage_options, "skip_instance_cache": True}
                 self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
             self.restored_manifest = manifest
             if manifest:

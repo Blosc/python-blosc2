@@ -4,8 +4,11 @@ RemoteCTable
 ============
 
 ``RemoteCTable`` is a read-only :class:`blosc2.CTable` backed by a remote B2Z
-archive. Fixed-width, shaped, nullable, UTF-8, batch-backed variable-length,
+archive or a local or remote PyTables/HDF5 table. Fixed-width, shaped, nullable,
+UTF-8, batch-backed variable-length,
 batch-backed list, struct/object, and dictionary columns are fetched on demand.
+Open local PyTables tables through :func:`blosc2.open` with ``path=`` or a
+``::table`` selector.
 Standalone tables can be opened directly; tables inside a hierarchy can be
 selected with ``dataset=`` or through :class:`blosc2.RemoteStore`.
 PyTables/HDF5 sources may supply ``hdf5_index=`` as a native index dictionary,

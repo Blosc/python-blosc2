@@ -2411,13 +2411,64 @@ def _open_remote_b2z(urlpath, options):
         raise
 
 
+def _open_local_hdf5(urlpath, options):
+    """Use table discovery only for PyTables nodes; keep ordinary datasets on h5py."""
+    import h5py
+
+    dataset = options.get("dataset")
+    if dataset:
+        with h5py.File(urlpath, "r") as h5file:
+            node = h5file.get(dataset.strip("/"))
+            is_table = isinstance(node, h5py.Dataset) and node.attrs.get("CLASS") in {"TABLE", b"TABLE"}
+        if is_table:
+            if options["cache_dir"] is not None or options["cache_path"] is not None:
+                raise NotImplementedError("Local HDF5 tables do not support disk caches")
+            if options["assume_immutable"] is not True:
+                raise NotImplementedError("Local HDF5 tables require assume_immutable=True")
+            if options.get("storage_options") is not None:
+                raise ValueError("storage_options is only supported for fsspec URLs")
+            from blosc2.proxy import CacheCoordinator
+            from blosc2.remote_array import CACHE_POLICY_DEFAULT, normalize_cache_limit
+            from blosc2.remote_store import RemoteDiscovery
+
+            policy = options["cache_policy"]
+            if policy is CACHE_POLICY_DEFAULT:
+                policy = blosc2.CachePolicy.MEMORY
+            if policy is blosc2.CachePolicy.DISK:
+                raise NotImplementedError("Local HDF5 tables do not support disk caches")
+            if not isinstance(policy, blosc2.CachePolicy):
+                raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
+            limit = normalize_cache_limit(policy, options.get("max_cache_bytes", CACHE_POLICY_DEFAULT))
+            owner = RemoteDiscovery(
+                urlpath,
+                dataset=dataset,
+                _source_format="hdf5",
+                _hdf5_index=options.get("hdf5_index"),
+            )
+            owner.cache_policy = policy
+            owner.max_cache_bytes = limit
+            owner.cache_coordinator = CacheCoordinator(limit)
+            try:
+                return blosc2.RemoteCTable._from_owner(
+                    owner,
+                    dataset.strip("/"),
+                    **(
+                        {}
+                        if options["max_concurrency"] is None
+                        else {"max_concurrency": options["max_concurrency"]}
+                    ),
+                )
+            except BaseException:
+                owner.close()
+                raise
+    return blosc2.RemoteArray(urlpath, **options)
+
+
 def _open_remote_hdf5(urlpath, options):
     """Discover HDF5 groups and PyTables tables while retaining array-only options."""
-    if (
-        not is_fsspec_url(urlpath)
-        or options["cache_path"] is not None
-        or options["assume_immutable"] is not True
-    ):
+    if not is_fsspec_url(urlpath):
+        return _open_local_hdf5(urlpath, options)
+    if options["cache_path"] is not None or options["assume_immutable"] is not True:
         return blosc2.RemoteArray(urlpath, **options)
     dataset = options.get("dataset")
     hdf5_index = options.get("hdf5_index")
@@ -2657,7 +2708,8 @@ def open(
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
             the remote array dataset and read the byte ranges a slice touches.
             B2Z and HDF5 table and group nodes return :class:`RemoteCTable` and
-            :class:`RemoteStore` instead.
+            :class:`RemoteStore` instead. Selected local PyTables/HDF5 tables also
+            return :class:`RemoteCTable`; local ordinary datasets remain :class:`RemoteArray`.
             A slice landing in a small part of a large
             chunk costs only the *blocks* it touches when ranges are available;
             chunks small enough to be one cheap request are still fetched whole.
