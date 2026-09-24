@@ -439,6 +439,19 @@ def test_remote_summary_warm_reference_and_sparse_cache(tmp_path):
             old_summary[:]
 
 
+def test_sparse_cache_storage_options_partition(tmp_path):
+    url = remote_table_url(
+        tmp_path, blosc2.CTable(IndexedRow, [(1, 2)], create_summary_index=False), "options"
+    )
+    cache = tmp_path / "cache"
+    for endpoint in ("one", "two"):
+        with blosc2.RemoteCTable.with_sparse_cache(
+            url, cache, storage_options={"endpoint": endpoint}
+        ) as table:
+            assert table["x"][0] == 1
+    assert len([path for path in cache.iterdir() if path.is_dir()]) == 2
+
+
 @pytest.mark.parametrize(("expression", "expected"), [("x == 7", [4993]), ("x == 5000", [])])
 def test_remote_full_index_selective_lookup(tmp_path, expression, expected):
     url, _ = indexed_remote_table_url(tmp_path, "full", rows=5000)
