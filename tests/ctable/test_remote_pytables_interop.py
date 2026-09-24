@@ -71,6 +71,35 @@ def test_native_pytables_csi(tmp_path):
         np.testing.assert_array_equal(table.where("(id >= 15) & (id < 25)").id[:], expected["id"])
 
 
+def test_local_pytables_disk_cache_reuse_and_invalidation(tmp_path):
+    native_pytables_url(tmp_path, "local-csi.h5", csi=True)
+    path = tmp_path / "local-csi.h5"
+    cache_dir = tmp_path / "cache"
+    options = {"path": "table", "cache_dir": cache_dir}
+
+    with blosc2.open(path, **options) as table:
+        assert sorted(table.where("id < 10").id[:].tolist()) == list(range(10))
+        generation = table._storage._owner.generation
+        descriptor = table._get_index_catalog()["id"]
+        assert descriptor["persistent"]
+
+    with blosc2.open(path, **options) as table:
+        assert table._storage._owner.generation == generation
+        assert table._get_index_catalog()["id"]["opsi"]["values_path"] == descriptor["opsi"]["values_path"]
+
+    import h5py
+
+    with h5py.File(path, "r+") as h5file:
+        row = h5file["table"][0]
+        row["value"] = 999
+        h5file["table"][0] = row
+
+    with blosc2.open(path, **options) as table:
+        assert table._storage._owner.generation != generation
+        assert table["value"][0] == 999
+        assert sorted(table.where("id < 10").id[:].tolist()) == list(range(10))
+
+
 def test_native_pytables_light_index_falls_back_to_scan(tmp_path):
     url, _, expected, _ = native_pytables_url(tmp_path, "native-light.h5", index_kind="light")
     with blosc2.RemoteCTable(url, dataset="table") as table:

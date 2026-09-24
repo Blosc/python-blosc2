@@ -2421,36 +2421,26 @@ def _open_local_hdf5(urlpath, options):
             node = h5file.get(dataset.strip("/"))
             is_table = isinstance(node, h5py.Dataset) and node.attrs.get("CLASS") in {"TABLE", b"TABLE"}
         if is_table:
-            if options["cache_dir"] is not None or options["cache_path"] is not None:
-                raise NotImplementedError("Local HDF5 tables do not support disk caches")
+            if options["cache_path"] is not None:
+                raise NotImplementedError("Local HDF5 tables use cache_dir, not cache_path")
             if options["assume_immutable"] is not True:
                 raise NotImplementedError("Local HDF5 tables require assume_immutable=True")
             if options.get("storage_options") is not None:
                 raise ValueError("storage_options is only supported for fsspec URLs")
-            from blosc2.proxy import CacheCoordinator
-            from blosc2.remote_array import CACHE_POLICY_DEFAULT, normalize_cache_limit
-            from blosc2.remote_store import RemoteDiscovery
-
-            policy = options["cache_policy"]
-            if policy is CACHE_POLICY_DEFAULT:
-                policy = blosc2.CachePolicy.MEMORY
-            if policy is blosc2.CachePolicy.DISK:
-                raise NotImplementedError("Local HDF5 tables do not support disk caches")
-            if not isinstance(policy, blosc2.CachePolicy):
-                raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
-            limit = normalize_cache_limit(policy, options.get("max_cache_bytes", CACHE_POLICY_DEFAULT))
-            owner = RemoteDiscovery(
+            store_options = {
+                key: value
+                for key, value in options.items()
+                if key in {"dataset", "cache_dir", "cache_policy", "max_cache_bytes", "hdf5_index"}
+            }
+            with blosc2.RemoteStore(
                 urlpath,
-                dataset=dataset,
+                _allow_array_root=True,
+                _allow_local_hdf5=True,
                 _source_format="hdf5",
-                _hdf5_index=options.get("hdf5_index"),
-            )
-            owner.cache_policy = policy
-            owner.max_cache_bytes = limit
-            owner.cache_coordinator = CacheCoordinator(limit)
-            try:
+                **store_options,
+            ) as store:
                 return blosc2.RemoteCTable._from_owner(
-                    owner,
+                    store._owner,
                     dataset.strip("/"),
                     **(
                         {}
@@ -2458,9 +2448,6 @@ def _open_local_hdf5(urlpath, options):
                         else {"max_concurrency": options["max_concurrency"]}
                     ),
                 )
-            except BaseException:
-                owner.close()
-                raise
     return blosc2.RemoteArray(urlpath, **options)
 
 
@@ -2730,7 +2717,9 @@ def open(
             local copy — either the whole thing, or just the chunks and blocks ``lazy`` has fetched so far
             (as a persistent :ref:`RemoteArray` with :attr:`CachePolicy.DISK`). Either way a later run
             starts from what is already there, and the copy is discarded when the remote no longer matches
-            it. There is no default on purpose, so nothing writes to a disk you did not name.
+            it. For selected local PyTables/HDF5 tables, retains converted chunks and index sidecars
+            across runs and rebuilds them when the source file changes. There is no default on purpose,
+            so nothing writes to a disk you did not name.
         cache_path: str | pathlib.Path, optional
             With ``lazy=True``, the exact file to use for the remote array's
             persistent :ref:`RemoteArray` cache (:attr:`CachePolicy.DISK`). Mutually exclusive with

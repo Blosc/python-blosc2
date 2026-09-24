@@ -111,6 +111,24 @@ def _resolve_hdf5_options(hdf5_index, private_index, source_format):
     return index, "hdf5" if index is not None and source_format is None else source_format
 
 
+def _local_hdf5_stat(urlpath, source_format, allow_local):
+    if not (allow_local and source_format == "hdf5" and os.path.isfile(urlpath)):
+        validate_persistable_url(urlpath)
+        return None
+    stat = os.stat(urlpath)
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _reuse_local_hdf5_manifest(manifest, source_stat):
+    if (
+        source_stat is not None
+        and manifest is not None
+        and tuple(manifest["metadata"].get("local_source_stat", ())) != source_stat
+    ):
+        return None
+    return manifest
+
+
 class RemoteDiscovery:
     """Shared metadata and source resources, independent of browser presentation."""
 
@@ -1466,6 +1484,7 @@ class RemoteStore(RemoteObject):
         _traffic=None,
         nested_storage_options=None,
         _b2z_blob=None,
+        _allow_local_hdf5=False,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(urlpath, (str, os.PathLike)):
@@ -1483,7 +1502,8 @@ class RemoteStore(RemoteObject):
         self._validate_nested_storage_options(nested_storage_options)
         cache_policy, limit = self._validate_cache_config(cache_policy, max_cache_bytes, cache_dir)
         base_url, _, _ = parse_container_url(urlpath, dataset)
-        validate_persistable_url(base_url)
+        local_source_stat = _local_hdf5_stat(base_url, _source_format, _allow_local_hdf5)
+        local_hdf5 = local_source_stat is not None
         disk = None
         source_cache_path = source_cache_marker = None
         manifest = _manifest
@@ -1494,7 +1514,8 @@ class RemoteStore(RemoteObject):
             disk = StoreDiskCache(cache_dir, source)
         try:
             manifest = disk.load() if disk is not None else manifest
-            if disk is not None and source["kind"] == "hdf5" and cache_dir is not None:
+            manifest = _reuse_local_hdf5_manifest(manifest, local_source_stat)
+            if disk is not None and source["kind"] == "hdf5" and not local_hdf5:
                 from blosc2.hdf5_source import prepare_hdf5_source_cache
 
                 source_cache_path, source_cache_marker, _hdf5_blob, hdf5_index, manifest = (
@@ -1527,6 +1548,8 @@ class RemoteStore(RemoteObject):
                 _b2z_blob=_b2z_blob,
             )
             manifest = owner.restored_manifest
+            if local_hdf5:
+                owner.hdf5_index["local_source_stat"] = local_source_stat
             owner.attach_hdf5_source_cache(source_cache_path, source_cache_marker)
         except BaseException:
             if disk is not None:
