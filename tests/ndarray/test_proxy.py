@@ -20,7 +20,7 @@ argvalues = [
     (None, [77, 134, 13], [31, 13, 5], [7, 8, 3], (slice(3, 7), slice(50, 100), 7), np.float64),
     (
         "b2nd",
-        [12, 13, 14, 15, 16],
+        [6, 7, 8, 9, 11],  # Keep multiple chunks and partial edges in every dimension.
         [5, 5, 5, 5, 5],
         [2, 2, 2, 2, 2],
         (slice(1, 3), ..., slice(3, 6)),

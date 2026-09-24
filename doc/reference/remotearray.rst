@@ -60,8 +60,11 @@ or ``dataset="dataset"``).
 HDF5 datasets on a local path are read directly with ``h5py``; remote HDF5 files use
 native metadata pre-indexing with ``h5py`` and byte ranges through fsspec. Like Zarr, HDF5 sources
 are assumed immutable (``assume_immutable=True``); mutable HDF5 sources are not supported.
-Pre-computed native HDF5 indexes can be supplied via ``hdf5_index`` to avoid remote scanning
-(including when opening a local file through the indexed reader).
+Pre-computed native HDF5 indexes can be supplied via ``hdf5_index`` to avoid
+remote scanning (including when opening a local file through the indexed
+reader). It accepts a dictionary, local JSON path, or remote fsspec URL. The
+index must match the source URL and selected dataset scope. See
+:doc:`../guides/remote_arrays` for generation and publication.
 
 .. code-block:: python
 
@@ -142,12 +145,23 @@ is always returned: specifying ``cache_dir`` or ``cache_path`` configures it wit
 :attr:`blosc2.CachePolicy.DISK`, while omitting them configures it with
 :attr:`blosc2.CachePolicy.MEMORY`.
 
+For concurrent processes, prefer
+``blosc2.open(url, cache_dir="shared-cache", shared_cache=True)``. This supports
+standalone ``.b2nd`` URLs, array leaves in remote containers, and Caterva2
+``URLPath`` sources. It uses sparse storage with process-safe initialization
+and operation locks, and the same default 256 MiB payload budget. All remote
+sources enter lazy mode when ``lazy`` is omitted or None; explicit ``lazy=False``
+is rejected, including for suffix-free fsspec URLs.
+All users of the cache must enable sharing. Authenticated Caterva2 users must
+use separate directories; tokens are not persisted.
+``RemoteArray.with_sparse_cache()`` remains available for advanced attachment.
+
 By default, :meth:`RemoteArray.save <blosc2.RemoteArray.save>` and
 :meth:`RemoteArray.to_cframe <blosc2.RemoteArray.to_cframe>` include valid warm
-chunks for DISK proxies; MEMORY proxies always export cold carriers.
-Pass ``include_cache=False`` for a cold carrier without changing the
-warm original. The cache policy and limit remain in both forms; local paths and
-authentication data are not serialized.
+chunks already retained by DISK or MEMORY proxies. Pass ``include_cache=False``
+for a cold carrier without changing the warm original. The cache policy and
+limit remain in both forms; local paths and authentication data are not
+serialized.
 
 Pass ``cache_policy=blosc2.CachePolicy.NONE`` (or another policy) to either
 export method to produce a cold carrier with an explicit policy, leaving the
@@ -162,7 +176,8 @@ The raw ``cache`` is incomplete storage for inspection, not a materialized array
 
 Reads and exports on one handle are serialized. Async methods use worker threads;
 cancelling an await does not stop a running operation. Separate handles and
-processes sharing a carrier need external locking. Unreadable cache files are
+processes sharing an ordinary carrier need external locking; ``shared_cache=True``
+handles synchronization for sparse runtime caches. Unreadable cache files are
 preserved and their opening errors are propagated.
 
 Authentication supplied to a live Caterva2 source is deliberately omitted from

@@ -8,22 +8,28 @@
 
 """Storage backends for CTable.
 
-Two concrete backends:
+The main concrete backends are:
 
 * :class:`InMemoryTableStorage` — all arrays live in RAM (default when
   ``urlpath`` is not provided).
 * :class:`FileTableStorage` — arrays are stored inside a :class:`blosc2.TreeStore`
   rooted at ``urlpath``; logical object metadata lives in ``/_meta`` and table
   data lives under ``/_valid_rows`` and ``/_cols/<name>``.
+* :class:`RemoteTableStorage` — fixed-width and UTF-8 backing arrays are opened lazily as
+  :class:`blosc2.RemoteArray` objects from a remote B2Z archive.
 """
 
 from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
+import math
 import os
-from typing import TYPE_CHECKING, Any
+import pathlib
+import uuid
+from typing import Any
 
 import numpy as np
 
@@ -38,11 +44,8 @@ from blosc2.scalar_array import (
     _ScalarVarLenArray,
     _validate_role_metadata,
 )
-from blosc2.schema import UTF8Spec
+from blosc2.schema import ListSpec, UTF8Spec
 from blosc2.schunk import process_opened_object
-
-if TYPE_CHECKING:
-    from blosc2.schema import ListSpec
 
 # Directory inside the table root that holds per-column index sidecar files.
 _INDEXES_DIR = "_indexes"
@@ -69,7 +72,9 @@ class TableStorage:
     ) -> blosc2.NDArray:
         raise NotImplementedError
 
-    def install_column(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(
+        self, name: str, ndarray: blosc2.NDArray | blosc2.RemoteArray
+    ) -> blosc2.NDArray | blosc2.RemoteArray:
         """Store a pre-built NDArray as column *name*, preserving its storage config.
 
         Faster than create_column + fill when the caller already has the fully
@@ -268,7 +273,7 @@ class InMemoryTableStorage(TableStorage):
             kwargs["dparams"] = dparams
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
-    def install_column(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(self, name, ndarray: blosc2.NDArray | blosc2.RemoteArray):
         """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
         return ndarray
 
@@ -642,6 +647,525 @@ class EmbedStoreTableStorage(TableStorage):
         return None
 
 
+def column_cbytes_for_info(column):
+    """Do not present shared HDF5 record storage as a per-field compressed size."""
+    return None if isinstance(column, _RemoteHDF5Field) else getattr(column, "cbytes", None)
+
+
+class _RemoteHDF5Field(blosc2.Operand):
+    """One field of a shared remote HDF5 compound dataset."""
+
+    def __init__(self, records, name, dtype=None):
+        self.records = records
+        self.field = name
+        self._storage_dtype = np.dtype(records.dtype.fields[name][0])
+        self._dtype = self._storage_dtype if dtype is None else np.dtype(dtype)
+        self._shape = records.shape
+        self.chunks = records.chunks
+        self.blocks = records.blocks
+
+    dtype = property(lambda self: self._dtype)
+    shape = property(lambda self: self._shape)
+    ndim = property(lambda self: len(self._shape))
+    nbytes = property(lambda self: math.prod(self._shape) * self._dtype.itemsize)
+    cbytes = property(lambda self: 0)
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, key):
+        values = self.records[key][self.field]
+        return values if self._dtype == self._storage_dtype else values.astype(self._dtype, copy=False)
+
+    def _take_numpy(self, indices, /, *, axis=None):
+        if axis not in (None, 0, -1):
+            raise ValueError("axis is out of bounds for a one-dimensional column")
+        return np.ascontiguousarray(self[indices])
+
+
+class _AllValidRows(blosc2.Operand):
+    """Virtual validity column for immutable row-complete sources."""
+
+    _all_valid = True
+
+    def __init__(self, size, source_chunks):
+        chunk = source_chunks[0] if source_chunks else max(1, min(size, 1 << 16))
+        self._shape = (size,)
+        self.chunks = (chunk,)
+        self.blocks = (chunk,)
+        self._dtype = np.dtype(np.bool_)
+
+    dtype = property(lambda self: self._dtype)
+    shape = property(lambda self: self._shape)
+    ndim = property(lambda self: 1)
+    nbytes = property(lambda self: self._shape[0])
+    cbytes = property(lambda self: 0)
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, key):
+        if isinstance(key, (int, np.integer)):
+            if not -self.shape[0] <= key < self.shape[0]:
+                raise IndexError("row index out of range")
+            return np.bool_(True)
+        return np.broadcast_to(np.bool_(True), self.shape)[key]
+
+    def _take_numpy(self, indices, /, *, axis=None):
+        if axis not in (None, 0, -1):
+            raise ValueError("axis is out of bounds for a one-dimensional column")
+        return np.ones(np.asarray(indices).shape, dtype=bool)
+
+
+class RemoteTableStorage(TableStorage):
+    """Read-only CTable storage over a shared RemoteStore owner."""
+
+    def __init__(
+        self,
+        owner,
+        root_key: str,
+        *,
+        max_concurrency=8,
+        metadata_buffer_bytes=8 << 20,
+        row_buffer_bytes=64 << 20,
+    ) -> None:
+        self.max_concurrency = max_concurrency
+        self.metadata_buffer_bytes = metadata_buffer_bytes
+        self.row_buffer_bytes = row_buffer_bytes
+        self._peak_metadata_buffer_bytes = self._peak_row_buffer_bytes = 0
+        self._owner = owner
+        self._root_key = root_key.strip("/")
+        self._generation = owner.generation
+        self._arrays: list[blosc2.RemoteArray] = []
+        self._registered_index_paths: list[str] = []
+        self._closed = False
+        self._hdf5_records = None
+        owner.acquire()
+
+    def open_columns(self, table, names, load):
+        if self._owner.format == "hdf5":
+            with self._owner.lock:
+                self._check_open()
+                for name in names:
+                    load(name)
+            return None
+        from blosc2.ctable_remote_read import open_columns
+
+        return open_columns(self, table, names, load)
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("RemoteCTable handle is closed")
+        if self._generation != self._owner.generation:
+            raise RuntimeError("RemoteCTable handle is stale; look it up again after refresh")
+
+    def _full_key(self, logical_key: str) -> str:
+        return "/".join(part for part in (self._root_key, logical_key.strip("/")) if part)
+
+    def _open_array(self, logical_key: str) -> blosc2.RemoteArray:
+        with self._owner.lock:
+            self._check_open()
+            full = self._full_key(logical_key)
+            self._owner.open_ctable_array(self._root_key, logical_key)
+            array = self._owner.remote_array(full)
+        self._arrays.append(array)
+        return array
+
+    def _metadata(self) -> dict:
+        self._check_open()
+        try:
+            kind, metadata = self._owner.nodes[self._root_key]
+        except KeyError as exc:
+            raise RuntimeError("RemoteCTable source is unavailable") from exc
+        if kind != "ctable" or not isinstance(metadata, dict):
+            raise ValueError(f"Object at {self._root_key!r} is not a CTable")
+        return metadata
+
+    def _has_array(self, logical_key: str) -> bool:
+        self._check_open()
+        if self._owner.format == "hdf5":
+            return False
+        member = self._full_key(logical_key) + ".b2nd"
+        return sum(info.filename == member for info in self._owner.archive.members) == 1
+
+    @staticmethod
+    def _not_supported(*args, **kwargs):
+        raise RuntimeError("RemoteTableStorage is read-only")
+
+    def open_column(self, name: str) -> blosc2.RemoteArray:
+        if self._owner.format == "hdf5":
+            if self._hdf5_records is None:
+                self._hdf5_records = self._owner.remote_array(self._root_key)
+                self._arrays.append(self._hdf5_records)
+            return _RemoteHDF5Field(self._hdf5_records, name, self._schema_spec(name).dtype)
+        source_columns = set(self.load_schema().get("source_columns", ()))
+        if name in source_columns:
+            logical_key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
+            array = self._owner.open_ctable_carrier(self._root_key, logical_key)
+            self._arrays.append(array)
+            return array
+        return self._open_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}")
+
+    def open_list_column(self, name: str) -> ListArray:
+        spec = self._schema_spec(name)
+        if spec.storage != "batch":
+            raise NotImplementedError(
+                f"Remote CTable list column {name!r} with storage='vl' is not supported"
+            )
+        return ListArray._from_batch_backend(spec, self._open_batch(name, spec))
+
+    def _schema_spec(self, name):
+        from blosc2.schema_compiler import schema_from_dict
+
+        return schema_from_dict(self.load_schema()).columns_by_name[name].spec
+
+    def _open_batch(self, name, spec, *, suffix=""):
+        from blosc2.remote_batch import _RemoteBatchArray
+
+        key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}{suffix}"
+        backend = _RemoteBatchArray(
+            self._owner.open_ctable_batch(self._full_key(key)), name, self._check_open
+        )
+        if not isinstance(spec, ListSpec):
+            _validate_role_metadata(backend, spec)
+        return backend
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        if isinstance(spec, UTF8Spec):
+            key = f"{_COLS_DIR}/{_column_name_to_relpath(name)}"
+            first = len(self._arrays)
+            offsets = self._open_array(key)
+            data = None
+            try:
+                data = self._open_array(key + _UTF8_DATA_SUFFIX)
+                if offsets.ndim != 1 or offsets.dtype != np.dtype("int64") or offsets.shape[0] < 1:
+                    raise ValueError(f"Invalid offsets array for remote UTF-8 column {name!r}")
+                if data.ndim != 1 or data.dtype != np.dtype("uint8"):
+                    raise ValueError(f"Invalid data array for remote UTF-8 column {name!r}")
+                return UTF8Array(spec, offsets, data)
+            except BaseException:
+                for array in (offsets, data):
+                    if array is not None:
+                        array.close()
+                del self._arrays[first:]
+                raise
+        return _ScalarVarLenArray(spec, self._open_batch(name, spec))
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        first = len(self._arrays)
+        codes = self.open_column(name)
+        try:
+            if codes.ndim != 1 or codes.dtype != np.dtype("int32"):
+                raise ValueError(
+                    f"Remote dictionary column {name!r} requires a one-dimensional int32 code array"
+                )
+            dict_spec = VLStringSpec(nullable=False)
+            backend = self._open_batch(name, dict_spec, suffix=_DICT_SUFFIX)
+            return DictionaryColumn(spec, codes, _ScalarVarLenArray(dict_spec, backend))
+        except BaseException:
+            codes.close()
+            del self._arrays[first:]
+            raise
+
+    def open_valid_rows(self) -> blosc2.RemoteArray:
+        if self._owner.format == "hdf5":
+            metadata = self._metadata()
+            return _AllValidRows(metadata["shape"][0], metadata["chunks"])
+        return self._open_array("_valid_rows")
+
+    def open_null_mask(self, name: str) -> blosc2.RemoteArray:
+        return self._open_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}{_NOTNULL_SUFFIX}")
+
+    def has_null_mask(self, name: str) -> bool:
+        return self._has_array(f"{_COLS_DIR}/{_column_name_to_relpath(name)}{_NOTNULL_SUFFIX}")
+
+    def check_kind(self) -> None:
+        kind = self._metadata().get("kind")
+        if isinstance(kind, bytes):
+            kind = kind.decode()
+        if kind != "ctable":
+            raise ValueError(f"Object at {self._root_key!r} is not a CTable (kind={kind!r})")
+
+    def load_schema(self) -> dict[str, Any]:
+        raw = self._metadata().get("schema")
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        if not isinstance(raw, str):
+            raise ValueError(f"Remote CTable at {self._root_key!r} has no schema")
+        return json.loads(raw)
+
+    def load_user_attrs(self) -> dict:
+        self._check_open()
+        if hasattr(self, "_user_attrs"):
+            return dict(self._user_attrs)
+        self._user_attrs = self._owner.load_ctable_attrs(self._root_key)
+        if self._owner.format == "hdf5":
+            self._user_attrs = {
+                key: value
+                for key, value in self._user_attrs.items()
+                if key not in {"CLASS", "VERSION", "NROWS"} and not key.startswith("FIELD_")
+            }
+        return dict(self._user_attrs)
+
+    def table_exists(self) -> bool:
+        try:
+            return self._metadata().get("kind") in {"ctable", b"ctable"}
+        except (RuntimeError, ValueError):
+            return False
+
+    def is_read_only(self) -> bool:
+        return True
+
+    def open_mode(self) -> str:
+        return "r"
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        from blosc2.indexing import _SIDECAR_REMOTE_REGISTRY
+
+        for path in self._registered_index_paths:
+            _SIDECAR_REMOTE_REGISTRY.pop(path, None)
+        self._registered_index_paths.clear()
+        for array in self._arrays:
+            array.close()
+        self._arrays.clear()
+        self._owner.release()
+
+    discard = close
+
+    create_column = _not_supported
+    install_column = _not_supported
+    create_list_column = _not_supported
+    install_list_column = _not_supported
+    create_varlen_scalar_column = _not_supported
+    create_dictionary_column = _not_supported
+    create_valid_rows = _not_supported
+    create_null_mask = _not_supported
+    install_null_mask = _not_supported
+    delete_null_mask = _not_supported
+    save_schema = _not_supported
+    save_vlmeta = _not_supported
+    delete_column = _not_supported
+    rename_column = _not_supported
+
+    def load_index_catalog(self) -> dict:
+        self._check_open()
+        if self._owner.format == "hdf5":
+            return self._load_pytables_index_catalog()
+        raw = self._metadata().get("index_catalog")
+        if not isinstance(raw, dict):
+            return {}
+        catalog = {}
+        for name, descriptor in raw.items():
+            if not isinstance(descriptor, dict):
+                continue
+            kind = descriptor.get("kind")
+            if kind in {"summary", "bucket", "partial", "full", "opsi"}:
+                if descriptor.get("version") != 1 or not isinstance(descriptor.get("token"), str):
+                    raise ValueError(f"Malformed remote index for column {name!r}")
+                resolved = copy.deepcopy(descriptor)
+                from blosc2.indexing import _SIDECAR_REMOTE_REGISTRY
+
+                for obj, key in FileTableStorage._walk_descriptor_paths(resolved):
+                    path = obj[key]
+                    parts = pathlib.PurePosixPath(path).parts
+                    if os.path.isabs(path) or ".." in parts or not path.endswith(".b2nd"):
+                        raise ValueError(f"Unsafe remote index path for column {name!r}")
+                    logical = path[:-5].strip("/")
+                    prefix = self._root_key + "/" if self._root_key else ""
+                    if prefix and logical.startswith(prefix):
+                        logical = logical[len(prefix) :]
+                    if not self._has_array(logical):
+                        raise ValueError(f"Missing remote index sidecar for column {name!r}")
+                    remote_path = f"remote-index://{id(self)}/{path}"
+                    _SIDECAR_REMOTE_REGISTRY[remote_path] = (self, logical)
+                    self._registered_index_paths.append(remote_path)
+                    obj[key] = remote_path
+                catalog[name] = resolved
+                continue
+            if kind != "membership":
+                continue
+            payload = descriptor.get("membership")
+            if not isinstance(payload, dict):
+                raise ValueError(f"Malformed remote membership index for column {name!r}")
+            path = payload.get("postings_path")
+            if path is not None and (
+                not isinstance(path, str) or os.path.isabs(path) or ".." in pathlib.PurePosixPath(path).parts
+            ):
+                raise ValueError(f"Unsafe remote membership index path for column {name!r}")
+            catalog[name] = copy.deepcopy(descriptor)
+        return catalog
+
+    def _load_pytables_index_catalog(self) -> dict:
+        from blosc2.hdf5_source import read_pytables_index_arrays
+        from blosc2.indexing import _build_descriptor, _field_target_descriptor, _store_array_sidecar
+
+        self._owner.ensure_pytables_indexes(self._root_key)
+        catalog = {}
+        for name, source in self._metadata().get("pytables_indexes", {}).items():
+            column = self.open_column(name)
+            cached = self._load_cached_pytables_index(name, column)
+            if cached is not None:
+                catalog[name] = cached
+                continue
+            keys = ("sorted", "indices", "sortedLR", "indicesLR")
+            self._owner.ensure_hdf5_allocations_many(source[key] for key in keys)
+            opened = []
+            try:
+                for key in keys:
+                    array = self._owner.remote_array(source[key])
+                    self._arrays.append(array)
+                    opened.append(array)
+                tail = int(source["tail"])
+                sorted_values, sorted_positions, tail_values, tail_positions = read_pytables_index_arrays(
+                    opened, tail
+                )
+                values = np.concatenate((sorted_values.reshape(-1), tail_values))
+                raw_positions = np.concatenate((sorted_positions.reshape(-1), tail_positions))
+                if raw_positions.dtype.kind != "u" or raw_positions.itemsize != 8:
+                    continue
+                if len(raw_positions) and int(raw_positions.max()) >= len(column):
+                    continue
+                positions = raw_positions.astype(np.int64)
+                chunk_len = max(1, int(source["slicesize"]))
+                last = np.minimum(np.arange(chunk_len, len(values) + chunk_len, chunk_len), len(values)) - 1
+                mins = values[::chunk_len]
+                maxs = values[last]
+                target = _field_target_descriptor(None)
+                token = name
+                opsi = {
+                    "chunk_len": chunk_len,
+                    "block_len": chunk_len,
+                    "chunk_multiplier": 1,
+                    "nblocks": len(mins),
+                    "cycles": int(source["optlevel"]),
+                    "attempted_cycles": int(source["optlevel"]),
+                    "max_cycles": int(source["optlevel"]),
+                    "is_csi": bool(source["is_csi"]),
+                }
+                sidecars = (
+                    ("opsi", "values", values),
+                    ("opsi", "positions", positions),
+                    ("opsi_nav", "mins", mins),
+                    ("opsi_nav", "maxs", maxs),
+                )
+                paths = self._pytables_index_paths(name)
+                for category, sidecar_name, data in sidecars:
+                    geometry = {"chunks": (chunk_len,), "blocks": (chunk_len,)} if category == "opsi" else {}
+                    if paths is None:
+                        info = _store_array_sidecar(
+                            column, token, "opsi", category, sidecar_name, data, False, **geometry
+                        )
+                        opsi[f"{sidecar_name}_path"] = info["path"]
+                    else:
+                        self._write_pytables_sidecar(paths[sidecar_name], data, **geometry)
+                        opsi[f"{sidecar_name}_path"] = str(paths[sidecar_name])
+                descriptor = _build_descriptor(
+                    column,
+                    target,
+                    token,
+                    "opsi",
+                    int(source["optlevel"]),
+                    paths is not None,
+                    False,
+                    None,
+                    column.dtype,
+                    {},
+                    None,
+                    None,
+                    None,
+                    opsi=opsi,
+                )
+                if paths is not None:
+                    from blosc2.remote_store_cache import atomic_write
+
+                    marker = {
+                        "version": 1,
+                        "root": self._root_key,
+                        "column": name,
+                        "descriptor": descriptor,
+                    }
+                    atomic_write(paths["marker"], json.dumps(marker).encode())
+                catalog[name] = descriptor
+            except (KeyError, OSError, TypeError, ValueError):
+                continue
+        return catalog
+
+    def _pytables_index_paths(self, name):
+        if self._owner.disk is None:
+            return None
+        digest = hashlib.sha256(f"{self._root_key}\0{name}".encode()).hexdigest()
+        prefix = f"_pytables_indexes/{digest}"
+        paths = {
+            key: self._owner.disk.payload_path(self._generation, f"{prefix}/{key}")
+            for key in ("values", "positions", "mins", "maxs")
+        }
+        paths["marker"] = paths["values"].parent / "complete.json"
+        return paths
+
+    def _load_cached_pytables_index(self, name, column):
+        paths = self._pytables_index_paths(name)
+        if paths is None or not paths["marker"].is_file():
+            return None
+        try:
+            marker = json.loads(paths["marker"].read_text())
+            descriptor = marker["descriptor"]
+            opsi = descriptor["opsi"]
+            valid = (
+                marker.get("version") == 1
+                and marker.get("root") == self._root_key
+                and marker.get("column") == name
+                and descriptor.get("kind") == "opsi"
+                and tuple(descriptor.get("shape", ())) == tuple(column.shape)
+                and tuple(descriptor.get("chunks", ())) == tuple(column.chunks)
+                and all(
+                    opsi.get(f"{key}_path") == str(paths[key]) and paths[key].is_file()
+                    for key in ("values", "positions", "mins", "maxs")
+                )
+            )
+            return descriptor if valid else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+            return None
+
+    @staticmethod
+    def _write_pytables_sidecar(path, data, **geometry):
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.b2nd")
+        try:
+            array = blosc2.asarray(np.asarray(data), urlpath=str(temporary), mode="w", **geometry)
+            del array
+            os.replace(temporary, path)
+        finally:
+            blosc2.remove_urlpath(str(temporary))
+
+    def open_membership_postings(self, name: str, descriptor: dict, indexes: list[int]):
+        """Read only the compressed posting-list batches needed by a query."""
+        from blosc2.remote_batch import _RemoteBatchArray
+
+        path = descriptor["membership"].get("postings_path")
+        if not isinstance(path, str) or not path.endswith(".b2b"):
+            raise ValueError(f"Malformed remote membership index for column {name!r}")
+        logical = path[:-4].strip("/")
+        source = self._owner.open_ctable_batch(self._full_key(logical))
+        backend = _RemoteBatchArray(source, f"{name} membership index", self._check_open)
+        return [backend[index][:] for index in indexes]
+
+    save_index_catalog = _not_supported
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        metadata = self._metadata()
+        return int(metadata.get("value_epoch", 0) or 0), int(metadata.get("visibility_epoch", 0) or 0)
+
+    bump_value_epoch = _not_supported
+    bump_visibility_epoch = _not_supported
+
+    def index_anchor_path(self, col_name: str) -> None:
+        return None
+
+
 class FileTableStorage(TableStorage):
     """Arrays stored as TreeStore leaves inside *urlpath*.
 
@@ -766,7 +1290,7 @@ class FileTableStorage(TableStorage):
         store[self._col_key(name)] = col
         return store[self._col_key(name)]
 
-    def install_column(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(self, name, ndarray: blosc2.NDArray | blosc2.RemoteArray):
         """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
         store = self._open_store()
         store[self._col_key(name)] = ndarray
@@ -1351,7 +1875,11 @@ class TreeStoreTableStorage(TableStorage):
         self._store._modified = True
         return col
 
-    def install_column(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+    def install_column(self, name: str, ndarray: blosc2.NDArray | blosc2.RemoteArray):
+        if isinstance(ndarray, blosc2.RemoteArray):
+            key = self._table_key(self._col_logical_key(name))
+            self._store[key] = ndarray
+            return self._store[key]
         dest_path = self._dest_path(self._col_logical_key(name), ".b2nd")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         saved = ndarray.copy(urlpath=dest_path)
@@ -1431,7 +1959,8 @@ class TreeStoreTableStorage(TableStorage):
             return UTF8Array(spec, offsets, data)
         urlpath = self._list_col_path(name)
         os.makedirs(os.path.dirname(urlpath), exist_ok=True)
-        return _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+        backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+        return _ScalarVarLenArray(spec, backend)
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
         if isinstance(spec, UTF8Spec):

@@ -239,11 +239,13 @@ class _ScalarVarLenArray:
 
     def append(self, value: Any) -> None:
         """Append one scalar row."""
+        self._backend._check_writable()
         self._pending.append(self._coerce(value))
         self._flush_full_batches()
 
     def extend(self, values: Iterable[Any]) -> None:
         """Append many scalar rows."""
+        self._backend._check_writable()
         for v in values:
             self._pending.append(self._coerce(v))
             if len(self._pending) >= self._batch_rows:
@@ -252,6 +254,7 @@ class _ScalarVarLenArray:
     def flush(self) -> None:
         """Flush any remaining pending rows to the backend as one batch."""
         if self._pending:
+            self._backend._check_writable()
             batch = list(self._pending)
             self._backend.append(batch)
             self._persisted_row_count += len(batch)
@@ -265,6 +268,7 @@ class _ScalarVarLenArray:
         :meth:`__setitem__` would rewrite a whole batch per row.  Mirrors
         ``UTF8Array.set_all`` so callers can treat both the same way.
         """
+        self._backend._check_writable()
         coerced = [self._coerce(v) for v in values]
         if len(coerced) != len(self):
             raise ValueError(f"set_all() expects {len(self)} values, got {len(coerced)}.")
@@ -279,6 +283,9 @@ class _ScalarVarLenArray:
     # ------------------------------------------------------------------
 
     def __len__(self) -> int:
+        check = getattr(self._backend, "_check_open", None)
+        if check is not None:
+            check()
         return self._persisted_row_count + len(self._pending)
 
     def __iter__(self) -> Iterator[Any]:
@@ -311,6 +318,9 @@ class _ScalarVarLenArray:
         return np.asarray(self[:], dtype=object) != other
 
     def __getitem__(self, index: int | slice | list | tuple) -> Any | list[Any]:
+        check = getattr(self._backend, "_check_open", None)
+        if check is not None:
+            check()
         if isinstance(index, int):
             n = len(self)
             if index < 0:
@@ -346,6 +356,7 @@ class _ScalarVarLenArray:
         raise TypeError(f"_ScalarVarLenArray indices must be int, slice, or array; got {type(index)!r}")
 
     def __setitem__(self, index: int, value: Any) -> None:
+        self._backend._check_writable()
         value = self._coerce(value)
         n = len(self)
         if index < 0:

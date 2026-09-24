@@ -49,7 +49,7 @@ print("*** Disk sizes ***")
 print(f"Size 'a' (disk): {os.stat(a.urlpath).st_size}")
 print(f"Size 'b' (disk): {os.stat(b.urlpath).st_size}")
 
-# Check vlmeta
-print("*** VLmeta ***")
-print(f"VLmeta in 'a': {list(a.vlmeta)}")
-print(f"VLmeta in 'b': {list(b.vlmeta)}")
+# Check attrs
+print("*** Attrs ***")
+print(f"Attrs in 'a': {list(a.attrs)}")
+print(f"Attrs in 'b': {list(b.attrs)}")

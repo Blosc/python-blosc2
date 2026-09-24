@@ -6,15 +6,22 @@
 #######################################################################
 
 import pytest
+from msgpack import ExtType, packb
 
 import blosc2
-from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
+from blosc2.msgpack_utils import _safe_msgpack_unpackb, msgpack_packb, msgpack_unpackb
 
 BATCHES = [
     [b"bytes\x00payload", "plain text", 42],
     [{"nested": [1, 2]}, None, {"tail": True}],
     [(1, 2, "three"), 3.5, True],
 ]
+
+
+def test_remote_ndarray_shape_overflow_rejected():
+    extension = ExtType(46, packb({"shape": [2**32, 2**32], "values": []}, use_bin_type=True))
+    with pytest.raises(ValueError, match="Unsafe remote NumPy extension shape"):
+        _safe_msgpack_unpackb(packb(extension, use_bin_type=True))
 
 
 def _make_payload(seed, size):

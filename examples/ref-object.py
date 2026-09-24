@@ -56,13 +56,13 @@ ref1 = reopened_refs[1]
 show("ObjectArray round-trip types", [type(ref0).__name__, type(ref1).__name__])
 show("ObjectArray round-trip values", [ref0.open()[:], ref1.open()[:]])
 
-# Refs can also be stored in vlmeta and recovered both individually and in bulk.
+# Refs can also be stored in attrs and recovered both individually and in bulk.
 meta_holder = blosc2.SChunk()
-meta_holder.vlmeta["array_ref"] = array_ref
-show("vlmeta single-key Ref", meta_holder.vlmeta["array_ref"])
-show("vlmeta single-key values", meta_holder.vlmeta["array_ref"].open()[:])
-show("vlmeta bulk Ref", meta_holder.vlmeta[:]["array_ref"])
-show("vlmeta bulk values", meta_holder.vlmeta[:]["array_ref"].open()[:])
+meta_holder.attrs["array_ref"] = array_ref
+show("attrs single-key Ref", meta_holder.attrs["array_ref"])
+show("attrs single-key values", meta_holder.attrs["array_ref"].open()[:])
+show("attrs bulk Ref", meta_holder.attrs[:]["array_ref"])
+show("attrs bulk values", meta_holder.attrs[:]["array_ref"].open()[:])
 
 for path in (array_path, store_path, store_src_path, refs_path):
     blosc2.remove_urlpath(path)

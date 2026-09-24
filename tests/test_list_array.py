@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -70,6 +71,35 @@ def test_listarray_rejects_invalid_cells():
         arr.append([1, None])
 
 
+@pytest.mark.parametrize("storage", ["vl", "batch"])
+def test_listarray_nullable_items(storage):
+    arr = blosc2.ListArray(item_spec=blosc2.int32(nullable=True), storage=storage, batch_rows=2)
+    values = [[1, None, 3], [], [None]]
+    arr.extend(values)
+    arr.flush()
+    assert arr[:] == values
+
+
+def test_listarray_default_batch_rows_and_explicit_none():
+    spec = blosc2.list(blosc2.int32())
+    assert spec.batch_rows == 2048
+    assert spec.to_metadata_dict()["batch_rows"] == 2048
+
+    legacy = blosc2.schema.ListSpec.from_metadata_dict({"kind": "list", "item": {"kind": "int32"}})
+    assert legacy.batch_rows is None
+
+    managed = blosc2.list(blosc2.int32(), batch_rows=None)
+    assert managed.to_metadata_dict()["batch_rows"] is None
+
+
+def test_listarray_default_batch_boundaries():
+    arr = blosc2.ListArray(item_spec=blosc2.int32())
+    arr.extend([[i] for i in range(4097)])
+    assert arr._backend._load_or_compute_batch_lengths() == [2048, 2048]
+    arr.flush()
+    assert arr._backend._load_or_compute_batch_lengths() == [2048, 2048, 1]
+
+
 def test_listarray_boolean_fancy_indexing():
     arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
     arr.extend([[1], None, [], [2, 3]])
@@ -84,6 +114,75 @@ def test_listarray_arrow_roundtrip():
     arr = blosc2.ListArray.from_arrow(values, item_spec=blosc2.string(), nullable=True)
     assert arr[:] == [["a"], None, ["b", "c"]]
     assert arr.to_arrow().to_pylist() == [["a"], None, ["b", "c"]]
+
+
+@pytest.mark.parametrize("storage", ["vl", "batch"])
+def test_listarray_nested_lists(storage):
+    item = blosc2.list(blosc2.int32(nullable=True), nullable=True)
+    arr = blosc2.ListArray(item_spec=item, nullable=True, storage=storage, batch_rows=2)
+    values = [None, [], [None, [], [1, None, 3]], [[4]]]
+    arr.extend(values)
+    arr.flush()
+    assert arr[:] == values
+    assert arr.spec.display_label() == "list[list[int32]]"
+
+
+def test_listarray_nested_arrow_roundtrip():
+    pa = pytest.importorskip("pyarrow")
+    values = [None, [], [None, [], [1, None, 3]], [[4]]]
+    arrow = pa.array(values, type=pa.list_(pa.field("item", pa.list_(pa.int32()), nullable=True)))
+    arr = blosc2.ListArray.from_arrow(arrow)
+    assert arr[:] == values
+    assert arr.to_arrow().to_pylist() == values
+
+
+def test_listarray_contains_and_overlaps():
+    item = blosc2.list(blosc2.int32(nullable=True), nullable=True)
+    arr = blosc2.ListArray(item_spec=item, nullable=True, batch_rows=2)
+    arr.extend([None, [], [None, [1, 2]], [[3]], [[1, 2], [3]]])
+
+    np.testing.assert_array_equal(arr.contains([1, 2]), [False, False, True, False, True])
+    np.testing.assert_array_equal(arr.contains(None), [False, False, True, False, False])
+    np.testing.assert_array_equal(arr.overlaps([[3], [4]]), [False, False, False, True, True])
+    np.testing.assert_array_equal(arr.overlaps([]), np.zeros(5, dtype=np.bool_))
+
+
+def test_ctable_list_predicates_compose():
+    @dataclass
+    class Rows:
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int32(nullable=True), nullable=True, batch_rows=2)
+        )
+        value: int = blosc2.field(blosc2.int32())
+
+    rows = [([1, None], 0), (None, 1), ([], 2), ([2, 3], 3), ([3], 4)]
+    table = blosc2.CTable(Rows, rows, create_summary_index=False)
+    assert table[table["tags"].contains(None)]["value"][:].tolist() == [0]
+    assert table[table["tags"].overlaps([2, 9]) & (table["value"] > 2)]["value"][:].tolist() == [3]
+    assert table[~table["tags"].contains(3)]["value"][:].tolist() == [0, 1, 2]
+
+
+def test_ctable_membership_index_matches_scan(tmp_path):
+    @dataclass
+    class Rows:
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.int32(nullable=True), nullable=True, batch_rows=2)
+        )
+        value: int = blosc2.field(blosc2.int32())
+
+    rows = [([1, None, 1], 0), (None, 1), ([], 2), ([2, 3], 3), ([3], 4)]
+    path = tmp_path / "membership.b2d"
+    table = blosc2.CTable(Rows, rows, urlpath=path, mode="w", create_summary_index=False)
+    expected = table[table["tags"].overlaps([None, 3])]["value"][:].tolist()
+
+    index = table.create_index("tags", kind="membership")
+    assert index.kind == "membership"
+    assert table[table["tags"].overlaps([None, 3])]["value"][:].tolist() == expected
+    assert table[table["tags"].contains(9)]["value"][:].tolist() == []
+
+    table["tags"][0] = [9]
+    assert table._get_index_catalog()["tags"]["stale"] is True
+    assert table[table["tags"].contains(9)]["value"][:].tolist() == [0]
 
 
 def test_listarray_extend_no_validate_keeps_none():
@@ -241,3 +340,19 @@ def test_listarray_extend_arrow_flushes_pending_rows():
     arr.extend_arrow(pa.array([[3, 4], [5, 6]], type=pa.list_(pa.int64())))
     arr.flush()
     assert arr[:] == [[1, 2], [3, 4], [5, 6]]
+
+
+def test_extend_arrow_preserves_typed_batches_without_python_cells(monkeypatch):
+    pa = pytest.importorskip("pyarrow")
+    arr = blosc2.ListArray(
+        item_spec=blosc2.int64(nullable=True), nullable=True, serializer="arrow", batch_rows=2
+    )
+
+    def reject_python_cells(*args):
+        raise AssertionError("Arrow input must stay in Arrow")
+
+    monkeypatch.setattr(arr, "_typed_batch", reject_python_cells)
+    values = [[1, None], [], None, [3]]
+    arr.extend_arrow(pa.chunked_array([pa.array(values, type=pa.list_(pa.int32()))]))
+    assert arr[:] == values
+    assert arr._backend._batch_lengths == [2, 2]

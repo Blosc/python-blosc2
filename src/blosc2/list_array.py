@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
@@ -49,9 +50,15 @@ def _require_pyarrow():
 
 
 def _arrow_type_for_spec(pa, spec: SchemaSpec):
+    if isinstance(spec, ListSpec):
+        child = pa.field("item", _arrow_type_for_spec(pa, spec.item_spec), nullable=spec.item_spec.nullable)
+        return pa.list_(child)
     if isinstance(spec, StructSpec):
         return pa.struct(
-            [pa.field(name, _arrow_type_for_spec(pa, child)) for name, child in spec.fields.items()]
+            [
+                pa.field(name, _arrow_type_for_spec(pa, child), nullable=child.nullable)
+                for name, child in spec.fields.items()
+            ]
         )
     mapping = {
         "int8": pa.int8(),
@@ -71,7 +78,7 @@ def _arrow_type_for_spec(pa, spec: SchemaSpec):
     return mapping.get(spec.to_metadata_dict()["kind"])
 
 
-def _arrow_list_item_type_to_spec(pa, value_type):
+def _arrow_list_item_type_to_spec(pa, value_type, *, nullable=False):
     import blosc2.schema as b2s
 
     mapping = {
@@ -91,14 +98,28 @@ def _arrow_list_item_type_to_spec(pa, value_type):
         pa.binary(): b2s.bytes(),
         pa.large_binary(): b2s.bytes(),
     }
+    if pa.types.is_list(value_type) or pa.types.is_large_list(value_type):
+        field = value_type.value_field
+        return b2s.list(
+            _arrow_list_item_type_to_spec(pa, field.type, nullable=field.nullable), nullable=nullable
+        )
     if pa.types.is_struct(value_type):
         return b2s.struct(
-            {field.name: _arrow_list_item_type_to_spec(pa, field.type) for field in value_type}
+            {
+                field.name: _arrow_list_item_type_to_spec(pa, field.type, nullable=field.nullable)
+                for field in value_type
+            },
+            nullable=nullable,
         )
-    return mapping.get(value_type)
+    spec = mapping.get(value_type)
+    if spec is not None:
+        spec.nullable = nullable
+    return spec
 
 
-def _validate_list_spec(spec: ListSpec) -> None:
+def _validate_list_spec(spec: ListSpec, *, _depth=0) -> None:
+    if _depth >= 32:
+        raise ValueError("ListArray nesting exceeds the supported depth of 32")
     if spec.storage not in _SUPPORTED_STORAGES:
         raise ValueError(f"Unsupported list storage: {spec.storage!r}")
     if spec.serializer not in _SUPPORTED_SERIALIZERS:
@@ -108,7 +129,7 @@ def _validate_list_spec(spec: ListSpec) -> None:
     if spec.serializer == "arrow" and spec.storage != "batch":
         raise ValueError("ListArray serializer='arrow' requires storage='batch'")
     if isinstance(spec.item_spec, ListSpec):
-        raise TypeError("Nested list item specs are not supported in V1")
+        _validate_list_spec(spec.item_spec, _depth=_depth + 1)
     if spec.batch_rows is not None and spec.batch_rows <= 0:
         raise ValueError("batch_rows must be a positive integer")
     if spec.items_per_block is not None and spec.items_per_block <= 0:
@@ -122,21 +143,21 @@ def _coerce_struct_item(spec: StructSpec, value: Any) -> dict[str, Any]:
     for name, child_spec in spec.fields.items():
         if name not in value:
             raise ValueError(f"Struct list item is missing field {name!r}")
-        result[name] = None if value[name] is None else _coerce_scalar_item(child_spec, value[name])
+        result[name] = _coerce_scalar_item(child_spec, value[name])
     return result
 
 
 def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
     if value is None:
-        raise ValueError("ListArray does not support nullable items inside a list in V1")
+        if getattr(spec, "nullable", False):
+            return None
+        raise ValueError(f"Null {_spec_label(spec)} list items are not allowed")
 
     if isinstance(spec, StructSpec):
         return _coerce_struct_item(spec, value)
     if isinstance(spec, ListSpec):
         return coerce_list_cell(spec, value)
     if isinstance(spec, DictionarySpec):
-        if value is None:
-            raise ValueError("ListArray does not support nullable items inside a list in V1")
         if not isinstance(value, str):
             value = str(value)
         return value
@@ -196,6 +217,46 @@ def coerce_list_cell(spec: ListSpec, value: Any) -> list[Any] | None:
     return [_coerce_scalar_item(spec.item_spec, item) for item in list(value)]
 
 
+def _list_item_equal(left: Any, right: Any) -> bool:
+    """Structural equality used by list membership predicates."""
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(_list_item_equal(a, b) for a, b in zip(left, right, strict=True))
+        )
+    if isinstance(left, dict) or isinstance(right, dict):
+        return (
+            isinstance(left, dict)
+            and isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_list_item_equal(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, (float, np.floating)) and math.isnan(left):
+        return False
+    if isinstance(right, (float, np.floating)) and math.isnan(right):
+        return False
+    return bool(left == right)
+
+
+def list_item_key(spec: SchemaSpec, value: Any) -> bytes | None:
+    """Return the stable persisted membership key for one validated list item.
+
+    NaN has no key because membership follows ordinary equality and never
+    matches it. Signed zero is normalized before MessagePack encoding.
+    """
+    from blosc2.msgpack_utils import msgpack_packb
+
+    value = _coerce_scalar_item(spec, value)
+    if isinstance(value, (float, np.floating)):
+        if math.isnan(value):
+            return None
+        if value == 0:
+            value = 0.0
+    return msgpack_packb(value)
+
+
 class ListArray:
     """A row-oriented container for list-valued data.
 
@@ -211,7 +272,7 @@ class ListArray:
         nullable: bool = False,
         storage: str = "batch",
         serializer: str = "msgpack",
-        batch_rows: int | None = None,
+        batch_rows: int | None = 2048,
         items_per_block: int | None = None,
         _from_schunk=None,
         **kwargs: Any,
@@ -220,7 +281,10 @@ class ListArray:
 
         Parameters may be supplied either as a complete ``spec`` or as an
         ``item_spec`` plus list/storage options. Storage-related keyword
-        arguments are passed to :class:`blosc2.Storage`.
+        arguments are passed to :class:`blosc2.Storage`. Batch storage flushes
+        automatically every ``batch_rows`` list cells (2048 by default). Pass
+        ``None`` for caller-managed batches; :meth:`flush`, :meth:`close`, or
+        context-manager exit persists the partial final batch.
         """
         if _from_schunk is not None:
             if spec is not None or item_spec is not None or kwargs:
@@ -296,6 +360,28 @@ class ListArray:
             self._backend = BatchArray(_from_schunk=schunk)
             self._persisted_row_count = self._persisted_rows_count()
 
+    @classmethod
+    def _from_batch_backend(cls, spec, backend):
+        """Build an internal read wrapper around an already-open BatchArray."""
+        if spec.storage != "batch":
+            raise NotImplementedError("Remote ListArray storage='vl' is not supported")
+        stored = backend.meta.get("listarray")
+        if (
+            not isinstance(stored, dict)
+            or stored.get("version") != 1
+            or ListSpec.from_metadata_dict(stored).to_listarray_metadata() != spec.to_listarray_metadata()
+        ):
+            raise ValueError("Remote ListArray metadata does not match its table schema")
+        obj = object.__new__(cls)
+        obj.spec = spec
+        obj._pending_cells = []
+        obj._persisted_prefix_cache = None
+        obj._cached_batch_index = None
+        obj._cached_batch_values = None
+        obj._backend = backend
+        obj._persisted_row_count = obj._persisted_rows_count()
+        return obj
+
     def _invalidate_batch_caches(self) -> None:
         self._persisted_prefix_cache = None
         self._cached_batch_index = None
@@ -354,13 +440,14 @@ class ListArray:
             return
         while len(self._pending_cells) >= batch_rows:
             batch = self._pending_cells[:batch_rows]
-            self._backend.append(batch)
+            self._backend.append(self._typed_batch(batch))
             self._pending_cells = self._pending_cells[batch_rows:]
             self._persisted_row_count += len(batch)
             self._invalidate_batch_caches()
 
     def append(self, value: Any) -> int:
         """Append one list cell and return the new number of rows."""
+        self._backend._check_writable()
         cell = coerce_list_cell(self.spec, value)
         if self.spec.storage == "vl":
             self._backend.append(cell)
@@ -376,6 +463,7 @@ class ListArray:
         Set ``validate=False`` only for trusted values that already match this
         array's schema.
         """
+        self._backend._check_writable()
         if validate:
             cells = [coerce_list_cell(self.spec, v) for v in values]
         else:
@@ -393,12 +481,41 @@ class ListArray:
         self._pending_cells.extend(cells)
         self._flush_full_batches()
 
+    def contains(self, value: Any) -> np.ndarray:
+        """Return one Boolean per row indicating immediate-child membership.
+
+        Null outer lists and empty lists return false. Nested lists compare
+        structurally and are not flattened.
+        """
+        needle = _coerce_scalar_item(self.spec.item_spec, value)
+        return np.fromiter(
+            (cell is not None and any(_list_item_equal(item, needle) for item in cell) for cell in self),
+            dtype=np.bool_,
+            count=len(self),
+        )
+
+    def overlaps(self, values: Iterable[Any]) -> np.ndarray:
+        """Return one Boolean per row when any immediate child is in *values*."""
+        if isinstance(values, (str, bytes, bytearray, memoryview)) or not isinstance(values, Iterable):
+            raise TypeError("ListArray.overlaps() expects an iterable of list items")
+        needles = [_coerce_scalar_item(self.spec.item_spec, value) for value in values]
+        return np.fromiter(
+            (
+                cell is not None
+                and any(_list_item_equal(item, needle) for item in cell for needle in needles)
+                for cell in self
+            ),
+            dtype=np.bool_,
+            count=len(self),
+        )
+
     def extend_arrow(self, arrow_array) -> None:
         """Append a PyArrow list array without materializing Python cells.
 
         This requires batch storage with ``serializer='arrow'`` and is intended
         for trusted Arrow/Parquet import paths.
         """
+        self._backend._check_writable()
         pa = _require_pyarrow()
         if isinstance(arrow_array, pa.ChunkedArray):
             chunks = arrow_array.chunks
@@ -411,23 +528,35 @@ class ListArray:
         # Persist pending rows first: chunks are appended straight to the
         # backend, which would otherwise reorder them ahead of pending cells.
         self.flush()
+        item = pa.field("item", self._arrow_item_type(), nullable=self.spec.item_spec.nullable)
         for chunk in chunks:
-            if len(chunk) == 0:
-                continue
-            self._backend.append(chunk)
-            self._persisted_row_count += len(chunk)
-            self._invalidate_batch_caches()
+            step = self.batch_rows or len(chunk) or 1
+            for start in range(0, len(chunk), step):
+                part = chunk.slice(start, step)
+                typed = part.cast(pa.list_(item))
+                self._backend.append(typed)
+                self._persisted_row_count += len(part)
+                self._invalidate_batch_caches()
 
     def flush(self) -> None:
         """Persist any pending rows when using the batch backend."""
         if self.spec.storage != "batch":
             return
         if self._pending_cells:
+            self._backend._check_writable()
             batch = list(self._pending_cells)
-            self._backend.append(batch)
+            self._backend.append(self._typed_batch(batch))
             self._persisted_row_count += len(batch)
             self._pending_cells.clear()
             self._invalidate_batch_caches()
+
+    def _typed_batch(self, values):
+        """Give Arrow batches their declared type so empty/null batches stay stable."""
+        if self.spec.serializer != "arrow":
+            return values
+        pa = _require_pyarrow()
+        item = pa.field("item", self._arrow_item_type(), nullable=self.spec.item_spec.nullable)
+        return pa.array(values, type=pa.list_(item))
 
     def close(self) -> None:
         """Flush pending rows and close the logical container."""
@@ -496,7 +625,11 @@ class ListArray:
         # For small selections from block-addressable batches, scalar access is
         # much cheaper than materializing the full containing batch.  This is
         # common for filtered column previews and small logical slices.
-        if getattr(self._backend, "items_per_block", None) is not None and len(indices) <= 1024:
+        if (
+            not getattr(self._backend, "_remote", False)
+            and getattr(self._backend, "items_per_block", None) is not None
+            and len(indices) <= 1024
+        ):
             return [self[index] for index in indices]
         if len(indices) <= 1:
             return self._get_many_grouped(indices)
@@ -513,6 +646,9 @@ class ListArray:
 
     def __getitem__(self, index: int | slice | list[int] | tuple[int, ...] | np.ndarray) -> Any:
         """Return one cell or a list of cells selected by index, slice, or mask."""
+        check = getattr(self._backend, "_check_open", None)
+        if check is not None:
+            check()
         if isinstance(index, slice):
             indices = list(range(*index.indices(len(self))))
             return self._get_many(indices)
@@ -536,6 +672,7 @@ class ListArray:
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Replace one list cell."""
+        self._backend._check_writable()
         cell = coerce_list_cell(self.spec, value)
         index = self._normalize_index(index)
         if self.spec.storage == "vl":
@@ -553,6 +690,9 @@ class ListArray:
 
     def __len__(self) -> int:
         """Return the number of rows."""
+        check = getattr(self._backend, "_check_open", None)
+        if check is not None:
+            check()
         if self.spec.storage == "vl":
             return len(self._backend)
         return self._persisted_row_count + len(self._pending_cells)
@@ -724,31 +864,7 @@ class ListArray:
         return self._backend.to_cframe()
 
     def _arrow_item_type(self):
-        pa = _require_pyarrow()
-        kind = self.spec.item_spec.to_metadata_dict()["kind"]
-        mapping = {
-            "int8": pa.int8(),
-            "int16": pa.int16(),
-            "int32": pa.int32(),
-            "int64": pa.int64(),
-            "uint8": pa.uint8(),
-            "uint16": pa.uint16(),
-            "uint32": pa.uint32(),
-            "uint64": pa.uint64(),
-            "float32": pa.float32(),
-            "float64": pa.float64(),
-            "bool": pa.bool_(),
-            "string": pa.string(),
-            "bytes": pa.large_binary(),
-        }
-        if isinstance(self.spec.item_spec, StructSpec):
-            return pa.struct(
-                [
-                    pa.field(name, _arrow_type_for_spec(pa, child_spec))
-                    for name, child_spec in self.spec.item_spec.fields.items()
-                ]
-            )
-        return mapping.get(kind)
+        return _arrow_type_for_spec(_require_pyarrow(), self.spec.item_spec)
 
     def to_arrow(self):
         """Return the data as a PyArrow list array."""
@@ -756,7 +872,8 @@ class ListArray:
         self.flush()
         item_type = self._arrow_item_type()
         if item_type is not None:
-            return pa.array(list(self), type=pa.list_(item_type))
+            item = pa.field("item", item_type, nullable=self.spec.item_spec.nullable)
+            return pa.array(list(self), type=pa.list_(item))
         return pa.array(list(self))
 
     @classmethod
@@ -768,7 +885,7 @@ class ListArray:
         nullable: bool = True,
         storage: str = "batch",
         serializer: str = "msgpack",
-        batch_rows: int | None = None,
+        batch_rows: int | None = 2048,
         items_per_block: int | None = None,
         **kwargs: Any,
     ) -> ListArray:
@@ -777,32 +894,9 @@ class ListArray:
         if isinstance(arrow_array, pa.ChunkedArray):
             arrow_array = arrow_array.combine_chunks()
         if item_spec is None:
-            value_type = arrow_array.type.value_type
-            import blosc2.schema as b2s
-
-            mapping = {
-                pa.int8(): b2s.int8(),
-                pa.int16(): b2s.int16(),
-                pa.int32(): b2s.int32(),
-                pa.int64(): b2s.int64(),
-                pa.uint8(): b2s.uint8(),
-                pa.uint16(): b2s.uint16(),
-                pa.uint32(): b2s.uint32(),
-                pa.uint64(): b2s.uint64(),
-                pa.float32(): b2s.float32(),
-                pa.float64(): b2s.float64(),
-                pa.bool_(): b2s.bool(),
-                pa.string(): b2s.string(),
-                pa.large_string(): b2s.string(),
-                pa.binary(): b2s.bytes(),
-                pa.large_binary(): b2s.bytes(),
-            }
-            if pa.types.is_struct(value_type):
-                item_spec = b2s.struct(
-                    {field.name: _arrow_list_item_type_to_spec(pa, field.type) for field in value_type}
-                )
-            else:
-                item_spec = mapping.get(value_type)
+            field = arrow_array.type.value_field
+            value_type = field.type
+            item_spec = _arrow_list_item_type_to_spec(pa, value_type, nullable=field.nullable)
             if item_spec is None:
                 raise TypeError(f"Unsupported Arrow list item type {value_type!r}")
         arr = cls(

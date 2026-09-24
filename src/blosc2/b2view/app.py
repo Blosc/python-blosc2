@@ -2323,7 +2323,7 @@ class B2ViewApp(App):
                 for part in start_path.strip("/").split("/"):
                     target = parent.rstrip("/") + "/" + part
                     found = next((c for c in children[parent] if c.path == target), None)
-                    if found is None or found.kind != "group":
+                    if found is None or found.kind not in {"group", "remote_store"}:
                         break
                     parent = target
                     children[parent] = browser.list_children(parent)
@@ -2434,7 +2434,7 @@ class B2ViewApp(App):
                 data = None
                 if info.kind == "unsupported":
                     data = {"message": info.metadata.get("preview", "Preview unavailable")}
-                elif info.kind != "group" and not self._uses_grid_preview(info):
+                elif info.kind not in {"group", "remote_store"} and not self._uses_grid_preview(info):
                     data = browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
             self._deliver_remote(session, self._finish_remote_info, request, path, info, data, None)
         except Exception as exc:
@@ -2468,7 +2468,7 @@ class B2ViewApp(App):
             # A locked row window does not survive navigating to a node.
             self.row_window = None
             self.browser.clear_row_window(path)
-            if info.kind == "group":
+            if info.kind in {"group", "remote_store"}:
                 data_header.display = False
                 data_table_row.display = False
                 data_scroll.display = True

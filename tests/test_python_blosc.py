@@ -206,18 +206,26 @@ class TestCodec(unittest.TestCase):
 
         def leaks(operation, repeats=3):
             # Fill reusable codec/Python allocator arenas before taking the RSS
-            # baseline. A real per-call leak keeps growing in the second batch.
+            # baseline. A real per-call leak keeps growing in successive batches;
+            # a single jump can just be malloc retaining a freed output buffer.
             for _ in range(repeats):
                 operation()
             gc.collect()
-            used_mem_before = psutil.Process(os.getpid()).memory_info()[0]
-            for _ in range(repeats):
-                operation()
-            gc.collect()
-            used_mem_after = psutil.Process(os.getpid()).memory_info()[0]
+            process = psutil.Process(os.getpid())
+            used_mem_before = process.memory_info().rss
             # We multiply by an additional factor of .01 to account for
             # storage overhead of Python classes
-            return (used_mem_after - used_mem_before) >= num_elements * 8.01
+            threshold = num_elements * 8.01
+            growth = []
+            for _ in range(2):
+                for _ in range(repeats):
+                    operation()
+                # These operations return bytes, freed by reference counting;
+                # repeated full collections only rescan unrelated suite objects.
+                used_mem_after = process.memory_info().rss
+                growth.append(used_mem_after - used_mem_before)
+                used_mem_before = used_mem_after
+            return growth if all(delta >= threshold for delta in growth) else []
 
         def compress():
             blosc2.compress(array, typesize, clevel=1)
@@ -227,8 +235,8 @@ class TestCodec(unittest.TestCase):
         def decompress():
             blosc2.decompress(compressed)
 
-        assert not leaks(compress), "compress leaks memory"
-        assert not leaks(decompress), "decompress leaks memory"
+        assert not (growth := leaks(compress)), f"compress leaks memory: RSS growth {growth}"
+        assert not (growth := leaks(decompress)), f"decompress leaks memory: RSS growth {growth}"
 
     def test_get_blocksize(self):
         s = b"0123456789" * 1000

@@ -153,6 +153,14 @@ class Proxy(blosc2.Operand):
 
     This can be used to cache chunks of a regular data container which follows the
     :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
+
+    .. note::
+
+       Use :ref:`RemoteArray` for supported remote URLs: it manages source
+       descriptors, cache policies and portable save/reopen behavior using Proxy
+       internally. Use Proxy directly for custom sources, including local or
+       generated data. Implementing the source interface enables reads, but does
+       not by itself define how to reconstruct that source from a saved cache.
     """
 
     _stamped = False

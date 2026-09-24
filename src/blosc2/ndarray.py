@@ -5162,6 +5162,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
             separate exact-filtering index kind; it incrementally improves
             physical ordering but does not try to produce a completely sorted
             full/CSI payload.
+            ``MEMBERSHIP`` is reserved for CTable list columns and is not
+            supported by NDArray.
         optlevel : int, optional
             Optimization level for index payload construction. For
             ``kind=OPSI``, this controls the default number of iterative OPSI

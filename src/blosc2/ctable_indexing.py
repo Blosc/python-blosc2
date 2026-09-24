@@ -385,7 +385,7 @@ class _CTableIndexingMixin:
         if not isinstance(token, str) or not token:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing token.")
         kind = descriptor.get("kind")
-        if kind not in {"summary", "bucket", "partial", "full", "opsi"}:
+        if kind not in {"summary", "bucket", "partial", "full", "opsi", "membership"}:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: invalid kind {kind!r}.")
         if kind == "bucket" and not isinstance(descriptor.get("bucket"), dict):
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing bucket payload.")
@@ -393,6 +393,10 @@ class _CTableIndexingMixin:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing partial payload.")
         if kind == "full" and not isinstance(descriptor.get("full"), dict):
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing full payload.")
+        if kind == "membership" and not isinstance(descriptor.get("membership"), dict):
+            raise ValueError(
+                f"Malformed index metadata for column {col_name!r}: missing membership payload."
+            )
 
     def _drop_index_descriptor(self, col_name: str, descriptor: dict) -> None:
         """Delete sidecars/cache for a catalog descriptor without touching the column mapping."""
@@ -408,6 +412,14 @@ class _CTableIndexingMixin:
         )
 
         token = descriptor["token"]
+        if descriptor.get("kind") == "membership":
+            path = descriptor["membership"].get("postings_path")
+            if path:
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+                with contextlib.suppress(OSError):
+                    os.rmdir(os.path.dirname(path))
+            return
         col_arr = None
         with contextlib.suppress(Exception):
             col_arr = self._index_target_array(col_name, descriptor)
@@ -454,10 +466,118 @@ class _CTableIndexingMixin:
             kwargs["method"] = descriptor.get("full", {}).get("build_method", "global-sort")
         if descriptor.get("kind") == "opsi":
             kwargs["opsi_max_cycles"] = descriptor.get("opsi", {}).get("max_cycles")
+        if descriptor.get("kind") == "summary" and len(descriptor.get("levels", {})) == 1:
+            kwargs["granularity"] = next(iter(descriptor["levels"]))
         target = descriptor.get("target") or {}
         if target.get("source") == "expression":
             kwargs["expression"] = target.get("expression")
         return kwargs
+
+    def _create_membership_index(self, col_name: str, *, name: str | None = None):
+        """Build one compressed posting-list batch per distinct scalar item."""
+        from blosc2.list_array import list_item_key
+
+        spec = self._schema.columns_by_name[col_name].spec
+        if not isinstance(spec, ListSpec):
+            raise ValueError("kind='membership' is only supported for list columns")
+        if isinstance(spec.item_spec, (ListSpec, StructSpec)):
+            raise ValueError("Membership indexes currently require a scalar list item type")
+
+        postings: dict[bytes, list[int]] = {}
+        for row, cell in enumerate(self._cols[col_name]):
+            if cell is None:
+                continue
+            row_keys = {key for item in cell if (key := list_item_key(spec.item_spec, item)) is not None}
+            for key in row_keys:
+                postings.setdefault(key, []).append(row)
+
+        entries = sorted(postings.items())
+        anchor = self._storage.index_anchor_path(col_name)
+        path = None if anchor is None else os.path.join(os.path.dirname(anchor), "membership.b2b")
+        membership: dict[str, Any] = {"version": 1, "keys": []}
+        if path is None:
+            membership["postings"] = [rows for _, rows in entries]
+        else:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            store = blosc2.BatchArray(urlpath=path, mode="w")
+            for _, rows in entries:
+                store.append(rows)
+            membership["postings_path"] = path
+        membership["keys"] = [[key, index, len(rows)] for index, (key, rows) in enumerate(entries)]
+
+        value_epoch, _ = self._storage.get_epoch_counters()
+        descriptor = {
+            "kind": "membership",
+            "token": col_name,
+            "name": name or "",
+            "membership": membership,
+            "built_value_epoch": value_epoch,
+            "stale": False,
+        }
+        catalog = self._get_index_catalog()
+        catalog[col_name] = descriptor
+        self._storage.save_index_catalog(catalog)
+        self._invalidate_index_catalog_cache()
+        return blosc2.Index._from_table(self, col_name, descriptor)
+
+    def _membership_positions(self, col_name: str, values) -> np.ndarray | None:
+        """Return indexed physical rows, or None when a scan is required."""
+        from blosc2.list_array import list_item_key
+
+        descriptor = self._get_index_catalog().get(col_name)
+        if not descriptor or descriptor.get("kind") != "membership" or descriptor.get("stale"):
+            return None
+        self._validate_index_descriptor(col_name, descriptor)
+        payload = descriptor["membership"]
+        raw_keys = payload.get("keys", [])
+        if not isinstance(raw_keys, list):
+            raise ValueError(f"Malformed membership index for column {col_name!r}: invalid key directory")
+        directory = {}
+        previous = None
+        for entry in raw_keys:
+            if (
+                not isinstance(entry, (list, tuple))
+                or len(entry) != 3
+                or not isinstance(entry[0], bytes)
+                or isinstance(entry[1], bool)
+                or not isinstance(entry[1], int)
+                or entry[1] < 0
+                or isinstance(entry[2], bool)
+                or not isinstance(entry[2], int)
+                or entry[2] < 0
+                or (previous is not None and entry[0] <= previous)
+            ):
+                raise ValueError(
+                    f"Malformed membership index for column {col_name!r}: invalid key directory"
+                )
+            directory[entry[0]] = (entry[1], entry[2])
+            previous = entry[0]
+        spec = self._schema.columns_by_name[col_name].spec
+        wanted = {key for value in values if (key := list_item_key(spec.item_spec, value)) is not None}
+        indexes = sorted({directory[key][0] for key in wanted if key in directory})
+        if not indexes:
+            return np.empty(0, dtype=np.int64)
+
+        inline = payload.get("postings")
+        if inline is not None:
+            chunks = [inline[index] for index in indexes]
+        elif hasattr(self._storage, "open_membership_postings"):
+            chunks = self._storage.open_membership_postings(col_name, descriptor, indexes)
+        else:
+            path = payload.get("postings_path")
+            if not isinstance(path, str):
+                raise ValueError(f"Malformed membership index for column {col_name!r}: missing postings")
+            store = blosc2.open(path, mode="r")
+            chunks = [store[index][:] for index in indexes]
+        counts = dict(directory.values())
+        for index, chunk in zip(indexes, chunks, strict=True):
+            expected = counts[index]
+            if len(chunk) != expected:
+                raise ValueError(f"Malformed membership index for column {col_name!r}: posting length")
+        positions = np.unique(np.concatenate([np.asarray(chunk, dtype=np.int64) for chunk in chunks]))
+        if positions.size and (positions[0] < 0 or positions[-1] >= len(self._valid_rows)):
+            raise ValueError(f"Malformed membership index for column {col_name!r}: posting row range")
+        return positions
 
     def _normalize_table_expression_target(
         self, expression: str, operands: dict | None = None
@@ -560,7 +680,12 @@ class _CTableIndexingMixin:
         path = descriptor.get("expr_values_path")
         if path is None:
             raise KeyError(f"No backing array found for expression index {token!r}.")
-        arr = blosc2.open(path, mode="r" if root._read_only else "a")
+        if root._read_only:
+            from blosc2.indexing import _open_sidecar_file
+
+            arr = _open_sidecar_file(path)
+        else:
+            arr = blosc2.open(path, mode="a")
         root._expr_index_arrays[token] = arr
         return arr
 
@@ -818,7 +943,7 @@ class _CTableIndexingMixin:
         field: str | None = None,
         expression: str | None = None,
         operands: dict | None = None,
-        kind: blosc2.IndexKind | None = None,
+        kind: blosc2.IndexKind | str | None = None,
         optlevel: int = 5,
         name: str | None = None,
         build: str = "auto",
@@ -866,6 +991,14 @@ class _CTableIndexingMixin:
         lightest kind; it may still skip segments for broad range
         queries but cannot accelerate ``sort_by``.
 
+        ``MEMBERSHIP`` is specific to stored ``list()`` columns. It maps each
+        distinct scalar list item to the rows containing it and accelerates
+        :meth:`Column.contains` and :meth:`Column.overlaps` predicates. Nested
+        lists and struct items are not supported. For example::
+
+            table.create_index("tags", kind=blosc2.IndexKind.MEMBERSHIP)
+            selected = table[table["tags"].overlaps(["python", "numpy"])]
+
         When *kind* is omitted it defaults to ``BUCKET``, except on ``utf8()``
         and ``dictionary()`` columns, which are indexed by alphabetical rank and
         only ever consulted through a ``FULL`` index — there the default is
@@ -891,6 +1024,15 @@ class _CTableIndexingMixin:
         col_name = field if field is not None else col_name
         if col_name is not None:
             col_name = self._logical_to_physical_name(col_name)
+
+        if kind in ("membership", blosc2.IndexKind.MEMBERSHIP):
+            if expression is not None or col_name is None:
+                raise ValueError("Membership indexes require a stored list column")
+            if col_name not in self._cols:
+                raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
+            if col_name in self._get_index_catalog():
+                raise ValueError(f"Index already exists for column {col_name!r}.")
+            return self._create_membership_index(col_name, name=name)
 
         from blosc2.indexing import (
             _IN_MEMORY_INDEXES,
@@ -1280,7 +1422,14 @@ class _CTableIndexingMixin:
 
     def _try_expression_index_where(self, expr_result: blosc2.LazyExpr, catalog: dict) -> np.ndarray | None:
         """Attempt to resolve *expr_result* via a direct table expression index."""
-        from blosc2.indexing import evaluate_bucket_query, evaluate_segment_query, plan_query
+        from blosc2.indexing import (
+            _clear_cached_data,
+            _load_store,
+            _register_descriptor_owner,
+            evaluate_bucket_query,
+            evaluate_segment_query,
+            plan_query,
+        )
 
         expression = expr_result.expression
         operands = dict(expr_result.operands)
@@ -1292,9 +1441,18 @@ class _CTableIndexingMixin:
             if rewritten is None:
                 continue
             expr_arr = self._index_target_array(lookup_key, descriptor)
+            # The table catalog rebases paths after moving or packing a store;
+            # the expression array's own metadata still names its original files.
+            store = _load_store(expr_arr)
+            if store["indexes"].get(lookup_key) is not descriptor:
+                _clear_cached_data(expr_arr, lookup_key)
+            store["indexes"][lookup_key] = descriptor
+            _register_descriptor_owner(expr_arr, lookup_key)
             where_dict = {"_where_x": expr_arr}
             merged_operands = {"_where_x": expr_arr}
-            plan = plan_query(rewritten, merged_operands, where_dict)
+            plan = plan_query(
+                rewritten, merged_operands, where_dict, array_to_col={id(expr_arr): lookup_key}
+            )
             if not plan.usable:
                 continue
             if plan.exact_positions is not None:
@@ -1366,7 +1524,7 @@ class _CTableIndexingMixin:
             indexed_arrays[col_name] = (root_cols[col_name], descriptor)
 
         for operand in operands.values():
-            if not isinstance(operand, blosc2.NDArray):
+            if not isinstance(operand, (blosc2.NDArray, blosc2.RemoteArray)):
                 continue
             for col_name, (col_arr, descriptor) in indexed_arrays.items():
                 if col_name in seen or col_arr is not operand:

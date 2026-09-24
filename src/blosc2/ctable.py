@@ -54,6 +54,7 @@ from blosc2.ctable_storage import (
     InMemoryTableStorage,
     TableStorage,
     TreeStoreTableStorage,
+    column_cbytes_for_info,
     join_field_path,
     split_field_path,
 )
@@ -679,6 +680,32 @@ def _rank_index_row_lookup(values_path: str, positions_path: str, table, null_ra
     return rows_for_ranks
 
 
+def _iter_true_segments(arr):
+    """Yield ``(start, size, mask)``; ``mask is None`` means all rows are true."""
+    chunk_size = arr.chunks[0]
+    iter_info = getattr(arr, "iterchunks_info", None)
+    if iter_info is None:
+        for start in range(0, arr.shape[0], chunk_size):
+            size = min(chunk_size, arr.shape[0] - start)
+            mask = np.asarray(arr[start : start + size], dtype=np.bool_)
+            if np.any(mask):
+                yield start, size, None if np.all(mask) else mask
+        return
+
+    for info in iter_info():
+        size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
+        start = info.nchunk * chunk_size
+        if info.special == blosc2.SpecialValue.ZERO:
+            continue
+        if info.special == blosc2.SpecialValue.VALUE:
+            if np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]:
+                yield start, size, None
+            continue
+        mask = np.asarray(arr[start : start + size], dtype=np.bool_)
+        if np.any(mask):
+            yield start, size, None if np.all(mask) else mask
+
+
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     """Translate a logical (valid-row) index into a physical array index.
 
@@ -696,31 +723,14 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
         If the logical index is out of range or the array is inconsistent.
     """
     count = 0
-    chunk_size = arr.chunks[0]
-
-    for info in arr.iterchunks_info():
-        actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-        chunk_start = info.nchunk * chunk_size
-
-        if info.special == blosc2.SpecialValue.ZERO:
-            continue
-
-        if info.special == blosc2.SpecialValue.VALUE:
-            val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-            if not val:
-                continue
-            if count + actual_size <= logical_key:
-                count += actual_size
-                continue
-            return chunk_start + (logical_key - count)
-
-        chunk_data = arr[chunk_start : chunk_start + actual_size]
-        n_true = int(np.count_nonzero(chunk_data))
+    for chunk_start, actual_size, mask in _iter_true_segments(arr):
+        n_true = actual_size if mask is None else int(np.count_nonzero(mask))
         if count + n_true <= logical_key:
             count += n_true
             continue
-
-        return chunk_start + int(np.flatnonzero(chunk_data)[logical_key - count])
+        if mask is None:
+            return chunk_start + logical_key - count
+        return chunk_start + int(np.flatnonzero(mask)[logical_key - count])
 
     raise IndexError("Unexpected error finding physical index.")
 
@@ -1391,9 +1401,16 @@ class Column:
     _REPR_PREVIEW_ITEMS = 8
 
     def __init__(self, table: CTable, col_name: str, mask=None):
-        self._table = table
+        self._table_ref = table
+        self._remote_storage_ref = table._remote_read_storage()
         self._col_name = col_name
         self._mask = mask
+
+    @property
+    def _table(self):
+        if self._remote_storage_ref is not None:
+            self._remote_storage_ref._check_open()
+        return self._table_ref
 
     @property
     def _nulls(self) -> NullChannel:
@@ -1572,6 +1589,41 @@ class Column:
         For a writable logical sub-view use :attr:`view`.
         """
         return self._values_from_key(key)
+
+    def contains(self, value):
+        """Return a Boolean row predicate for list cells containing *value*."""
+        if not self.is_list:
+            raise TypeError("Column.contains() is only supported for list columns")
+        positions = self._table._membership_positions(self._col_name, [value])
+        if positions is not None:
+            mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask[positions] = True
+            mask &= self._valid_rows[:]
+            return blosc2.asarray(mask)
+        physical = self._raw_col.contains(value)
+        positions = self._resolve_live_positions()
+        mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+        mask[positions] = physical[positions]
+        return blosc2.asarray(mask)
+
+    def overlaps(self, values):
+        """Return a Boolean row predicate for list cells sharing any value."""
+        if not self.is_list:
+            raise TypeError("Column.overlaps() is only supported for list columns")
+        if isinstance(values, (str, bytes, bytearray, memoryview)) or not isinstance(values, Iterable):
+            raise TypeError("Column.overlaps() expects an iterable of list items")
+        values = list(values)
+        positions = self._table._membership_positions(self._col_name, values)
+        if positions is not None:
+            mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask[positions] = True
+            mask &= self._valid_rows[:]
+            return blosc2.asarray(mask)
+        physical = self._raw_col.overlaps(values)
+        positions = self._resolve_live_positions()
+        mask = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+        mask[positions] = physical[positions]
+        return blosc2.asarray(mask)
 
     def _values_from_key(self, key, *, check_stale: bool = True):  # noqa: C901
         """Materialise values for a logical index key."""
@@ -1915,26 +1967,9 @@ class Column:
         if self.is_list or self.is_varlen_scalar:
             yield from self._raw_col[np.where(self._valid_rows[:])[0]]
             return
-        arr = self._valid_rows
-        chunk_size = arr.chunks[0]
-
-        for info in arr.iterchunks_info():
-            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-            chunk_start = info.nchunk * chunk_size
-
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                if not val:
-                    continue
-                yield from self._raw_col[chunk_start : chunk_start + actual_size]
-                continue
-
-            mask_chunk = arr[chunk_start : chunk_start + actual_size]
+        for chunk_start, actual_size, mask_chunk in _iter_true_segments(self._valid_rows):
             data_chunk = self._raw_col[chunk_start : chunk_start + actual_size]
-            yield from data_chunk[mask_chunk]
+            yield from data_chunk if mask_chunk is None else data_chunk[mask_chunk]
 
     @staticmethod
     def _format_array_value(value) -> str:
@@ -2022,7 +2057,7 @@ class Column:
             f"  dtype      : {self.dtype}",
             f"  storage    : NDArray shape={getattr(raw, 'shape', None)}, chunks={getattr(raw, 'chunks', None)}, blocks={getattr(raw, 'blocks', None)}",
         ]
-        cbytes = getattr(raw, "cbytes", None)
+        cbytes = column_cbytes_for_info(raw)
         if cbytes is not None:
             lines.append(f"  cbytes     : {format_nbytes_info(cbytes)}")
         if rows and self.dtype is not None and self.dtype.kind in "biufc":
@@ -2115,8 +2150,8 @@ class Column:
             items.append(("blocks", blocks))
 
         nbytes = getattr(raw, "nbytes", None)
-        cbytes = getattr(raw, "cbytes", None)
-        cratio = getattr(raw, "cratio", None)
+        cbytes = column_cbytes_for_info(raw)
+        cratio = getattr(raw, "cratio", None) if cbytes is not None else None
         if nbytes is not None:
             items.append(("nbytes", format_nbytes_info(nbytes)))
         if cbytes is not None:
@@ -3004,26 +3039,14 @@ class Column:
             raise TypeError("Column.iter_chunks() is not supported for varlen scalar columns.")
         valid = self._valid_rows
         raw = self._raw_col
-        arr_len = len(valid)
-        phys_chunk = valid.chunks[0]
 
         pending: list[np.ndarray] = []
         pending_count = 0
 
-        for info in valid.iterchunks_info():
-            actual = min(phys_chunk, arr_len - info.nchunk * phys_chunk)
-            start = info.nchunk * phys_chunk
-
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=valid.dtype)[0]
-                if not val:
-                    continue
+        for start, actual, mask in _iter_true_segments(valid):
+            if mask is None:
                 segment = raw[start : start + actual]
             else:
-                mask = valid[start : start + actual]
                 data_part = raw[start : start + actual]
                 if len(data_part) < actual:
                     # Logically-sized storage (utf8) is shorter than the
@@ -4264,7 +4287,7 @@ class NestedColumn:
                 dtype_label = table._dtype_info_label(
                     getattr(table._cols[name], "dtype", None), spec
                 ) + table._null_info_tag(spec)
-                cbytes = getattr(table._cols[name], "cbytes", None)
+                cbytes = column_cbytes_for_info(table._cols[name])
                 if cbytes is not None:
                     nbytes = getattr(table._cols[name], "nbytes", None)
                     detail = f"cbytes: {format_nbytes_human(cbytes)}"
@@ -4275,6 +4298,11 @@ class NestedColumn:
                     column_summary[rel_name] = _InfoLiteral(dtype_label)
 
         descendant = set(self._descendant_col_names())
+        compression_available = all(
+            column_cbytes_for_info(table._cols[name]) is not None
+            for name in descendant
+            if name in table._cols
+        )
         index_summary = {}
         for idx in table.indexes:
             if idx.col_name not in descendant:
@@ -4294,8 +4322,8 @@ class NestedColumn:
             ("storage", storage_type),
             ("nrows", self.nrows),
             ("nbytes", format_nbytes_info(self.nbytes)),
-            ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}x"),
+            ("cbytes", format_nbytes_info(self.cbytes) if compression_available else "n/a"),
+            ("cratio", f"{self.cratio:.2f}x" if compression_available else "n/a"),
             ("columns", column_summary),
             ("indexes", index_summary if index_summary else "none"),
         ]
@@ -4373,6 +4401,10 @@ class _LazyColumnDict(dict):
         return dict.__getitem__(self, name)
 
     def _load_all(self) -> None:
+        storage = self._table._remote_read_storage()
+        if storage is not None:
+            storage.open_columns(self._table, self._col_names, self._load)
+            return
         for name in self._col_names:
             self._load(name)
 
@@ -4823,11 +4855,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._cached_live_positions = result
         return result
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         row_type: type[RowT],
         new_data=None,
         *,
+        sources: Mapping[str, blosc2.NDArray | blosc2.RemoteArray] | None = None,
         urlpath: str | None = None,
         mode: str = "a",
         expected_size: int | None = None,
@@ -4841,6 +4874,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Parameters
         ----------
+        sources:
+            Mapping from every stored column name to an existing
+            :class:`NDArray` or :class:`RemoteArray`.  The arrays are bound
+            without copying for an in-memory table.  Their dtypes and shapes
+            must exactly match the schema, and the resulting table is
+            read-only.
         create_summary_index:
             If ``True`` (default), SUMMARY indexes are automatically built for
             all eligible scalar columns.  These indexes are extremely cheap to
@@ -4861,6 +4900,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             logical copy and do **not** trigger the build; index the source
             table (or the reopened result) explicitly if you need it.
         """
+        if sources is not None and new_data is not None:
+            raise ValueError("sources and new_data are mutually exclusive")
+        if sources is not None and not isinstance(sources, Mapping):
+            raise TypeError("sources must be a mapping from column names to arrays")
+
         # Auto-size: if the caller didn't specify expected_size and new_data has a
         # known length, pre-allocate just enough (×2 for headroom, min 64).
         # Fall back to 1 M when new_data has no __len__ or is absent.
@@ -4885,7 +4929,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self.auto_compact = compact
         self._create_summary_index = create_summary_index
         self._summary_indexes_built = False
+        self._source_bound = False
+        self._source_columns: set[str] = set()
         self.base = None
+
+        source_n_rows = None
+        if sources is not None:
+            if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
+                self._schema = compile_schema(row_type)
+            else:
+                self._schema = _compile_pydantic_schema(row_type)
+            self._resolve_nullable_specs(self._schema)
+            source_n_rows = self._validate_sources(sources)
 
         # Choose storage backend
         if urlpath is not None:
@@ -4902,12 +4957,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if storage.table_exists() and mode != "w":
             # ---- Open existing persistent table ----
-            if new_data is not None:
+            if new_data is not None or sources is not None:
                 raise ValueError(
-                    "Cannot pass new_data when opening an existing table. Use mode='w' to overwrite."
+                    "Cannot pass new_data or sources when opening an existing table. "
+                    "Use mode='w' to overwrite."
                 )
             storage.check_kind()
             schema_dict = storage.load_schema()
+            self._load_source_binding_metadata(schema_dict)
             self._schema: CompiledSchema = schema_from_dict(schema_dict)
             self._schema = CompiledSchema(
                 row_cls=row_type,
@@ -4935,6 +4992,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # Restore auto-index preference from the schema.
             self._create_summary_index = schema_dict.get("create_summary_index", True)
             self._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
+            if self._source_bound:
+                self._read_only = True
+                self._create_summary_index = False
+                self._summary_indexes_built = True
         else:
             # ---- Create new table ----
             if storage.is_read_only():
@@ -4945,12 +5006,40 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "use mode='w' to create a new one."
                 )
 
-            # Build compiled schema from either a dataclass or a legacy Pydantic model
-            if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
-                self._schema = compile_schema(row_type)
-            else:
-                self._schema = _compile_pydantic_schema(row_type)
-            self._resolve_nullable_specs(self._schema)
+            # Build compiled schema from either a dataclass or a legacy Pydantic model.
+            # Source-bound schemas were compiled before storage selection so a
+            # validation failure cannot overwrite a destination.
+            if sources is None:
+                if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
+                    self._schema = compile_schema(row_type)
+                else:
+                    self._schema = _compile_pydantic_schema(row_type)
+                self._resolve_nullable_specs(self._schema)
+
+            if sources is not None:
+                n_rows = source_n_rows
+                capacity = max(n_rows, 1)
+                default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+                self._valid_rows = storage.create_valid_rows(
+                    shape=(capacity,), chunks=default_chunks, blocks=default_blocks
+                )
+                if n_rows:
+                    self._valid_rows[:n_rows] = True
+                self._n_rows = n_rows
+                self._last_pos = n_rows
+                for col in self._schema.columns:
+                    self.col_names.append(col.name)
+                    self._col_widths[col.name] = max(len(col.name), col.display_width)
+                    self._cols[col.name] = storage.install_column(col.name, sources[col.name])
+                self._source_bound = True
+                self._source_columns = {
+                    name for name, source in sources.items() if isinstance(source, blosc2.RemoteArray)
+                }
+                self._read_only = True
+                self._create_summary_index = False
+                self._summary_indexes_built = True
+                storage.save_schema(self._schema_dict_with_computed())
+                return
 
             self._n_rows = 0
             self._last_pos = 0
@@ -4983,6 +5072,80 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 # Persist the row count so subsequent opens can skip the
                 # _valid_rows intersection in where().
                 self._save_n_rows_to_meta()
+
+    def _validate_sources(self, sources: Mapping[str, Any]) -> int:  # noqa: C901
+        """Validate source bindings without reading their payloads."""
+        expected = {col.name for col in self._schema.columns}
+        supplied = set(sources)
+        missing = expected - supplied
+        unknown = supplied - expected
+        if missing or unknown:
+            details = []
+            if missing:
+                details.append(f"missing: {', '.join(sorted(missing))}")
+            if unknown:
+                details.append(f"unknown: {', '.join(sorted(unknown))}")
+            raise ValueError(
+                "sources must bind every stored column exactly once (" + "; ".join(details) + ")"
+            )
+        if self._table_cparams is not None or self._table_dparams is not None:
+            raise ValueError("cparams and dparams cannot be specified with sources")
+
+        n_rows = None
+        for col in self._schema.columns:
+            source = sources[col.name]
+            if not isinstance(source, (blosc2.NDArray, blosc2.RemoteArray)):
+                raise TypeError(
+                    f"Source for column {col.name!r} must be an NDArray or RemoteArray, "
+                    f"got {type(source).__name__}"
+                )
+            if (
+                self._is_list_column(col)
+                or self._is_varlen_scalar_column(col)
+                or self._is_dictionary_column(col)
+            ):
+                raise TypeError(f"Source binding for column {col.name!r} requires a fixed-width schema")
+            if getattr(col.spec, "uses_mask", False):
+                raise TypeError(f"Source binding for nullable mask column {col.name!r} is not supported")
+            if self._validate and any(
+                getattr(col.spec, constraint, None) is not None for constraint in ("ge", "gt", "le", "lt")
+            ):
+                raise ValueError(
+                    f"Source binding for constrained column {col.name!r} requires validate=False; "
+                    "source values are not scanned during construction"
+                )
+            if any(
+                option is not None
+                for option in (col.config.chunks, col.config.blocks, col.config.cparams, col.config.dparams)
+            ):
+                raise ValueError(f"Storage options for source-bound column {col.name!r} are not supported")
+
+            shape = tuple(source.shape)
+            wanted = self._column_physical_shape(col, shape[0] if shape else 0)
+            if shape != wanted:
+                raise ValueError(f"Source for column {col.name!r} has shape {shape}, expected {wanted}")
+            if np.dtype(source.dtype) != np.dtype(col.dtype):
+                raise TypeError(
+                    f"Source for column {col.name!r} has dtype {source.dtype}, expected {np.dtype(col.dtype)}"
+                )
+            if n_rows is None:
+                n_rows = shape[0]
+            elif shape[0] != n_rows:
+                raise ValueError(
+                    f"Source columns have different row counts: {col.name!r} has {shape[0]}, expected {n_rows}"
+                )
+        return 0 if n_rows is None else n_rows
+
+    def _load_source_binding_metadata(self, schema_dict: Mapping[str, Any]) -> None:
+        version = schema_dict.get("source_bindings_version")
+        if version is None:
+            self._source_bound = False
+            self._source_columns = set()
+            return
+        if version != 1:
+            raise ValueError(f"Unsupported CTable source bindings version: {version!r}")
+        self._source_bound = True
+        self._source_columns = set(schema_dict.get("source_columns", ()))
 
     def close(self) -> None:
         """Close any persistent backing store held by this table.
@@ -5860,13 +6023,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Returns the cached ``_last_pos`` when available.  After a deletion
         ``_last_pos`` is ``None``; this method then walks chunk metadata of
         ``_valid_rows`` from the end (no full decompression) to find the last
-        ``True`` position, caches the result, and returns it.
+        ``True`` position, caches the result, and returns it. Readers without
+        chunk metadata are scanned backwards one chunk at a time instead.
         """
         if self._last_pos is not None:
             return self._last_pos
 
         arr = self._valid_rows
+        if getattr(arr, "_all_valid", False):
+            self._last_pos = arr.shape[0]
+            return self._last_pos
         chunk_size = arr.chunks[0]
+        if not hasattr(arr, "iterchunks_info"):
+            last_pos = 0
+            for start in reversed(range(0, arr.shape[0], chunk_size)):
+                nonzero = np.flatnonzero(arr[start : min(start + chunk_size, arr.shape[0])])
+                if len(nonzero):
+                    last_pos = start + int(nonzero[-1]) + 1
+                    break
+            self._last_pos = last_pos
+            return self._last_pos
         last_true_pos = -1
 
         for info in reversed(list(arr.iterchunks_info())):
@@ -6117,15 +6293,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Only pays off when both slices are non-empty.
         """
         cache = getattr(self, "_display_fetch_cache", None)
-        if cache is None or len(head_pos) == 0 or len(tail_pos) == 0:
+        remote = self._remote_read_storage() is not None
+        if cache is None or (not remote and (len(head_pos) == 0 or len(tail_pos) == 0)):
             return
         real_cols = [n for n in display_cols if n != "..." and (n in self._cols or n in self._computed_cols)]
         if not real_cols:
             return
         nh = len(head_pos)
         combined = np.concatenate([head_pos, tail_pos])
+        if remote:
+            from blosc2.ctable_remote_read import column_values
+
+            columns = column_values(self, real_cols, combined)
         for name in real_cols:
-            vals = self._fetch_col_at_positions_uncached(name, combined)
+            vals = columns[name] if remote else self._fetch_col_at_positions_uncached(name, combined)
             cache[(name, id(head_pos))] = vals[:nh]
             cache[(name, id(tail_pos))] = vals[nh:]
 
@@ -6477,6 +6658,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def __iter__(self):
         """Iterate over live rows in insertion order, yielding namedtuple-like row objects."""
+        storage = self._remote_read_storage()
+        if storage is not None:
+            from blosc2.ctable_remote_read import column_values
+
+            # Bound decoded output independently of the transport budget.
+            for start, _, batch in self._remote_position_batches(1024):
+                values = column_values(self, self.col_names, batch)
+                for j, pos in enumerate(batch):
+                    storage._check_open()
+                    yield self._materialize_row(
+                        start + j,
+                        _physical=int(pos),
+                        _values={name: values[name][j] for name in self.col_names},
+                    )
+            return
         for i in range(self.nrows):
             yield self._materialize_row(i)
 
@@ -6486,6 +6682,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._row_namedtuple_type_cache = _make_namedtuple_row_type(visible)
             self._row_namedtuple_type_cache_cols = visible
         return self._row_namedtuple_type_cache
+
+    def _remote_read_storage(self):
+        from blosc2.ctable_storage import RemoteTableStorage
+
+        saved = getattr(self, "_remote_view_storage", None)
+        if saved is not None:
+            saved._check_open()
+            return saved
+        table = self
+        while table.base is not None:
+            table = table.base
+        storage = getattr(table, "_storage", None)
+        return storage if isinstance(storage, RemoteTableStorage) else None
+
+    def _remote_position_batches(self, batch_size):
+        """Bounded live selections, preserving a gathered/sorted view's order."""
+        cached = getattr(self, "_cached_live_positions", None)
+        groups = (cached,) if cached is not None else self._iter_live_positions_chunks()
+        logical = 0
+        for positions in groups:
+            for start in range(0, len(positions), batch_size):
+                batch = positions[start : start + batch_size]
+                yield logical, logical + len(batch), batch
+                logical += len(batch)
 
     def _row_namedtuple_type_for_fields(self, fields: tuple[str, ...]):
         cache = getattr(self, "_row_namedtuple_type_cache_by_fields", None)
@@ -6522,27 +6742,47 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return np.datetime64(int(value), spec.unit)
         return value
 
-    def _materialize_row(self, index: int):
+    def _materialize_row(self, index: int, *, _physical=None, _values=None):
         n_rows = self.nrows
         if index < 0:
             index += n_rows
         if not (0 <= index < n_rows):
             raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
         _slp = getattr(self, "_cached_live_positions", None)
-        if _slp is not None and self.base is not None:
+        if _physical is not None:
+            pos = _physical
+        elif _slp is not None and self.base is not None:
             pos = int(_slp[index])
         else:
             pos = _find_physical_index(self._valid_rows, index)
+
+        values = _values
+        if values is None and self._remote_read_storage() is not None:
+            from blosc2.ctable_remote_read import column_values
+
+            columns = column_values(self, self.col_names, np.array([pos], dtype=np.int64))
+            values = {name: columns[name][0] for name in self.col_names}
+
+        def row_value(name):
+            if values is None:
+                return self._physical_row_value(name, int(pos))
+            value = values[name]
+            spec = self._schema.columns_by_name.get(name)
+            if value is not None and spec is not None and isinstance(spec.spec, timestamp):
+                return (
+                    value if isinstance(value, np.datetime64) else np.datetime64(int(value), spec.spec.unit)
+                )
+            return self._normalize_scalar_value(value)
 
         nested_meta = self._schema.metadata.get("nested") if self._schema.metadata else None
         reconstruct = isinstance(nested_meta, dict) and bool(nested_meta.get("reconstruct_rows", False))
         if not reconstruct:
             row_type = self._row_namedtuple_type()
-            return row_type(*(self._physical_row_value(name, int(pos)) for name in self.col_names))
+            return row_type(*(row_value(name) for name in self.col_names))
 
         row_dict: dict[str, Any] = {}
         for name in self.col_names:
-            value = self._physical_row_value(name, int(pos))
+            value = row_value(name)
             parts = split_field_path(name)
             if len(parts) <= 1:
                 row_dict[name] = value
@@ -6675,7 +6915,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise FileNotFoundError(f"No CTable found at {urlpath!r}")
         return cls._open_from_storage(storage)
 
-    def to_b2z(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
+    def to_b2z(
+        self,
+        urlpath: str,
+        *,
+        overwrite: bool = False,
+        compact: bool = False,
+        preserve_sources: bool = False,
+    ) -> str:
         """Write this table to a compact ``.b2z`` container.
 
         ``.b2z`` is the compact zip-backed CTable format.  For persistent,
@@ -6709,6 +6956,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if not str(urlpath).endswith(".b2z"):
             raise ValueError("urlpath must have a .b2z extension")
+        if preserve_sources and self.base is not None:
+            raise ValueError("preserve_sources requires an unfiltered root table")
 
         storage = getattr(self, "_storage", None)
         can_physical_pack = (
@@ -6716,6 +6965,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             and self.base is None
             and isinstance(storage, FileTableStorage)
             and not str(storage._root).endswith(".b2z")
+            and (preserve_sources or not self._source_bound)
         )
         if can_physical_pack:
             self._flush_varlen_columns()
@@ -6729,10 +6979,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
         else:
-            self.save(urlpath, overwrite=overwrite)
+            CTable.save(self, urlpath, overwrite=overwrite, preserve_sources=preserve_sources)
         return os.path.abspath(urlpath)
 
-    def to_b2d(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
+    def to_b2d(
+        self,
+        urlpath: str,
+        *,
+        overwrite: bool = False,
+        compact: bool = False,
+        preserve_sources: bool = False,
+    ) -> str:
         """Write this table to a directory-backed store.
 
         Directory-backed CTable stores may use any path that does not end in
@@ -6773,6 +7030,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             and isinstance(storage, FileTableStorage)
             and str(storage._root).endswith(".b2z")
             and storage.open_mode() == "r"
+            and (preserve_sources or not self._source_bound)
         )
         if can_physical_unpack:
             store = blosc2.TreeStore(storage._root, mode="r")
@@ -6785,10 +7043,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
         else:
-            self.save(urlpath, overwrite=overwrite)
+            CTable.save(self, urlpath, overwrite=overwrite, preserve_sources=preserve_sources)
         return os.path.abspath(urlpath)
 
-    def to_cframe(self) -> bytes:
+    def to_cframe(self, *, preserve_sources: bool = False) -> bytes:
         """Serialize this table to a bytes buffer (a CFrame).
 
         This is the Blosc2-bytes counterpart of :meth:`to_b2z`, mirroring
@@ -6833,7 +7091,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         meta = blosc2.SChunk()
         meta.vlmeta["kind"] = "ctable"
         meta.vlmeta["version"] = 1
-        meta.vlmeta["schema"] = json.dumps(src._schema_dict_with_computed())
+        schema_dict = src._schema_dict_with_computed()
+        if not preserve_sources:
+            schema_dict.pop("source_bindings_version", None)
+            schema_dict.pop("source_columns", None)
+        meta.vlmeta["schema"] = json.dumps(schema_dict)
         estore["/_meta"] = meta
         estore["/_valid_rows"] = src._valid_rows
 
@@ -6858,7 +7120,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 estore[key] = arr._backend
             else:
                 # Scalar NDArray or ListArray — both serialize via to_cframe().
-                estore[key] = arr
+                if isinstance(arr, blosc2.RemoteArray):
+                    estore[key] = (
+                        arr._export_carrier(include_cache=False)
+                        if preserve_sources
+                        else blosc2.asarray(arr[:])
+                    )
+                else:
+                    estore[key] = arr
 
         # Validity sidecars travel beside their columns; a column without one
         # simply contributes no entry, which reconstructs as all-valid.
@@ -7038,9 +7307,38 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if n_live > 0:
                 disk_mask[:n_live] = mask[:n_live] if no_deletions else mask[live_pos]
 
-        storage.save_schema(self._schema_dict_with_computed())
+        schema_dict = self._schema_dict_with_computed()
+        schema_dict.pop("source_bindings_version", None)
+        schema_dict.pop("source_columns", None)
+        storage.save_schema(schema_dict)
+        attrs = self.attrs[:]
+        if attrs:
+            vlmeta = blosc2.SChunk()
+            for key, value in attrs.items():
+                vlmeta.vlmeta[key] = value
+            storage.save_vlmeta(vlmeta)
 
-    def save(self, urlpath: str, *, overwrite: bool = False) -> None:
+    def _save_sources_to_storage(self, storage: TableStorage) -> None:
+        """Persist identity-mapped source bindings without reading remote payloads."""
+        if self.base is not None:
+            raise ValueError("preserve_sources requires an unfiltered root table")
+        n_rows = len(self)
+        capacity = max(n_rows, 1)
+        chunks, blocks = compute_chunks_blocks((capacity,))
+        valid = storage.create_valid_rows(shape=(capacity,), chunks=chunks, blocks=blocks)
+        if n_rows:
+            valid[:n_rows] = True
+        for name in self.col_names:
+            storage.install_column(name, self._cols[name])
+        storage.save_schema(self._schema_dict_with_computed())
+        attrs = self.attrs[:]
+        if attrs:
+            vlmeta = blosc2.SChunk()
+            for key, value in attrs.items():
+                vlmeta.vlmeta[key] = value
+            storage.save_vlmeta(vlmeta)
+
+    def save(self, urlpath: str, *, overwrite: bool = False, preserve_sources: bool = False) -> None:
         """Persist this table to disk at *urlpath*.
 
         This writes a standalone copy and returns ``None``; use :meth:`copy`
@@ -7060,12 +7358,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         overwrite:
             If ``False`` (default), raise :exc:`ValueError` when *urlpath*
             already exists.  Set to ``True`` to replace an existing table.
+        preserve_sources:
+            Keep RemoteArray columns as references instead of materializing
+            them. This is valid only for an unfiltered source-bound root table.
+            The default writes an independent local copy.
 
         Raises
         ------
         ValueError
             If *urlpath* already exists and ``overwrite=False``.
         """
+        if preserve_sources and self.base is not None:
+            raise ValueError("preserve_sources requires an unfiltered root table")
         if self.base is not None:
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
@@ -7081,7 +7385,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 os.remove(target_path)
 
-        self._save_to_storage(file_storage)
+        if preserve_sources:
+            if not self._source_bound:
+                raise ValueError("preserve_sources requires a source-bound CTable")
+            self._save_sources_to_storage(file_storage)
+        else:
+            self._save_to_storage(file_storage)
         file_storage.close()
 
     @classmethod
@@ -7097,13 +7406,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         schema = schema_from_dict(schema_dict)
         col_names = [c["name"] for c in schema_dict["columns"]]
 
-        obj = cls.__new__(cls)
+        obj = object.__new__(cls)
         obj._row_type = None
         obj._validate = True
         obj._table_cparams = None
         obj._table_dparams = None
         obj._storage = storage
         obj._read_only = storage.is_read_only()
+        obj._load_source_binding_metadata(schema_dict)
+        if obj._source_bound:
+            obj._read_only = True
         obj._schema = schema
         obj._cols = {}
         obj._col_widths = {}
@@ -7111,6 +7423,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj.auto_compact = False
         obj._create_summary_index = schema_dict.get("create_summary_index", True)
         obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
+        if obj._source_bound:
+            obj._create_summary_index = False
+            obj._summary_indexes_built = True
         obj.base = None
 
         obj._valid_rows = storage.open_valid_rows()
@@ -7144,7 +7459,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized._save_to_treestore(store, full_key)
             return
         storage = TreeStoreTableStorage(store, full_key, mode="a", owns_store=False)
-        self._save_to_storage(storage)
+        if self._source_bound:
+            self._save_sources_to_storage(storage)
+        else:
+            self._save_to_storage(storage)
         # storage is non-owning; outer store handles persistence
 
     @classmethod
@@ -7321,6 +7639,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._table_dparams = parent._table_dparams
         obj._storage = None
         obj._read_only = parent._read_only  # inherit: only True for mode="r" disk tables
+        obj._remote_view_storage = parent._remote_read_storage()
         obj._schema = parent._schema
         obj._cols = parent._cols  # shared — views cannot change row structure
         obj._computed_cols = parent._computed_cols  # shared — LazyExpr refs remain valid
@@ -7634,6 +7953,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._table_dparams = self._table_dparams
         obj._storage = None
         obj._read_only = self._read_only
+        obj._remote_view_storage = self._remote_read_storage()
         obj._valid_rows = self._valid_rows
         obj._n_rows = self._known_n_rows()
         obj._last_pos = self._last_pos
@@ -8112,8 +8432,40 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if any(name in self.col_names and self[name].is_dictionary for name in names):
             dict_real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
 
-        for start in range(0, self._n_rows, batch_size):
-            stop = min(start + batch_size, self._n_rows)
+        remote = self._remote_read_storage()
+        parallel = (
+            remote is not None and remote._owner.is_mutable and not getattr(remote._owner, "shared", False)
+        )
+        batches = (
+            self._remote_position_batches(batch_size)
+            if parallel
+            else (
+                (start, min(start + batch_size, self._n_rows), None)
+                for start in range(0, self._n_rows, batch_size)
+            )
+        )
+        for start, stop, positions in batches:
+            remote_values, remote_nulls = {}, {}
+            if parallel:
+                from blosc2.ctable_remote_read import column_values
+
+                leaves = [name for name in names if name in self.col_names]
+                remote_values = column_values(self, leaves, positions, null_masks=remote_nulls)
+
+            def read_values(name, remote_values=remote_values, start=start, stop=stop):
+                return remote_values[name] if name in remote_values else self[name][start:stop]
+
+            def read_nulls(
+                name, values, remote_values=remote_values, remote_nulls=remote_nulls, start=start, stop=stop
+            ):
+                if name in remote_values:
+                    return (
+                        remote_nulls.get(name)
+                        if self[name]._nulls.kind == NULL_MASK
+                        else self[name]._nulls.mask_for_values(values)
+                    )
+                return self[name]._nulls.null_mask_slice(values, start, stop)
+
             arrays = []
             for name in names:
                 cc = self._schema.columns_by_name.get(name)
@@ -8130,7 +8482,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     spec = self._schema.columns_by_name[name].spec
                     arr8 = self._cols[name]
                     nv = col.null_value
-                    if self.base is None and self._last_pos == self._n_rows and stop <= arr8._persisted_rows:
+                    if (
+                        not parallel
+                        and self.base is None
+                        and self._last_pos == self._n_rows
+                        and stop <= arr8._persisted_rows
+                    ):
                         # Dense root table: logical rows == persisted rows, so
                         # export straight from the offsets/bytes buffers with
                         # no per-row decode (storage is already Arrow layout).
@@ -8138,8 +8495,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                             arr8.arrow_slice(pa, start, stop, nv, valid=col._nulls.valid_slice(start, stop))
                         )
                         continue
-                    values = col[start:stop]  # StringDType array; nulls per this column's channel
-                    null_mask = col._nulls.null_mask_slice(values, start, stop)
+                    values = read_values(name)  # StringDType array; nulls per this column's channel
+                    null_mask = read_nulls(name, values)
                     arrays.append(
                         pa.array(
                             values.astype(object),
@@ -8182,12 +8539,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     continue
                 if col.is_ndarray:
                     spec = self._schema.columns_by_name[name].spec
-                    values = np.asarray(col[start:stop])
+                    values = np.asarray(read_values(name))
                     # Row-level under mask storage.  A sentinel ndarray column
                     # keeps the older, lossier rule -- a row is null only when
                     # *every* element equals the sentinel -- because that is the
                     # only thing its storage can express.
-                    null_mask = col._nulls.null_mask_slice(values, start, stop)
+                    null_mask = read_nulls(name, values)
                     pa_type = self._pa_type_from_spec(pa, spec)
                     flat_values = np.ascontiguousarray(values.reshape(-1))
                     pa_values = pa.array(flat_values, type=pa_type.value_type)
@@ -8199,8 +8556,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         )
                     )
                     continue
-                arr = np.asarray(col[start:stop])
-                null_mask = col._nulls.null_mask_slice(arr, start, stop)
+                arr = np.asarray(read_values(name))
+                null_mask = read_nulls(name, arr)
                 if arr.dtype.kind in "US":
                     # pyarrow reads the mask alongside the values, so the null
                     # slots need no substitution here — under mask storage they
@@ -9362,13 +9719,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if cls._is_list_column(col):
                 if getattr(col.spec, "storage", None) == "batch":
                     col.spec.serializer = list_serializer
-                    if blosc2_batch_size is not None:
-                        col.spec.batch_rows = blosc2_batch_size
+                    col.spec.batch_rows = blosc2_batch_size
                     if blosc2_items_per_block is not None:
                         col.spec.items_per_block = blosc2_items_per_block
             elif cls._is_varlen_scalar_column(col):
-                if blosc2_batch_size is not None:
-                    col.spec.batch_rows = blosc2_batch_size
+                col.spec.batch_rows = blosc2_batch_size
                 if blosc2_items_per_block is not None:
                     col.spec.items_per_block = blosc2_items_per_block
         metadata = cls._arrow_schema_metadata(schema)
@@ -10208,6 +10563,29 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         import pandas as pd
 
+        remote = self._remote_read_storage()
+        if (
+            remote is not None
+            and remote._owner.is_mutable
+            and not getattr(remote._owner, "shared", False)
+            and self.nrows
+        ):
+            from blosc2.ctable_remote_read import column_values
+
+            frames = []
+            for _, _, positions in self._remote_position_batches(1024):
+                nulls = {}
+                values = column_values(self, self.col_names, positions, null_masks=nulls)
+                data = {}
+                for name in self.col_names:
+                    col = self[name]
+                    raw = list(values[name]) if col.is_ndarray else values[name]
+                    data[name] = self._pandas_values(
+                        pd, col, raw, nulls=nulls.get(name, np.zeros(len(positions), dtype=bool))
+                    )
+                frames.append(pd.DataFrame(data))
+            return pd.concat(frames, ignore_index=True)
+
         data = {}
         for name in self.col_names:
             col = self[name]
@@ -10267,7 +10645,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return cells
 
     @staticmethod
-    def _pandas_values(pd, col, values):
+    def _pandas_values(pd, col, values, *, nulls=None):
         """*values*, with this column's nulls turned into something pandas reads as NA.
 
         A null slot holds the fill under mask storage and the sentinel under a
@@ -10284,7 +10662,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         channel = col._nulls
         kind = channel.kind
         if kind == NULL_MASK:
-            nulls = channel.null_mask()  # one byte per row, off the sidecar
+            if nulls is None:
+                nulls = channel.null_mask()  # one byte per row, off the sidecar
         elif kind == NULL_SENTINEL:
             nulls = channel.mask_for_values(values)  # in band, from what we just read
         else:
@@ -11671,6 +12050,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _schema_dict_with_computed(self) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""
         d = schema_to_dict(self._schema)
+        if getattr(self, "_source_bound", False):
+            d["source_bindings_version"] = 1
+            d["source_columns"] = sorted(self._source_columns)
         n_rows = self._known_n_rows()
         if n_rows is not None:
             d["n_rows"] = n_rows
@@ -14213,6 +14595,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._last_pos = n
         return result
 
+    def materialize(
+        self,
+        *,
+        urlpath: str | os.PathLike[str] | None = None,
+        overwrite: bool = False,
+        compact: bool = True,
+        chunks: int | tuple[int, ...] | None = None,
+        blocks: int | tuple[int, ...] | None = None,
+        cparams: dict[str, Any] | None = None,
+    ) -> CTable:
+        """Return an independent local copy of this table or view."""
+        return self.copy(
+            compact=compact,
+            urlpath=urlpath,
+            overwrite=overwrite,
+            chunks=chunks,
+            blocks=blocks,
+            cparams=cparams,
+        )
+
     def copy(  # noqa: C901
         self,
         compact: bool = True,
@@ -14397,6 +14799,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             result._valid_rows[:n] = valid_np[:n]
             result._n_rows = n_live
             result._last_pos = None  # recomputed lazily on next append
+
+        for key, value in self.attrs[:].items():
+            result.attrs[key] = value
 
         return result
 
@@ -14611,6 +15016,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         storage = getattr(self, "_storage", None)
         if storage is None:
+            if self.base is not None:
+                return self.base.vlmeta
             raise AttributeError("CTable has no storage backend")
         if not hasattr(storage, "_open_meta"):
             # In-memory table: create a simple SChunk to hold vlmeta lazily
@@ -14666,7 +15073,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 dtype_label = self._dtype_info_label(
                     getattr(self._cols[name], "dtype", None), spec
                 ) + self._null_info_tag(spec)
-                cbytes = getattr(self._cols[name], "cbytes", None)
+                cbytes = column_cbytes_for_info(self._cols[name])
                 if cbytes is not None:
                     nbytes = getattr(self._cols[name], "nbytes", None)
                     detail = f"cbytes: {format_nbytes_human(cbytes)}"
@@ -14676,18 +15083,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 else:
                     column_summary[name] = _InfoLiteral(dtype_label)
 
-        index_summary = {}
-        for idx in self.indexes:
-            stale = " stale" if idx.stale else ""
-            label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
-            stats = idx.storage_stats()
-            if stats is None:
-                suffix = "(size=n/a, sidecars not directly addressable)"
-            else:
-                _, cbytes, _ = stats
-                suffix = f"({format_nbytes_human(cbytes)})"
-            index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
+        remote_storage = self._remote_read_storage()
+        if remote_storage is not None and remote_storage._owner.format == "hdf5":
+            remote_storage._owner.ensure_pytables_indexes(remote_storage._root_key)
+            index_summary = dict.fromkeys(remote_storage._metadata().get("pytables_indexes", {}), "[opsi]")
+        else:
+            index_summary = {}
+            for idx in self.indexes:
+                stale = " stale" if idx.stale else ""
+                label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
+                stats = idx.storage_stats()
+                if stats is None:
+                    suffix = "(size=n/a, sidecars not directly addressable)"
+                else:
+                    _, cbytes, cratio = stats
+                    suffix = f"(cbytes: {format_nbytes_human(cbytes)}, cratio: {cratio:.2f}x)"
+                index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
+        compression_available = all(column_cbytes_for_info(col) is not None for col in self._cols.values())
         items = [
             ("type", self.__class__.__name__),
             ("storage", storage_type),
@@ -14697,8 +15110,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ("chunks", self.chunks if self.chunks is not None else "none (no fixed-size columns)"),
             ("blocks", self.blocks if self.blocks is not None else "none (no fixed-size columns)"),
             ("nbytes", format_nbytes_info(self.nbytes)),
-            ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}x"),
+            ("cbytes", format_nbytes_info(self.cbytes) if compression_available else "n/a"),
+            ("cratio", f"{self.cratio:.2f}x" if compression_available else "n/a"),
             ("columns", column_summary),
             ("indexes", index_summary if index_summary else "none"),
         ]

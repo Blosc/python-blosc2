@@ -39,6 +39,7 @@ def b2z_url(tmp_path, *, threshold=0):
     return url, data
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_b2z_discovery_and_dispatch(tmp_path, monkeypatch):
     url, data = b2z_url(tmp_path)
     fs = fsspec.filesystem("memory")
@@ -50,9 +51,10 @@ def test_b2z_discovery_and_dispatch(tmp_path, monkeypatch):
         return cat_file(self, path, start=start, end=end, **kwargs)
 
     monkeypatch.setattr(type(fs), "cat_file", counted)
-    with pytest.raises(NotImplementedError, match="B2Z containers"):
-        blosc2.open(url)
-    assert reads == []
+    with blosc2.open(url) as store:
+        assert isinstance(store, blosc2.RemoteStore)
+    assert reads
+    reads.clear()
     with StoreBrowser(url) as browser:
         assert browser.is_tree
         assert [n.name for n in browser.list_children()] == ["group"]
@@ -255,6 +257,7 @@ async def test_remote_tui_lifecycle(tmp_path, monkeypatch):
         await pilot.press("q")
 
 
+@pytest.mark.usefixtures("b2z_range_reads")
 def test_embedded_b2z_index_is_bounded(tmp_path, monkeypatch):
     url, data = b2z_url(tmp_path, threshold=10**9)
     fs = fsspec.filesystem("memory")
@@ -515,12 +518,13 @@ def test_b2z_empty_groups_and_ctable_boundaries(tmp_path, threshold):
         assert [(n.name, n.kind) for n in browser.list_children()] == [
             ("empty", "group"),
             ("ordinary", "group"),
-            ("table", "unsupported"),
+            ("table", "ctable"),
         ]
         assert browser.list_children("/empty") == []
         assert browser.get_info("/empty").user_attrs == {"empty": True}
         assert browser.list_children("/table") == []
-        assert "CTable" in browser.get_info("/table").metadata["preview"]
+        assert browser.get_info("/table").metadata["type"] == "B2Z ctable"
+        np.testing.assert_array_equal(browser.preview("/table", max_rows=1)["data"]["x"], [3])
 
 
 def test_b2z_large_embedded_chunk_notice():
@@ -540,7 +544,7 @@ def test_b2z_large_embedded_chunk_notice():
 
 def test_b2z_explicit_localization(tmp_path):
     url, data = b2z_url(tmp_path)
-    with blosc2.open(url, cache_dir=tmp_path / "localized", mode="r") as store:
+    with blosc2.open(url, cache_dir=tmp_path / "localized", mode="r", lazy=False) as store:
         assert isinstance(store, blosc2.TreeStore)
         np.testing.assert_array_equal(store["/group/a"][:2, :3], data[:2, :3])
 

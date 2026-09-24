@@ -39,6 +39,16 @@ def test_list_schema_roundtrip():
     assert restored.columns_by_name["tags"].spec.batch_rows == 32
 
 
+def test_legacy_list_schema_without_batch_rows_keeps_caller_managed_batches():
+    restored = schema_from_dict(
+        {
+            "version": 1,
+            "columns": [{"name": "tags", "kind": "list", "item": {"kind": "int32"}}],
+        }
+    )
+    assert restored.columns_by_name["tags"].spec.batch_rows is None
+
+
 def test_list_annotation_mismatch_rejected():
     @dataclass
     class Bad:
@@ -46,3 +56,18 @@ def test_list_annotation_mismatch_rejected():
 
     with pytest.raises(TypeError, match="list spec"):
         compile_schema(Bad)
+
+
+def test_nested_list_annotation_and_schema_roundtrip():
+    @dataclass
+    class Nested:
+        values: list[list[int]] = blosc2.field(  # noqa: RUF009
+            blosc2.list(blosc2.list(blosc2.int32(nullable=True), nullable=True))
+        )
+
+    schema = compile_schema(Nested)
+    restored = schema_from_dict(schema_to_dict(schema))
+    spec = restored.columns_by_name["values"].spec
+    assert isinstance(spec.item_spec, ListSpec)
+    assert spec.item_spec.nullable
+    assert spec.item_spec.item_spec.nullable

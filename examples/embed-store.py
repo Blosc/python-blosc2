@@ -21,7 +21,7 @@ urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo
 arr_remote = blosc2.open(urlpath, mode="r")
 estore["/dir1/node3"] = arr_remote
 arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node4"
+arr_external.attrs["description"] = "This is metadata for /dir1/node4"
 estore["/dir2/node4"] = arr_external
 
 print("EmbedStore keys:", list(estore.keys()))

@@ -13,7 +13,9 @@ Topics
 
     benchmarks
     optimization_tips
+    remote_objects
     remote_arrays
+    remote_tables
     sharing_across_processes
     pandas_engine
 

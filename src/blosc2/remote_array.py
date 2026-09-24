@@ -14,6 +14,7 @@ import contextlib
 import json
 import math
 import os
+import tempfile
 import threading
 import weakref
 from collections.abc import Mapping
@@ -30,12 +31,14 @@ import blosc2
 from blosc2.b2objects import (
     _B2OBJECT_USER_VLMETA_KEY,
     make_b2object_carrier,
+    read_b2object_payload,
     read_b2object_user_vlmeta,
     write_b2object_payload,
     write_b2object_user_vlmeta,
 )
 from blosc2.core import fsspec_cache_path, parse_container_url, storage_options_fingerprint
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.remote_object import RemoteObject
 
 DEFAULT_DISK_CACHE_BYTES = 256 * 2**20
 
@@ -266,6 +269,15 @@ def _validate_max_concurrency(value: int | None) -> int | None:
     return value
 
 
+def _local_source_path(urlpath, enabled):
+    if not enabled:
+        return None, urlpath
+    if not isinstance(urlpath, str) or (urlsplit(urlpath).scheme and not os.path.splitdrive(urlpath)[0]):
+        raise ValueError("local cache sources must use a local filesystem path")
+    urlpath = os.path.abspath(urlpath)
+    return urlpath, urlpath
+
+
 def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
     if policy is blosc2.CachePolicy.NONE:
         if limit is not None:
@@ -277,38 +289,59 @@ def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
         raise ValueError(f"persisted {policy.name} RemoteArray requires positive max_cache_bytes")
 
 
-def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, store_attachment=False):
+def _validate_authorized_source(
+    urlpath, storage_options, source_descriptor, *, store_attachment=False, allow_local_source=False
+):
     if storage_options is not None:
         raise ValueError("storage_options cannot be used with an authorized source")
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
-    if not isinstance(urlpath, (blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls, blosc2.B2ZNDSource)):
+    if not isinstance(
+        urlpath,
+        (blosc2.C2Array, blosc2.FsspecNDSource, blosc2.ZarrNDSource, hdf5_cls, blosc2.B2ZNDSource),
+    ):
         raise TypeError(
-            "source_descriptor requires an authorized FsspecNDSource, ZarrNDSource, HDF5NDSource, or B2ZNDSource"
+            "source_descriptor requires an authorized C2Array, FsspecNDSource, ZarrNDSource, "
+            "HDF5NDSource, or B2ZNDSource"
         )
     assume_immutable = _validate_assume_immutable(
         source_descriptor.get("assume_immutable"), "source_descriptor assume_immutable"
     )
-    expected = {
-        "kind": (
-            "b2z"
-            if isinstance(urlpath, blosc2.B2ZNDSource)
-            else "hdf5"
-            if isinstance(urlpath, hdf5_cls)
-            else "zarr"
-            if isinstance(urlpath, blosc2.ZarrNDSource)
-            else "fsspec"
-        ),
-        "version": 1,
-        "urlpath": urlpath.urlpath,
-        "assume_immutable": assume_immutable,
-    }
+    if isinstance(urlpath, blosc2.C2Array):
+        expected = {
+            "kind": "caterva2",
+            "version": 1,
+            "path": urlpath.path,
+            "urlbase": urlpath.urlbase,
+            "assume_immutable": assume_immutable,
+        }
+    else:
+        expected = {
+            "kind": (
+                "b2z"
+                if isinstance(urlpath, blosc2.B2ZNDSource)
+                else "hdf5"
+                if isinstance(urlpath, hdf5_cls)
+                else "zarr"
+                if isinstance(urlpath, blosc2.ZarrNDSource)
+                else "fsspec"
+            ),
+            "version": 1,
+            "urlpath": urlpath.urlpath,
+            "assume_immutable": assume_immutable,
+        }
     if isinstance(urlpath, (hdf5_cls, blosc2.B2ZNDSource)):
         expected["dataset"] = urlpath.dataset
     if isinstance(urlpath, blosc2.B2ZNDSource) and urlpath._archive.urlpath != urlpath.urlpath:
         raise ValueError("B2Z source URL does not match its archive")
     if source_descriptor != expected:
         raise ValueError("source_descriptor does not match the supplied source")
-    validate_persistable_url(urlpath.urlpath)
+    persisted_url = urlpath.urlbase if isinstance(urlpath, blosc2.C2Array) else urlpath.urlpath
+    if persisted_url is not None and not (
+        store_attachment
+        and allow_local_source
+        and (not urlsplit(persisted_url).scheme or os.path.splitdrive(persisted_url)[0])
+    ):
+        validate_persistable_url(persisted_url)
     return urlpath, dict(expected)
 
 
@@ -326,8 +359,11 @@ def _open_url_source(
     seed=None,
     blocks=None,
     cparams=None,
+    source_cache_dir=None,
+    hdf5_index_explicit=True,
+    local_source=False,
 ):
-    if persistable:
+    if persistable and not local_source:
         validate_persistable_url(urlpath)
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
     if storage_options is not None:
@@ -354,6 +390,8 @@ def _open_url_source(
             urlpath,
             dataset,
             hdf5_index=hdf5_index,
+            _source_cache_dir=source_cache_dir,
+            _index_explicit=hdf5_index_explicit,
             _traffic=traffic,
             blocks=blocks,
             cparams=cparams,
@@ -369,7 +407,9 @@ def _open_url_source(
     elif source_format == "b2z":
         if not assume_immutable:
             raise NotImplementedError("mutable B2Z sources are not supported")
-        src = blosc2.B2ZNDSource(urlpath, dataset, _traffic=traffic, _seed=seed, **kwargs)
+        src = blosc2.B2ZNDSource(
+            urlpath, dataset, _traffic=traffic, _seed=seed, _source_cache_dir=source_cache_dir, **kwargs
+        )
         source = {
             "kind": "b2z",
             "version": 1,
@@ -506,15 +546,26 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format, hdf5_index=No
     return urlpath, resolved_dataset, resolved_format
 
 
-class RemoteArray(blosc2.Operand):
+class RemoteArray(RemoteObject, blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
+    ``blosc2.open(local_path, cache_dir=...)`` also returns this read-only
+    wrapper for local arrays; these local references cannot be exported.
+
     With :attr:`CachePolicy.DISK`, the public constructor uses the persisted
-    B2ND carrier itself as the bounded cache.  Server code can instead use
-    :meth:`with_sparse_cache` to keep a private directory-backed runtime cache
-    beside a portable carrier. With :attr:`CachePolicy.MEMORY`, chunks are
-    retained in process memory up to a bounded size. With
+    B2ND carrier itself as the bounded cache. Use
+    ``blosc2.open(url, cache_dir=..., shared_cache=True)`` for a process-shared
+    sparse runtime cache. Server code can also use :meth:`with_sparse_cache`
+    for advanced attachment beside a portable carrier. With
+    :attr:`CachePolicy.MEMORY`, chunks are retained in process memory up to a bounded size. With
     :attr:`CachePolicy.NONE`, reads retain no data.
+
+    .. note::
+
+       RemoteArray manages supported remote sources and their portable
+       descriptors, using :ref:`Proxy` internally for reads and caching. For a
+       custom source implementing :ref:`ProxyNDSource` or :ref:`ProxySource`,
+       use Proxy directly; RemoteArray does not accept arbitrary source objects.
 
     Parameters
     ----------
@@ -545,13 +596,19 @@ class RemoteArray(blosc2.Operand):
         an fsspec URL.
     source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
         Format of a URL source, inferred from its container suffix when omitted.
-    dataset: str, optional
+    path: str, optional
         Array path within an HDF5, Zarr, or B2Z container. B2Z supports external
-        NDArray leaves in immutable archives, e.g. ``dataset="d0/a3"``.
+        NDArray leaves in immutable archives, e.g. ``path="d0/a3"``.
+        None leaves selection unspecified; ``""`` and ``"/"`` select the root.
+        Do not combine with a selector embedded in the URL.
+    dataset: str, optional
+        Supported alias of ``path``. If both are given, they must agree after
+        stripping leading/trailing slashes.
     hdf5_index: dict, str, or path-like, optional
-        Pre-computed native HDF5 index for the dataset, or the path to a JSON
-        encoding of one. It must match the source URL. Legacy HDF5 reference
-        maps are rejected; omit it to rescan and build a native index.
+        Pre-computed native HDF5 index for the dataset, or a local or remote
+        fsspec URL to its JSON encoding. It must match the source URL and dataset
+        scope. Legacy HDF5 reference maps are rejected; omit it to scan the
+        source and build a native index.
     assume_immutable: bool, optional
         Skip remote identity checks before reads. Defaults to ``True``. Set to
         ``False`` when the object at the URL may be replaced.
@@ -570,6 +627,7 @@ class RemoteArray(blosc2.Operand):
         source_format: str | None = None,
         assume_immutable: bool = True,
         dataset: str | None = None,
+        path: str | None = None,
         hdf5_index=None,
         _carrier=None,
         _runtime_cache_path=None,
@@ -578,7 +636,11 @@ class RemoteArray(blosc2.Operand):
         _source_cparams=None,
         _store_owner=None,
         _runtime_is_mutable: bool = True,
+        _defer_cache: bool = False,
+        _shared_cache: bool = False,
+        _local_source: bool = False,
     ):
+        dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(cache_policy, blosc2.CachePolicy):
             raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
         assume_immutable = _validate_assume_immutable(assume_immutable)
@@ -593,7 +655,11 @@ class RemoteArray(blosc2.Operand):
         urlpath, self._dataset, self._source_format = _resolve_init_dataset_and_url(
             urlpath, dataset, source_format, hdf5_index
         )
+        _local_source = _local_source and cache_policy is blosc2.CachePolicy.DISK
+        self._local_source = _local_source
+        self._local_source_path, urlpath = _local_source_path(urlpath, _local_source)
         self._authorized_source = _source_descriptor is not None
+        hdf5_index_explicit = hdf5_index is not None
         shared_index_path = None
         if (
             not self._authorized_source
@@ -603,11 +669,21 @@ class RemoteArray(blosc2.Operand):
             and hdf5_index is None
         ):
             shared_index_path = Path(
-                fsspec_cache_path(urlpath, cache_dir, ".hdf5-index.b2", storage_options=storage_options)
+                fsspec_cache_path(
+                    urlpath,
+                    cache_dir,
+                    ".hdf5-index.b2",
+                    storage_options=storage_options,
+                    create_parent=not _defer_cache,
+                )
             )
         if self._authorized_source:
             self.src, self._source = _validate_authorized_source(
-                urlpath, storage_options, _source_descriptor, store_attachment=_store_owner is not None
+                urlpath,
+                storage_options,
+                _source_descriptor,
+                store_attachment=_store_owner is not None,
+                allow_local_source=getattr(_store_owner, "local_source", False),
             )
         else:
             read_seed = (
@@ -625,7 +701,9 @@ class RemoteArray(blosc2.Operand):
             ):
                 # A DISK carrier already holds the container bootstrap from a
                 # previous run; reuse it rather than redoing the remote discovery.
-                path = self._carrier_path(cache_dir, cache_path, urlpath, storage_options)
+                path = self._carrier_path(
+                    cache_dir, cache_path, urlpath, storage_options, create_parent=not _defer_cache
+                )
                 if os.path.exists(path):
                     with contextlib.suppress(Exception):
                         cached = blosc2.blosc2_ext.open(path, "r", 0, dparams=blosc2.DParams(nthreads=1))
@@ -652,9 +730,19 @@ class RemoteArray(blosc2.Operand):
                 seed=seed,
                 blocks=_source_blocks,
                 cparams=_source_cparams,
+                source_cache_dir=cache_dir if cache_policy is blosc2.CachePolicy.DISK else None,
+                hdf5_index_explicit=hdf5_index_explicit,
+                local_source=_local_source,
             )
+            if _local_source:
+                self.src.stamp = ("local", urlpath, self._dataset, self._source_format)
         self._assume_immutable = assume_immutable
         self._storage_options = storage_options
+        self._refresh_cache_dir = cache_dir
+        self._source_blocks = _source_blocks
+        self._source_cparams = _source_cparams
+        if _shared_cache:
+            _runtime_cache_path = self._carrier_path(cache_dir, None) + ".cache"
         self._runtime_urlpath = self._runtime_source(urlpath)
         self._expected_geometry = self._geometry(self.src)
         self._expected_cparams = self.src.cparams
@@ -673,20 +761,54 @@ class RemoteArray(blosc2.Operand):
         self._runtime_is_mutable = _runtime_is_mutable
         self._mutable = False
 
-        self._initialize_runtime_cache(cache_dir, cache_path, _runtime_cache_path)
-
-        _publish_hdf5_index(shared_index_path, self._carrier, scanned=hdf5_index is None)
-
-        if self._carrier is not None:
-            if self._cached_meta is None:
-                self._cached_meta = self._meta_from_carrier(self._carrier)
-            if self._cached_vlmeta is None:
-                self._cached_vlmeta = read_b2object_user_vlmeta(self._carrier)
+        self._deferred_cache = (
+            cache_dir,
+            cache_path,
+            _runtime_cache_path,
+            shared_index_path,
+            hdf5_index is None,
+        )
+        if not _defer_cache:
+            self._complete_deferred_cache()
 
         if _store_owner is not None:
             _store_owner.acquire()
             self._store_owner = _store_owner
             self._store_finalizer = weakref.finalize(self, _store_owner.release)
+
+    def _complete_deferred_cache(self):
+        if self._deferred_cache is None:
+            return
+        cache_dir, cache_path, runtime_cache_path, shared_index_path, scanned = self._deferred_cache
+        self._initialize_runtime_cache(cache_dir, cache_path, runtime_cache_path)
+        self._publish_source_cache()
+        _publish_hdf5_index(shared_index_path, self._carrier, scanned=scanned)
+        if self._carrier is not None:
+            if self._cached_meta is None:
+                self._cached_meta = self._meta_from_carrier(self._carrier)
+            if self._cached_vlmeta is None:
+                self._cached_vlmeta = read_b2object_user_vlmeta(self._carrier)
+        self._deferred_cache = None
+
+    def _publish_source_cache(self):
+        if not self._authorized_source and isinstance(self.src, blosc2.B2ZNDSource):
+            publish = getattr(self.src._archive, "publish_source", None)
+            if publish is not None:
+                publish()
+        if (
+            not self._authorized_source
+            and isinstance(self.src, blosc2.HDF5NDSource)
+            and self.src._source_cache_path is not None
+        ):
+            from blosc2.hdf5_source import publish_hdf5_source_cache
+
+            _store_hdf5_index(self._carrier, self.src._hdf5_index)
+            publish_hdf5_source_cache(
+                self.src._source_cache_path,
+                self.src._blob,
+                self.src._hdf5_index,
+                expected=self.src._source_cache_marker,
+            )
 
     def _initialize_runtime_cache(self, cache_dir, cache_path, _runtime_cache_path):
         if self._store_owner is not None and self.cache_policy is not blosc2.CachePolicy.NONE:
@@ -745,6 +867,101 @@ class RemoteArray(blosc2.Operand):
                     self._closed = True
                     hdf5_source.close()
 
+    def refresh(self) -> None:
+        """Reload a standalone source and discard its cached payload and metadata.
+
+        Refresh arrays obtained from a RemoteStore through the root store instead.
+        Ordinary disk caches must not be used concurrently by other processes.
+        """
+        with self._operation_lock:
+            self._check_open()
+            if self._store_owner is not None:
+                raise ValueError("Refresh the root RemoteStore, then retrieve this array again")
+            if self._shared_runtime_cache:
+                raise NotImplementedError("Shared sparse array caches cannot be refreshed directly")
+            if not self.is_cache_mutable:
+                raise ValueError("Cannot refresh an immutable RemoteArray carrier")
+
+            urlpath = self._runtime_urlpath
+            if isinstance(urlpath, str) and self._source_format == "zarr" and self._dataset:
+                if self._local_source:
+                    urlpath = str(Path(urlpath).parents[len(self._dataset.split("/")) - 1])
+                else:
+                    parsed = urlsplit(urlpath)
+                    suffix = f"/{self._dataset}"
+                    if parsed.path.endswith(suffix):
+                        urlpath = urlunsplit(parsed._replace(path=parsed.path[: -len(suffix)]))
+            options = {
+                "cache_policy": self.cache_policy,
+                "max_concurrency": self._max_concurrency,
+                "storage_options": self._storage_options,
+                "assume_immutable": self._assume_immutable,
+                "dataset": self._dataset,
+                "_local_source": self._local_source,
+                "_source_blocks": self._source_blocks,
+                "_source_cparams": self._source_cparams,
+            }
+            if isinstance(urlpath, str):
+                options["source_format"] = self._source_format
+            if self.cache_policy is not blosc2.CachePolicy.NONE:
+                options["max_cache_bytes"] = self.max_cache_bytes
+
+            cache_path = self.cache_path if self.cache_policy is blosc2.CachePolicy.DISK else None
+            if self.cache_policy is blosc2.CachePolicy.DISK and cache_path is None:
+                raise ValueError("Refresh requires a writable disk cache path")
+            temporary = None
+            fresh = None
+            try:
+                if cache_path is not None:
+                    fd, temporary = tempfile.mkstemp(
+                        prefix=".refresh-", suffix=".b2nd", dir=Path(cache_path).parent
+                    )
+                    os.close(fd)
+                    os.unlink(temporary)
+                    options["cache_path"] = temporary
+                fresh = type(self)(urlpath, **options)
+                if temporary is not None:
+                    self._discard_source_snapshots()
+                    os.replace(temporary, cache_path)
+                    carrier = blosc2.blosc2_ext.open(cache_path, "a", 0, dparams=blosc2.DParams(nthreads=1))
+                    fresh._carrier = fresh._runtime_cache = carrier
+                    fresh._attach_carrier_cache()
+                    fresh._cache_status = "refreshed"
+                old_source = self.src
+                state = fresh.__dict__.copy()
+                state["_operation_lock"] = self._operation_lock
+                state["_refresh_lock"] = self._refresh_lock
+                state["_refresh_cache_dir"] = self._refresh_cache_dir
+                self.__dict__ = state
+                if isinstance(old_source, blosc2.HDF5NDSource):
+                    old_source.close()
+            finally:
+                if temporary is not None:
+                    Path(temporary).unlink(missing_ok=True)
+
+    def _discard_source_snapshots(self):
+        if self._refresh_cache_dir is None or self._local_source:
+            return
+        if self._source_format in {"hdf5", "b2z"}:
+            from blosc2.remote_source_cache import source_cache_path
+
+            path = source_cache_path(
+                self._source["urlpath"],
+                self._refresh_cache_dir,
+                self._storage_options,
+                kind=self._source_format,
+            )
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".json").unlink(missing_ok=True)
+        if self._source_format == "hdf5":
+            index = fsspec_cache_path(
+                self._source["urlpath"],
+                self._refresh_cache_dir,
+                ".hdf5-index.b2",
+                storage_options=self._storage_options,
+            )
+            Path(index).unlink(missing_ok=True)
+
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
         if isinstance(self.src, blosc2.C2Array):
@@ -764,11 +981,18 @@ class RemoteArray(blosc2.Operand):
             tuple(src.blocks),
         )
 
-    def _carrier_path(self, cache_dir, cache_path, urlpath=None, storage_options=None):
+    def _carrier_path(
+        self, cache_dir, cache_path, urlpath=None, storage_options=None, *, create_parent=True
+    ):
         if cache_path is not None:
             path = os.fspath(cache_path)
             if os.path.isdir(path):
                 raise ValueError("cache_path must name a file, not a directory")
+            if self._local_source and (
+                os.path.abspath(path) == self._local_source_path
+                or (os.path.exists(path) and os.path.samefile(path, self._local_source_path))
+            ):
+                raise ValueError("cache_path cannot overwrite the local source")
             return path
         if urlpath is None:
             urlpath = self._source.get("urlpath", self._source_identity())
@@ -776,8 +1000,16 @@ class RemoteArray(blosc2.Operand):
         if self._source_format == "zarr" and self._dataset:
             parsed = urlsplit(urlpath)
             urlpath = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")[: -len(self._dataset) - 1]))
+        cache_dataset = self._dataset
+        if self._local_source:
+            cache_dataset = f"{self._source_format}::{self._dataset or ''}"
         return fsspec_cache_path(
-            urlpath, cache_dir, ".b2nd", dataset=self._dataset, storage_options=storage_options
+            urlpath,
+            cache_dir,
+            ".b2nd",
+            dataset=cache_dataset,
+            storage_options=storage_options,
+            create_parent=create_parent,
         )
 
     def _open_or_create_carrier(self, cache_dir, cache_path):
@@ -803,6 +1035,15 @@ class RemoteArray(blosc2.Operand):
                 if stored is not None and current is not None and stored != current
                 else "reused"
             )
+            if (
+                status == "invalidated/rebuilt"
+                and isinstance(self.src, (blosc2.HDF5NDSource, blosc2.B2ZNDSource))
+                and self._geometry(carrier) != self._geometry(self.src)
+            ):
+                del carrier
+                return self._to_b2object_carrier(
+                    urlpath=path, contiguous=True, mode="w", mutable=True
+                ), status
             if status == "reused":
                 if self._cached_meta is None:
                     self._cached_meta = self._meta_from_carrier(carrier)
@@ -818,28 +1059,39 @@ class RemoteArray(blosc2.Operand):
         This is deliberately separate from ``cache_path`` in the public
         constructor: portable RemoteArray carriers remain contiguous files.
         """
+        from blosc2.remote_store_cache import lock_cache_file
+
+        # The frame lock cannot protect a directory that does not exist yet.
+        lock_path = Path(os.fspath(cache_path) + ".init.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock:
+            lock_cache_file(lock, blocking=True)
+            return self._open_sparse_cache(cache_path)
+
+    def _open_sparse_cache(self, cache_path):
         path = os.fspath(cache_path)
         if os.path.exists(path):
             if not os.path.isdir(path):
                 raise ValueError("runtime_cache_path must name a sparse frame directory")
             runtime = blosc2.blosc2_ext.open(path, "a", 0, dparams=blosc2.DParams(nthreads=1), locking=True)
-            if runtime.schunk.vlmeta.get("b2o") != self._payload(mutable=True):
-                raise ValueError(f"the sparse runtime cache at {path} has a different specification")
-            self._validate_geometry(
-                (runtime.shape, runtime.dtype, runtime.chunks, runtime.blocks), src=self.src
-            )
-            stored = runtime.schunk.vlmeta.get("proxy-stamp")
-            current = getattr(self.src, "stamp", None)
-            status = (
-                "invalidated/rebuilt"
-                if stored is not None and current is not None and stored != current
-                else "reused"
-            )
-            if status == "reused":
-                if self._cached_meta is None:
-                    self._cached_meta = self._meta_from_carrier(runtime)
-                if self._cached_vlmeta is None:
-                    self._cached_vlmeta = read_b2object_user_vlmeta(runtime)
+            with runtime.holding_lock():
+                if runtime.schunk.vlmeta.get("b2o") != self._payload(mutable=True):
+                    raise ValueError(f"the sparse runtime cache at {path} has a different specification")
+                self._validate_geometry(
+                    (runtime.shape, runtime.dtype, runtime.chunks, runtime.blocks), src=self.src
+                )
+                stored = runtime.schunk.vlmeta.get("proxy-stamp")
+                current = getattr(self.src, "stamp", None)
+                status = (
+                    "invalidated/rebuilt"
+                    if stored is not None and current is not None and stored != current
+                    else "reused"
+                )
+                if status == "reused":
+                    if self._cached_meta is None:
+                        self._cached_meta = self._meta_from_carrier(runtime)
+                    if self._cached_vlmeta is None:
+                        self._cached_vlmeta = read_b2object_user_vlmeta(runtime)
             return runtime, status
 
         if self._carrier is not None:
@@ -918,6 +1170,11 @@ class RemoteArray(blosc2.Operand):
         the mutable directory-backed runtime cache.  All processes using the
         directory must construct it through this method so frame locking and
         interrupted-mutation recovery remain enabled.
+
+        The compressed-payload budget defaults to 256 MiB; pass
+        ``max_cache_bytes=None`` for unlimited retention.
+        For ordinary shared caching, prefer
+        ``blosc2.open(url, cache_dir=..., shared_cache=True)``.
 
         ``carrier`` is the portable RemoteArray carrier.  If it contains valid
         warm chunks when the sparse runtime cache is first created, those chunks
@@ -1056,11 +1313,20 @@ class RemoteArray(blosc2.Operand):
                 _persistent_dirty=self._shared_runtime_cache,
             )
         elif self.cache_policy is blosc2.CachePolicy.MEMORY:
-            self._proxy = blosc2.Proxy(
+            proxy = blosc2.Proxy(
                 self.src,
                 _refresh_source=False,
                 _max_cache_bytes=self._cache_limit,
             )
+            if self._carrier is not None:
+                self._import_warm_seed(self._carrier, proxy._cache)
+                proxy = blosc2.Proxy(
+                    self.src,
+                    _cache=proxy._cache,
+                    _refresh_source=False,
+                    _max_cache_bytes=self._cache_limit,
+                )
+            self._proxy = proxy
         else:
             self._proxy = None
 
@@ -1079,6 +1345,9 @@ class RemoteArray(blosc2.Operand):
         seed=None,
         blocks=None,
         cparams=None,
+        source_cache_dir=None,
+        hdf5_index_explicit=True,
+        local_source=False,
     ):
         if isinstance(urlpath, blosc2.C2Array):
             if source_format not in {None, "blosc2"}:
@@ -1127,6 +1396,9 @@ class RemoteArray(blosc2.Operand):
                 seed=seed,
                 blocks=blocks,
                 cparams=cparams,
+                source_cache_dir=source_cache_dir,
+                hdf5_index_explicit=hdf5_index_explicit,
+                local_source=local_source,
             )
         else:
             raise TypeError("RemoteArray requires a URL string, URLPath, or C2Array")
@@ -1289,6 +1561,15 @@ class RemoteArray(blosc2.Operand):
         return getattr(self.src, "traffic", None)
 
     @property
+    def cbytes(self) -> int:
+        """Compressed source size, when supplied by the source format."""
+        self._check_open()
+        value = getattr(self.src, "cbytes", None)
+        if value is None:
+            raise NotImplementedError("This remote source does not report its compressed size")
+        return int(value)
+
+    @property
     def nbytes(self) -> int:
         """The uncompressed size of the remote array."""
         self._check_open()
@@ -1343,6 +1624,7 @@ class RemoteArray(blosc2.Operand):
     @property
     def source(self) -> dict:
         """A copy of the credential-free source descriptor."""
+        self._ensure_exportable_source()
         self._payload()  # Runtime-only URLs must not escape as portable descriptors.
         return dict(self._source)
 
@@ -1579,12 +1861,12 @@ class RemoteArray(blosc2.Operand):
 
     def _payload(self, mutable=None):
         url = self._source.get("urlpath", self._source.get("urlbase"))
-        if url is not None:
+        if url is not None and not self._local_source:
             validate_persistable_url(url)
         return {
             "kind": "remote_array",
             "version": 1,
-            "source": dict(self._source),
+            "source": {**self._source, **({"local": True} if self._local_source else {})},
             "cache_policy": self.cache_policy.value,
             "max_cache_bytes": self.max_cache_bytes,
             "mutable": self.mutable if mutable is None else mutable,
@@ -1656,7 +1938,12 @@ class RemoteArray(blosc2.Operand):
         write_b2object_payload(carrier, payload)
         return carrier
 
+    def _ensure_exportable_source(self):
+        if self._local_source:
+            raise ValueError("local-source caches cannot be exported as portable RemoteArray references")
+
     def _export_carrier(self, include_cache: bool, cache_policy=None, mutable=None):
+        self._ensure_exportable_source()
         if not isinstance(include_cache, bool):
             raise TypeError("include_cache must be a boolean")
         effective_mutable = self.mutable if mutable is None else mutable
@@ -1680,7 +1967,7 @@ class RemoteArray(blosc2.Operand):
                 if key.startswith("proxy-") or key == _B2OBJECT_USER_VLMETA_KEY:
                     carrier.schunk.vlmeta[key] = runtime_schunk.vlmeta[key]
             return carrier
-        if include_cache and self._store_owner is not None and self._proxy is not None:
+        if include_cache and self._proxy is not None:
             carrier = self._to_b2object_carrier(mutable=effective_mutable)
             for nchunk in self._proxy._cache_sizes:
                 carrier.schunk.update_chunk(nchunk, self._proxy.schunk.get_chunk(nchunk))
@@ -1694,7 +1981,7 @@ class RemoteArray(blosc2.Operand):
     def to_cframe(
         self, *, include_cache: bool = True, cache_policy=None, mutable: bool | None = None
     ) -> bytes:
-        """Export a carrier. Only DISK preserves warm chunks by default.
+        """Export a carrier containing retained chunks by default.
 
         An explicit cache_policy exports a cold carrier with that policy.
         """
@@ -1705,33 +1992,117 @@ class RemoteArray(blosc2.Operand):
     @_serialized_operation
     def save(
         self,
-        urlpath: str | os.PathLike,
+        destination: str | os.PathLike | None = None,
         contiguous: bool = True,
         *,
+        urlpath: str | os.PathLike | None = None,
         include_cache: bool = True,
         cache_policy=None,
         mutable: bool | None = None,
+        overwrite: bool = False,
         **kwargs,
     ) -> str:
-        """Save a carrier; MEMORY exports are cold. See :meth:`to_cframe`.
+        """Save a carrier containing retained chunks by default.
 
-        Return the written ``urlpath``.
+        ``urlpath`` is retained as a compatibility alias for ``destination``.
+        Return the written destination.
         """
         if mutable is not None and not isinstance(mutable, bool):
             raise TypeError("mutable must be a boolean")
-        urlpath = os.fspath(urlpath)
-        if (cache_policy is not None or not include_cache) and any(
-            path is not None and os.path.abspath(path) == os.path.abspath(urlpath)
-            for path in (self.cache_path, self.runtime_cache_path)
-        ):
-            raise ValueError("cold or policy-changing export requires a different destination")
+        if destination is None:
+            if urlpath is None:
+                raise TypeError("save() missing required destination")
+            destination = urlpath
+        elif urlpath is not None:
+            raise TypeError("destination and urlpath cannot both be specified")
+        destination = os.fspath(destination)
+        dest_real = os.path.realpath(destination)
+        for attached in (self._carrier, self._runtime_cache):
+            path = None if attached is None else getattr(attached.schunk, "urlpath", None)
+            if path is None:
+                continue
+            live_real = os.path.realpath(path)
+            if (
+                dest_real == live_real
+                or (os.path.exists(destination) and os.path.samefile(destination, path))
+                or (os.path.isdir(path) and dest_real.startswith(live_real + os.sep))
+            ):
+                raise ValueError(
+                    "cannot overwrite the attached live cache; export requires a different destination"
+                )
+        if os.path.exists(destination) and not overwrite:
+            raise ValueError(f"destination {destination!r} already exists; use overwrite=True to replace it")
+        blosc2.blosc2_ext.check_access_mode(destination, "w")
         carrier = self._export_carrier(include_cache, cache_policy, mutable=mutable)
-        source_path = getattr(carrier.schunk, "urlpath", None)
-        if source_path is not None and os.path.abspath(source_path) == os.path.abspath(urlpath):
-            return urlpath
-        blosc2.blosc2_ext.check_access_mode(urlpath, "w")
-        carrier.save(urlpath, contiguous=contiguous, **kwargs)
-        return urlpath
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(destination))) as temp_dir:
+            staged = os.path.join(temp_dir, "payload")
+            carrier.save(staged, contiguous=contiguous, **kwargs)
+            if os.path.exists(destination) and (os.path.isdir(destination) or not contiguous):
+                # Keep the previous directory until publication succeeds.
+                previous = os.path.join(temp_dir, "previous")
+                os.replace(destination, previous)
+                try:
+                    os.replace(staged, destination)
+                except BaseException:
+                    os.replace(previous, destination)
+                    raise
+            else:
+                os.replace(staged, destination)
+        return destination
+
+    @classmethod
+    def _from_carrier_with_owner(cls, carrier, owner, cache_key):
+        """Open a persisted carrier under a RemoteStore owner's cache policy."""
+        payload = read_b2object_payload(carrier)
+        allowed = {"kind", "version", "source", "cache_policy", "max_cache_bytes", "mutable"}
+        if not set(payload).issubset(allowed) or payload.get("kind") != "remote_array":
+            raise ValueError("CTable source column is not a RemoteArray carrier")
+        if payload.get("version") != 1:
+            raise ValueError(f"Unsupported persisted Blosc2 object version: {payload.get('version')!r}")
+        source = payload.get("source")
+        source_kind, urlpath = _parse_source_from_payload(source)
+        hdf5_index = _hdf5_index_from_carrier(carrier) if source_kind == "hdf5" else None
+        seed = (
+            _zarr_metadata_from_carrier(carrier)
+            if source_kind == "zarr"
+            else _b2z_seed_from_carrier(carrier)
+            if source_kind == "b2z"
+            else None
+        )
+        src, descriptor = cls._open_source(
+            urlpath,
+            None,
+            traffic=owner.traffic,
+            source_format=source_kind if source_kind in {"zarr", "hdf5", "b2z"} else None,
+            assume_immutable=source["assume_immutable"],
+            dataset=source.get("dataset") if source_kind in {"hdf5", "b2z"} else None,
+            hdf5_index=hdf5_index,
+            seed=seed,
+            blocks=carrier.blocks if source_kind in {"zarr", "hdf5"} else None,
+            cparams=carrier.cparams if source_kind in {"zarr", "hdf5"} else None,
+        )
+        expected = (
+            tuple(carrier.shape),
+            np.dtype(carrier.dtype),
+            tuple(carrier.chunks),
+            tuple(carrier.blocks),
+        )
+        actual = cls._geometry(src)
+        if actual != expected:
+            raise ValueError(f"RemoteArray source geometry no longer matches its carrier: {actual!r}")
+        owner.sources[cache_key] = src
+        owner.source_descriptors[cache_key] = descriptor
+        kwargs = {}
+        if owner.cache_policy is not blosc2.CachePolicy.NONE:
+            kwargs["max_cache_bytes"] = owner.max_cache_bytes
+        return cls(
+            src,
+            cache_policy=owner.cache_policy,
+            _carrier=carrier,
+            _source_descriptor=descriptor,
+            _store_owner=owner,
+            **kwargs,
+        )
 
     @classmethod
     def _from_payload(cls, payload, carrier):
@@ -1757,7 +2128,7 @@ class RemoteArray(blosc2.Operand):
         source_kind, urlpath = _parse_source_from_payload(source)
         expected = (carrier.shape, carrier.dtype, carrier.chunks, carrier.blocks)
         kwargs = {} if policy is blosc2.CachePolicy.NONE else {"max_cache_bytes": limit}
-        carrier_arg = carrier if policy is blosc2.CachePolicy.DISK else None
+        carrier_arg = carrier if policy in {blosc2.CachePolicy.DISK, blosc2.CachePolicy.MEMORY} else None
         hdf5_index = _hdf5_index_from_carrier(carrier) if source_kind == "hdf5" else None
         carrier_mode = getattr(carrier.schunk, "mode", "r") if carrier is not None else "r"
         is_disk_file = carrier is not None and bool(getattr(carrier.schunk, "urlpath", None))
@@ -1788,14 +2159,6 @@ class RemoteArray(blosc2.Operand):
             if obj._cached_vlmeta is None:
                 obj._cached_vlmeta = read_b2object_user_vlmeta(carrier)
         return obj
-
-    def __enter__(self):
-        self._check_open()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-        return False
 
     def __str__(self):
         return f"RemoteArray({self._display_identity()!r}, cache_policy={self.cache_policy.name})"

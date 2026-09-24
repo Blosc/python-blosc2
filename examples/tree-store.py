@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Example usage of TreeStore with hierarchical navigation, vlmeta, and CTables
+# Example usage of TreeStore with hierarchical navigation, attrs, and CTables
 
 from dataclasses import dataclass
 
@@ -22,7 +22,7 @@ with blosc2.TreeStore("example_tree.b2z", mode="w") as tstore:
 
     # External arrays can also be included
     ext = blosc2.linspace(0, 1, 5, urlpath="external_leaf.b2nd", mode="w")
-    ext.vlmeta["desc"] = "external /dir1/node3 metadata"  # NDArray-level metadata
+    ext.attrs["desc"] = "external /dir1/node3 metadata"  # NDArray-level metadata
     tstore["/dir1/node3"] = ext
 
     # Remote array (read-only), referenced via URLPath
@@ -31,17 +31,17 @@ with blosc2.TreeStore("example_tree.b2z", mode="w") as tstore:
     tstore["/dir2/remote"] = arr_remote
 
     # TreeStore-level metadata (persists with the store)
-    tstore.vlmeta["author"] = "blosc2"
-    tstore.vlmeta["version"] = 1
-    tstore.vlmeta[:] = {"purpose": "TreeStore example", "scale": 2.5}
+    tstore.attrs["author"] = "blosc2"
+    tstore.attrs["version"] = 1
+    tstore.attrs[:] = {"purpose": "TreeStore example", "scale": 2.5}
 
     print("TreeStore keys:", sorted(tstore.keys()))
     print("/child0/data:", tstore["/child0/data"][:])
     print("/dir1/node3 (external) first 3:", tstore["/dir1/node3"][:3])
     print("/dir2/remote first 3:", tstore["/dir2/remote"][:3])
-    print("Stored vlmeta:", tstore.vlmeta[:])
+    print("Stored attrs:", tstore.attrs[:])
     node3 = tstore["/dir1/node3"]
-    print("Node '/dir1/node3' vlmeta.desc:", node3.vlmeta["desc"])  # NDArray metadata
+    print("Node '/dir1/node3' attrs.desc:", node3.attrs["desc"])  # NDArray metadata
 
     # Access a subtree view rooted at /child0
     root = tstore["/child0"]  # or tstore["/child0"]

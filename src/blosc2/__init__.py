@@ -228,6 +228,8 @@ class IndexKind(Enum):
     FULL = "full"
     #: Tunable iterative-ordering payloads for exact filtering; not a full/CSI index.
     OPSI = "opsi"
+    #: Value-to-row postings for CTable list columns; not supported on NDArray.
+    MEMBERSHIP = "membership"
 
 
 class CachePolicy(Enum):
@@ -605,7 +607,7 @@ from .proxy_source import (
 )
 from .zarr_source import ZarrNDSource
 from .b2z_source import B2ZNDSource
-from .hdf5_source import HDF5NDSource, available_datasets
+from .hdf5_source import HDF5NDSource, available_datasets, scan_hdf5_index, validate_hdf5_index
 from .indexing import Index
 
 from .schunk import SChunk, load, open
@@ -619,6 +621,7 @@ from .proxy import (
     jit,
     as_simpleproxy,
 )
+from .remote_object import RemoteObject
 from .remote_array import RemoteMetadataMapping, RemoteArray
 from .remote_store import RemoteNode, RemoteStore
 from . import linalg
@@ -780,6 +783,7 @@ from .ndarray import (
     var,
     where,
 )
+from .remote_ctable import RemoteCTable
 from .schema import (
     DictionarySpec,
     NDArraySpec,
@@ -914,7 +918,9 @@ __all__ = [  # noqa : RUF022
     "ProxySource",
     "Ref",
     "RemoteMetadataMapping",
+    "RemoteObject",
     "RemoteArray",
+    "RemoteCTable",
     "RemoteNode",
     "RemoteStore",
     "SChunk",
@@ -941,6 +947,8 @@ __all__ = [  # noqa : RUF022
     "arange",
     "array",
     "available_datasets",
+    "scan_hdf5_index",
+    "validate_hdf5_index",
     "arccos",
     "arccosh",
     "arcsin",

@@ -708,6 +708,25 @@ def _parse_b2z_url(urlpath, dataset):
     return None
 
 
+def resolve_dataset_path(dataset, path):
+    """Resolve the public path alias without changing persisted dataset names.
+
+    None means unspecified. Empty strings and slash-only strings select the
+    root; retain them until URL parsing so duplicate URL selectors still fail.
+    """
+    if dataset is not None and not isinstance(dataset, str):
+        raise TypeError("dataset must be a string or None")
+    if path is None:
+        return dataset
+    if not isinstance(path, str):
+        raise TypeError("path must be a string or None")
+    if dataset is not None:
+        if dataset.strip("/") != path.strip("/"):
+            raise ValueError("Conflicting dataset and path parameters")
+        return dataset
+    return path
+
+
 def parse_container_url(
     urlpath: object,
     dataset: str | None = None,
@@ -805,6 +824,7 @@ def fsspec_cache_path(
     *,
     dataset: str | None = None,
     storage_options: dict | None = None,
+    create_parent: bool = True,
 ) -> str:
     """Readable source directory and optional dataset path, creating parent directories."""
     identity = urlpath
@@ -822,7 +842,8 @@ def fsspec_cache_path(
         path = directory.joinpath(*parts)
     else:
         path = directory
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 
 

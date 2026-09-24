@@ -24,9 +24,155 @@ import numpy as np
 
 import blosc2
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ProxyNDSource, Traffic
+from blosc2.remote_source_cache import (
+    SMALL_REMOTE_FILE as _SMALL_REMOTE_FILE,
+)
+from blosc2.remote_source_cache import (
+    load_source_cache as load_hdf5_source_cache,
+)
+from blosc2.remote_source_cache import publish_source_cache as publish_hdf5_source_cache  # noqa: F401
+from blosc2.remote_source_cache import (
+    source_cache_path,
+)
+from blosc2.remote_source_cache import (
+    source_version as hdf5_source_version,
+)
 
 HDF5_INDEX_FORMAT = "blosc2-hdf5-index"
-HDF5_INDEX_VERSION = 1
+HDF5_INDEX_VERSION = 2
+_HDF5_INDEX_VERSIONS = {1, HDF5_INDEX_VERSION}
+
+
+class HDF5GroupError(ValueError):
+    """An array lookup found a group; retain discovery for container dispatch."""
+
+    def __init__(self, message, source):
+        super().__init__(message)
+        self.index = source._hdf5_index
+        self.blob = source._blob
+        self.traffic = source.traffic
+
+
+def hdf5_source_cache_path(urlpath, cache_dir, storage_options=None):
+    return source_cache_path(urlpath, cache_dir, storage_options, kind="hdf5")
+
+
+def reconcile_hdf5_index(index, urlpath, dataset, storage_options, blob, marker, *, explicit):
+    """Reject stale explicit indexes; rescan disposable generated indexes."""
+    if index is None:
+        return None
+    index = load_hdf5_index(index, urlpath, storage_options, dataset=dataset)
+    if marker is None:
+        return index
+    version = hdf5_source_version(index)
+    mismatch = index.get("size") != marker["size"] or version != marker["token"]
+    if explicit:
+        if index.get("size") != marker["size"] or (version is not None and mismatch):
+            raise ValueError("HDF5 source version does not match hdf5_index; regenerate the sidecar")
+        return index
+    return None if mismatch else index
+
+
+def prepare_hdf5_source_cache(
+    urlpath, dataset, cache_dir, storage_options, index, manifest, blob, *, explicit
+):
+    """Resolve source bytes and discard a stale store manifest before opening leaves."""
+    path = hdf5_source_cache_path(urlpath, cache_dir, storage_options)
+    cached_blob, marker = load_hdf5_source_cache(path)
+    if cached_blob is not None:
+        blob = cached_blob
+    elif blob is not None and marker is not None and hashlib.sha256(blob).hexdigest() != marker["token"]:
+        blob = None
+    index = reconcile_hdf5_index(index, urlpath, dataset, storage_options, blob, marker, explicit=explicit)
+    if (
+        manifest is not None
+        and reconcile_hdf5_index(
+            manifest["metadata"], urlpath, dataset, storage_options, blob, marker, explicit=False
+        )
+        is None
+    ):
+        manifest = None
+    return path, marker, blob, index, manifest
+
+
+def _pytables_table_schema(dtype, shape, boolean_fields=()):
+    """Return a source-bound CTable schema for a supported PyTables Table."""
+    dtype = np.dtype(dtype)
+    if len(shape) != 1 or dtype.names is None:
+        raise TypeError("PyTables tables require a one-dimensional compound dataset")
+    columns = []
+    for name in dtype.names:
+        field = dtype.fields[name][0]
+        if field.fields is not None or field.subdtype is not None:
+            raise TypeError(f"PyTables field {name!r} must be a scalar")
+        if name in boolean_fields:
+            spec = {"kind": "bool"}
+        elif field.kind == "S":
+            spec = {"kind": "bytes", "max_length": field.itemsize}
+        elif field.kind == "b":
+            spec = {"kind": "bool"}
+        elif field.kind in "iu":
+            prefix = "int" if field.kind == "i" else "uint"
+            spec = {"kind": f"{prefix}{field.itemsize * 8}"}
+        elif field.kind in "fc":
+            prefix = "float" if field.kind == "f" else "complex"
+            spec = {"kind": f"{prefix}{field.itemsize * 8}"}
+        else:
+            raise TypeError(f"Unsupported PyTables field {name!r} with dtype {field}")
+        columns.append({"name": name, **spec})
+    return {
+        "version": 1,
+        "columns": columns,
+        "source_bindings_version": 1,
+        "source_columns": list(dtype.names),
+        "n_rows": int(shape[0]),
+        "create_summary_index": False,
+        "summary_indexes_built": True,
+    }
+
+
+def _decoded_attr(metadata, name, default=None):
+    value = metadata.get("attrs", {}).get(name, default)
+    return _from_json_value(value)
+
+
+def _pytables_full_indexes(datasets, groups, table_path, nrows, dtype):
+    parent, _, table_name = table_path.rpartition("/")
+    index_root = "/".join(part for part in (parent, f"_i_{table_name}") if part)
+    indexes = {}
+    for name in dtype.names or ():
+        group_path = f"{index_root}/{name}"
+        group = groups.get(group_path)
+        paths = {leaf: f"{group_path}/{leaf}" for leaf in ("sorted", "indices", "sortedLR", "indicesLR")}
+        if group is None or any(path not in datasets for path in paths.values()):
+            continue
+        indices = datasets[paths["indices"]]
+        if dtype_from_value(indices["dtype"]).itemsize != 8 or bool(_decoded_attr(group, "DIRTY", 1)):
+            continue
+        tail = int(_decoded_attr(datasets[paths["indicesLR"]], "nelements", 0))
+        regular = math.prod(datasets[paths["indices"]]["shape"])
+        if regular + tail != nrows:
+            continue
+        indexes[name] = {
+            **paths,
+            "tail": tail,
+            "slicesize": int(_decoded_attr(group, "slicesize", datasets[paths["indices"]]["shape"][-1])),
+            "optlevel": int(_decoded_attr(group, "optlevel", 0)),
+            "is_csi": bool(_decoded_attr(group, "is_csi", 0)),
+        }
+    return indexes
+
+
+def _attach_pytables_indexes(datasets, groups):
+    for table_path, metadata in datasets.items():
+        if metadata.get("kind") != "ctable":
+            continue
+        dtype = dtype_from_value(metadata["dtype"])
+        metadata["pytables_indexes"] = _pytables_full_indexes(
+            datasets, groups, table_path, metadata["shape"][0], dtype
+        )
+
+
 _DIRECT_FILTERS = {1, 2, 32026}  # deflate, shuffle, Blosc2
 
 
@@ -67,7 +213,13 @@ def _dtype_field_from_json(field):
         # dtype.descr writes a titled field as (title, name); JSON and msgpack
         # round trips turn that tuple into a list again.
         name = tuple(name)
-    if isinstance(spec, list):
+    if isinstance(spec, (list, tuple)) and len(spec) == 2 and isinstance(spec[1], dict):
+        # h5py annotates fixed-width HDF5 strings as (dtype, metadata).
+        # NumPy includes that pair in dtype.descr, but does not accept it when
+        # reconstructing a structured dtype.  The storage dtype is the first
+        # item; encoding metadata does not change the bytes on disk.
+        spec = spec[0]
+    elif isinstance(spec, list):
         spec = [_dtype_field_from_json(item) for item in spec]
     return (name, spec, tuple(shape[0])) if shape else (name, spec)
 
@@ -112,9 +264,11 @@ def _from_json_value(value):
     if "__float__" in value:
         return float(value["__float__"])
     if "__scalar__" in value:
-        return np.frombuffer(base64.b64decode(value["__scalar__"]), dtype=dtype_from_value(value["dtype"]))[
-            0
-        ]
+        data = base64.b64decode(value["__scalar__"])
+        dtype = dtype_from_value(value["dtype"])
+        if dtype.itemsize == 0:
+            return np.array(data, dtype=dtype)[()]
+        return np.frombuffer(data, dtype=dtype)[0]
     if "__object_ndarray__" in value:
         items = [_from_json_value(item) for item in value["__object_ndarray__"]]
         result = np.empty(value["shape"], dtype=object)
@@ -157,6 +311,38 @@ class _CountingFile(io.IOBase):
         return self.file.tell()
 
 
+@contextlib.contextmanager
+def _open_hdf5_file(path, *, local=False, filesystem=None, traffic=None, blob=None, buffered=False):
+    """Open one HDF5 file from local storage, retained bytes, or remote ranges."""
+    import h5py
+
+    with contextlib.ExitStack() as stack:
+        if blob is not None:
+            raw = stack.enter_context(io.BytesIO(blob))
+        elif local:
+            raw = stack.enter_context(open(path, "rb"))
+        else:
+            options = (
+                {"block_size": 64 << 10, "cache_type": "blockcache", "cache_options": {"maxblocks": 32}}
+                if buffered
+                else {"block_size": 1, "cache_type": "none"}
+            )
+            raw = stack.enter_context(filesystem.open(path, "rb", **options))
+            cache = getattr(raw, "cache", None) if buffered else None
+            if traffic is not None and cache is not None and hasattr(cache, "fetcher"):
+                fetcher = cache.fetcher
+
+                def counted_fetch(start, end):
+                    data = fetcher(start, end)
+                    traffic.charge(len(data))
+                    return data
+
+                cache.fetcher = counted_fetch
+            elif traffic is not None:
+                raw = _CountingFile(raw, traffic)
+        yield stack.enter_context(h5py.File(raw, "r"))
+
+
 def _filesystem_and_path(urlpath, storage_options=None, filesystem=None):
     import fsspec
 
@@ -179,7 +365,22 @@ def _close_owned_filesystem(filesystem):
         close(filesystem.loop, session)
 
 
-def _dataset_metadata(dataset):
+def _allocated_chunks(dataset):
+    allocated = []
+    for index in range(dataset.id.get_num_chunks()):
+        info = dataset.id.get_chunk_info(index)
+        allocated.append(
+            {
+                "offset": [int(v) for v in info.chunk_offset],
+                "filter_mask": int(info.filter_mask),
+                "byte_offset": int(info.byte_offset),
+                "size": int(info.size),
+            }
+        )
+    return allocated
+
+
+def _dataset_metadata(dataset, *, include_allocated=True):
     dcpl = dataset.id.get_create_plist()
     filters = []
     for index in range(dcpl.get_nfilters()):
@@ -194,19 +395,8 @@ def _dataset_metadata(dataset):
         )
     chunks = None if dataset.chunks is None else [int(v) for v in dataset.chunks]
     direct = chunks is not None and all(item["id"] in _DIRECT_FILTERS for item in filters)
-    allocated = []
-    if direct:
-        for index in range(dataset.id.get_num_chunks()):
-            info = dataset.id.get_chunk_info(index)
-            allocated.append(
-                {
-                    "offset": [int(v) for v in info.chunk_offset],
-                    "filter_mask": int(info.filter_mask),
-                    "byte_offset": int(info.byte_offset),
-                    "size": int(info.size),
-                }
-            )
-    return {
+    allocated = _allocated_chunks(dataset) if direct and include_allocated else None if direct else []
+    metadata = {
         "shape": [int(v) for v in dataset.shape],
         "dtype": dtype_value(dataset.dtype),
         "chunks": chunks,
@@ -216,13 +406,129 @@ def _dataset_metadata(dataset):
         "direct": direct,
         "allocated": allocated,
     }
+    table_class = dataset.attrs.get("CLASS")
+    if table_class in {"TABLE", b"TABLE", np.bytes_(b"TABLE")}:
+        from h5py import h5t
+
+        hdf5_type = dataset.id.get_type()
+        boolean_fields = {
+            dataset.dtype.names[index]
+            for index in range(hdf5_type.get_nmembers())
+            if hdf5_type.get_member_type(index).get_class() == h5t.BITFIELD
+        }
+        metadata["kind"] = "ctable"
+        metadata["schema"] = json.dumps(_pytables_table_schema(dataset.dtype, dataset.shape, boolean_fields))
+    return metadata
 
 
-def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=None, _filesystem=None):
-    """Build a versioned native index for one local or remote HDF5 container."""
+def _record_hdf5_object(name, obj, groups, datasets, unsupported, *, include_allocated):
     import h5py
 
+    try:
+        if isinstance(obj, h5py.Group):
+            groups[name] = {"attrs": {key: _json_value(value) for key, value in obj.attrs.items()}}
+            return
+        if not isinstance(obj, h5py.Dataset):
+            return
+        if obj.is_virtual:
+            raise TypeError("HDF5 virtual datasets are not supported")
+        if obj.external:
+            raise TypeError("HDF5 externally stored datasets are not supported")
+        if obj.shape is None:
+            raise TypeError("HDF5 null datasets are not supported")
+        dtype = np.dtype(obj.dtype)
+        if dtype.hasobject or dtype.itemsize == 0:
+            raise TypeError(f"HDF5NDSource only supports fixed-size dtypes, got {dtype}")
+        datasets[name] = _dataset_metadata(obj, include_allocated=include_allocated)
+    except Exception as exc:
+        if unsupported is None:
+            raise
+        unsupported[name] = f"{type(exc).__name__}: {exc}"
+
+
+def _scan_hdf5_objects(h5file, dataset, groups, datasets, unsupported, lazy_allocations):
+    import h5py
+
+    if dataset is None:
+        h5file.visititems(
+            lambda name, obj: _record_hdf5_object(
+                name,
+                obj,
+                groups,
+                datasets,
+                unsupported,
+                include_allocated=not lazy_allocations,
+            )
+        )
+        _attach_pytables_indexes(datasets, groups)
+        return
+    if dataset not in h5file:
+        raise ValueError(f"dataset {dataset!r} not found")
+    obj = h5file[dataset]
+    parent = dataset.rpartition("/")[0]
+    ancestors = []
+    while parent:
+        ancestors.append(parent)
+        parent = parent.rpartition("/")[0]
+    for name in reversed(ancestors):
+        _record_hdf5_object(name, h5file[name], groups, datasets, unsupported, include_allocated=False)
+    if isinstance(obj, h5py.Group):
+        _record_hdf5_object(dataset, obj, groups, datasets, unsupported, include_allocated=False)
+        obj.visititems(
+            lambda name, child: _record_hdf5_object(
+                f"{dataset}/{name}",
+                child,
+                groups,
+                datasets,
+                unsupported,
+                include_allocated=not lazy_allocations,
+            )
+        )
+        if not lazy_allocations:
+            _attach_pytables_indexes(datasets, groups)
+        return
+    _record_hdf5_object(dataset, obj, groups, datasets, unsupported, include_allocated=True)
+
+
+def scan_hdf5_index(
+    urlpath,
+    storage_options=None,
+    *,
+    dataset=None,
+    path=None,
+    unsupported=None,
+    traffic=None,
+    _filesystem=None,
+    _lazy_allocations=False,
+    _return_blob=False,
+    _blob=None,
+):
+    """Build a native byte-range index for a local or remote HDF5 source.
+
+    ``path`` limits discovery to one dataset, or one group subtree, plus its ancestor groups. The
+    returned dictionary is JSON-compatible and can be supplied via
+    ``hdf5_index=`` on later opens.
+
+    Parameters
+    ----------
+    urlpath: str or path-like
+        Local path or fsspec URL of the immutable HDF5 source.
+    storage_options: dict, optional
+        Options passed to the fsspec filesystem.
+    path: str, optional
+        Build a scoped index for this dataset or group subtree. By default,
+        index the complete container.
+    dataset: str, optional
+        Supported alias of ``path``; both must agree after stripping outer slashes.
+
+    Returns
+    -------
+    dict
+        A JSON-compatible native HDF5 index.
+    """
+    dataset = blosc2.core.resolve_dataset_path(dataset, path)
     urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
+    dataset = None if dataset is None else str(dataset).strip("/")
     local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
     if local:
         _check_h5py_dependencies()
@@ -232,58 +538,63 @@ def scan_hdf5_index(urlpath, storage_options=None, *, unsupported=None, traffic=
         check_hdf5_dependencies()
         fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
     groups, datasets = {"": {"attrs": {}}}, {}
+    blob = _blob
     try:
-        with contextlib.ExitStack() as stack:
-            if local:
-                raw = stack.enter_context(open(path, "rb"))
-            else:
-                raw = stack.enter_context(fs.open(path, "rb", block_size=1, cache_type="none"))
-            fileobj = _CountingFile(raw, traffic) if traffic is not None else raw
-            with h5py.File(fileobj, "r") as h5file:
-                groups[""]["attrs"] = {key: _json_value(value) for key, value in h5file.attrs.items()}
-
-                def visit(name, obj):
-                    try:
-                        if isinstance(obj, h5py.Group):
-                            groups[name] = {
-                                "attrs": {key: _json_value(value) for key, value in obj.attrs.items()}
-                            }
-                        elif isinstance(obj, h5py.Dataset):
-                            if obj.is_virtual:
-                                raise TypeError("HDF5 virtual datasets are not supported")
-                            if obj.external:
-                                raise TypeError("HDF5 externally stored datasets are not supported")
-                            if obj.shape is None:
-                                raise TypeError("HDF5 null datasets are not supported")
-                            dtype = np.dtype(obj.dtype)
-                            if dtype.hasobject or dtype.itemsize == 0:
-                                raise TypeError(f"HDF5NDSource only supports fixed-size dtypes, got {dtype}")
-                            datasets[name] = _dataset_metadata(obj)
-                    except Exception as exc:
-                        if unsupported is None:
-                            raise
-                        unsupported[name] = f"{type(exc).__name__}: {exc}"
-
-                h5file.visititems(visit)
-        with contextlib.suppress(Exception):
-            size = os.path.getsize(path) if local else int(fs.info(path)["size"])
+        size = (
+            len(blob) if blob is not None else os.path.getsize(path) if local else int(fs.info(path)["size"])
+        )
+        if blob is None and not local and size <= _SMALL_REMOTE_FILE:
+            blob = fs.cat_file(path)
+            if len(blob) != size:
+                raise OSError(f"Short HDF5 read: expected {size} bytes, got {len(blob)}")
+            if traffic is not None:
+                traffic.charge(len(blob))
+        with _open_hdf5_file(path, local=local, filesystem=fs, traffic=traffic, blob=blob) as h5file:
+            groups[""]["attrs"] = {key: _json_value(value) for key, value in h5file.attrs.items()}
+            _scan_hdf5_objects(h5file, dataset, groups, datasets, unsupported, _lazy_allocations)
     finally:
         if fs is not None and _filesystem is None:
             _close_owned_filesystem(fs)
-    if "size" not in locals():
-        size = None
-    return {
+    index = {
         "format": HDF5_INDEX_FORMAT,
         "version": HDF5_INDEX_VERSION,
         "urlpath": os.fspath(urlpath),
         "size": size,
+        "complete": dataset is None,
+        "scope": dataset,
         "groups": groups,
         "datasets": datasets,
     }
+    if blob is not None:
+        index["source_sha256"] = hashlib.sha256(blob).hexdigest()
+    return (index, blob) if _return_blob else index
 
 
-def validate_hdf5_index(index, urlpath=None):
-    """Validate and return a native HDF5 index."""
+def load_hdf5_index(index, urlpath, storage_options=None, *, filesystem=None, dataset=None):
+    """Load a native HDF5 index dictionary or JSON path and validate its source."""
+    if isinstance(index, (str, os.PathLike)):
+        index_path = os.fspath(index)
+        if urlsplit(index_path).scheme:
+            import fsspec
+
+            with fsspec.open(index_path, "r", **(storage_options or {})) as file:
+                index = json.load(file)
+        else:
+            with open(index_path) as file:
+                index = json.load(file)
+    if not isinstance(index, dict):
+        raise TypeError("hdf5_index must be a dict, string, or path-like object")
+    return validate_hdf5_index(index, urlpath, dataset=dataset)
+
+
+def validate_hdf5_index(index, urlpath=None, *, dataset=None, path=None):
+    """Validate and return a native HDF5 index.
+
+    ``urlpath`` checks the recorded source URL. ``path`` (or ``dataset``) additionally checks
+    that a scoped index describes the requested dataset. Version-1 and version-2
+    native indexes are accepted.
+    """
+    dataset = blosc2.core.resolve_dataset_path(dataset, path)
     if not isinstance(index, dict):
         raise ValueError("Invalid HDF5 index")
     if index.get("format") != HDF5_INDEX_FORMAT:
@@ -295,19 +606,35 @@ def validate_hdf5_index(index, urlpath=None):
                 "Legacy HDF5 reference maps are unsupported; omit hdf5_index and rescan the source"
             )
         raise ValueError("Invalid HDF5 index format")
-    if index.get("version") != HDF5_INDEX_VERSION:
+    version = index.get("version")
+    for field in ("source_sha256", "source_cache_version"):
+        value = index.get(field)
+        if value is not None and (
+            not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+        ):
+            raise ValueError(f"Invalid HDF5 {field}")
+    if version not in _HDF5_INDEX_VERSIONS:
         raise ValueError(f"Unsupported HDF5 index version {index.get('version')!r}")
     if urlpath is not None and index.get("urlpath") != os.fspath(urlpath):
         raise ValueError("HDF5 index specification does not match the requested URL")
     if not isinstance(index.get("groups"), dict) or not isinstance(index.get("datasets"), dict):
         raise ValueError("Invalid HDF5 index contents")
+    if version == 2:
+        complete, scope = index.get("complete"), index.get("scope")
+        if not isinstance(complete, bool) or (scope is not None and not isinstance(scope, str)):
+            raise ValueError("Invalid HDF5 index scope")
+        if complete != (scope is None):
+            raise ValueError("Invalid HDF5 index completeness")
+        requested = None if dataset is None else str(dataset).strip("/")
+        if not complete and ((requested is None and urlpath is not None) or requested not in {None, scope}):
+            raise ValueError(f"HDF5 index is scoped to dataset {scope!r}")
     size = index.get("size")
     for path, meta in index["datasets"].items():
-        _validate_dataset_entry(path, meta, size)
+        _validate_dataset_entry(path, meta, size, version)
     return index
 
 
-def _validate_dataset_entry(path, meta, file_size):
+def _validate_dataset_entry(path, meta, file_size, version=HDF5_INDEX_VERSION):
     """Validate one dataset entry in a native index."""
     if not isinstance(path, str) or not isinstance(meta, dict):
         raise ValueError("Invalid HDF5 dataset entry")
@@ -342,6 +669,8 @@ def _validate_dataset_entry(path, meta, file_size):
     if meta["direct"]:
         _validate_direct_filters(path, chunks, filters)
     allocated = meta.get("allocated")
+    if allocated is None and version == 2 and meta["direct"]:
+        return
     if not isinstance(allocated, list):
         raise ValueError(f"Invalid HDF5 allocation table for {path!r}")
     _validate_allocated_records(path, allocated, shape, chunks, filters, file_size)
@@ -386,6 +715,146 @@ def _validate_allocated_records(path, allocated, shape, chunks, filters, file_si
             raise ValueError(f"Invalid HDF5 chunk range for {path!r}")
         if file_size is not None and byte_offset + length > file_size:
             raise ValueError(f"HDF5 chunk range exceeds the file for {path!r}")
+
+
+def scan_hdf5_allocations(
+    urlpath, dataset, storage_options=None, *, traffic=None, _filesystem=None, _blob=None
+):
+    """Return the allocated-chunk records for one remote HDF5 dataset."""
+    urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
+    local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
+    fs = None
+    path = urlpath
+    try:
+        if not local:
+            check_hdf5_dependencies()
+            fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+        with _open_hdf5_file(path, local=local, filesystem=fs, traffic=traffic, blob=_blob) as h5file:
+            obj = h5file[str(dataset).strip("/")]
+            return _allocated_chunks(obj)
+    finally:
+        if fs is not None and _filesystem is None:
+            _close_owned_filesystem(fs)
+
+
+def scan_hdf5_allocations_many(
+    urlpath, datasets, storage_options=None, *, traffic=None, _filesystem=None, _blob=None
+):
+    """Scan several HDF5 allocation maps through one bounded metadata cache."""
+    urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
+    local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
+    fs = None
+    path = urlpath
+    try:
+        if not local:
+            check_hdf5_dependencies()
+            fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+        with _open_hdf5_file(
+            path, local=local, filesystem=fs, traffic=traffic, blob=_blob, buffered=True
+        ) as h5file:
+            return {dataset: _allocated_chunks(h5file[dataset]) for dataset in datasets}
+    finally:
+        if fs is not None and _filesystem is None:
+            _close_owned_filesystem(fs)
+
+
+def scan_pytables_indexes(
+    urlpath, table_path, table_metadata, storage_options=None, *, traffic=None, _filesystem=None, _blob=None
+):
+    """Discover only the PyTables index nodes belonging to one table."""
+    import h5py
+
+    urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
+    local = _filesystem is None and (not urlsplit(urlpath).scheme or os.path.isabs(urlpath))
+    fs = None
+    path = urlpath
+    groups, datasets = {}, {}
+    try:
+        if not local:
+            check_hdf5_dependencies()
+            fs, path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+        with _open_hdf5_file(path, local=local, filesystem=fs, traffic=traffic, blob=_blob) as h5file:
+            parent, _, table_name = table_path.rpartition("/")
+            root = "/".join(part for part in (parent, f"_i_{table_name}") if part)
+            dtype = dtype_from_value(table_metadata["dtype"])
+            for name in dtype.names or ():
+                group_path = f"{root}/{name}"
+                if group_path not in h5file or not isinstance(h5file[group_path], h5py.Group):
+                    continue
+                group = h5file[group_path]
+                groups[group_path] = {
+                    "attrs": {key: _json_value(value) for key, value in group.attrs.items()}
+                }
+                for leaf in ("sorted", "indices", "sortedLR", "indicesLR"):
+                    leaf_path = f"{group_path}/{leaf}"
+                    if leaf_path not in h5file or not isinstance(h5file[leaf_path], h5py.Dataset):
+                        break
+                    datasets[leaf_path] = _dataset_metadata(h5file[leaf_path], include_allocated=False)
+        indexes = _pytables_full_indexes(
+            datasets,
+            groups,
+            table_path,
+            table_metadata["shape"][0],
+            dtype_from_value(table_metadata["dtype"]),
+        )
+        return groups, datasets, indexes
+    finally:
+        if fs is not None and _filesystem is None:
+            _close_owned_filesystem(fs)
+
+
+def read_pytables_index_arrays(arrays, tail):
+    """Read a PyTables index with bounded, merged source ranges."""
+    sources = [array.src for array in arrays]
+    if any(
+        source._local or source._blob is not None or not source._metadata["direct"] for source in sources
+    ):
+        return [arrays[0][:], arrays[1][:], arrays[2][:tail], arrays[3][:tail]]
+
+    shapes = [source.shape if i < 2 else (tail,) for i, source in enumerate(sources)]
+    outputs = [
+        np.full(shape, _from_json_value(source._metadata["fill_value"]), dtype=source.dtype)
+        for source, shape in zip(sources, shapes, strict=True)
+    ]
+    chunks = []
+    for source, output in zip(sources, outputs, strict=True):
+        for record in source._metadata["allocated"]:
+            offsets = tuple(record["offset"])
+            if offsets[0] >= output.shape[0]:
+                continue
+            selection = tuple(
+                slice(offset, min(offset + length, extent))
+                for offset, length, extent in zip(offsets, source.chunks, output.shape, strict=True)
+            )
+            start = record["byte_offset"]
+            chunks.append((start, start + record["size"], source, output, offsets, selection))
+    chunks.sort(key=lambda chunk: chunk[0])
+
+    def read_group(start, end, members):
+        data = sources[0]._filesystem.cat_file(sources[0]._path, start=start, end=end)
+        if len(data) != end - start:
+            raise OSError(f"Short PyTables index read: expected {end - start} bytes, got {len(data)}")
+        if sources[0].traffic is not None:
+            sources[0].traffic.charge(len(data))
+        for chunk_start, chunk_end, source, output, offsets, selection in members:
+            payload = data[chunk_start - start : chunk_end - start]
+            output[selection] = source._direct_values(offsets, selection, data=payload)
+
+    start = end = None
+    members = []
+    for chunk in chunks:
+        chunk_start, chunk_end = chunk[:2]
+        if members and (chunk_start - end > 64 << 10 or max(end, chunk_end) - start > 8 << 20):
+            read_group(start, end, members)
+            members = []
+        if not members:
+            start, end = chunk_start, chunk_end
+        else:
+            end = max(end, chunk_end)
+        members.append(chunk)
+    if members:
+        read_group(start, end, members)
+    return outputs
 
 
 # Kept while callers migrate from the old internal name.
@@ -488,7 +957,11 @@ def _close_hdf5_file(h5file, raw):
 
 
 class HDF5NDSource(ProxyNDSource):
-    """Read one immutable HDF5 dataset as Blosc2-compressed logical chunks."""
+    """Read one immutable HDF5 dataset as Blosc2-compressed logical chunks.
+
+    Select it with keyword-only ``path`` or the supported ``dataset`` alias.
+    If both are supplied they must agree after stripping outer slashes.
+    """
 
     serves_blocks = False
     # The logical Blosc2 cache chunks are unchanged from the former reader, so
@@ -498,8 +971,9 @@ class HDF5NDSource(ProxyNDSource):
     def __init__(
         self,
         urlpath,
-        dataset: str,
+        dataset: str | None = None,
         *,
+        path: str | None = None,
         hdf5_index=None,
         storage_options=None,
         max_concurrency=REMOTE_MAX_CONCURRENCY,
@@ -507,10 +981,17 @@ class HDF5NDSource(ProxyNDSource):
         cparams=None,
         _traffic: Traffic | None = None,
         _filesystem=None,
+        _blob=None,
+        _ensure_allocations=None,
+        _source_cache_dir=None,
+        _index_explicit=True,
     ):
+        dataset = blosc2.core.resolve_dataset_path(dataset, path)
         urlpath, dataset = self._parse_url(urlpath, dataset)
         self.urlpath, self.dataset, self.max_concurrency = urlpath, dataset, max_concurrency
         self._storage_options, self._external_filesystem = storage_options, _filesystem
+        self._blob = _blob
+        self._ensure_allocations = _ensure_allocations
         self._fallback_lock = threading.RLock()
         self._fallback_h5 = self._fallback_file = None
         self._lifecycle = threading.Condition()
@@ -520,6 +1001,8 @@ class HDF5NDSource(ProxyNDSource):
         self.traffic = _traffic if _traffic is not None else Traffic() if remote else None
         self._local = (not remote or os.path.isabs(urlpath)) and _filesystem is None
         self._hdf5_index = None
+        self._source_cache_path = None
+        self._source_cache_marker = None
         try:
             if self._local:
                 self._open_local()
@@ -532,12 +1015,44 @@ class HDF5NDSource(ProxyNDSource):
             else:
                 check_hdf5_dependencies()
                 self._filesystem, self._path = _filesystem_and_path(urlpath, storage_options, _filesystem)
+                if _source_cache_dir is not None:
+                    self._source_cache_path = hdf5_source_cache_path(
+                        urlpath, _source_cache_dir, storage_options
+                    )
+                    self._blob, self._source_cache_marker = load_hdf5_source_cache(self._source_cache_path)
+                    hdf5_index = reconcile_hdf5_index(
+                        hdf5_index,
+                        urlpath,
+                        dataset,
+                        storage_options,
+                        self._blob,
+                        self._source_cache_marker,
+                        explicit=_index_explicit,
+                    )
                 # No extra session finalizer here: fsspec's HTTP and S3 filesystems
                 # already register one when they create their session, and a second
                 # close makes s3fs/aiobotocore assert on the already-exited client.
                 self._hdf5_index = self._load_or_scan_index(hdf5_index)
+                if self._source_cache_path is not None and self._blob is not None:
+                    self._hdf5_index = dict(self._hdf5_index)
+                    self._hdf5_index["source_sha256"] = hashlib.sha256(self._blob).hexdigest()
+                if self._source_cache_marker is not None and self._blob is None:
+                    self._hdf5_index = dict(self._hdf5_index)
+                    self._hdf5_index["source_cache_version"] = self._source_cache_marker["token"]
                 self._validate_dataset_presence(dataset)
                 self._metadata = self._hdf5_index["datasets"][self.dataset]
+                if self._metadata["direct"] and self._metadata["allocated"] is None:
+                    if self._ensure_allocations is not None:
+                        self._metadata = self._ensure_allocations(self.dataset)
+                    else:
+                        self._metadata["allocated"] = scan_hdf5_allocations(
+                            self.urlpath,
+                            self.dataset,
+                            self._storage_options,
+                            traffic=self.traffic,
+                            _filesystem=self._filesystem,
+                            _blob=self._blob,
+                        )
                 shape, physical_chunks = tuple(self._metadata["shape"]), self._metadata["chunks"]
                 dtype = dtype_from_value(self._metadata["dtype"])
                 self._chunk_records = {tuple(item["offset"]): item for item in self._metadata["allocated"]}
@@ -551,6 +1066,8 @@ class HDF5NDSource(ProxyNDSource):
                 "blocks": self._blocks,
                 "dtype": self._dtype.descr if self._dtype.fields else self._dtype.str,
             }
+            if self._hdf5_index is not None and hdf5_source_version(self._hdf5_index) is not None:
+                identity["source_version"] = hdf5_source_version(self._hdf5_index)
             self.stamp = hashlib.sha256(
                 json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
@@ -600,27 +1117,34 @@ class HDF5NDSource(ProxyNDSource):
 
     def _load_or_scan_index(self, hdf5_index):
         if hdf5_index is None:
-            return scan_hdf5_index(
-                self.urlpath, self._storage_options, traffic=self.traffic, _filesystem=self._filesystem
+            result = scan_hdf5_index(
+                self.urlpath,
+                self._storage_options,
+                dataset=self.dataset,
+                traffic=self.traffic,
+                _filesystem=self._filesystem,
+                _return_blob=True,
+                _blob=self._blob,
             )
-        if isinstance(hdf5_index, (str, os.PathLike)):
-            hdf5_index_str = os.fspath(hdf5_index)
-            if urlsplit(hdf5_index_str).scheme:
-                import fsspec
-
-                with fsspec.open(hdf5_index_str, "r", **(self._storage_options or {})) as file:
-                    hdf5_index = json.load(file)
-            else:
-                with open(hdf5_index_str) as file:
-                    hdf5_index = json.load(file)
-        if not isinstance(hdf5_index, dict):
-            raise TypeError("hdf5_index must be a dict, string, or path-like object")
-        return validate_hdf5_index(hdf5_index, self.urlpath)
+            hdf5_index, blob = result
+            if self._blob is None:
+                self._blob = blob
+            return hdf5_index
+        if self._ensure_allocations is not None and isinstance(hdf5_index, dict):
+            return hdf5_index  # The shared discovery owner already validated it.
+        return load_hdf5_index(
+            hdf5_index,
+            self.urlpath,
+            self._storage_options,
+            filesystem=getattr(self, "_filesystem", None),
+            dataset=self.dataset,
+        )
 
     def _validate_dataset_presence(self, raw_dataset):
         if self.dataset in self._hdf5_index["groups"]:
-            raise ValueError(
-                f"{raw_dataset!r} is an HDF5 group; pass the path of a dataset. Available datasets: {available_datasets(self._hdf5_index)}"
+            raise HDF5GroupError(
+                f"{raw_dataset!r} is an HDF5 group; pass the path of a dataset. Available datasets: {available_datasets(self._hdf5_index)}",
+                self,
             )
         if self.dataset not in self._hdf5_index["datasets"]:
             raise ValueError(
@@ -669,8 +1193,14 @@ class HDF5NDSource(ProxyNDSource):
 
         if self._closed:
             raise RuntimeError("HDF5 source is closed")
-        raw = self._filesystem.open(self._path, "rb", block_size=1, cache_type="none")
-        fileobj = _CountingFile(raw, self.traffic) if self.traffic is not None else raw
+        raw = (
+            io.BytesIO(self._blob)
+            if self._blob is not None
+            else self._filesystem.open(self._path, "rb", block_size=1, cache_type="none")
+        )
+        fileobj = (
+            _CountingFile(raw, self.traffic) if self._blob is None and self.traffic is not None else raw
+        )
         try:
             h5file = h5py.File(fileobj, "r")
         except Exception:
@@ -680,8 +1210,9 @@ class HDF5NDSource(ProxyNDSource):
         self._fallback_finalizer = weakref.finalize(self, _close_hdf5_file, h5file, raw)
         return h5file[self.dataset or "/"]
 
-    def _direct_values(self, offsets, selection):
+    def _direct_values(self, offsets, selection, data=None):
         valid_shape = tuple(item.stop - item.start for item in selection)
+        prefetched = data is not None
         # Count in-flight reads so close() can wait for them without serializing
         # independent direct fetches against each other. The closed check comes
         # first so sparse fill chunks obey the same contract as allocated ones.
@@ -692,16 +1223,22 @@ class HDF5NDSource(ProxyNDSource):
             if record is None:
                 return np.full(valid_shape, _from_json_value(self._metadata["fill_value"]), dtype=self.dtype)
             filesystem = self._filesystem
+            blob = self._blob
             self._active_reads += 1
         try:
-            data = filesystem.cat_file(
-                self._path, start=record["byte_offset"], end=record["byte_offset"] + record["size"]
-            )
+            if not prefetched:
+                if blob is not None:
+                    start = record["byte_offset"]
+                    data = blob[start : start + record["size"]]
+                else:
+                    data = filesystem.cat_file(
+                        self._path, start=record["byte_offset"], end=record["byte_offset"] + record["size"]
+                    )
         finally:
             with self._lifecycle:
                 self._active_reads -= 1
                 self._lifecycle.notify_all()
-        if self.traffic is not None:
+        if not prefetched and blob is None and self.traffic is not None:
             self.traffic.charge(len(data))
         if len(data) != record["size"]:
             raise OSError(f"Short HDF5 chunk read for {self.dataset!r} at {offsets}")

@@ -238,6 +238,9 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
         if len(args) != 1:
             raise TypeError(f"Column {name!r}: list annotations must specify exactly one item type.")
         item_annotation = args[0]
+        if isinstance(spec.item_spec, ListSpec):
+            validate_annotation_matches_spec(f"{name}[]", item_annotation, spec.item_spec)
+            return
         expected = spec.item_spec.python_type
         if item_annotation is not expected:
             raise TypeError(
@@ -430,6 +433,9 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
         data["null_value"] = _json_to_bytes(data["null_value"])
     if kind == "list":
         item_spec = spec_from_metadata_dict(data.pop("item"))
+        # Before ListArray V2 the field was omitted to mean caller-managed
+        # batching. Preserve that meaning when reading legacy schemas.
+        data.setdefault("batch_rows", None)
         return ListSpec(item_spec, **data)
     if kind == "struct":
         return StructSpec.from_metadata_dict({"fields": data.pop("fields"), **data})

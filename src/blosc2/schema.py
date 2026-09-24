@@ -617,7 +617,12 @@ class StructSpec(SchemaSpec):
 
 
 class ListSpec(SchemaSpec):
-    """Logical schema descriptor for a list-valued column."""
+    """Logical schema descriptor for a list-valued column.
+
+    ``batch_rows`` defaults to 2048 list cells for batch storage. Pass ``None``
+    to keep pending cells in one caller-managed batch until ListArray.flush().
+    The option has no effect on ``storage="vl"``.
+    """
 
     python_type = _builtin_list
     dtype = None
@@ -629,13 +634,11 @@ class ListSpec(SchemaSpec):
         nullable: bool = False,
         storage: str = "batch",
         serializer: str = "msgpack",
-        batch_rows: int | None = None,
+        batch_rows: int | None = 2048,
         items_per_block: int | None = None,
     ):
         if not isinstance(item_spec, SchemaSpec):
             raise TypeError("ListSpec item_spec must be a SchemaSpec instance")
-        if isinstance(item_spec, ListSpec):
-            raise TypeError("Nested list item specs are not supported in V1")
         if storage not in {"batch", "vl"}:
             raise ValueError("storage must be 'batch' or 'vl'")
         if serializer not in {"msgpack", "arrow"}:
@@ -662,8 +665,7 @@ class ListSpec(SchemaSpec):
             "storage": self.storage,
             "serializer": self.serializer,
         }
-        if self.batch_rows is not None:
-            d["batch_rows"] = self.batch_rows
+        d["batch_rows"] = self.batch_rows
         if self.items_per_block is not None:
             d["items_per_block"] = self.items_per_block
         return d
@@ -674,7 +676,8 @@ class ListSpec(SchemaSpec):
         return d
 
     def display_label(self) -> str:
-        item_kind = self.item_spec.to_metadata_dict().get("kind", type(self.item_spec).__name__)
+        item = self.item_spec.display_label() if isinstance(self.item_spec, ListSpec) else None
+        item_kind = item or self.item_spec.to_metadata_dict().get("kind", type(self.item_spec).__name__)
         return f"list[{item_kind}]"
 
     @classmethod
@@ -1268,7 +1271,7 @@ def list(
     nullable: bool = False,
     storage: str = "batch",
     serializer: str = "msgpack",
-    batch_rows: int | None = None,
+    batch_rows: int | None = 2048,
     items_per_block: int | None = None,
 ) -> ListSpec:
     """Build a list-valued schema descriptor for CTable and ListArray."""

@@ -286,6 +286,7 @@ class DictionaryColumn:
 
     def __setitem__(self, key, value) -> None:
         """Encode *value* (str/None or list thereof) and write the code(s)."""
+        self._dict_store._backend._check_writable()
         if isinstance(key, (int, np.integer)):
             self._codes[int(key)] = np.int32(self.encode(value))
         elif isinstance(key, slice):
@@ -302,6 +303,7 @@ class DictionaryColumn:
 
     def resize(self, shape: tuple) -> None:
         """Resize the underlying codes NDArray (delegates to the NDArray)."""
+        self._dict_store._backend._check_writable()
         self._codes.resize(shape)
 
     # ------------------------------------------------------------------

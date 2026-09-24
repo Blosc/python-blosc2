@@ -585,6 +585,17 @@ def _read_frame_header(read_range, head=None) -> tuple[bytes, list, bytes]:
 
 
 def _read_frame_offsets(read_range, header: list, head: bytes, header_len: int) -> np.ndarray:
+    steps = _frame_offset_reads(header, head, header_len)
+    answer = None
+    while True:
+        try:
+            offset, size = steps.send(answer)
+        except StopIteration as done:
+            return done.value
+        answer = read_range(offset, size)
+
+
+def _frame_offset_reads(header, head, header_len):
     """The absolute position of every chunk of a frame whose header is in hand.
 
     A negative position is not a position at all: it encodes a run-length chunk
@@ -597,7 +608,7 @@ def _read_frame_offsets(read_range, header: list, head: bytes, header_len: int) 
     """
     # An empty frame has no chunks, so it has no offsets chunk either: what sits
     # at index_pos is the trailer, and reading it as one fails obscurely
-    if header[8] == 0:  # chunksize
+    if header[4] == 0:  # nbytes; variable-sized chunks use chunksize == 0
         return np.empty(0, dtype=np.int64)
 
     # The offsets live in a Blosc2 chunk of their own, right after the data ones,
@@ -609,10 +620,10 @@ def _read_frame_offsets(read_range, header: list, head: bytes, header_len: int) 
     if len(head) >= frame_len:
         index = head[index_pos:]  # the whole frame arrived in the first read
     else:
-        index = read_range(index_pos, min(frame_len - index_pos, _INDEX_PREFETCH))
+        index = yield index_pos, min(frame_len - index_pos, _INDEX_PREFETCH)
     index_cbytes = struct.unpack("<i", index[12:16])[0]
     if index_cbytes > len(index):
-        index = read_range(index_pos, index_cbytes)
+        index = yield index_pos, index_cbytes
     offsets = np.frombuffer(blosc2.decompress2(index[:index_cbytes]), dtype=np.int64)
     # Offsets are relative to the end of the header
     return np.where(offsets >= 0, offsets + header_len, offsets)
@@ -696,7 +707,8 @@ def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     index_pos = header[1] + header[5]
     bounds = np.sort(np.append(offsets[offsets >= 0], index_pos))
     extents = bounds[np.searchsorted(bounds, offsets, side="right")] - offsets
-    return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD)
+    cap = header[8] + 2 * blosc2.MAX_OVERHEAD
+    return np.minimum(extents, cap) if header[8] else extents
 
 
 class ByteRangeNDSource(ProxyNDSource):
@@ -963,6 +975,21 @@ class ByteRangeNDSource(ProxyNDSource):
         """Where each chunk begins, negative for one that lives in its offset."""
         return self._frame_index()[0]
 
+    def frame_index_reads(self):
+        """Yield index ranges for an immutable source; parse on the caller thread.
+
+        The caller serializes source access and sends each response back. Ordinary
+        array reads retain their existing locked, synchronous index path.
+        """
+        if self._stale:
+            raise RuntimeError("Batched index reads require an immutable source")
+        if self._index is None:
+            offsets = yield from _frame_offset_reads(self._header, self._head, self._header_len)
+            _check_specials(offsets, self.urlpath)
+            self._index = (offsets, _chunk_extents(offsets, self._header))
+            self._head = None
+        return self._index
+
     @property
     def _extents(self) -> np.ndarray:
         """How many bytes to read at each chunk's offset to be sure of covering it."""
@@ -1114,6 +1141,16 @@ class ByteRangeNDSource(ProxyNDSource):
         needs, and everything that reads bytes goes through it.
         """
         return [self.read_range(offset, size) for offset, size in spans]
+
+    @property
+    def storage_nbytes(self) -> int:
+        """Uncompressed stored bytes, including padding, as for SChunk.nbytes."""
+        return int(self._header[4])
+
+    @property
+    def cbytes(self) -> int:
+        """Compressed payload bytes recorded in the native frame header."""
+        return int(self._header[5])
 
     def wants_blocks(
         self,

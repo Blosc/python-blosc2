@@ -2070,6 +2070,7 @@ def _remote_array_options(
     assume_immutable=True,
     dataset=None,
     hdf5_index=None,
+    local_source=False,
 ):
     """Return the explicit RemoteArray options, or None when remote access was not requested."""
     policy_present = "cache_policy" in kwargs
@@ -2102,6 +2103,8 @@ def _remote_array_options(
         options["dataset"] = dataset
     if hdf5_index is not None:
         options["hdf5_index"] = hdf5_index
+    if local_source:
+        options["_local_source"] = True
     return options
 
 
@@ -2139,6 +2142,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         raise NotImplementedError("offset is not supported for Caterva2 arrays")
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
+    shared_cache = kwargs.pop("shared_cache", False)
     max_concurrency = kwargs.pop("max_concurrency", None)
     immutable_present = "assume_immutable" in kwargs
     assume_immutable = kwargs.pop("assume_immutable", True)
@@ -2157,7 +2161,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
             urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
         )
 
-    return blosc2.RemoteArray(urlpath, **remote_array_options)
+    return _open_lazy_remote(urlpath, None, remote_array_options, shared_cache)
 
 
 def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):
@@ -2230,6 +2234,104 @@ def _resolve_fsspec_format(urlpath, dataset, source_format, hdf5_index):
     return urlpath, dataset, source_format
 
 
+def _open_shared_remote(urlpath, source_format, options):
+    """Open remote arrays or containers through a process-shared sparse cache."""
+    if options["cache_dir"] is None:
+        raise ValueError("shared_cache=True requires cache_dir")
+    if options["cache_policy"] is not blosc2.CachePolicy.DISK:
+        raise ValueError("shared_cache=True requires cache_policy=CachePolicy.DISK")
+    if options["assume_immutable"] is not True:
+        raise ValueError("shared_cache=True requires assume_immutable=True")
+    if source_format not in {"b2z", "hdf5", "zarr"}:
+        return blosc2.RemoteArray(urlpath, _shared_cache=True, **options)
+    store_options = {
+        key: value
+        for key, value in options.items()
+        if key in {"dataset", "storage_options", "max_cache_bytes"}
+    }
+    with blosc2.RemoteStore.with_sparse_cache(
+        urlpath,
+        options["cache_dir"],
+        _source_format=source_format,
+        _hdf5_index=options.get("hdf5_index"),
+        **store_options,
+    ) as store:
+        result = store[""]
+        concurrency = options["max_concurrency"]
+        if concurrency is not None:
+            if isinstance(result, blosc2.RemoteCTable):
+                result.max_concurrency = concurrency
+            elif isinstance(result, blosc2.RemoteArray):
+                result.src.max_concurrency = concurrency
+            else:
+                result.close()
+                raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+        return result
+
+
+def _open_lazy_remote(urlpath, source_format, options, shared_cache=False):
+    if shared_cache:
+        return _open_shared_remote(urlpath, source_format, options)
+    if source_format == "b2z":
+        return _open_remote_b2z(urlpath, options)
+    if source_format == "hdf5":
+        return _open_remote_hdf5(urlpath, options)
+    if source_format == "zarr" and options.get("_local_source"):
+        try:
+            return blosc2.RemoteArray(urlpath, **options)
+        except ValueError as exc:
+            if "is a Zarr group" not in str(exc):
+                raise
+            if options["cache_path"] is not None:
+                raise NotImplementedError("Zarr groups use cache_dir, not cache_path") from exc
+        store_options = {
+            key: value
+            for key, value in options.items()
+            if key in {"dataset", "cache_dir", "cache_policy", "max_cache_bytes"}
+        }
+        with blosc2.RemoteStore(
+            urlpath,
+            _allow_array_root=True,
+            _allow_local_source=True,
+            _source_format="zarr",
+            **store_options,
+        ) as store:
+            result = store[""]
+            if options["max_concurrency"] is not None:
+                if not isinstance(result, blosc2.RemoteArray):
+                    result.close()
+                    raise NotImplementedError(
+                        "max_concurrency is only supported for remote arrays and tables"
+                    )
+                result.src.max_concurrency = options["max_concurrency"]
+            return result
+    return blosc2.RemoteArray(urlpath, **options)
+
+
+def _normalize_open_source_path(urlpath):
+    parsed = urlsplit(os.fspath(urlpath)) if isinstance(urlpath, os.PathLike) else urlsplit(urlpath)
+    local_source = not is_fsspec_url(urlpath) or parsed.scheme == "file"
+    if parsed.scheme == "file":
+        from urllib.parse import unquote
+
+        urlpath = os.path.abspath(unquote(parsed.path))
+    if local_source and os.path.isdir(urlpath) and urlpath.endswith((".b2nd", ".b2frame", ".b2d")):
+        raise NotImplementedError(
+            "local source caching requires a contiguous native frame, not a sparse directory"
+        )
+    return urlpath, local_source
+
+
+def _resolve_local_cache_lazy(local_source, cache_dir, cache_path, lazy, assume_immutable):
+    if not (local_source and (cache_dir is not None or cache_path is not None)):
+        return lazy
+    if lazy is False:
+        raise NotImplementedError("local source caches require on-demand access; omit lazy=False")
+    if assume_immutable is not True:
+        raise NotImplementedError("local source caches require assume_immutable=True")
+    return True if lazy is None else lazy
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -2239,11 +2341,16 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     lazy access, nothing is fetched up front and each slice pulls just the chunks
     it needs, retaining them under `cache_dir` when supplied.
     """
+    urlpath, local_source = _normalize_open_source_path(urlpath)
     if mode != "r":
-        raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
+        opener = "local cached sources" if local_source else "fsspec URLs"
+        raise NotImplementedError(f"{opener} can only be opened with mode='r', not {mode!r}")
 
     cache_dir, cache_path = _remote_cache_options(kwargs)
+    shared_cache = kwargs.pop("shared_cache", False)
     storage_options = kwargs.pop("storage_options", None)
+    if local_source and storage_options is not None:
+        raise ValueError("storage_options is only supported for fsspec URLs")
     source_format = kwargs.pop("source_format", None)
     dataset = kwargs.pop("dataset", None)
     hdf5_index = kwargs.pop("hdf5_index", None)
@@ -2260,6 +2367,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         lazy = False
     if lazy is False and hdf5_index is not None:
         raise NotImplementedError("hdf5_index is only supported with lazy=True")
+    if lazy is None and source_format == "b2z":
+        lazy = True
+    lazy = _resolve_local_cache_lazy(local_source, cache_dir, cache_path, lazy, assume_immutable)
     # Auto-infer lazy=True only when the caller left the choice unspecified.
     lazy = _resolve_lazy(lazy, dataset, source_format, urlpath)
 
@@ -2275,6 +2385,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         assume_immutable=assume_immutable,
         dataset=dataset,
         hdf5_index=hdf5_index,
+        local_source=local_source,
     )
     if lazy:
         if offset != 0:
@@ -2282,7 +2393,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        return blosc2.RemoteArray(urlpath, **remote_array_options)
+        return _open_lazy_remote(urlpath, source_format, remote_array_options, shared_cache)
 
     _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, cache_path, max_concurrency)
 
@@ -2292,8 +2403,8 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     if source_format == "b2z":
         raise NotImplementedError(
-            "Remote B2Z containers require b2view for browsing, lazy=True with a dataset for arrays, "
-            "or cache_dir= for explicit localization"
+            "Remote B2Z containers require lazy=True for on-demand access, "
+            "or cache_dir= with lazy=False for explicit localization"
         )
 
     if offset != 0:
@@ -2309,6 +2420,171 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         )
     with fsspec_open(urlpath, "rb", storage_options=storage_options) as f:
         return blosc2.from_cframe(f.read())
+
+
+def _open_remote_b2z(urlpath, options):
+    """Keep the array fast path and discover table/group nodes through RemoteStore."""
+    from blosc2.b2z_source import B2ZArrayNotFoundError
+
+    dataset = options.get("dataset")
+    array_error = None
+    if dataset and dataset.strip("/"):
+        try:
+            return blosc2.RemoteArray(urlpath, **options)
+        except B2ZArrayNotFoundError as exc:
+            # Tables and groups have no corresponding .b2nd member.
+            array_error = exc
+    if options["cache_path"] is not None:
+        raise NotImplementedError("Remote tables and stores use cache_dir, not cache_path")
+    if options["assume_immutable"] is not True:
+        raise NotImplementedError("Remote tables and stores require assume_immutable=True")
+    store_options = {
+        key: value
+        for key, value in options.items()
+        if key in {"dataset", "storage_options", "cache_dir", "cache_policy", "max_cache_bytes"}
+    }
+    try:
+        with blosc2.RemoteStore(
+            urlpath,
+            _allow_array_root=True,
+            _allow_local_source=options.get("_local_source", False),
+            _source_format="b2z",
+            _b2z_blob=array_error.blob if array_error is not None else None,
+            **store_options,
+        ) as store:
+            if array_error is not None:
+                # Include the initial array lookup in shared transfer accounting.
+                store.traffic.nbytes += array_error.traffic.nbytes
+                store.traffic.requests += array_error.traffic.requests
+            if options["max_concurrency"] is not None:
+                _, full = store._resolve("")
+                if store._owner.nodes[full][0] != "ctable":
+                    raise NotImplementedError(
+                        "max_concurrency is only supported for remote arrays and tables"
+                    )
+                return blosc2.RemoteCTable._from_owner(
+                    store._owner,
+                    full,
+                    max_concurrency=options["max_concurrency"],
+                )
+            return store[""]
+    except KeyError:
+        if array_error is not None:
+            raise array_error from None
+        raise
+
+
+def _open_local_hdf5(urlpath, options):
+    """Use table discovery only for PyTables nodes; keep ordinary datasets on h5py."""
+    import h5py
+
+    dataset = (options.get("dataset") or "").strip("/")
+    is_table = False
+    is_group = False
+    if dataset:
+        with h5py.File(urlpath, "r") as h5file:
+            node = h5file.get(dataset.strip("/"))
+            is_group = isinstance(node, h5py.Group)
+            is_table = isinstance(node, h5py.Dataset) and node.attrs.get("CLASS") in {"TABLE", b"TABLE"}
+    if is_table or is_group or not dataset:
+        if not is_table and options["max_concurrency"] is not None:
+            raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+        if options["cache_path"] is not None:
+            raise NotImplementedError("HDF5 tables and groups use cache_dir, not cache_path")
+        if options["assume_immutable"] is not True:
+            raise NotImplementedError("Local HDF5 caches require assume_immutable=True")
+        store_options = {
+            key: value
+            for key, value in options.items()
+            if key in {"dataset", "cache_dir", "cache_policy", "max_cache_bytes", "hdf5_index"}
+        }
+        with blosc2.RemoteStore(
+            urlpath,
+            _allow_array_root=True,
+            _allow_local_source=options.get("_local_source", False),
+            _source_format="hdf5",
+            **store_options,
+        ) as store:
+            if is_table:
+                return blosc2.RemoteCTable._from_owner(
+                    store._owner,
+                    dataset.strip("/"),
+                    **(
+                        {}
+                        if options["max_concurrency"] is None
+                        else {"max_concurrency": options["max_concurrency"]}
+                    ),
+                )
+            return store[""]
+    return blosc2.RemoteArray(urlpath, **options)
+
+
+def _open_remote_hdf5(urlpath, options):
+    """Discover HDF5 groups and PyTables tables while retaining array-only options."""
+    from blosc2.hdf5_source import HDF5GroupError
+
+    if not is_fsspec_url(urlpath):
+        return _open_local_hdf5(urlpath, options)
+    if options["cache_path"] is not None or options["assume_immutable"] is not True:
+        return blosc2.RemoteArray(urlpath, **options)
+    dataset = (options.get("dataset") or "").strip("/")
+    hdf5_index = options.get("hdf5_index")
+    hdf5_blob = None
+    traffic = None
+    cached_store = False
+    if dataset and options["cache_dir"] is not None and hdf5_index is None:
+        from blosc2.remote_store_cache import StoreDiskCache
+
+        source = blosc2.RemoteStore._cache_source(urlpath, dataset, "hdf5", options.get("storage_options"))
+        cached_store = (
+            StoreDiskCache.path_for(options["cache_dir"], source) / "active_generation.json"
+        ).exists()
+    if dataset and not cached_store:
+        try:
+            array = blosc2.RemoteArray(urlpath, _defer_cache=True, **options)
+        except HDF5GroupError as exc:
+            hdf5_index, hdf5_blob, traffic = exc.index, exc.blob, exc.traffic
+        else:
+            metadata = array.src._hdf5_index["datasets"][array.dataset]
+            if metadata.get("kind") != "ctable":
+                array._complete_deferred_cache()
+                return array
+            hdf5_index = array.src._hdf5_index
+            hdf5_blob = array.src._blob
+            traffic = array.traffic
+            array.close()
+    store_options = {
+        key: value
+        for key, value in options.items()
+        if key in {"dataset", "storage_options", "cache_dir", "cache_policy", "max_cache_bytes"}
+    }
+    with blosc2.RemoteStore(
+        urlpath,
+        _allow_array_root=True,
+        _source_format="hdf5",
+        _hdf5_index=hdf5_index,
+        _hdf5_blob=hdf5_blob,
+        _traffic=traffic,
+        **store_options,
+    ) as store:
+        _, full = store._resolve("")
+        kind = store._owner.nodes[full][0]
+        max_concurrency = options["max_concurrency"]
+        if kind == "ctable":
+            return blosc2.RemoteCTable._from_owner(
+                store._owner,
+                full,
+                **({} if max_concurrency is None else {"max_concurrency": max_concurrency}),
+            )
+        if cached_store and kind == "ndarray":
+            return blosc2.RemoteArray(urlpath, **options)
+        result = store[""]
+        if max_concurrency is not None:
+            if not isinstance(result, blosc2.RemoteArray):
+                result.close()
+                raise NotImplementedError("max_concurrency is only supported for remote arrays and tables")
+            result.src.max_concurrency = max_concurrency
+        return result
 
 
 def _is_hdf5_open_request(urlpath: str, kwargs: dict) -> bool:
@@ -2330,9 +2606,20 @@ def _is_container_open_request(urlpath: str, kwargs: dict) -> bool:
     _, parsed_dataset, hint = parse_container_url(urlpath, kwargs.get("dataset"))
     if hint == "hdf5":
         return True
+    if hint == "b2z" and os.path.exists(urlpath):
+        meta = _meta_from_store(urlpath, 0)
+        if meta is not None and "b2remote_store" in meta:
+            return False
     return (hint in {"zarr", "b2z"} or kwargs.get("source_format") == "b2z") and (
         kwargs.get("lazy") or parsed_dataset is not None or "dataset" in kwargs
     )
+
+
+def _should_use_fsspec_opener(urlpath, kwargs):
+    local_cache_requested = any(
+        kwargs.get(key) is not None for key in ("cache_dir", "cache_path", "cache_storage")
+    )
+    return is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs) or local_cache_requested
 
 
 def _try_open_special_store(urlpath: str, mode: str, offset: int, kwargs: dict):
@@ -2377,12 +2664,38 @@ def _normalize_open_target(urlpath, kwargs, dataset, hdf5_index):
     return urlpath
 
 
+def _reject_table_buffer_options(kwargs):
+    table_options = kwargs.keys() & {"metadata_buffer_bytes", "row_buffer_bytes"}
+    if table_options:
+        raise TypeError(
+            f"{', '.join(sorted(table_options))} are RemoteCTable options; use RemoteCTable directly"
+        )
+
+
+def _validate_shared_cache_request(urlpath, shared_cache, kwargs):
+    if not isinstance(shared_cache, bool):
+        raise TypeError("shared_cache must be a bool")
+    if shared_cache:
+        if not isinstance(urlpath, blosc2.URLPath) and (
+            not isinstance(urlpath, str) or not is_fsspec_url(urlpath)
+        ):
+            raise ValueError("shared_cache=True requires a remote URL or Caterva2 URLPath")
+        kwargs["shared_cache"] = True
+        if kwargs.get("lazy") is False:
+            raise ValueError("shared_cache=True requires lazy=True")
+        if kwargs.get("lazy") is None:
+            kwargs["lazy"] = True
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
     offset: int = 0,
     dataset: str | None = None,
     hdf5_index: dict | str | os.PathLike | None = None,
+    *,
+    path: str | None = None,
+    shared_cache: bool = False,
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2391,6 +2704,9 @@ def open(
     | blosc2.ObjectArray
     | blosc2.C2Array
     | blosc2.RemoteArray
+    | blosc2.CTable
+    | blosc2.RemoteCTable
+    | blosc2.RemoteStore
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -2399,7 +2715,7 @@ def open(
 ):
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
     :ref:`RemoteArray`, :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or
-    :ref:`TreeStore`.
+    :ref:`TreeStore`, :class:`CTable`, :class:`RemoteCTable`, or :class:`RemoteStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
 
@@ -2433,39 +2749,61 @@ def open(
         (e.g. in a file containing several such objects).
         A nonzero offset in a local file opens the embedded Blosc2 frame
         directly, bypassing filename-based container format detection.
+    shared_cache: bool, optional
+        Share an on-demand disk cache between processes. Defaults to False.
+        Requires ``cache_dir`` and a remote source: a standalone ``.b2nd`` URL,
+        a B2Z, HDF5, or Zarr container, or a Caterva2 :ref:`URLPath`.
+        Requires lazy access, ``CachePolicy.DISK``, and ``assume_immutable=True``.
+        Enables lazy access for every remote source when ``lazy`` is omitted or None;
+        explicit ``lazy=False`` is rejected.
+        Returns the selected table, group, or array using sparse cache storage
+        and operation-scoped locks. Operations on the same cache serialize.
+        All processes using this cache must enable sharing; use a separate
+        directory from ordinary exclusive caches. The aggregate retained
+        compressed-payload budget defaults to 256 MiB per standalone array or
+        table/store owner; ``max_cache_bytes=None`` disables eviction.
+        This does not bound total disk usage or peak RAM. Authenticated Caterva2
+        users must use separate cache directories; tokens are not persisted.
     kwargs: dict, optional
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
-            returns a lazy :ref:`RemoteArray`; ``False`` requests eager access.
-            Known remote `.b2nd` arrays default to lazy access, including when
+            returns a lazy remote object; ``False`` requests eager access.
+            Known remote `.b2nd` arrays and `.b2z` archives default to lazy access, including when
             ``cache_dir=`` is supplied. Pass ``lazy=False`` to download the whole
             container under ``cache_dir`` instead. ``mmap_mode=`` or a nonzero
             ``offset=`` forces the eager path. Dataset paths currently require
             ``lazy=True`` and reject explicit ``False``.
             For an fsspec URL or a Caterva2 :ref:`URLPath`, return a :ref:`RemoteArray` over
-            the remote dataset and read the byte ranges a slice touches. Neither form opens
-            a whole remote store hierarchy. A slice landing in a small part of a large
+            the remote array dataset and read the byte ranges a slice touches.
+            B2Z and HDF5 table and group nodes return :class:`RemoteCTable` and
+            :class:`RemoteStore` instead. Selected local PyTables/HDF5 tables also
+            return :class:`RemoteCTable`; local ordinary datasets remain :class:`RemoteArray`.
+            A slice landing in a small part of a large
             chunk costs only the *blocks* it touches when ranges are available;
             chunks small enough to be one cheap request are still fetched whole.
             What arrives is kept in memory (defaulting to :attr:`CachePolicy.MEMORY`),
             under ``cache_dir``, or at the exact ``cache_path`` (as :attr:`CachePolicy.DISK`).
         max_concurrency: int, optional
-            Only with ``lazy``: how many fetches to run at once, in a thread
+            For lazy remote arrays and RemoteCTable: how many fetches to run at once, in a thread
             pool. A slice against an object store is almost entirely round-trip
             latency, so overlapping the requests is what makes a wide slice
             bearable. Defaults to 8; pass 1 for a protocol with no latency to
             hide, where the pool costs about 10 microseconds per chunk and saves
             nothing.
+            Remote tables overlap independent requests across selected columns;
+            their table-specific temporary buffer settings are available through
+            ``RemoteCTable``, not through this general opener.
         cache_dir: str | pathlib.Path, optional
-            For fsspec URLs and lazy Caterva2 :ref:`URLPath` objects, a directory holding this container's
-            local copy — either the whole thing, or just the chunks and blocks ``lazy`` has fetched so far
-            (as a persistent :ref:`RemoteArray` with :attr:`CachePolicy.DISK`). Either way a later run
-            starts from what is already there, and the copy is discarded when the remote no longer matches
-            it. There is no default on purpose, so nothing writes to a disk you did not name.
+            Parent directory for a persistent :ref:`RemoteArray`, :class:`RemoteCTable`, or
+            :class:`RemoteStore` cache. For remote inputs it stores fetched chunks and metadata;
+            for local Blosc2, HDF5, and Zarr inputs it stores accessed chunks and converted data.
+            Supplying it selects on-demand, read-only access for local inputs. Local caches assume
+            the source is immutable: call ``refresh()`` on the cached handle after replacing it at
+            the same path. No cache is created unless you name one.
         cache_path: str | pathlib.Path, optional
-            With ``lazy=True``, the exact file to use for the remote array's
-            persistent :ref:`RemoteArray` cache (:attr:`CachePolicy.DISK`). Mutually exclusive with
-            ``cache_dir``.
+            Exact file for a persistent array cache (:attr:`CachePolicy.DISK`), for local or remote
+            standalone arrays and array leaves. Tables and groups require ``cache_dir``. Mutually
+            exclusive with ``cache_dir``.
         cache_storage: str | pathlib.Path, optional
             Deprecated alias for ``cache_dir``. Mutually exclusive with
             ``cache_dir`` and ``cache_path``.
@@ -2506,26 +2844,35 @@ def open(
         storage_options: dict, optional
             Parameters passed to the underlying ``fsspec`` filesystem when opening
             an fsspec URL (for instance credentials, endpoint URL, token, client_kwargs, etc.).
-        dataset: str, optional
-            Array path within HDF5, Zarr, or B2Z containers (e.g. ``dataset="d0/d1/a2"``).
-            B2Z supports external NDArray leaves in immutable archives.
+        path: str, optional
+            Node path within HDF5, Zarr, or B2Z containers (e.g. ``path="d0/d1/a2"``).
+            B2Z and HDF5 also support table and group paths in immutable containers.
             Requires ``lazy=True``.
+            None leaves selection unspecified; ``""`` and ``"/"`` select the root.
+            Do not combine with a selector embedded in the URL.
+        dataset: str, optional
+            Supported alias of ``path``. Both may be supplied if they agree after
+            stripping leading/trailing slashes; conflicting values raise ValueError.
         hdf5_index: dict | str | PathLike, optional
-            Pre-computed native HDF5 index or path to a JSON index file.
+            Pre-computed native HDF5 index, or a local path or remote fsspec URL
+            to its JSON encoding. It must match the source HDF5 URL and dataset
+            scope. Arrays, PyTables tables, and hierarchy stores are supported.
         source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
             a ``.b2z`` path selects B2Z automatically. An explicit value supports
-            suffix-free array paths. Zarr and HDF5 sources automatically enable
+            suffix-free paths. Zarr, HDF5 and B2Z sources automatically enable
             ``lazy=True``.
         assume_immutable: bool, optional
             With ``lazy=True``, skip remote identity checks before reads. Defaults
-            to ``True``; set to ``False`` when the remote object may be replaced.
+            to ``True``. Local disk caches always assume immutable sources; set to a new path or
+            explicitly rebuild the cache after changing a local source.
 
     Returns
     -------
     out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`RemoteArray`,
-        :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
+        :ref:`Proxy`, :ref:`DictStore`, :ref:`EmbedStore`, :ref:`TreeStore`,
+        :class:`CTable`, :class:`RemoteCTable`, or :class:`RemoteStore`
         The object found in the path.
 
     Notes
@@ -2542,8 +2889,8 @@ def open(
       ownership when closed; other handles from that store remain usable.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
-      must be 'r' and :paramref:`offset` must be 0. Without ``lazy=True`` it
-      returns a :ref:`C2Array`. With ``lazy=True``, it returns a :ref:`RemoteArray`
+      must be 'r' and :paramref:`offset` must be 0. By default it returns a
+      :ref:`C2Array`. With ``lazy=True`` or ``shared_cache=True``, it returns a :ref:`RemoteArray`
       (defaulting to ``CachePolicy.DISK`` when ``cache_dir`` or ``cache_path`` is
       provided, and ``CachePolicy.MEMORY`` otherwise).
       Authenticated users sharing a machine must use separate caches.
@@ -2554,12 +2901,14 @@ def open(
       endpoint URL, region, etc.) can be passed directly via ``storage_options``.
       ``mode != 'r'`` always raises, as object stores have no rename and no locks.
       A plain URL read rebuilds the object from a cframe held in memory, so it
-      covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
-      archive rather than a cframe, and needs ``cache_dir`` like the directory
-      formats do. With ``lazy=True`` and a dataset path, a B2Z archive serves
-      its selected external NDArray by byte range. Lazy opening returns a :ref:`RemoteArray` (using
-      ``CachePolicy.DISK`` with ``cache_dir`` or ``cache_path``, and
-      ``CachePolicy.MEMORY`` otherwise).
+      covers ``.b2nd``, ``.b2f`` and ``.b2e`` only. Remote ``.b2z`` archives
+      default to lazy discovery: table nodes return :class:`RemoteCTable`,
+      groups return :class:`RemoteStore`, and external array leaves return
+      :ref:`RemoteArray`. Select a nested node with ``path=`` or ``::path``.
+      Tables and groups use ``cache_dir`` for DISK caching and default to MEMORY
+      otherwise; array leaves additionally support ``cache_path``.
+      Use ``lazy=False, cache_dir=...`` to download a complete archive and open
+      its root locally. Local table archives return :class:`CTable`.
 
     * Persistent data handling follows a no-hidden-writes rule except for an
       explicitly self-caching :ref:`RemoteArray`:
@@ -2614,10 +2963,17 @@ def open(
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    dataset = blosc2.core.resolve_dataset_path(dataset, path)
+    _reject_table_buffer_options(kwargs)
+    _validate_shared_cache_request(urlpath, shared_cache, kwargs)
     if isinstance(urlpath, blosc2.URLPath):
         return _open_c2_urlpath(urlpath, mode, offset, kwargs)
 
-    if offset != 0 and not is_fsspec_url(urlpath):
+    if (
+        offset != 0
+        and not is_fsspec_url(urlpath)
+        and not any(kwargs.get(key) is not None for key in ("cache_dir", "cache_path", "cache_storage"))
+    ):
         local_path = normalize_urlpath(os.fspath(urlpath))
         if os.path.isfile(local_path):
             if dataset is not None or hdf5_index is not None:
@@ -2627,7 +2983,7 @@ def open(
 
     urlpath = _normalize_open_target(urlpath, kwargs, dataset, hdf5_index)
 
-    if is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs):
+    if _should_use_fsspec_opener(urlpath, kwargs):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)
 
     # The native local opener does not consume the public lazy option.

@@ -6,18 +6,36 @@
 
 """Native range reads of external NDArray members in immutable B2Z archives."""
 
+import hashlib
 import io
 import operator
 import re
+import uuid
 import zipfile
+from contextlib import contextmanager
 
-from blosc2.core import _import_fsspec
+from blosc2.core import _import_fsspec, resolve_dataset_path
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traffic
+from blosc2.remote_source_cache import (
+    SMALL_REMOTE_FILE,
+    load_source_cache,
+    publish_source_cache,
+    source_cache_path,
+    source_version,
+)
 
 # One request can carry a small member whole -- local header, frame header and the
 # trailing vlmeta -- sparing a round trip each against the object store.
 _WHOLE_MEMBER_PREFETCH_MAX = 64 * 1024
 _LOCAL_HEADER_HEADROOM = 4096
+
+
+def b2z_source_cache(urlpath, cache_dir, storage_options=None, *, refresh=False):
+    if cache_dir is None:
+        return None, None, None
+    path = source_cache_path(urlpath, cache_dir, storage_options, kind="b2z")
+    blob, marker = load_source_cache(path)
+    return path, marker, None if refresh else blob
 
 
 async def _http_tail(fs, path):
@@ -86,7 +104,17 @@ class _ArchiveFile(io.RawIOBase):
 class B2ZArchive:
     """Session directory and bounded range access shared by discovery and leaves."""
 
-    def __init__(self, urlpath, *, storage_options=None, _filesystem=None, _traffic=None, _metadata=None):
+    def __init__(
+        self,
+        urlpath,
+        *,
+        storage_options=None,
+        _filesystem=None,
+        _traffic=None,
+        _metadata=None,
+        _source_cache=(None, None, None),
+        _refresh=False,
+    ):
         self.storage_options = storage_options or {}
         self.urlpath = urlpath
         fsspec = _import_fsspec(urlpath)
@@ -95,23 +123,32 @@ class B2ZArchive:
         else:
             self._fs, self._path = _filesystem, _filesystem._strip_protocol(urlpath)
         self.traffic = _traffic if _traffic is not None else Traffic()
-        bootstrap = None
-        if self._fs.protocol in ("http", "https", ("http", "https")) and not _metadata:
-            from fsspec.asyn import sync
-            from fsspec.implementations.http import HTTPFileSystem
-
-            if isinstance(self._fs, HTTPFileSystem):
-                bootstrap = sync(self._fs.loop, _http_tail, self._fs, self._path)
-        object_info = self._fs.info(self._path) if bootstrap is None else bootstrap[0]
-        self.object_info = object_info
-        size = object_info["size"]
-        self.size = size
+        self.source_cache_path, self.source_cache_marker, self.blob = _source_cache
+        object_info, bootstrap, legacy_metadata = self._bootstrap_source(_metadata)
+        size = self.size
         self.metadata = _metadata if _metadata is not None else {}
         self.persist_metadata = _metadata is not None
         identity = repr(sorted((key, str(value)) for key, value in object_info.items()))
         if self.metadata and self.metadata.get("identity") != identity:
             raise ValueError("B2Z source changed; refresh the store cache")
         self.metadata.setdefault("identity", identity)
+        if self.blob is not None:
+            self.metadata["source_sha256"] = object_info["source_sha256"]
+        elif _refresh and self.source_cache_path is not None:
+            self.metadata["source_cache_version"] = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
+        elif self.source_cache_marker is not None:
+            self.metadata["source_cache_version"] = self.source_cache_marker["token"]
+        # Backend info can contain datetime or other non-msgpack values. Only
+        # size needs its native type; retain per-member stamps before normalizing.
+        self.metadata.setdefault(
+            "object_info", {**{k: str(v) for k, v in object_info.items()}, "size": size}
+        )
+        # New readers (including concurrent sparse-cache handles) must derive
+        # identical stamps from the live and serialized forms. During upgrades,
+        # preserve the old stamp for existing payloads in member_stamps below.
+        self.object_info = (
+            object_info if legacy_metadata or _metadata is None else self.metadata["object_info"]
+        )
         self.metadata.setdefault("ranges", [])
         for offset, data in self.metadata["ranges"]:
             if (
@@ -121,7 +158,9 @@ class B2ZArchive:
             ):
                 raise ValueError("Invalid cached B2Z metadata range")
         self.capture_metadata = True
+        self._captured_ranges = []
         self._opening_ranges = []
+        self._batch_ranges = []
         # ponytail: small directories fit in 8 KiB; larger ones use exact reads.
         tail_start = max(0, size - 8192)
         if bootstrap is None:
@@ -129,6 +168,7 @@ class B2ZArchive:
         else:
             tail = bootstrap[1]
             self.traffic.charge(len(tail))
+            self._captured_ranges.append((tail_start, tail))
             if self.persist_metadata:
                 self.metadata["ranges"].append((tail_start, tail))
         self._opening_ranges.append((tail_start, tail))
@@ -136,6 +176,43 @@ class B2ZArchive:
         self.archive = zipfile.ZipFile(self.file)
         self.members = self.archive.infolist()
         self.capture_metadata = False
+
+    def _bootstrap_source(self, _metadata):
+        bootstrap = None
+        if self.blob is None and self._fs.protocol in ("http", "https", ("http", "https")) and not _metadata:
+            from fsspec.asyn import sync
+            from fsspec.implementations.http import HTTPFileSystem
+
+            if isinstance(self._fs, HTTPFileSystem):
+                bootstrap = sync(self._fs.loop, _http_tail, self._fs, self._path)
+        legacy_metadata = bool(_metadata) and "object_info" not in _metadata
+        object_info = (_metadata or {}).get("object_info")
+        if self.blob is not None:
+            object_info = {"size": len(self.blob), "source_sha256": hashlib.sha256(self.blob).hexdigest()}
+        if object_info is None:
+            # Old manifests need one identity lookup to acquire this bootstrap.
+            object_info = self._fs.info(self._path) if bootstrap is None else bootstrap[0]
+        size = object_info["size"]
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError("Invalid cached B2Z archive size")
+        self.size = size
+        if (
+            self.blob is None
+            and size <= SMALL_REMOTE_FILE
+            and (not _metadata or self.source_cache_path is not None)
+        ):
+            if bootstrap is not None:
+                self.traffic.charge(len(bootstrap[1]))
+            if bootstrap is not None and len(bootstrap[1]) == size:
+                self.blob = bootstrap[1]
+            else:
+                self.blob = self.read_transport(0, size)
+            bootstrap = None
+            # A content identity is stable across transports and cached reopens.
+            object_info = {"size": size, "source_sha256": hashlib.sha256(self.blob).hexdigest()}
+            if _metadata and not source_version(_metadata):
+                _metadata.clear()  # Upgrade legacy discovery against the downloaded source.
+        return object_info, bootstrap, legacy_metadata
 
     def member_window(self, info, *, prefetch=False):
         size = self.size
@@ -185,16 +262,47 @@ class B2ZArchive:
         for start, data in self.metadata["ranges"] if self.capture_metadata else ():
             if start <= offset and offset + size <= start + len(data):
                 return data[offset - start : offset - start + size]
-        for start, data in self._opening_ranges:
+        for start, data in (*self._opening_ranges, *self._batch_ranges):
             if start <= offset and offset + size <= start + len(data):
                 return data[offset - start : offset - start + size]
+        data = self.read_transport(offset, size)
+        if self.capture_metadata:
+            self._captured_ranges.append((offset, data))
+            if self.persist_metadata:
+                self.metadata["ranges"].append((offset, data))
+        return data
+
+    def read_transport(self, offset, size):
+        """Read immutable bytes only; safe while the owner parses other responses."""
+        if not 0 <= offset <= self.size or not 0 <= size <= self.size - offset:
+            raise ValueError("B2Z range exceeds archive bounds")
+        if self.blob is not None:
+            return self.blob[offset : offset + size]
         data = self._fs.cat_file(self._path, start=offset, end=offset + size)
-        if len(data) > size:
+        if len(data) != size:
             raise ValueError("B2Z transport did not honor the requested byte range")
         self.traffic.charge(len(data))
-        if self.capture_metadata and self.persist_metadata:
-            self.metadata["ranges"].append((offset, data))
         return data
+
+    def publish_source(self, *, refresh=False):
+        if self.source_cache_path is not None:
+            publish_source_cache(
+                self.source_cache_path,
+                self.blob,
+                {**self.metadata, "size": self.size},
+                expected=self.source_cache_marker,
+                refresh=refresh,
+            )
+
+    @contextmanager
+    def buffered_ranges(self, ranges):
+        """Owner-thread-only prefix reuse while opening a batch of members."""
+        previous = self._batch_ranges
+        self._batch_ranges = ranges
+        try:
+            yield
+        finally:
+            self._batch_ranges = previous
 
     def close(self):
         self.archive.close()
@@ -227,6 +335,11 @@ class _SeededArchive:
         if self.prefix_start <= offset and offset + size <= self.prefix_start + len(self.prefix):
             start = offset - self.prefix_start
             return self.prefix[start : start + size]
+        self.prepare_transport()
+        return self.read_transport(offset, size)
+
+    def prepare_transport(self):
+        """Resolve a seeded transport on the owner thread before parallel reads."""
         if self._fs is None:
             if self._filesystem is None:
                 fs, path = _import_fsspec(self.urlpath).url_to_fs(self.urlpath, **self.storage_options)
@@ -234,17 +347,29 @@ class _SeededArchive:
                 fs = self._filesystem
                 path = fs._strip_protocol(self.urlpath)
             self._path, self._fs = path, fs
+
+    def read_transport(self, offset, size):
         data = self._fs.cat_file(self._path, start=offset, end=offset + size)
-        if len(data) > size:
+        if len(data) != size:
             raise ValueError("B2Z transport did not honor the requested byte range")
         self.traffic.charge(len(data))
         return data
 
 
+class B2ZArrayNotFoundError(ValueError):
+    """The selected archive path is not an external NDArray member."""
+
+    def __init__(self, dataset, traffic, blob=None):
+        super().__init__(f"No supported external NDArray at {dataset!r}; specify an external array leaf")
+        self.traffic = traffic
+        self.blob = blob
+
+
 class B2ZNDSource(ByteRangeNDSource):
     """Read a stored external NDArray from an immutable B2Z archive via fsspec.
 
-    ``dataset`` is a logical tree key, e.g. ``d0/a3``, without the member's
+    ``path`` (or its supported alias ``dataset``) is a logical tree key,
+    e.g. ``d0/a3``, without the member's
     ``.b2nd`` suffix. Embedded leaves and ZIP-compressed members are unsupported.
     Opening uses bounded metadata prefetch; native chunks and blocks are fetched
     on demand. Replacing the archive requires replacing its cache.
@@ -253,15 +378,18 @@ class B2ZNDSource(ByteRangeNDSource):
     def __init__(
         self,
         urlpath,
-        dataset,
+        dataset=None,
         max_concurrency=REMOTE_MAX_CONCURRENCY,
         *,
+        path=None,
         storage_options=None,
         _filesystem=None,
         _traffic=None,
         _archive=None,
         _seed=None,
+        _source_cache_dir=None,
     ):
+        dataset = resolve_dataset_path(dataset, path)
         if not isinstance(dataset, str) or not dataset.strip("/"):
             raise ValueError("B2Z sources require a dataset path (e.g. dataset='d0/a3')")
         dataset = dataset.strip("/")
@@ -270,6 +398,13 @@ class B2ZNDSource(ByteRangeNDSource):
         ):
             raise ValueError("invalid B2Z dataset path")
         self.dataset = dataset
+        cache = b2z_source_cache(urlpath, _source_cache_dir, storage_options)
+        if _source_cache_dir is not None and _seed is not None and "source_cache_version" not in _seed:
+            _seed = None  # One-time migration from a metadata-only carrier.
+        if cache[1] is not None and _seed is not None and source_version(_seed) != cache[1]["token"]:
+            _seed = None
+        if cache[2] is not None:
+            _seed = None
         if _seed is not None:
             if _archive is not None:
                 raise ValueError("a cached B2Z seed cannot be combined with an archive")
@@ -278,7 +413,11 @@ class B2ZNDSource(ByteRangeNDSource):
         if _archive is not None and _archive.urlpath != urlpath:
             raise ValueError("B2Z source URL does not match its archive")
         archive = _archive or B2ZArchive(
-            urlpath, storage_options=storage_options, _filesystem=_filesystem, _traffic=_traffic
+            urlpath,
+            storage_options=storage_options,
+            _filesystem=_filesystem,
+            _traffic=_traffic,
+            _source_cache=cache,
         )
         try:
             archive.capture_metadata = True
@@ -290,16 +429,26 @@ class B2ZNDSource(ByteRangeNDSource):
             object_info = archive.object_info
             matches = [info for info in archive.members if info.filename == dataset + ".b2nd"]
             if not matches:
-                raise ValueError(
-                    f"No supported external NDArray at {dataset!r}; specify an external array leaf"
-                )
+                raise B2ZArrayNotFoundError(dataset, self.traffic, archive.blob)
             if len(matches) != 1:
                 raise ValueError("duplicate B2Z array member")
             self.member_offset, self.member_length = archive.member_window(matches[0], prefetch=True)
             prefix_start, prefix = archive._opening_ranges[-1]
             from fsspec.utils import tokenize
 
-            self.stamp = tokenize(urlpath, object_info, dataset, self.member_offset, self.member_length)
+            # tokenize() uses dict repr: HEAD and range responses can contain
+            # identical fields in different insertion orders.
+            self.stamp = archive.metadata.setdefault("member_stamps", {}).setdefault(
+                dataset,
+                tokenize(
+                    urlpath,
+                    sorted(object_info.items()),
+                    dataset,
+                    self.member_offset,
+                    self.member_length,
+                    *([source_version(archive.metadata)] if source_version(archive.metadata) else []),
+                ),
+            )
             super().__init__(urlpath, max_concurrency, traffic=self.traffic)
             if b"b2o" in self._header[13][1]:
                 raise NotImplementedError("B2Z object carriers are not supported; select a plain NDArray")
@@ -317,6 +466,7 @@ class B2ZNDSource(ByteRangeNDSource):
 
     def _init_seeded(self, urlpath, max_concurrency, storage_options, filesystem, traffic, seed):
         """Rebuild this source from a carrier's cached bootstrap, without network."""
+        self._seed = seed
         self.member_offset = int(seed["member_offset"])
         self.member_length = int(seed["member_length"])
         self.stamp = str(seed["stamp"])
@@ -364,6 +514,12 @@ class B2ZNDSource(ByteRangeNDSource):
             "prefix_start": self.member_offset,
             "prefix": self._raw_header,
             "stamp": self.stamp,
+            "source_sha256": self._archive.metadata.get("source_sha256")
+            if hasattr(self._archive, "metadata")
+            else self._seed.get("source_sha256"),
+            "source_cache_version": source_version(self._archive.metadata)
+            if hasattr(self._archive, "metadata")
+            else source_version(self._seed),
         }
 
     def _take_prefetched_array(self):
@@ -382,6 +538,63 @@ class B2ZNDSource(ByteRangeNDSource):
             raise ValueError("invalid B2Z frame range")
         size = max(0, min(size, self.member_length - offset))
         return self._read_archive(self.member_offset + offset, size)
+
+
+class B2ZBatchSource:
+    """Internal byte-range source for one external BatchArray member."""
+
+    def __init__(self, archive, dataset, check_open=None):
+        from blosc2.proxy_source import (
+            _chunk_extents,
+            _read_frame_header,
+            _read_frame_metalayers,
+            _read_frame_offsets,
+        )
+
+        self.archive = archive
+        self.dataset = dataset.strip("/")
+        self._check = check_open or (lambda: None)
+        matches = [info for info in archive.members if info.filename == self.dataset + ".b2b"]
+        if len(matches) != 1:
+            raise NotImplementedError(f"Remote CTable batch member {self.dataset!r} is unavailable")
+        self.info = matches[0]
+        self.member_offset, self.member_length = archive.member_window(self.info, prefetch=True)
+        prefix_start, prefix = archive._opening_ranges[-1]
+        start = self.member_offset - prefix_start
+        head = prefix[start:] if 0 <= start < len(prefix) else None
+        raw, self.header, head = _read_frame_header(self.read_range, head=head)
+        if not len(raw) <= self.header[2] <= self.member_length:
+            raise ValueError(f"Batch frame for {self.dataset!r} exceeds its B2Z member bounds")
+        self.meta = _read_frame_metalayers(raw, self.header)
+        self.vlmeta = member_vlmeta(archive, self.info)
+        self.offsets = _read_frame_offsets(self.read_range, self.header, head, len(raw))
+        index_pos = self.header[1] + self.header[5]
+        if ((self.offsets < self.header[1]) | (self.offsets >= index_pos)).any():
+            raise ValueError(f"Batch frame for {self.dataset!r} contains an invalid chunk offset")
+        self.extents = _chunk_extents(self.offsets, self.header)
+        archive._opening_ranges.clear()
+
+    def read_range(self, offset, size):
+        offset, size = operator.index(offset), operator.index(size)
+        if offset < 0 or size < 0:
+            raise ValueError("invalid B2Z batch range")
+        size = max(0, min(size, self.member_length - offset))
+        return self.archive._read_archive(self.member_offset + offset, size)
+
+    def get_chunk(self, index):
+        self._check()
+        offset = int(self.offsets[index])
+        if offset < 0:
+            raise ValueError(f"Batch {index} of {self.dataset!r} has an unsupported special offset")
+        chunk = self.read_range(offset, int(self.extents[index]))
+        if len(chunk) < 16:
+            raise ValueError(f"Truncated batch {index} in {self.dataset!r}")
+        cbytes = int.from_bytes(chunk[12:16], "little")
+        if not 16 <= cbytes <= len(chunk):
+            raise ValueError(f"Invalid compressed size for batch {index} in {self.dataset!r}")
+        # ponytail: remote variable-length reads fetch whole batches; add block
+        # transport only if oversized batches prove this granularity insufficient.
+        return chunk[:cbytes]
 
 
 def member_vlmeta(archive, info):

@@ -100,6 +100,19 @@ def test_ctable_vlmeta_in_memory():
     assert t.vlmeta[:]["active"] is True
 
 
+def test_ctable_copy_preserves_vlmeta(tmp_path):
+    t = CTable(Row, [(1, 10.0, True)])
+    t.attrs["author"] = "test"
+
+    copied = t.copy()
+    assert copied.attrs[:] == {"author": "test"}
+    view_copy = t.where(t["id"] == 1).copy()
+    assert view_copy.attrs[:] == {"author": "test"}
+    t.save(tmp_path / "copy.b2z")
+    with CTable.open(tmp_path / "copy.b2z") as reopened:
+        assert reopened.attrs[:] == {"author": "test"}
+
+
 def test_ctable_vlmeta_persistent(tmp_path):
     """CTable.vlmeta round-trips through close/reopen."""
     path = str(tmp_path / "vlmeta.b2z")
@@ -273,6 +286,17 @@ def test_copy_to_b2z_uses_urlpath_extension():
     assert os.path.exists(dest)
     assert len(copied) == 2
     assert list(copied["id"][:]) == [10, 20]
+
+
+def test_materialize_view_returns_independent_table():
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True)])
+    view = t.where(t["id"] > 1)
+
+    materialized = view.materialize()
+    t.close()
+
+    assert type(materialized) is CTable
+    assert list(materialized["id"][:]) == [2, 3]
 
 
 def test_to_b2d_unpacks_persistent_b2z():
