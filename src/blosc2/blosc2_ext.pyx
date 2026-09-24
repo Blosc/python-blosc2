@@ -3864,7 +3864,10 @@ cdef class NDArray:
         cdef Py_buffer view
         cdef int rc
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
-        PyThread_acquire_lock(self.read_lock, 1)
+        # Waiting for a reader already using this SChunk must not retain the
+        # GIL: that reader can need the GIL again from a Python postfilter.
+        with nogil:
+            PyThread_acquire_lock(self.read_lock, 1)
         try:
             rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
                                         <void *> view.buf, buffershape_, view.len)

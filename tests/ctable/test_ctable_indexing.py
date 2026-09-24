@@ -11,6 +11,7 @@ import dataclasses
 import shutil
 import tempfile
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -1238,6 +1239,24 @@ def test_span_read_preserves_schunk_postfilter():
     arr.get_1d_span_numpy(out, 0, 4, len(out))
 
     np.testing.assert_array_equal(out, values[4:10] + 100)
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Pyodide cannot start threads")
+def test_concurrent_span_reads_have_independent_contexts():
+    """Concurrent span reads must not share a mutable decompression context."""
+    values = np.arange(1024, dtype=np.int64)
+    arr = blosc2.asarray(values, chunks=(128,))
+    spans = [(chunk, start, 31) for chunk in range(8) for start in (0, 17, 64)]
+
+    def read_span(span):
+        chunk, start, nitems = span
+        out = np.empty(nitems, dtype=values.dtype)
+        arr.get_1d_span_numpy(out, chunk, start, nitems)
+        offset = chunk * arr.chunks[0] + start
+        np.testing.assert_array_equal(out, values[offset : offset + nitems])
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(read_span, spans))
 
 
 def test_coalesce_spans_merges_within_a_block():
