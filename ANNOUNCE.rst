@@ -1,71 +1,59 @@
-Announcing Python-Blosc2 4.13.1
+Announcing Python-Blosc2 4.14.0
 ===============================
 
-Python-Blosc2 4.13.1 is a maintenance and performance follow-up to 4.13.0,
-refining the remote data access layer and expanding platform support. Lazy
-access is now the default for remote arrays, local HDF5 files are read
-directly via ``h5py`` without auxiliary dependencies, warm opens replay cached
-bootstrap metadata to eliminate redundant network roundtrips, disk caches use
-human-readable folder hierarchies, and official Windows ARM64 wheels are now
-available.
+Python-Blosc2 4.14.0 is a major feature release introducing lazy remote
+columnar tables (``RemoteCTable``), a unified ``RemoteObject`` architecture,
+native remote HDF5 indexing with direct byte-range reads (dropping Kerchunk and
+Zarr dependencies for HDF5), native PyTables table interoperability, remote
+column indexes, ListArray V2 with recursive nesting and membership predicates,
+nested remote stores in ``TreeStore``, the bundled C-Blosc2 3.3.5 upgrade, and
+critical bug fixes including partition contiguity verification for large arrays.
 
-- **Lazy access is the default for remote arrays.** ``blosc2.open()`` on remote
-  ``.b2nd`` files or container datasets (HDF5, Zarr, B2Z) now returns a lazy
-  ``RemoteArray`` without requiring an explicit ``lazy=True``. Dataset paths
-  require lazy access and reject ``lazy=False`` with ``NotImplementedError``.
-  For standalone array files (such as ``.b2nd``), ``cache_dir=`` keeps the
-  default lazy access and persists fetched chunks. Pass ``lazy=False`` to
-  download the complete container there instead. ``mmap_mode=`` or a nonzero
-  ``offset=`` forces eager reading.
+- **Remote columnar tables (``RemoteCTable``) and unified ``RemoteObject``.**
+  Columnar tables can now be opened lazily over HTTP, S3, or any fsspec-supported
+  filesystem without full downloads. The unified ``RemoteObject`` base provides
+  consistent cache policies (memory, disk, none), shared process caching via
+  ``blosc2.open(url, cache_dir=..., shared_cache=True)``, attributes, traffic
+  accounting, and portable reference exports (``table.save("ref.b2z")``).
+  Multi-threaded chunk reads bounded by ``max_concurrency`` deliver high-throughput
+  streaming.
 
-- **Direct local HDF5 reads via ``h5py``.** Local ``.h5``/``.hdf5`` datasets
-  are now accessed directly through ``h5py``, eliminating the need for
-  ``kerchunk``, ``zarr``, or ``fsspec`` when reading local files. Chunked
-  datasets preserve their native HDF5 chunk layout, while contiguous datasets
-  automatically receive optimal Blosc2 cache chunks. Explicit ``refs=``
-  arguments continue to select the kerchunk reference reader.
+- **Native remote HDF5 indexing and direct range reads.** Remote HDF5 access has
+  been redesigned with a native metadata index and direct fsspec range reads,
+  completely removing runtime dependencies on ``kerchunk``, ``zarr``, and
+  ``numcodecs`` for HDF5. Uncompressed, deflate/gzip, shuffle, and Blosc2 chunks
+  are decoded directly, while unsupported filters fall back cleanly to ``h5py``.
+  Index snapshots are cached in ``.hdf5-index.b2`` sidecars and carrier metadata
+  to eliminate repeated remote scans on warm opens. The ``refs`` parameter is
+  replaced by ``hdf5_index``, with legacy reference maps detected and cleanly
+  rejected.
 
-- **Faster HTTP discovery and instant warm opens.**
+- **PyTables interoperability.** Local and remote PyTables tables can be opened
+  directly as ``RemoteCTable`` via ``blosc2.open("file.h5::/path/to/table")``
+  without installing PyTables. Existing PyTables column indexes (including FULL
+  indexes) are discovered and imported as Blosc2 OPSI indexes, enabling accelerated
+  queries directly over existing datasets.
 
-  * *Cold HTTP discovery*: Initial HTTP opens for B2Z archives retrieve the ZIP
-    directory tail and object identity within a single bounded range request,
-    halving network round-trips.
-  * *Warm reopens*: Reopening cached B2Z, Zarr, or HDF5 sources replays
-    persisted bootstrap metadata directly from the carrier, completely
-    bypassing remote discovery. Sibling HDF5 datasets under a shared
-    ``cache_dir=`` reuse a single on-disk reference snapshot.
-  * *Small member prefetching*: B2Z members up to 64 KiB are fetched in full on
-    open (header, chunks, and trailing metadata), populating the standard chunk
-    cache with full quota tracking and LRU eviction.
+- **Remote column indexing and query acceleration.** Remote queries on
+  ``RemoteCTable`` leverage pre-computed column indexes (OPSI, FULL, SUMMARY)
+  without fetching full columns. Added ``kind="membership"`` index support to
+  accelerate scalar-list membership queries (``contains()``, ``overlaps()``).
 
-- **Human-readable disk cache paths.** Persistent caches under ``cache_dir=``
-  now mirror the source filename and dataset hierarchy (e.g.,
-  ``hierarchy.b2z--03cc6a2f9314/d0/a1.b2nd``) with a 12-character identity
-  fingerprint derived from the source URL and storage options. Old hash-only
-  cache directories are ignored and can be safely deleted to reclaim space.
+- **ListArray V2.** List elements can be nullable, and ``ListSpec`` values can be
+  nested recursively to arbitrary depths. Added ``contains()`` and ``overlaps()``
+  row predicates for ListArray and CTable list columns. New schemas default to
+  ``batch_rows=2048`` for balanced chunking and compression.
 
-- **Windows ARM64 wheels and test stability.** Added official build recipes and
-  CI pipelines producing native Windows on ARM64 (``win_arm64``) wheels. Test
-  suite execution is accelerated with logical core utilization in pytest-xdist,
-  per-test doctest workspace isolation, and test deadlock diagnostics.
+- **Nested remote stores in ``TreeStore``.** ``TreeStore`` can embed and persist
+  references to ``RemoteStore`` instances, enabling composite hierarchical stores
+  spanning local arrays and remote endpoints with shared cache ownership.
 
-- **Bug fixes and robustness:**
-
-  * Embedded frames with nonzero byte offsets open directly even when the file
-    name looks like a container.
-  * ``file://`` HDF5 URLs with ``::`` dataset separators survive path conversion
-    on Windows.
-  * ``RemoteArray.info`` and ``str()`` mask sensitive credentials in signed URLs,
-    and ``info`` works reliably on local B2Z sources.
-  * ``load_tensor()`` explicitly requests eager access, avoiding unexpected lazy
-    intermediates for remote paths.
-  * Fixed decoding of HDF5 datasets compressed with the Blosc2 filter (such as
-    via ``hdf5plugin``) when read through kerchunk, properly handling multi-chunk
-    super-chunk frames without an ``AttributeError``.
-  * HDF5 reference snapshot publishing is safely guarded, fixing a crash on
-    Windows drive-letter paths when opening local h5py sources with a disk cache.
-  * Attaching a sparse runtime cache to a read-only legacy B2Z carrier safely
-    rebuilds bootstrap metadata in memory without attempting disk writes.
+- **C-Blosc2 3.3.5 and critical bug fixes.** Bundled C-Blosc2 is updated to 3.3.5.
+  Fixed a critical bug (#723) in ``are_partitions_behaved()`` where non-contiguous
+  block partitions silently corrupted ``asarray()`` copies for arrays larger than
+  16 MB. Also resolved double-closing of fsspec sessions, hardened NumPy and
+  object attributes in msgpack vlmeta payloads, and improved Windows path and
+  refresh handling.
 
 Install it with::
 

@@ -1,62 +1,144 @@
 # Release notes
 
-## Changes from 4.13.1 to 4.13.2
+## Changes from 4.13.1 to 4.14.0
 
-XXX version-specific blurb XXX
+Python-Blosc2 4.14.0 is a major release introducing remote columnar tables (`RemoteCTable`),
+a unified `RemoteObject` architecture, native remote HDF5 indexing with direct range reads
+(eliminating Kerchunk and Zarr dependencies for HDF5), native PyTables table interoperability,
+remote column indexes, ListArray V2 with recursive nesting and membership predicates,
+nested remote stores in `TreeStore`, bundled C-Blosc2 upgraded to 3.3.5, and critical
+bug fixes including partition contiguity verification for arrays larger than 16 MB.
 
 ### Improvements
 
+#### Remote columnar tables (`RemoteCTable`) and unified `RemoteObject`
+
+- **Lazy remote table access (`RemoteCTable`)**: Columnar tables (`CTable`) can now be
+  accessed lazily over HTTP, S3, or any fsspec-supported filesystem without downloading
+  the entire container. Supported formats include `.b2z` table archives, HDF5/PyTables tables,
+  and Caterva2 endpoints.
+- **Bounded parallel reads**: Multi-threaded chunk decoding across columns and chunks, bounded
+  by `max_concurrency` for high-throughput remote table streaming.
+- **Common `RemoteObject` API**: Added the public `RemoteObject` base class for `RemoteArray`,
+  `RemoteStore`, and `RemoteCTable`. It unifies handling of cache policies (`CachePolicy.MEMORY`,
+  `CachePolicy.DISK`, `CachePolicy.NONE`), `cache_dir`, `shared_cache`, attributes, traffic
+  monitoring (`traffic`), export mutability, reference saving, and handle lifetime contracts.
+- **Process-shared sparse caching**: Added `blosc2.open(url, cache_dir=..., shared_cache=True)`
+  for process-shared sparse caches of standalone `.b2nd` URLs, Caterva2 `URLPath` sources, and
+  remote B2Z, HDF5, and Zarr tables, groups, and array leaves.
+  This is the preferred entry point for ordinary shared caching; `with_sparse_cache()` remains
+  available for advanced attachment. Shared caches select lazy access for every remote source
+  when `lazy` is omitted or `None`, including suffix-free fsspec URLs. Explicit `lazy=False` is
+  rejected. Sparse array cache initialization is serialized so simultaneous first openers cannot
+  overwrite each other's cache. Locked frame opens release the GIL so another Python thread can
+  finish its read.
+- **Portable table references**: `RemoteCTable.save()` writes a portable `.b2z` remote reference
+  with retained cache data (`include_cache=True` by default; pass `include_cache=False` to produce
+  a cold reference without clearing the live cache). `materialize()`, `copy()`, `to_b2z()`, and
+  `to_b2d()` remain the independent local-table operations.
+- **Standalone and table-root refresh**: Added `.refresh()` support to standalone `RemoteArray`,
+  `RemoteCTable`, and table roots in `RemoteStore` to revalidate against remote changes.
+
+#### Native remote HDF5 indexing and direct range reads
+
+- **Direct range reading without Kerchunk or Zarr**: Remote HDF5 access has been rewritten to
+  use native metadata indexing (`blosc2-hdf5-index` format v1) and direct fsspec byte-range
+  reads. `kerchunk`, `zarr`, and `numcodecs` are no longer required or imported when reading
+  remote HDF5 datasets.
+- **Direct decompressor pipeline**: Direct range fetches and decoding for uncompressed datasets,
+  deflate/gzip (filter 1), shuffle (filter 2), and Blosc2 (filter 32026 via `hdf5plugin`).
+- **Resilient fallback**: Filter pipelines requiring external codecs fall back safely to
+  retained `h5py` reads, with clear diagnostic messages when required plugins are missing.
+- **Fast warm opens with index sidecars**: Native HDF5 container index snapshots are persisted
+  in `.hdf5-index.b2` sidecars and `vlmeta["hdf5-index"]`, avoiding remote rescanning on warm
+  reopens. Sibling datasets in the same container share one snapshot.
+- **Strict validation and security**: Bounded deflate decompression prevents zip-bomb attacks;
+  strict schema validation verifies chunk bounds, file extents, and coordinates, and rejects
+  virtual or external datasets.
+- **Clean resource lifecycle**: Standalone HDF5 handles properly close underlying files and
+  fsspec sessions on `close()`, context-manager exit, failed initialization, and garbage
+  collection. Operations on closed handles are cleanly rejected.
+
+#### PyTables interoperability
+
+- **Direct PyTables table access**: Open local and remote PyTables tables directly as
+  `RemoteCTable` via `blosc2.open("file.h5::/path/to/table")` without requiring PyTables installed.
+- **Type and metadata fidelity**: Full support for PyTables data types, booleans, variable-length
+  strings, and user attributes.
+- **PyTables index import**: Discovers and imports existing PyTables column indexes (including
+  FULL indexes) as Blosc2 OPSI indexes, accelerating queries on existing PyTables datasets.
+- **Optimized I/O**: Batched allocation scanning, merged range reads, and persistent index
+  caching across runs.
+
+#### Remote column indexing and query acceleration
+
+- **Remote CTable indexes**: Remote queries can leverage pre-computed column indexes (OPSI,
+  FULL, SUMMARY) without downloading whole columns.
+- **Remote index sidecars**: Resolves and caches remote index sidecars (`.opsi`, etc.) on demand.
+- **Membership indexes**: Added `kind="membership"` index support to accelerate scalar-list
+  membership queries (`contains()`, `overlaps()`).
+
 #### ListArray V2
 
-- List elements can be nullable, and ListSpec values can be nested recursively.
-- ListArray and CTable list columns provide `contains()` and `overlaps()` row
-  predicates.
-- Optional `kind="membership"` indexes accelerate flat scalar-list predicates
-  locally and through RemoteCTable.
-- New ListArray schemas use `batch_rows=2048` by default. Explicit `None` keeps
-  caller-managed batching, and existing stored schemas without the field retain
-  their previous behavior when reopened.
+- **Nullable elements and recursive nesting**: List elements can be nullable, and `ListSpec`
+  values can be nested recursively to arbitrary depths.
+- **Row predicates**: ListArray and CTable list columns provide `contains()` and `overlaps()`
+  row predicates.
+- **Membership index acceleration**: Optional `kind="membership"` indexes accelerate flat
+  scalar-list predicates locally and through `RemoteCTable`.
+- **Batched storage by default**: New ListArray schemas use `batch_rows=2048` by default.
+  Explicit `None` keeps caller-managed batching, and existing stored schemas without the field
+  retain their previous behavior when reopened.
 
-#### Common remote-object API
+#### Nested remote stores in TreeStore
 
-- Added `blosc2.open(url, cache_dir=..., shared_cache=True)` for process-shared
-  sparse caches of standalone `.b2nd` URLs, Caterva2 `URLPath` sources, and
-  remote B2Z, HDF5, and Zarr tables, groups, and array leaves.
-  This is the preferred entry point for ordinary shared caching;
-  `with_sparse_cache()` remains available for advanced attachment.
-- Shared caches select lazy access for every remote source when `lazy` is
-  omitted or `None`, including suffix-free fsspec URLs. Explicit `lazy=False`
-  is rejected. Sparse array cache initialization is
-  serialized so simultaneous first openers cannot overwrite each other's cache.
-  Locked frame opens release the GIL so another Python thread can finish its read.
-- Added the public `RemoteObject` base for `RemoteArray`, `RemoteStore`,
-  and `RemoteCTable`. It documents their shared source, attributes, traffic,
-  cache accounting, export mutability, reference saving, and lifetime contract.
-- Remote references now preserve valid warm MEMORY cache chunks by default.
-  Pass `include_cache=False` to produce a cold reference without clearing the
-  live cache.
-- `RemoteCTable.save()` now writes a portable `.b2z` remote reference with
-  retained cache data. `materialize()`, `copy()`, `to_b2z()`, and
-  `to_b2d()` remain the independent local-table operations.
+- **Hierarchical composition**: `TreeStore` can embed and persist references to `RemoteStore`
+  instances, allowing composite trees spanning local and remote data sources.
+- **Shared cache and traversal**: Seamless traversal of nested stores with shared cache ownership
+  and reference export via `save()`.
+
+#### Packaging and platform support
+
+- **Bundled C-Blosc2 3.3.5**: Updated the bundled C-Blosc2 library to version 3.3.5.
+- **Leaner dependencies**: `kerchunk` has been removed from optional dependencies (`blosc2[hdf5]`),
+  development, and test groups. `blosc2[hdf5]` now requires only `h5py` and `hdf5plugin`.
+- **Persistent caches for local sources**: Local data sources can now utilize persistent disk
+  caches across runs.
+
+### Bug fixes
+
+- **Array partitioning and block contiguity**: Fixed a critical bug (#723, PR #724) in
+  `are_partitions_behaved()` where block shapes dividing a chunk but not forming C-contiguous
+  runs caused `blosc2.asarray()` to silently scramble data for arrays larger than 16 MB.
+- **fsspec session cleanup**: Avoided double-closing owned fsspec sessions in HTTP and S3 sources.
+- **Windows compatibility**: Fixed local array refresh on Windows; ensured dataset separators
+  (`::`) in `file://` URLs survive conversion on Windows.
+- **Serialization hardening**: Preserved NumPy arrays, object-dtype attributes, and titled
+  structured dtypes in msgpack vlmeta payloads.
+- **HDF5 dataset URLs**: Preserved query strings when parsing HDF5 dataset paths.
 
 ### Compatibility notes
 
-- `RemoteCTable.with_sparse_cache()` and `RemoteStore.with_sparse_cache()` now
-  default to a 256 MiB aggregate compressed-payload budget, matching `open()`
-  and `RemoteArray.with_sparse_cache()`. Explicitly pass `max_cache_bytes=None`
-  to retain unlimited caching. Internal leaf caches still share one aggregate
-  allowance rather than receiving independent 256 MiB limits.
-- The ListArray construction default changed from caller-managed batches to
-  2048 rows per batch. Pass `batch_rows=None` to retain the previous behavior.
+- **`refs` replaced by `hdf5_index`**: The `refs` parameter in `blosc2.open()` and `RemoteArray`
+  is replaced by `hdf5_index` (accepting a native index dictionary or a path to a JSON index file).
+  Legacy Kerchunk reference maps are detected and rejected with an explicit migration error.
+- **Dependency changes**: `kerchunk` and `zarr` are no longer required for reading HDF5 files.
+  The `hdf5` extra now requires `h5py` and `hdf5plugin`.
+- **Default ListArray batch size**: ListArray construction defaults to `batch_rows=2048` instead
+  of caller-managed batching. Pass `batch_rows=None` to retain the previous behavior.
   Existing arrays are not rewritten and keep their stored boundaries.
-
-- `RemoteCTable.save()` previously inherited `CTable.save()` and returned
-  `None` after materializing local data. It now returns the reference path.
-  Use `materialize(urlpath=...)` or the table conversion methods when a
-  complete local table is required. Local `CTable.save()` is unchanged.
-- Remote reference destinations are no longer replaced implicitly. Pass
-  `overwrite=True` when replacement is intended; live cache and source
-  artifacts remain protected.
+- **`RemoteCTable.save()` return value**: `RemoteCTable.save()` previously inherited `CTable.save()`
+  and returned `None` after materializing local data. It now returns the reference path.
+  Use `materialize(urlpath=...)` or the table conversion methods when a complete local table is
+  required. Local `CTable.save()` is unchanged.
+- **Explicit overwrite required**: Remote reference destinations are no longer replaced implicitly.
+  Pass `overwrite=True` when replacement is intended; live cache and source artifacts remain
+  protected.
+- **Shared cache budget**: `RemoteCTable.with_sparse_cache()` and `RemoteStore.with_sparse_cache()`
+  default to a 256 MiB aggregate compressed-payload budget, matching `blosc2.open()` and
+  `RemoteArray.with_sparse_cache()`. Explicitly pass `max_cache_bytes=None` to retain unlimited
+  caching. Internal leaf caches still share one aggregate allowance rather than receiving
+  independent 256 MiB limits.
 
 ## Changes from 4.13.0 to 4.13.1
 
