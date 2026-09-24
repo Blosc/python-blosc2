@@ -549,6 +549,25 @@ def test_nested_remote_store_table_root(tmp_path):
                 np.testing.assert_array_equal(table.value[:], [1, 2])
 
 
+def test_remote_store_table_root_refresh(tmp_path):
+    source = tmp_path / "refresh-table.b2z"
+    url = f"memory://{tmp_path.name}-refresh-table.b2z"
+    fs = fsspec.filesystem("memory")
+    blosc2.CTable(NestedIndexedRow, [(1,)], create_summary_index=False).to_b2z(source)
+    fs.pipe(url, source.read_bytes())
+    with blosc2.RemoteStore(url, allow_table_root=True, _filesystem=fs) as store:
+        old = store[""]
+        assert old.value[0] == 1
+        blosc2.CTable(NestedIndexedRow, [(2,)], create_summary_index=False).to_b2z(source, overwrite=True)
+        fs.pipe(url, source.read_bytes())
+        store.refresh()
+        with pytest.raises(RuntimeError, match="stale"):
+            old.value[0]
+        with store[""] as fresh:
+            assert fresh.value[0] == 2
+        old.close()
+
+
 def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path, monkeypatch):
     data = np.arange(200, dtype="int32")
     target = tmp_path / "artifact-target.b2z"

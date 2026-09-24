@@ -2317,7 +2317,9 @@ class RemoteStore(RemoteObject):
             if self._path:
                 raise ValueError("refresh must be called on the root store handle")
             owner = self._owner
-            replacement = owner.prepare_refresh("group")
+            replacement = owner.prepare_refresh(
+                "ctable" if owner.nodes[owner.root][0] == "ctable" else "group"
+            )
             try:
                 replacement.restoring = False
                 replacement.save_manifest()
