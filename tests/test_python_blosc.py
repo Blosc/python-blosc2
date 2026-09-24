@@ -220,7 +220,8 @@ class TestCodec(unittest.TestCase):
             for _ in range(2):
                 for _ in range(repeats):
                     operation()
-                gc.collect()
+                # These operations return bytes, freed by reference counting;
+                # repeated full collections only rescan unrelated suite objects.
                 used_mem_after = process.memory_info().rss
                 growth.append(used_mem_after - used_mem_before)
                 used_mem_before = used_mem_after

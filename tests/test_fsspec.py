@@ -800,7 +800,8 @@ def _ranged_server(root, *, head_requests=None):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.requests = []
     server.head_requests = [] if head_requests is None else head_requests
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # shutdown() waits for the next poll; the default adds up to 0.5 s per test.
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", server.requests
     finally:

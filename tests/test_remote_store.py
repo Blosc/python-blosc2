@@ -862,7 +862,10 @@ def test_sparse_store_processes_and_crash(tmp_path):
     ctx = multiprocessing.get_context("spawn")
     barrier, results = ctx.Barrier(4), ctx.Queue()
     workers = [ctx.Process(target=_shared_reader, args=(url, cache, barrier, results)) for _ in range(4)]
-    for worker in workers:
+    # The crash uses a separate cache, so overlap its interpreter startup.
+    crash_cache = str(tmp_path / "crash")
+    crash_worker = ctx.Process(target=_shared_crash, args=(url, crash_cache))
+    for worker in [*workers, crash_worker]:
         worker.start()
     try:
         answers = [results.get(timeout=60) for _ in workers]
@@ -872,20 +875,14 @@ def test_sparse_store_processes_and_crash(tmp_path):
         for worker in workers:
             worker.join(timeout=10)
             assert worker.exitcode == 0
+        crash_worker.join(timeout=30)
     finally:
-        for worker in workers:
+        for worker in [*workers, crash_worker]:
             if worker.is_alive():
                 worker.terminate()
                 worker.join()
         results.close()
-    crash_cache = str(tmp_path / "crash")
-    worker = ctx.Process(target=_shared_crash, args=(url, crash_cache))
-    worker.start()
-    worker.join(timeout=30)
-    if worker.is_alive():
-        worker.terminate()
-        worker.join()
-    assert worker.exitcode == 17
+    assert crash_worker.exitcode == 17
     with (
         blosc2.RemoteStore.with_sparse_cache(url, crash_cache, _filesystem=_shared_fs()) as store,
         store["a"] as array,
