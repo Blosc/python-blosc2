@@ -246,6 +246,9 @@ class SharedStoreOperation:
                 if manifest is not None:
                     if owner.generation != manifest["generation"]:
                         # Child handles fail their generation check before using these resources.
+                        for store in owner.linked_stores.values():
+                            store.close()
+                        owner.linked_stores.clear()
                         if owner.archive is not None:
                             owner.archive.close()
                             owner.archive = None
@@ -254,6 +257,7 @@ class SharedStoreOperation:
                             owner.zstore = None
                         owner.sources.clear()
                         owner.source_descriptors.clear()
+                        owner.batch_caches.clear()
                     owner.generation = manifest["generation"]
                     owner.metadata = manifest["metadata"]
                     owner.nodes.clear()

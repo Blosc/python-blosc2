@@ -150,13 +150,18 @@ def _copy_array(source, target, path, staging):
 
 def _copy_table(table, target, path):
     indexes = dict(table._get_index_catalog())
-    local = table.copy(compact=True)
-    local._source_bound = False
-    local._source_columns = set()
-    target[path] = local
-    local.close()
+    batch_rows = 2048
+    seed = table._empty_copy(capacity=1)
+    seed._source_bound = False
+    seed._source_columns = set()
+    seed._create_summary_index = False
+    target[path] = seed
     materialized = target[path]
     try:
+        for start in range(0, len(table), batch_rows):
+            materialized.extend(table[start : start + batch_rows], validate=False)
+        for key, value in table.attrs.items():
+            materialized.attrs[key] = value
         for name, descriptor in indexes.items():
             options = table._index_create_kwargs_from_descriptor(descriptor)
             materialized.create_index(None if "expression" in options else name, **options)

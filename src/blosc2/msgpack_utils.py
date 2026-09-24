@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 
 import numpy as np
@@ -173,7 +174,10 @@ def _safe_msgpack_unpackb(payload):
                 isinstance(size, bool) or not isinstance(size, int) or size < 0 for size in shape
             ):
                 raise ValueError("Unsafe remote NumPy extension shape")
-            count = int(np.prod(shape, dtype=np.int64))
+            count = math.prod(shape)
+            limit = np.iinfo(np.intp).max
+            if any(size > limit for size in shape) or count > limit // np.dtype(object).itemsize:
+                raise ValueError("Unsafe remote NumPy extension shape")
             if "values" in value:
                 if not isinstance(value["values"], list) or len(value["values"]) != count:
                     raise ValueError("Invalid remote object-array extension")

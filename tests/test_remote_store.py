@@ -1082,6 +1082,8 @@ def test_zarr_unsupported_codec():
 def test_store_validation():
     with pytest.raises(TypeError, match="dataset must be a string"):
         blosc2.RemoteStore("memory://a.b2z", dataset=1)
+    with pytest.raises(TypeError, match="dataset must be a string"):
+        blosc2.open("memory://a.b2z", dataset=1)
     with pytest.raises(ValueError, match="cache_dir"):
         blosc2.RemoteStore("memory://a.b2z", cache_policy=blosc2.CachePolicy.DISK)
     with pytest.raises(TypeError, match="CachePolicy"):
@@ -1659,6 +1661,38 @@ def test_materialize_preserves_metadata_and_expression_indexes(tmp_path, remote)
         table.close()
 
 
+def test_materialize_table_reads_bounded_row_batches(tmp_path, monkeypatch):
+    @dataclasses.dataclass
+    class Payload:
+        value: bytes = blosc2.field(blosc2.vlbytes(batch_rows=128))
+
+    source = tmp_path / "large-table.b2z"
+    with blosc2.TreeStore(source, mode="w") as tree:
+        tree["table"] = blosc2.CTable(
+            NestedIndexedRow, [(i,) for i in range(5000)], create_summary_index=False
+        )
+        tree["batch"] = blosc2.CTable(
+            Payload, [(bytes([i % 251]),) for i in range(3000)], create_summary_index=False
+        )
+    url = f"memory://{tmp_path.name}-large-table.b2z"
+    fsspec.filesystem("memory").pipe(url, source.read_bytes())
+
+    def no_full_copy(*args, **kwargs):
+        raise AssertionError("materialization must not copy the whole table into memory")
+
+    with blosc2.RemoteStore(url) as store:
+        with monkeypatch.context() as patch:
+            patch.setattr(blosc2.CTable, "copy", no_full_copy)
+            store.materialize(tmp_path / "bounded-table.b2d")
+    with blosc2.open(tmp_path / "bounded-table.b2d") as tree:
+        with tree["table"] as table:
+            np.testing.assert_array_equal(table["value"][:], np.arange(5000))
+        with tree["batch"] as table:
+            assert len(table) == 3000
+            assert table["value"][0] == b"\x00"
+            assert table["value"][2999] == bytes([2999 % 251])
+
+
 def test_nested_reference_preserves_batch_cache(tmp_path):
     @dataclasses.dataclass
     class Payload:
@@ -1689,3 +1723,48 @@ def test_nested_reference_preserves_batch_cache(tmp_path):
             assert root.cache_bytes == retained
             assert table["value"][0] == value
             assert root.traffic.requests == 0
+
+
+def test_shared_generation_reload_replaces_batch_and_linked_owners(tmp_path):
+    @dataclasses.dataclass
+    class Payload:
+        value: bytes = blosc2.field(blosc2.vlbytes(batch_rows=1))
+
+    source = tmp_path / "generation-source.b2z"
+    with blosc2.TreeStore(source, mode="w", threshold=0) as tree:
+        tree["table"] = blosc2.CTable(Payload, [(b"old",)], create_summary_index=False)
+    fs = fsspec.filesystem("memory")
+    source_url = f"memory://{tmp_path.name}-generation-source.b2z"
+    fs.pipe(source_url, source.read_bytes())
+    with blosc2.open(source_url, cache_dir=tmp_path / "leaf-cache", shared_cache=True) as root:
+        with root["table"] as table:
+            assert table["value"][0] == b"old"
+        old_batch = next(iter(root._owner.batch_caches.values()))
+        with root._owner.disk.guard():
+            manifest = root._owner.disk.load()
+            manifest["generation"] = "b" * 32
+            root._owner.disk.publish(manifest)
+        with root._owner.lock:
+            pass
+        assert all(cache is not old_batch for cache in root._owner.batch_caches.values())
+
+    host = tmp_path / "generation-host.b2z"
+    with blosc2.RemoteStore(source_url) as linked, blosc2.TreeStore(host, mode="w") as tree:
+        tree["linked"] = linked
+    host_url = f"memory://{tmp_path.name}-generation-host.b2z"
+    fs.pipe(host_url, host.read_bytes())
+
+    with blosc2.open(host_url, cache_dir=tmp_path / "cache", shared_cache=True) as root:
+        with root["linked/table"] as table:
+            assert table["value"][0] == b"old"
+        old_linked = root._owner.linked_stores["linked"]._owner
+        old_batch = next(iter(old_linked.batch_caches.values()))
+        with root._owner.disk.guard():
+            manifest = root._owner.disk.load()
+            manifest["generation"] = "a" * 32
+            root._owner.disk.publish(manifest)
+        with root._owner.lock:
+            pass
+        assert not root._owner.linked_stores
+        assert old_linked._closed
+        assert all(cache is not old_batch for cache in old_linked.batch_caches.values())

@@ -714,13 +714,13 @@ def resolve_dataset_path(dataset, path):
     None means unspecified. Empty strings and slash-only strings select the
     root; retain them until URL parsing so duplicate URL selectors still fail.
     """
+    if dataset is not None and not isinstance(dataset, str):
+        raise TypeError("dataset must be a string or None")
     if path is None:
         return dataset
     if not isinstance(path, str):
         raise TypeError("path must be a string or None")
     if dataset is not None:
-        if not isinstance(dataset, str):
-            raise TypeError("dataset must be a string or None")
         if dataset.strip("/") != path.strip("/"):
             raise ValueError("Conflicting dataset and path parameters")
         return dataset
