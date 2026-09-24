@@ -13928,8 +13928,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         --------
         Create a small table and materialise a plain sort::
 
->>> import blosc2
->>> from dataclasses import dataclass
+            >>> import blosc2
+            >>> from dataclasses import dataclass
             >>> @dataclass
             ... class Record:
             ...     name: str = blosc2.field(blosc2.string(max_length=8))
