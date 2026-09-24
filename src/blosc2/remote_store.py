@@ -111,24 +111,6 @@ def _resolve_hdf5_options(hdf5_index, private_index, source_format):
     return index, "hdf5" if index is not None and source_format is None else source_format
 
 
-def _local_hdf5_stat(urlpath, source_format, allow_local):
-    if not (allow_local and source_format == "hdf5" and os.path.isfile(urlpath)):
-        validate_persistable_url(urlpath)
-        return None
-    stat = os.stat(urlpath)
-    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-
-
-def _reuse_local_hdf5_manifest(manifest, source_stat):
-    if (
-        source_stat is not None
-        and manifest is not None
-        and tuple(manifest["metadata"].get("local_source_stat", ())) != source_stat
-    ):
-        return None
-    return manifest
-
-
 class RemoteDiscovery:
     """Shared metadata and source resources, independent of browser presentation."""
 
@@ -151,6 +133,7 @@ class RemoteDiscovery:
         _source_cache_dir=None,
         _refresh_source=False,
         _b2z_blob=None,
+        _local_source=False,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         if _source_format is not None:
@@ -160,6 +143,7 @@ class RemoteDiscovery:
         self.root = (dataset or "").strip("/")
         self._validate(self.root)
         self.storage_options = storage_options or {}
+        self.local_source = _local_source
         self.source_cache_dir = _source_cache_dir
         self.refresh_source = _refresh_source
         self.b2z_source_cache = (None, None, None)
@@ -1085,6 +1069,7 @@ class RemoteDiscovery:
             _source_format=self.format,
             _source_cache_dir=self.source_cache_dir,
             _refresh_source=True,
+            _local_source=self.local_source,
         )
         try:
             if replacement.nodes[replacement.root][0] != kind:
@@ -1186,6 +1171,8 @@ class RemoteDiscovery:
         overwrite: bool = False,
     ) -> str:
         """Export the current store or subtree to a portable .b2z reference archive."""
+        if self.local_source:
+            raise ValueError("local-source caches cannot be exported as portable RemoteStore references")
         if not isinstance(include_cache, bool):
             raise TypeError("include_cache must be a boolean")
         if mutable is not None and not isinstance(mutable, bool):
@@ -1397,6 +1384,8 @@ class RemoteDiscovery:
 class RemoteStore(RemoteObject):
     """Read-only remote B2Z, Zarr or HDF5 hierarchy.
 
+    Also used for local hierarchies opened with ``blosc2.open(..., cache_dir=...)``.
+
     Discovery and returned array handles share source resources and traffic.
     MEMORY shares one bounded cache across all leaves; NONE retains no payload.
     DISK retains payload and discovery under an exclusively owned cache directory.
@@ -1439,7 +1428,16 @@ class RemoteStore(RemoteObject):
     @staticmethod
     def _cache_source(urlpath, dataset, source_format, storage_options):
         base_url, root, kind = parse_container_url(urlpath, dataset)
-        source = {"urlpath": base_url, "dataset": (root or "").strip("/"), "kind": source_format or kind}
+        local = not urlsplit(base_url).scheme or bool(os.path.splitdrive(base_url)[0])
+        if local:
+            base_url = os.path.abspath(base_url)
+        source = {
+            "urlpath": base_url,
+            "dataset": (root or "").strip("/"),
+            "kind": source_format or kind,
+        }
+        if local:
+            source["local"] = True
         fingerprint = storage_options_fingerprint(storage_options)
         if fingerprint:
             source["storage_options"] = fingerprint
@@ -1484,7 +1482,7 @@ class RemoteStore(RemoteObject):
         _traffic=None,
         nested_storage_options=None,
         _b2z_blob=None,
-        _allow_local_hdf5=False,
+        _allow_local_source=False,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(urlpath, (str, os.PathLike)):
@@ -1501,9 +1499,19 @@ class RemoteStore(RemoteObject):
             raise TypeError("dataset must be a string")
         self._validate_nested_storage_options(nested_storage_options)
         cache_policy, limit = self._validate_cache_config(cache_policy, max_cache_bytes, cache_dir)
-        base_url, _, _ = parse_container_url(urlpath, dataset)
-        local_source_stat = _local_hdf5_stat(base_url, _source_format, _allow_local_hdf5)
-        local_hdf5 = local_source_stat is not None
+        base_url, dataset, _ = parse_container_url(urlpath, dataset)
+        urlpath = base_url
+        local_source = bool(
+            _allow_local_source
+            and (not urlsplit(base_url).scheme or os.path.splitdrive(base_url)[0])
+            and os.path.exists(base_url)
+        )
+        if not local_source:
+            validate_persistable_url(base_url)
+        else:
+            base_url = os.path.abspath(base_url)
+            urlpath = base_url
+        local_hdf5 = local_source and _source_format == "hdf5"
         disk = None
         source_cache_path = source_cache_marker = None
         manifest = _manifest
@@ -1514,7 +1522,6 @@ class RemoteStore(RemoteObject):
             disk = StoreDiskCache(cache_dir, source)
         try:
             manifest = disk.load() if disk is not None else manifest
-            manifest = _reuse_local_hdf5_manifest(manifest, local_source_stat)
             if disk is not None and source["kind"] == "hdf5" and not local_hdf5:
                 from blosc2.hdf5_source import prepare_hdf5_source_cache
 
@@ -1546,10 +1553,9 @@ class RemoteStore(RemoteObject):
                 _traffic=_traffic,
                 _source_cache_dir=cache_dir if disk is not None else None,
                 _b2z_blob=_b2z_blob,
+                _local_source=local_source,
             )
             manifest = owner.restored_manifest
-            if local_hdf5:
-                owner.hdf5_index["local_source_stat"] = local_source_stat
             owner.attach_hdf5_source_cache(source_cache_path, source_cache_marker)
         except BaseException:
             if disk is not None:

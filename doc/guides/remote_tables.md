@@ -5,12 +5,16 @@ Fixed-width, `blosc2.utf8()`, batch-backed variable-length, list, struct/object,
 and dictionary columns are fetched on demand, including their null masks. A table
 inside a hierarchy can also be opened through `RemoteStore`.
 
-`blosc2.open()` dispatches local B2Z table archives to `CTable`, and remote B2Z
-archives and selected local or remote PyTables tables to `RemoteCTable`.
+`blosc2.open()` dispatches uncached local B2Z table archives to `CTable`, and
+remote B2Z archives and selected local or remote PyTables tables to
+`RemoteCTable`. Supplying `cache_dir=` also selects `RemoteCTable` for a local
+B2Z table and retains its accessed chunks and indexes on disk.
 Remote `.b2z` groups return `RemoteStore` by default;
 array leaves retain their `RemoteArray` behavior. Use `path="group/table"`
 or a `::group/table` URL suffix to select a nested table. For a complete local
 download instead, pass `lazy=False, cache_dir="download-cache"`.
+Passing `cache_dir` for a local `.b2z` table or group opts into a persistent,
+read-only cache, just as it does for remote sources.
 
 ```python
 with blosc2.open("https://example.org/readings.b2z") as table:
@@ -125,9 +129,9 @@ costs separately.
 
 ## Refresh a remote table
 
-Remote containers are assumed immutable. A standalone table with a writable
-cache can call `refresh()` to rediscover its schema and replace the cache
-generation while preserving cache limits and parallel-read settings:
+Cached sources, local or remote, are assumed immutable. A standalone table with
+a writable cache can call `refresh()` to rediscover its schema and replace the
+cache generation while preserving cache limits and parallel-read settings:
 
 ```python
 with blosc2.RemoteCTable(url, cache_dir="table-cache") as table:

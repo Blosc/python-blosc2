@@ -570,6 +570,8 @@ def test_local_scan_without_fsspec(tmp_path, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", blocked_import)
     index = scan_hdf5_index(str(path))
     assert "data" in validate_hdf5_index(index)["datasets"]
+    with blosc2.open(path, path="data", cache_dir=tmp_path / "cache") as cached:
+        np.testing.assert_array_equal(cached[:], np.arange(8, dtype="i4"))
 
 
 def test_local_hdf5_explicit_index(tmp_path):
@@ -848,11 +850,32 @@ def test_hdf5_auto_detection(tmp_path):
     assert isinstance(proxy.src, blosc2.HDF5NDSource)
     assert proxy.dataset == "data"
     np.testing.assert_array_equal(proxy[:], data)
-
-    # With remote URL, proxy.source also works
+    # With remote URL, proxy.source also works.
     mem_url = make_memory_h5("auto_detect_mem.h5", data=(data, (10,)))
     mem_proxy = blosc2.open(mem_url, lazy=True, dataset="data")
     assert mem_proxy.source["kind"] == "hdf5"
+
+
+def test_local_hdf5_disk_cache_dir_and_path(tmp_path):
+    path = tmp_path / "local-cache.h5"
+    data = np.arange(32, dtype=np.int32)
+    with h5py.File(path, "w") as h5file:
+        h5file.create_dataset("data", data=data, chunks=(8,))
+
+    with blosc2.open(path, path="data", cache_dir=tmp_path / "cache") as cached:
+        assert isinstance(cached, blosc2.RemoteArray)
+        np.testing.assert_array_equal(cached[::2], data[::2])
+        carrier_path = cached.cache_path
+    assert carrier_path is not None
+
+    explicit_path = tmp_path / "explicit.b2nd"
+    with blosc2.open(path, dataset="data", cache_path=explicit_path) as cached:
+        np.testing.assert_array_equal(cached[:], data)
+    assert explicit_path.exists()
+
+    with blosc2.open(path.resolve(), path="data", cache_path=explicit_path) as reopened:
+        reopened.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
+        np.testing.assert_array_equal(reopened[:], data)
 
 
 def test_hdf5_without_dataset_opens_store():

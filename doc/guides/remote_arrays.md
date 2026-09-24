@@ -65,6 +65,35 @@ Both spellings share cache identities and portable artifacts.
 The exported `B2ZNDSource`, `HDF5NDSource`, `scan_hdf5_index()` and
 `validate_hdf5_index()` APIs also accept `path=` alongside `dataset=`.
 
+## Persistent caches for local sources
+
+Passing `cache_dir=` or `cache_path=` to `blosc2.open()` also opts local sources
+into read-only, on-demand caching. This supports standalone `.b2nd` arrays,
+array leaves in `.b2z`, HDF5 datasets, and Zarr arrays. Tables and groups use
+`cache_dir=` and return `RemoteCTable` or `RemoteStore`; `cache_path=` is only
+for arrays. Without a cache option, local files keep their normal native open
+behavior.
+
+```python
+array = blosc2.open("local-data.h5", path="measurements", cache_dir="cache")
+same_array = blosc2.open(
+    "local-data.h5", path="measurements", cache_path="measurements.b2nd"
+)
+```
+
+Local caches assume the source is immutable and are keyed by its absolute path
+and selected node. Replacing data at that path violates the assumption and can
+mix cached values with uncached reads. For a local `RemoteCTable` or root
+`RemoteStore`, call `refresh()` after changing the source; this rebuilds source
+metadata, cached payload, and table indexes together. For a standalone
+`RemoteArray`, use a fresh cache location or remove its cache before reopening.
+Local-source cache files cannot be exported as portable remote references.
+
+Local cached opens require `mode="r"` and `assume_immutable=True`; write modes,
+`lazy=False`, `mmap_mode`, embedded-frame offsets, and `shared_cache=True` are
+not supported. Native array sources must be contiguous files, not sparse frame
+directories. Close other cached handles before refreshing or replacing a cache.
+
 Remote B2Z needs `pip install "blosc2[fsspec]"`.
 HTTP and HTTPS URLs work out of the box; cloud object stores need their respective protocol driver (such as `s3fs` for S3, `gcsfs` for GCS, or `adlfs` for Azure).
 It accesses external `ZIP_STORED` NDArray members using native Blosc2 chunk and
@@ -138,11 +167,14 @@ dataset through h5py and caches converted Blosc2 chunks in memory. A selected
 PyTables table returns `RemoteCTable`, so `blosc2.open("readings.h5", path="readings").where("humidity < 10")`
 uses the same query API as a remote table. Local tables also use h5py. Add
 `cache_dir="table-cache"` to reuse converted chunks and PyTables index sidecars
-across processes; the cache is rebuilt when the local file changes. Explicit `hdf5_index=`
+across processes. Local caches assume the source is immutable: a changed file at
+the same path is not detected automatically. Call `refresh()` on the root
+`RemoteCTable`/`RemoteStore`, or clear the array cache before reopening.
+Explicit `hdf5_index=`
 accepts a native HDF5 index for local files. Legacy HDF5 reference maps are
 rejected; omit it to regenerate the native index.
 
-`RemoteArray` assumes remote sources are immutable by default, avoiding a metadata request before every read.
+`RemoteArray` assumes sources are immutable by default, avoiding a metadata request before every read.
 For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
 Mutable B2Z, Zarr, and HDF5 sources are not supported.
 

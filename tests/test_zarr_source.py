@@ -268,6 +268,23 @@ def test_direct_proxy_zarr_cache_reopens(tmp_path, zarr):
     np.testing.assert_array_equal(reopened[:3, :4], data[:3, :4])
 
 
+def test_local_zarr_open_uses_disk_cache(tmp_path, zarr):
+    source = tmp_path / "cached.zarr"
+    data = np.arange(35, dtype=np.int32).reshape(5, 7)
+    array = zarr.create_array(source, shape=data.shape, chunks=(3, 4), dtype=data.dtype)
+    array[:] = data
+    cache_dir = tmp_path / "cache"
+
+    with blosc2.open(source, path="", cache_dir=cache_dir) as cached:
+        assert isinstance(cached, blosc2.RemoteArray)
+        np.testing.assert_array_equal(cached[:], data)
+        assert cached.cache_bytes > 0
+    assert list(cache_dir.rglob("active_generation.json"))
+
+    with blosc2.open(source.resolve(), cache_dir=cache_dir) as reopened:
+        np.testing.assert_array_equal(reopened[:], data)
+
+
 def test_zarr_v3_shards_are_decoded_as_logical_chunks(tmp_path, zarr):
     path = tmp_path / "sharded.zarr"
     data = np.arange(64, dtype=np.float32).reshape(8, 8)

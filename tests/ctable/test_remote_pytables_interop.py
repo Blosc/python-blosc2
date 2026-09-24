@@ -71,7 +71,7 @@ def test_native_pytables_csi(tmp_path):
         np.testing.assert_array_equal(table.where("(id >= 15) & (id < 25)").id[:], expected["id"])
 
 
-def test_local_pytables_disk_cache_reuse_and_invalidation(tmp_path):
+def test_local_pytables_disk_cache_reuse_and_refresh(tmp_path):
     native_pytables_url(tmp_path, "local-csi.h5", csi=True)
     path = tmp_path / "local-csi.h5"
     cache_dir = tmp_path / "cache"
@@ -79,6 +79,7 @@ def test_local_pytables_disk_cache_reuse_and_invalidation(tmp_path):
 
     with blosc2.open(path, **options) as table:
         assert sorted(table.where("id < 10").id[:].tolist()) == list(range(10))
+        table["value"][:]
         generation = table._storage._owner.generation
         descriptor = table._get_index_catalog()["id"]
         assert descriptor["persistent"]
@@ -95,6 +96,9 @@ def test_local_pytables_disk_cache_reuse_and_invalidation(tmp_path):
         h5file["table"][0] = row
 
     with blosc2.open(path, **options) as table:
+        assert table._storage._owner.generation == generation
+        assert table["value"][0] != 999
+        table.refresh()
         assert table._storage._owner.generation != generation
         assert table["value"][0] == 999
         assert sorted(table.where("id < 10").id[:].tolist()) == list(range(10))

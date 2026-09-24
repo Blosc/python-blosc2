@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,6 +20,101 @@ import blosc2.c2array as blosc2_c2array
 from blosc2.b2objects import decode_b2object_payload
 
 fsspec = pytest.importorskip("fsspec")
+
+
+def test_local_b2nd_disk_cache(tmp_path):
+    source = tmp_path / "source.b2nd"
+    cache_dir = tmp_path / "cache"
+    data = np.arange(40, dtype=np.int32)
+    blosc2.asarray(data, urlpath=source)
+
+    with blosc2.open(source, cache_dir=cache_dir) as cached:
+        assert isinstance(cached, blosc2.RemoteArray)
+        np.testing.assert_array_equal(cached[::3], data[::3])
+        cache_path = cached.cache_path
+        assert cache_path is not None
+        with pytest.raises(ValueError, match="cannot be exported"):
+            cached.to_cframe()
+        with pytest.raises(ValueError, match="cannot be exported"):
+            blosc2.Ref.from_object(cached)
+    assert Path(cache_path).exists()
+    with pytest.raises(ValueError, match="source descriptor"):
+        blosc2.open(cache_path)
+
+    with blosc2.open(source.resolve(), cache_dir=cache_dir) as reopened:
+        assert reopened.cache_path == cache_path
+        reopened.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
+        np.testing.assert_array_equal(reopened[:], data)
+
+    with blosc2.open(source.as_uri(), cache_dir=cache_dir) as file_url:
+        assert file_url.cache_path == cache_path
+        np.testing.assert_array_equal(file_url[:], data)
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import blosc2, sys, numpy as np\n"
+            "with blosc2.open(sys.argv[1], cache_dir=sys.argv[2]) as array:\n"
+            "    array.src.get_chunk = lambda n: sys.exit('unexpected source read')\n"
+            "    np.testing.assert_array_equal(array[:], np.arange(40, dtype=np.int32))\n",
+            str(source),
+            str(cache_dir),
+        ],
+        check=True,
+    )
+
+    with pytest.raises(ValueError, match="cannot overwrite the local source"):
+        blosc2.open(source, cache_path=source)
+    with pytest.raises(NotImplementedError, match="omit lazy=False"):
+        blosc2.open(source, cache_dir=cache_dir, lazy=False)
+    with pytest.raises(NotImplementedError, match="assume_immutable=True"):
+        blosc2.open(source, cache_dir=cache_dir, assume_immutable=False)
+    for options in ({"mode": "a"}, {"offset": 1}, {"mmap_mode": "r"}, {"shared_cache": True}):
+        with pytest.raises((ValueError, NotImplementedError)):
+            blosc2.open(source, cache_dir=cache_dir, **options)
+
+    other = tmp_path / "other.b2nd"
+    blosc2.asarray(data + 1, urlpath=other)
+    with pytest.raises(ValueError, match="different specification"):
+        blosc2.open(other, cache_path=cache_path)
+
+    sparse = tmp_path / "sparse.b2nd"
+    blosc2.asarray(data, urlpath=sparse, contiguous=False)
+    with pytest.raises(NotImplementedError, match="contiguous native frame"):
+        blosc2.open(sparse, cache_dir=cache_dir)
+
+
+@pytest.mark.parametrize("format", ["b2z", "hdf5", "zarr"])
+def test_local_container_cache_selection(tmp_path, format):
+    source = tmp_path / f"source.{format}"
+    data = np.arange(24, dtype=np.int32)
+    if format == "b2z":
+        with blosc2.TreeStore(source, mode="w", threshold=0) as store:
+            store["values"] = blosc2.asarray(data)
+    elif format == "hdf5":
+        h5py = pytest.importorskip("h5py")
+        with h5py.File(source, "w") as store:
+            store.create_dataset("values", data=data, chunks=(8,))
+    else:
+        zarr = pytest.importorskip("zarr")
+        store = zarr.open_group(source, mode="w")
+        store.create_array("values", data=data, chunks=(8,))
+
+    with blosc2.open(source, cache_dir=tmp_path / "group-cache") as group:
+        assert isinstance(group, blosc2.RemoteStore)
+        with group["values"] as array:
+            np.testing.assert_array_equal(array[:], data)
+    with pytest.raises(NotImplementedError, match="cache_dir"):
+        blosc2.open(source, cache_path=tmp_path / "group.b2nd")
+
+    for placement in ("cache_dir", "cache_path"):
+        options = {placement: tmp_path / f"{placement}.b2nd"}
+        with blosc2.open(source, path="values", **options) as array:
+            np.testing.assert_array_equal(array[:], data)
+        with blosc2.open(f"{source}::values", **options) as array:
+            array.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
+            np.testing.assert_array_equal(array[:], data)
 
 
 def test_bounded_unbounded_cache_accounting_transition(tmp_path):

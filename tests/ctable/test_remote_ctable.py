@@ -1710,6 +1710,22 @@ def test_open_dispatches_local_and_remote_tables(tmp_path, policy):
         assert table.cache_policy == blosc2.CachePolicy.MEMORY
 
 
+def test_open_local_b2z_with_cache_dir(tmp_path):
+    local = blosc2.CTable(Row, [(1, [1, 2], "one")], create_summary_index=False)
+    path = tmp_path / "table.b2z"
+    local.to_b2z(path)
+    cache_dir = tmp_path / "cache"
+
+    with blosc2.open(path, cache_dir=cache_dir) as table:
+        assert isinstance(table, blosc2.RemoteCTable)
+        assert table.where("x == 1").x[:].tolist() == [1]
+    assert cache_dir.exists()
+    assert list(cache_dir.rglob("active_generation.json"))
+    assert list(cache_dir.rglob("*.b2nd"))
+    with pytest.raises(NotImplementedError, match="cache_dir, not cache_path"):
+        blosc2.open(path, cache_path=tmp_path / "table-cache.b2nd")
+
+
 @pytest.mark.parametrize("suffix", [".b2z", ""])
 def test_open_dispatches_remote_table_hierarchy(tmp_path, suffix, monkeypatch):
     local = blosc2.CTable(Row, [(1, [1, 2], "one")], create_summary_index=False)

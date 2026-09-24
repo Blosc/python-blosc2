@@ -269,6 +269,15 @@ def _validate_max_concurrency(value: int | None) -> int | None:
     return value
 
 
+def _local_source_path(urlpath, enabled):
+    if not enabled:
+        return None, urlpath
+    if not isinstance(urlpath, str) or (urlsplit(urlpath).scheme and not os.path.splitdrive(urlpath)[0]):
+        raise ValueError("local cache sources must use a local filesystem path")
+    urlpath = os.path.abspath(urlpath)
+    return urlpath, urlpath
+
+
 def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
     if policy is blosc2.CachePolicy.NONE:
         if limit is not None:
@@ -280,7 +289,9 @@ def _validate_payload_limit(policy: blosc2.CachePolicy, limit) -> None:
         raise ValueError(f"persisted {policy.name} RemoteArray requires positive max_cache_bytes")
 
 
-def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, store_attachment=False):
+def _validate_authorized_source(
+    urlpath, storage_options, source_descriptor, *, store_attachment=False, allow_local_source=False
+):
     if storage_options is not None:
         raise ValueError("storage_options cannot be used with an authorized source")
     hdf5_cls = getattr(blosc2, "HDF5NDSource", ())
@@ -326,7 +337,9 @@ def _validate_authorized_source(urlpath, storage_options, source_descriptor, *, 
         raise ValueError("source_descriptor does not match the supplied source")
     persisted_url = urlpath.urlbase if isinstance(urlpath, blosc2.C2Array) else urlpath.urlpath
     if persisted_url is not None and not (
-        store_attachment and isinstance(urlpath, hdf5_cls) and urlpath._local
+        store_attachment
+        and allow_local_source
+        and (not urlsplit(persisted_url).scheme or os.path.splitdrive(persisted_url)[0])
     ):
         validate_persistable_url(persisted_url)
     return urlpath, dict(expected)
@@ -348,8 +361,9 @@ def _open_url_source(
     cparams=None,
     source_cache_dir=None,
     hdf5_index_explicit=True,
+    local_source=False,
 ):
-    if persistable:
+    if persistable and not local_source:
         validate_persistable_url(urlpath)
     kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
     if storage_options is not None:
@@ -535,6 +549,9 @@ def _resolve_init_dataset_and_url(urlpath, dataset, source_format, hdf5_index=No
 class RemoteArray(RemoteObject, blosc2.Operand):
     """A persistable, optionally self-caching reference to a remote array.
 
+    ``blosc2.open(local_path, cache_dir=...)`` also returns this read-only
+    wrapper for local arrays; these local references cannot be exported.
+
     With :attr:`CachePolicy.DISK`, the public constructor uses the persisted
     B2ND carrier itself as the bounded cache. Use
     ``blosc2.open(url, cache_dir=..., shared_cache=True)`` for a process-shared
@@ -621,6 +638,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         _runtime_is_mutable: bool = True,
         _defer_cache: bool = False,
         _shared_cache: bool = False,
+        _local_source: bool = False,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(cache_policy, blosc2.CachePolicy):
@@ -637,6 +655,9 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         urlpath, self._dataset, self._source_format = _resolve_init_dataset_and_url(
             urlpath, dataset, source_format, hdf5_index
         )
+        _local_source = _local_source and cache_policy is blosc2.CachePolicy.DISK
+        self._local_source = _local_source
+        self._local_source_path, urlpath = _local_source_path(urlpath, _local_source)
         self._authorized_source = _source_descriptor is not None
         hdf5_index_explicit = hdf5_index is not None
         shared_index_path = None
@@ -658,7 +679,11 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             )
         if self._authorized_source:
             self.src, self._source = _validate_authorized_source(
-                urlpath, storage_options, _source_descriptor, store_attachment=_store_owner is not None
+                urlpath,
+                storage_options,
+                _source_descriptor,
+                store_attachment=_store_owner is not None,
+                allow_local_source=getattr(_store_owner, "local_source", False),
             )
         else:
             read_seed = (
@@ -707,7 +732,10 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 cparams=_source_cparams,
                 source_cache_dir=cache_dir if cache_policy is blosc2.CachePolicy.DISK else None,
                 hdf5_index_explicit=hdf5_index_explicit,
+                local_source=_local_source,
             )
+            if _local_source:
+                self.src.stamp = ("local", urlpath, self._dataset, self._source_format)
         self._assume_immutable = assume_immutable
         self._storage_options = storage_options
         if _shared_cache:
@@ -862,6 +890,11 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             path = os.fspath(cache_path)
             if os.path.isdir(path):
                 raise ValueError("cache_path must name a file, not a directory")
+            if self._local_source and (
+                os.path.abspath(path) == self._local_source_path
+                or (os.path.exists(path) and os.path.samefile(path, self._local_source_path))
+            ):
+                raise ValueError("cache_path cannot overwrite the local source")
             return path
         if urlpath is None:
             urlpath = self._source.get("urlpath", self._source_identity())
@@ -869,11 +902,14 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         if self._source_format == "zarr" and self._dataset:
             parsed = urlsplit(urlpath)
             urlpath = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")[: -len(self._dataset) - 1]))
+        cache_dataset = self._dataset
+        if self._local_source:
+            cache_dataset = f"{self._source_format}::{self._dataset or ''}"
         return fsspec_cache_path(
             urlpath,
             cache_dir,
             ".b2nd",
-            dataset=self._dataset,
+            dataset=cache_dataset,
             storage_options=storage_options,
             create_parent=create_parent,
         )
@@ -1213,6 +1249,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         cparams=None,
         source_cache_dir=None,
         hdf5_index_explicit=True,
+        local_source=False,
     ):
         if isinstance(urlpath, blosc2.C2Array):
             if source_format not in {None, "blosc2"}:
@@ -1263,6 +1300,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 cparams=cparams,
                 source_cache_dir=source_cache_dir,
                 hdf5_index_explicit=hdf5_index_explicit,
+                local_source=local_source,
             )
         else:
             raise TypeError("RemoteArray requires a URL string, URLPath, or C2Array")
@@ -1488,6 +1526,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
     @property
     def source(self) -> dict:
         """A copy of the credential-free source descriptor."""
+        self._ensure_exportable_source()
         self._payload()  # Runtime-only URLs must not escape as portable descriptors.
         return dict(self._source)
 
@@ -1724,12 +1763,12 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
     def _payload(self, mutable=None):
         url = self._source.get("urlpath", self._source.get("urlbase"))
-        if url is not None:
+        if url is not None and not self._local_source:
             validate_persistable_url(url)
         return {
             "kind": "remote_array",
             "version": 1,
-            "source": dict(self._source),
+            "source": {**self._source, **({"local": True} if self._local_source else {})},
             "cache_policy": self.cache_policy.value,
             "max_cache_bytes": self.max_cache_bytes,
             "mutable": self.mutable if mutable is None else mutable,
@@ -1801,7 +1840,12 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         write_b2object_payload(carrier, payload)
         return carrier
 
+    def _ensure_exportable_source(self):
+        if self._local_source:
+            raise ValueError("local-source caches cannot be exported as portable RemoteArray references")
+
     def _export_carrier(self, include_cache: bool, cache_policy=None, mutable=None):
+        self._ensure_exportable_source()
         if not isinstance(include_cache, bool):
             raise TypeError("include_cache must be a boolean")
         effective_mutable = self.mutable if mutable is None else mutable
