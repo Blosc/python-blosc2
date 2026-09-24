@@ -14314,6 +14314,38 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         TypeError
             If a column used as a sort key does not support ordering
             (e.g. complex numbers).
+
+        Examples
+        --------
+        Create a small table and materialise a plain sort::
+
+            >>> import blosc2
+            >>> from dataclasses import dataclass
+            >>> @dataclass
+            ... class Record:
+            ...     name: str = blosc2.field(blosc2.string(max_length=8))
+            ...     score: int = blosc2.field(blosc2.int64())
+            ...     group: int = blosc2.field(blosc2.int64())
+            >>> t = blosc2.CTable(
+            ...     Record,
+            ...     new_data=[("a", 30, 1), ("b", 10, 2), ("c", 20, 1), ("d", 40, 2)],
+            ... )
+            >>> t.sort_by("score")["score"][:].tolist()
+            [10, 20, 30, 40]
+
+        Sorting a filtered table stays lazy until rows are read::
+
+            >>> filtered = t.where(t.group == 1)
+            >>> ranked = filtered.sort_by("score")
+            >>> print(ranked.base is not None)
+            True
+            >>> print(ranked["score"][:].tolist())
+            [20, 30]
+
+        Multiple keys are applied from left to right::
+
+            >>> t.sort_by(["group", "score"], ascending=[True, False])["name"][:].tolist()
+            ['a', 'c', 'd', 'b']
         """
         if inplace and view:
             raise ValueError("inplace=True and view=True are mutually exclusive.")
@@ -16134,14 +16166,33 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Examples
         --------
+        Start with a small table::
+
+            >>> from dataclasses import dataclass
+            >>> @dataclass
+            ... class Record:
+            ...     name: str = blosc2.field(blosc2.string(max_length=8))
+            ...     score: int = blosc2.field(blosc2.int64())
+            ...     group: int = blosc2.field(blosc2.int64())
+            >>> t = blosc2.CTable(
+            ...     Record,
+            ...     new_data=[("a", 30, 1), ("b", 10, 2), ("c", 20, 1), ("d", 40, 2)],
+            ... )
+
         Filter using a string expression::
 
-            view = t.where("value * category >= 150")
-            slim = t.where("value * category >= 150", columns=["value", "category"])
+            >>> view = t.where("score > 15")
+            >>> print(view.base is t, view.nrows)
+            True 3
+            >>> slim = t.where("score > 15", columns=["name", "score"])
+            >>> print(slim.col_names)
+            ['name', 'score']
 
-        Filter using column arithmetic::
+        Compound predicates can use column expressions::
 
-            view = t.where((t.value * t.category) >= 150)
+            >>> selected = t.where((t.group == 1) & (t.score >= 25))
+            >>> print(selected["name"][:].tolist())
+            ['a']
 
         Blosc2 lazy functions can be used in column expressions::
 
