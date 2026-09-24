@@ -2373,3 +2373,36 @@ def test_lazyexpr_subscript_slice_and_shape_inference():
         lexpr2 = blosc2.lazyexpr("a[2:5, 1:4, 0:3]", {"a": a})
         assert lexpr2.shape == (3, 3, 3)
         np.testing.assert_array_equal(lexpr2.compute()[:], npa[2:5, 1:4, 0:3])
+
+
+@pytest.mark.parametrize("engine", ["fast_eval", "slices_eval"])
+@pytest.mark.parametrize("blocks", [(2, 1, 4), (1, 2, 4)])
+def test_evaluation_block_layout(monkeypatch, engine, blocks):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", False)
+    data = np.arange(16 * 8 * 4, dtype=np.float64).reshape(16, 8, 4)
+    chunks = (8, 8, 4)
+    assert blosc2.are_partitions_behaved(data.shape, chunks, blocks) is (blocks == (1, 2, 4))
+    a = blosc2.asarray(data, chunks=chunks, blocks=blocks)
+    evaluate = lazyexpr_mod.slices_eval if engine == "slices_eval" else lazyexpr_mod.fast_eval
+    result = evaluate("a + 1", {"a": a}, getitem=False, chunks=chunks, blocks=blocks)
+    np.testing.assert_array_equal(result[:], data + 1)
+
+
+@pytest.mark.parametrize("blocks", [(2, 1, 4), (1, 2, 4)])
+def test_cumulative_block_layout(monkeypatch, blocks):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", False)
+    data = (np.arange(16 * 8 * 4).reshape(16, 8, 4) % 3 + 1).astype(np.int64)
+    chunks = (8, 8, 4)
+    a = blosc2.asarray(data, chunks=chunks, blocks=blocks)
+    out = blosc2.empty(data.shape, dtype=data.dtype, chunks=chunks, blocks=blocks)
+    expression = a + 0
+    result = expression.cumulative_sum(axis=0, out=out)
+    expected = np.cumulative_sum(data, axis=0)
+    np.testing.assert_array_equal(result[:], expected)
+    np.testing.assert_array_equal(out[:], expected)
