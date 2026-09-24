@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -28,6 +29,10 @@ from blosc2.remote_array import (
 from blosc2.remote_object import RemoteObject
 
 RESERVED_NAMES = {"embed.b2e", "__vlmeta__"}
+
+
+class CacheMiss(Exception):
+    """A cached-only table operation needs unavailable source data."""
 
 
 def validate_remote_store_reference(descriptor):
@@ -124,6 +129,8 @@ class RemoteDiscovery:
         persist_metadata=False,
         _filesystem=None,
         _source_validator=None,
+        _batch_validator=None,
+        _filesystem_resolver=None,
         _manifest_validator=None,
         _max_nodes=None,
         _source_format=None,
@@ -194,6 +201,8 @@ class RemoteDiscovery:
         self.persist_metadata = persist_metadata
         self._external_filesystem = _filesystem
         self.source_validator = _source_validator
+        self.batch_validator = _batch_validator
+        self.filesystem_resolver = _filesystem_resolver
         self.manifest_validator = _manifest_validator
         self.max_nodes = _max_nodes
         self.metadata_bytes = 0
@@ -806,7 +815,7 @@ class RemoteDiscovery:
         carrier = blosc2.ndarray_from_cframe(self.archive._read_archive(offset, length), copy=True)
         return blosc2.RemoteArray._from_carrier_with_owner(carrier, self, full + ".source")
 
-    def open_ctable_batch(self, full):
+    def open_ctable_batch(self, full):  # noqa: C901
         """Open one external BatchArray member hidden below a CTable node."""
         if full in self.batch_caches:
             return self.batch_caches[full]
@@ -826,6 +835,8 @@ class RemoteDiscovery:
         self.archive.capture_metadata = True
         try:
             source = B2ZBatchSource(self.archive, full, check_open)
+            if self.batch_validator is not None:
+                self.batch_validator(source)
         finally:
             self.archive.capture_metadata = False
             self.archive._opening_ranges.clear()
@@ -1085,6 +1096,8 @@ class RemoteDiscovery:
             persist_metadata=self.disk is not None,
             _filesystem=self._external_filesystem,
             _source_validator=self.source_validator,
+            _batch_validator=self.batch_validator,
+            _filesystem_resolver=self.filesystem_resolver,
             _manifest_validator=self.manifest_validator,
             _max_nodes=self.max_nodes,
             _source_format=self.format,
@@ -1440,6 +1453,8 @@ class RemoteStore(RemoteObject):
     alias; when both are supplied they must agree after stripping outer slashes.
     None leaves selection unspecified; an empty string or slash selects the root.
     Selector keywords cannot be combined with a selector embedded in the URL.
+    ``allow_table_root=True`` permits a table selection to remain a store handle
+    for server integrations that manage one store operation across table reads.
     """
 
     @classmethod
@@ -1509,9 +1524,12 @@ class RemoteStore(RemoteObject):
         cache_dir=None,
         hdf5_index=None,
         _allow_array_root=False,
+        allow_table_root=False,
         _filesystem=None,
         _manifest=None,
         _source_validator=None,
+        _batch_validator=None,
+        _filesystem_resolver=None,
         _manifest_validator=None,
         _max_nodes=None,
         _source_format=None,
@@ -1583,6 +1601,8 @@ class RemoteStore(RemoteObject):
                 persist_metadata=disk is not None,
                 _filesystem=_filesystem,
                 _source_validator=_source_validator,
+                _batch_validator=_batch_validator,
+                _filesystem_resolver=_filesystem_resolver,
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _source_format=_source_format,
@@ -1600,7 +1620,8 @@ class RemoteStore(RemoteObject):
                 disk.close()
             raise
         owner.disk = disk
-        if not owner.is_tree and not _allow_array_root:
+        table_root = allow_table_root and owner.nodes[owner.root][0] == "ctable"
+        if not owner.is_tree and not (_allow_array_root or table_root):
             kind, diagnostic = owner.nodes[owner.root]
             owner.close()
             if kind == "unsupported":
@@ -1662,6 +1683,7 @@ class RemoteStore(RemoteObject):
             else:
                 runtime["storage_options"] = None
         runtime.setdefault("cache_policy", blosc2.CachePolicy(descriptor["cache_policy"]))
+        runtime.setdefault("allow_table_root", True)
         if runtime["cache_policy"] is not blosc2.CachePolicy.NONE:
             runtime.setdefault("max_cache_bytes", descriptor["max_cache_bytes"] or CACHE_POLICY_DEFAULT)
         else:
@@ -1683,6 +1705,11 @@ class RemoteStore(RemoteObject):
                 parent.max_cache_bytes,
                 None,
                 _traffic=parent.traffic,
+                _filesystem_resolver=parent.filesystem_resolver,
+                _source_validator=parent.source_validator,
+                _batch_validator=parent.batch_validator,
+                _manifest_validator=parent.manifest_validator,
+                _max_nodes=parent.max_nodes,
             )
             opened = object.__new__(type(self))
             opened._attach(opened_owner, "")
@@ -1700,6 +1727,12 @@ class RemoteStore(RemoteObject):
                     max_cache_bytes=parent.max_cache_bytes,
                     storage_options=runtime["storage_options"],
                     _traffic=parent.traffic,
+                    _filesystem=runtime.get("_filesystem"),
+                    _filesystem_resolver=parent.filesystem_resolver,
+                    _source_validator=parent.source_validator,
+                    _batch_validator=parent.batch_validator,
+                    _manifest_validator=parent.manifest_validator,
+                    _max_nodes=parent.max_nodes,
                 )
             elif parent.disk is not None:
                 runtime["cache_dir"] = parent.disk.path / "nested" / identity
@@ -1738,6 +1771,8 @@ class RemoteStore(RemoteObject):
                 cache._cache_key = f"{namespace}:{key}"
                 parent.cache_coordinator.register(cache)
             owner.nested_storage_options = parent.nested_storage_options
+            owner.filesystem_resolver = parent.filesystem_resolver
+            owner.batch_validator = parent.batch_validator
             if mount is not None and mount not in parent.linked_stores:
                 anchor = object.__new__(type(self))
                 anchor._reference_parent = None
@@ -1758,7 +1793,7 @@ class RemoteStore(RemoteObject):
         self._finalizer = weakref.finalize(self, owner.release)
 
     @classmethod
-    def with_sparse_cache(
+    def with_sparse_cache(  # noqa: C901
         cls,
         urlpath,
         runtime_cache_path,
@@ -1771,6 +1806,8 @@ class RemoteStore(RemoteObject):
         storage_options=None,
         _filesystem=None,
         _source_validator=None,
+        _batch_validator=None,
+        _filesystem_resolver=None,
         _manifest_validator=None,
         _max_nodes=None,
         _traffic=None,
@@ -1809,11 +1846,14 @@ class RemoteStore(RemoteObject):
                 seed_manifest, seed_offsets = cls._load_artifact_manifest(os.fspath(carrier))
                 if seed_manifest["source"] != source:
                     raise ValueError("RemoteStore seed source mismatch")
+                current = dict(
+                    seed_manifest, caches=[], batch_caches=[], linked={}, generation=uuid.uuid4().hex
+                )
             if current is None and manifest is not None:
                 cls._validate_artifact_manifest(manifest)
                 if manifest["source"] != source:
                     raise ValueError("RemoteStore manifest source mismatch")
-                current = dict(manifest, caches=[], generation=uuid.uuid4().hex)
+                current = dict(manifest, caches=[], batch_caches=[], linked={}, generation=uuid.uuid4().hex)
             owner = RemoteDiscovery(
                 base,
                 storage_options,
@@ -1822,6 +1862,8 @@ class RemoteStore(RemoteObject):
                 persist_metadata=True,
                 _filesystem=_filesystem,
                 _source_validator=_source_validator,
+                _batch_validator=_batch_validator,
+                _filesystem_resolver=_filesystem_resolver,
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _traffic=_traffic,
@@ -1838,7 +1880,21 @@ class RemoteStore(RemoteObject):
                 if seed_manifest is not None:
                     for key in seed_manifest["caches"]:
                         relative = key[len(owner.root) + 1 :] if owner.root else key
-                        src = owner.open_source(relative)
+                        try:
+                            src = owner.open_source(relative)
+                        except KeyError as exc:
+                            table = next(
+                                (
+                                    path
+                                    for path, (kind, _) in owner.nodes.items()
+                                    if kind == "ctable" and key.startswith(f"{path}/" if path else "")
+                                ),
+                                None,
+                            )
+                            if table is None:
+                                raise ValueError("Invalid cached RemoteStore seed leaf") from exc
+                            leaf = key[len(table) + 1 :] if table else key
+                            src = owner.open_ctable_array(table, leaf)
                         name = key + ".b2nd"
                         seed = blosc2.blosc2_ext.open(
                             os.fspath(carrier),
@@ -1856,6 +1912,73 @@ class RemoteStore(RemoteObject):
                             descriptor["dataset"] = key
                         seed.schunk.vlmeta["b2o"] = {"kind": "remote_array", "source": descriptor}
                         owner.get_cache(src, seed=seed)
+                    for key in seed_manifest.get("batch_caches", []):
+                        prefix = f"{key}.b2b.cache/"
+                        folder = disk.batch_payload_path(owner.generation, key)
+                        folder.mkdir(parents=True, exist_ok=True)
+                        members = [
+                            (name[len(prefix) :], info)
+                            for name, info in seed_offsets.items()
+                            if name.startswith(prefix)
+                        ]
+                        if not members:
+                            raise ValueError("Missing cached batch members in RemoteStore seed")
+                        with open(os.fspath(carrier), "rb") as artifact:
+                            for name, info in members:
+                                if not name.endswith(".chunk") or not name[:-6].isdigit():
+                                    raise ValueError("Invalid cached batch member in RemoteStore seed")
+                                artifact.seek(info["offset"])
+                                payload = artifact.read(info["length"])
+                                if len(payload) != info["length"]:
+                                    raise ValueError("Truncated cached batch member in RemoteStore seed")
+                                (folder / name).write_bytes(payload)
+                        owner.open_ctable_batch(key)
+                    for mount, entry in seed_manifest.get("linked", {}).items():
+                        descriptor = owner.nodes[mount][1]
+                        namespace = f"{owner.generation}:{mount}"
+                        identity = hashlib.sha256(
+                            f"{namespace}\0{descriptor['kind']}\0{descriptor['urlpath']}\0{descriptor['dataset']}".encode()
+                        ).hexdigest()
+                        nested_dir = disk.parent / "nested" / identity
+                        with tempfile.TemporaryDirectory(dir=disk.parent) as temporary:
+                            nested_file = Path(temporary) / "linked.b2z"
+                            st = blosc2.Storage(contiguous=True)
+                            st.meta = {"b2tree": {"version": 1}, "b2remote_store": {"version": 1}}
+                            embed = blosc2.SChunk(chunksize=8192, data=None, storage=st)
+                            embed.vlmeta["b2remote_manifest"] = entry["manifest"]
+                            prefix = entry["prefix"].rstrip("/") + "/"
+                            with (
+                                zipfile.ZipFile(os.fspath(carrier)) as original,
+                                zipfile.ZipFile(nested_file, "w", zipfile.ZIP_STORED) as nested,
+                            ):
+                                nested.writestr("embed.b2e", embed.to_cframe())
+                                for name in seed_offsets:
+                                    if name.startswith(prefix):
+                                        with (
+                                            original.open(name) as source_file,
+                                            nested.open(name[len(prefix) :], "w") as target_file,
+                                        ):
+                                            shutil.copyfileobj(source_file, target_file)
+                            with cls.with_sparse_cache(
+                                descriptor["urlpath"],
+                                nested_dir,
+                                dataset=descriptor["dataset"] or None,
+                                max_cache_bytes=limit,
+                                carrier=nested_file,
+                                storage_options=storage_options,
+                                _filesystem=(
+                                    _filesystem_resolver(descriptor["urlpath"])
+                                    if _filesystem_resolver is not None
+                                    else None
+                                ),
+                                _source_validator=_source_validator,
+                                _batch_validator=_batch_validator,
+                                _filesystem_resolver=_filesystem_resolver,
+                                _manifest_validator=_manifest_validator,
+                                _max_nodes=_max_nodes,
+                                _traffic=_traffic,
+                            ):
+                                pass
                     owner.cache_coordinator.enforce()
                 owner.save_manifest()
                 obj = object.__new__(cls)
@@ -1867,9 +1990,9 @@ class RemoteStore(RemoteObject):
                 raise
 
     @staticmethod
-    def trim_sparse_cache(runtime_cache_path, source, target_bytes, *, max_chunks=64):
+    def trim_sparse_cache(runtime_cache_path, source, target_bytes, *, max_chunks=64):  # noqa: C901
         """Trim shared leaf payload without opening or contacting the source."""
-        from blosc2.remote_store_cache import SharedStoreCache
+        from blosc2.remote_store_cache import SharedStoreCache, validate_generation
 
         for value in (target_bytes, max_chunks):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -1886,7 +2009,40 @@ class RemoteStore(RemoteObject):
                 path = disk.payload_path(manifest["generation"], key)
                 evicted, size = blosc2.RemoteArray.trim_sparse_cache(path, 1 << 63, max_chunks=0)
                 leaves.append((key, path, size))
-            total = sum(size for _, _, size in leaves)
+            batches = []
+            for key in manifest.get("batch_caches", []):
+                folder = disk.batch_payload_path(manifest["generation"], key)
+                batches.extend(
+                    (key, file, file.stat().st_size)
+                    for file in folder.glob("*.chunk")
+                    if file.stem.isdigit()
+                )
+            nested = []
+            nested_root = disk.parent / "nested"
+            if nested_root.is_dir() and not nested_root.is_symlink():
+                for parent in nested_root.iterdir():
+                    if not parent.is_dir() or parent.is_symlink():
+                        continue
+                    for child in parent.iterdir():
+                        if not child.is_dir() or child.is_symlink():
+                            continue
+                        active = child / "active_generation.json"
+                        if not active.exists():
+                            continue
+                        generation = json.loads(active.read_text())["generation"]
+                        validate_generation(generation)
+                        embed = blosc2.blosc2_ext.open(
+                            os.fspath(child / f"{generation}.b2d" / "embed.b2e"), "r", 0
+                        )
+                        source = embed.vlmeta["b2remote_manifest"]["source"]
+                        del embed
+                        _, size = RemoteStore.trim_sparse_cache(parent, source, 1 << 63, max_chunks=0)
+                        nested.append((parent, source, size))
+            total = (
+                sum(size for _, _, size in leaves)
+                + sum(size for _, _, size in batches)
+                + sum(size for _, _, size in nested)
+            )
             removed = []
             # ponytail: leaf-order eviction; persist global recency if workloads need exact LRU.
             for key, path, size in leaves:
@@ -1899,17 +2055,55 @@ class RemoteStore(RemoteObject):
                 )
                 removed.extend((key, chunk) for chunk in evicted)
                 total += remaining - size
+            for key, file, size in batches:
+                if total <= target_bytes or len(removed) >= max_chunks:
+                    break
+                file.unlink()
+                removed.append((key, int(file.stem)))
+                total -= size
+            for parent, source, size in nested:
+                if total <= target_bytes or len(removed) >= max_chunks:
+                    break
+                evicted, remaining = RemoteStore.trim_sparse_cache(
+                    parent,
+                    source,
+                    max(0, size - (total - target_bytes)),
+                    max_chunks=max_chunks - len(removed),
+                )
+                removed.extend((f"linked:{parent.name}:{key}", chunk) for key, chunk in evicted)
+                total += remaining - size
             return tuple(removed), total
 
     def read_cached(self, path, item=(), *, nchunk=None):
         """Return ``(hit, result)`` atomically without fetching missing payload."""
         self._ensure_open()
         with self._owner.lock:
+            linked = self._linked_path(path)
+            if linked is not None:
+                mount, suffix, descriptor = linked
+                with self._linked_store(mount, descriptor) as store:
+                    return store.read_cached(suffix, item, nchunk=nchunk)
             _, full = self._resolve(path)
             if full not in self._owner.caches:
                 return False, None
             with self[path] as array:
                 return array.read_cached(item, nchunk=nchunk)
+
+    def read_cached_table(self, operation):
+        """Run a table operation from retained payload, returning ``(hit, value)``."""
+        self._ensure_open()
+        with self._owner.lock:
+            if self._owner.cache_policy is blosc2.CachePolicy.NONE:
+                return False, None
+            coordinator = self._owner.cache_coordinator
+            previous = coordinator.cached_only
+            coordinator.cached_only = True
+            try:
+                return True, operation(self)
+            except CacheMiss:
+                return False, None
+            finally:
+                coordinator.cached_only = previous
 
     def _resolve(self, path):
         self._ensure_open()
@@ -1957,7 +2151,14 @@ class RemoteStore(RemoteObject):
             "_parent_owner": self._owner,
             "_cache_namespace": f"{self._owner.generation}:{mount}",
             "_mount": mount,
+            "_filesystem_resolver": self._owner.filesystem_resolver,
+            "_source_validator": self._owner.source_validator,
+            "_batch_validator": self._owner.batch_validator,
+            "_manifest_validator": self._owner.manifest_validator,
+            "_max_nodes": self._owner.max_nodes,
         }
+        if self._owner.filesystem_resolver is not None:
+            runtime["_filesystem"] = self._owner.filesystem_resolver(descriptor["urlpath"])
         if self._owner.cache_policy is not blosc2.CachePolicy.NONE:
             runtime["max_cache_bytes"] = self._owner.max_cache_bytes
         runtime.update(overrides)
@@ -2221,9 +2422,11 @@ class RemoteStore(RemoteObject):
         return manifest, artifact_offsets
 
     @staticmethod
-    def _validate_artifact_manifest(manifest):  # noqa: C901
+    def _validate_artifact_manifest(manifest, _depth=0):  # noqa: C901
         from blosc2.remote_store_cache import validate_generation
 
+        if _depth > 16:
+            raise ValueError("RemoteStore reference nesting exceeds the limit")
         validate_generation(manifest.get("generation"))
         source = manifest["source"]
         root = source.get("dataset", "")
@@ -2317,7 +2520,7 @@ class RemoteStore(RemoteObject):
             RemoteDiscovery._validate(entry["prefix"])
             if not entry["prefix"].startswith("__remote_links__/"):
                 raise ValueError("Invalid nested RemoteStore artifact prefix")
-            RemoteStore._validate_artifact_manifest(entry["manifest"])
+            RemoteStore._validate_artifact_manifest(entry["manifest"], _depth + 1)
 
     @classmethod
     def _open_mutable_artifact(cls, urlpath, manifest, storage_options, cache_policy, limit, cache_dir):
@@ -2389,6 +2592,11 @@ class RemoteStore(RemoteObject):
         cache_dir,
         *,
         _traffic=None,
+        _filesystem_resolver=None,
+        _source_validator=None,
+        _batch_validator=None,
+        _manifest_validator=None,
+        _max_nodes=None,
     ):
         if cache_dir is not None:
             raise ValueError("cache_dir cannot be specified for an immutable RemoteStore artifact")
@@ -2400,6 +2608,14 @@ class RemoteStore(RemoteObject):
             manifest=manifest,
             persist_metadata=False,
             _traffic=_traffic,
+            _filesystem=(
+                _filesystem_resolver(source_desc["urlpath"]) if _filesystem_resolver is not None else None
+            ),
+            _filesystem_resolver=_filesystem_resolver,
+            _source_validator=_source_validator,
+            _batch_validator=_batch_validator,
+            _manifest_validator=_manifest_validator,
+            _max_nodes=_max_nodes,
         )
         owner.disk = None
         owner.is_mutable = False

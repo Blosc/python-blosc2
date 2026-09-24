@@ -105,6 +105,7 @@ class CacheCoordinator:
 
     def __init__(self, max_cache_bytes):
         self.max_cache_bytes = max_cache_bytes
+        self.cached_only = False
         self.proxies = weakref.WeakValueDictionary()
         self.lru = OrderedDict()
 

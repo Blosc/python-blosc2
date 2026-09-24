@@ -41,6 +41,76 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
+def test_remote_ctable_shared_seed_restores_batch_payload(tmp_path, monkeypatch):
+    @dataclasses.dataclass
+    class BatchRow:
+        text: str = blosc2.field(blosc2.vlstring(batch_rows=2))
+
+    url = remote_table_url(
+        tmp_path, blosc2.CTable(BatchRow, [("one",), ("two",)], create_summary_index=False)
+    )
+    artifact = tmp_path / "warm.b2z"
+    with blosc2.RemoteCTable(url, cache_dir=tmp_path / "creator") as table:
+        assert table.text[:] == ["one", "two"]
+        table.save(artifact)
+
+    from blosc2.b2z_source import B2ZBatchSource
+
+    with blosc2.RemoteCTable.with_sparse_cache(url, tmp_path / "shared", carrier=artifact) as table:
+        source = table._remote_storage()._owner.disk.source
+        monkeypatch.setattr(
+            B2ZBatchSource,
+            "get_chunk",
+            lambda *args: pytest.fail("warm batch fetched from source"),
+        )
+        assert table.text[:] == ["one", "two"]
+    removed, remaining = blosc2.RemoteStore.trim_sparse_cache(tmp_path / "shared", source, 0)
+    assert removed
+    assert remaining == 0
+    with blosc2.RemoteStore.with_sparse_cache(url, tmp_path / "shared") as store:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                type(fsspec.filesystem("memory")),
+                "cat_file",
+                lambda *args, **kwargs: pytest.fail("cached-only read contacted source"),
+            )
+            hit, value = store.read_cached_table(lambda runtime: runtime[""].text[:])
+        assert not hit
+        assert value is None
+
+    def deny_batch(source):
+        assert source.dataset.endswith("_cols/text")
+        raise ValueError("batch exceeds limit")
+
+    with blosc2.RemoteCTable(url, _batch_validator=deny_batch) as table:
+        with pytest.raises(ValueError, match="batch exceeds limit"):
+            table.text[:]
+
+
+def test_remote_ctable_carrier_column_authorizes_before_open(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    source = tmp_path / "column.b2nd"
+    blosc2.asarray(np.array([1, 2], dtype="i8"), urlpath=source)
+    fs = fsspec.filesystem("memory")
+    column_url = f"memory://{tmp_path.name}-column.b2nd"
+    fs.pipe_file(column_url, source.read_bytes())
+    carrier = tmp_path / "carrier.b2nd"
+    with blosc2.RemoteArray(column_url) as array:
+        array.save(carrier)
+    destinations = []
+
+    def deny(url):
+        destinations.append(url)
+        raise PermissionError("secondary source denied")
+
+    raw = blosc2.ndarray_from_cframe(carrier.read_bytes(), copy=True)
+    owner = SimpleNamespace(filesystem_resolver=deny)
+    with pytest.raises(PermissionError, match="secondary source denied"):
+        blosc2.RemoteArray._from_carrier_with_owner(raw, owner, "x")
+    assert destinations == [column_url]
+
+
 def pytables_hdf5_url(
     name="pytables-table.h5",
     *,
@@ -1727,6 +1797,9 @@ def test_remote_store_rejects_table_root(tmp_path):
     )
     with pytest.raises(ValueError, match="use RemoteCTable"):
         blosc2.RemoteStore(url)
+    with blosc2.RemoteStore(url, allow_table_root=True) as store:
+        with store[""] as table:
+            assert table.nrows == 1
 
 
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))

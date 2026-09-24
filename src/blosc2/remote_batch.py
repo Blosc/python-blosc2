@@ -188,6 +188,10 @@ class _RemoteBatchCache:
         if index in self._cache_sizes:
             chunk = self.read_cached_chunk(index)
         else:
+            if self._cache_coordinator.cached_only:
+                from blosc2.remote_store import CacheMiss
+
+                raise CacheMiss
             chunk = self._source.get_chunk(index)
             if self._read_only:
                 return chunk

@@ -91,6 +91,8 @@ class RemoteCTable(RemoteObject, CTable):
         metadata_buffer_bytes=8 << 20,
         row_buffer_bytes=64 << 20,
         _filesystem=None,
+        _filesystem_resolver=None,
+        _batch_validator=None,
     ):
         if urlpath is None:
             raise TypeError("RemoteCTable requires a remote B2Z URL")
@@ -116,6 +118,8 @@ class RemoteCTable(RemoteObject, CTable):
             hdf5_index=hdf5_index,
             _allow_array_root=True,
             _filesystem=_filesystem,
+            _filesystem_resolver=_filesystem_resolver,
+            _batch_validator=_batch_validator,
         )
         try:
             _, full = store._resolve("")
@@ -148,6 +152,8 @@ class RemoteCTable(RemoteObject, CTable):
         metadata_buffer_bytes=8 << 20,
         row_buffer_bytes=64 << 20,
         _filesystem=None,
+        _filesystem_resolver=None,
+        _batch_validator=None,
         _source_validator=None,
         _manifest_validator=None,
         _max_nodes=None,
@@ -180,6 +186,8 @@ class RemoteCTable(RemoteObject, CTable):
             carrier=carrier,
             storage_options=storage_options,
             _filesystem=_filesystem,
+            _filesystem_resolver=_filesystem_resolver,
+            _batch_validator=_batch_validator,
             _source_validator=_source_validator,
             _manifest_validator=_manifest_validator,
             _max_nodes=_max_nodes,

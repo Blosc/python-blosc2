@@ -527,7 +527,29 @@ def test_nested_remote_store_ctable_index_uses_outer_cache(tmp_path):
         np.testing.assert_array_equal(table.where("value >= 197").value[:], [197, 198, 199])
 
 
-def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path):
+def test_nested_remote_store_table_root(tmp_path):
+    target = tmp_path / "table-root-target.b2z"
+    blosc2.CTable(NestedIndexedRow, [(1,), (2,)], create_summary_index=False).to_b2z(target)
+    target_url = f"memory://{tmp_path.name}-table-root-target.b2z"
+    fs = fsspec.filesystem("memory")
+    fs.pipe(target_url, target.read_bytes())
+    host = tmp_path / "table-root-host.b2z"
+    with (
+        blosc2.RemoteStore(target_url, allow_table_root=True) as linked,
+        blosc2.TreeStore(host, mode="w") as tree,
+    ):
+        tree["linked"] = linked
+    host_url = f"memory://{tmp_path.name}-table-root-host.b2z"
+    fs.pipe(host_url, host.read_bytes())
+    with blosc2.RemoteStore(host_url) as outer:
+        assert outer.kind("linked") == "remote_store"
+        with outer["linked"] as linked:
+            assert linked.kind("") == "ctable"
+            with linked[""] as table:
+                np.testing.assert_array_equal(table.value[:], [1, 2])
+
+
+def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path, monkeypatch):
     data = np.arange(200, dtype="int32")
     target = tmp_path / "artifact-target.b2z"
     with blosc2.TreeStore(target, mode="w") as tree:
@@ -557,6 +579,30 @@ def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path):
 
     with blosc2.open(cold) as reopened:
         np.testing.assert_array_equal(reopened["linked/data"][:20], data[:20])
+
+    seed = tmp_path / "linked-seed.b2z"
+    seed.write_bytes(warm.read_bytes())
+    with blosc2.RemoteStore.with_sparse_cache(host_url, tmp_path / "shared-linked", carrier=seed):
+        pass
+    seed.unlink()
+    with blosc2.RemoteStore.with_sparse_cache(host_url, tmp_path / "shared-linked") as shared:
+        with monkeypatch.context() as patch:
+            patch.setattr(blosc2.B2ZNDSource, "get_chunk", lambda *args: pytest.fail("lost linked seed"))
+            with shared["linked/data"] as array:
+                np.testing.assert_array_equal(array[:20], data[:20])
+
+    visited = []
+
+    def deny(url):
+        visited.append(url)
+        raise PermissionError("linked source denied")
+
+    with (
+        blosc2.RemoteStore(host_url, _filesystem=fs, _filesystem_resolver=deny) as outer,
+        pytest.raises(PermissionError, match="linked source denied"),
+    ):
+        outer["linked/data"]
+    assert visited == [target_url]
 
     fs.rm(target_url)
     with blosc2.open(warm) as reopened:

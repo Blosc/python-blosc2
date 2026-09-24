@@ -161,6 +161,17 @@ Handles can coexist, but operations on the same store serialize.
 `RemoteCTable.with_sparse_cache()` remains available for advanced attachment
 with a manifest or seed carrier, and now has the same 256 MiB default.
 
+Server integrations can supply `_filesystem_resolver` to authorize and create a
+filesystem for each secondary source URL, including referenced array columns
+and linked stores. The callback runs before opening those sources. Use
+`_source_validator` for array geometry and `_batch_validator` for batch metadata;
+both callbacks run before payload reads. The root source may use `_filesystem`.
+
+`RemoteStore.read_cached_table(operation)` runs an operation against retained
+table payload and returns `(hit, result)`. On a missing chunk or batch it returns
+`(False, None)` without fetching that payload. Shared attachments also restore
+warm batch payloads and include them in offline trimming.
+
 ## See also
 
 - {doc}`remote_objects` — shared caching, traffic, reference, and lifetime behavior.

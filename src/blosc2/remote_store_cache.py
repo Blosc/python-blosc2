@@ -217,7 +217,7 @@ class SharedStoreCache(StoreDiskCache):
         if dirty.exists():
             # ponytail: discard the interrupted generation; salvage leaves if recovery cost matters.
             if manifest is not None:
-                manifest = dict(manifest, generation=uuid.uuid4().hex, caches=[])
+                manifest = dict(manifest, generation=uuid.uuid4().hex, caches=[], batch_caches=[])
                 self.publish(manifest)
             dirty.unlink()
         return manifest

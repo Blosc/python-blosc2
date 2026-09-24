@@ -362,6 +362,7 @@ def _open_url_source(
     source_cache_dir=None,
     hdf5_index_explicit=True,
     local_source=False,
+    _filesystem=None,
 ):
     if persistable and not local_source:
         validate_persistable_url(urlpath)
@@ -372,8 +373,15 @@ def _open_url_source(
     if source_format == "zarr":
         if not assume_immutable:
             raise NotImplementedError("mutable Zarr sources are not supported")
+        store = _filesystem.get_mapper(urlpath) if _filesystem is not None else urlpath
         src = blosc2.ZarrNDSource(
-            urlpath, _traffic=traffic, _metadata=seed, blocks=blocks, cparams=cparams, **kwargs
+            store,
+            _urlpath=urlpath if _filesystem is not None else None,
+            _traffic=traffic,
+            _metadata=seed,
+            blocks=blocks,
+            cparams=cparams,
+            **kwargs,
         )
         source = {
             "kind": "zarr",
@@ -382,6 +390,8 @@ def _open_url_source(
             "assume_immutable": assume_immutable,
         }
     elif source_format == "hdf5":
+        if _filesystem is not None:
+            kwargs["_filesystem"] = _filesystem
         if not assume_immutable:
             raise NotImplementedError("mutable HDF5 sources are not supported")
         if dataset is None:
@@ -405,6 +415,8 @@ def _open_url_source(
             "assume_immutable": assume_immutable,
         }
     elif source_format == "b2z":
+        if _filesystem is not None:
+            kwargs["_filesystem"] = _filesystem
         if not assume_immutable:
             raise NotImplementedError("mutable B2Z sources are not supported")
         src = blosc2.B2ZNDSource(
@@ -418,6 +430,8 @@ def _open_url_source(
             "assume_immutable": True,
         }
     else:
+        if _filesystem is not None:
+            kwargs["_filesystem"] = _filesystem
         src = blosc2.FsspecNDSource(urlpath, _traffic=traffic, **kwargs)
         source = {
             "kind": "fsspec",
@@ -1348,6 +1362,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         source_cache_dir=None,
         hdf5_index_explicit=True,
         local_source=False,
+        _filesystem=None,
     ):
         if isinstance(urlpath, blosc2.C2Array):
             if source_format not in {None, "blosc2"}:
@@ -1399,6 +1414,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 source_cache_dir=source_cache_dir,
                 hdf5_index_explicit=hdf5_index_explicit,
                 local_source=local_source,
+                _filesystem=_filesystem,
             )
         else:
             raise TypeError("RemoteArray requires a URL string, URLPath, or C2Array")
@@ -1771,6 +1787,13 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
     @_serialized_operation
     def __getitem__(self, item):
+        if self._store_owner is not None and self._store_owner.cache_coordinator.cached_only:
+            from blosc2.remote_store import CacheMiss
+
+            hit, value = self.read_cached(item)
+            if not hit:
+                raise CacheMiss
+            return value
         backend = self._prepare_read()
         if isinstance(backend, blosc2.Proxy):
             if not self.is_cache_mutable:
@@ -1843,6 +1866,13 @@ class RemoteArray(RemoteObject, blosc2.Operand):
 
     @_serialized_operation
     def get_chunk(self, nchunk: int) -> bytes:
+        if self._store_owner is not None and self._store_owner.cache_coordinator.cached_only:
+            from blosc2.remote_store import CacheMiss
+
+            hit, value = self.read_cached(nchunk=nchunk)
+            if not hit:
+                raise CacheMiss
+            return value
         backend = self._prepare_read()
         if not isinstance(backend, blosc2.Proxy):
             return backend.get_chunk(nchunk)
@@ -2061,6 +2091,11 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             raise ValueError(f"Unsupported persisted Blosc2 object version: {payload.get('version')!r}")
         source = payload.get("source")
         source_kind, urlpath = _parse_source_from_payload(source)
+        filesystem = None
+        if owner.filesystem_resolver is not None:
+            if not isinstance(urlpath, str):
+                raise ValueError("RemoteStore source policy cannot authorize this column source")
+            filesystem = owner.filesystem_resolver(urlpath)
         hdf5_index = _hdf5_index_from_carrier(carrier) if source_kind == "hdf5" else None
         seed = (
             _zarr_metadata_from_carrier(carrier)
@@ -2080,6 +2115,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             seed=seed,
             blocks=carrier.blocks if source_kind in {"zarr", "hdf5"} else None,
             cparams=carrier.cparams if source_kind in {"zarr", "hdf5"} else None,
+            _filesystem=filesystem,
         )
         expected = (
             tuple(carrier.shape),
@@ -2090,6 +2126,8 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         actual = cls._geometry(src)
         if actual != expected:
             raise ValueError(f"RemoteArray source geometry no longer matches its carrier: {actual!r}")
+        if owner.source_validator is not None:
+            owner.source_validator(src)
         owner.sources[cache_key] = src
         owner.source_descriptors[cache_key] = descriptor
         kwargs = {}

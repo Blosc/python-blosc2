@@ -7776,9 +7776,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             elif self._is_dictionary_column(col):
                 for v in arr.dictionary:
                     result._cols[col_name].encode(v)
-                result._cols[col_name].codes[:n] = arr.codes._take_numpy(physical_pos, axis=0)
+                codes = arr.codes
+                result._cols[col_name].codes[:n] = (
+                    codes._take_numpy(physical_pos, axis=0)
+                    if hasattr(codes, "_take_numpy")
+                    else codes[physical_pos]
+                )
             else:
-                result._cols[col_name][:n] = arr._take_numpy(physical_pos, axis=0)
+                result._cols[col_name][:n] = (
+                    arr._take_numpy(physical_pos, axis=0)
+                    if hasattr(arr, "_take_numpy")
+                    else arr[physical_pos]
+                )
 
         self._gather_null_masks_into(result, physical_pos, n)
         result._valid_rows[:n] = True
