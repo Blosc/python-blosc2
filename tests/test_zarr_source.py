@@ -279,7 +279,7 @@ def test_local_zarr_open_uses_disk_cache(tmp_path, zarr):
         assert isinstance(cached, blosc2.RemoteArray)
         np.testing.assert_array_equal(cached[:], data)
         assert cached.cache_bytes > 0
-    assert list(cache_dir.rglob("active_generation.json"))
+        assert cached.cache_path is not None
 
     with blosc2.open(source.resolve(), cache_dir=cache_dir) as reopened:
         np.testing.assert_array_equal(reopened[:], data)

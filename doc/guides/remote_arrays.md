@@ -81,18 +81,15 @@ same_array = blosc2.open(
 )
 ```
 
-Local caches assume the source is immutable and are keyed by its absolute path
-and selected node. Replacing data at that path violates the assumption and can
-mix cached values with uncached reads. For a local `RemoteCTable` or root
-`RemoteStore`, call `refresh()` after changing the source; this rebuilds source
-metadata, cached payload, and table indexes together. For a standalone
-`RemoteArray`, use a fresh cache location or remove its cache before reopening.
+Local caches are keyed by the source's absolute path and selected node. If the
+source changes at that path, [refresh the cached handle](#handle-source-changes)
+before reading it again.
 Local-source cache files cannot be exported as portable remote references.
 
 Local cached opens require `mode="r"` and `assume_immutable=True`; write modes,
 `lazy=False`, `mmap_mode`, embedded-frame offsets, and `shared_cache=True` are
 not supported. Native array sources must be contiguous files, not sparse frame
-directories. Close other cached handles before refreshing or replacing a cache.
+directories.
 
 Remote B2Z needs `pip install "blosc2[fsspec]"`.
 HTTP and HTTPS URLs work out of the box; cloud object stores need their respective protocol driver (such as `s3fs` for S3, `gcsfs` for GCS, or `adlfs` for Azure).
@@ -109,7 +106,6 @@ Remote Zarr needs `pip install "blosc2[zarr,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
 Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr` separator, or via `path="sub/arr"`.
 For a suffix-free URL, pass `source_format="zarr"`.
-Converted Blosc2 chunks are cached under an immutable source contract, so publish changed data at a new URL or replace its cache.
 
 Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
@@ -167,16 +163,9 @@ dataset through h5py and caches converted Blosc2 chunks in memory. A selected
 PyTables table returns `RemoteCTable`, so `blosc2.open("readings.h5", path="readings").where("humidity < 10")`
 uses the same query API as a remote table. Local tables also use h5py. Add
 `cache_dir="table-cache"` to reuse converted chunks and PyTables index sidecars
-across processes. Local caches assume the source is immutable: a changed file at
-the same path is not detected automatically. Call `refresh()` on the root
-`RemoteCTable`/`RemoteStore`, or clear the array cache before reopening.
-Explicit `hdf5_index=`
-accepts a native HDF5 index for local files. Legacy HDF5 reference maps are
-rejected; omit it to regenerate the native index.
-
-`RemoteArray` assumes sources are immutable by default, avoiding a metadata request before every read.
-For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to refresh its identity and invalidate stale cached chunks before each operation.
-Mutable B2Z, Zarr, and HDF5 sources are not supported.
+across processes. Explicit `hdf5_index=` accepts a native HDF5 index for local
+files. Legacy HDF5 reference maps are rejected; omit it to regenerate the native
+index.
 
 A `URLPath` always means Caterva2.
 If its `urlbase` is omitted, the server comes from {func}`blosc2.c2context` or `BLOSC_C2URLBASE`.
@@ -383,28 +372,35 @@ Prefer direct `C2Array` indexing for sparse, one-off point retrieval; prefer a {
 Remote CTable access, filtering, buffering, saving, and materialization now live
 in {doc}`remote_tables`. This heading remains as a pointer for existing links.
 
-## Handle remote changes
+## Handle source changes
 
-### Standalone arrays and Caterva2 sources
+Local and remote caches assume the source is immutable by default. After
+replacing data at the same path or URL, close other cache handles and refresh:
 
-A persistent cache records the source identity when one is available.
-On a later `blosc2.open()` with the same `cache_dir` or `cache_path`, a mismatched cache is discarded and rebuilt automatically.
+- `array.refresh()` for a standalone `RemoteArray` replaces its metadata and
+  cached chunks, even if its shape changed.
+- `table.refresh()` for a standalone `RemoteCTable` also rebuilds its indexes.
+- `store.refresh()` for a `RemoteStore` rebuilds the hierarchy. Retrieve child
+  arrays and tables again afterward; they cannot refresh themselves.
 
-When constructing a proxy directly in append mode, a mismatch is reported instead:
+Shared sparse `RemoteArray` caches cannot be refreshed directly; use a new URL
+or cache directory. See {doc}`remote_objects` and {doc}`remote_tables` for store
+and table details.
+
+For a replaceable `.b2nd` or Caterva2 source, `assume_immutable=False` checks
+its identity before each read and invalidates stale chunks automatically.
+Other source formats require explicit refresh when data changes at the same
+location.
+
+A direct `Proxy` cache reports a source mismatch in append mode:
 
 ```python
 p = blosc2.Proxy(source, urlpath="cache.b2nd", mode="a")
 # ValueError if cache.b2nd belongs to different remote bytes
 ```
 
-Use `mode="w"` to start that cache again.
-If a source cannot provide an identity, compatibility is checked only from shape, dtype, chunks, and blocks.
-Use a fresh cache when such a source may have changed without changing its geometry.
-
-For a replaceable `.b2nd` or Caterva2 source, pass `assume_immutable=False` to check for updates and invalidate stale cached chunks before each operation.
-
-RemoteStore and RemoteCTable refresh behavior is documented in
-{doc}`remote_objects` and {doc}`remote_tables`.
+Use `mode="w"` to start that cache again. If a source cannot provide an
+identity, compatibility is checked only from shape, dtype, chunks, and blocks.
 
 ## Fill a Caterva2 array concurrently
 

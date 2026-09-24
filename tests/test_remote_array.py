@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -83,6 +85,122 @@ def test_local_b2nd_disk_cache(tmp_path):
     blosc2.asarray(data, urlpath=sparse, contiguous=False)
     with pytest.raises(NotImplementedError, match="contiguous native frame"):
         blosc2.open(sparse, cache_dir=cache_dir)
+
+
+@pytest.mark.parametrize("format", ["b2nd", "b2z", "h5", "zarr"])
+@pytest.mark.parametrize("placement", ["cache_dir", "cache_path"])
+def test_local_array_refresh(tmp_path, format, placement, monkeypatch):
+    source = tmp_path / f"source.{format}"
+    replacement = tmp_path / f"replacement.{format}"
+    dataset = "values" if format in {"b2z", "h5", "zarr"} else None
+
+    def write(path, data):
+        if format == "b2nd":
+            blosc2.asarray(data, urlpath=path)
+        elif format == "b2z":
+            with blosc2.TreeStore(path, mode="w", threshold=0) as store:
+                store["values"] = blosc2.asarray(data)
+        elif format == "h5":
+            h5py = pytest.importorskip("h5py")
+            with h5py.File(path, "w") as store:
+                store.create_dataset("values", data=data, chunks=(4,))
+        else:
+            zarr = pytest.importorskip("zarr")
+            store = zarr.open_group(path, mode="w")
+            store.create_array("values", data=data, chunks=(4,))
+
+    old = np.arange(8, dtype="i4")
+    new = np.arange(12, dtype="i4") + 100
+    write(source, old)
+    options = {placement: tmp_path / ("cache" if placement == "cache_dir" else "cache.b2nd")}
+    with blosc2.open(source, path=dataset, **options) as array:
+        np.testing.assert_array_equal(array[:], old)
+        carrier = array.cache_path
+        write(replacement, new)
+        if source.is_dir():
+            shutil.rmtree(source)
+        os.replace(replacement, source)
+        np.testing.assert_array_equal(array[:], old)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                blosc2.RemoteArray, "_open_source", lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
+            )
+            with pytest.raises(OSError, match="offline"):
+                array.refresh()
+        np.testing.assert_array_equal(array[:], old)
+        assert array.cache_path == carrier
+
+        array.refresh()
+        assert array.cache_status == "refreshed"
+        assert array.cache_path == carrier
+        np.testing.assert_array_equal(array[:], new)
+    with blosc2.open(source, path=dataset, **options) as reopened:
+        reopened.src.get_chunk = lambda n: (_ for _ in ()).throw(AssertionError("cache miss"))
+        np.testing.assert_array_equal(reopened[:], new)
+
+
+def test_remote_array_refresh_policies_and_store_owner(tmp_path):
+    url, old = _remote_array("refresh-array.b2nd", nchunks=1, chunk_size=8)
+    fs = fsspec.filesystem("memory")
+    new = np.arange(12, dtype="u1")
+    for policy in (blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK):
+        options = {"cache_policy": policy}
+        if policy is blosc2.CachePolicy.DISK:
+            options["cache_dir"] = tmp_path / "remote-cache"
+        array = blosc2.RemoteArray(url, **options)
+        np.testing.assert_array_equal(array[:], old)
+        fs.pipe_file("refresh-array.b2nd", blosc2.asarray(new).to_cframe())
+        array.refresh()
+        np.testing.assert_array_equal(array[:], new)
+        fs.pipe_file("refresh-array.b2nd", blosc2.asarray(old).to_cframe())
+
+    source = tmp_path / "source.b2z"
+    with blosc2.TreeStore(source, mode="w", threshold=0) as tree:
+        tree["values"] = blosc2.asarray(new)
+    with blosc2.open(source, cache_dir=tmp_path / "store-cache") as store:
+        with store["values"] as array:
+            with pytest.raises(ValueError, match="root RemoteStore"):
+                array.refresh()
+
+    shared = blosc2.RemoteArray.with_sparse_cache(url, tmp_path / "shared-cache")
+    with pytest.raises(NotImplementedError, match="Shared sparse"):
+        shared.refresh()
+
+    readonly = blosc2.from_cframe(shared.to_cframe(mutable=False))
+    with pytest.raises(ValueError, match="immutable RemoteArray"):
+        readonly.refresh()
+
+
+@pytest.mark.parametrize("format", ["b2z", "h5"])
+def test_remote_container_array_refresh_discards_source_snapshot(tmp_path, format):
+    source = tmp_path / f"source.{format}"
+    url = f"memory://refresh-container.{format}"
+    fs = fsspec.filesystem("memory")
+
+    def upload(data):
+        if format == "b2z":
+            with blosc2.TreeStore(source, mode="w", threshold=0) as store:
+                store["values"] = blosc2.asarray(data)
+        else:
+            h5py = pytest.importorskip("h5py")
+            with h5py.File(source, "w") as store:
+                store.create_dataset("values", data=data, chunks=(4,))
+        fs.pipe_file(f"refresh-container.{format}", source.read_bytes())
+
+    old = np.arange(8, dtype="i4")
+    new = np.arange(12, dtype="i4") + 100
+    upload(old)
+    cache_dir = tmp_path / "cache"
+    with blosc2.open(url, path="values", cache_dir=cache_dir) as array:
+        np.testing.assert_array_equal(array[:], old)
+        upload(new)
+        np.testing.assert_array_equal(array[:], old)
+        array.refresh()
+        np.testing.assert_array_equal(array[:], new)
+    with blosc2.open(url, path="values", cache_dir=cache_dir) as reopened:
+        reopened.src.get_chunk = lambda n: (_ for _ in ()).throw(AssertionError("cache miss"))
+        np.testing.assert_array_equal(reopened[:], new)
 
 
 @pytest.mark.parametrize("format", ["b2z", "hdf5", "zarr"])

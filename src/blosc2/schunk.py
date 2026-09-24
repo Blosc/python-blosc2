@@ -2277,13 +2277,13 @@ def _open_lazy_remote(urlpath, source_format, options, shared_cache=False):
     if source_format == "hdf5":
         return _open_remote_hdf5(urlpath, options)
     if source_format == "zarr" and options.get("_local_source"):
-        if options["cache_path"] is not None:
-            try:
-                return blosc2.RemoteArray(urlpath, **options)
-            except ValueError as exc:
-                if "is a Zarr group" in str(exc):
-                    raise NotImplementedError("Zarr groups use cache_dir, not cache_path") from exc
+        try:
+            return blosc2.RemoteArray(urlpath, **options)
+        except ValueError as exc:
+            if "is a Zarr group" not in str(exc):
                 raise
+            if options["cache_path"] is not None:
+                raise NotImplementedError("Zarr groups use cache_dir, not cache_path") from exc
         store_options = {
             key: value
             for key, value in options.items()
@@ -2792,8 +2792,8 @@ def open(
             :class:`RemoteStore` cache. For remote inputs it stores fetched chunks and metadata;
             for local Blosc2, HDF5, and Zarr inputs it stores accessed chunks and converted data.
             Supplying it selects on-demand, read-only access for local inputs. Local caches assume
-            the source is immutable: replacing it at the same path requires clearing/rebuilding the
-            cache. No cache is created unless you name one.
+            the source is immutable: call ``refresh()`` on the cached handle after replacing it at
+            the same path. No cache is created unless you name one.
         cache_path: str | pathlib.Path, optional
             Exact file for a persistent array cache (:attr:`CachePolicy.DISK`), for local or remote
             standalone arrays and array leaves. Tables and groups require ``cache_dir``. Mutually

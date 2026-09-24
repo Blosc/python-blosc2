@@ -738,6 +738,9 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                 self.src.stamp = ("local", urlpath, self._dataset, self._source_format)
         self._assume_immutable = assume_immutable
         self._storage_options = storage_options
+        self._refresh_cache_dir = cache_dir
+        self._source_blocks = _source_blocks
+        self._source_cparams = _source_cparams
         if _shared_cache:
             _runtime_cache_path = self._carrier_path(cache_dir, None) + ".cache"
         self._runtime_urlpath = self._runtime_source(urlpath)
@@ -863,6 +866,98 @@ class RemoteArray(RemoteObject, blosc2.Operand):
                     # Serialize against in-flight reads before closing the source.
                     self._closed = True
                     hdf5_source.close()
+
+    def refresh(self) -> None:
+        """Reload a standalone source and discard its cached payload and metadata.
+
+        Refresh arrays obtained from a RemoteStore through the root store instead.
+        Ordinary disk caches must not be used concurrently by other processes.
+        """
+        with self._operation_lock:
+            self._check_open()
+            if self._store_owner is not None:
+                raise ValueError("Refresh the root RemoteStore, then retrieve this array again")
+            if self._shared_runtime_cache:
+                raise NotImplementedError("Shared sparse array caches cannot be refreshed directly")
+            if not self.is_cache_mutable:
+                raise ValueError("Cannot refresh an immutable RemoteArray carrier")
+
+            urlpath = self._runtime_urlpath
+            if isinstance(urlpath, str) and self._source_format == "zarr" and self._dataset:
+                parsed = urlsplit(urlpath)
+                suffix = f"/{self._dataset}"
+                if parsed.path.endswith(suffix):
+                    urlpath = urlunsplit(parsed._replace(path=parsed.path[: -len(suffix)]))
+            options = {
+                "cache_policy": self.cache_policy,
+                "max_concurrency": self._max_concurrency,
+                "storage_options": self._storage_options,
+                "assume_immutable": self._assume_immutable,
+                "dataset": self._dataset,
+                "_local_source": self._local_source,
+                "_source_blocks": self._source_blocks,
+                "_source_cparams": self._source_cparams,
+            }
+            if isinstance(urlpath, str):
+                options["source_format"] = self._source_format
+            if self.cache_policy is not blosc2.CachePolicy.NONE:
+                options["max_cache_bytes"] = self.max_cache_bytes
+
+            cache_path = self.cache_path if self.cache_policy is blosc2.CachePolicy.DISK else None
+            if self.cache_policy is blosc2.CachePolicy.DISK and cache_path is None:
+                raise ValueError("Refresh requires a writable disk cache path")
+            temporary = None
+            fresh = None
+            try:
+                if cache_path is not None:
+                    fd, temporary = tempfile.mkstemp(
+                        prefix=".refresh-", suffix=".b2nd", dir=Path(cache_path).parent
+                    )
+                    os.close(fd)
+                    os.unlink(temporary)
+                    options["cache_path"] = temporary
+                fresh = type(self)(urlpath, **options)
+                if temporary is not None:
+                    self._discard_source_snapshots()
+                    os.replace(temporary, cache_path)
+                    carrier = blosc2.blosc2_ext.open(cache_path, "a", 0, dparams=blosc2.DParams(nthreads=1))
+                    fresh._carrier = fresh._runtime_cache = carrier
+                    fresh._attach_carrier_cache()
+                    fresh._cache_status = "refreshed"
+                old_source = self.src
+                state = fresh.__dict__.copy()
+                state["_operation_lock"] = self._operation_lock
+                state["_refresh_lock"] = self._refresh_lock
+                state["_refresh_cache_dir"] = self._refresh_cache_dir
+                self.__dict__ = state
+                if isinstance(old_source, blosc2.HDF5NDSource):
+                    old_source.close()
+            finally:
+                if temporary is not None:
+                    Path(temporary).unlink(missing_ok=True)
+
+    def _discard_source_snapshots(self):
+        if self._refresh_cache_dir is None or self._local_source:
+            return
+        if self._source_format in {"hdf5", "b2z"}:
+            from blosc2.remote_source_cache import source_cache_path
+
+            path = source_cache_path(
+                self._source["urlpath"],
+                self._refresh_cache_dir,
+                self._storage_options,
+                kind=self._source_format,
+            )
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".json").unlink(missing_ok=True)
+        if self._source_format == "hdf5":
+            index = fsspec_cache_path(
+                self._source["urlpath"],
+                self._refresh_cache_dir,
+                ".hdf5-index.b2",
+                storage_options=self._storage_options,
+            )
+            Path(index).unlink(missing_ok=True)
 
     def _runtime_source(self, original):
         """Keep credentials in live process state, outside the descriptor."""
