@@ -99,6 +99,7 @@ def test_expand_dims(shape, axis, chunks, blocks, fill_value):
     assert bloscview2[()].shape == bloscview2.shape  # shouldn't fail because still have access to bloscarr_
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Pyodide cannot start threads")
 def test_expand_dims_aliases_support_concurrent_reads():
     """Views and their base must synchronize reads through their shared SChunk."""
     expected = np.arange(64 * 32, dtype=np.int64).reshape(64, 32)
