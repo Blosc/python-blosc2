@@ -19,6 +19,58 @@ from blosc2 import CTable
 pa = pytest.importorskip("pyarrow")
 
 
+@pytest.mark.parametrize("batch_size", [1, 3, 9])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_arrow_list_export_direct_and_fallback(monkeypatch, tmp_path, batch_size, persistent):
+    @dataclass
+    class Lists:
+        id: int = blosc2.field(blosc2.int64())
+        tags: list[int] = blosc2.field(  # noqa: RUF009
+            blosc2.list(
+                blosc2.int16(nullable=True),
+                nullable=True,
+                serializer="arrow",
+                batch_rows=3,
+                items_per_block=2,
+            )
+        )
+
+    values = [[1, None], [], None, [3], [4, 5], [], [6]]
+    expected = pa.table({"id": range(7), "tags": pa.array(values, type=pa.list_(pa.int16()))})
+    urlpath = str(tmp_path / "lists.b2z") if persistent else None
+    table = CTable(
+        Lists,
+        new_data={"id": list(range(7)), "tags": values},
+        urlpath=urlpath,
+        mode="w",
+        create_summary_index=False,
+    )
+    if persistent:
+        table.close()
+        table = blosc2.open(urlpath, mode="a")
+        assert table._last_pos is None
+    with table:
+        with monkeypatch.context() as patch:
+
+            def reject_python_cells(*args):
+                raise AssertionError("Dense Arrow export must not materialize Python cells")
+
+            patch.setattr(blosc2.ListArray, "__getitem__", reject_python_cells)
+            assert pa.Table.from_batches(list(table.iter_arrow_batches(batch_size=batch_size))).equals(
+                expected
+            )
+            assert pa.table(table).equals(expected)
+            path = tmp_path / "lists.parquet"
+            table.to_parquet(path, batch_size=batch_size)
+            import pyarrow.parquet as pq
+
+            assert pq.read_table(path).equals(expected)
+        view = table.where("id >= 2")
+        assert view.to_arrow().equals(expected.slice(2))
+        table.delete(slice(1, 3))
+        assert table.to_arrow().equals(expected.take(pa.array([0, 3, 4, 5, 6])))
+
+
 @dataclass
 class Row:
     id: int = blosc2.field(blosc2.int64(ge=0))

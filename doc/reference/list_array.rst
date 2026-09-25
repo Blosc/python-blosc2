@@ -85,6 +85,11 @@ a membership index for those child types is not supported.
 
 .. currentmodule:: blosc2
 
+With ``storage="batch", serializer="arrow"``, :meth:`ListArray.to_arrow` and
+:meth:`ListArray.arrow_slice` decompress stored Arrow blocks without converting
+their cells to Python lists. Combining blocks may copy Arrow buffers. Slice
+bounds follow Python semantics, and pending rows are flushed before export.
+
 .. autoclass:: ListArray
 
     Constructors
@@ -115,6 +120,7 @@ a membership index for those child types is not supported.
     Public Members
     --------------
     .. automethod:: to_arrow
+    .. automethod:: arrow_slice
     .. automethod:: to_cframe
     .. automethod:: contains
     .. automethod:: overlaps

@@ -8442,6 +8442,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             dict_real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
 
         remote = self._remote_read_storage()
+        # Reopened tables resolve this position lazily; None does not imply holes.
+        dense = remote is None and self.base is None and self._resolve_last_pos() == self._n_rows
         parallel = (
             remote is not None and remote._owner.is_mutable and not getattr(remote._owner, "shared", False)
         )
@@ -8485,7 +8487,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 col = self[name]
                 if col.is_list:
                     spec = self._schema.columns_by_name[name].spec
-                    arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
+                    if dense and spec.storage == "batch" and spec.serializer == "arrow":
+                        array = self._cols[name].arrow_slice(start, stop)
+                        arrays.append(array.cast(self._pa_type_from_spec(pa, spec)))
+                    else:
+                        arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
                     continue
                 if col.is_utf8:
                     spec = self._schema.columns_by_name[name].spec

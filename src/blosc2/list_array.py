@@ -868,13 +868,48 @@ class ListArray:
 
     def to_arrow(self):
         """Return the data as a PyArrow list array."""
+        return self.arrow_slice(0, None)
+
+    def arrow_slice(self, start: int, stop: int | None):
+        """Export a contiguous row slice, keeping Arrow-backed blocks in Arrow form.
+
+        Bounds follow Python slice semantics. Pending rows are flushed first.
+        Combining multiple blocks may copy buffers, but does not create Python cells.
+        """
         pa = _require_pyarrow()
         self.flush()
+        start, stop, _ = slice(start, stop).indices(len(self))
         item_type = self._arrow_item_type()
+        arrow_type = None
         if item_type is not None:
             item = pa.field("item", item_type, nullable=self.spec.item_spec.nullable)
-            return pa.array(list(self), type=pa.list_(item))
-        return pa.array(list(self))
+            arrow_type = pa.list_(item)
+        if self.spec.storage != "batch" or self.spec.serializer != "arrow":
+            return pa.array(self[start:stop], type=arrow_type)
+        if start >= stop:
+            return pa.array([], type=arrow_type)
+
+        prefix = self._persisted_prefix_sums()
+        parts = []
+        first = bisect_right(prefix, start) - 1
+        for batch_index in range(first, len(prefix) - 1):
+            offset = prefix[batch_index]
+            if offset >= stop:
+                break
+            # ponytail: decompress whole storage batches; use block-local reads if small slices dominate.
+            payloads = blosc2.blosc2_ext.vldecompress(
+                self._backend.schunk.get_chunk(batch_index), **self._backend._vl_dparams_kwargs()
+            )
+            for payload in payloads:
+                array = self._backend._deserialize_arrow_block_column(payload)
+                lo, hi = max(start - offset, 0), min(stop - offset, len(array))
+                if lo < hi:
+                    parts.append(array.slice(lo, hi - lo))
+                offset += len(array)
+                if offset >= stop:
+                    break
+        result = parts[0] if len(parts) == 1 else pa.concat_arrays(parts)
+        return result.cast(arrow_type) if arrow_type is not None else result
 
     @classmethod
     def from_arrow(

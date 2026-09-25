@@ -41,6 +41,12 @@ keeps caller-managed boundaries, while CTable still flushes the pending final
 batch when it persists or closes the table. Arrow/Parquet input batch size and
 the persisted ListArray ``batch_rows`` setting are separate controls.
 
+For list columns with ``serializer="arrow"``, dense local root tables export
+directly from decompressed Arrow blocks, avoiding intermediate Python lists.
+This applies to Arrow batches, the Arrow stream protocol, and Parquet export.
+Views, tables with deleted rows, and remote tables retain the general export
+path. Joining blocks can still copy Arrow buffers.
+
 List item specs may themselves be nullable or lists. Use
 :meth:`Column.contains` and :meth:`Column.overlaps` for membership filtering,
 and ``create_index(name, kind="membership")`` for repeated selective queries on

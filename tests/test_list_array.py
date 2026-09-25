@@ -356,3 +356,36 @@ def test_extend_arrow_preserves_typed_batches_without_python_cells(monkeypatch):
     arr.extend_arrow(pa.chunked_array([pa.array(values, type=pa.list_(pa.int32()))]))
     assert arr[:] == values
     assert arr._backend._batch_lengths == [2, 2]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_arrow_export_without_python_cells(monkeypatch, tmp_path, nested):
+    pa = pytest.importorskip("pyarrow")
+    item_spec = blosc2.int32(nullable=True)
+    values = [[1, None], [], None, [3], [4, 5], [], [6]]
+    if nested:
+        item_spec = blosc2.list(item_spec, nullable=True)
+        values = [[[1, None], None], [], None, [[3]], [[]], [], [[6]]]
+    arr = blosc2.ListArray(
+        item_spec=item_spec,
+        nullable=True,
+        serializer="arrow",
+        batch_rows=3,
+        items_per_block=2,
+        urlpath=str(tmp_path / "lists.b2b"),
+        mode="w",
+    )
+    arr.extend(values)  # Includes an unflushed final row.
+    expected = pa.array(values, type=pa.list_(pa.field("item", arr._arrow_item_type(), nullable=True)))
+
+    def reject_python_cells(*args):
+        raise AssertionError("Arrow export must not materialize Python cells")
+
+    monkeypatch.setattr(blosc2.ListArray, "__getitem__", reject_python_cells)
+    assert arr.to_arrow().equals(expected)
+    arr.close()
+    with blosc2.open(str(tmp_path / "lists.b2b"), mode="r") as reopened:
+        for start, stop in [(0, 0), (0, 7), (1, 6), (2, 4), (-3, None), (6, 3)]:
+            assert reopened.arrow_slice(start, stop).equals(pa.array(values[start:stop], type=expected.type))
+    empty = blosc2.ListArray(item_spec=item_spec, nullable=True, serializer="arrow")
+    assert empty.to_arrow().equals(pa.array([], type=expected.type))
