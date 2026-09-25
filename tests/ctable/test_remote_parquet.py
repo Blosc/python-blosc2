@@ -130,7 +130,12 @@ def test_narrow_read_uses_only_one_later_group(tmp_path):
 def test_unnamed_root_without_flattening(tmp_path):
     path = tmp_path / "root.parquet"
     source = pa.Table.from_arrays(
-        [pa.array([[{"id": 1}], [], None, [{"id": 4}]], type=pa.list_(pa.struct([("id", pa.int32())])))],
+        [
+            pa.array(
+                [[{"root": 1}], [], None, [{"root": 4}]],
+                type=pa.list_(pa.struct([("root", pa.int32())])),
+            )
+        ],
         names=[""],
     )
     pq.write_table(source, path, row_group_size=2)
@@ -172,6 +177,10 @@ def test_flattened_root_counts_from_smallest_leaf(tmp_path):
         assert len(remote) == 3
         assert remote.traffic.requests == 3  # Footer and one leaf per group.
         assert remote.traffic.nbytes < path.stat().st_size // 2
+        before = remote.traffic.nbytes
+        assert remote["id"][-1] == 3
+        assert remote.traffic.nbytes - before < path.stat().st_size // 2
+        assert remote["blob"][-1] == source.column(0)[-1].as_py()[-1]["blob"]
 
 
 @pytest.mark.parametrize("limit", [0, 2, 5])

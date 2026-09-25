@@ -538,6 +538,23 @@ value retrieval. The nested case already received a large logical capacity
 through the Arrow importer's unnamed-root fallback. The flat converted-group
 cache footprint also fell from about 34.7 MB to 356 KB for `trip.sec`.
 
+### Nested leaf projection (2026-09-25)
+
+The remote reader now maps a logical nested leaf to an unambiguous Parquet
+column path using footer metadata. It falls back to the containing field when
+the mapping is ambiguous. The converted cache is keyed by the projected path,
+so sibling leaves do not force each other into the same conversion. Results are
+saved in `bench/remote_parquet_chicago_http_leaf_projection.jsonl`.
+
+For `chicago-taxi.parquet / trip.sec`, opening still reads 26 GETs / 333,139
+bytes for the exact logical row map. The cold final-row read fell from one GET /
+6,660,483 bytes / 1.087 s to one GET / 363,880 bytes / 0.073 s. The warm repeat
+still makes no GET. Converted cache size fell from 12.6 MB to 356 KB. The other
+four Chicago HTTP cases kept their request and transfer counts and had cold
+times of 0.081–0.094 s. All measured final values match PyArrow. A local
+comparison of the last nested row group also matched all 14 logical columns
+against a full-field import, including the list-valued `trip.path` column.
+
 - [ ] 1. Compatibility inventory, API contract, and storage seam
 - [ ] 2. Scalar lazy access
 - [ ] 3. Strings, binary, and dictionaries

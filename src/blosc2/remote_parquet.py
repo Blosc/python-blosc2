@@ -105,6 +105,20 @@ def _group_filename(number, physical):
     return f"{number}-{token}.b2z"
 
 
+def _projected_field(name, physical, paths):
+    parts = split_field_path(name)
+    matches = set()
+    for path in paths:
+        segments = path.split(".")
+        for start in range(len(segments) - len(parts) + 1):
+            if tuple(segments[start : start + len(parts)]) != parts:
+                continue
+            prefix = ".".join(segments[: start + len(parts)])
+            if not physical or prefix == physical or prefix.startswith(f"{physical}."):
+                matches.add(prefix)
+    return matches.pop() if len(matches) == 1 else physical
+
+
 class _ParquetOwner:
     format = "parquet"
     is_mutable = True
@@ -537,6 +551,13 @@ class RemoteParquetCTable(RemoteCTable):
                     else split_field_path(name)[0]
                 )
                 for name in probe.col_names
+            }
+            paths = [pf.schema.column(i).path for i in range(len(pf.schema.names))]
+            physical = {
+                name: _projected_field(name, source, paths)
+                if flatten_root or (source and source != name)
+                else source
+                for name, source in physical.items()
             }
             if flatten_root:
                 # ponytail: full length scan; replace with a persisted offsets map when large nested roots matter.

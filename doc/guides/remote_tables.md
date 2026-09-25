@@ -26,7 +26,8 @@ with blosc2.open(
 ```
 
 Reads convert the requested physical field and row group using the Arrow
-importer. A narrow scalar read can avoid unrelated fields and groups; a group
+importer. Nested struct leaves are projected from Parquet when their physical
+paths are unambiguous. A narrow scalar read can avoid unrelated fields and groups; a group
 with an indivisible large value can still allocate much more than the cache
 budget. With mask-backed nulls, schema inference reads only the footer; in-band
 null policies may need a first-batch sample. Flattening a single unnamed
