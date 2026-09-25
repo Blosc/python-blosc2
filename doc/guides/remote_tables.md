@@ -35,15 +35,32 @@ null policies may need a first-batch sample. Flattening a single unnamed
 logical row count.
 `max_rows` stops that preparation at the requested prefix. `cache_dir` retains
 converted groups and the row map for later opens; without it, an in-memory LRU
-is used. `refresh()` reopens the source and invalidates old views. `lazy=False`
+is used. `refresh()` reopens a changed source and invalidates old views; it
+returns without rebuilding the table when a disk-cached source is unchanged. `lazy=False`
 calls the eager `CTable.from_parquet()` importer.
+The disk cache uses a readable source directory such as
+`parquet-cache/readings.parquet--<hash>/<generation>.b2d/`. Each accessed
+physical field and row group becomes a native CTable directory inside that
+generation. Opening the generation path with `blosc2.open()` returns the whole
+logical remote table and fetches missing groups from the source.
+The generation also retains Parquet discovery metadata. A warm open restores
+the schema and row-group map locally, without contacting the source. A small
+local marker index locates the active source revision. Like other remote table
+caches, it assumes that revision is immutable until `refresh()` is called.
+The Arrow reader is created only when an uncached group is requested.
+Cached row groups open directly from their native `.b2d` directories; warm
+reads do not copy complete groups into memory.
 Reads against the shared seekable Parquet handle are serialized; increasing
 `max_concurrency` does not make one file's row-group reads parallel.
 HTTP servers must honor byte-range requests; fsspec raises a range-request error
 for servers that only return complete files. Download the file and import it
 locally when range access is unavailable.
 
-Parquet disk caches require source size and an ETag or modification time.
+Parquet disk caches require source size and a version marker. HTTP sources
+can use an ETag, modification time, or Backblaze B2 file ID.
+`table.save("reference.b2z")` creates a portable archive with the retained
+groups; `blosc2.open("reference.b2z")` reuses those groups and fetches uncached
+ones on demand. The earlier `reference.b2nd` format remains readable.
 `table.save("reference.b2nd")` includes already converted groups and the row
 map; use `include_cache=False` for a small cold reference. `blosc2.open()`
 reopens a reference when the source marker still matches. Runtime credentials

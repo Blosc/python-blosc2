@@ -16,6 +16,8 @@ import pyarrow.parquet as pq
 import pytest
 
 import blosc2
+from blosc2 import remote_parquet
+from blosc2.ctable import CTable
 from blosc2.schema_compiler import schema_to_dict
 
 
@@ -485,6 +487,125 @@ def test_disk_cache_reuses_group_and_root_map(tmp_path):
         assert reopened_requests < prepared_requests  # row map reused
         assert second["id"][-1] == 5
         assert second.traffic.requests == reopened_requests  # converted group reused
+    cache_root = next(cache_dir.glob("root.parquet--*"))
+    generation = next(cache_root.glob("*.b2d"))
+    with blosc2.open(generation) as reopened:
+        assert reopened.col_names == ["id"]
+        before = reopened.traffic.requests
+        assert reopened["id"][-1] == 5
+        assert reopened.traffic.requests == before
+
+
+def test_warm_open_uses_retained_metadata_and_lazily_opens_arrow(tmp_path, monkeypatch):
+    path = tmp_path / "source.parquet"
+    cache_dir = tmp_path / "cache"
+    pq.write_table(pa.table({"x": [1, 2, 3, 4], "y": [5, 6, 7, 8]}), path, row_group_size=2)
+    with blosc2.open(path, cache_dir=cache_dir) as cold:
+        assert cold["x"][0] == 1
+
+    real_reader = pq.ParquetFile
+    readers = []
+
+    def record_reader(*args, **kwargs):
+        assert kwargs.get("metadata") is not None
+        readers.append(kwargs["metadata"])
+        return real_reader(*args, **kwargs)
+
+    monkeypatch.setattr(pq, "ParquetFile", record_reader)
+    real_from_arrow = CTable.from_arrow
+    monkeypatch.setattr(CTable, "from_arrow", lambda *args, **kwargs: pytest.fail("schema was inferred"))
+    monkeypatch.setattr(CTable, "load", lambda *args, **kwargs: pytest.fail("cached group was copied"))
+    monkeypatch.setattr(remote_parquet, "_source_marker", lambda *args: pytest.fail("source was checked"))
+    with blosc2.open(path, cache_dir=cache_dir) as warm:
+        assert warm.nrows == 4
+        assert warm.metadata_bytes > 0
+        assert readers == []
+        assert warm["x"][0] == 1
+        assert readers == []
+        monkeypatch.setattr(CTable, "from_arrow", real_from_arrow)
+        assert warm["y"][3] == 8
+        assert len(readers) == 1
+
+
+def test_retained_metadata_is_separate_for_projections(tmp_path):
+    path = tmp_path / "source.parquet"
+    cache_dir = tmp_path / "cache"
+    pq.write_table(pa.table({"x": [1, 2], "y": [3, 4]}), path)
+    with blosc2.open(path, cache_dir=cache_dir, columns=["x"]) as x_only:
+        assert x_only.col_names == ["x"]
+    with blosc2.open(path, cache_dir=cache_dir, columns=["y"]) as y_only:
+        assert y_only.col_names == ["y"]
+    assert len(list(cache_dir.glob("source.parquet--*"))) == 2
+
+
+def test_invalid_retained_metadata_is_rebuilt(tmp_path):
+    path = tmp_path / "source.parquet"
+    cache_dir = tmp_path / "cache"
+    pq.write_table(pa.table({"x": [1, 2]}), path)
+    with blosc2.open(path, cache_dir=cache_dir) as table:
+        disk = table._remote_storage()._owner.disk
+        manifest = disk.load()
+        manifest["metadata"]["parquet_discovery"]["schema"] = {"version": 999}
+        disk.publish(manifest)
+    with blosc2.open(path, cache_dir=cache_dir) as rebuilt:
+        assert rebuilt["x"][0] == 1
+        assert rebuilt._remote_storage()._owner.disk.load()["metadata"]["parquet_discovery"]["version"] == 1
+
+
+def test_existing_cache_adds_local_marker_index(tmp_path, monkeypatch):
+    path = tmp_path / "source.parquet"
+    cache_dir = tmp_path / "cache"
+    pq.write_table(pa.table({"x": [1, 2]}), path)
+    with blosc2.open(path, cache_dir=cache_dir):
+        pass
+    index = next(cache_dir.glob(".parquet-marker-*.json"))
+    index.unlink()
+    with blosc2.open(path, cache_dir=cache_dir):
+        pass
+    assert index.is_file()
+    monkeypatch.setattr(remote_parquet, "_source_marker", lambda *args: pytest.fail("source was checked"))
+    with blosc2.open(path, cache_dir=cache_dir) as warm:
+        assert warm.nrows == 2
+
+
+@pytest.mark.parametrize("disk", [False, True])
+def test_cache_archive_reuses_warm_group_and_fetches_cold_group(tmp_path, disk):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"x": [1, 2, 3, 4], "y": [5, 6, 7, 8]}), path, row_group_size=2)
+    options = {"cache_dir": tmp_path / "cache"} if disk else {}
+    artifact = tmp_path / "reference.b2z"
+    cold_artifact = tmp_path / "cold-reference.b2z"
+    with blosc2.open(path, **options) as original:
+        assert original["x"][0] == 1
+        original.save(artifact)
+        original.save(cold_artifact, include_cache=False)
+    with blosc2.open(artifact) as restored:
+        assert restored.col_names == ["x", "y"]
+        before = restored.traffic.requests
+        assert restored["x"][0] == 1
+        assert restored.traffic.requests == before
+        assert restored["y"][3] == 8
+        assert restored.traffic.requests > before
+    with blosc2.open(cold_artifact) as cold:
+        before = cold.traffic.requests
+        assert cold["x"][0] == 1
+        assert cold.traffic.requests > before
+    result = subprocess.check_output(
+        [sys.executable, "-c", "import blosc2,sys; print(blosc2.open(sys.argv[1])['x'][0])", str(artifact)],
+        text=True,
+    )
+    assert result.strip() == "1"
+
+
+def test_cache_generation_reopens_with_compression_options(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"x": [1, 2, 3]}), path)
+    cache_dir = tmp_path / "cache"
+    with blosc2.open(path, cache_dir=cache_dir, cparams=blosc2.CParams(clevel=1)) as original:
+        assert original["x"][0] == 1
+    generation = next(cache_dir.glob("*/*.b2d"))
+    with blosc2.open(generation) as reopened:
+        assert reopened["x"][0] == 1
 
 
 def test_shared_disk_cache_reuses_converted_group_across_processes(tmp_path):
@@ -525,9 +646,14 @@ def test_disk_cache_eviction_and_corrupt_entry(tmp_path):
     with blosc2.open(path, cache_dir=cache_dir, max_cache_bytes=1) as remote:
         assert remote["id"][2] == 2
         assert remote["id"][5] == 5
-    entries = list(cache_dir.rglob("*.b2z"))
-    assert len(entries) == 1  # one indivisible converted group exceeds the budget
-    entries[0].write_bytes(b"broken")
+    entries = list(cache_dir.rglob("*.b2d"))
+    entries = [entry for entry in entries if entry.name.startswith(("0-", "1-", "2-"))]
+    assert not entries  # The common cache budget does not retain an oversized group.
+    with blosc2.open(path, cache_dir=cache_dir, max_cache_bytes=None) as remote:
+        assert remote["id"][5] == 5
+    entries = [entry for entry in cache_dir.rglob("*.b2d") if entry.name.startswith("2-")]
+    assert len(entries) == 1
+    (entries[0] / "_meta.b2f").write_bytes(b"broken")
     with blosc2.open(path, cache_dir=cache_dir) as remote:
         assert remote["id"][5] == 5
 
@@ -541,6 +667,68 @@ def test_refresh_disk_cache_uses_new_generation(tmp_path):
         pq.write_table(pa.table({"id": [3, 4, 5]}), path)
         remote.refresh()
         assert remote["id"][0] == 3
+
+
+def test_same_size_source_replacement_rebuilds_metadata(tmp_path):
+    path = tmp_path / "changing.parquet"
+    cache_dir = tmp_path / "cache"
+    pq.write_table(pa.table({"id": [1, 2]}), path)
+    old = path.stat()
+    with blosc2.open(path, cache_dir=cache_dir) as first:
+        assert first["id"][0] == 1
+    pq.write_table(pa.table({"id": [3, 4]}), path)
+    assert path.stat().st_size == old.st_size
+    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns + 2_000_000_000))
+    with blosc2.open(path, cache_dir=cache_dir) as replaced:
+        assert replaced["id"][0] == 1  # Cached sources stay immutable until refresh.
+        replaced.refresh()
+        assert replaced["id"][0] == 3
+
+
+def test_refresh_unchanged_disk_source_keeps_cache_owner(tmp_path):
+    path = tmp_path / "unchanged.parquet"
+    pq.write_table(pa.table({"id": [1, 2]}), path)
+    with blosc2.open(path, cache_dir=tmp_path / "cache") as remote:
+        remote.refresh()
+        assert remote["id"][0] == 1
+
+
+def test_http_b2_file_id_supplies_missing_cache_validator(monkeypatch):
+    class Response:
+        def __init__(self):
+            self.headers = {"Content-Length": "49961641", "x-bz-file-id": "file-version-1"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+    class Session:
+        def head(self, *args, **kwargs):
+            return Response()
+
+    class Filesystem:
+        loop = fsspec.asyn.get_loop()
+
+        def __init__(self):
+            self.kwargs = {}
+
+        def info(self, path):
+            pytest.fail("HTTP source information required a second request")
+
+        async def set_session(self):
+            return Session()
+
+        def encode_url(self, path):
+            return path
+
+        def _raise_not_found_for_status(self, response, path):
+            pass
+
+    monkeypatch.setattr(fsspec.core, "url_to_fs", lambda *args, **kwargs: (Filesystem(), args[0]))
+    marker = remote_parquet._source_marker("https://example.com/table.parquet", None)
+    assert marker == {"size": "49961641", "x-bz-file-id": "file-version-1"}
 
 
 def test_http_range_requests_are_narrow(tmp_path):

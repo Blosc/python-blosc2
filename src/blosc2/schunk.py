@@ -1847,6 +1847,11 @@ def _open_special_store(urlpath, mode, offset, **kwargs):
         if "b2remote_store" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for RemoteStore")
+            from blosc2.remote_parquet import open_parquet_cache_artifact
+
+            parquet = open_parquet_cache_artifact(urlpath, mode=mode, **kwargs)
+            if parquet is not None:
+                return parquet
             from blosc2.remote_store import RemoteStore
 
             return RemoteStore._open_artifact(urlpath, mode=mode, **kwargs)

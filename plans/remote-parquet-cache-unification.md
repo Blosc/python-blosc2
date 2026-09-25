@@ -1,6 +1,24 @@
 # Unify Parquet with the remote table cache lifecycle
 
-Proposal; no runtime changes implemented by this document.
+Status: cache behavior ready for manual checks. The live cache uses readable
+source directories, `StoreDiskCache` generations, native group `.b2d` payloads,
+and `CacheCoordinator` accounting. Generation roots reopen as Parquet tables,
+and `.save("reference.b2z")` exports retained groups as a single archive.
+
+Implementation decision: keep the Parquet owner and storage adapter for Arrow
+row groups. `RemoteDiscovery` assumes existing Blosc2 array leaves for its
+format dispatch, while Parquet creates converted table segments on demand.
+Forcing that class to own Parquet would add format branches across discovery,
+table storage, and export. The shared cache primitives now provide the intended
+layout and lifecycle behavior. The deeper `RemoteDiscovery` integration below
+remains an optional architectural follow-up rather than a requirement for
+manual cache checks.
+
+The source revision is still part of Parquet's cache identity, so `refresh()`
+uses a new readable source directory after a file changes. Moving that revision
+into a new generation under a stable source directory is a separate lifecycle
+change; the current behavior keeps old revisions isolated and old references
+detect source changes.
 
 ## Objective
 
