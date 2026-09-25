@@ -211,7 +211,7 @@ def _source_url(urlpath):
     if not is_fsspec_url(urlpath):
         return os.path.abspath(urlpath)
     url = urlsplit(urlpath)
-    return urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", ""))
+    return urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, url.query, ""))
 
 
 def _cache_marker_index(urlpath, storage_options, options, cache_dir):
@@ -267,6 +267,10 @@ def _disk_cache_path(urlpath, storage_options, options, cache_dir, marker, *, sh
         "urlpath": _source_url(urlpath),
         "identity": digest,
     }
+    if is_fsspec_url(urlpath):
+        from blosc2.remote_array import validate_persistable_url
+
+        validate_persistable_url(source["urlpath"])
     disk = (SharedStoreCache if shared else StoreDiskCache)(cache_dir, source)
     try:
         with _disk_guard(disk):
@@ -1321,11 +1325,8 @@ class RemoteParquetCTable(RemoteCTable):
             raise ValueError("Parquet reference has no null policy")
         _restore_compression_options(options)
         saved_reader = options.get("parquet_options") or {}
-        if parquet_options:
-            for key, value in parquet_options.items():
-                if key in saved_reader and saved_reader[key] != value:
-                    raise ValueError(f"Parquet reader option {key!r} differs from the saved reference")
-            options["parquet_options"] = {**saved_reader, **parquet_options}
+        if parquet_options is not None and parquet_options != saved_reader:
+            raise ValueError("Parquet reader option set differs from the saved reference")
         retained = payload.get("cache_files", {})
         if not isinstance(retained, dict):
             raise ValueError("Invalid retained Parquet cache")

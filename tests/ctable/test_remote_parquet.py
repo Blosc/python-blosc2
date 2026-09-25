@@ -28,6 +28,21 @@ def test_windows_cache_directory_uses_source_basename():
     assert cache_directory_name(r"C:\data\source.parquet", b"cache").startswith("source.parquet--")
 
 
+def test_source_url_preserves_non_sensitive_query():
+    assert (
+        remote_parquet._source_url("https://example.com/source.parquet?version=2#section")
+        == "https://example.com/source.parquet?version=2"
+    )
+    with pytest.raises(ValueError, match="credential-like"):
+        remote_parquet._disk_cache_path(
+            "https://example.com/source.parquet?token=secret",
+            None,
+            (),
+            None,
+            {"size": "1", "etag": "revision"},
+        )
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -378,11 +393,16 @@ def test_reference_reader_options_are_frozen(tmp_path):
     carrier = tmp_path / "source.b2nd"
     pq.write_table(pa.table({"name": ["a", "b", "a"]}), path)
     with blosc2.open(path, parquet_options={"read_dictionary": ["name"]}) as remote:
-        remote.save(carrier, include_cache=False)
+        assert remote["name"][0] == "a"
+        remote.save(carrier, include_cache=True)
     with blosc2.RemoteCTable.open_reference(carrier) as reopened:
         assert reopened.to_arrow().column("name").to_pylist() == ["a", "b", "a"]
     with pytest.raises(ValueError, match="differs"):
         blosc2.RemoteCTable.open_reference(carrier, parquet_options={"read_dictionary": []})
+    with pytest.raises(ValueError, match="differ"):
+        blosc2.RemoteCTable.open_reference(
+            carrier, parquet_options={"read_dictionary": ["name"], "coerce_int96_timestamp_unit": "ms"}
+        )
 
 
 def test_closed_handle_rejects_cached_column(tmp_path):
