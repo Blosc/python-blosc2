@@ -1060,10 +1060,18 @@ class RemoteParquetCTable(RemoteCTable):
 
     @property
     def source(self):
+        source_url = _source_url(self._remote_storage()._owner.urlpath)
+        if is_fsspec_url(source_url):
+            from blosc2.remote_array import validate_persistable_url
+
+            try:
+                validate_persistable_url(source_url)
+            except ValueError:
+                source_url = source_url.split("?", 1)[0]
         return {
             "kind": "parquet",
             "version": 1,
-            "urlpath": _source_url(self._remote_storage()._owner.urlpath),
+            "urlpath": source_url,
         }
 
     @property
