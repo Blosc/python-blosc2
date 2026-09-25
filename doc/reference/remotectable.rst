@@ -4,8 +4,8 @@ RemoteCTable
 ============
 
 ``RemoteCTable`` is a read-only :class:`blosc2.CTable` backed by a remote B2Z
-archive or a local or remote PyTables/HDF5 table. Fixed-width, shaped, nullable,
-UTF-8, batch-backed variable-length,
+archive, a local or remote PyTables/HDF5 table, or a Parquet file. Fixed-width,
+shaped, nullable, UTF-8, batch-backed variable-length,
 batch-backed list, struct/object, and dictionary columns are fetched on demand.
 Open local PyTables tables through :func:`blosc2.open` with ``path=`` or a
 ``::table`` selector.
@@ -73,6 +73,23 @@ peak RAM.
 ``RemoteCTable.with_sparse_cache(url, runtime_cache_path)`` remains available
 for advanced attachment with manifests or seed carriers, with the same default
 budget and shared-cache implementation.
+
+Parquet cache details
+---------------------
+
+Parquet ``cache_dir`` stores each accessed physical field and row group as a
+native CTable directory beneath ``<source>.parquet--<hash>/<generation>.b2d/``.
+The generation manifest retains the table schema and row-group boundaries; a
+small index in ``cache_dir`` identifies its source revision. Warm opens use
+these local files without contacting the source. Cached sources are assumed
+immutable until ``refresh()`` is called. The generation path itself can be
+opened with :func:`blosc2.open` to recover the complete logical table and fetch
+uncached groups on demand.
+
+HTTP Parquet sources need byte-range support. A persistent cache also needs a
+source size and version marker, such as an ETag, modification time, or
+Backblaze B2 file ID. The ``traffic`` counter measures file-handle reads;
+transport buffering may make actual HTTP transfer different.
 
 See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
 access, filtering, buffering, reference saving, and materialization examples.

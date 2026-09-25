@@ -25,55 +25,24 @@ with blosc2.open(
     local = table.copy(urlpath="readings.b2z")
 ```
 
-Reads convert the requested physical field and row group using the Arrow
-importer. Nested struct leaves are projected from Parquet when their physical
-paths are unambiguous. A narrow scalar read can avoid unrelated fields and groups; a group
-with an indivisible large value can still allocate much more than the cache
-budget. With mask-backed nulls, schema inference reads only the footer; in-band
-null policies may need a first-batch sample. Flattening a single unnamed
-`list<struct>` root reads the smallest leaf from each group to establish the
-logical row count.
-`max_rows` stops that preparation at the requested prefix. `cache_dir` retains
-converted groups and the row map for later opens; without it, an in-memory LRU
-is used. `refresh()` reopens a changed source and invalidates old views; it
-returns without rebuilding the table when a disk-cached source is unchanged. `lazy=False`
-calls the eager `CTable.from_parquet()` importer.
-The disk cache uses a readable source directory such as
-`parquet-cache/readings.parquet--<hash>/<generation>.b2d/`. Each accessed
-physical field and row group becomes a native CTable directory inside that
-generation. Opening the generation path with `blosc2.open()` returns the whole
-logical remote table and fetches missing groups from the source.
-The generation also retains Parquet discovery metadata. A warm open restores
-the schema and row-group map locally, without contacting the source. A small
-local marker index locates the active source revision. Like other remote table
-caches, it assumes that revision is immutable until `refresh()` is called.
-The Arrow reader is created only when an uncached group is requested.
-Cached row groups open directly from their native `.b2d` directories; warm
-reads do not copy complete groups into memory.
-Reads against the shared seekable Parquet handle are serialized; increasing
-`max_concurrency` does not make one file's row-group reads parallel.
+Reads fetch a Parquet field one row group at a time. Selecting one column avoids
+unrelated columns; reading a complete row may fetch every column in its group.
+`cache_dir` retains converted data and table metadata across opens, so warm
+opens and cached reads need no connection to the source. Cached sources are
+assumed unchanged until `refresh()` is called. Use `lazy=False` to import the
+whole table eagerly.
+
 HTTP servers must honor byte-range requests; fsspec raises a range-request error
 for servers that only return complete files. Download the file and import it
 locally when range access is unavailable.
 
-Parquet disk caches require source size and a version marker. HTTP sources
-can use an ETag, modification time, or Backblaze B2 file ID.
-`table.save("reference.b2z")` creates a portable archive with the retained
-groups; `blosc2.open("reference.b2z")` reuses those groups and fetches uncached
-ones on demand. The earlier `reference.b2nd` format remains readable.
-`table.save("reference.b2nd")` includes already converted groups and the row
-map; use `include_cache=False` for a small cold reference. `blosc2.open()`
-reopens a reference when the source marker still matches. Runtime credentials
-and reader objects are omitted. Reopen a protected source with
-`blosc2.RemoteCTable.open_reference("reference.b2nd", storage_options={...})`.
-`shared_cache=True` permits separate processes to reuse a `cache_dir`; it
-requires a disk cache and serializes cache lookup and publication with a file
-lock. Every process sharing that directory should use the same source and
-conversion options. `RemoteCTable.with_sparse_cache(url, cache_dir)` uses the
-same Parquet cache for a single `.parquet` source.
-The `traffic` counter reports file-handle reads and bytes returned;
-for an HTTP or object-store driver, its own buffering can change actual wire
-traffic.
+`table.save("reference.b2z")` creates a portable archive with data already in
+the cache. Opening it reuses that data and fetches missing groups on demand.
+Use `include_cache=False` to save only the table metadata. Older `.b2nd`
+references remain readable.
+
+Use `shared_cache=True` when separate processes need to share one `cache_dir`.
+They should use the same source and conversion options.
 
 `blosc2.open()` dispatches uncached local B2Z table archives to `CTable`, and
 remote B2Z archives and selected local or remote PyTables tables to
