@@ -467,12 +467,11 @@ single sub-megabyte GET for `trip.sec`.
 For `chicago-taxi-flat-f32.parquet`, the final group has 259,680 rows and its
 `trip.sec` chunk is 352,939 compressed bytes. Reading and decoding that chunk
 directly with PyArrow took about 0.001 seconds from the local file. A `cProfile`
-trace of the cold remote access showed 259,680 calls to `CTable._write` and
+trace of the cold remote access showed 259,680 calls to `_ChunkAlignedWriter._write` and
 259,712 calls to `NDArray.__setitem__` during `CTable.from_arrow()` conversion. Profiling raised
-the total to 32.4 seconds versus 17.9 seconds uninstrumented. The dominant cost
-is Python per-row materialization and index bookkeeping, not the HTTP transfer.
-For faster random scalar access, conversion needs a vectorized path or a way to
-read the selected value without materializing the entire row group.
+the total to 32.4 seconds versus 17.9 seconds uninstrumented. Those calls came
+from one-row Blosc2 chunks created without a capacity hint. Passing the known
+row-group length fixes this bottleneck, as measured below.
 
 ### Request and transfer optimization (2026-09-25)
 
@@ -515,6 +514,29 @@ The synthetic benchmark was rerun and saved in
 2 reads / 15,241 bytes to 1 read / 8,231 bytes. The flattened-root open fell
 from 12 reads / 162,866 bytes to 11 reads / 109,198 bytes. Scalar, wide, and
 UTF-8 open counts stayed at one read.
+
+### Row-group conversion capacity (2026-09-25)
+
+The remote reader now passes the known logical row-group length as
+`capacity_hint` to `CTable.from_arrow()`. Without it, Arrow import sized the
+flat column's initial Blosc2 chunks for one row, causing many small writes.
+The localhost rerun is saved in
+`bench/remote_parquet_chicago_http_capacity_hint.jsonl`; values still match
+PyArrow. Request counts and transferred bytes are unchanged from the preceding
+HTTP table.
+
+| File / column | Cold seconds before | Cold seconds after | Speedup |
+| --- | ---: | ---: | ---: |
+| `chicago-taxi-flat-f32-cl20.parquet` / `trip.sec` | 17.571 | 0.080 | 220× |
+| `chicago-taxi-flat-f32.parquet` / `trip.sec` | 17.638 | 0.083 | 213× |
+| `chicago-taxi-flat-f64.parquet` / `trip.sec` | 17.862 | 0.085 | 210× |
+| `chicago-taxi-flat-f32-cl20.parquet` / `company` | 0.819 | 0.089 | 9.2× |
+| `chicago-taxi.parquet` / `trip.sec` | 1.083 | 1.087 | 1.0× |
+
+Times are single local runs, including loopback transfer, conversion, and
+value retrieval. The nested case already received a large logical capacity
+through the Arrow importer's unnamed-root fallback. The flat converted-group
+cache footprint also fell from about 34.7 MB to 356 KB for `trip.sec`.
 
 - [ ] 1. Compatibility inventory, API contract, and storage seam
 - [ ] 2. Scalar lazy access

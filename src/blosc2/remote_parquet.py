@@ -185,6 +185,7 @@ class _ParquetOwner:
                 cparams=self.options["cparams"],
                 dparams=self.options["dparams"],
                 validate=self.options["validate"],
+                capacity_hint=int(self.row_ends[number]) - (int(self.row_ends[number - 1]) if number else 0),
             )
         size = int(getattr(table, "cbytes", 0) or arrow.nbytes)
         if cache_file is not None:
