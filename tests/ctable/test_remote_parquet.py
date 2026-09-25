@@ -9,16 +9,17 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from email.utils import formatdate
 
-import fsspec
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 import blosc2
 from blosc2 import remote_parquet
 from blosc2.ctable import CTable
 from blosc2.schema_compiler import schema_to_dict
+
+fsspec = pytest.importorskip("fsspec")
+pa = pytest.importorskip("pyarrow")
+pq = pytest.importorskip("pyarrow.parquet")
 
 
 @pytest.mark.parametrize(
