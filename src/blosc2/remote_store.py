@@ -2002,7 +2002,9 @@ class RemoteStore(RemoteObject):
         base, root, kind = parse_container_url(os.fspath(urlpath), dataset)
         if _source_format is not None:
             kind = _source_format
-        local_parquet = kind == "parquet" and not urlsplit(base).scheme
+        local_parquet = kind == "parquet" and (
+            not urlsplit(base).scheme or bool(os.path.splitdrive(base)[0])
+        )
         if local_parquet:
             base = os.path.abspath(base)
         else:
