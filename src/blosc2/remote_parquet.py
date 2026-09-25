@@ -239,6 +239,8 @@ class _ParquetOwner:
 
 
 class _ParquetColumn:
+    _compressed_size_unavailable = True
+
     def __init__(self, storage, name, mask=False):
         self.storage = storage
         self.name = name
@@ -251,6 +253,14 @@ class _ParquetColumn:
 
     def __len__(self):
         return self.shape[0]
+
+    @property
+    def nbytes(self):
+        return len(self) * self.dtype.itemsize if self.dtype is not None else 0
+
+    @property
+    def cbytes(self):
+        return 0
 
     def flush(self):
         pass

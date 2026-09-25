@@ -127,6 +127,18 @@ def test_narrow_read_uses_only_one_later_group(tmp_path):
         assert remote.traffic.requests == before + 1
 
 
+def test_info_without_loading_parquet_groups(tmp_path):
+    path = tmp_path / "info.parquet"
+    pq.write_table(pa.table({"id": [1, 2, 3], "text": ["a", "bb", "ccc"]}), path)
+    with blosc2.open(path, cache_dir=tmp_path / "cache") as remote:
+        before = remote.traffic.requests
+        info = dict(remote.info_items)
+        assert info["nbytes"] == "27 (27 B)"  # Three int64 values plus the virtual validity mask.
+        assert info["cbytes"] == info["cratio"] == "n/a"
+        assert "id" in info["columns"]
+        assert remote.traffic.requests == before
+
+
 def test_unnamed_root_without_flattening(tmp_path):
     path = tmp_path / "root.parquet"
     source = pa.Table.from_arrays(
