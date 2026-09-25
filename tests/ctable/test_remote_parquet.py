@@ -29,18 +29,15 @@ def test_windows_cache_directory_uses_source_basename():
 
 
 def test_source_url_preserves_non_sensitive_query():
+    from blosc2.remote_store import public_source_url
+
     assert (
-        remote_parquet._source_url("https://example.com/source.parquet?version=2#section")
+        public_source_url("https://example.com/source.parquet?version=2#section")
         == "https://example.com/source.parquet?version=2"
     )
-    with pytest.raises(ValueError, match="credential-like"):
-        remote_parquet._disk_cache_path(
-            "https://example.com/source.parquet?token=secret",
-            None,
-            (),
-            None,
-            {"size": "1", "etag": "revision"},
-        )
+    assert public_source_url("https://example.com/source.parquet?token=secret") == (
+        "https://example.com/source.parquet"
+    )
 
 
 @pytest.mark.parametrize(
@@ -324,11 +321,11 @@ def test_invalid_source_options_fail_clearly(tmp_path):
 
 def test_portable_reference_reopens_and_detects_source_change(tmp_path):
     path = tmp_path / "source.parquet"
-    carrier = tmp_path / "source.b2nd"
+    carrier = tmp_path / "source.b2z"
     pq.write_table(pa.table({"id": pa.array([1, None, 3], type=pa.int8())}), path)
     with blosc2.null_policy(blosc2.NullPolicy(signed_int_strategy="max")):
         with blosc2.open(path) as remote:
-            remote.save(carrier)
+            remote.save(carrier, include_cache=False)
     with blosc2.open(carrier) as reopened:
         assert reopened.to_arrow().column("id").to_pylist() == [1, None, 3]
     with blosc2.RemoteCTable.open_reference(carrier) as reopened:
@@ -344,13 +341,14 @@ def test_portable_reference_reopens_and_detects_source_change(tmp_path):
     )
     assert output.strip() == "[1, None, 3]"
     pq.write_table(pa.table({"id": pa.array([4, 5], type=pa.int8())}), path)
-    with pytest.raises(RuntimeError, match="source has changed"):
-        blosc2.open(carrier)
+    with blosc2.open(carrier) as reopened:
+        with pytest.raises((RuntimeError, OSError), match="changed"):
+            reopened["id"][0]
 
 
 def test_reference_retains_cached_group_and_runtime_options(tmp_path):
     path = tmp_path / "source.parquet"
-    carrier = tmp_path / "source.b2nd"
+    carrier = tmp_path / "source.b2z"
     pq.write_table(pa.table({"id": list(range(6))}), path, row_group_size=2)
     with blosc2.open(path, storage_options={"auto_mkdir": True}) as remote:
         assert remote["id"][5] == 5
@@ -363,7 +361,7 @@ def test_reference_retains_cached_group_and_runtime_options(tmp_path):
 
 def test_reference_retains_flattened_row_map(tmp_path):
     path = tmp_path / "root.parquet"
-    carrier = tmp_path / "root.b2nd"
+    carrier = tmp_path / "root.b2z"
     source = pa.Table.from_arrays(
         [pa.array([[{"id": i}] for i in range(6)], type=pa.list_(pa.struct([("id", pa.int32())])))],
         names=[""],
@@ -379,30 +377,17 @@ def test_reference_retains_flattened_row_map(tmp_path):
         assert reopened.traffic.requests == before
 
 
-def test_reference_rejects_nonportable_reader_option(tmp_path):
-    path = tmp_path / "source.parquet"
-    pq.write_table(pa.table({"id": [1]}), path)
-    with blosc2.open(path) as remote:
-        remote._storage._owner.reopen_kwargs["parquet_options"] = {"decryption_properties": object()}
-        with pytest.raises(TypeError, match="Nonportable"):
-            remote.save(tmp_path / "source.b2nd")
-
-
 def test_reference_reader_options_are_frozen(tmp_path):
     path = tmp_path / "source.parquet"
-    carrier = tmp_path / "source.b2nd"
+    carrier = tmp_path / "source.b2z"
     pq.write_table(pa.table({"name": ["a", "b", "a"]}), path)
     with blosc2.open(path, parquet_options={"read_dictionary": ["name"]}) as remote:
         assert remote["name"][0] == "a"
         remote.save(carrier, include_cache=True)
     with blosc2.RemoteCTable.open_reference(carrier) as reopened:
         assert reopened.to_arrow().column("name").to_pylist() == ["a", "b", "a"]
-    with pytest.raises(ValueError, match="differs"):
+    with pytest.raises(TypeError, match="frozen"):
         blosc2.RemoteCTable.open_reference(carrier, parquet_options={"read_dictionary": []})
-    with pytest.raises(ValueError, match="differ"):
-        blosc2.RemoteCTable.open_reference(
-            carrier, parquet_options={"read_dictionary": ["name"], "coerce_int96_timestamp_unit": "ms"}
-        )
 
 
 def test_closed_handle_rejects_cached_column(tmp_path):
@@ -574,27 +559,13 @@ def test_invalid_retained_metadata_is_rebuilt(tmp_path):
     with blosc2.open(path, cache_dir=cache_dir) as table:
         disk = table._remote_storage()._owner.disk
         manifest = disk.load()
-        manifest["metadata"]["parquet_discovery"]["schema"] = {"version": 999}
+        manifest["metadata"]["parquet"]["discovery"]["schema"] = {"version": 999}
         disk.publish(manifest)
     with blosc2.open(path, cache_dir=cache_dir) as rebuilt:
         assert rebuilt["x"][0] == 1
-        assert rebuilt._remote_storage()._owner.disk.load()["metadata"]["parquet_discovery"]["version"] == 1
-
-
-def test_existing_cache_adds_local_marker_index(tmp_path, monkeypatch):
-    path = tmp_path / "source.parquet"
-    cache_dir = tmp_path / "cache"
-    pq.write_table(pa.table({"x": [1, 2]}), path)
-    with blosc2.open(path, cache_dir=cache_dir):
-        pass
-    index = next(cache_dir.glob(".parquet-marker-*.json"))
-    index.unlink()
-    with blosc2.open(path, cache_dir=cache_dir):
-        pass
-    assert index.is_file()
-    monkeypatch.setattr(remote_parquet, "_source_marker", lambda *args: pytest.fail("source was checked"))
-    with blosc2.open(path, cache_dir=cache_dir) as warm:
-        assert warm.nrows == 2
+        assert (
+            rebuilt._remote_storage()._owner.disk.load()["metadata"]["parquet"]["discovery"]["version"] == 1
+        )
 
 
 @pytest.mark.parametrize("disk", [False, True])
@@ -632,6 +603,30 @@ def test_cache_archive_reuses_warm_group_and_fetches_cold_group(tmp_path, disk, 
         text=True,
     )
     assert result.strip() == "1"
+
+
+def test_archive_seeds_shared_cache(tmp_path):
+    path = tmp_path / "source.parquet"
+    artifact = tmp_path / "reference.b2z"
+    pq.write_table(pa.table({"x": [1, 2, 3, 4]}), path, row_group_size=2)
+    with blosc2.open(path) as table:
+        assert table["x"][0] == 1
+        table.save(artifact)
+    manifest, _ = blosc2.RemoteStore._load_artifact_manifest(str(artifact))
+    conversion = dict(manifest["metadata"]["parquet"]["conversion"])
+    conversion["_effective_null_policy"] = blosc2.NullPolicy(
+        **manifest["metadata"]["parquet"]["discovery"]["options"]["null_policy"]
+    )
+    with blosc2.RemoteStore.with_sparse_cache(
+        path,
+        tmp_path / "shared",
+        carrier=artifact,
+        _parquet_conversion=conversion,
+    ) as store:
+        with store[""] as table:
+            before = store.traffic.requests
+            assert table["x"][0] == 1
+            assert store.traffic.requests == before
 
 
 def test_cache_generation_reopens_with_compression_options(tmp_path):

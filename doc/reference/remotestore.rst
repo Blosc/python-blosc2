@@ -3,7 +3,7 @@
 RemoteStore
 ===========
 
-``RemoteStore`` discovers a read-only B2Z, Zarr or HDF5 hierarchy and returns
+``RemoteStore`` discovers a read-only B2Z, Zarr, HDF5 or Parquet source and returns
 :ref:`RemoteArray` and :ref:`RemoteCTable` leaves. Groups and leaves share one
 source session: a B2Z archive, a native HDF5 index, or a Zarr store. Zarr listing
 remains lazy.
@@ -15,6 +15,11 @@ the policy is omitted; an explicit policy must agree with the cache location.
 DISK accepts ``max_cache_bytes=None`` for unbounded retention.
 Sources must be immutable. Generic ``blosc2.open(..., lazy=True, dataset=...)``
 continues to open a single array.
+
+A Parquet file has one CTable at its root. Pass ``allow_table_root=True`` to
+retain a store handle, then use ``store[""]`` to access the table. Parquet has no
+child selectors. Converted physical-column/row-group caches share the store's
+policy, allowance, traffic counter, persistence, and refresh generation.
 
 For HDF5, ``hdf5_index=`` accepts a native index dictionary, local JSON path, or
 remote fsspec URL. An explicit index skips hierarchy discovery and must match the

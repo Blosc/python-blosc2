@@ -78,13 +78,13 @@ Parquet cache details
 ---------------------
 
 Parquet ``cache_dir`` stores each accessed physical field and row group as a
-native CTable directory beneath ``<source>.parquet--<hash>/<generation>.b2d/``.
-The generation manifest retains the table schema and row-group boundaries; a
-small index in ``cache_dir`` identifies its source revision. Warm opens use
-these local files without contacting the source. Cached sources are assumed
-immutable until ``refresh()`` is called. The generation path itself can be
-opened with :func:`blosc2.open` to recover the complete logical table and fetch
-uncached groups on demand.
+native CTable directory under the RemoteStore generation's ``parquet-groups``
+directory. The common manifest retains the footer, schema, conversion options,
+source marker, and row-group boundaries. Warm opens reuse this discovery and
+payload without contacting the source. Cached sources are assumed immutable
+until ``refresh()`` is called. New portable ``.b2z`` archives use the common
+RemoteStore manifest. Local Parquet sources use the same cache layout and may
+export ``.b2z`` references tied to the local source path.
 
 HTTP Parquet sources need byte-range support. A persistent cache also needs a
 source size and version marker, such as an ETag, modification time, or

@@ -769,6 +769,8 @@ def parse_container_url(
         return urlpath, dataset, "hdf5"
     if any(part.endswith(".zarr") for part in parts):
         return urlpath, dataset, "zarr"
+    if parsed.path.lower().endswith(".parquet"):
+        return urlpath, dataset, "parquet"
 
     return urlpath, dataset, None
 

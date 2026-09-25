@@ -3,30 +3,24 @@
 from __future__ import annotations
 
 import hashlib
-import json
+import math
 import os
+import re
 import shutil
-import tempfile
-import threading
 import uuid
 import zipfile
 from collections import OrderedDict
-from contextlib import contextmanager, nullcontext
-from dataclasses import asdict, fields
+from contextlib import contextmanager
+from dataclasses import asdict
 from enum import Enum
-from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import numpy as np
 
 import blosc2
-from blosc2.core import is_fsspec_url, normalize_urlpath
 from blosc2.ctable import CTable, NullPolicy, get_null_policy, null_policy
 from blosc2.ctable_storage import RemoteTableStorage, _AllValidRows, split_field_path
-from blosc2.proxy import CacheCoordinator
-from blosc2.proxy_source import Traffic
-from blosc2.remote_array import CACHE_POLICY_DEFAULT, normalize_cache_limit
-from blosc2.remote_ctable import RemoteCTable, _positive_integer
 from blosc2.schema_compiler import schema_from_dict, schema_to_dict
 
 
@@ -36,7 +30,7 @@ def _portable(value):
     if isinstance(value, Enum):
         value = value.value
     if isinstance(value, np.generic):
-        value = value.item()
+        return _portable(value.item())
     if value is None or isinstance(value, bool | int | float | str | bytes):
         return value
     if isinstance(value, (list, tuple)):
@@ -46,27 +40,72 @@ def _portable(value):
     raise TypeError(f"Nonportable Parquet reader or conversion option: {type(value).__name__}")
 
 
-def _reference_options(owner):
-    options = {
-        key: value
-        for key, value in owner.reopen_kwargs.items()
-        if key
-        not in {
-            "storage_options",
-            "cache_dir",
-            "cache_policy",
-            "max_cache_bytes",
-            "shared_cache",
-            "_effective_null_policy",
-            "max_concurrency",
-            "metadata_buffer_bytes",
-            "row_buffer_bytes",
-        }
+def parquet_identity(conversion):
+    import msgpack
+    import pyarrow
+
+    def stable(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return str(value)
+        if isinstance(value, dict):
+            return {key: stable(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    defaults = {
+        "parquet_options": None,
+        "columns": None,
+        "max_rows": None,
+        "string_max_length": None,
+        "null_storage": None,
+        "auto_null_sentinels": True,
+        "separate_nested_cols": True,
+        "list_serializer": "msgpack",
+        "blosc2_batch_size": 2048,
+        "blosc2_items_per_block": None,
+        "batch_size": 2048,
+        "cparams": None,
+        "dparams": None,
+        "validate": False,
     }
-    options["null_policy"] = {
-        field.name: getattr(owner.options["null_policy"], field.name) for field in fields(NullPolicy)
+    options = defaults | {key: value for key, value in conversion.items() if key != "_effective_null_policy"}
+    identity = {
+        "version": 1,
+        "blosc2": blosc2.__version__,
+        "pyarrow": pyarrow.__version__,
+        "conversion": stable(_portable(options)),
+        "null_policy": stable(
+            _portable(asdict(conversion.get("_effective_null_policy") or get_null_policy()))
+        ),
     }
-    return _portable(options)
+    return hashlib.sha256(msgpack.packb(identity, use_bin_type=True)).hexdigest()
+
+
+def validate_parquet_metadata(metadata):
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("parquet"), dict):
+        raise ValueError("Missing Parquet discovery metadata")
+    retained = metadata["parquet"]
+    discovery = retained.get("discovery")
+    if not isinstance(discovery, dict) or discovery.get("version") != 1:
+        raise ValueError("Invalid Parquet discovery metadata")
+    for key in ("schema", "physical", "options"):
+        if not isinstance(discovery.get(key), dict):
+            raise ValueError(f"Invalid Parquet {key}")
+    if not isinstance(discovery.get("arrow_metadata"), bytes):
+        raise ValueError("Invalid Parquet footer metadata")
+    if not isinstance(discovery.get("row_ends"), list) or any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in discovery["row_ends"]
+    ):
+        raise ValueError("Invalid Parquet row groups")
+    if not isinstance(discovery.get("length"), int) or discovery["length"] < 0:
+        raise ValueError("Invalid Parquet length")
+    if not isinstance(retained.get("reader_options"), dict):
+        raise ValueError("Invalid Parquet reader options")
+    if not isinstance(retained.get("conversion"), dict) or not isinstance(
+        retained.get("source_marker"), dict
+    ):
+        raise ValueError("Invalid Parquet conversion or source marker")
 
 
 def _restore_compression_options(options):
@@ -75,41 +114,12 @@ def _restore_compression_options(options):
             options[name] = cls(**options[name])
 
 
-def _parquet_reopen_kwargs(values):
-    result = {
-        key: values[key]
-        for key in (
-            "storage_options",
-            "columns",
-            "max_rows",
-            "parquet_options",
-            "string_max_length",
-            "auto_null_sentinels",
-            "null_storage",
-            "separate_nested_cols",
-            "list_serializer",
-            "blosc2_batch_size",
-            "blosc2_items_per_block",
-            "batch_size",
-            "cparams",
-            "dparams",
-            "validate",
-            "cache_policy",
-            "shared_cache",
-            "cache_dir",
-        )
-    }
-    result["max_cache_bytes"] = values["max_cache_bytes"]
-    result["_effective_null_policy"] = values["effective_policy"]
-    result.update(values["settings"])
-    return result
-
-
 def _parquet_discovery(owner, schema, physical, length):
     import pyarrow as pa
 
     sink = pa.BufferOutputStream()
     owner.arrow_metadata.write_metadata_file(sink)
+    options = owner.parquet_options
     return {
         "version": 1,
         "arrow_metadata": sink.getvalue().to_pybytes(),
@@ -118,8 +128,8 @@ def _parquet_discovery(owner, schema, physical, length):
         "row_ends": owner.row_ends.tolist(),
         "length": length,
         "options": {
-            **_portable({key: value for key, value in owner.options.items() if key != "null_policy"}),
-            "null_policy": asdict(owner.options["null_policy"]),
+            **_portable({key: value for key, value in options.items() if key != "null_policy"}),
+            "null_policy": asdict(options["null_policy"]),
         },
     }
 
@@ -143,12 +153,16 @@ class _CountingHandle:
         return getattr(self.handle, name)
 
 
-def _source_marker(urlpath, storage_options):
+def _source_marker(urlpath, storage_options, filesystem=None):
     import fsspec
     from fsspec.asyn import sync
 
-    fs, path = fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
-    if urlsplit(urlpath).scheme in {"http", "https"}:
+    fs, path = (
+        (filesystem, urlpath)
+        if filesystem is not None
+        else fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+    )
+    if urlsplit(urlpath).scheme in {"http", "https"} and hasattr(fs, "set_session"):
         try:
             info = sync(fs.loop, _http_source_info, fs, path)
         except (OSError, RuntimeError):
@@ -196,105 +210,20 @@ async def _http_source_info(fs, path):
         return info
 
 
-def _open_source_handle(urlpath, storage_options, marker, traffic):
+def _open_source_handle(urlpath, storage_options, marker, traffic, filesystem=None):
     import fsspec
 
-    fs, path = fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+    fs, path = (
+        (filesystem, urlpath)
+        if filesystem is not None
+        else fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+    )
     kwargs = (
-        {"size": int(marker["size"])} if marker and urlsplit(urlpath).scheme in {"http", "https"} else {}
+        {"size": int(marker["size"])}
+        if marker and urlsplit(urlpath).scheme in {"http", "https"} and hasattr(fs, "set_session")
+        else {}
     )
     return _CountingHandle(fs.open(path, "rb", **kwargs), traffic)
-
-
-def _source_url(urlpath):
-    urlpath = str(normalize_urlpath(urlpath))
-    if not is_fsspec_url(urlpath):
-        return os.path.abspath(urlpath)
-    url = urlsplit(urlpath)
-    return urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, url.query, ""))
-
-
-def _cache_marker_index(urlpath, storage_options, options, cache_dir):
-    import pyarrow
-
-    if not is_fsspec_url(urlpath):
-        urlpath = os.path.abspath(urlpath)
-    identity = (1, blosc2.__version__, pyarrow.__version__, urlpath, storage_options, options)
-    digest = hashlib.sha256(repr(identity).encode()).hexdigest()
-    return Path(cache_dir) / f".parquet-marker-{digest}.json"
-
-
-def _cached_source_marker(urlpath, storage_options, options, cache_dir):
-    path = _cache_marker_index(urlpath, storage_options, options, cache_dir)
-    try:
-        value = json.loads(path.read_text())
-        marker, directory = value["marker"], value["directory"]
-        if (
-            value["version"] == 1
-            and isinstance(marker, dict)
-            and "size" in marker
-            and len(marker) > 1
-            and isinstance(directory, str)
-            and directory == Path(directory).name
-            and (path.parent / directory / "active_generation.json").is_file()
-        ):
-            return marker
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return None
-
-
-def _publish_source_marker(urlpath, storage_options, options, cache_dir, marker, disk):
-    from blosc2.remote_store_cache import atomic_write
-
-    path = _cache_marker_index(urlpath, storage_options, options, cache_dir)
-    atomic_write(path, json.dumps({"version": 1, "marker": marker, "directory": disk.path.name}).encode())
-
-
-def _disk_cache_path(urlpath, storage_options, options, cache_dir, marker, *, shared=False):
-    import pyarrow
-
-    from blosc2.remote_store_cache import SharedStoreCache, StoreDiskCache
-
-    if "size" not in marker or len(marker) < 2:
-        raise ValueError("A persistent Parquet cache requires source size and a version marker")
-    if not is_fsspec_url(urlpath):
-        urlpath = os.path.abspath(urlpath)
-    identity = (1, blosc2.__version__, pyarrow.__version__, urlpath, storage_options, marker, options)
-    digest = hashlib.sha256(repr(identity).encode()).hexdigest()
-    source = {
-        "kind": "parquet",
-        "urlpath": _source_url(urlpath),
-        "identity": digest,
-    }
-    if is_fsspec_url(urlpath):
-        from blosc2.remote_array import validate_persistable_url
-
-        validate_persistable_url(source["urlpath"])
-    disk = (SharedStoreCache if shared else StoreDiskCache)(cache_dir, source)
-    try:
-        with _disk_guard(disk):
-            manifest = disk.load()
-            if manifest is None:
-                manifest = {
-                    "version": 1,
-                    "source": source,
-                    "generation": uuid.uuid4().hex,
-                    "nodes": {"": ("ctable", {})},
-                    "attrs": {},
-                    "listed": {},
-                    "metadata": {"source_marker": marker},
-                    "caches": [],
-                }
-                disk.publish(manifest)
-        return disk, disk.path / f"{manifest['generation']}.b2d"
-    except BaseException:
-        disk.close()
-        raise
-
-
-def _disk_guard(disk):
-    return disk.guard() if disk is not None and hasattr(disk, "guard") else nullcontext()
 
 
 def _group_filename(number, physical):
@@ -302,17 +231,8 @@ def _group_filename(number, physical):
     return f"{number}-{token}.b2d"
 
 
-def open_parquet_cache_artifact(path, *, mode="r", **kwargs):
-    if os.path.isdir(path):
-        carrier = blosc2.blosc2_ext.open(str(Path(path) / "embed.b2e"), "r", 0)
-    else:
-        with zipfile.ZipFile(path) as archive:
-            carrier = blosc2.schunk_from_cframe(archive.read("embed.b2e"))
-    if carrier.vlmeta["b2remote_manifest"]["source"].get("kind") != "parquet":
-        return None
-    if os.path.isdir(path):
-        return RemoteParquetCTable._open_cache_artifact(path, mode=mode, **kwargs)
-    return RemoteParquetCTable._open_archive_artifact(path, mode=mode, **kwargs)
+def valid_group_name(name):
+    return isinstance(name, str) and re.fullmatch(r"[0-9]+-[0-9a-f]{16}\.b2d", name) is not None
 
 
 def _projected_field(name, physical, paths):
@@ -329,106 +249,246 @@ def _projected_field(name, physical, paths):
     return matches.pop() if len(matches) == 1 else physical
 
 
-class _ParquetOwner:
-    format = "parquet"
-    is_mutable = True
-    shared = False
+def discover_parquet(owner, conversion):  # noqa: C901
+    """Build the one CTable root and keep only the Arrow reader on the store owner."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
-    def __init__(
-        self,
-        path,
-        handle,
-        parquet_file,
-        options,
-        *,
-        cache_policy,
-        max_cache_bytes,
-        cache_dir,
-        disk,
-        storage_options=None,
-        source_marker=None,
-        arrow_metadata=None,
-        parquet_options=None,
-    ):
-        self.urlpath = path
-        self.handle = handle
-        self.traffic = handle.traffic if handle is not None else Traffic()
-        self.storage_options = storage_options
-        self.source_marker = source_marker
-        self.arrow_metadata = arrow_metadata or parquet_file.metadata
-        self.parquet_options = parquet_options
-        self.parquet_file = parquet_file
-        self.options = options
-        self.lock = threading.RLock()
-        self.generation = 0
-        self.users = 0
-        self.closed = False
-        self.cache = OrderedDict()
-        self.cache_bytes = 0
-        self.cache_policy = cache_policy
-        self.max_cache_bytes = max_cache_bytes
-        self.cache_dir = cache_dir
-        self.disk = disk
+    if owner.root:
+        raise ValueError("Parquet files support only the root table")
+    retained = owner.metadata.get("parquet")
+    if retained is not None:
+        try:
+            discovery = retained["discovery"]
+            schema = schema_from_dict(discovery["schema"])
+            physical = discovery["physical"]
+            ends = np.asarray(discovery["row_ends"], dtype=np.int64)
+            metadata = pq.read_metadata(pa.BufferReader(discovery["arrow_metadata"]))
+            if (
+                discovery["version"] != 1
+                or set(physical) != {column.name for column in schema.columns}
+                or ends.ndim != 1
+                or len(ends) > metadata.num_row_groups
+                or np.any(ends < 0)
+                or np.any(ends[1:] < ends[:-1])
+                or not isinstance(discovery["length"], int)
+                or discovery["length"] < 0
+            ):
+                raise ValueError("Invalid retained Parquet metadata")
+            options = dict(discovery["options"])
+            options["null_policy"] = NullPolicy(**options["null_policy"])
+            _restore_compression_options(options)
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            raise ValueError("Invalid retained Parquet metadata") from exc
+        owner.arrow_metadata = metadata
+        validate_parquet_groups(owner, metadata)
+        owner.row_ends = ends
+        owner.parquet_schema = schema
+        owner.parquet_physical = physical
+        owner.parquet_length = discovery["length"]
+        owner.parquet_options = options
+        owner.parquet_reader_options = retained.get("reader_options") or {}
+        owner.parquet_source_marker = retained.get("source_marker")
+        owner.nodes[""] = ("ctable", {"kind": "ctable"})
+        return
+
+    reader_options = conversion.get("parquet_options") or {}
+    if reader_options.get("memory_map"):
+        raise ValueError("memory_map is incompatible with a remote Parquet handle")
+    columns = conversion.get("columns")
+    if columns is not None and len(set(columns)) != len(columns):
+        raise ValueError("columns must be unique")
+    max_rows = conversion.get("max_rows")
+    if max_rows is not None and max_rows < 0:
+        raise ValueError("max_rows must be non-negative")
+    batch_size = conversion.get("batch_size", 2048)
+    CTable._validate_arrow_batch_size(batch_size)
+    policy = conversion.get("_effective_null_policy") or get_null_policy()
+    options = {
+        "null_policy": policy,
+        "string_max_length": conversion.get("string_max_length"),
+        "auto_null_sentinels": conversion.get("auto_null_sentinels", True),
+        "null_storage": conversion.get("null_storage"),
+        "separate_nested_cols": conversion.get("separate_nested_cols", True),
+        "list_serializer": conversion.get("list_serializer", "msgpack"),
+        "blosc2_batch_size": conversion.get("blosc2_batch_size", 2048),
+        "blosc2_items_per_block": conversion.get("blosc2_items_per_block"),
+        "batch_size": batch_size,
+        "cparams": conversion.get("cparams"),
+        "dparams": conversion.get("dparams"),
+        "validate": conversion.get("validate", False),
+    }
+    marker = (
+        _source_marker(owner.urlpath, owner.storage_options, owner.filesystem)
+        if owner.parquet_persistent
+        else None
+    )
+    if marker is not None and ("size" not in marker or len(marker) < 2):
+        raise ValueError("A persistent Parquet cache requires source size and a version marker")
+    handle = _open_source_handle(
+        owner.urlpath, owner.storage_options, marker, owner.traffic, owner.filesystem
+    )
+    pf = None
+    try:
+        pf = pq.ParquetFile(handle, **reader_options)
+        fields = pf.schema_arrow
+        if columns is not None:
+            fields = pa.schema([fields.field(name) for name in columns])
+        root_name = "root"
+        if "" in fields.names:
+            while root_name in fields.names:
+                root_name += "_1"
+        flatten_root = options["separate_nested_cols"] and CTable._detect_unnamed_root_list_struct(
+            pa, fields
+        )
+        sample_needed = (options["null_storage"] or policy.resolve_null_storage()) != "mask"
+        sample = (
+            next(pf.iter_batches(batch_size=1 if flatten_root else batch_size, columns=columns), None)
+            if sample_needed
+            else None
+        )
+        if sample is None:
+            sample = pa.RecordBatch.from_arrays([pa.array([], type=f.type) for f in fields], schema=fields)
+        if not flatten_root and "" in fields.names:
+            sample = sample.rename_columns([root_name if name == "" else name for name in fields.names])
+            meta = dict(sample.schema.metadata or {})
+            meta[b"blosc2_empty_root_physical"] = root_name.encode()
+            sample = sample.replace_schema_metadata(meta)
+        options.update(root_name=root_name, flatten_root=flatten_root)
+        with null_policy(policy):
+            probe = CTable.from_arrow(
+                sample.schema,
+                [sample],
+                **{
+                    key: options[key]
+                    for key in (
+                        "string_max_length",
+                        "auto_null_sentinels",
+                        "null_storage",
+                        "separate_nested_cols",
+                        "list_serializer",
+                        "blosc2_batch_size",
+                        "blosc2_items_per_block",
+                        "cparams",
+                        "dparams",
+                        "validate",
+                    )
+                },
+            )
+        physical = {
+            name: (
+                ""
+                if flatten_root or (split_field_path(name)[0] == root_name and "" in fields.names)
+                else name
+                if name in fields.names
+                else split_field_path(name)[0]
+            )
+            for name in probe.col_names
+        }
+        paths = [pf.schema.column(i).path for i in range(len(pf.schema.names))]
+        physical = {
+            name: _projected_field(name, source, paths)
+            if flatten_root or (source and source != name)
+            else source
+            for name, source in physical.items()
+        }
+        if flatten_root:
+            lengths = []
+            count = 0
+            for group in range(pf.num_row_groups):
+                if max_rows is not None and count >= max_rows:
+                    break
+                row_group = pf.metadata.row_group(group)
+                leaf = min(
+                    (row_group.column(i) for i in range(row_group.num_columns)),
+                    key=lambda column: column.total_compressed_size,
+                )
+                arr = pf.read_row_group(group, columns=[leaf.path_in_schema]).column(0)
+                size = pa.compute.sum(pa.compute.list_value_length(arr)).as_py() or 0
+                lengths.append(size)
+                count += size
+            ends = np.cumsum(lengths)
+        else:
+            ends = np.cumsum([pf.metadata.row_group(i).num_rows for i in range(pf.num_row_groups)])
+        length = int(ends[-1]) if len(ends) else 0
+        if max_rows is not None:
+            length = min(length, max_rows)
+        owner.parquet_handle = handle
+        owner.parquet_file = pf
+        owner.arrow_metadata = pf.metadata
+        validate_parquet_groups(owner, pf.metadata)
+        owner.parquet_schema = probe._schema
+        owner.parquet_physical = physical
+        owner.parquet_length = length
+        owner.parquet_options = options
+        owner.parquet_reader_options = reader_options
+        owner.parquet_source_marker = marker
+        owner.row_ends = ends
+        discovery = _parquet_discovery(owner, probe._schema, physical, length)
+        owner.metadata["parquet"] = {
+            "discovery": discovery,
+            "reader_options": _portable(reader_options),
+            "source_marker": marker,
+            "conversion": _portable(conversion),
+        }
+        owner.nodes[""] = ("ctable", {"kind": "ctable"})
+        probe.close()
+    except BaseException:
+        if pf is not None:
+            pf.close()
+        handle.close()
+        raise
+
+
+def validate_parquet_groups(owner, footer):
+    if owner.source_validator is None:
+        return
+    for number in range(footer.num_row_groups):
+        size = max(1, footer.row_group(number).total_byte_size)
+        geometry = SimpleNamespace(shape=(size,), dtype=np.dtype("u1"), chunks=(size,), blocks=(size,))
+        owner.source_validator(geometry)
+
+
+class ParquetCache:
+    """One cache leaf for converted Parquet row groups in a RemoteStore."""
+
+    def __init__(self, owner):
+        self.owner = owner
         self._cache_key = "parquet"
         self._cache_sizes = {}
         self._cache_lru = OrderedDict()
-        self.cache_coordinator = CacheCoordinator(max_cache_bytes) if disk is not None else None
-        if self.cache_coordinator is not None:
-            with _disk_guard(self.disk):
-                self._sync_evictions()
-                self.cache_coordinator.register(self)
-        self._cache_manager = None
-        self.row_ends = np.cumsum(
-            [self.arrow_metadata.row_group(i).num_rows for i in range(self.arrow_metadata.num_row_groups)]
+        self.cache = OrderedDict()
+        self.cache_bytes = 0
+        self.cache_dir = (
+            owner.disk.path / f"{owner.generation}.b2d" / "parquet-groups"
+            if owner.disk is not None
+            else getattr(owner, "parquet_artifact_dir", None)
         )
+        if self.cache_dir is not None:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        owner.cache_coordinator.register(self)
+        self._sync_evictions()
 
-    def acquire(self):
-        self.users += 1
-
-    def release(self):
-        self.users -= 1
-        if self.users == 0:
-            self.closed = True
-            self.cache.clear()
-            if self.parquet_file is not None:
-                self.parquet_file.close()
-            if self.handle is not None:
-                self.handle.close()
-            if self.disk is not None:
-                self.disk.close()
-            if self._cache_manager is not None:
-                self._cache_manager.cleanup()
-
-    @contextmanager
-    def group(self, number, physical):
-        with self.lock, _disk_guard(self.disk):
-            table = self._group_locked(number, physical, (number, physical))
-            try:
-                yield table
-            finally:
-                if self.cache_policy is not blosc2.CachePolicy.MEMORY:
-                    table.close()
+    _filename = staticmethod(_group_filename)
 
     def _sync_evictions(self):
         if self.cache_dir is None:
             return
-        # ponytail: scan cached groups on each accounting pass; persist sizes if directory walks dominate reads.
         entries = sorted(self.cache_dir.glob("*-*.b2d"), key=lambda path: path.stat().st_mtime_ns)
         present = {path.name for path in entries}
-        for name in tuple(self._cache_sizes):
+        for name in (key for key in tuple(self._cache_sizes) if isinstance(key, str)):
             if name not in present:
                 self._cache_sizes.pop(name)
                 self._cache_lru.pop(name, None)
-                if self.cache_coordinator is not None:
-                    self.cache_coordinator.forget(self, name)
+                self.owner.cache_coordinator.forget(self, name)
         for path in entries:
             if path.name not in self._cache_sizes:
                 self._cache_sizes[path.name] = sum(
                     file.stat().st_size for file in path.rglob("*") if file.is_file()
                 )
                 self._cache_lru[path.name] = None
-                if self.cache_coordinator is not None:
-                    self.cache_coordinator.touch(self, path.name)
+                if self.owner.is_mutable:
+                    self.owner.cache_coordinator.touch(self, path.name)
 
     def _retained_cache_bytes(self):
         return sum(self._cache_sizes.values())
@@ -436,7 +496,9 @@ class _ParquetOwner:
     def _trim_cache(self, target_bytes, *, max_chunks=None):
         evicted = []
         while (
-            self._retained_cache_bytes() > target_bytes
+            self.cache_dir is not None
+            and self.owner.is_mutable
+            and self._retained_cache_bytes() > target_bytes
             and self._cache_lru
             and (max_chunks is None or len(evicted) < max_chunks)
         ):
@@ -444,95 +506,148 @@ class _ParquetOwner:
             shutil.rmtree(self.cache_dir / name)
             self._cache_lru.pop(name)
             self._cache_sizes.pop(name)
-            self.cache_coordinator.forget(self, name)
+            self.owner.cache_coordinator.forget(self, name)
             evicted.append(name)
+        while (
+            self._retained_cache_bytes() > target_bytes
+            and self.cache
+            and (max_chunks is None or len(evicted) < max_chunks)
+        ):
+            key, (table, size) = self.cache.popitem(last=False)
+            self.cache_bytes -= size
+            self._cache_sizes.pop(key, None)
+            self._cache_lru.pop(key, None)
+            self.owner.cache_coordinator.forget(self, key)
+            table.close()
+            evicted.append(key)
         return tuple(evicted)
 
-    def _touch_group(self, path):
-        if self.cache_coordinator is None:
-            return
-        path.touch()
-        self._cache_lru.pop(path.name, None)
-        self._cache_lru[path.name] = None
-        self.cache_coordinator.touch(self, path.name)
+    @contextmanager
+    def group(self, number, physical):  # noqa: C901
+        owner = self.owner
+        with owner.lock:
+            from blosc2.remote_store import CacheMiss
 
-    def _group_locked(self, number, physical, key):
-        if key in self.cache:
-            self.cache.move_to_end(key)
-            return self.cache[key][0]
-        cache_file = None
-        if self.cache_dir is not None:
-            cache_file = self.cache_dir / _group_filename(number, physical)
-            if cache_file.exists():
+            key = (number, physical)
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                owner.cache_coordinator.touch(self, key)
+                yield self.cache[key][0]
+                return
+            path = None if self.cache_dir is None else self.cache_dir / _group_filename(number, physical)
+            cache_file = path if path is not None and (owner.disk is not None or path.exists()) else None
+            if cache_file is not None and cache_file.exists():
                 try:
-                    cached = CTable.open(cache_file)
-                    start = 0 if number == 0 else int(self.row_ends[number - 1])
-                    if len(cached) == int(self.row_ends[number]) - start:
-                        self._touch_group(cache_file)
-                        return cached
-                    cached.close()
+                    table = CTable.open(cache_file)
+                    start = 0 if number == 0 else int(owner.row_ends[number - 1])
+                    if len(table) == int(owner.row_ends[number]) - start:
+                        cache_file.touch()
+                        if owner.is_mutable:
+                            owner.cache_coordinator.touch(self, cache_file.name)
+                        try:
+                            yield table
+                        finally:
+                            table.close()
+                        return
+                    table.close()
                 except (OSError, ValueError, RuntimeError, KeyError, TypeError, zipfile.BadZipFile):
-                    pass  # Interrupted or corrupt publication: rebuild this group.
-        if self.parquet_file is None:
-            self.handle = _open_source_handle(
-                self.urlpath, self.storage_options, self.source_marker, self.traffic
-            )
-            try:
+                    pass
+            if owner.cache_coordinator.cached_only:
+                raise CacheMiss
+            if owner.parquet_file is None:
                 import pyarrow.parquet as pq
 
-                self.parquet_file = pq.ParquetFile(
-                    self.handle, metadata=self.arrow_metadata, **(self.parquet_options or {})
+                if owner.artifact_path is not None and owner.parquet_source_marker is not None:
+                    marker = _source_marker(owner.urlpath, owner.storage_options, owner.filesystem)
+                    if marker != owner.parquet_source_marker:
+                        raise RuntimeError("Parquet reference source has changed")
+                owner.parquet_handle = _open_source_handle(
+                    owner.urlpath,
+                    owner.storage_options,
+                    owner.parquet_source_marker,
+                    owner.traffic,
+                    owner.filesystem,
                 )
-            except BaseException:
-                self.handle.close()
-                self.handle = None
-                raise
-        arrow = self.parquet_file.read_row_group(number, columns=[physical], use_threads=False)
-        if physical == "" and not self.options["flatten_root"]:
-            arrow = arrow.rename_columns([self.options["root_name"]])
-            meta = dict(arrow.schema.metadata or {})
-            meta[b"blosc2_empty_root_physical"] = self.options["root_name"].encode()
-            arrow = arrow.replace_schema_metadata(meta)
-        with null_policy(self.options["null_policy"]):
-            table = CTable.from_arrow(
-                arrow.schema,
-                arrow.to_batches(max_chunksize=self.options["batch_size"]),
-                string_max_length=self.options["string_max_length"],
-                auto_null_sentinels=self.options["auto_null_sentinels"],
-                null_storage=self.options["null_storage"],
-                separate_nested_cols=self.options["separate_nested_cols"],
-                list_serializer=self.options["list_serializer"],
-                blosc2_batch_size=self.options["blosc2_batch_size"],
-                blosc2_items_per_block=self.options["blosc2_items_per_block"],
-                cparams=self.options["cparams"],
-                dparams=self.options["dparams"],
-                validate=self.options["validate"],
-                capacity_hint=int(self.row_ends[number]) - (int(self.row_ends[number - 1]) if number else 0),
-            )
-        size = int(getattr(table, "cbytes", 0) or arrow.nbytes)
-        if cache_file is not None:
-            temporary = cache_file.with_name(f".{uuid.uuid4().hex}.b2d")
-            try:
-                with table.copy(urlpath=temporary):
-                    pass
-                if cache_file.exists():
-                    shutil.rmtree(cache_file)
-                os.replace(temporary, cache_file)
-            finally:
-                if temporary.exists():
-                    shutil.rmtree(temporary)
-            self._sync_evictions()
-            self._touch_group(cache_file)
-            self.cache_coordinator.enforce()
-        elif self.cache_policy is blosc2.CachePolicy.MEMORY:
-            self.cache[key] = table, size
-            self.cache_bytes += size
-            while (
-                self.max_cache_bytes is not None and self.cache_bytes > self.max_cache_bytes and self.cache
+                try:
+                    owner.parquet_file = pq.ParquetFile(
+                        owner.parquet_handle,
+                        metadata=owner.arrow_metadata,
+                        **owner.parquet_reader_options,
+                    )
+                except BaseException:
+                    owner.parquet_handle.close()
+                    owner.parquet_handle = None
+                    raise
+            arrow = owner.parquet_file.read_row_group(number, columns=[physical], use_threads=False)
+            options = owner.parquet_options
+            if physical == "" and not options["flatten_root"]:
+                arrow = arrow.rename_columns([options["root_name"]])
+                meta = dict(arrow.schema.metadata or {})
+                meta[b"blosc2_empty_root_physical"] = options["root_name"].encode()
+                arrow = arrow.replace_schema_metadata(meta)
+            with null_policy(options["null_policy"]):
+                table = CTable.from_arrow(
+                    arrow.schema,
+                    arrow.to_batches(max_chunksize=options["batch_size"]),
+                    **{
+                        name: options[name]
+                        for name in (
+                            "string_max_length",
+                            "auto_null_sentinels",
+                            "null_storage",
+                            "separate_nested_cols",
+                            "list_serializer",
+                            "blosc2_batch_size",
+                            "blosc2_items_per_block",
+                            "cparams",
+                            "dparams",
+                            "validate",
+                        )
+                    },
+                    capacity_hint=int(owner.row_ends[number])
+                    - (int(owner.row_ends[number - 1]) if number else 0),
+                )
+            size = int(getattr(table, "cbytes", 0) or arrow.nbytes)
+            if cache_file is not None and owner.disk is not None:
+                temporary = cache_file.with_name(f".{uuid.uuid4().hex}.b2d")
+                try:
+                    with table.copy(urlpath=temporary):
+                        pass
+                    if cache_file.exists():
+                        shutil.rmtree(cache_file)
+                    os.replace(temporary, cache_file)
+                finally:
+                    if temporary.exists():
+                        shutil.rmtree(temporary)
+                self._sync_evictions()
+                owner.cache_coordinator.touch(self, cache_file.name)
+                owner.cache_coordinator.enforce()
+                owner.save_manifest()
+            elif owner.cache_policy is blosc2.CachePolicy.MEMORY or (
+                owner.disk is None and owner.cache_policy is not blosc2.CachePolicy.NONE
             ):
-                _, (_, removed) = self.cache.popitem(last=False)
-                self.cache_bytes -= removed
-        return table
+                pass
+            try:
+                yield table
+            finally:
+                if owner.cache_policy is blosc2.CachePolicy.MEMORY or (
+                    owner.disk is None and owner.cache_policy is not blosc2.CachePolicy.NONE
+                ):
+                    self.cache[key] = table, size
+                    self.cache_bytes += size
+                    self._cache_sizes[key] = size
+                    self._cache_lru[key] = None
+                    owner.cache_coordinator.touch(self, key)
+                    owner.cache_coordinator.enforce()
+                else:
+                    table.close()
+
+    def close(self):
+        for table, _ in self.cache.values():
+            table.close()
+        self.cache.clear()
+        self._cache_sizes.clear()
+        self._cache_lru.clear()
 
 
 class _ParquetColumn:
@@ -637,7 +752,15 @@ class _ParquetColumn:
 
 class ParquetTableStorage(RemoteTableStorage):
     def __init__(
-        self, owner, schema, physical, length, *, max_concurrency, metadata_buffer_bytes, row_buffer_bytes
+        self,
+        owner,
+        schema,
+        physical,
+        length,
+        *,
+        max_concurrency=8,
+        metadata_buffer_bytes=8 << 20,
+        row_buffer_bytes=64 << 20,
     ):
         self._owner = owner
         self._generation = owner.generation
@@ -694,672 +817,3 @@ class ParquetTableStorage(RemoteTableStorage):
         if not self._closed:
             self._closed = True
             self._owner.release()
-
-
-class RemoteParquetCTable(RemoteCTable):
-    """A read-only Parquet CTable that converts accessed row groups on demand."""
-
-    def __new__(  # noqa: C901
-        cls,
-        urlpath,
-        *,
-        storage_options=None,
-        columns=None,
-        max_rows=None,
-        parquet_options=None,
-        string_max_length=None,
-        auto_null_sentinels=True,
-        null_storage=None,
-        separate_nested_cols=True,
-        list_serializer="msgpack",
-        blosc2_batch_size=2048,
-        blosc2_items_per_block=None,
-        batch_size=2048,
-        cparams=None,
-        dparams=None,
-        validate=False,
-        max_cache_bytes=CACHE_POLICY_DEFAULT,
-        cache_policy=CACHE_POLICY_DEFAULT,
-        shared_cache=False,
-        max_concurrency=8,
-        metadata_buffer_bytes=8 << 20,
-        row_buffer_bytes=64 << 20,
-        _effective_null_policy=None,
-        **kwargs,
-    ):
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        urlpath = str(normalize_urlpath(urlpath))
-        cache_dir = kwargs.pop("cache_dir", None)
-        seed_cache = kwargs.pop("_seed_cache", None)
-        cache_manager = kwargs.pop("_cache_manager", None)
-        refresh_marker = kwargs.pop("_refresh_marker", None)
-        if kwargs:
-            raise TypeError(f"Unsupported Parquet options: {', '.join(kwargs)}")
-        if max_rows is not None and max_rows < 0:
-            raise ValueError("max_rows must be non-negative")
-        CTable._validate_arrow_batch_size(batch_size)
-        settings = {
-            name: _positive_integer(name, value)
-            for name, value in {
-                "max_concurrency": max_concurrency,
-                "metadata_buffer_bytes": metadata_buffer_bytes,
-                "row_buffer_bytes": row_buffer_bytes,
-            }.items()
-        }
-        if columns is not None and len(set(columns)) != len(columns):
-            raise ValueError("columns must be unique")
-        if parquet_options and parquet_options.get("memory_map"):
-            raise ValueError("memory_map is incompatible with a remote Parquet handle")
-        if cache_policy is CACHE_POLICY_DEFAULT:
-            cache_policy = blosc2.CachePolicy.DISK if cache_dir is not None else blosc2.CachePolicy.MEMORY
-        else:
-            cache_policy = blosc2.CachePolicy(cache_policy)
-        if (cache_policy is blosc2.CachePolicy.DISK) != (cache_dir is not None):
-            raise ValueError("Parquet DISK cache policy requires cache_dir, and cache_dir requires DISK")
-        if shared_cache and cache_policy is not blosc2.CachePolicy.DISK:
-            raise ValueError("shared_cache=True requires a disk cache")
-        max_cache_bytes = normalize_cache_limit(cache_policy, max_cache_bytes)
-        effective_policy = _effective_null_policy or get_null_policy()
-        options = {
-            "null_policy": effective_policy,
-            "string_max_length": string_max_length,
-            "auto_null_sentinels": auto_null_sentinels,
-            "null_storage": null_storage,
-            "separate_nested_cols": separate_nested_cols,
-            "list_serializer": list_serializer,
-            "blosc2_batch_size": blosc2_batch_size,
-            "blosc2_items_per_block": blosc2_items_per_block,
-            "batch_size": batch_size,
-            "cparams": cparams,
-            "dparams": dparams,
-            "validate": validate,
-        }
-        identity_options = (columns, max_rows, parquet_options, _portable(options))
-        cached_marker = (
-            _cached_source_marker(urlpath, storage_options, identity_options, cache_dir)
-            if cache_dir is not None and refresh_marker is None
-            else None
-        )
-        marker = (
-            refresh_marker or cached_marker or _source_marker(urlpath, storage_options)
-            if cache_dir is not None
-            else None
-        )
-        disk, disk_dir = (
-            _disk_cache_path(
-                urlpath, storage_options, identity_options, cache_dir, marker, shared=shared_cache
-            )
-            if cache_dir is not None
-            else (None, None)
-        )
-        handle = None
-        try:
-            with _disk_guard(disk):
-                discovery = disk.load()["metadata"].get("parquet_discovery") if disk is not None else None
-            if discovery is not None:
-                try:
-                    schema = schema_from_dict(discovery["schema"])
-                    physical = discovery["physical"]
-                    ends = np.asarray(discovery["row_ends"], dtype=np.int64)
-                    length = discovery["length"]
-                    metadata = pq.read_metadata(pa.BufferReader(discovery["arrow_metadata"]))
-                    if (
-                        discovery["version"] != 1
-                        or not isinstance(physical, dict)
-                        or set(physical) != {column.name for column in schema.columns}
-                        or not isinstance(length, int)
-                        or length < 0
-                        or ends.ndim != 1
-                        or len(ends) > metadata.num_row_groups
-                        or np.any(ends < 0)
-                        or np.any(ends[1:] < ends[:-1])
-                        or (len(ends) and length > ends[-1])
-                    ):
-                        raise ValueError("Invalid retained Parquet metadata")
-                    restored_options = dict(discovery["options"])
-                    restored_options["null_policy"] = NullPolicy(**restored_options["null_policy"])
-                    _restore_compression_options(restored_options)
-                except (KeyError, TypeError, ValueError, OSError):
-                    discovery = None
-                else:
-                    owner = _ParquetOwner(
-                        urlpath,
-                        None,
-                        None,
-                        restored_options,
-                        cache_policy=cache_policy,
-                        max_cache_bytes=max_cache_bytes,
-                        cache_dir=disk_dir,
-                        disk=disk,
-                        storage_options=storage_options,
-                        source_marker=marker,
-                        arrow_metadata=metadata,
-                        parquet_options=parquet_options,
-                    )
-                    owner.row_ends = ends
-                    owner.identity_options = identity_options
-                    owner.discovery = discovery
-                    owner._cache_manager = cache_manager
-                    owner.reopen_kwargs = _parquet_reopen_kwargs(locals())
-                    storage = ParquetTableStorage(owner, schema, physical, length, **settings)
-                    try:
-                        table = cls._open_from_storage(storage)
-                        if cached_marker is None:
-                            _publish_source_marker(
-                                urlpath, storage_options, identity_options, cache_dir, marker, disk
-                            )
-                        return table
-                    except BaseException:
-                        storage.close()
-                        raise
-            handle = _open_source_handle(urlpath, storage_options, marker, Traffic())
-            pf = pq.ParquetFile(handle, **(parquet_options or {}))
-            fields = pf.schema_arrow
-            if columns is not None:
-                fields = pa.schema([fields.field(name) for name in columns])
-            root_name = "root"
-            if "" in fields.names:
-                while root_name in fields.names:
-                    root_name += "_1"
-            flatten_root = separate_nested_cols and CTable._detect_unnamed_root_list_struct(pa, fields)
-            # Mask-backed schemas are determined by the Arrow schema alone. A
-            # value sample is only needed when in-band null handling may reject
-            # actual nulls during inference.
-            sample_needed = (null_storage or effective_policy.resolve_null_storage()) != "mask"
-            sample = (
-                next(pf.iter_batches(batch_size=1 if flatten_root else batch_size, columns=columns), None)
-                if sample_needed
-                else None
-            )
-            if sample is None:
-                sample = pa.RecordBatch.from_arrays(
-                    [pa.array([], type=f.type) for f in fields], schema=fields
-                )
-            if not flatten_root and "" in fields.names:
-                names = [root_name if name == "" else name for name in fields.names]
-                sample = sample.rename_columns(names)
-                meta = dict(sample.schema.metadata or {})
-                meta[b"blosc2_empty_root_physical"] = root_name.encode()
-                sample = sample.replace_schema_metadata(meta)
-            options["root_name"] = root_name
-            options["flatten_root"] = flatten_root
-            if seed_cache:
-                if disk_dir is None:
-                    raise ValueError("A retained Parquet cache requires cache_dir")
-                with _disk_guard(disk):
-                    for name, data in seed_cache.items():
-                        if (
-                            not isinstance(name, str)
-                            or not isinstance(data, bytes)
-                            or (not name.startswith("row-map-") and not name.endswith(".b2z"))
-                            or Path(name).name != name
-                        ):
-                            raise ValueError("Invalid retained Parquet cache entry")
-                        destination = disk_dir / (name[:-4] + ".b2d" if name.endswith(".b2z") else name)
-                        with tempfile.NamedTemporaryFile(
-                            dir=disk_dir, suffix=Path(name).suffix, delete=False
-                        ) as staged:
-                            staged.write(data)
-                        try:
-                            if name.endswith(".b2z"):
-                                with CTable.load(staged.name) as table:
-                                    with table.copy(urlpath=destination):
-                                        pass
-                            else:
-                                os.replace(staged.name, destination)
-                        finally:
-                            Path(staged.name).unlink(missing_ok=True)
-            with null_policy(options["null_policy"]):
-                probe = CTable.from_arrow(
-                    sample.schema,
-                    [sample],
-                    string_max_length=string_max_length,
-                    auto_null_sentinels=auto_null_sentinels,
-                    null_storage=null_storage,
-                    separate_nested_cols=separate_nested_cols,
-                    list_serializer=list_serializer,
-                    blosc2_batch_size=blosc2_batch_size,
-                    blosc2_items_per_block=blosc2_items_per_block,
-                    cparams=cparams,
-                    dparams=dparams,
-                    validate=validate,
-                )
-            physical = {
-                name: (
-                    ""
-                    if flatten_root or (split_field_path(name)[0] == root_name and "" in fields.names)
-                    else name
-                    if name in fields.names
-                    else split_field_path(name)[0]
-                )
-                for name in probe.col_names
-            }
-            paths = [pf.schema.column(i).path for i in range(len(pf.schema.names))]
-            physical = {
-                name: _projected_field(name, source, paths)
-                if flatten_root or (source and source != name)
-                else source
-                for name, source in physical.items()
-            }
-            if flatten_root:
-                # ponytail: full length scan; replace with a persisted offsets map when large nested roots matter.
-                with _disk_guard(disk):
-                    lengths = []
-                    count = 0
-                    map_file = disk_dir / f"row-map-{max_rows}.npy" if disk_dir is not None else None
-                    ends = None
-                    if map_file is not None and map_file.exists():
-                        try:
-                            if map_file.stat().st_size <= 1024 + 8 * pf.num_row_groups:
-                                loaded = np.load(map_file, allow_pickle=False)
-                                if (
-                                    loaded.ndim == 1
-                                    and loaded.dtype == np.dtype(np.int64)
-                                    and len(loaded) <= pf.num_row_groups
-                                    and np.all(loaded >= 0)
-                                    and np.all(loaded[1:] >= loaded[:-1])
-                                    and (
-                                        len(loaded) == pf.num_row_groups
-                                        or max_rows == 0
-                                        or (max_rows is not None and len(loaded) and loaded[-1] >= max_rows)
-                                    )
-                                ):
-                                    ends = loaded
-                        except (OSError, ValueError):
-                            pass
-                    if ends is None:
-                        for group in range(pf.num_row_groups):
-                            if max_rows is not None and count >= max_rows:
-                                break
-                            row_group = pf.metadata.row_group(group)
-                            leaf = min(
-                                (row_group.column(i) for i in range(row_group.num_columns)),
-                                key=lambda column: column.total_compressed_size,
-                            )
-                            arr = pf.read_row_group(group, columns=[leaf.path_in_schema]).column(0)
-                            size = pa.compute.sum(pa.compute.list_value_length(arr)).as_py() or 0
-                            lengths.append(size)
-                            count += size
-                        ends = np.cumsum(lengths)
-                        if map_file is not None:
-                            temporary = map_file.with_name(f".{uuid.uuid4().hex}.npy")
-                            try:
-                                np.save(temporary, ends)
-                                os.replace(temporary, map_file)
-                            finally:
-                                temporary.unlink(missing_ok=True)
-            else:
-                ends = np.cumsum([pf.metadata.row_group(i).num_rows for i in range(pf.num_row_groups)])
-            length = int(ends[-1]) if len(ends) else 0
-            if max_rows is not None:
-                length = min(length, max_rows)
-            owner = _ParquetOwner(
-                urlpath,
-                handle,
-                pf,
-                options,
-                cache_policy=cache_policy,
-                max_cache_bytes=max_cache_bytes,
-                cache_dir=disk_dir,
-                disk=disk,
-                storage_options=storage_options,
-                source_marker=marker,
-                parquet_options=parquet_options,
-            )
-            owner.source_marker = marker
-            owner.identity_options = identity_options
-            owner._cache_manager = cache_manager
-            owner.reopen_kwargs = _parquet_reopen_kwargs(locals())
-            owner.row_ends = ends
-            owner.discovery = _parquet_discovery(owner, probe._schema, physical, length)
-            if disk is not None:
-                with _disk_guard(disk):
-                    manifest = disk.load()
-                    try:
-                        manifest["metadata"]["reopen"] = _reference_options(owner)
-                    except TypeError:
-                        manifest["metadata"]["reopen"] = None
-                    manifest["metadata"]["parquet_discovery"] = owner.discovery
-                    disk.publish(manifest)
-            if disk is not None and cached_marker is None:
-                _publish_source_marker(urlpath, storage_options, identity_options, cache_dir, marker, disk)
-            storage = ParquetTableStorage(owner, probe._schema, physical, length, **settings)
-            probe.close()
-            try:
-                return cls._open_from_storage(storage)
-            except BaseException:
-                storage.close()
-                raise
-        except BaseException:
-            if handle is not None:
-                handle.close()
-            if disk is not None:
-                disk.close()
-            raise
-
-    def refresh(self):
-        storage = self._remote_storage()
-        owner = storage._owner
-        with owner.lock:
-            refresh_marker = (
-                _source_marker(owner.urlpath, owner.storage_options) if owner.disk is not None else None
-            )
-            if refresh_marker is not None and refresh_marker == owner.source_marker:
-                return
-            fresh = type(self)(owner.urlpath, _refresh_marker=refresh_marker, **owner.reopen_kwargs)
-            fresh._remote_storage()._owner._cache_manager = owner._cache_manager
-            owner._cache_manager = None
-            owner.generation += 1
-            state = fresh.__dict__.copy()
-            fresh._storage = None
-            self.__dict__ = state
-            self._cols._table = self
-            storage.close()
-
-    @property
-    def source(self):
-        source_url = _source_url(self._remote_storage()._owner.urlpath)
-        if is_fsspec_url(source_url):
-            from blosc2.remote_array import validate_persistable_url
-
-            try:
-                validate_persistable_url(source_url)
-            except ValueError:
-                source_url = source_url.split("?", 1)[0]
-        return {
-            "kind": "parquet",
-            "version": 1,
-            "urlpath": source_url,
-        }
-
-    @property
-    def traffic(self):
-        return self._remote_storage()._owner.traffic
-
-    @property
-    def cache_bytes(self):
-        owner = self._remote_storage()._owner
-        if owner.cache_dir is not None:
-            return sum(
-                file.stat().st_size
-                for path in owner.cache_dir.iterdir()
-                if path.suffix in {".b2d", ".npy"}
-                for file in (path.rglob("*") if path.is_dir() else (path,))
-                if file.is_file()
-            )
-        return owner.cache_bytes
-
-    @property
-    def metadata_bytes(self):
-        return self._remote_storage()._owner.arrow_metadata.serialized_size
-
-    @property
-    def mutable(self):
-        return False
-
-    @mutable.setter
-    def mutable(self, value):
-        raise RuntimeError("Parquet remote references are not supported")
-
-    @property
-    def is_cache_mutable(self):
-        return True
-
-    def save(self, *args, **kwargs):
-        destination = args[0] if args else kwargs.get("destination")
-        if destination is not None and str(destination).endswith(".b2z"):
-            return self._save_archive(*args, **kwargs)
-        return self._save_reference(*args, **kwargs)
-
-    def _save_archive(self, destination, *, include_cache=True, overwrite=False, mutable=None):
-        from blosc2.remote_array import validate_persistable_url
-
-        if mutable not in (None, False):
-            raise ValueError("Parquet references are read-only")
-        owner = self._remote_storage()._owner
-        if is_fsspec_url(owner.urlpath):
-            validate_persistable_url(owner.urlpath)
-        destination = Path(destination)
-        if destination.exists() and not overwrite:
-            raise FileExistsError(destination)
-        if owner.disk is not None and destination.resolve().is_relative_to(owner.disk.path.resolve()):
-            raise ValueError("destination cannot be inside the live cache")
-        if owner.source_marker is None:
-            owner.source_marker = _source_marker(owner.urlpath, owner.reopen_kwargs["storage_options"])
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with (
-            owner.lock,
-            _disk_guard(owner.disk),
-            tempfile.TemporaryDirectory(dir=destination.parent) as temporary,
-        ):
-            if owner.disk is None:
-                disk, root = _disk_cache_path(
-                    owner.urlpath,
-                    owner.reopen_kwargs["storage_options"],
-                    owner.identity_options,
-                    temporary,
-                    owner.source_marker,
-                )
-                try:
-                    manifest = disk.load()
-                    manifest["metadata"]["reopen"] = _reference_options(owner)
-                    manifest["metadata"]["parquet_discovery"] = owner.discovery
-                    disk.publish(manifest)
-                    if include_cache:
-                        for (number, physical), (table, _) in owner.cache.items():
-                            with table.copy(urlpath=root / _group_filename(number, physical)):
-                                pass
-                finally:
-                    disk.close()
-            else:
-                root = owner.cache_dir
-                manifest = owner.disk.load()
-                if manifest["metadata"].get("reopen") is None:
-                    raise TypeError("Parquet conversion options cannot be saved in a portable archive")
-            staged = Path(temporary) / "reference.b2z"
-            with zipfile.ZipFile(staged, "w", zipfile.ZIP_STORED) as archive:
-                archive.write(root.parent / "active_generation.json", "active_generation.json")
-                archive.write(root / "embed.b2e", "embed.b2e")
-                if include_cache:
-                    for file in root.rglob("*"):
-                        if file.is_file() and not file.name.startswith(".") and file != root / "embed.b2e":
-                            archive.write(file, f"{root.name}/{file.relative_to(root)}")
-            os.replace(staged, destination)
-        return str(destination)
-
-    @classmethod
-    def _open_cache_artifact(cls, path, *, mode="r", storage_options=None, source_url=None):
-        if mode != "r":
-            raise ValueError("Parquet caches are read-only")
-        path = Path(path).resolve()
-        carrier = blosc2.blosc2_ext.open(str(path / "embed.b2e"), "r", 0)
-        manifest = carrier.vlmeta["b2remote_manifest"]
-        source = manifest["source"]
-        if source.get("kind") != "parquet":
-            raise ValueError("Cache is not a Parquet table")
-        if is_fsspec_url(source["urlpath"]):
-            from blosc2.remote_array import validate_persistable_url
-
-            validate_persistable_url(source["urlpath"])
-        options = manifest["metadata"].get("reopen")
-        if options is None:
-            raise ValueError("This Parquet cache needs the original conversion options to reopen")
-        options = dict(options)
-        policy = options.pop("null_policy")
-        _restore_compression_options(options)
-        urlpath = source_url or source["urlpath"]
-        table = cls(
-            urlpath,
-            cache_dir=path.parent.parent,
-            storage_options=storage_options,
-            _effective_null_policy=NullPolicy(**policy),
-            _refresh_marker=manifest["metadata"]["source_marker"],
-            **options,
-        )
-        if table._remote_storage()._owner.cache_dir != path:
-            table.close()
-            raise ValueError("Parquet cache source or options no longer match this generation")
-        return table
-
-    @classmethod
-    def _open_archive_artifact(cls, path, *, mode="r", storage_options=None, source_url=None):
-        from blosc2.remote_store_cache import StoreDiskCache, validate_generation
-
-        manager = tempfile.TemporaryDirectory(prefix="parquet-reference-")
-        try:
-            with zipfile.ZipFile(path) as archive:
-                carrier = blosc2.schunk_from_cframe(archive.read("embed.b2e"))
-                manifest = carrier.vlmeta["b2remote_manifest"]
-                source = manifest["source"]
-                if source.get("kind") != "parquet":
-                    raise ValueError("Cache archive is not a Parquet table")
-                validate_generation(manifest["generation"])
-                generation = f"{manifest['generation']}.b2d"
-                cache_root = StoreDiskCache.path_for(manager.name, source)
-                cache_root.mkdir(parents=True)
-                for member in archive.infolist():
-                    name = member.filename
-                    if (
-                        (
-                            name not in {"active_generation.json", "embed.b2e"}
-                            and not name.startswith(generation + "/")
-                        )
-                        or ".." in Path(name).parts
-                        or member.is_dir()
-                        or member.compress_type != zipfile.ZIP_STORED
-                    ):
-                        raise ValueError("Invalid Parquet cache archive member")
-                    target = cache_root / (f"{generation}/embed.b2e" if name == "embed.b2e" else name)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(member) as source_file, target.open("wb") as target_file:
-                        shutil.copyfileobj(source_file, target_file)
-            table = cls._open_cache_artifact(
-                cache_root / generation,
-                mode=mode,
-                storage_options=storage_options,
-                source_url=source_url,
-            )
-            table._remote_storage()._owner._cache_manager = manager
-            return table
-        except BaseException:
-            manager.cleanup()
-            raise
-
-    def _save_reference(self, destination, *, include_cache=True, overwrite=False, mutable=None):
-        """Write a CFrame-backed source reference without runtime credentials."""
-        from blosc2.b2objects import make_b2object_carrier, write_b2object_payload
-        from blosc2.remote_array import validate_persistable_url
-
-        if mutable not in (None, False):
-            raise ValueError("Parquet references are read-only")
-        owner = self._remote_storage()._owner
-        url = owner.urlpath
-        if is_fsspec_url(url):
-            validate_persistable_url(url)
-        if owner.source_marker is None:
-            owner.source_marker = _source_marker(url, owner.reopen_kwargs["storage_options"])
-        if "size" not in owner.source_marker or len(owner.source_marker) < 2:
-            raise ValueError("A portable Parquet reference requires an ETag or modification time")
-        options = _reference_options(owner)
-        payload = {
-            "kind": "remote_parquet",
-            "version": 1,
-            "urlpath": url,
-            "source_marker": owner.source_marker,
-            "options": options,
-        }
-        if include_cache:
-            retained = {}
-            with owner.lock, _disk_guard(owner.disk):
-                if owner.cache_dir is not None:
-                    with tempfile.TemporaryDirectory() as cache_export:
-                        for path in owner.cache_dir.iterdir():
-                            if path.suffix == ".npy":
-                                retained[path.name] = path.read_bytes()
-                            elif path.suffix == ".b2d":
-                                exported = Path(cache_export) / f"{path.stem}.b2z"
-                                with CTable.open(str(path)) as table, table.copy(urlpath=exported):
-                                    pass
-                                retained[exported.name] = exported.read_bytes()
-                else:
-                    with tempfile.TemporaryDirectory() as cache_export:
-                        for (number, physical), (table, _) in owner.cache.items():
-                            path = (
-                                Path(cache_export)
-                                / f"{number}-{hashlib.sha256(physical.encode()).hexdigest()[:16]}.b2z"
-                            )
-                            with table.copy(urlpath=path):
-                                pass
-                            retained[path.name] = path.read_bytes()
-            payload["cache_files"] = retained
-        destination = Path(destination)
-        if destination.exists() and not overwrite:
-            raise FileExistsError(destination)
-        carrier = make_b2object_carrier("remote_parquet", (1,), np.uint8)
-        write_b2object_payload(carrier, payload)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
-            staged = Path(temporary) / "reference.b2nd"
-            carrier.save(staged)
-            os.replace(staged, destination)
-        return str(destination)
-
-    @classmethod
-    def _from_payload(cls, payload, *, storage_options=None, parquet_options=None):
-        from blosc2.remote_array import validate_persistable_url
-
-        if (
-            not isinstance(payload, dict)
-            or payload.get("kind") != "remote_parquet"
-            or payload.get("version") != 1
-        ):
-            raise ValueError("Invalid Parquet reference")
-        url = payload.get("urlpath")
-        marker = payload.get("source_marker")
-        options = payload.get("options")
-        if not isinstance(url, str) or not isinstance(marker, dict) or not isinstance(options, dict):
-            raise ValueError("Invalid Parquet reference fields")
-        if is_fsspec_url(url):
-            validate_persistable_url(url)
-        if "storage_options" in options or "cache_dir" in options:
-            raise ValueError("Parquet references cannot contain runtime transport options")
-        if _source_marker(url, storage_options) != marker:
-            raise RuntimeError("Parquet reference source has changed; create a new reference")
-        options = dict(options)
-        policy = options.pop("null_policy", None)
-        if not isinstance(policy, dict):
-            raise ValueError("Parquet reference has no null policy")
-        _restore_compression_options(options)
-        saved_reader = options.get("parquet_options") or {}
-        if parquet_options is not None and parquet_options != saved_reader:
-            raise ValueError("Parquet reader option set differs from the saved reference")
-        retained = payload.get("cache_files", {})
-        if not isinstance(retained, dict):
-            raise ValueError("Invalid retained Parquet cache")
-        manager = tempfile.TemporaryDirectory() if retained else None
-        try:
-            return cls(
-                url,
-                storage_options=storage_options,
-                _effective_null_policy=NullPolicy(**policy),
-                cache_dir=manager.name if manager is not None else None,
-                _seed_cache=retained,
-                _cache_manager=manager,
-                **options,
-            )
-        except BaseException:
-            if manager is not None:
-                manager.cleanup()
-            raise
-
-    @classmethod
-    def open_reference(cls, path, *, storage_options=None, parquet_options=None):
-        """Reopen a saved reference with replacement runtime transport options."""
-        from blosc2.b2objects import read_b2object_payload
-
-        raw = blosc2.blosc2_ext.open(os.fspath(path), "r", 0)
-        return cls._from_payload(
-            read_b2object_payload(raw), storage_options=storage_options, parquet_options=parquet_options
-        )

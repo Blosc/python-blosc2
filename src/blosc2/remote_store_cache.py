@@ -255,6 +255,15 @@ class SharedStoreOperation:
                         if owner.zstore is not None:
                             owner.zstore.close()
                             owner.zstore = None
+                        if owner.parquet_cache is not None:
+                            owner.parquet_cache.close()
+                            owner.parquet_cache = None
+                        if owner.parquet_file is not None:
+                            owner.parquet_file.close()
+                            owner.parquet_file = None
+                        if owner.parquet_handle is not None:
+                            owner.parquet_handle.close()
+                            owner.parquet_handle = None
                         owner.sources.clear()
                         owner.source_descriptors.clear()
                         owner.batch_caches.clear()

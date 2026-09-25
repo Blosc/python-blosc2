@@ -1847,11 +1847,6 @@ def _open_special_store(urlpath, mode, offset, **kwargs):
         if "b2remote_store" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for RemoteStore")
-            from blosc2.remote_parquet import open_parquet_cache_artifact
-
-            parquet = open_parquet_cache_artifact(urlpath, mode=mode, **kwargs)
-            if parquet is not None:
-                return parquet
             from blosc2.remote_store import RemoteStore
 
             return RemoteStore._open_artifact(urlpath, mode=mode, **kwargs)
@@ -2978,9 +2973,8 @@ def open(  # noqa: C901
     ):
         if kwargs.get("source_format") not in (None, "parquet"):
             raise ValueError("source_format conflicts with the .parquet suffix")
-        if mode != "r" or offset or dataset is not None:
-            raise ValueError("Parquet sources require mode='r', offset=0, and no dataset path")
-        from blosc2.remote_parquet import RemoteParquetCTable
+        if mode != "r" or offset or (dataset is not None and dataset.strip("/")):
+            raise ValueError("Parquet sources require mode='r', offset=0, and the root table")
 
         kwargs.pop("source_format", None)
         lazy = kwargs.pop("lazy", True)
@@ -3007,7 +3001,7 @@ def open(  # noqa: C901
             reader = kwargs.pop("parquet_options", None) or {}
             with fsspec_open(str(urlpath), "rb", options) as handle:
                 return blosc2.CTable.from_parquet(handle, **kwargs, **reader)
-        return RemoteParquetCTable(str(urlpath), **kwargs)
+        return blosc2.RemoteCTable(str(urlpath), dataset=dataset, source_format="parquet", **kwargs)
     _reject_table_buffer_options(kwargs)
     _validate_shared_cache_request(urlpath, shared_cache, kwargs)
     if isinstance(urlpath, blosc2.URLPath):

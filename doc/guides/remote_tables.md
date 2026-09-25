@@ -5,7 +5,7 @@ Fixed-width, `blosc2.utf8()`, batch-backed variable-length, list, struct/object,
 and dictionary columns are fetched on demand, including their null masks. A table
 inside a hierarchy can also be opened through `RemoteStore`.
 
-## Single-file Parquet (experimental)
+## Single-file Parquet
 
 `blosc2.open()` recognizes `.parquet` paths, including fsspec URLs, and returns
 a read-only `RemoteCTable`. Use `source_format="parquet"` for an extensionless
@@ -32,14 +32,28 @@ opens and cached reads need no connection to the source. Cached sources are
 assumed unchanged until `refresh()` is called. Use `lazy=False` to import the
 whole table eagerly.
 
+Parquet is a `RemoteStore` with one root CTable. Use
+`RemoteStore(url, allow_table_root=True)` and `store[""]` when a store operation
+needs to own the cache and traffic counters. A Parquet file accepts only the
+root selector (`""` or `"/"`); selecting a child path raises an error.
+`RemoteCTable(url)` and lazy `blosc2.open(url)` use the same owner. NONE retains
+no converted row groups, MEMORY shares the store budget, and DISK retains
+complete converted physical-column/row-group units. A small slice can therefore
+read a whole row group. Shared DISK caches support `read_cached_table()` and
+offline `trim_sparse_cache()` with the same aggregate allowance.
+Caches from the earlier Parquet prototype layout are not migrated; use a fresh
+`cache_dir` for this RemoteStore layout.
+
 HTTP servers must honor byte-range requests; fsspec raises a range-request error
 for servers that only return complete files. Download the file and import it
 locally when range access is unavailable.
 
-`table.save("reference.b2z")` creates a portable archive with data already in
+`table.save("reference.b2z")` creates a RemoteStore archive with data already in
 the cache. Opening it reuses that data and fetches missing groups on demand.
-Use `include_cache=False` to save only the table metadata. Older `.b2nd`
-references remain readable.
+Archives of local sources keep an absolute path to the local Parquet file.
+Use `include_cache=False` to save only the table metadata. `.b2z` exports use
+the RemoteStore version 1 manifest with `kind="parquet"`. Runtime filesystems, credentials,
+and storage options must be supplied again when reopening.
 
 Use `shared_cache=True` when separate processes need to share one `cache_dir`.
 They should use the same source and conversion options.
