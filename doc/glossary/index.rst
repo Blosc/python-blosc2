@@ -32,8 +32,9 @@ Glossary
         tempor incididunt ut labore et dolore magna aliqua.
 
     CTable
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-        tempor incididunt ut labore et dolore magna aliqua.
+        A columnar table for structured data. Columns are stored, compressed, and
+        queried independently, with SUMMARY indexes available by default. Use with
+        structured data that benefits from compression, speed, and persistence.
 
     filters
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
@@ -48,8 +49,10 @@ Glossary
         tempor incididunt ut labore et dolore magna aliqua.
 
     NDArray
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-        tempor incididunt ut labore et dolore magna aliqua.
+        A compressed, chunked multidimensional data array. Supports NumPy-like
+        slicing and broadcasting, and out-of-core computation. Backed by an SChunk.
+        Use for array workloads, especially when too large to fit in memory
+        uncompressed.
 
     OPSI
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
@@ -60,12 +63,12 @@ Glossary
         tempor incididunt ut labore et dolore magna aliqua.
 
     SChunk
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-        tempor incididunt ut labore et dolore magna aliqua.
+        The foundational container for managing a sequence of individual,
+        compressed chunks. NDArrays and CTable columns are built on top of SChunk.
+        Use when you want to directly manipulate raw compresesd data and metadata.
 
     subblock
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-        tempor incididunt ut labore et dolore magna aliqua.
+        An indexing segment within a block. One eighth the length of a block.
 
     SUMMARY
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
