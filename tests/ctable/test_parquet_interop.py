@@ -26,6 +26,52 @@ pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 
 
+@pytest.mark.parametrize("batch_size", [None, 8192])
+def test_export_batch_defaults_and_override(tmp_path, batch_size):
+    n = 65539
+    source = pa.table({"id": np.arange(n, dtype=np.int64)})
+    with CTable.from_arrow(source, chunks=(65536,), blocks=(8192,), create_summary_index=False) as table:
+        kwargs = {} if batch_size is None else {"batch_size": batch_size}
+        size = batch_size or 65536
+        expected = [min(size, n - start) for start in range(0, n, size)]
+        batches = list(table.iter_arrow_batches(**kwargs))
+        assert [len(batch) for batch in batches] == expected
+        assert pa.Table.from_batches(batches).equals(source)
+        if batch_size is None:
+            assert [len(batch) for batch in pa.RecordBatchReader.from_stream(table)] == expected
+            assert [len(batch) for batch in table.to_arrow().to_batches()] == expected
+        path = tmp_path / "batches.parquet"
+        table.to_parquet(path, **kwargs)
+        metadata = pq.ParquetFile(path).metadata
+        assert [metadata.row_group(i).num_rows for i in range(metadata.num_row_groups)] == expected
+        assert pq.read_table(path).equals(source)
+
+
+@pytest.mark.parametrize("serializer", [None, "arrow"])
+def test_import_storage_defaults_and_override(tmp_path, serializer):
+    source = pa.table(
+        {"tags": pa.array([[1, None], [], None], type=pa.list_(pa.int16())), "text": ["café", None, ""]}
+    )
+    path = tmp_path / "lists.parquet"
+    pq.write_table(source, path)
+    kwargs = {} if serializer is None else {"list_serializer": serializer}
+    for load, value in [(CTable.from_arrow, source), (CTable.from_parquet, path)]:
+        with load(value, **kwargs) as table:
+            spec = table._schema.columns_by_name["tags"].spec
+            assert spec.serializer == (serializer or "msgpack")
+            assert spec.batch_rows == 2048
+            if HAVE_STRING_DTYPE:
+                assert table["text"].is_utf8
+                assert table["text"].null_storage == "mask"
+            assert table.to_arrow().cast(source.schema).equals(source)
+
+
+def test_parquet_cli_list_serializer_default():
+    from blosc2.cli.parquet_to_blosc2 import build_parser
+
+    assert build_parser().get_default("list_serializer") == "msgpack"
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures / dataclasses
 # ---------------------------------------------------------------------------

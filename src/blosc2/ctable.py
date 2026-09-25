@@ -4109,6 +4109,7 @@ def _fmt_bytes(n: int) -> str:
 
 _EXPECTED_SIZE_DEFAULT = 1_048_576
 _BATCH_SIZE_DEFAULT = 2048
+_ARROW_EXPORT_BATCH_SIZE_DEFAULT = 65_536
 
 # ---------------------------------------------------------------------------
 # Computed-column definition (virtual columns backed by a LazyExpr)
@@ -8422,10 +8423,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         *,
         columns: list[str] | None = None,
-        batch_size: int = _BATCH_SIZE_DEFAULT,
+        batch_size: int = _ARROW_EXPORT_BATCH_SIZE_DEFAULT,
         include_computed: bool = True,
     ):
-        """Yield live rows as bounded-size :class:`pyarrow.RecordBatch` objects."""
+        """Yield live rows as Arrow batches (65,536 rows per batch by default)."""
         pa = self._require_pyarrow("iter_arrow_batches()")
         self._validate_arrow_batch_size(batch_size)
         self._flush_varlen_columns()
@@ -9814,13 +9815,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         path,
         *,
         columns: list[str] | None = None,
-        batch_size: int = _BATCH_SIZE_DEFAULT,
+        batch_size: int = _ARROW_EXPORT_BATCH_SIZE_DEFAULT,
         compression: str | None = "zstd",
         row_group_size: int | None = None,
         include_computed: bool = True,
         **kwargs,
     ) -> None:
-        """Write this table to a Parquet file batch-wise using pyarrow."""
+        """Write Parquet in batches of 65,536 rows by default.
+
+        Unless specified, the row-group size follows the export batch size.
+        Smaller batches reduce temporary memory usage.
+        """
         pq = self._require_pyarrow_parquet("to_parquet()")
         pa = self._require_pyarrow("to_parquet()")
         self._validate_arrow_batch_size(batch_size)
@@ -9848,7 +9853,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         null_storage: Literal["mask", "sentinel"] | None = None,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
-        list_serializer: Literal["msgpack", "arrow"] = "arrow",
+        list_serializer: Literal["msgpack", "arrow"] = "msgpack",
         separate_nested_cols: bool = True,
         max_rows: int | None = None,
         **kwargs,
@@ -9932,13 +9937,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             favors compression ratios but make random access slower.
 
         list_serializer : {"msgpack", "arrow"}, optional
-            Serializer used for imported list columns. The default, ``"arrow"``,
-            stores Arrow list batches directly and is much faster for deeply nested
-            or ``list<struct<...>>`` columns. The tradeoff is that accessing those
-            list columns later requires PyArrow. Use ``"msgpack"`` to keep
-            list-column stores independent of PyArrow at read time; it can be
-            smaller for simple lists but is much slower and more memory-intensive
-            for deeply nested data.
+            Serializer used for imported list columns. Defaults to ``"msgpack"``,
+            matching :meth:`from_arrow` and list-column construction. MessagePack
+            can compress simple lists better and does not require PyArrow to read
+            the stored cells. Choose ``"arrow"`` for direct Arrow list ingestion
+            and export; this can improve throughput, especially for nested lists,
+            but may increase storage size and requires PyArrow at read time.
 
         separate_nested_cols : bool, optional
             Whether to separate qualifying nested columns during import. Defaults to

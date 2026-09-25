@@ -41,6 +41,12 @@ keeps caller-managed boundaries, while CTable still flushes the pending final
 batch when it persists or closes the table. Arrow/Parquet input batch size and
 the persisted ListArray ``batch_rows`` setting are separate controls.
 
+List columns default to ``serializer="msgpack"``, including Arrow and Parquet
+imports. Choose ``serializer="arrow"`` (``list_serializer="arrow"`` on import)
+when interchange throughput matters more than storage size. Variable-length
+text imported without a fixed-width override uses ``utf8`` storage on NumPy
+2.0+, with validity masks under the default null policy.
+
 For list columns with ``serializer="arrow"``, dense local root tables export
 directly from decompressed Arrow blocks, avoiding intermediate Python lists.
 This applies to Arrow batches, the Arrow stream protocol, and Parquet export.
@@ -152,6 +158,13 @@ Construction
 
 Parquet interoperability
 ------------------------
+
+Arrow and Parquet exports default to **65,536 rows per batch**, including
+``to_arrow()`` and Arrow PyCapsule consumers such as DuckDB, Polars and pandas.
+Pass a smaller ``batch_size`` to ``iter_arrow_batches()`` or ``to_parquet()``
+when temporary memory or time to the first batch matters. Parquet row groups
+follow the export batch size unless overridden. Import read batches and
+persisted list/variable-length storage batches retain their 2,048-row defaults.
 
 Parquet import/export is intended as logical data interchange between Parquet
 and Blosc2 CTable, not as exact preservation of Parquet's physical layout. For

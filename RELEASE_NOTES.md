@@ -12,6 +12,22 @@ verification for arrays larger than 16 MB.
 
 ### Improvements
 
+#### CTable interchange defaults and direct Arrow list export
+
+- Arrow and Parquet exports now default to 65,536 rows per batch instead of
+  2,048. `to_arrow()` and Arrow PyCapsule consumers inherit the export default.
+  Larger batches improve bulk throughput but increase temporary memory and
+  change default Parquet row-group sizes. Explicit smaller sizes remain supported.
+- Import read batches and persisted list/variable-length batches remain at
+  2,048 rows. Parquet imports now default to MessagePack list serialization,
+  matching Arrow imports and list construction; the CLI follows the same default.
+  Use `list_serializer="arrow"` or `--list-serializer arrow` to opt into Arrow.
+  Existing stored serializers and explicit string/null-storage choices are unchanged.
+- Dense local CTable exports and `ListArray.to_arrow()` keep Arrow-backed list
+  blocks in Arrow form instead of converting through Python cells. Reopened
+  dense tables also use the existing direct UTF-8 export path. Views, tables
+  with physical row holes and remote CTable exports retain the general path.
+
 #### Remote columnar tables (`RemoteCTable`) and unified `RemoteObject`
 
 - **Lazy remote table access (`RemoteCTable`)**: Columnar tables (`CTable`) can now be
