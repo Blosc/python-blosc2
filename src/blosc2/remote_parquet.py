@@ -516,9 +516,7 @@ class _ParquetOwner:
             self.cache[key] = table, size
             self.cache_bytes += size
             while (
-                self.max_cache_bytes is not None
-                and self.cache_bytes > self.max_cache_bytes
-                and len(self.cache) > 1
+                self.max_cache_bytes is not None and self.cache_bytes > self.max_cache_bytes and self.cache
             ):
                 _, (_, removed) = self.cache.popitem(last=False)
                 self.cache_bytes -= removed
@@ -554,6 +552,11 @@ class _ParquetColumn:
 
     @property
     def dictionary(self):
+        with self.storage._owner.lock:
+            self.storage._check_open()
+            return self._dictionary_locked()
+
+    def _dictionary_locked(self):
         if self._dictionary is not None:
             return self._dictionary
         values = []
@@ -579,6 +582,10 @@ class _ParquetColumn:
         return Codes()
 
     def __getitem__(self, key):
+        with self.storage._owner.lock:
+            return self._getitem_locked(key)
+
+    def _getitem_locked(self, key):
         self.storage._check_open()
         if isinstance(key, tuple) and len(key) == 1:
             key = key[0]

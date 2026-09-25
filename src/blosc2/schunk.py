@@ -2983,11 +2983,13 @@ def open(  # noqa: C901
         from blosc2.remote_parquet import RemoteParquetCTable
 
         kwargs.pop("source_format", None)
+        lazy = kwargs.pop("lazy", True)
+        if shared_cache and lazy is False:
+            raise TypeError("shared_cache requires lazy Parquet access")
         if shared_cache:
             if kwargs.get("cache_dir") is None:
                 raise ValueError("shared_cache=True requires cache_dir")
             kwargs["shared_cache"] = True
-        lazy = kwargs.pop("lazy", True)
         if lazy is False:
             from blosc2.core import fsspec_open
 

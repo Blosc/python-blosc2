@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from decimal import Decimal
 from email.utils import formatdate
 
@@ -293,6 +294,8 @@ def test_invalid_source_options_fail_clearly(tmp_path):
         blosc2.open(path, lazy=False, cache_dir=tmp_path / "cache")
     with pytest.raises(ValueError, match="requires cache_dir"):
         blosc2.open(path, shared_cache=True)
+    with pytest.raises(TypeError, match="shared_cache requires lazy"):
+        blosc2.open(path, lazy=False, shared_cache=True, cache_dir=tmp_path / "cache")
     with pytest.raises(ValueError, match="memory_map"):
         blosc2.open(path, parquet_options={"memory_map": True})
     with pytest.raises(ValueError, match="conflicts"):
@@ -868,8 +871,6 @@ def test_http_without_range_support_fails_clearly(tmp_path):
 
 
 def test_shared_warm_read_holds_cache_lock(tmp_path, monkeypatch):
-    from contextlib import contextmanager
-
     path = tmp_path / "source.parquet"
     pq.write_table(pa.table({"x": [1, 2]}), path)
     with blosc2.open(path, cache_dir=tmp_path / "cache", shared_cache=True) as remote:
@@ -927,3 +928,56 @@ def test_archive_rejects_invalid_generation(tmp_path):
     with pytest.raises(ValueError, match="generation"):
         blosc2.open(archive_path)
     assert not (tmp_path / "escaped.b2d").exists()
+
+
+@pytest.mark.parametrize("whole_row", [False, True])
+def test_refresh_waits_for_parquet_read(tmp_path, monkeypatch, whole_row):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"x": [1, 2, 3, 4], "y": [5, 6, 7, 8]}), path, row_group_size=2)
+    with blosc2.open(path) as remote:
+        owner = remote._remote_storage()._owner
+        original_group = owner.group
+        entered = threading.Event()
+        resume = threading.Event()
+        refresh_started = threading.Event()
+        refresh_done = threading.Event()
+
+        @contextmanager
+        def paused_group(number, physical):
+            with original_group(number, physical) as table:
+                if number == 0 and physical == "x":
+                    entered.set()
+                    assert resume.wait(5)
+                yield table
+
+        monkeypatch.setattr(owner, "group", paused_group)
+
+        def refresh():
+            refresh_started.set()
+            remote.refresh()
+            refresh_done.set()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            read = pool.submit(lambda: remote[0] if whole_row else remote["x"][:])
+            assert entered.wait(5)
+            update = pool.submit(refresh)
+            assert refresh_started.wait(5)
+            assert not refresh_done.wait(0.1)
+            resume.set()
+            result = read.result(timeout=5)
+            update.result(timeout=5)
+        if whole_row:
+            assert (result.x, result.y) == (1, 5)
+        else:
+            assert result.tolist() == [1, 2, 3, 4]
+
+
+def test_oversized_memory_group_is_not_retained(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"x": [1, 2]}), path)
+    with blosc2.open(path, max_cache_bytes=1) as remote:
+        assert remote["x"][0] == 1
+        assert remote.cache_bytes == 0
+        before = remote.traffic.requests
+        assert remote["x"][1] == 2
+        assert remote.traffic.requests > before
