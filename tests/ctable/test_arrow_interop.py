@@ -19,6 +19,13 @@ from blosc2 import CTable
 pa = pytest.importorskip("pyarrow")
 
 
+def test_imported_arrow_list_exports_null_children():
+    source = pa.table({"tags": pa.array([[1, None], [], None], type=pa.list_(pa.int16()))})
+    with CTable.from_arrow(source, list_serializer="arrow") as table:
+        assert table._cols["tags"].to_arrow().to_pylist() == [[1, None], [], None]
+        assert table.to_arrow().equals(source)
+
+
 @pytest.mark.parametrize("batch_size", [1, 3, 9])
 @pytest.mark.parametrize("persistent", [False, True])
 def test_arrow_list_export_direct_and_fallback(monkeypatch, tmp_path, batch_size, persistent):

@@ -908,8 +908,7 @@ class ListArray:
                 offset += len(array)
                 if offset >= stop:
                     break
-        result = parts[0] if len(parts) == 1 else pa.concat_arrays(parts)
-        return result.cast(arrow_type) if arrow_type is not None else result
+        return parts[0] if len(parts) == 1 else pa.concat_arrays(parts)
 
     @classmethod
     def from_arrow(
