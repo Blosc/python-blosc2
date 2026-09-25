@@ -569,12 +569,20 @@ def test_existing_cache_adds_local_marker_index(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("disk", [False, True])
-def test_cache_archive_reuses_warm_group_and_fetches_cold_group(tmp_path, disk):
+def test_cache_archive_reuses_warm_group_and_fetches_cold_group(tmp_path, disk, monkeypatch):
     path = tmp_path / "source.parquet"
     pq.write_table(pa.table({"x": [1, 2, 3, 4], "y": [5, 6, 7, 8]}), path, row_group_size=2)
     options = {"cache_dir": tmp_path / "cache"} if disk else {}
     artifact = tmp_path / "reference.b2z"
     cold_artifact = tmp_path / "cold-reference.b2z"
+    replace = os.replace
+
+    def checked_replace(source, destination):
+        if destination in (artifact, cold_artifact):
+            assert source.parent.parent == destination.parent
+        return replace(source, destination)
+
+    monkeypatch.setattr(remote_parquet.os, "replace", checked_replace)
     with blosc2.open(path, **options) as original:
         assert original["x"][0] == 1
         original.save(artifact)
@@ -856,3 +864,65 @@ def test_http_without_range_support_fails_clearly(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_shared_warm_read_holds_cache_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"x": [1, 2]}), path)
+    with blosc2.open(path, cache_dir=tmp_path / "cache", shared_cache=True) as remote:
+        assert remote["x"][0] == 1
+        owner = remote._remote_storage()._owner
+        guard = owner.disk.guard
+        locked = False
+
+        @contextmanager
+        def tracked_guard():
+            nonlocal locked
+            with guard():
+                locked = True
+                try:
+                    yield
+                finally:
+                    locked = False
+
+        monkeypatch.setattr(owner.disk, "guard", tracked_guard)
+        original_open = CTable.open
+
+        def checked_open(*args, **kwargs):
+            table = original_open(*args, **kwargs)
+            column = table._cols["x"]
+
+            class CheckedColumn:
+                def __getitem__(self, key):
+                    assert locked, "shared cache must remain locked during lazy reads"
+                    return column[key]
+
+            table._cols["x"] = CheckedColumn()
+            return table
+
+        monkeypatch.setattr(CTable, "open", checked_open)
+        assert remote["x"][0] == 1
+        assert not locked
+
+
+def test_archive_rejects_invalid_generation(tmp_path):
+    import zipfile
+
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"x": [1]}), path)
+    archive_path = tmp_path / "reference.b2z"
+    with blosc2.open(path) as remote:
+        remote.save(archive_path)
+    with zipfile.ZipFile(archive_path) as archive:
+        carrier = blosc2.schunk_from_cframe(archive.read("embed.b2e"))
+    manifest = carrier.vlmeta["b2remote_manifest"]
+    manifest["generation"] = str(tmp_path / "escaped")
+    carrier = blosc2.SChunk(meta={"b2tree": {"version": 1}, "b2remote_store": {"version": 1}})
+    carrier.vlmeta["b2remote_manifest"] = manifest
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("embed.b2e", carrier.to_cframe())
+    with pytest.raises(ValueError, match="generation"):
+        blosc2.open(archive_path)
+    assert not (tmp_path / "escaped.b2d").exists()

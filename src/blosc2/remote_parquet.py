@@ -11,7 +11,7 @@ import threading
 import uuid
 import zipfile
 from collections import OrderedDict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, fields
 from enum import Enum
 from pathlib import Path
@@ -362,8 +362,9 @@ class _ParquetOwner:
         self._cache_lru = OrderedDict()
         self.cache_coordinator = CacheCoordinator(max_cache_bytes) if disk is not None else None
         if self.cache_coordinator is not None:
-            self._sync_evictions()
-            self.cache_coordinator.register(self)
+            with _disk_guard(self.disk):
+                self._sync_evictions()
+                self.cache_coordinator.register(self)
         self._cache_manager = None
         self.row_ends = np.cumsum(
             [self.arrow_metadata.row_group(i).num_rows for i in range(self.arrow_metadata.num_row_groups)]
@@ -386,11 +387,15 @@ class _ParquetOwner:
             if self._cache_manager is not None:
                 self._cache_manager.cleanup()
 
+    @contextmanager
     def group(self, number, physical):
-        key = number, physical
-        with self.lock:
-            with _disk_guard(self.disk):
-                return self._group_locked(number, physical, key)
+        with self.lock, _disk_guard(self.disk):
+            table = self._group_locked(number, physical, (number, physical))
+            try:
+                yield table
+            finally:
+                if self.cache_policy is not blosc2.CachePolicy.MEMORY:
+                    table.close()
 
     def _sync_evictions(self):
         if self.cache_dir is None:
@@ -554,15 +559,11 @@ class _ParquetColumn:
         values = []
         seen = set()
         for group in range(len(self.storage.row_ends)):
-            table = self.storage._owner.group(group, self.storage.physical[self.name])
-            try:
+            with self.storage._owner.group(group, self.storage.physical[self.name]) as table:
                 for value in table._cols[self.name].dictionary:
                     if value not in seen:
                         values.append(value)
                         seen.add(value)
-            finally:
-                if self.storage._owner.cache_policy is not blosc2.CachePolicy.MEMORY:
-                    table.close()
         self._dictionary = values
         return values
 
@@ -599,16 +600,12 @@ class _ParquetColumn:
             selected = np.flatnonzero(groups == group)
             start = 0 if group == 0 else int(self.storage.row_ends[group - 1])
             local = positions[selected] - start
-            table = self.storage._owner.group(int(group), self.storage.physical[self.name])
-            try:
+            with self.storage._owner.group(int(group), self.storage.physical[self.name]) as table:
                 if self.mask:
                     mask = table._null_mask(self.name)
                     part = np.ones(len(local), dtype=bool) if mask is None else mask[local]
                 else:
                     part = table._cols[self.name][local]
-            finally:
-                if self.storage._owner.cache_policy is not blosc2.CachePolicy.MEMORY:
-                    table.close()
             for target, value in zip(selected, part, strict=True):
                 values[int(target)] = value
         result = (
@@ -779,7 +776,8 @@ class RemoteParquetCTable(RemoteCTable):
         )
         handle = None
         try:
-            discovery = disk.load()["metadata"].get("parquet_discovery") if disk is not None else None
+            with _disk_guard(disk):
+                discovery = disk.load()["metadata"].get("parquet_discovery") if disk is not None else None
             if discovery is not None:
                 try:
                     schema = schema_from_dict(discovery["schema"])
@@ -1103,7 +1101,12 @@ class RemoteParquetCTable(RemoteCTable):
             raise ValueError("destination cannot be inside the live cache")
         if owner.source_marker is None:
             owner.source_marker = _source_marker(owner.urlpath, owner.reopen_kwargs["storage_options"])
-        with owner.lock, _disk_guard(owner.disk), tempfile.TemporaryDirectory() as temporary:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            owner.lock,
+            _disk_guard(owner.disk),
+            tempfile.TemporaryDirectory(dir=destination.parent) as temporary,
+        ):
             if owner.disk is None:
                 disk, root = _disk_cache_path(
                     owner.urlpath,
@@ -1136,7 +1139,6 @@ class RemoteParquetCTable(RemoteCTable):
                     for file in root.rglob("*"):
                         if file.is_file() and not file.name.startswith(".") and file != root / "embed.b2e":
                             archive.write(file, f"{root.name}/{file.relative_to(root)}")
-            destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staged, destination)
         return str(destination)
 
@@ -1169,14 +1171,14 @@ class RemoteParquetCTable(RemoteCTable):
             _refresh_marker=manifest["metadata"]["source_marker"],
             **options,
         )
-        if table._remote_storage()._owner.disk.path != path.parent:
+        if table._remote_storage()._owner.cache_dir != path:
             table.close()
             raise ValueError("Parquet cache source or options no longer match this generation")
         return table
 
     @classmethod
     def _open_archive_artifact(cls, path, *, mode="r", storage_options=None, source_url=None):
-        from blosc2.remote_store_cache import StoreDiskCache
+        from blosc2.remote_store_cache import StoreDiskCache, validate_generation
 
         manager = tempfile.TemporaryDirectory(prefix="parquet-reference-")
         try:
@@ -1186,6 +1188,7 @@ class RemoteParquetCTable(RemoteCTable):
                 source = manifest["source"]
                 if source.get("kind") != "parquet":
                     raise ValueError("Cache archive is not a Parquet table")
+                validate_generation(manifest["generation"])
                 generation = f"{manifest['generation']}.b2d"
                 cache_root = StoreDiskCache.path_for(manager.name, source)
                 cache_root.mkdir(parents=True)
