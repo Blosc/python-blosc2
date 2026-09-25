@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import operator
-import os  # noqa: TC003
+import os
 
 from blosc2.ctable import CTable
 from blosc2.ctable_storage import RemoteTableStorage
@@ -86,14 +86,87 @@ class RemoteCTable(RemoteObject, CTable):
         cache_policy=CACHE_POLICY_DEFAULT,
         max_cache_bytes=CACHE_POLICY_DEFAULT,
         cache_dir=None,
+        shared_cache=False,
         hdf5_index=None,
         max_concurrency=8,
         metadata_buffer_bytes=8 << 20,
         row_buffer_bytes=64 << 20,
+        source_format=None,
+        parquet_options=None,
+        columns=None,
+        max_rows=None,
+        string_max_length=None,
+        null_storage=None,
+        auto_null_sentinels=True,
+        separate_nested_cols=True,
+        list_serializer="msgpack",
+        blosc2_batch_size=2048,
+        blosc2_items_per_block=None,
+        batch_size=2048,
+        cparams=None,
+        dparams=None,
+        validate=False,
         _filesystem=None,
         _filesystem_resolver=None,
         _batch_validator=None,
     ):
+        if source_format == "parquet" or (
+            isinstance(urlpath, (str, os.PathLike))
+            and os.fspath(urlpath).split("?", 1)[0].lower().endswith(".parquet")
+        ):
+            if source_format not in (None, "parquet"):
+                raise ValueError("source_format conflicts with the .parquet suffix")
+            from blosc2.remote_parquet import RemoteParquetCTable
+
+            return RemoteParquetCTable(
+                os.fspath(urlpath),
+                storage_options=storage_options,
+                parquet_options=parquet_options,
+                columns=columns,
+                max_rows=max_rows,
+                string_max_length=string_max_length,
+                null_storage=null_storage,
+                auto_null_sentinels=auto_null_sentinels,
+                separate_nested_cols=separate_nested_cols,
+                list_serializer=list_serializer,
+                blosc2_batch_size=blosc2_batch_size,
+                blosc2_items_per_block=blosc2_items_per_block,
+                batch_size=batch_size,
+                cparams=cparams,
+                dparams=dparams,
+                validate=validate,
+                max_cache_bytes=max_cache_bytes,
+                cache_policy=cache_policy,
+                cache_dir=cache_dir,
+                shared_cache=shared_cache,
+                max_concurrency=max_concurrency,
+                metadata_buffer_bytes=metadata_buffer_bytes,
+                row_buffer_bytes=row_buffer_bytes,
+            )
+        if (
+            source_format is not None
+            or any(
+                value is not None
+                for value in (
+                    parquet_options,
+                    columns,
+                    max_rows,
+                    string_max_length,
+                    null_storage,
+                    blosc2_items_per_block,
+                    cparams,
+                    dparams,
+                )
+            )
+            or auto_null_sentinels is not True
+            or separate_nested_cols is not True
+            or list_serializer != "msgpack"
+            or blosc2_batch_size != 2048
+            or batch_size != 2048
+            or validate is not False
+            or shared_cache
+        ):
+            raise TypeError("Parquet conversion options require a Parquet source")
         if urlpath is None:
             raise TypeError("RemoteCTable requires a remote B2Z URL")
         settings = {
@@ -137,6 +210,15 @@ class RemoteCTable(RemoteObject, CTable):
         pass
 
     @classmethod
+    def open_reference(cls, path, *, storage_options=None, parquet_options=None):
+        """Reopen a saved Parquet table with replacement runtime options."""
+        from blosc2.remote_parquet import RemoteParquetCTable
+
+        return RemoteParquetCTable.open_reference(
+            path, storage_options=storage_options, parquet_options=parquet_options
+        )
+
+    @classmethod
     def with_sparse_cache(
         cls,
         urlpath,
@@ -165,6 +247,37 @@ class RemoteCTable(RemoteObject, CTable):
         ``max_cache_bytes=None`` for unlimited retention. For ordinary shared
         caching, prefer ``blosc2.open(url, cache_dir=..., shared_cache=True)``.
         """
+        if isinstance(urlpath, (str, os.PathLike)) and os.fspath(urlpath).split("?", 1)[0].lower().endswith(
+            ".parquet"
+        ):
+            if any(
+                value is not None
+                for value in (
+                    dataset,
+                    path,
+                    manifest,
+                    carrier,
+                    _filesystem,
+                    _filesystem_resolver,
+                    _batch_validator,
+                    _source_validator,
+                    _manifest_validator,
+                    _max_nodes,
+                )
+            ):
+                raise ValueError("Parquet sparse caching accepts a single file and cache directory")
+            from blosc2.remote_parquet import RemoteParquetCTable
+
+            return RemoteParquetCTable(
+                os.fspath(urlpath),
+                cache_dir=runtime_cache_path,
+                shared_cache=True,
+                max_cache_bytes=max_cache_bytes,
+                storage_options=storage_options,
+                max_concurrency=max_concurrency,
+                metadata_buffer_bytes=metadata_buffer_bytes,
+                row_buffer_bytes=row_buffer_bytes,
+            )
         settings = {
             name: _positive_integer(name, value)
             for name, value in {

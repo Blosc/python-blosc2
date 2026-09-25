@@ -2687,7 +2687,7 @@ def _validate_shared_cache_request(urlpath, shared_cache, kwargs):
             kwargs["lazy"] = True
 
 
-def open(
+def open(  # noqa: C901
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
     offset: int = 0,
@@ -2857,12 +2857,15 @@ def open(
             Pre-computed native HDF5 index, or a local path or remote fsspec URL
             to its JSON encoding. It must match the source HDF5 URL and dataset
             scope. Arrays, PyTables tables, and hierarchy stores are supported.
-        source_format: {None, "blosc2", "zarr", "hdf5", "b2z"}, optional
+        source_format: {None, "blosc2", "zarr", "hdf5", "b2z", "parquet"}, optional
             Format of a lazy remote source. A ``.zarr`` URL path component selects
             Zarr automatically; a ``.h5`` or ``.hdf5`` path selects HDF5 automatically;
             a ``.b2z`` path selects B2Z automatically. An explicit value supports
-            suffix-free paths. Zarr, HDF5 and B2Z sources automatically enable
+            suffix-free paths. Zarr, HDF5, B2Z and Parquet sources automatically enable
             ``lazy=True``.
+        parquet_options: dict, optional
+            PyArrow ``ParquetFile`` reader options for a Parquet source. Conversion
+            options such as ``columns`` and ``max_rows`` are passed separately.
         assume_immutable: bool, optional
             With ``lazy=True``, skip remote identity checks before reads. Defaults
             to ``True``. Local disk caches always assume immutable sources; set to a new path or
@@ -2964,6 +2967,40 @@ def open(
     True
     """
     dataset = blosc2.core.resolve_dataset_path(dataset, path)
+    if kwargs.get("source_format") == "parquet" or (
+        isinstance(urlpath, (str, pathlib.Path))
+        and str(urlpath).split("?", 1)[0].lower().endswith(".parquet")
+    ):
+        if kwargs.get("source_format") not in (None, "parquet"):
+            raise ValueError("source_format conflicts with the .parquet suffix")
+        if mode != "r" or offset or dataset is not None:
+            raise ValueError("Parquet sources require mode='r', offset=0, and no dataset path")
+        from blosc2.remote_parquet import RemoteParquetCTable
+
+        kwargs.pop("source_format", None)
+        if shared_cache:
+            if kwargs.get("cache_dir") is None:
+                raise ValueError("shared_cache=True requires cache_dir")
+            kwargs["shared_cache"] = True
+        lazy = kwargs.pop("lazy", True)
+        if lazy is False:
+            from blosc2.core import fsspec_open
+
+            cache_keys = kwargs.keys() & {
+                "cache_dir",
+                "cache_policy",
+                "max_cache_bytes",
+                "max_concurrency",
+                "metadata_buffer_bytes",
+                "row_buffer_bytes",
+            }
+            if cache_keys:
+                raise TypeError(f"{', '.join(sorted(cache_keys))} require lazy Parquet access")
+            options = kwargs.pop("storage_options", None)
+            reader = kwargs.pop("parquet_options", None) or {}
+            with fsspec_open(str(urlpath), "rb", options) as handle:
+                return blosc2.CTable.from_parquet(handle, **kwargs, **reader)
+        return RemoteParquetCTable(str(urlpath), **kwargs)
     _reject_table_buffer_options(kwargs)
     _validate_shared_cache_request(urlpath, shared_cache, kwargs)
     if isinstance(urlpath, blosc2.URLPath):

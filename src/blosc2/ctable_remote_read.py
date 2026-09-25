@@ -345,6 +345,28 @@ def column_values(table, names, positions, *, null_masks=None):  # noqa: C901
     )
 
     storage = table._remote_read_storage()
+    if storage._owner.format == "parquet":
+        storage._check_open()
+        result = {}
+        for name in names:
+            result[name] = (
+                table._cols[name][positions]
+                if name in table.col_names
+                else table._fetch_col_at_positions_uncached(name, positions)
+            )
+            if null_masks is not None and name in table.col_names:
+                mask = table._null_mask(name)
+                if mask is not None:
+                    null_masks[name] = ~mask[positions]
+            elif name in table.col_names:
+                mask = table._null_mask(name)
+                if mask is not None:
+                    missing = ~mask[positions]
+                    if missing.any():
+                        result[name] = list(result[name])
+                        for index in np.flatnonzero(missing):
+                            result[name][index] = None
+        return result
     source_columns = _source_columns(table)
     with storage._owner.lock:
         storage._check_open()

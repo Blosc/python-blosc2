@@ -5,6 +5,58 @@ Fixed-width, `blosc2.utf8()`, batch-backed variable-length, list, struct/object,
 and dictionary columns are fetched on demand, including their null masks. A table
 inside a hierarchy can also be opened through `RemoteStore`.
 
+## Single-file Parquet (experimental)
+
+`blosc2.open()` recognizes `.parquet` paths, including fsspec URLs, and returns
+a read-only `RemoteCTable`. Use `source_format="parquet"` for an extensionless
+URL. `storage_options` go to fsspec; `parquet_options` go to PyArrow's
+`ParquetFile`. `columns`, `max_rows`, null policy, string width, and list
+conversion options follow `CTable.from_parquet()`.
+
+```python
+with blosc2.open(
+    "s3://bucket/readings.parquet",
+    storage_options={"anon": True},
+    columns=["station", "temperature"],
+    parquet_options={"read_dictionary": ["station"]},
+    cache_dir="parquet-cache",
+) as table:
+    last = table["temperature"][-1]
+    local = table.copy(urlpath="readings.b2z")
+```
+
+Reads convert the requested physical field and row group using the Arrow
+importer. A narrow scalar read can avoid unrelated fields and groups; a group
+with an indivisible large value can still allocate much more than the cache
+budget. With mask-backed nulls, schema inference reads only the footer; in-band
+null policies may need a first-batch sample. Flattening a single unnamed
+`list<struct>` root reads the smallest leaf from each group to establish the
+logical row count.
+`max_rows` stops that preparation at the requested prefix. `cache_dir` retains
+converted groups and the row map for later opens; without it, an in-memory LRU
+is used. `refresh()` reopens the source and invalidates old views. `lazy=False`
+calls the eager `CTable.from_parquet()` importer.
+Reads against the shared seekable Parquet handle are serialized; increasing
+`max_concurrency` does not make one file's row-group reads parallel.
+HTTP servers must honor byte-range requests; fsspec raises a range-request error
+for servers that only return complete files. Download the file and import it
+locally when range access is unavailable.
+
+Parquet disk caches require source size and an ETag or modification time.
+`table.save("reference.b2nd")` includes already converted groups and the row
+map; use `include_cache=False` for a small cold reference. `blosc2.open()`
+reopens a reference when the source marker still matches. Runtime credentials
+and reader objects are omitted. Reopen a protected source with
+`blosc2.RemoteCTable.open_reference("reference.b2nd", storage_options={...})`.
+`shared_cache=True` permits separate processes to reuse a `cache_dir`; it
+requires a disk cache and serializes cache lookup and publication with a file
+lock. Every process sharing that directory should use the same source and
+conversion options. `RemoteCTable.with_sparse_cache(url, cache_dir)` uses the
+same Parquet cache for a single `.parquet` source.
+The `traffic` counter reports file-handle reads and bytes returned;
+for an HTTP or object-store driver, its own buffering can change actual wire
+traffic.
+
 `blosc2.open()` dispatches uncached local B2Z table archives to `CTable`, and
 remote B2Z archives and selected local or remote PyTables tables to
 `RemoteCTable`. Supplying `cache_dir=` also selects `RemoteCTable` for a local
