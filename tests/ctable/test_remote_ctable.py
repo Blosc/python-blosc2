@@ -689,6 +689,8 @@ def test_remote_example_batch_columns(tmp_path, capsys):
         assert local["message"][47] is None
         assert local["tags"][53] is None
         assert local["region"][59] is None
+        for name, period in (("temperature", 17), ("humidity", 29), ("status", 41), ("note", 43)):
+            np.testing.assert_array_equal(np.flatnonzero(local[name].is_null()), np.arange(0, 100, period))
 
     url = f"memory://{tmp_path.name}-example-batches.b2z"
     fsspec.filesystem("memory").pipe(url, path.read_bytes())
@@ -698,6 +700,112 @@ def test_remote_example_batch_columns(tmp_path, capsys):
     assert "cold batch read" in output
     assert "warm batch read" in output
     assert "Dictionary costs (codes first, then full vocabulary on first decode)" in output
+
+
+@pytest.mark.parametrize(("format_flag", "suffix"), [("pytables", ".h5"), ("parquet", ".parquet")])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_remote_example_external_formats(tmp_path, capsys, monkeypatch, format_flag, suffix, explicit):
+    import runpy
+    import sys
+    from pathlib import Path
+
+    pytest.importorskip("tables" if format_flag == "pytables" else "pyarrow")
+    script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
+    example = runpy.run_path(str(script))
+    path = tmp_path / f"readings{suffix}"
+    args = [str(script), "--write", str(path), "--rows", "120", "--batch-size", "37"]
+    if explicit:
+        args.insert(1, f"--{format_flag}")
+    if format_flag == "pytables":
+        args += ["--full", "station_id"]
+    monkeypatch.setattr(sys, "argv", args)
+    assert example["main"]() == 0
+
+    if format_flag == "parquet":
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        source = pq.read_table(path)
+        assert source.column_names == [field.name for field in dataclasses.fields(example["Reading"])]
+        assert pa.types.is_large_string(source.schema.field("note").type)
+        assert pa.types.is_large_string(source.schema.field("message").type)
+        assert source.schema.field("tags").type == pa.list_(pa.int16())
+        assert pa.types.is_dictionary(source.schema.field("region").type)
+        assert source["temperature"].null_count == 8
+        assert source["humidity"].null_count == 5
+        assert source["status"].null_count == 3
+        assert source["note"].null_count == 3
+        assert source["message"].null_count == 3
+        assert source["tags"].null_count == 3
+        assert source["region"].null_count == 3
+        row_group = pq.read_metadata(path).row_group(0)
+        for name in ("id", "temperature", "note", "message"):
+            column = next(
+                row_group.column(i)
+                for i in range(row_group.num_columns)
+                if row_group.column(i).path_in_schema == name
+            )
+            assert "RLE_DICTIONARY" not in column.encodings
+
+    url = f"memory://{tmp_path.name}-readings{suffix}"
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    if format_flag == "parquet":
+        with blosc2.open(url, source_format="parquet") as remote:
+            assert remote.to_arrow().to_pylist() == source.to_pylist()
+    monkeypatch.setattr(sys, "argv", [str(script), *([f"--{format_flag}"] if explicit else []), url])
+    assert example["main"]() == 0
+    output = capsys.readouterr().out
+    assert "first ids: [42]" in output
+    assert f"[Format: {'PyTables/HDF5' if format_flag == 'pytables' else 'Parquet'}]" in output
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_remote_example_blosc2_flag_and_inference(tmp_path, capsys, monkeypatch, explicit):
+    import runpy
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
+    example = runpy.run_path(str(script))
+    path = tmp_path / "readings.b2z"
+    flag = ["--blosc2"] if explicit else []
+    monkeypatch.setattr(sys, "argv", [str(script), *flag, "--write", str(path), "--rows", "120"])
+    assert example["main"]() == 0
+    url = f"memory://{tmp_path.name}-readings.b2z"
+    fsspec.filesystem("memory").pipe(url, path.read_bytes())
+    monkeypatch.setattr(sys, "argv", [str(script), *flag, url])
+    assert example["main"]() == 0
+    assert "[Format: Blosc2 B2Z" in capsys.readouterr().out
+
+
+def test_remote_example_unknown_extension(tmp_path, monkeypatch, capsys):
+    import runpy
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
+    example = runpy.run_path(str(script))
+    for args in (["--write", str(tmp_path / "readings.csv")], ["memory://readings.csv"]):
+        monkeypatch.setattr(sys, "argv", [str(script), *args])
+        with pytest.raises(SystemExit, match="2"):
+            example["main"]()
+    assert "cannot infer format" in capsys.readouterr().err
+
+
+def test_remote_example_url_extension_ignores_query_string(monkeypatch):
+    import runpy
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "examples/ctable/remote_handling.py"
+    example = runpy.run_path(str(script))
+    selected = []
+    monkeypatch.setitem(
+        example["main"].__globals__, "access_external_table", lambda args: selected.append(args.parquet)
+    )
+    monkeypatch.setattr(sys, "argv", [str(script), "https://example.com/readings.parquet?version=1"])
+    assert example["main"]() == 0
+    assert selected == [True]
 
 
 def test_disk_cache_metadata_key_order(tmp_path, monkeypatch):

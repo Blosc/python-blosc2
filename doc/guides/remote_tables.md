@@ -165,6 +165,12 @@ See `examples/ctable/remote_handling.py` for a batched archive writer with nulla
 multilingual UTF-8 and variable-length strings, a batch-backed list, and a
 dictionary. It reports ordinary batch cold/warm reads and dictionary code/vocabulary
 costs separately.
+The same script writes and reads Blosc2 with `--blosc2`, PyTables/HDF5 with
+`--pytables`, and Parquet with `--parquet`. Without a format flag, it selects the
+format from the `.b2z`, `.h5`, or `.parquet` extension of the output path or input URL.
+Use `--write FILE` to create a file locally, then pass its uploaded URL to read it remotely.
+The Parquet file uses the full Blosc2 example schema, including nullable values,
+multilingual strings, lists, and dictionary-encoded regions.
 
 ## Refresh a remote table
 
