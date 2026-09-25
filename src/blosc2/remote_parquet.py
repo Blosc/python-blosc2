@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 import numpy as np
 
 import blosc2
+from blosc2.core import is_fsspec_url, normalize_urlpath
 from blosc2.ctable import CTable, NullPolicy, get_null_policy, null_policy
 from blosc2.ctable_storage import RemoteTableStorage, _AllValidRows, split_field_path
 from blosc2.proxy import CacheCoordinator
@@ -205,10 +206,18 @@ def _open_source_handle(urlpath, storage_options, marker, traffic):
     return _CountingHandle(fs.open(path, "rb", **kwargs), traffic)
 
 
+def _source_url(urlpath):
+    urlpath = str(normalize_urlpath(urlpath))
+    if not is_fsspec_url(urlpath):
+        return os.path.abspath(urlpath)
+    url = urlsplit(urlpath)
+    return urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", ""))
+
+
 def _cache_marker_index(urlpath, storage_options, options, cache_dir):
     import pyarrow
 
-    if not urlsplit(urlpath).scheme:
+    if not is_fsspec_url(urlpath):
         urlpath = os.path.abspath(urlpath)
     identity = (1, blosc2.__version__, pyarrow.__version__, urlpath, storage_options, options)
     digest = hashlib.sha256(repr(identity).encode()).hexdigest()
@@ -249,14 +258,13 @@ def _disk_cache_path(urlpath, storage_options, options, cache_dir, marker, *, sh
 
     if "size" not in marker or len(marker) < 2:
         raise ValueError("A persistent Parquet cache requires source size and a version marker")
-    if not urlsplit(urlpath).scheme:
+    if not is_fsspec_url(urlpath):
         urlpath = os.path.abspath(urlpath)
     identity = (1, blosc2.__version__, pyarrow.__version__, urlpath, storage_options, marker, options)
     digest = hashlib.sha256(repr(identity).encode()).hexdigest()
-    url = urlsplit(urlpath)
     source = {
         "kind": "parquet",
-        "urlpath": urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")),
+        "urlpath": _source_url(urlpath),
         "identity": digest,
     }
     disk = (SharedStoreCache if shared else StoreDiskCache)(cache_dir, source)
@@ -718,6 +726,7 @@ class RemoteParquetCTable(RemoteCTable):
         import pyarrow as pa
         import pyarrow.parquet as pq
 
+        urlpath = str(normalize_urlpath(urlpath))
         cache_dir = kwargs.pop("cache_dir", None)
         seed_cache = kwargs.pop("_seed_cache", None)
         cache_manager = kwargs.pop("_cache_manager", None)
@@ -1047,11 +1056,10 @@ class RemoteParquetCTable(RemoteCTable):
 
     @property
     def source(self):
-        url = urlsplit(self._remote_storage()._owner.urlpath)
         return {
             "kind": "parquet",
             "version": 1,
-            "urlpath": urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")),
+            "urlpath": _source_url(self._remote_storage()._owner.urlpath),
         }
 
     @property
@@ -1099,7 +1107,7 @@ class RemoteParquetCTable(RemoteCTable):
         if mutable not in (None, False):
             raise ValueError("Parquet references are read-only")
         owner = self._remote_storage()._owner
-        if urlsplit(owner.urlpath).scheme:
+        if is_fsspec_url(owner.urlpath):
             validate_persistable_url(owner.urlpath)
         destination = Path(destination)
         if destination.exists() and not overwrite:
@@ -1159,7 +1167,7 @@ class RemoteParquetCTable(RemoteCTable):
         source = manifest["source"]
         if source.get("kind") != "parquet":
             raise ValueError("Cache is not a Parquet table")
-        if urlsplit(source["urlpath"]).scheme:
+        if is_fsspec_url(source["urlpath"]):
             from blosc2.remote_array import validate_persistable_url
 
             validate_persistable_url(source["urlpath"])
@@ -1236,7 +1244,7 @@ class RemoteParquetCTable(RemoteCTable):
             raise ValueError("Parquet references are read-only")
         owner = self._remote_storage()._owner
         url = owner.urlpath
-        if urlsplit(url).scheme:
+        if is_fsspec_url(url):
             validate_persistable_url(url)
         if owner.source_marker is None:
             owner.source_marker = _source_marker(url, owner.reopen_kwargs["storage_options"])
@@ -1301,7 +1309,7 @@ class RemoteParquetCTable(RemoteCTable):
         options = payload.get("options")
         if not isinstance(url, str) or not isinstance(marker, dict) or not isinstance(options, dict):
             raise ValueError("Invalid Parquet reference fields")
-        if urlsplit(url).scheme:
+        if is_fsspec_url(url):
             validate_persistable_url(url)
         if "storage_options" in options or "cache_dir" in options:
             raise ValueError("Parquet references cannot contain runtime transport options")

@@ -15,12 +15,17 @@ import pytest
 
 import blosc2
 from blosc2 import remote_parquet
+from blosc2.core import cache_directory_name
 from blosc2.ctable import CTable
 from blosc2.schema_compiler import schema_to_dict
 
 fsspec = pytest.importorskip("fsspec")
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
+
+
+def test_windows_cache_directory_uses_source_basename():
+    assert cache_directory_name(r"C:\data\source.parquet", b"cache").startswith("source.parquet--")
 
 
 @pytest.mark.parametrize(
