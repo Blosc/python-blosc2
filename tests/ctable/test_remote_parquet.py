@@ -809,9 +809,9 @@ def test_http_range_requests_are_narrow(tmp_path):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Last-Modified", formatdate(path.stat().st_mtime, usegmt=True))
             self.end_headers()
-            self.wfile.write(data)
             counts["requests"] += 1
             counts["bytes"] += len(data)
+            self.wfile.write(data)
 
     try:
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ranged)
