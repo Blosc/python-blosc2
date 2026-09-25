@@ -1035,7 +1035,10 @@ class _CTableIndexingMixin:
             return self._create_membership_index(col_name, name=name)
 
         from blosc2.indexing import (
+            _DATA_CACHE,
             _IN_MEMORY_INDEXES,
+            _SIDECAR_HANDLE_CACHE,
+            _array_key,
             _copy_descriptor,
             _normalize_build_mode,
             _normalize_full_build_method,
@@ -1112,6 +1115,11 @@ class _CTableIndexingMixin:
             descriptor["token"] = token
             descriptor["dtype"] = str(np.dtype(dtype))
             descriptor["expr_values_path"] = getattr(expr_arr, "urlpath", None)
+            if descriptor["expr_values_path"] is None:
+                # The physical index was built as __self__; queries use the table expression token.
+                for cache in (_DATA_CACHE, _SIDECAR_HANDLE_CACHE):
+                    for key in [key for key in cache if key[:2] == (_array_key(expr_arr), "__self__")]:
+                        cache[(_array_key(expr_arr), token, *key[2:])] = cache.pop(key)
             value_epoch, _ = self._storage.get_epoch_counters()
             descriptor["built_value_epoch"] = value_epoch
             catalog[token] = descriptor
@@ -1424,6 +1432,7 @@ class _CTableIndexingMixin:
         """Attempt to resolve *expr_result* via a direct table expression index."""
         from blosc2.indexing import (
             _clear_cached_data,
+            _is_persistent_array,
             _load_store,
             _register_descriptor_owner,
             evaluate_bucket_query,
@@ -1444,7 +1453,7 @@ class _CTableIndexingMixin:
             # The table catalog rebases paths after moving or packing a store;
             # the expression array's own metadata still names its original files.
             store = _load_store(expr_arr)
-            if store["indexes"].get(lookup_key) is not descriptor:
+            if _is_persistent_array(expr_arr) and store["indexes"].get(lookup_key) is not descriptor:
                 _clear_cached_data(expr_arr, lookup_key)
             store["indexes"][lookup_key] = descriptor
             _register_descriptor_owner(expr_arr, lookup_key)
