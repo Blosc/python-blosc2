@@ -196,7 +196,7 @@ def test_nullable_bool_imports_without_the_255_reservation():
     table = pa.table({"v": pa.array([True, None, False], type=pa.bool_())})
     ct = blosc2.CTable.from_arrow(table, null_storage="mask")
     assert ct["v"].dtype == np.dtype(np.bool_)
-    assert ct["v"][:].tolist() == [True, False, False]
+    assert ct["v"][:].tolist() == [True, None, False]
     assert ct["v"].is_null().tolist() == [False, True, False]
 
 

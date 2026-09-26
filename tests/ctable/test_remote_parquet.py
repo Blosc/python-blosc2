@@ -1095,3 +1095,39 @@ def test_parquet_parallel_transport_failure_can_retry(tmp_path, monkeypatch):
         monkeypatch.setattr(fs, "cat_file", original)
         values = column_values(remote, remote.col_names, np.array([0]))
         assert {name: list(value) for name, value in values.items()} == {"x": [1], "y": [3]}
+
+
+@pytest.mark.parametrize("disk", [False, True])
+def test_remote_parquet_scalar_column_null_matches_row(tmp_path, disk):
+    path = tmp_path / "humidity.parquet"
+    pq.write_table(pa.table({"humidity": pa.array([None, 0, 33], type=pa.uint8())}), path)
+    options = {"cache_dir": tmp_path / "cache"} if disk else {}
+    with blosc2.open(path, **options) as remote:
+        assert remote["humidity"][0] is remote[0].humidity is None
+        assert remote["humidity"][np.int64(0)] is None
+        assert remote["humidity"][1] == remote[1].humidity == 0
+        assert remote[1:]["humidity"][0] == 0
+        assert remote["humidity"][-1] == 33
+        requests = remote.traffic.requests
+        assert remote["humidity"][0] is None
+        assert remote.traffic.requests == requests
+    if disk:
+        with blosc2.open(path, **options) as reopened:
+            requests = reopened.traffic.requests
+            assert reopened["humidity"][0] is reopened[0].humidity is None
+            assert reopened.traffic.requests == requests
+
+
+def test_remote_parquet_slice_masks_nulls_without_losing_dtype(tmp_path):
+    path = tmp_path / "slice-humidity.parquet"
+    pq.write_table(pa.table({"humidity": pa.array([None, 0, 33], type=pa.uint8())}), path)
+    options = {"cache_dir": tmp_path / "cache"}
+    for _ in range(2):
+        with blosc2.open(path, **options) as remote:
+            values = remote["humidity"][:3]
+            assert isinstance(values, np.ma.MaskedArray)
+            assert values.dtype == np.dtype("uint8")
+            assert values.tolist() == [None, 0, 33]
+            assert remote["humidity"][[2, 0]].tolist() == [33, None]
+            assert remote["humidity"][1:].tolist() == [0, 33]
+            assert not isinstance(remote["humidity"][1:], np.ma.MaskedArray)

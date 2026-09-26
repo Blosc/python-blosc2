@@ -80,7 +80,7 @@ def test_argmax_points_at_a_real_row():
 def test_argmin_would_have_picked_the_fill():
     """Regression: the fill sits at row 1 and is smaller than every real value."""
     col = mask_col([5, None, 1, 9])["v"]
-    assert col[:][1] == 0  # the fill really is there in the values
+    assert col.to_numpy()[1] == 0  # explicit unmasked access exposes the fill
     assert col.argmin() == 2  # ...and is not what argmin reports
 
 

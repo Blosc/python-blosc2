@@ -1586,8 +1586,15 @@ class Column:
         - ``list / np.ndarray`` → :class:`numpy.ndarray`
         - ``bool np.ndarray``  → :class:`numpy.ndarray`
 
+        Scalar reads return ``None`` for mask-storage nulls. Slices and gathers
+        containing mask-storage nulls return :class:`numpy.ma.MaskedArray`,
+        retaining the native dtype. Null-free selections return plain arrays.
+
         For a writable logical sub-view use :attr:`view`.
         """
+        if self._remote_storage_ref is not None:
+            with self._remote_storage_ref._owner.lock:
+                return self._values_from_key(key)
         return self._values_from_key(key)
 
     def contains(self, value):
@@ -1634,13 +1641,13 @@ class Column:
                 raise IndexError("empty tuple index is not valid for Column")
             row_key, inner_key = key[0], key[1:]
             values = self._values_from_key(row_key, check_stale=False)
-            if not inner_key:
+            if not inner_key or values is None:
                 return values
             if isinstance(row_key, (int, np.integer)) and not isinstance(row_key, (bool, np.bool_)):
                 return values[inner_key]
             return values[(slice(None), *inner_key)]
 
-        if isinstance(key, int):
+        if isinstance(key, (int, np.integer)):
             n_rows = len(self)
             if key < 0:
                 key += n_rows
@@ -1653,6 +1660,9 @@ class Column:
                 pos_true = int(_slp[key])
             else:
                 pos_true = _find_physical_index(self._valid_rows, key)
+            mask = self._nulls.valid_array()
+            if mask is not None and not mask[int(pos_true)]:
+                return None
             if self.is_dictionary:
                 return self._raw_col[int(pos_true)]
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
@@ -1675,14 +1685,16 @@ class Column:
                 )
                 and self._has_identity_positions()
             ):
-                return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key]))
+                return self._mask_selected_values(
+                    self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key])), key
+                )
             real_pos = self._resolve_live_positions()
             # Apply the slice straight to the physical positions so that all
             # slice semantics (including negative steps) follow NumPy.
             selected_pos = real_pos[key]
             if selected_pos.size == 0:
                 if self.is_utf8:
-                    return self._raw_col[selected_pos]
+                    return self._mask_selected_values(self._raw_col[selected_pos], selected_pos)
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                     return []
                 if self.is_ndarray:
@@ -1694,8 +1706,10 @@ class Column:
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
                 return chunk[selected_pos - lo]
             if self.is_list or self.is_varlen_scalar or self.is_dictionary:
-                return self._raw_col[selected_pos]
-            return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[selected_pos]))
+                return self._mask_selected_values(self._raw_col[selected_pos], selected_pos)
+            return self._mask_selected_values(
+                self._maybe_decode_timestamp_values(np.asarray(self._raw_col[selected_pos])), selected_pos
+            )
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
             n_live = len(self)
@@ -1709,8 +1723,10 @@ class Column:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
             if self.is_list or self.is_varlen_scalar or self.is_dictionary:
-                return self._raw_col[phys_indices]
-            return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
+                return self._mask_selected_values(self._raw_col[phys_indices], phys_indices)
+            return self._mask_selected_values(
+                self._maybe_decode_timestamp_values(self._raw_col[phys_indices]), phys_indices
+            )
 
         elif isinstance(key, (list, tuple, np.ndarray)):
             real_pos = self._resolve_live_positions()
@@ -1719,10 +1735,24 @@ class Column:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
             if self.is_list or self.is_varlen_scalar or self.is_dictionary:
-                return self._raw_col[phys_indices]
-            return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
+                return self._mask_selected_values(self._raw_col[phys_indices], phys_indices)
+            return self._mask_selected_values(
+                self._maybe_decode_timestamp_values(self._raw_col[phys_indices]), phys_indices
+            )
 
         raise TypeError(f"Invalid index type: {type(key)}")
+
+    def _mask_selected_values(self, values, positions):
+        """Attach validity for selected physical rows without changing the dtype."""
+        valid = self._nulls.valid_array()
+        if valid is None:
+            return values
+        null = ~np.asarray(valid[positions], dtype=bool)
+        if not null.any():
+            return values
+        values = np.asarray(values)
+        mask = np.broadcast_to(null.reshape((-1,) + (1,) * (values.ndim - 1)), values.shape).copy()
+        return np.ma.MaskedArray(values, mask=mask, copy=False)
 
     def _view_from_key(self, key) -> Column:
         """Build a Column sub-view for the given logical index key.
@@ -3323,7 +3353,9 @@ class Column:
         arr = np.asarray(self[:])
         if not masked:
             return arr
-        return np.ma.MaskedArray(arr, mask=self.is_null())
+        null = self.is_null()
+        mask = np.broadcast_to(null.reshape((-1,) + (1,) * (arr.ndim - 1)), arr.shape).copy()
+        return np.ma.MaskedArray(arr, mask=mask, copy=False)
 
     def _nonnull_chunks(self):
         """Yield chunks of live, non-null values.
@@ -8465,7 +8497,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 remote_values = column_values(self, leaves, positions, null_masks=remote_nulls)
 
             def read_values(name, remote_values=remote_values, start=start, stop=stop):
-                return remote_values[name] if name in remote_values else self[name][start:stop]
+                values = remote_values[name] if name in remote_values else self[name][start:stop]
+                return np.ma.getdata(values) if isinstance(values, np.ma.MaskedArray) else values
 
             def read_nulls(
                 name, values, remote_values=remote_values, remote_nulls=remote_nulls, start=start, stop=stop
