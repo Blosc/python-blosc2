@@ -31,6 +31,18 @@ from blosc2.remote_object import RemoteObject
 RESERVED_NAMES = {"embed.b2e", "__vlmeta__"}
 
 
+def public_source_url(url):
+    parsed = urlsplit(url)
+    if not parsed.scheme:
+        return url
+    clean = urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, parsed.query, ""))
+    try:
+        validate_persistable_url(clean)
+    except ValueError:
+        clean = urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", ""))
+    return clean
+
+
 class CacheMiss(Exception):
     """A cached-only table operation needs unavailable source data."""
 
@@ -83,7 +95,18 @@ def get_zip_offsets(zip_path: str) -> dict[str, dict[str, int]]:
             if not name or ":" in name:
                 raise ValueError("Invalid RemoteStore archive path")
             if name != "embed.b2e":
-                RemoteDiscovery._validate(name)
+                if name.startswith("parquet-groups/"):
+                    parts = name.split("/")
+                    if (
+                        len(parts) < 3
+                        or any(part in {"", ".", ".."} for part in parts)
+                        or any(char in name for char in "\\\0\n\r\t")
+                    ):
+                        raise ValueError("Invalid Parquet cache archive path")
+                else:
+                    RemoteDiscovery._validate(name)
+            if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError("RemoteStore archives cannot contain symbolic links")
             if info.filename in offsets or info.flag_bits & 1:
                 raise ValueError("Invalid RemoteStore archive member")
             f.seek(info.header_offset)
@@ -119,7 +142,7 @@ def _resolve_hdf5_options(hdf5_index, private_index, source_format):
 class RemoteDiscovery:
     """Shared metadata and source resources, independent of browser presentation."""
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         urlpath,
         storage_options=None,
@@ -141,6 +164,7 @@ class RemoteDiscovery:
         _refresh_source=False,
         _b2z_blob=None,
         _local_source=False,
+        _parquet_conversion=None,
     ):
         self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         if _source_format is not None:
@@ -185,6 +209,10 @@ class RemoteDiscovery:
         self.notice = None
         self.archive = None
         self.zstore = None
+        self.parquet_file = None
+        self.parquet_handle = None
+        self.parquet_cache = None
+        self.parquet_conversion = _parquet_conversion or {}
         self.hdf5_blob = None
         self.hdf5_source_cache_path = None
         if _hdf5_blob is not None:
@@ -198,7 +226,21 @@ class RemoteDiscovery:
         self.disk = None
         self.generation = manifest["generation"] if manifest else uuid.uuid4().hex
         self.metadata = manifest["metadata"] if manifest else {}
+        if self.format == "parquet" and manifest:
+            from blosc2.ctable import NullPolicy
+            from blosc2.remote_parquet import _restore_compression_options
+
+            self.parquet_conversion = dict(self.metadata["parquet"].get("conversion", {}))
+            self.parquet_conversion["_effective_null_policy"] = NullPolicy(
+                **self.metadata["parquet"]["discovery"]["options"]["null_policy"]
+            )
+            _restore_compression_options(self.parquet_conversion)
+        elif self.format == "parquet":
+            from blosc2.ctable import get_null_policy
+
+            self.parquet_conversion.setdefault("_effective_null_policy", get_null_policy())
         self.persist_metadata = persist_metadata
+        self.parquet_persistent = persist_metadata
         self._external_filesystem = _filesystem
         self.source_validator = _source_validator
         self.batch_validator = _batch_validator
@@ -233,6 +275,10 @@ class RemoteDiscovery:
                 self._open_b2z()
             elif self.format == "hdf5":
                 self._open_hdf5(_hdf5_index)
+            elif self.format == "parquet":
+                from blosc2.remote_parquet import discover_parquet
+
+                discover_parquet(self, self.parquet_conversion)
             else:
                 self._open_zarr()
             self._check_node_limit()
@@ -243,7 +289,11 @@ class RemoteDiscovery:
             self.close()
             raise
 
-    def _restore_manifest(self, manifest):
+    def _restore_manifest(self, manifest):  # noqa: C901
+        if self.format == "parquet":
+            from blosc2.remote_parquet import validate_parquet_metadata
+
+            validate_parquet_metadata(manifest["metadata"])
         for path, entry in manifest["nodes"].items():
             self._validate(path)
             if (
@@ -288,6 +338,10 @@ class RemoteDiscovery:
                     self.nodes[path] = (kind, self.hdf5_index["datasets"][path])
         elif self.format == "zarr" and self.zstore is None:
             self._open_zarr()
+        elif self.format == "parquet":
+            from blosc2.remote_parquet import discover_parquet
+
+            discover_parquet(self, self.parquet_conversion)
         self._check_node_limit()
 
     def _validate_hdf5_index(self):
@@ -319,6 +373,9 @@ class RemoteDiscovery:
             "metadata": self.metadata,
             "caches": sorted(self.caches),
             "batch_caches": sorted(self.batch_caches),
+            "parquet_caches": (
+                sorted(self.parquet_cache._cache_sizes) if self.parquet_cache is not None else []
+            ),
             "cache_policy": getattr(self, "cache_policy", blosc2.CachePolicy.DISK).value,
             "max_cache_bytes": getattr(self, "max_cache_bytes", None),
             "mutable": getattr(self, "mutable", False),
@@ -869,6 +926,8 @@ class RemoteDiscovery:
 
     def load_ctable_attrs(self, table_path):
         """Load one table's user attributes without opening its data arrays."""
+        if self.format == "parquet":
+            return {}
         if table_path in self.attrs:
             return dict(self.attrs[table_path])
         member = "/".join(part for part in (table_path, "_vlmeta.b2f") if part)
@@ -963,7 +1022,31 @@ class RemoteDiscovery:
             if not self._users:
                 self.close()
 
-    def restore_caches(self, manifest):
+    def restore_caches(self, manifest):  # noqa: C901
+        if self.format == "parquet":
+            from blosc2.remote_parquet import ParquetCache
+
+            if self.parquet_cache is not None:
+                self.parquet_cache.close()
+            if self.artifact_path is not None and self.disk is None and manifest:
+                self._cleanup_dir = tempfile.TemporaryDirectory(prefix="parquet-artifact-")
+                target = Path(self._cleanup_dir.name) / "parquet-groups"
+                target.mkdir()
+                members = set(manifest.get("parquet_caches", []))
+                if self.artifact_offsets is not None:
+                    with zipfile.ZipFile(self.artifact_path) as archive:
+                        for info in archive.infolist():
+                            parts = PurePosixPath(info.filename).parts
+                            if len(parts) >= 3 and parts[0] == "parquet-groups" and parts[1] in members:
+                                archive.extract(info, self._cleanup_dir.name)
+                else:
+                    for name in members:
+                        source = Path(self.artifact_path) / "parquet-groups" / name
+                        if source.is_dir():
+                            shutil.copytree(source, target / name)
+                self.parquet_artifact_dir = target
+            self.parquet_cache = ParquetCache(self)
+            return
         if manifest:
             self.restoring = True
             for path in manifest["caches"]:
@@ -1003,6 +1086,11 @@ class RemoteDiscovery:
                 self.open_ctable_batch(path)
             self.cache_coordinator.enforce()
             self.restoring = False
+
+    def group(self, number, physical):
+        if self.format != "parquet" or self.parquet_cache is None:
+            raise RuntimeError("Parquet cache is unavailable")
+        return self.parquet_cache.group(number, physical)
 
     def get_cache(self, source, *, seed=None):
         key = next(path for path, value in self.sources.items() if value is source)
@@ -1104,6 +1192,7 @@ class RemoteDiscovery:
             _source_cache_dir=self.source_cache_dir,
             _refresh_source=True,
             _local_source=self.local_source,
+            _parquet_conversion=self.parquet_conversion,
         )
         try:
             if replacement.nodes[replacement.root][0] != kind:
@@ -1116,6 +1205,8 @@ class RemoteDiscovery:
             replacement.mutable = self.mutable
             replacement.restoring = True
             replacement.disk = self.disk
+            if replacement.format == "parquet":
+                replacement.restore_caches(None)
             replacement.hdf5_source_cache_path = self.hdf5_source_cache_path
             if self.hdf5_source_cache_path is not None and replacement.hdf5_blob is None:
                 # A large replacement has no retained bytes, but must invalidate
@@ -1125,6 +1216,8 @@ class RemoteDiscovery:
                 ).hexdigest()
             return replacement
         except BaseException:
+            if replacement.disk is self.disk:
+                replacement.disk = None
             replacement.close()
             raise
 
@@ -1154,6 +1247,15 @@ class RemoteDiscovery:
         if self.zstore is not None:
             self.zstore.close()
             self.zstore = None
+        if getattr(self, "parquet_cache", None) is not None:
+            self.parquet_cache.close()
+            self.parquet_cache = None
+        if getattr(self, "parquet_file", None) is not None:
+            self.parquet_file.close()
+            self.parquet_file = None
+        if getattr(self, "parquet_handle", None) is not None:
+            self.parquet_handle.close()
+            self.parquet_handle = None
         for source in self.sources.values():
             if isinstance(source, blosc2.HDF5NDSource):
                 source.close()
@@ -1195,7 +1297,7 @@ class RemoteDiscovery:
         metadata["ranges"] = ranges
         return metadata
 
-    def save_selection(
+    def save_selection(  # noqa: C901
         self,
         full_path,
         destination: str | os.PathLike,
@@ -1205,8 +1307,10 @@ class RemoteDiscovery:
         overwrite: bool = False,
     ) -> str:
         """Export the current store or subtree to a portable .b2z reference archive."""
-        if self.local_source:
+        if self.local_source and self.format != "parquet":
             raise ValueError("local-source caches cannot be exported as portable RemoteStore references")
+        if not self.local_source:
+            validate_persistable_url(self.urlpath)
         if not isinstance(include_cache, bool):
             raise TypeError("include_cache must be a boolean")
         if mutable is not None and not isinstance(mutable, bool):
@@ -1214,6 +1318,17 @@ class RemoteDiscovery:
         dest_abs, dest_dir = self._validate_save_destination(destination, overwrite)
 
         with self.lock:
+            if self.format == "parquet" and self.parquet_source_marker is None:
+                from blosc2.remote_parquet import _source_marker
+
+                self.parquet_source_marker = _source_marker(
+                    self.urlpath, self.storage_options, self.filesystem
+                )
+                if "size" not in self.parquet_source_marker or len(self.parquet_source_marker) < 2:
+                    raise ValueError(
+                        "A portable Parquet reference requires source size and a version marker"
+                    )
+                self.metadata["parquet"]["source_marker"] = self.parquet_source_marker
             effective_mutable = self.mutable if mutable is None else mutable
             if include_cache:
                 retained = self.cache_coordinator.cache_bytes
@@ -1240,6 +1355,22 @@ class RemoteDiscovery:
 
                 exported_batches = self._export_batch_caches(full_path, staging_dir) if include_cache else []
 
+                exported_parquet = []
+                if self.format == "parquet" and include_cache:
+                    for name, (table, _) in self.parquet_cache.cache.items():
+                        filename = self.parquet_cache._filename(*name)
+                        destination = Path(staging_dir) / "parquet-groups" / filename
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        with table.copy(urlpath=destination):
+                            pass
+                        exported_parquet.append(filename)
+                    if self.parquet_cache.cache_dir is not None:
+                        for path in self.parquet_cache.cache_dir.glob("*-*.b2d"):
+                            if path.name not in exported_parquet and path.is_dir():
+                                destination = Path(staging_dir) / "parquet-groups" / path.name
+                                shutil.copytree(path, destination)
+                                exported_parquet.append(path.name)
+
                 linked_exports = self._export_linked_stores(full_path, staging_dir) if include_cache else {}
 
                 exported_manifest = {
@@ -1253,6 +1384,7 @@ class RemoteDiscovery:
                     "metadata": metadata,
                     "caches": sorted(exported_caches),
                     "batch_caches": sorted(exported_batches),
+                    "parquet_caches": sorted(exported_parquet),
                     "cache_policy": self.cache_policy.value,
                     "max_cache_bytes": self.max_cache_bytes,
                     "mutable": effective_mutable,
@@ -1358,9 +1490,15 @@ class RemoteDiscovery:
             "dataset": group_full,
             "kind": self.format,
         }
+        if self.local_source:
+            exported_source["local"] = True
         fingerprint = storage_options_fingerprint(getattr(self, "storage_options", None))
         if fingerprint:
             exported_source["storage_options"] = fingerprint
+        if self.format == "parquet":
+            from blosc2.remote_parquet import parquet_identity
+
+            exported_source["options"] = parquet_identity(self.parquet_conversion)
         if prefix:
             exported_nodes = {
                 k: (v[0], v[1] if v[0] in {"ctable", "remote_store", "unsupported"} else None)
@@ -1459,7 +1597,15 @@ class RemoteStore(RemoteObject):
 
     @classmethod
     def _try_open_artifact(
-        cls, urlpath, dataset, storage_options, cache_policy, max_cache_bytes, cache_dir, allow_array_root
+        cls,
+        urlpath,
+        dataset,
+        storage_options,
+        cache_policy,
+        max_cache_bytes,
+        cache_dir,
+        allow_array_root,
+        allow_table_root,
     ):
         if not os.path.exists(urlpath):
             return None
@@ -1475,11 +1621,13 @@ class RemoteStore(RemoteObject):
             "max_cache_bytes": None if max_cache_bytes is CACHE_POLICY_DEFAULT else max_cache_bytes,
             "cache_dir": cache_dir,
             "_allow_array_root": allow_array_root,
+            "_as_store": True,
+            "allow_table_root": allow_table_root,
         }
         return cls._open_artifact(urlpath, **kwargs)
 
     @staticmethod
-    def _cache_source(urlpath, dataset, source_format, storage_options):
+    def _cache_source(urlpath, dataset, source_format, storage_options, parquet_conversion=None):
         base_url, root, kind = parse_container_url(urlpath, dataset)
         local = not urlsplit(base_url).scheme or bool(os.path.splitdrive(base_url)[0])
         if local:
@@ -1494,6 +1642,10 @@ class RemoteStore(RemoteObject):
         fingerprint = storage_options_fingerprint(storage_options)
         if fingerprint:
             source["storage_options"] = fingerprint
+        if source["kind"] == "parquet":
+            from blosc2.remote_parquet import parquet_identity
+
+            source["options"] = parquet_identity(parquet_conversion or {})
         return source
 
     @staticmethod
@@ -1512,7 +1664,7 @@ class RemoteStore(RemoteObject):
         if value is not None and not callable(value) and not isinstance(value, dict):
             raise TypeError("nested_storage_options must be a mapping or callable")
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         urlpath,
         *,
@@ -1539,6 +1691,7 @@ class RemoteStore(RemoteObject):
         nested_storage_options=None,
         _b2z_blob=None,
         _allow_local_source=False,
+        _parquet_conversion=None,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         if not isinstance(urlpath, (str, os.PathLike)):
@@ -1546,10 +1699,20 @@ class RemoteStore(RemoteObject):
         urlpath = os.fspath(urlpath)
         hdf5_index, _source_format = _resolve_hdf5_options(hdf5_index, _hdf5_index, _source_format)
         artifact = self._try_open_artifact(
-            urlpath, dataset, storage_options, cache_policy, max_cache_bytes, cache_dir, _allow_array_root
+            urlpath,
+            dataset,
+            storage_options,
+            cache_policy,
+            max_cache_bytes,
+            cache_dir,
+            _allow_array_root,
+            allow_table_root,
         )
         if artifact is not None:
-            self._attach(artifact._owner, artifact._path)
+            try:
+                self._attach(artifact._owner, artifact._path)
+            finally:
+                artifact.close()
             return
         if dataset is not None and not isinstance(dataset, str):
             raise TypeError("dataset must be a string")
@@ -1562,11 +1725,13 @@ class RemoteStore(RemoteObject):
             and (not urlsplit(base_url).scheme or os.path.splitdrive(base_url)[0])
             and os.path.exists(base_url)
         )
-        if not local_source:
-            validate_persistable_url(base_url)
-        else:
+        if local_source:
             base_url = os.path.abspath(base_url)
             urlpath = base_url
+        elif (
+            _source_format != "parquet" and parse_container_url(base_url)[2] != "parquet"
+        ) or cache_policy is blosc2.CachePolicy.DISK:
+            validate_persistable_url(base_url)
         local_hdf5 = local_source and _source_format == "hdf5"
         disk = None
         source_cache_path = source_cache_marker = None
@@ -1574,7 +1739,9 @@ class RemoteStore(RemoteObject):
         if cache_policy is blosc2.CachePolicy.DISK:
             from blosc2.remote_store_cache import StoreDiskCache
 
-            source = self._cache_source(urlpath, dataset, _source_format, storage_options)
+            source = self._cache_source(
+                urlpath, dataset, _source_format, storage_options, _parquet_conversion
+            )
             disk = StoreDiskCache(cache_dir, source)
         try:
             manifest = disk.load() if disk is not None else manifest
@@ -1612,6 +1779,7 @@ class RemoteStore(RemoteObject):
                 _source_cache_dir=cache_dir if disk is not None else None,
                 _b2z_blob=_b2z_blob,
                 _local_source=local_source,
+                _parquet_conversion=_parquet_conversion,
             )
             manifest = owner.restored_manifest
             owner.attach_hdf5_source_cache(source_cache_path, source_cache_marker)
@@ -1813,6 +1981,7 @@ class RemoteStore(RemoteObject):
         _traffic=None,
         _source_format=None,
         _hdf5_index=None,
+        _parquet_conversion=None,
     ):
         """Attach an immutable remote hierarchy to a cache shared across processes.
 
@@ -1830,14 +1999,26 @@ class RemoteStore(RemoteObject):
 
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         limit = normalize_cache_limit(blosc2.CachePolicy.DISK, max_cache_bytes)
-        base, root, kind = parse_container_url(urlpath, dataset)
+        base, root, kind = parse_container_url(os.fspath(urlpath), dataset)
         if _source_format is not None:
             kind = _source_format
-        validate_persistable_url(base)
+        local_parquet = kind == "parquet" and (
+            not urlsplit(base).scheme or bool(os.path.splitdrive(base)[0])
+        )
+        if local_parquet:
+            base = os.path.abspath(base)
+        else:
+            validate_persistable_url(base)
         source = {"urlpath": base, "dataset": (root or "").strip("/"), "kind": kind}
+        if local_parquet:
+            source["local"] = True
         fingerprint = storage_options_fingerprint(storage_options)
         if fingerprint:
             source["storage_options"] = fingerprint
+        if kind == "parquet":
+            from blosc2.remote_parquet import parquet_identity
+
+            source["options"] = parquet_identity(_parquet_conversion or {})
         disk = SharedStoreCache(runtime_cache_path, source)
         with disk.guard():
             current = disk.load()
@@ -1869,6 +2050,8 @@ class RemoteStore(RemoteObject):
                 _traffic=_traffic,
                 _source_format=kind,
                 _hdf5_index=_hdf5_index,
+                _parquet_conversion=_parquet_conversion,
+                _local_source=local_parquet,
             )
             owner.disk = disk
             owner.shared = True
@@ -1876,6 +2059,20 @@ class RemoteStore(RemoteObject):
             owner.max_cache_bytes = limit
             owner.cache_coordinator = CacheCoordinator(limit)
             try:
+                if seed_manifest is not None and kind == "parquet":
+                    names = set(seed_manifest.get("parquet_caches", []))
+                    target = disk.path / f"{owner.generation}.b2d"
+                    if os.path.isdir(carrier):
+                        for name in names:
+                            shutil.copytree(
+                                Path(carrier) / "parquet-groups" / name, target / "parquet-groups" / name
+                            )
+                    else:
+                        with zipfile.ZipFile(carrier) as archive:
+                            for info in archive.infolist():
+                                parts = PurePosixPath(info.filename).parts
+                                if len(parts) >= 3 and parts[0] == "parquet-groups" and parts[1] in names:
+                                    archive.extract(info, target)
                 owner.restore_caches(current)
                 if seed_manifest is not None:
                     for key in seed_manifest["caches"]:
@@ -2017,6 +2214,23 @@ class RemoteStore(RemoteObject):
                     for file in folder.glob("*.chunk")
                     if file.stem.isdigit()
                 )
+            groups = []
+            if manifest["source"]["kind"] == "parquet":
+                from blosc2.remote_parquet import valid_group_name
+
+                folder = disk.path / f"{manifest['generation']}.b2d" / "parquet-groups"
+                for name in manifest.get("parquet_caches", []):
+                    if not valid_group_name(name):
+                        raise ValueError("Invalid cached Parquet group name")
+                    path = folder / name
+                    if path.is_dir() and not path.is_symlink():
+                        groups.append(
+                            (
+                                name,
+                                path,
+                                sum(file.stat().st_size for file in path.rglob("*") if file.is_file()),
+                            )
+                        )
             nested = []
             nested_root = disk.parent / "nested"
             if nested_root.is_dir() and not nested_root.is_symlink():
@@ -2041,6 +2255,7 @@ class RemoteStore(RemoteObject):
             total = (
                 sum(size for _, _, size in leaves)
                 + sum(size for _, _, size in batches)
+                + sum(size for _, _, size in groups)
                 + sum(size for _, _, size in nested)
             )
             removed = []
@@ -2061,6 +2276,12 @@ class RemoteStore(RemoteObject):
                 file.unlink()
                 removed.append((key, int(file.stem)))
                 total -= size
+            for name, path, size in groups:
+                if total <= target_bytes or len(removed) >= max_chunks:
+                    break
+                shutil.rmtree(path)
+                removed.append(("parquet", name))
+                total -= size
             for parent, source, size in nested:
                 if total <= target_bytes or len(removed) >= max_chunks:
                     break
@@ -2072,6 +2293,11 @@ class RemoteStore(RemoteObject):
                 )
                 removed.extend((f"linked:{parent.name}:{key}", chunk) for key, chunk in evicted)
                 total += remaining - size
+            if manifest["source"]["kind"] == "parquet" and any(key == "parquet" for key, _ in removed):
+                manifest["parquet_caches"] = [
+                    name for name in manifest.get("parquet_caches", []) if (folder / name).is_dir()
+                ]
+                disk.publish(manifest)
             return tuple(removed), total
 
     def read_cached(self, path, item=(), *, nchunk=None):
@@ -2244,7 +2470,7 @@ class RemoteStore(RemoteObject):
             return {
                 "kind": self._owner.format,
                 "version": 1,
-                "urlpath": self._owner.urlpath,
+                "urlpath": public_source_url(self._owner.urlpath),
                 "dataset": full,
                 "assume_immutable": True,
             }
@@ -2419,7 +2645,12 @@ class RemoteStore(RemoteObject):
         source = manifest["source"]
         if not isinstance(source, dict) or not isinstance(source.get("urlpath"), str):
             raise ValueError("Invalid RemoteStore manifest source descriptor")
-        validate_persistable_url(source["urlpath"])
+        if not (
+            (source.get("kind") == "parquet" or os.path.isdir(urlpath))
+            and source.get("local")
+            and os.path.isfile(source["urlpath"])
+        ):
+            validate_persistable_url(source["urlpath"])
         cls._validate_artifact_manifest(manifest)
         return manifest, artifact_offsets
 
@@ -2433,12 +2664,27 @@ class RemoteStore(RemoteObject):
         source = manifest["source"]
         root = source.get("dataset", "")
         RemoteDiscovery._validate(root)
-        if source.get("kind") not in {"b2z", "hdf5", "zarr"}:
+        if source.get("kind") not in {"b2z", "hdf5", "zarr", "parquet"}:
             raise ValueError("Invalid RemoteStore source kind")
         for field in ("nodes", "attrs", "listed", "metadata"):
             if not isinstance(manifest.get(field), dict):
                 raise ValueError(f"Invalid RemoteStore manifest {field}")
         nodes = manifest["nodes"]
+        if source.get("kind") == "parquet":
+            from blosc2.remote_parquet import validate_parquet_metadata
+
+            required = {"urlpath", "dataset", "kind", "options"}
+            if (
+                not required <= set(source) <= required | {"local", "storage_options"}
+                or not isinstance(source["options"], str)
+                or len(source["options"]) != 64
+                or any(char not in "0123456789abcdef" for char in source["options"])
+                or ("local" in source and source["local"] is not True)
+            ):
+                raise ValueError("Invalid Parquet source descriptor")
+            if root or set(nodes) != {""} or nodes[""][0] != "ctable":
+                raise ValueError("Parquet RemoteStore requires one root CTable")
+            validate_parquet_metadata(manifest["metadata"])
         for path, entry in nodes.items():
             RemoteDiscovery._validate(path)
             if (
@@ -2450,10 +2696,13 @@ class RemoteStore(RemoteObject):
             if entry[0] == "ctable":
                 metadata = entry[1]
                 if (
-                    source.get("kind") not in {"b2z", "hdf5"}
+                    source.get("kind") not in {"b2z", "hdf5", "parquet"}
                     or not isinstance(metadata, dict)
                     or metadata.get("kind") not in {"ctable", b"ctable"}
-                    or not isinstance(metadata.get("schema"), (str, bytes))
+                    or (
+                        source.get("kind") != "parquet"
+                        and not isinstance(metadata.get("schema"), (str, bytes))
+                    )
                     or (
                         source.get("kind") == "hdf5"
                         and (
@@ -2506,6 +2755,15 @@ class RemoteStore(RemoteObject):
                 )
             ):
                 raise ValueError("Invalid cached RemoteStore batch")
+        parquet_caches = manifest.get("parquet_caches", [])
+        if not isinstance(parquet_caches, list) or (parquet_caches and source.get("kind") != "parquet"):
+            raise ValueError("Invalid cached Parquet groups")
+        from blosc2.remote_parquet import valid_group_name
+
+        if any(not valid_group_name(name) for name in parquet_caches) or len(set(parquet_caches)) != len(
+            parquet_caches
+        ):
+            raise ValueError("Invalid cached Parquet group name")
         linked = manifest.get("linked", {})
         if not isinstance(linked, dict):
             raise ValueError("Invalid nested RemoteStore artifacts")
@@ -2548,6 +2806,7 @@ class RemoteStore(RemoteObject):
                 dataset=source_desc.get("dataset"),
                 manifest=manifest,
                 persist_metadata=True,
+                _local_source=source_desc.get("local", False),
             )
         except BaseException:
             if cleanup_dir is not None:
@@ -2609,6 +2868,7 @@ class RemoteStore(RemoteObject):
             dataset=source_desc.get("dataset"),
             manifest=manifest,
             persist_metadata=False,
+            _local_source=source_desc.get("local", False),
             _traffic=_traffic,
             _filesystem=(
                 _filesystem_resolver(source_desc["urlpath"]) if _filesystem_resolver is not None else None
@@ -2665,7 +2925,7 @@ class RemoteStore(RemoteObject):
             if not isinstance(cache_policy, blosc2.CachePolicy):
                 raise TypeError("cache_policy must be a blosc2.CachePolicy instance")
             if cache_policy is blosc2.CachePolicy.NONE and (
-                manifest.get("caches") or manifest.get("batch_caches")
+                manifest.get("caches") or manifest.get("batch_caches") or manifest.get("parquet_caches")
             ):
                 raise ValueError(
                     "Cannot reopen a warm RemoteStore artifact with CachePolicy.NONE; "
@@ -2702,6 +2962,13 @@ class RemoteStore(RemoteObject):
                 urlpath, manifest, artifact_offsets, storage_options, cache_policy, limit, cache_dir
             )
 
+        if kwargs.get("_as_store"):
+            if owner.nodes[owner.root][0] == "ctable" and not kwargs.get("allow_table_root"):
+                owner.close()
+                raise ValueError("RemoteStore requires a group; use RemoteCTable for a table")
+            result = object.__new__(cls)
+            result._attach(owner, "")
+            return result
         return cls._select_artifact(owner, kwargs.get("dataset"), kwargs.get("max_concurrency"))
 
     @classmethod

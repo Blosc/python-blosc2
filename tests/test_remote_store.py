@@ -15,6 +15,96 @@ import blosc2
 fsspec = pytest.importorskip("fsspec")
 
 
+def test_parquet_table_root_uses_store_owner(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    path = tmp_path / "data.parquet"
+    pq.write_table(pa.table({"value": [1, 2, 3, 4]}), path, row_group_size=2)
+    with blosc2.RemoteStore(path, allow_table_root=True, _allow_local_source=True) as store:
+        assert store.kind("") == "ctable"
+        with store[""] as table:
+            assert table._storage._owner is store._owner
+            np.testing.assert_array_equal(table["value"][:], [1, 2, 3, 4])
+
+
+def test_parquet_shared_cache_export_and_refresh(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    path = tmp_path / "data.parquet"
+    pq.write_table(pa.table({"value": [1, 2, 3, 4]}), path, row_group_size=2)
+    url = "memory:///store-root.parquet"
+    fs = fsspec.filesystem("memory")
+    fs.pipe("/store-root.parquet", path.read_bytes())
+    cache = tmp_path / "cache"
+    archive = tmp_path / "warm.b2z"
+
+    def read(store):
+        with store[""] as table:
+            return table["value"][3]
+
+    with blosc2.RemoteStore.with_sparse_cache(url, cache) as store:
+        table = store[""]
+        assert table._storage._owner is store._owner
+        assert store.read_cached_table(read) == (False, None)
+        assert table["value"][3] == 4
+        assert store.read_cached_table(read) == (True, 4)
+        source = store._owner.disk.source
+        store.save(archive)
+        table.close()
+
+    with blosc2.open(archive) as table:
+        before = table.traffic.requests
+        assert table["value"][3] == 4
+        assert table.traffic.requests == before
+
+    with blosc2.RemoteStore.with_sparse_cache(url, cache) as store:
+        before = store.traffic.requests
+        with store[""] as table:
+            assert table["value"][3] == 4
+        assert store.traffic.requests == before
+
+    removed, remaining = blosc2.RemoteStore.trim_sparse_cache(cache, source, 0)
+    assert removed
+    assert remaining == 0
+
+    with blosc2.RemoteStore.with_sparse_cache(url, cache) as store:
+        assert store.read_cached_table(read) == (False, None)
+        old = store[""]
+        pq.write_table(pa.table({"value": [5, 6, 7, 8]}), path, row_group_size=2)
+        fs.pipe("/store-root.parquet", path.read_bytes())
+        store.refresh()
+        with pytest.raises(RuntimeError, match="stale"):
+            old["value"][3]
+        old.close()
+        with store[""] as table:
+            assert table["value"][3] == 8
+
+
+def test_parquet_standalone_refresh_replaces_cache(tmp_path, monkeypatch):
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    path = tmp_path / "refresh.parquet"
+    pq.write_table(pa.table({"value": [1, 2]}), path)
+    with blosc2.RemoteCTable(path, cache_dir=tmp_path / "cache") as table:
+        old = table["value"]
+        assert old[0] == 1
+        pq.write_table(pa.table({"value": [3, 4]}), path)
+        table.refresh()
+        with pytest.raises(RuntimeError, match=r"stale|closed"):
+            old[0]
+        assert table["value"][0] == 3
+        import blosc2.remote_parquet as parquet
+
+        def fail(*args):
+            raise OSError("discovery failed")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(parquet, "discover_parquet", fail)
+            with pytest.raises(OSError, match="discovery failed"):
+                table.refresh()
+        assert table["value"][0] == 3
+
+
 @dataclasses.dataclass
 class NestedIndexedRow:
     value: int = blosc2.field(blosc2.int64(), chunks=(64,), blocks=(16,))

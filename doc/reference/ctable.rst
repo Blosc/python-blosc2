@@ -212,6 +212,14 @@ inferred from Arrow, Parquet or CSV — keeps its nulls in a sidecar, so:
     blosc2.utf8(nullable=True)  # any string, including "" and "\x00"
     blosc2.complex128(nullable=True)  # nullable at all, for the first time
 
+Scalar column reads apply the validity mask: ``t["price"][i]`` returns
+``None`` for a missing value, matching ``t[i].price``. Slices and gathers
+containing mask-storage nulls return a NumPy masked array, preserving the
+native dtype and displaying missing values as ``--``. Null-free selections
+return plain NumPy arrays. ``column.to_numpy()`` explicitly returns unmasked
+values; ``column.to_numpy(masked=True)`` always includes a mask.
+Sentinel-storage reads keep returning the reserved value.
+
 Sentinel storage is supported indefinitely and is one keyword away, per column
 (``null_storage="sentinel"``, or any explicit ``null_value=``) or globally
 through :class:`NullPolicy`.  It is the right choice when a column has to stay
