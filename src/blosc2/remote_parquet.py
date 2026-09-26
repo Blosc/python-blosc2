@@ -10,7 +10,7 @@ import shutil
 import uuid
 import zipfile
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from enum import Enum
 from types import SimpleNamespace
@@ -138,16 +138,30 @@ class _CountingHandle:
     def __init__(self, handle, traffic):
         self.handle = handle
         self.traffic = traffic
+        self.ranges = ()
+
+    @contextmanager
+    def buffered_ranges(self, ranges):
+        previous, self.ranges = self.ranges, ranges
+        try:
+            yield
+        finally:
+            self.ranges = previous
 
     def read(self, size=-1):
+        start = self.handle.tell()
+        for offset, data in self.ranges:
+            if size >= 0 and offset <= start and start + size <= offset + len(data):
+                self.handle.seek(start + size)
+                return data[start - offset : start - offset + size]
         data = self.handle.read(size)
         self.traffic.charge(len(data))
         return data
 
     def readinto(self, buffer):
-        size = self.handle.readinto(buffer)
-        self.traffic.charge(size)
-        return size
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
 
     def __getattr__(self, name):
         return getattr(self.handle, name)
@@ -223,6 +237,8 @@ def _open_source_handle(urlpath, storage_options, marker, traffic, filesystem=No
         if marker and urlsplit(urlpath).scheme in {"http", "https"} and hasattr(fs, "set_session")
         else {}
     )
+    if urlsplit(urlpath).scheme in {"http", "https"} and hasattr(fs, "set_session"):
+        kwargs["cache_type"] = (storage_options or {}).get("cache_type", "none")
     return _CountingHandle(fs.open(path, "rb", **kwargs), traffic)
 
 
@@ -522,8 +538,80 @@ class ParquetCache:
             evicted.append(key)
         return tuple(evicted)
 
+    def _ensure_reader(self):
+        owner = self.owner
+        if owner.parquet_file is None:
+            import pyarrow.parquet as pq
+
+            if owner.artifact_path is not None and owner.parquet_source_marker is not None:
+                marker = _source_marker(owner.urlpath, owner.storage_options, owner.filesystem)
+                if marker != owner.parquet_source_marker:
+                    raise RuntimeError("Parquet reference source has changed")
+            owner.parquet_handle = _open_source_handle(
+                owner.urlpath,
+                owner.storage_options,
+                owner.parquet_source_marker,
+                owner.traffic,
+                owner.filesystem,
+            )
+            try:
+                owner.parquet_file = pq.ParquetFile(
+                    owner.parquet_handle,
+                    metadata=owner.arrow_metadata,
+                    **owner.parquet_reader_options,
+                )
+            except BaseException:
+                owner.parquet_handle.close()
+                owner.parquet_handle = None
+                raise
+
+    def group_reads(self, number, physical):
+        """Fetch one missing physical field; caller owns decoding and cache changes."""
+        owner = self.owner
+        path = None if self.cache_dir is None else self.cache_dir / _group_filename(number, physical)
+        if (number, physical) in self.cache or (path is not None and path.exists()):
+            return []
+        if owner.cache_coordinator.cached_only:
+            return []
+        self._ensure_reader()
+        handle = owner.parquet_handle.handle
+        if not hasattr(handle, "fs"):
+            return []
+        group = owner.arrow_metadata.row_group(number)
+        ranges = []
+        for index in range(group.num_columns):
+            column = group.column(index)
+            name = column.path_in_schema
+            if physical and name != physical and not name.startswith(physical + "."):
+                continue
+            offset = min(
+                value
+                for value in (column.dictionary_page_offset, column.data_page_offset)
+                if value is not None and value >= 0
+            )
+            size = column.total_compressed_size
+            if size < 0 or (handle.size is not None and offset + size > handle.size):
+                raise ValueError("Parquet column range exceeds source bounds")
+            ranges.append((offset, size))
+
+        def fetch():
+            answers = []
+            for offset, size in ranges:
+                if hasattr(handle, "async_fetch_range"):
+                    # HTTPFile's transport checks range support without reading an ignored full response.
+                    data = handle._fetch_range(offset, offset + size)
+                else:
+                    data = handle.fs.cat_file(handle.path, start=offset, end=offset + size)
+                owner.traffic.charge(len(data))
+                if len(data) != size:
+                    raise OSError("Incomplete Parquet column range")
+                answers.append((offset, data))
+            return answers
+
+        return (yield fetch, (), sum(size for _, size in ranges)) if ranges else []
+
     @contextmanager
-    def group(self, number, physical):  # noqa: C901
+    def group(self, number, physical):
         owner = self.owner
         with owner.lock:
             from blosc2.remote_store import CacheMiss
@@ -554,30 +642,7 @@ class ParquetCache:
                     pass
             if owner.cache_coordinator.cached_only:
                 raise CacheMiss
-            if owner.parquet_file is None:
-                import pyarrow.parquet as pq
-
-                if owner.artifact_path is not None and owner.parquet_source_marker is not None:
-                    marker = _source_marker(owner.urlpath, owner.storage_options, owner.filesystem)
-                    if marker != owner.parquet_source_marker:
-                        raise RuntimeError("Parquet reference source has changed")
-                owner.parquet_handle = _open_source_handle(
-                    owner.urlpath,
-                    owner.storage_options,
-                    owner.parquet_source_marker,
-                    owner.traffic,
-                    owner.filesystem,
-                )
-                try:
-                    owner.parquet_file = pq.ParquetFile(
-                        owner.parquet_handle,
-                        metadata=owner.arrow_metadata,
-                        **owner.parquet_reader_options,
-                    )
-                except BaseException:
-                    owner.parquet_handle.close()
-                    owner.parquet_handle = None
-                    raise
+            self._ensure_reader()
             arrow = owner.parquet_file.read_row_group(number, columns=[physical], use_threads=False)
             options = owner.parquet_options
             if physical == "" and not options["flatten_root"]:
@@ -713,6 +778,14 @@ class _ParquetColumn:
             return self._getitem_locked(key)
 
     def _getitem_locked(self, key):
+        from blosc2.ctable_remote_read import run_reads
+
+        values, peak = run_reads(((self.name, self.reads(key)),), 1, self.storage.row_buffer_bytes)
+        self.storage._peak_row_buffer_bytes = peak
+        return values[self.name]
+
+    def reads(self, key):
+        """Yield transport work while selection, decoding and caching stay serial."""
         self.storage._check_open()
         if isinstance(key, tuple) and len(key) == 1:
             key = key[0]
@@ -734,12 +807,20 @@ class _ParquetColumn:
             selected = np.flatnonzero(groups == group)
             start = 0 if group == 0 else int(self.storage.row_ends[group - 1])
             local = positions[selected] - start
-            with self.storage._owner.group(int(group), self.storage.physical[self.name]) as table:
+            owner = self.storage._owner
+            physical = self.storage.physical[self.name]
+            ranges = yield from owner.parquet_cache.group_reads(int(group), physical)
+            # A retained group may be available without opening the source handle.
+            with ExitStack() as stack:
+                if ranges:
+                    stack.enter_context(owner.parquet_handle.buffered_ranges(ranges))
+                table = stack.enter_context(owner.group(int(group), physical))
                 if self.mask:
                     mask = table._null_mask(self.name)
                     part = np.ones(len(local), dtype=bool) if mask is None else mask[local]
                 else:
                     part = table._cols[self.name][local]
+            del ranges
             for target, value in zip(selected, part, strict=True):
                 values[int(target)] = value
         result = (

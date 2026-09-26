@@ -88,8 +88,18 @@ export ``.b2z`` references tied to the local source path.
 
 HTTP Parquet sources need byte-range support. A persistent cache also needs a
 source size and version marker, such as an ETag, modification time, or
-Backblaze B2 file ID. The ``traffic`` counter measures file-handle reads;
-transport buffering may make actual HTTP transfer different.
+Backblaze B2 file ID. HTTP read-ahead is disabled by default to avoid fetching
+unused bytes; an explicit ``storage_options={"cache_type": "bytes"}`` restores
+fsspec buffering. The ``traffic`` counter counts fetched ranges; explicitly
+enabled transport buffering may make actual HTTP transfer different.
+
+Multi-column selections, including table previews, fetch independent Parquet
+column chunks concurrently using ``max_concurrency`` (8 by default). Decoding
+and cache writes stay on the calling thread. ``row_buffer_bytes`` bounds each
+wave of compressed responses; one physical field larger than the budget runs
+alone. A physical field with nested leaves is fetched as one unit. Reads still
+load whole column chunks for the selected row groups, even for a few rows.
+Use ``max_concurrency=1`` for serial transport.
 
 See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
 access, filtering, buffering, reference saving, and materialization examples.

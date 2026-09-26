@@ -816,7 +816,7 @@ def test_http_range_requests_are_narrow(tmp_path):
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_port}/served.parquet?signature=test"
-        with blosc2.open(url, storage_options={"block_size": 4096, "cache_type": "none"}) as remote:
+        with blosc2.open(url, storage_options={"block_size": 4096}) as remote:
             assert counts["requests"] == 1
             assert counts["heads"] == 1
             assert "signature" not in remote.source["urlpath"]
@@ -1001,3 +1001,97 @@ def test_oversized_memory_group_is_not_retained(tmp_path):
         before = remote.traffic.requests
         assert remote["x"][1] == 2
         assert remote.traffic.requests > before
+
+
+@pytest.mark.parametrize(("workers", "budget", "expected"), [(1, 1 << 20, 1), (3, 1 << 20, 3), (3, 1, 1)])
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.NONE, blosc2.CachePolicy.DISK]
+)
+def test_parquet_parallel_reads_are_bounded(tmp_path, monkeypatch, workers, budget, expected, policy):
+    from blosc2.ctable_remote_read import column_values
+
+    source = pa.table({name: [0, None, 2, 3, 4, 5] for name in ("x", "y", "z")})
+    path = tmp_path / "parallel.parquet"
+    pq.write_table(source, path, row_group_size=3)
+    options = (
+        {"cache_dir": tmp_path / "cache"} if policy is blosc2.CachePolicy.DISK else {"cache_policy": policy}
+    )
+    with blosc2.open(path, max_concurrency=workers, **options) as remote:
+        remote.row_buffer_bytes = budget
+        owner = remote._remote_read_storage()._owner
+        fs = owner.parquet_handle.handle.fs
+        original = fs.cat_file
+        lock = threading.Lock()
+        barrier = threading.Barrier(expected)
+        state = {"active": 0, "peak": 0, "calls": 0, "bytes": 0}
+        caller = threading.current_thread()
+        group = remote_parquet.ParquetCache.group
+
+        def checked_group(self, *args):
+            assert threading.current_thread() is caller
+            return group(self, *args)
+
+        def fetch(*args, **kwargs):
+            with lock:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+                state["calls"] += 1
+                first_wave = state["calls"] <= expected
+            try:
+                if first_wave:
+                    barrier.wait(timeout=5)
+                data = original(*args, **kwargs)
+                with lock:
+                    state["bytes"] += len(data)
+                return data
+            finally:
+                with lock:
+                    state["active"] -= 1
+
+        monkeypatch.setattr(fs, "cat_file", fetch)
+        monkeypatch.setattr(remote_parquet.ParquetCache, "group", checked_group)
+        before = (remote.traffic.requests, remote.traffic.nbytes)
+        values = column_values(remote, remote.col_names, np.array([5, 1, 0, 5]))
+        assert values == {name: [5, None, 0, 5] for name in remote.col_names}
+        assert state["peak"] == expected
+        requests = 12 if policy is blosc2.CachePolicy.NONE else 6
+        assert remote.traffic.requests - before[0] == state["calls"] == requests
+        assert remote.traffic.nbytes - before[1] == state["bytes"]
+        assert owner.parquet_handle.ranges == ()
+        peak = remote._remote_read_storage()._peak_row_buffer_bytes
+        if budget > 1:
+            assert peak <= budget
+        else:
+            assert peak <= max(
+                owner.arrow_metadata.row_group(i).column(j).total_compressed_size
+                for i in range(2)
+                for j in range(3)
+            )
+        warm = remote.traffic.requests
+        assert column_values(remote, remote.col_names, np.array([5, 1, 0, 5])) == values
+        assert remote.traffic.requests == warm + (requests if policy is blosc2.CachePolicy.NONE else 0)
+
+
+def test_parquet_parallel_transport_failure_can_retry(tmp_path, monkeypatch):
+    from blosc2.ctable_remote_read import column_values
+
+    path = tmp_path / "retry.parquet"
+    pq.write_table(pa.table({"x": [1, 2], "y": [3, 4]}), path)
+    with blosc2.open(path) as remote:
+        owner = remote._remote_read_storage()._owner
+        fs = owner.parquet_handle.handle.fs
+        original = fs.cat_file
+
+        def fail(*args, **kwargs):
+            raise OSError("transport failed")
+
+        monkeypatch.setattr(fs, "cat_file", fail)
+        with pytest.raises(OSError, match="transport failed"):
+            column_values(remote, remote.col_names, np.array([0]))
+        assert owner.parquet_handle.ranges == ()
+        monkeypatch.setattr(fs, "cat_file", lambda *args, **kwargs: b"short")
+        with pytest.raises(OSError, match="Incomplete Parquet"):
+            column_values(remote, remote.col_names, np.array([0]))
+        monkeypatch.setattr(fs, "cat_file", original)
+        values = column_values(remote, remote.col_names, np.array([0]))
+        assert {name: list(value) for name, value in values.items()} == {"x": [1], "y": [3]}
