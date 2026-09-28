@@ -1760,27 +1760,34 @@ class RemoteStore(RemoteObject):
                         explicit=_hdf5_index is None,
                     )
                 )
-            owner = RemoteDiscovery(
-                urlpath,
-                storage_options,
-                dataset=dataset,
-                manifest=manifest,
-                persist_metadata=disk is not None,
-                _filesystem=_filesystem,
-                _source_validator=_source_validator,
-                _batch_validator=_batch_validator,
-                _filesystem_resolver=_filesystem_resolver,
-                _manifest_validator=_manifest_validator,
-                _max_nodes=_max_nodes,
-                _source_format=_source_format,
-                _hdf5_index=hdf5_index,
-                _hdf5_blob=_hdf5_blob,
-                _traffic=_traffic,
-                _source_cache_dir=cache_dir if disk is not None else None,
-                _b2z_blob=_b2z_blob,
-                _local_source=local_source,
-                _parquet_conversion=_parquet_conversion,
-            )
+            while True:
+                try:
+                    owner = RemoteDiscovery(
+                        urlpath,
+                        storage_options,
+                        dataset=dataset,
+                        manifest=manifest,
+                        persist_metadata=disk is not None,
+                        _filesystem=_filesystem,
+                        _source_validator=_source_validator,
+                        _batch_validator=_batch_validator,
+                        _filesystem_resolver=_filesystem_resolver,
+                        _manifest_validator=_manifest_validator,
+                        _max_nodes=_max_nodes,
+                        _source_format=_source_format,
+                        _hdf5_index=hdf5_index,
+                        _hdf5_blob=_hdf5_blob,
+                        _traffic=_traffic,
+                        _source_cache_dir=cache_dir if disk is not None else None,
+                        _b2z_blob=_b2z_blob,
+                        _local_source=local_source,
+                        _parquet_conversion=_parquet_conversion,
+                    )
+                    break
+                except (KeyError, TypeError, ValueError):
+                    if disk is None or source["kind"] != "parquet" or manifest is None:
+                        raise
+                    manifest = None
             manifest = owner.restored_manifest
             owner.attach_hdf5_source_cache(source_cache_path, source_cache_marker)
         except BaseException:
