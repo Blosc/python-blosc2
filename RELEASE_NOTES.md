@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.14.0 to 4.14.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.13.1 to 4.14.0
 
 Python-Blosc2 4.14.0 adds remote tables, shared caches, native HDF5 range reads,
