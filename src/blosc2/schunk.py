@@ -2276,7 +2276,7 @@ def _open_lazy_remote(urlpath, source_format, options, shared_cache=False):
         return _open_remote_b2z(urlpath, options)
     if source_format == "hdf5":
         return _open_remote_hdf5(urlpath, options)
-    if source_format == "zarr" and options.get("_local_source"):
+    if source_format == "zarr":
         try:
             return blosc2.RemoteArray(urlpath, **options)
         except ValueError as exc:
@@ -2287,12 +2287,12 @@ def _open_lazy_remote(urlpath, source_format, options, shared_cache=False):
         store_options = {
             key: value
             for key, value in options.items()
-            if key in {"dataset", "cache_dir", "cache_policy", "max_cache_bytes"}
+            if key in {"dataset", "storage_options", "cache_dir", "cache_policy", "max_cache_bytes"}
         }
         with blosc2.RemoteStore(
             urlpath,
             _allow_array_root=True,
-            _allow_local_source=True,
+            _allow_local_source=options.get("_local_source", False),
             _source_format="zarr",
             **store_options,
         ) as store:

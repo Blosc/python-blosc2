@@ -38,6 +38,11 @@ columns, queries, views, and local copy operations work normally.
 
 When working with containers that hold multiple groups and datasets—such as `.b2z`, `.zarr`, or `.h5` files—use {ref}`RemoteStore` to discover, navigate, and access the hierarchy:
 
+`blosc2.open(url, cache_dir="cache-dir")` also returns a `RemoteStore` when
+the selected node is a group, including remote Zarr v2 and v3 groups. Use
+`path="group/array"` to select an array directly; group caches use `cache_dir`
+rather than `cache_path`.
+
 ```python
 import blosc2
 

@@ -487,6 +487,22 @@ def hierarchy(request, tmp_path):
     return url, data
 
 
+def test_open_remote_hierarchy(hierarchy, tmp_path):
+    url, data = hierarchy
+    for path in (None, "group"):
+        with blosc2.open(url, path=path, cache_dir=tmp_path / "cache") as store:
+            assert isinstance(store, blosc2.RemoteStore)
+            key = "group/a" if path is None else "a"
+            with store[key] as array:
+                np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
+    with blosc2.open(url, path="group/a") as array:
+        assert isinstance(array, blosc2.RemoteArray)
+        np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
+    if url.endswith(".zarr"):
+        with pytest.raises(NotImplementedError, match="cache_dir"):
+            blosc2.open(url, cache_path=tmp_path / "group.b2nd")
+
+
 def test_nested_remote_store_discovery_and_traversal(hierarchy, tmp_path):
     url, data = hierarchy
     host = tmp_path / "nested-host.b2z"

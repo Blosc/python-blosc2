@@ -169,6 +169,14 @@ class ZarrNDSource(ProxyNDSource):
                     mode="r",
                 )
         except Exception as exc:
+            if type(exc).__name__ == "ArrayNotFoundError":
+                # Zarr v2 reports a missing array even when a group exists.
+                try:
+                    with ZARR_SYNC_LOCK:
+                        zarr.open_group(store=open_store, path=_path, mode="r")
+                except FileNotFoundError:
+                    raise exc from None
+                raise ValueError(f"{store!r} is a Zarr group; pass the path of an array") from exc
             if type(exc).__name__ in {"ContainsGroupError", "NodeTypeValidationError"}:
                 raise ValueError(f"{store!r} is a Zarr group; pass the path of an array") from exc
             raise
