@@ -467,7 +467,7 @@ class TreeStore(DictStore):
 
         # Check if this key already has children (is a structural subtree)
         children = self.get_children(key)
-        if children:
+        if children or super().__contains__(full_key + "/__vlmeta__"):
             raise ValueError(
                 f"Cannot assign array to structural path '{key}' that already has children: {children}"
             )
@@ -628,7 +628,7 @@ class TreeStore(DictStore):
         # Check if this key has children (is a structural subtree)
         children = self.get_children(key)
 
-        if children:
+        if children or super().__contains__(full_key + "/__vlmeta__"):
             return self.get_subtree(key)
         elif key_exists_as_data:
             return super().__getitem__(full_key)
@@ -685,11 +685,12 @@ class TreeStore(DictStore):
             key=len,
             reverse=True,
         )
+        metadata_keys = [k for k in DictStore.keys(self) if k.startswith(prefix) and self._is_vlmeta_key(k)]
 
-        if not key_exists_as_data and not descendants and not object_roots_to_delete:
+        if not key_exists_as_data and not descendants and not object_roots_to_delete and not metadata_keys:
             raise KeyError(f"Key '{key}' not found")
 
-        keys_to_delete = []
+        keys_to_delete = [self._translate_key_from_full(k) for k in metadata_keys]
         if key_exists_as_data:
             keys_to_delete.append(key)
         for descendant in descendants:
@@ -769,6 +770,8 @@ class TreeStore(DictStore):
                 super().__contains__(full_key)
                 or self._object_info(full_key) is not None
                 or self._probe_object_info(full_key) is not None
+                or super().__contains__(full_key + "/__vlmeta__")
+                or bool(self.get_children(key))
             )
         except ValueError:
             return False
@@ -803,8 +806,8 @@ class TreeStore(DictStore):
                 if relative_key is not None:
                     all_keys.add(relative_key)
 
-        # Filter out vlmeta keys
-        all_keys = {key for key in all_keys if not self._is_vlmeta_key(key)}
+        # Metadata-only groups remain visible; their internal carrier does not.
+        all_keys = {key.rsplit("/", 1)[0] if self._is_vlmeta_key(key) else key for key in all_keys} - {""}
 
         # Filter out object-internal keys
         object_roots = self._effective_object_roots()
@@ -953,7 +956,7 @@ class TreeStore(DictStore):
 
         for child in direct_children:
             child_descendants = self.get_descendants(child)
-            if child_descendants:
+            if child_descendants or super().__contains__(self._translate_key_to_full(child) + "/__vlmeta__"):
                 # Extract just the name from the full path
                 child_name = child.split("/")[-1]
                 children_dirs.append(child_name)
@@ -992,8 +995,7 @@ class TreeStore(DictStore):
 
         # Recursively walk child directories (structural nodes)
         for child in direct_children:
-            child_descendants = self.get_descendants(child)
-            if child_descendants:
+            if child.rsplit("/", 1)[-1] in children_dirs:
                 yield from self.walk(child, topdown=topdown)
 
         if not topdown:

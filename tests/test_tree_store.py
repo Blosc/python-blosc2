@@ -17,6 +17,34 @@ import blosc2
 from blosc2.tree_store import TreeStore
 
 
+@pytest.mark.parametrize("suffix", ["b2d", "b2z"])
+def test_metadata_only_groups_survive_materialization(tmp_path, suffix):
+    source = tmp_path / f"source.{suffix}"
+    destination = tmp_path / f"copy.{suffix}"
+    with TreeStore(source, mode="w") as tree:
+        tree.get_subtree("/group/empty").attrs[:] = {}
+        tree.get_subtree("/group/note").attrs["title"] = "metadata only"
+    with TreeStore(source, mode="r") as tree:
+        assert "/group/empty" in tree
+        assert tree.get_children("/group") == ["/group/empty", "/group/note"]
+        assert list(tree.walk("/group")) == [
+            ("/group", ["empty", "note"], []),
+            ("/group/empty", [], []),
+            ("/group/note", [], []),
+        ]
+        assert "empty" in str(tree.info)
+        tree.materialize(destination)
+    with TreeStore(destination, mode="a") as tree:
+        assert tree["group/empty"].attrs[:] == {}
+        assert tree["group/note"].attrs["title"] == "metadata only"
+        del tree["group/empty"]
+        assert "/group/empty" not in tree
+        del tree["group"]
+        assert list(tree.keys()) == []
+    with TreeStore(destination, mode="r") as tree:
+        assert list(tree.keys()) == []
+
+
 def _memory_remote_store(tmp_path, name="remote"):
     fsspec = pytest.importorskip("fsspec")
     source = tmp_path / f"{name}.b2z"

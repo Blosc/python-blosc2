@@ -31,6 +31,8 @@ def format_store_tree(entries: dict[str, str], root: str = "/") -> str:
     """Render relative paths and optional node labels without opening their values."""
     children = {}
     for path in entries:
+        if not path.strip("/"):
+            continue
         parent = ""
         for name in path.strip("/").split("/"):
             child = f"{parent}/{name}".strip("/")

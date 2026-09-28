@@ -61,8 +61,7 @@ def _copy_attrs(attrs, target, path):
     if attrs is None:
         return
     destination = target.attrs if path == "/" else target.get_subtree(path).attrs
-    for key, value in attrs.items():
-        destination[key] = value
+    destination[:] = dict(attrs)
 
 
 def _identity(store):
@@ -112,10 +111,9 @@ def _copy_local_group(store, target, path, active, depth, staging):
         elif isinstance(info, dict) and info.get("kind") == "ctable":
             with contextlib.closing(store[child]) as table:
                 _copy_table(table, target, child_path)
-        elif store.get_descendants(child):
-            _copy_local_group(store.get_subtree(child), target, child_path, active, depth, staging)
+        elif isinstance(value := store[child], blosc2.TreeStore):
+            _copy_local_group(value, target, child_path, active, depth, staging)
         else:
-            value = store[child]
             if isinstance(value, blosc2.RemoteArray):
                 with value:
                     _copy_array(value, target, child_path, staging)

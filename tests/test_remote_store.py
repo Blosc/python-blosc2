@@ -784,6 +784,7 @@ def test_nested_remote_store_materialize_mixed_source(hierarchy, tmp_path):
 
     with blosc2.open(destination) as local:
         assert all(info.get("kind") != "remote_store" for info in local._objects_registry().values())
+        assert local["/remote/empty"].attrs["empty"] is True
         assert local.get_subtree("/remote").attrs["title"] == "child"
         np.testing.assert_array_equal(local["/remote/a"][:2, :3], data[:2, :3])
         np.testing.assert_array_equal(local["/remote/b"][:2, :3], data[:2, :3] + 1)

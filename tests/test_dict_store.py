@@ -20,6 +20,12 @@ import blosc2
 from blosc2.dict_store import DictStore
 
 
+def test_store_tree_with_root_entry():
+    from blosc2.info import format_store_tree
+
+    assert format_store_tree({"": "", "a": ""}) == "/\n└── a"
+
+
 @pytest.mark.parametrize("store_type", [blosc2.DictStore, blosc2.TreeStore])
 @pytest.mark.parametrize("suffix", ["b2d", "b2z"])
 def test_store_info(tmp_path, monkeypatch, store_type, suffix):
