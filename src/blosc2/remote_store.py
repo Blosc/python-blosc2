@@ -18,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import blosc2
 from blosc2.core import parse_container_url, storage_options_fingerprint
+from blosc2.info import InfoReporter, format_nbytes_info, format_store_tree
 from blosc2.proxy import CacheCoordinator
 from blosc2.proxy_source import Traffic
 from blosc2.remote_array import (
@@ -2460,6 +2461,42 @@ class RemoteStore(RemoteObject):
     def kind(self, path=""):
         """Return the discovered node kind."""
         return self.get_info(path).kind
+
+    @property
+    def info(self) -> InfoReporter:
+        """Summary and hierarchy, discovering groups without opening leaf readers.
+
+        Zarr discovery may issue metadata or listing requests. Linked remote
+        stores are listed without following their references.
+        """
+        self._resolve("")
+        return InfoReporter(self)
+
+    @property
+    def info_items(self) -> list[tuple[str, object]]:
+        """The fields shown by :attr:`info`."""
+        self._ensure_open()
+        with self._owner.lock:
+            _, root = self._resolve("")
+            entries = {}
+            pending = [""]
+            while pending:
+                path, _ = self._resolve(pending.pop())
+                for child in self._owner.list_children(path):
+                    relative = child[len(root) + 1 :] if root else child
+                    kind = self._owner.nodes[child][0]
+                    entries[relative] = f" [{kind}]"
+                    if kind == "group":
+                        pending.append(relative)
+            self._owner.save_manifest()
+            return [
+                ("type", type(self).__name__),
+                ("source", self.source),
+                ("cache_policy", self.cache_policy.name),
+                ("cache_bytes", format_nbytes_info(self.cache_bytes)),
+                ("entries", len(entries)),
+                ("contents", format_store_tree(entries, "/" + root)),
+            ]
 
     @property
     def attrs(self):

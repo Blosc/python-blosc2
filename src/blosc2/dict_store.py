@@ -20,6 +20,7 @@ import numpy as np
 import blosc2
 from blosc2.c2array import C2Array
 from blosc2.embed_store import EmbedStore
+from blosc2.info import InfoReporter
 from blosc2.schunk import SChunk, process_opened_object
 
 if TYPE_CHECKING:
@@ -512,6 +513,27 @@ class DictStore:
         """Attach DictStore origin metadata so structured msgpack can preserve member identity."""
         value._blosc2_ref = blosc2.Ref.dictstore_key(self.localpath, key)
         return value
+
+    @property
+    def info(self) -> InfoReporter:
+        """A printable summary and listing of this store, without opening its leaves."""
+        return InfoReporter(self)
+
+    @property
+    def info_items(self) -> list[tuple[str, object]]:
+        """The fields shown by :attr:`info`."""
+        keys = sorted(self.keys())
+        return [
+            ("type", type(self).__name__),
+            ("urlpath", self.localpath),
+            ("mode", self.mode),
+            ("format", "b2z" if self.is_zip_store else "b2d"),
+            ("entries", len(keys)),
+            ("contents", self._info_contents(keys)),
+        ]
+
+    def _info_contents(self, keys):
+        return "\n".join(keys) or "(empty)"
 
     @property
     def estore(self) -> EmbedStore:

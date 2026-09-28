@@ -20,6 +20,32 @@ import blosc2
 from blosc2.dict_store import DictStore
 
 
+@pytest.mark.parametrize("store_type", [blosc2.DictStore, blosc2.TreeStore])
+@pytest.mark.parametrize("suffix", ["b2d", "b2z"])
+def test_store_info(tmp_path, monkeypatch, store_type, suffix):
+    with store_type(tmp_path / f"info.{suffix}", mode="w") as store:
+        assert dict(store.info_items)["entries"] == 0
+        store["/group/a"] = np.arange(3)
+        store["/other<b>"] = np.arange(2)
+
+        def no_leaf_reads(*args):
+            pytest.fail("info must not open a leaf")
+
+        monkeypatch.setattr(blosc2.DictStore, "__getitem__", no_leaf_reads)
+        items = dict(store.info_items)
+        assert items["type"] == store_type.__name__
+        assert items["format"] == suffix
+        assert "other<b>" in str(store.info)
+        assert "other&lt;b&gt;" in store.info._repr_html_()
+        if store_type is blosc2.TreeStore:
+            assert items["entries"] == 3
+            assert items["contents"] == "/\n├── group\n│   └── a\n└── other<b>"
+            assert dict(store.get_subtree("group").info_items)["contents"] == "/group\n└── a"
+        else:
+            assert items["entries"] == 2
+            assert items["contents"] == "/group/a\n/other<b>"
+
+
 def _rename_store_member(store_path, old_name, new_name):
     """Rename an external leaf inside a .b2d/.b2z store without changing its contents."""
     if str(store_path).endswith(".b2d"):

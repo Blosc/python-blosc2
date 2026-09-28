@@ -196,6 +196,13 @@ class TreeStore(DictStore):
 
         return materialize_store(self, destination, overwrite=overwrite)
 
+    def _info_contents(self, keys):
+        from blosc2.info import format_store_tree
+
+        return format_store_tree(
+            dict.fromkeys((key.strip("/") for key in keys), ""), self.subtree_path or "/"
+        )
+
     # ------------------------------------------------------------------
     # Object registry helpers
     # ------------------------------------------------------------------

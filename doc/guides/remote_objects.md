@@ -64,6 +64,14 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
 
 ### Hierarchy navigation and inspection
 
+- **Printable summary**: `print(store.info)` shows the source, cache policy,
+  retained payload size, entry count, and a tree of groups and leaves. It
+  discovers the hierarchy without opening leaf readers or fetching array
+  chunks. Zarr groups may require metadata and listing requests; linked remote
+  stores are shown without following their references. `DictStore.info` and
+  `TreeStore.info` similarly show the local location, mode, format, and contents.
+  Subtree summaries are relative to the selected group. The same summary renders
+  as a table with a preformatted listing in notebooks.
 - **Child enumeration**: `store.keys()` and `for name in store:` list immediate children of the current store or group level without fetching array data.
 - **Relative paths**: Lookups can use slash paths or chained indexing interchangeably (`store["experiment/temperature"]` is equivalent to `store["experiment"]["temperature"]`). Leaves return a {ref}`RemoteArray` or {ref}`RemoteCTable` according to their kind.
 - **Node inspection with `RemoteNode`**: Call `store.get_info(name)` to inspect a node without creating leaf readers or allocating cache memory. A `RemoteNode` provides:

@@ -487,6 +487,33 @@ def hierarchy(request, tmp_path):
     return url, data
 
 
+def test_remote_store_info(hierarchy, tmp_path, monkeypatch):
+    url, _ = hierarchy
+    with blosc2.RemoteStore(url, cache_dir=tmp_path / "info-cache") as store:
+
+        def no_leaf_reads(*args):
+            pytest.fail("info must not open a leaf")
+
+        monkeypatch.setattr(store._owner, "open_source", no_leaf_reads)
+        items = dict(store.info_items)
+        assert items["type"] == "RemoteStore"
+        assert items["source"]["urlpath"] == url
+        assert items["cache_policy"] == "DISK"
+        assert "group [group]" in items["contents"]
+        assert "a [ndarray]" in items["contents"]
+        assert not store._owner.caches
+        assert store.cache_bytes == 0
+        before = store.traffic.requests
+        assert "└──" in str(store.info)
+        assert "<pre>" in store.info._repr_html_()
+        assert store.traffic.requests == before
+        with store["group"] as group:
+            assert dict(group.info_items)["entries"] == 3
+            assert dict(group.info_items)["contents"].startswith("/group\n")
+    with pytest.raises(RuntimeError, match="closed"):
+        str(store.info)
+
+
 def test_open_remote_hierarchy(hierarchy, tmp_path):
     url, data = hierarchy
     for path in (None, "group"):
