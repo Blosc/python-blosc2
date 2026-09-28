@@ -11,7 +11,7 @@ critical bug fixes including partition contiguity verification for large arrays.
 
 - **Remote columnar tables (``RemoteCTable``) and unified ``RemoteObject``.**
   Columnar tables can now be opened lazily over HTTP, S3, or any fsspec-supported
-  filesystem without full downloads. The unified ``RemoteObject`` base provides
+  filesystem, including Parquet, B2Z, and PyTables tables. ``RemoteObject`` provides
   consistent cache policies (memory, disk, none), shared process caching via
   ``blosc2.open(url, cache_dir=..., shared_cache=True)``, attributes, traffic
   accounting, and portable reference exports (``table.save("ref.b2z")``).
@@ -40,13 +40,14 @@ critical bug fixes including partition contiguity verification for large arrays.
   accelerate scalar-list membership queries (``contains()``, ``overlaps()``).
 
 - **ListArray V2.** List elements can be nullable, and ``ListSpec`` values can be
-  nested recursively to arbitrary depths. Added ``contains()`` and ``overlaps()``
+  nested recursively (up to 32 list levels). Added ``contains()`` and ``overlaps()``
   row predicates for ListArray and CTable list columns. New schemas default to
   ``batch_rows=2048`` for balanced chunking and compression.
 
 - **Nested remote stores in ``TreeStore``.** ``TreeStore`` can embed and persist
   references to ``RemoteStore`` instances, enabling composite hierarchical stores
   spanning local arrays and remote endpoints with shared cache ownership.
+  Store ``.info`` summaries show their contents without reading leaf data.
 
 - **C-Blosc2 3.3.5 and critical bug fixes.** Bundled C-Blosc2 is updated to 3.3.5.
   Fixed a critical bug (#723) in ``are_partitions_behaved()`` where non-contiguous
