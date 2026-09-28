@@ -8830,8 +8830,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 pa_type.value_type,
                 item_arrow_col,
                 string_max_length=item_string_max_length,
+                nullable=pa_type.value_field.nullable,
                 object_fallback=object_fallback,
             )
+            item_spec.nullable = pa_type.value_field.nullable
             return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
 
         if pa.types.is_struct(pa_type):
@@ -8854,6 +8856,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     nullable=field.nullable,
                     object_fallback=object_fallback,
                 )
+                fields[field.name].nullable = field.nullable
             return b2s.struct(fields, nullable=nullable)
 
         if _is_arrow_string_type(pa, pa_type):

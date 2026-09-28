@@ -26,6 +26,17 @@ def test_imported_arrow_list_exports_null_children():
         assert table.to_arrow().equals(source)
 
 
+@pytest.mark.parametrize("serializer", ["msgpack", "arrow"])
+def test_imported_list_nullable_items_accept_new_rows(serializer):
+    dtype = pa.list_(pa.struct([pa.field("value", pa.int16(), nullable=True)]))
+    source = pa.table({"tags": pa.array([[{"value": None}, None]], type=dtype)})
+    with CTable.from_arrow(source, list_serializer=serializer) as table:
+        table.append(([{"value": None}, None],))
+        assert table["tags"].contains(None)[:].tolist() == [True, True]
+        assert table["tags"].contains({"value": None})[:].tolist() == [True, True]
+        assert table.to_arrow().to_pylist() == source.to_pylist() * 2
+
+
 @pytest.mark.parametrize("batch_size", [1, 3, 9])
 @pytest.mark.parametrize("persistent", [False, True])
 def test_arrow_list_export_direct_and_fallback(monkeypatch, tmp_path, batch_size, persistent):
