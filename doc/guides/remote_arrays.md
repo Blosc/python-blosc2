@@ -107,6 +107,21 @@ HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` fo
 Datasets can be named directly by path (`/sub/arr`), with the `::sub/arr` separator, or via `path="sub/arr"`.
 For a suffix-free URL, pass `source_format="zarr"`.
 
+For hierarchy browsing over HTTP, the server must provide directory listings
+or the store must include consolidated metadata. For an object endpoint without
+directory listings, prepare the local source before uploading:
+
+```python
+import zarr
+
+zarr.consolidate_metadata("hierarchy.zarr")
+```
+
+Publish the updated metadata along with the store (`zarr.json` for Zarr v3,
+`.zmetadata` for Zarr v2). Without it, `RemoteStore.info` reports an incomplete
+listing and `keys()` raises an explanatory error instead of reporting an empty
+group. Direct array paths still work.
+
 Remote HDF5 needs `pip install "blosc2[hdf5,fsspec]"`.
 HTTP/HTTPS works directly; cloud stores require their protocol driver (`s3fs` for S3, etc.).
 Datasets can be specified using standard slash syntax (`file.h5/d0/d1/a2`), the double-colon separator (`file.h5::d0/d1/a2`), or the `path="d0/d1/a2"` parameter.

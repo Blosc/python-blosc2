@@ -750,7 +750,7 @@ class RemoteDiscovery:
     def kind(self, path):
         return self.nodes[self._path(path)][0]
 
-    def list_children(self, path):
+    def list_children(self, path):  # noqa: C901
         full = self._path(path)
         if self.nodes[full][0] != "group":
             return []
@@ -791,6 +791,24 @@ class RemoteDiscovery:
                     raise OSError(
                         "Cannot list Zarr group; check LIST permission and backend support"
                     ) from exc
+                if (
+                    not children
+                    and group.metadata.consolidated_metadata is None
+                    and urlsplit(self.urlpath).scheme in {"http", "https"}
+                ):
+                    from zarr.core.sync import sync
+
+                    async def has_listing():
+                        async for _ in self.zstore.list_dir(full):
+                            return True
+                        return False
+
+                    if not sync(has_listing()):
+                        raise OSError(
+                            "Cannot list this HTTP Zarr group without a directory listing or consolidated "
+                            "metadata. Run zarr.consolidate_metadata() on the source store and publish "
+                            "its updated metadata. Direct array paths remain accessible."
+                        )
                 for name, node in children:
                     key = "/".join(p for p in (full, name) if p)
                     self._validate(key)
@@ -2479,24 +2497,33 @@ class RemoteStore(RemoteObject):
         with self._owner.lock:
             _, root = self._resolve("")
             entries = {}
+            unavailable = []
             pending = [""]
             while pending:
                 path, _ = self._resolve(pending.pop())
-                for child in self._owner.list_children(path):
+                try:
+                    children = self._owner.list_children(path)
+                except OSError as exc:
+                    unavailable.append(f"/{path}: {exc}")
+                    continue
+                for child in children:
                     relative = child[len(root) + 1 :] if root else child
                     kind = self._owner.nodes[child][0]
                     entries[relative] = f" [{kind}]"
                     if kind == "group":
                         pending.append(relative)
             self._owner.save_manifest()
-            return [
+            items = [
                 ("type", type(self).__name__),
                 ("source", self.source),
                 ("cache_policy", self.cache_policy.name),
                 ("cache_bytes", format_nbytes_info(self.cache_bytes)),
-                ("entries", len(entries)),
+                ("entries", f"{len(entries)} known (listing incomplete)" if unavailable else len(entries)),
                 ("contents", format_store_tree(entries, "/" + root)),
             ]
+            if unavailable:
+                items.append(("listing", "\n".join(unavailable)))
+            return items
 
     @property
     def attrs(self):

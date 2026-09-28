@@ -1241,6 +1241,37 @@ def test_owned_filesystem_session_is_left_to_fsspec_finalizer():
     assert close_calls == []
 
 
+@pytest.mark.parametrize("consolidated", [False, True])
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_http_zarr_without_directory_listing(monkeypatch, consolidated, zarr_format):
+    zarr = pytest.importorskip("zarr")
+    url = f"memory://http-listing-{zarr_format}-{consolidated}.zarr"
+    root = zarr.open_group(url, mode="w", zarr_format=zarr_format)
+    root.create_array("group/values", data=np.arange(3), chunks=(3,))
+    if consolidated:
+        zarr.consolidate_metadata(url)
+
+    async def no_listing(*args, **kwargs):
+        for name in ():
+            yield name
+
+    monkeypatch.setattr(zarr.storage.FsspecStore, "list_dir", no_listing)
+    with blosc2.RemoteStore(url) as store:
+        # Simulate an HTTP object endpoint which returns no directory links.
+        store._owner.urlpath = "https://example.org/data.zarr"
+        items = dict(store.info_items)
+        if consolidated:
+            assert items["entries"] == 2
+            assert "values [ndarray]" in items["contents"]
+            assert store.keys() == ["group"]
+        else:
+            assert items["entries"] == "0 known (listing incomplete)"
+            assert "consolidate_metadata" in items["listing"]
+            with pytest.raises(OSError, match="consolidated metadata"):
+                store.keys()
+            assert store.kind("group/values") == "ndarray"
+
+
 def test_zarr_direct_lookup_without_listing(hierarchy, monkeypatch):
     url, data = hierarchy
     if not url.endswith(".zarr"):

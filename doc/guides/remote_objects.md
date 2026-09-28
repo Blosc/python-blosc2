@@ -72,6 +72,8 @@ with blosc2.RemoteStore("https://datasets.example.org/data.h5") as store:
   `TreeStore.info` similarly show the local location, mode, format, and contents.
   Subtree summaries are relative to the selected group. The same summary renders
   as a table with a preformatted listing in notebooks.
+  If a group cannot be listed, the summary marks the entry count as incomplete
+  and includes the listing error.
 - **Child enumeration**: `store.keys()` and `for name in store:` list immediate children of the current store or group level without fetching array data.
 - **Relative paths**: Lookups can use slash paths or chained indexing interchangeably (`store["experiment/temperature"]` is equivalent to `store["experiment"]["temperature"]`). Leaves return a {ref}`RemoteArray` or {ref}`RemoteCTable` according to their kind.
 - **Node inspection with `RemoteNode`**: Call `store.get_info(name)` to inspect a node without creating leaf readers or allocating cache memory. A `RemoteNode` provides:
