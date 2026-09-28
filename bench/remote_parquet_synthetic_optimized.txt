@@ -1,0 +1,5 @@
+scalar: file=109920 B open=1 reads/65536 B/0.004 s cold=1 reads/5364 B/0.108 s warm=0 reads/0 B/0.001 s cache=138536 B python_peak=386880 B
+wide: file=1096185 B open=1 reads/65536 B/0.026 s cold=1 reads/5364 B/0.118 s warm=0 reads/0 B/0.002 s cache=138536 B python_peak=275013 B
+strings: file=64961 B open=1 reads/64961 B/0.001 s cold=1 reads/6352 B/0.007 s warm=0 reads/0 B/0.002 s cache=67367 B python_peak=132149 B
+dictionary: file=8231 B open=1 reads/8231 B/0.001 s cold=1 reads/701 B/0.006 s warm=0 reads/0 B/0.001 s cache=134786 B python_peak=304604 B
+unnamed-root: file=55530 B open=11 reads/109198 B/0.003 s cold=1 reads/5368 B/0.003 s warm=0 reads/0 B/0.001 s cache=3283 B python_peak=8441705 B

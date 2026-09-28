@@ -17,6 +17,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -1091,6 +1092,9 @@ def test_cached_dir_refetches_on_same_size_change(tmp_path):
     localdir = blosc2.core.localize_fsspec_url("memory://samesize.b2d", tmp_path)
     assert pathlib.Path(localdir, "a.bin").read_bytes() == b"A" * 100
 
+    # MemoryFileSystem's identity uses a creation timestamp; Windows clocks can
+    # return the same timestamp for consecutive writes.
+    time.sleep(0.05)
     memfs.pipe_file("/samesize.b2d/a.bin", b"B" * 100)
     localdir = blosc2.core.localize_fsspec_url("memory://samesize.b2d", tmp_path)
     assert pathlib.Path(localdir, "a.bin").read_bytes() == b"B" * 100

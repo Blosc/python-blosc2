@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Create or access a CTable with fixed-width, UTF-8, batch-backed and dictionary columns."""
+"""Create or access remote-friendly Blosc2, PyTables, and Parquet tables."""
 
 import argparse
 import pprint
@@ -14,6 +14,7 @@ import sys
 import time
 from dataclasses import dataclass, fields
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -40,15 +41,38 @@ class Reading:
 
 
 FULL_INDEX_UNSUPPORTED = {"message", "tags"}
+TABLE_NAME = "readings"
 
 
 def make_notes(ids):
     notes = np.array(["", "café", "東京の観測", "🌦️ weather improving"], dtype=object)[ids % 4]
-    notes = np.array(
+    return np.array(
         [f"{text} #{i}" if text else "" for i, text in zip(ids, notes, strict=True)], dtype=object
     )
-    notes[ids % 43 == 0] = None
-    return notes
+
+
+def rich_batches(rows, batch_size):
+    rng = np.random.default_rng(42)
+    statuses = np.array(["ok", "warning", "offline", ""], dtype=object)
+    for start in range(0, rows, batch_size):
+        ids = np.arange(start, min(start + batch_size, rows), dtype=np.int64)
+        temperature = rng.normal(18, 10, len(ids)).astype(np.float32)
+        humidity = rng.integers(0, 101, len(ids), dtype=np.int16)
+        status = statuses[(ids // 7) % len(statuses)]
+        regions = np.array(["north", "south", "east", "west"], dtype=object)[ids % 4]
+        regions[ids % 59 == 0] = None
+        yield {
+            "id": ids,
+            "station_id": (ids % 100).astype(np.int32),
+            "temperature": np.ma.array(temperature, mask=ids % 17 == 0),
+            "humidity": np.ma.array(humidity, mask=ids % 29 == 0),
+            "status": np.ma.array(status, mask=ids % 41 == 0),
+            "active": ids % 5 != 0,
+            "note": np.ma.array(make_notes(ids), mask=ids % 43 == 0),
+            "message": [None if i % 47 == 0 else f"sensor {i}: café 東京" for i in ids],
+            "tags": [None if i % 53 == 0 else [int(i % 7), int(i % 11)] for i in ids],
+            "region": regions,
+        }
 
 
 def write_table(args) -> None:
@@ -77,8 +101,6 @@ def write_table(args) -> None:
             raise ValueError("--full columns must not contain duplicates")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(42)
-    statuses = np.array(["ok", "warning", "offline", ""], dtype=object)
     attrs = {
         "version": 1,
         "sampling_interval": 0.5,
@@ -96,34 +118,8 @@ def write_table(args) -> None:
     ) as table:
         for name, value in attrs.items():
             table.attrs[name] = value
-        for start in range(0, args.rows, args.batch_size):
-            stop = min(start + args.batch_size, args.rows)
-            ids = np.arange(start, stop, dtype=np.int64)
-            temperature = rng.normal(18, 10, len(ids)).astype(np.float32).astype(object)
-            humidity = rng.integers(0, 101, len(ids), dtype=np.int16).astype(object)
-            status = statuses[(ids // 7) % len(statuses)].copy()
-            temperature[ids % 17 == 0] = None
-            humidity[ids % 29 == 0] = None
-            status[ids % 41 == 0] = None
-            messages = [None if i % 47 == 0 else f"sensor {i}: café 東京" for i in ids]
-            tags = [None if i % 53 == 0 else [int(i % 7), int(i % 11)] for i in ids]
-            regions = np.array(["north", "south", "east", "west"], dtype=object)[ids % 4]
-            regions[ids % 59 == 0] = None
-            table.extend(
-                {
-                    "id": ids,
-                    "station_id": (ids % 100).astype(np.int32),
-                    "temperature": temperature,
-                    "humidity": humidity,
-                    "status": status,
-                    "active": ids % 5 != 0,
-                    "note": make_notes(ids),
-                    "message": messages,
-                    "tags": tags,
-                    "region": regions,
-                },
-                validate=False,
-            )
+        for batch in rich_batches(args.rows, args.batch_size):
+            table.extend(batch, validate=False)
         if indexed_columns:
             started = time.perf_counter()
             for name in indexed_columns:
@@ -146,6 +142,134 @@ def write_table(args) -> None:
     print(f"Created {output} ({output.stat().st_size / 1_000_000:.1f} MB, {args.rows:,} rows)")
     print(f"FULL indexes: {', '.join(indexed_columns) if indexed_columns else 'none'}")
     print(f"Mask-backed null counts: {null_counts}")
+    print(f"Now upload {output} to your cloud object storage.")
+
+
+def simple_batches(rows, batch_size):
+    rng = np.random.default_rng(42)
+    statuses = np.array(["ok", "warning", "offline", ""])
+    notes = np.array(["", "clear", "cloudy", "rain"])
+    for start in range(0, rows, batch_size):
+        ids = np.arange(start, min(start + batch_size, rows), dtype=np.int64)
+        yield {
+            "id": ids,
+            "station_id": (ids % 100).astype(np.int32),
+            "temperature": rng.normal(18, 10, len(ids)).astype(np.float32),
+            "humidity": rng.integers(0, 101, len(ids), dtype=np.int16),
+            "status": statuses[(ids // 7) % len(statuses)],
+            "active": ids % 5 != 0,
+            "note": notes[ids % len(notes)],
+        }
+
+
+def write_pytables(args) -> None:
+    import tables
+
+    class PyTablesReading(tables.IsDescription):
+        id = tables.Int64Col(pos=0)
+        station_id = tables.Int32Col(pos=1)
+        temperature = tables.Float32Col(pos=2)
+        humidity = tables.Int16Col(pos=3)
+        status = tables.StringCol(8, pos=4)
+        active = tables.BoolCol(pos=5)
+        note = tables.StringCol(32, pos=6)
+
+    output = args.write
+    if output.suffix != ".h5":
+        raise ValueError("output must end in .h5")
+    if args.rows < 1 or args.batch_size < 1:
+        raise ValueError("--rows and --batch-size must be positive")
+    if output.exists() and not args.overwrite:
+        raise FileExistsError(f"{output} already exists; pass --overwrite to replace it")
+    indexed_columns = []
+    if args.full is not None:
+        indexed_columns = (
+            list(PyTablesReading.columns)
+            if args.full == "*"
+            else [name.strip() for name in args.full.split(",")]
+        )
+        unknown = set(indexed_columns) - set(PyTablesReading.columns)
+        if not all(indexed_columns) or unknown:
+            raise ValueError(f"invalid --full columns: {', '.join(sorted(unknown)) or args.full!r}")
+        if len(indexed_columns) != len(set(indexed_columns)):
+            raise ValueError("--full columns must not contain duplicates")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tables.open_file(output, mode="w") as h5file:
+        filters = tables.Filters(complevel=5, complib="blosc2:zstd", shuffle=True)
+        table = h5file.create_table(
+            "/",
+            TABLE_NAME,
+            PyTablesReading,
+            title="Synthetic weather-station readings",
+            filters=filters,
+            expectedrows=args.rows,
+        )
+        table.attrs.version = 1
+        table.attrs.sampling_interval = 0.5
+        table.attrs.description = "Synthetic weather-station readings"
+
+        for batch in simple_batches(args.rows, args.batch_size):
+            data = np.empty(len(batch["id"]), dtype=table.dtype)
+            for name, values in batch.items():
+                data[name] = values
+            table.append(data)
+        table.flush()
+
+        if indexed_columns:
+            started = time.perf_counter()
+            for name in indexed_columns:
+                getattr(table.cols, name).create_csindex(filters=filters)
+            print(f"Created FULL (CSI) indexes in {time.perf_counter() - started:.2f} s")
+
+    with tables.open_file(output) as h5file:
+        table = h5file.root.readings
+        assert table.nrows == args.rows
+        assert all(getattr(table.cols, name).index.is_csi for name in indexed_columns)
+
+    print(f"Created {output} ({output.stat().st_size / 1_000_000:.1f} MB, {args.rows:,} rows)")
+    print(f"FULL (CSI) indexes: {', '.join(indexed_columns) if indexed_columns else 'none'}")
+    print(f"Now upload {output} to your cloud object storage.")
+
+
+def write_parquet(args) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    output = args.write
+    if output.suffix != ".parquet":
+        raise ValueError("output must end in .parquet")
+    if args.rows < 1 or args.batch_size < 1:
+        raise ValueError("--rows and --batch-size must be positive")
+    if output.exists() and not args.overwrite:
+        raise FileExistsError(f"{output} already exists; pass --overwrite to replace it")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("station_id", pa.int32()),
+            ("temperature", pa.float32()),
+            ("humidity", pa.int16()),
+            ("status", pa.string()),
+            ("active", pa.bool_()),
+            ("note", pa.large_string()),
+            ("message", pa.large_string()),
+            ("tags", pa.list_(pa.int16())),
+            ("region", pa.dictionary(pa.int32(), pa.string())),
+        ]
+    )
+    with pq.ParquetWriter(
+        output,
+        schema,
+        compression="zstd",
+        use_dictionary=["station_id", "humidity", "status", "tags.list.element", "region"],
+    ) as writer:
+        for batch in rich_batches(args.rows, args.batch_size):
+            writer.write_table(pa.table(batch, schema=schema), row_group_size=args.batch_size)
+
+    assert pq.read_metadata(output).num_rows == args.rows
+    print(f"Created {output} ({output.stat().st_size / 1_000_000:.1f} MB, {args.rows:,} rows)")
     print(f"Now upload {output} to your cloud object storage.")
 
 
@@ -318,12 +442,71 @@ def access_table(args) -> None:
             print(f"Retained cache: {table.cache_bytes / 1024:8.2f} KB")
 
 
+def access_external_table(args) -> None:
+    storage_options = None
+    if args.url.startswith("s3://"):
+        storage_options = {
+            "profile": args.profile,
+            "client_kwargs": {"endpoint_url": args.endpoint_url},
+        }
+
+    cache_options = {"cache_dir": args.cache_dir} if args.cache_dir is not None else {}
+    print(f"Accessing: {args.url}{f'::{TABLE_NAME}' if args.pytables else ''}")
+    started = time.perf_counter()
+    if args.pytables:
+        table = blosc2.RemoteCTable(
+            args.url, dataset=TABLE_NAME, storage_options=storage_options, **cache_options
+        )
+    else:
+        table = blosc2.open(
+            args.url, source_format="parquet", storage_options=storage_options, **cache_options
+        )
+    with table:
+        metadata_time = time.perf_counter() - started
+        metadata_bytes = table.traffic.nbytes
+        metadata_requests = table.traffic.requests
+        metadata = {
+            "type": type(table).__name__,
+            "rows": table.nrows,
+            "columns": table.col_names,
+            "schema": table.schema_dict(),
+            "attrs": dict(table.attrs),
+            "indexes": sorted(table._get_index_catalog()),
+        }
+        print(f"\n[Format: {'PyTables/HDF5' if args.pytables else 'Parquet'}]")
+        for name, value in metadata.items():
+            rendered = pprint.pformat(value) if isinstance(value, (dict, list)) else value
+            print(f"{name:<9}: {rendered}")
+
+        sample_start = max(0, table.nrows // 2 - 2)
+        sample_stop = min(sample_start + 5, table.nrows)
+        print(f"\nSample rows [{sample_start}:{sample_stop}]:")
+        print(table[sample_start:sample_stop])
+
+        started = time.perf_counter()
+        ids = table.where("(station_id == 42) & active").id[:5]
+        query_time = time.perf_counter() - started
+        print("\nQuery: (station_id == 42) & active")
+        print(f"first ids: {ids}")
+        print(
+            f"metadata: {metadata_time * 1000:.1f} ms, "
+            f"{metadata_requests} requests, {metadata_bytes / 1024:.2f} KiB"
+        )
+        print(
+            f"query:    {query_time * 1000:.1f} ms, "
+            f"{table.traffic.requests - metadata_requests} requests, "
+            f"{(table.traffic.nbytes - metadata_bytes) / 1024:.2f} KiB"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "url", nargs="?", help="Local .b2z CTable path or remote URL (s3://, http://, https://)"
-    )
-    parser.add_argument("--write", type=Path, metavar="FILE", help="Create a local .b2z CTable instead")
+    parser.add_argument("url", nargs="?", help="Local table path or remote URL (s3://, http://, https://)")
+    parser.add_argument("--write", type=Path, metavar="FILE", help="Create a local table")
+    formats = parser.add_mutually_exclusive_group()
+    formats.add_argument("--blosc2", action="store_true", help="Use Blosc2 CTable (.b2z)")
+    formats.add_argument("--pytables", action="store_true", help="Use PyTables/HDF5 (.h5)")
+    formats.add_argument("--parquet", action="store_true", help="Use Parquet (.parquet)")
     parser.add_argument(
         "--full",
         nargs="?",
@@ -344,12 +527,25 @@ def main() -> int:
     if args.write is not None and args.url is not None:
         parser.error("URL cannot be combined with --write")
     if args.write is None and args.url is None:
-        parser.error("provide a local path or remote URL, or use --write FILE.b2z")
+        parser.error("provide a local path or remote URL, or use --write FILE")
+    if not (args.blosc2 or args.pytables or args.parquet):
+        source = args.write or Path(urlsplit(args.url).path or urlsplit(args.url).netloc)
+        format_name = {".b2z": "blosc2", ".h5": "pytables", ".parquet": "parquet"}.get(source.suffix)
+        if format_name is None:
+            parser.error("cannot infer format; use .b2z, .h5, .parquet, or a format flag")
+        setattr(args, format_name, True)
     if args.full is not None and args.write is None:
         parser.error("--full requires --write")
+    if args.full is not None and args.parquet:
+        parser.error("--full is not supported for Parquet")
 
     try:
-        write_table(args) if args.write is not None else access_table(args)
+        if args.write is not None:
+            (write_pytables if args.pytables else write_parquet if args.parquet else write_table)(args)
+        elif args.pytables or args.parquet:
+            access_external_table(args)
+        else:
+            access_table(args)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

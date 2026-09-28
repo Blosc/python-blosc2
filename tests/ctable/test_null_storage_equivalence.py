@@ -568,7 +568,7 @@ def test_isin_agrees(kind):
     # Probe with each storage's own stand-in for a null.  Neither should match,
     # because neither stand-in is the row's value: the fill is not part of the
     # format contract, and the sentinel is reserved.
-    for probe in (m["a"][:][NULL_ROW], s["a"][:][NULL_ROW]):
+    for probe in (m["a"].to_numpy()[NULL_ROW], s["a"].to_numpy()[NULL_ROW]):
         got, want = m["a"].isin([probe]).tolist(), s["a"].isin([probe]).tolist()
         assert_same(got, want, f"isin([{probe!r}])")
         if is_na_marker(probe):

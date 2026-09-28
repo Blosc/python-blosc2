@@ -1,0 +1,61 @@
+{
+  "date": "2026-09-25",
+  "method": "Local file-handle read calls and returned bytes from bench/remote_parquet_files.py; these are not HTTP or S3 wire requests. Cold access reads the final row; warm access repeats it in the same process. Default memory cache; no disk cache.",
+  "files": [
+    {
+      "file": "chicago-taxi-flat-f32-cl20.parquet",
+      "column": "trip.sec",
+      "file_bytes": 581387271,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"reads": 2, "bytes": 32679571, "seconds": 1.242},
+      "cold": {"reads": 1, "bytes": 331590, "seconds": 17.69},
+      "warm": {"reads": 0, "bytes": 0, "seconds": 0.069},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi-flat-f32.parquet",
+      "column": "trip.sec",
+      "file_bytes": 686857703,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"reads": 2, "bytes": 33057447, "seconds": 1.087},
+      "cold": {"reads": 1, "bytes": 352939, "seconds": 17.802},
+      "warm": {"reads": 0, "bytes": 0, "seconds": 0.066},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi-flat-f64.parquet",
+      "column": "trip.sec",
+      "file_bytes": 687450036,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"reads": 2, "bytes": 33068884, "seconds": 1.099},
+      "cold": {"reads": 1, "bytes": 352939, "seconds": 17.988},
+      "warm": {"reads": 0, "bytes": 0, "seconds": 0.067},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi-flat-f32-cl20.parquet",
+      "column": "company",
+      "file_bytes": 581387271,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"reads": 2, "bytes": 32679571, "seconds": 1.339},
+      "cold": {"reads": 1, "bytes": 1831, "seconds": 0.862},
+      "warm": {"reads": 0, "bytes": 0, "seconds": 0.069},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi.parquet",
+      "column": "trip.sec",
+      "file_bytes": 640173859,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"reads": 27, "bytes": 671548047, "seconds": 3.932},
+      "cold": {"reads": 1, "bytes": 6660483, "seconds": 1.077},
+      "warm": {"reads": 0, "bytes": 0, "seconds": 0.067},
+      "arrow_equal": true
+    }
+  ]
+}

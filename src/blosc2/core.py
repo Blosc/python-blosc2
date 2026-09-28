@@ -769,6 +769,8 @@ def parse_container_url(
         return urlpath, dataset, "hdf5"
     if any(part.endswith(".zarr") for part in parts):
         return urlpath, dataset, "zarr"
+    if parsed.path.lower().endswith(".parquet"):
+        return urlpath, dataset, "parquet"
 
     return urlpath, dataset, None
 
@@ -811,8 +813,11 @@ def cache_path_component(value: str) -> str:
 
 def cache_directory_name(urlpath: str, identity: bytes) -> str:
     """A recognizable source basename and a 48-bit cache identity."""
-    parsed = urllib.parse.urlsplit(urlpath)
-    name = pathlib.PurePosixPath(parsed.path.rstrip("/")).name or parsed.hostname or "remote"
+    if pathlib.PureWindowsPath(urlpath).drive and not is_fsspec_url(urlpath):
+        name = pathlib.PureWindowsPath(urlpath).name
+    else:
+        parsed = urllib.parse.urlsplit(urlpath)
+        name = pathlib.PurePosixPath(parsed.path.rstrip("/")).name or parsed.hostname or "remote"
     name = cache_path_component(urllib.parse.unquote(name))
     return name + "--" + hashlib.sha256(identity).hexdigest()[:12]
 

@@ -4,8 +4,8 @@ RemoteCTable
 ============
 
 ``RemoteCTable`` is a read-only :class:`blosc2.CTable` backed by a remote B2Z
-archive or a local or remote PyTables/HDF5 table. Fixed-width, shaped, nullable,
-UTF-8, batch-backed variable-length,
+archive, a local or remote PyTables/HDF5 table, or a Parquet file. Fixed-width,
+shaped, nullable, UTF-8, batch-backed variable-length,
 batch-backed list, struct/object, and dictionary columns are fetched on demand.
 Open local PyTables tables through :func:`blosc2.open` with ``path=`` or a
 ``::table`` selector.
@@ -73,6 +73,33 @@ peak RAM.
 ``RemoteCTable.with_sparse_cache(url, runtime_cache_path)`` remains available
 for advanced attachment with manifests or seed carriers, with the same default
 budget and shared-cache implementation.
+
+Parquet cache details
+---------------------
+
+Parquet ``cache_dir`` stores each accessed physical field and row group as a
+native CTable directory under the RemoteStore generation's ``parquet-groups``
+directory. The common manifest retains the footer, schema, conversion options,
+source marker, and row-group boundaries. Warm opens reuse this discovery and
+payload without contacting the source. Cached sources are assumed immutable
+until ``refresh()`` is called. New portable ``.b2z`` archives use the common
+RemoteStore manifest. Local Parquet sources use the same cache layout and may
+export ``.b2z`` references tied to the local source path.
+
+HTTP Parquet sources need byte-range support. A persistent cache also needs a
+source size and version marker, such as an ETag, modification time, or
+Backblaze B2 file ID. HTTP read-ahead is disabled by default to avoid fetching
+unused bytes; an explicit ``storage_options={"cache_type": "bytes"}`` restores
+fsspec buffering. The ``traffic`` counter counts fetched ranges; explicitly
+enabled transport buffering may make actual HTTP transfer different.
+
+Multi-column selections, including table previews, fetch independent Parquet
+column chunks concurrently using ``max_concurrency`` (8 by default). Decoding
+and cache writes stay on the calling thread. ``row_buffer_bytes`` bounds each
+wave of compressed responses; one physical field larger than the budget runs
+alone. A physical field with nested leaves is fetched as one unit. Reads still
+load whole column chunks for the selected row groups, even for a few rows.
+Use ``max_concurrency=1`` for serial transport.
 
 See :doc:`Working with Remote Tables <../guides/remote_tables>` for column
 access, filtering, buffering, reference saving, and materialization examples.

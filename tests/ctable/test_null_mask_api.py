@@ -114,7 +114,7 @@ def test_nullable_bool_is_a_real_bool():
     """The case that motivated the whole design: no uint8, no reserved 255."""
     t = simple([True, None, False], spec=blosc2.bool(null_storage="mask"))
     assert t["a"].dtype == np.dtype(np.bool_)
-    assert t["a"][:].tolist() == [True, False, False]
+    assert t["a"][:].tolist() == [True, None, False]
     assert t["a"].is_null().tolist() == [False, True, False]
 
 
@@ -145,7 +145,7 @@ def test_timestamp_accepts_none():
     spec = blosc2.timestamp(null_storage="mask")
     t = simple(["2020-01-01", None, "2020-01-03"], spec=spec)
     assert t["a"].is_null().tolist() == [False, True, False]
-    assert np.isnat(t["a"][:][1])
+    assert np.ma.is_masked(t["a"][:][1])
 
 
 def test_ndarray_column_accepts_none():
@@ -651,7 +651,7 @@ def test_extend_from_a_table_carries_the_nulls_over():
     src = simple([1, None, 3])
     dst = simple([])
     dst.extend(src)
-    assert dst["a"][:].tolist() == [1, 0, 3]
+    assert dst["a"][:].tolist() == [1, None, 3]
     assert dst["a"].is_null().tolist() == [False, True, False]
     assert dst["a"].null_count() == 1
 
@@ -677,7 +677,7 @@ def test_extend_from_a_table_carries_utf8_nulls():
     src = table([("x",), (None,), ("",)], s=utf8_spec(null_storage="mask"))
     dst = table([], s=utf8_spec(null_storage="mask"))
     dst.extend(src)
-    assert list(dst["s"][:]) == ["x", "", ""]
+    assert dst["s"][:].tolist() == ["x", None, ""]
     assert dst["s"].is_null().tolist() == [False, True, False]
 
 
@@ -705,7 +705,7 @@ def test_extend_from_a_sorted_view_copies_it_in_sorted_order():
     dst = simple([])
     dst.extend(src.sort_by("a", view=True))
     # Nulls sort last, in both directions, and the copy has to agree.
-    assert dst["a"][:].tolist() == [1, 2, 3, 0]
+    assert dst["a"][:].tolist() == [1, 2, 3, None]
     assert dst["a"].is_null().tolist() == [False, False, False, True]
 
 
@@ -730,7 +730,7 @@ def test_extend_from_a_null_free_table_writes_no_sidecar():
 def test_add_column_values_accept_none():
     t = simple([1, 2, 3], spec=blosc2.int64())
     t.add_column("b", blosc2.int64(nullable=True), values=[10, None, 30])
-    assert t["b"][:].tolist() == [10, 0, 30]
+    assert t["b"][:].tolist() == [10, None, 30]
     assert t["b"].is_null().tolist() == [False, True, False]
     assert t["b"].null_count() == 1
 
@@ -747,7 +747,7 @@ def test_add_column_default_none_still_applies_to_later_rows():
     t.add_column("b", blosc2.field(blosc2.int64(nullable=True), default=None))
     t.append((3, 9))
     t.extend([(4, None)])
-    assert t["b"][:].tolist() == [0, 0, 9, 0]
+    assert t["b"][:].tolist() == [None, None, 9, None]
     assert t["b"].is_null().tolist() == [True, True, False, True]
 
 
@@ -767,7 +767,7 @@ def test_add_column_scatters_nulls_past_deleted_rows():
     assert t["b"].is_null().tolist() == [False, True, False]
     t.compact()
     assert t["b"].is_null().tolist() == [False, True, False]
-    assert t["b"][:].tolist() == [10, 0, 30]
+    assert t["b"][:].tolist() == [10, None, 30]
 
 
 @needs_utf8
@@ -775,7 +775,7 @@ def test_add_column_utf8_values_accept_none():
     """The fill is "" here, which a genuine row may also hold."""
     t = simple([1, 2, 3], spec=blosc2.int64())
     t.add_column("s", utf8_spec(null_storage="mask"), values=["p", None, ""])
-    assert list(t["s"][:]) == ["p", "", ""]
+    assert t["s"][:].tolist() == ["p", None, ""]
     assert t["s"].is_null().tolist() == [False, True, False]
 
 
@@ -786,7 +786,7 @@ def test_add_column_ndarray_values_accept_none():
         blosc2.ndarray((3,), dtype=blosc2.int64(), nullable=True),
         values=[np.array([1, 2, 3]), None],
     )
-    assert t["v"][:].tolist() == [[1, 2, 3], [0, 0, 0]]
+    assert t["v"][:].tolist() == [[1, 2, 3], [None, None, None]]
     assert t["v"].is_null().tolist() == [False, True]
 
 
@@ -846,7 +846,7 @@ def test_add_column_timestamp_null_reads_as_nat():
     t = simple([1, 2], spec=blosc2.int64())
     t.add_column("ts", blosc2.timestamp(nullable=True), values=[when, None])
     assert t["ts"].is_null().tolist() == [False, True]
-    assert np.isnat(t["ts"][:][1])
+    assert np.ma.is_masked(t["ts"][:][1])
 
 
 # ---------------------------------------------------------------------------
@@ -863,7 +863,7 @@ def test_add_column_timestamp_null_reads_as_nat():
 def test_isin_does_not_match_the_fill():
     t = simple([1, None, 0])
     # Rows 1 and 2 both hold a physical 0; only row 2 holds it as a value.
-    assert t["a"][:].tolist() == [1, 0, 0]
+    assert t["a"][:].tolist() == [1, None, 0]
     assert t["a"].isin([0]).tolist() == [False, False, True]
 
 
@@ -887,7 +887,7 @@ def test_isin_pandas_na_spells_the_same_request():
 def test_isin_does_not_match_the_empty_string_fill():
     """The utf8 fill is "", which a genuine row may hold -- so it has to be the sidecar."""
     t = table([("x",), (None,), ("",)], s=utf8_spec(null_storage="mask"))
-    assert list(t["s"][:]) == ["x", "", ""]
+    assert t["s"][:].tolist() == ["x", None, ""]
     assert t["s"].isin([""]).tolist() == [False, False, True]
 
 
@@ -1160,4 +1160,100 @@ def test_a_sentinel_column_still_shows_its_sentinel_in_a_row():
     t = blosc2.CTable(Row, expected_size=8)
     t.extend([(1,), (-1,), (3,)])
     assert t[1].n == -1
+    assert t["n"][1] == -1
     assert t["n"].is_null().tolist() == [False, True, False]
+
+
+@pytest.mark.parametrize(
+    ("spec", "value"),
+    [
+        (blosc2.int64(null_storage="mask"), 0),
+        (blosc2.uint8(null_storage="mask"), 0),
+        (blosc2.float64(null_storage="mask"), float("nan")),
+        (blosc2.bool(null_storage="mask"), False),
+        (blosc2.string(max_length=4, null_storage="mask"), ""),
+        (blosc2.timestamp(null_storage="mask"), datetime.datetime(2020, 1, 1)),
+    ],
+)
+def test_scalar_column_reads_apply_null_mask(spec, value):
+    with simple([value, None], spec) as t:
+        col = t["a"]
+        assert col[1] is None
+        assert col[-1] is None
+        assert col[np.int64(1)] is None
+        assert col[np.int32(-1)] is None
+        assert col[0] is not None
+        assert col.is_null().tolist() == [False, True]
+        if isinstance(value, float):
+            assert np.isnan(col[0])  # A valid NaN remains a value.
+        with pytest.raises(IndexError):
+            col[np.int64(2)]
+
+
+def test_scalar_column_nulls_follow_view_positions_and_deletions():
+    with mixed_null_table() as t:
+        for name in ("n", "v", "t", "ts"):
+            assert t[name][1] is None
+            assert t[1:][name][0] is None
+            assert t[name].view[1:][0] is None
+        sorted_view = t.sort_by("n", view=True)
+        assert sorted_view["n"][-1] is None
+        assert sorted_view["n"][0] == 1
+        t.delete(0)
+        assert t["n"][0] is None
+        assert t["n"][1] == 3
+
+
+def test_scalar_masked_ndarray_column_returns_none():
+    spec = blosc2.ndarray((2,), dtype=blosc2.float32(), null_storage="mask")
+    with simple([[1.0, 2.0], None], spec) as t:
+        assert t["a"][1] is None
+        assert t["a"][1, 0] is None
+        assert t["a"][np.int64(1), 0] is None
+        assert t["a"][0, 1] == 2.0
+
+
+@pytest.mark.parametrize(
+    "key", [slice(None), slice(None, None, -1), slice(0, 3, 2), [2, 0, 2], np.array([True, False, True])]
+)
+def test_column_selections_mask_nulls_in_selection_order(key):
+    with simple([None, 0, 33], blosc2.uint8(null_storage="mask")) as t:
+        values = t["a"][key]
+        expected = np.array([True, False, False])[key]
+        if expected.any():
+            assert isinstance(values, np.ma.MaskedArray)
+            assert values.dtype == np.dtype("uint8")
+            np.testing.assert_array_equal(values.mask, expected)
+            np.testing.assert_array_equal(
+                values.compressed(), np.array([0, 0, 33], dtype=np.uint8)[key][~expected]
+            )
+            assert values.tolist() == np.array([None, 0, 33], dtype=object)[key].tolist()
+        else:
+            assert not isinstance(values, np.ma.MaskedArray)
+        assert not isinstance(t["a"][1:], np.ma.MaskedArray)
+        assert not isinstance(t["a"][0:0], np.ma.MaskedArray)
+
+
+def test_masked_column_selections_follow_views_and_deletions():
+    with mixed_null_table() as t:
+        assert t[1:]["n"][:].tolist() == [None, 3]
+        assert t["n"].view[1:][:].tolist() == [None, 3]
+        assert t.sort_by("n", view=True)["n"][:].tolist() == [1, 3, None]
+        t.delete(0)
+        assert t["n"][:].tolist() == [None, 3]
+        assert t["n"][[1, 0]].tolist() == [3, None]
+
+
+def test_masked_ndarray_selections_broadcast_validity():
+    spec = blosc2.ndarray((2,), dtype=blosc2.float32(), null_storage="mask")
+    with simple([[1.0, 2.0], None, [3.0, 4.0]], spec) as t:
+        values = t["a"][:]
+        assert values.shape == (3, 2)
+        assert values.mask.tolist() == [[False, False], [True, True], [False, False]]
+        assert values.dtype == np.dtype("float32")
+        assert t["a"][:, 1].tolist() == [2.0, None, 4.0]
+        assert t["a"][[1, 0], 0].tolist() == [None, 1.0]
+        assert t["a"].to_numpy(masked=True).mask.tolist() == values.mask.tolist()
+        values[1] = [5.0, 6.0]  # The returned mask is writable and independent of storage.
+        assert not values.mask[1].any()
+        assert t["a"][1] is None

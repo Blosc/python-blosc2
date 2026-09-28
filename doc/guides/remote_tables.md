@@ -5,6 +5,59 @@ Fixed-width, `blosc2.utf8()`, batch-backed variable-length, list, struct/object,
 and dictionary columns are fetched on demand, including their null masks. A table
 inside a hierarchy can also be opened through `RemoteStore`.
 
+## Single-file Parquet
+
+`blosc2.open()` recognizes `.parquet` paths, including fsspec URLs, and returns
+a read-only `RemoteCTable`. Use `source_format="parquet"` for an extensionless
+URL. `storage_options` go to fsspec; `parquet_options` go to PyArrow's
+`ParquetFile`. `columns`, `max_rows`, null policy, string width, and list
+conversion options follow `CTable.from_parquet()`.
+
+```python
+with blosc2.open(
+    "s3://bucket/readings.parquet",
+    storage_options={"anon": True},
+    columns=["station", "temperature"],
+    parquet_options={"read_dictionary": ["station"]},
+    cache_dir="parquet-cache",
+) as table:
+    last = table["temperature"][-1]
+    local = table.copy(urlpath="readings.b2z")
+```
+
+Reads fetch a Parquet field one row group at a time. Selecting one column avoids
+unrelated columns; reading a complete row may fetch every column in its group.
+`cache_dir` retains converted data and table metadata across opens, so warm
+opens and cached reads need no connection to the source. Cached sources are
+assumed unchanged until `refresh()` is called. Use `lazy=False` to import the
+whole table eagerly.
+
+Parquet is a `RemoteStore` with one root CTable. Use
+`RemoteStore(url, allow_table_root=True)` and `store[""]` when a store operation
+needs to own the cache and traffic counters. A Parquet file accepts only the
+root selector (`""` or `"/"`); selecting a child path raises an error.
+`RemoteCTable(url)` and lazy `blosc2.open(url)` use the same owner. NONE retains
+no converted row groups, MEMORY shares the store budget, and DISK retains
+complete converted physical-column/row-group units. A small slice can therefore
+read a whole row group. Shared DISK caches support `read_cached_table()` and
+offline `trim_sparse_cache()` with the same aggregate allowance.
+Caches from the earlier Parquet prototype layout are not migrated; use a fresh
+`cache_dir` for this RemoteStore layout.
+
+HTTP servers must honor byte-range requests; fsspec raises a range-request error
+for servers that only return complete files. Download the file and import it
+locally when range access is unavailable.
+
+`table.save("reference.b2z")` creates a RemoteStore archive with data already in
+the cache. Opening it reuses that data and fetches missing groups on demand.
+Archives of local sources keep an absolute path to the local Parquet file.
+Use `include_cache=False` to save only the table metadata. `.b2z` exports use
+the RemoteStore version 1 manifest with `kind="parquet"`. Runtime filesystems, credentials,
+and storage options must be supplied again when reopening.
+
+Use `shared_cache=True` when separate processes need to share one `cache_dir`.
+They should use the same source and conversion options.
+
 `blosc2.open()` dispatches uncached local B2Z table archives to `CTable`, and
 remote B2Z archives and selected local or remote PyTables tables to
 `RemoteCTable`. Supplying `cache_dir=` also selects `RemoteCTable` for a local
@@ -126,6 +179,12 @@ See `examples/ctable/remote_handling.py` for a batched archive writer with nulla
 multilingual UTF-8 and variable-length strings, a batch-backed list, and a
 dictionary. It reports ordinary batch cold/warm reads and dictionary code/vocabulary
 costs separately.
+The same script writes and reads Blosc2 with `--blosc2`, PyTables/HDF5 with
+`--pytables`, and Parquet with `--parquet`. Without a format flag, it selects the
+format from the `.b2z`, `.h5`, or `.parquet` extension of the output path or input URL.
+Use `--write FILE` to create a file locally, then pass its uploaded URL to read it remotely.
+The Parquet file uses the full Blosc2 example schema, including nullable values,
+multilingual strings, lists, and dictionary-encoded regions.
 
 ## Refresh a remote table
 

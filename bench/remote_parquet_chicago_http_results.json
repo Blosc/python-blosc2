@@ -1,0 +1,61 @@
+{
+  "date": "2026-09-25",
+  "method": "Each file served by bench/remote_parquet_files.py --http on 127.0.0.1 with byte-range responses. Reads and bytes count completed server GET responses and response bodies; HEAD requests are counted separately. Headers and TCP overhead are excluded. Default in-memory converted cache; fsspec block_size=4096, cache_type=none. Cold access reads the final row; warm access repeats it in the same process.",
+  "files": [
+    {
+      "file": "chicago-taxi-flat-f32-cl20.parquet",
+      "column": "trip.sec",
+      "file_bytes": 581387271,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"gets": 2, "heads": 2, "bytes": 32679571, "seconds": 1.253},
+      "cold": {"gets": 1, "heads": 0, "bytes": 331590, "seconds": 17.688},
+      "warm": {"gets": 0, "heads": 0, "bytes": 0, "seconds": 0.069},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi-flat-f32.parquet",
+      "column": "trip.sec",
+      "file_bytes": 686857703,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"gets": 2, "heads": 2, "bytes": 33057447, "seconds": 1.084},
+      "cold": {"gets": 1, "heads": 0, "bytes": 352939, "seconds": 17.885},
+      "warm": {"gets": 0, "heads": 0, "bytes": 0, "seconds": 0.069},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi-flat-f64.parquet",
+      "column": "trip.sec",
+      "file_bytes": 687450036,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"gets": 2, "heads": 2, "bytes": 33068884, "seconds": 1.122},
+      "cold": {"gets": 1, "heads": 0, "bytes": 352939, "seconds": 18.131},
+      "warm": {"gets": 0, "heads": 0, "bytes": 0, "seconds": 0.069},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi-flat-f32-cl20.parquet",
+      "column": "company",
+      "file_bytes": 581387271,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"gets": 2, "heads": 2, "bytes": 32679571, "seconds": 1.308},
+      "cold": {"gets": 1, "heads": 0, "bytes": 1831, "seconds": 0.813},
+      "warm": {"gets": 0, "heads": 0, "bytes": 0, "seconds": 0.068},
+      "arrow_equal": true
+    },
+    {
+      "file": "chicago-taxi.parquet",
+      "column": "trip.sec",
+      "file_bytes": 640173859,
+      "rows": 24314322,
+      "groups": 25,
+      "open": {"gets": 27, "heads": 2, "bytes": 671548047, "seconds": 3.909},
+      "cold": {"gets": 1, "heads": 0, "bytes": 6660483, "seconds": 1.051},
+      "warm": {"gets": 0, "heads": 0, "bytes": 0, "seconds": 0.067},
+      "arrow_equal": true
+    }
+  ]
+}
