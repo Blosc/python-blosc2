@@ -12003,11 +12003,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             )
 
     def _col_dtype(self, name: str) -> np.dtype | None:
-        """Return the dtype for *name*, routing through computed cols."""
+        """Return the dtype from the schema without opening stored columns."""
         cc = self._computed_cols.get(name)
         if cc is not None:
             return cc["dtype"]
-        return getattr(self._cols[name], "dtype", None)
+        column = self._schema.columns_by_name[name]
+        if isinstance(column.spec, UTF8Spec):
+            from blosc2._utf8_array import string_dtype
+
+            return string_dtype()
+        return column.dtype
 
     @staticmethod
     def _readable_computed_expr(cc: dict) -> str:

@@ -41,6 +41,40 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
+@pytest.mark.parametrize("text_spec", [blosc2.utf8(), blosc2.vlstring()])
+def test_preview_opens_only_visible_columns(tmp_path, monkeypatch, text_spec):
+    @dataclasses.dataclass
+    class WideRow:
+        left: int
+        hidden: list[int] = blosc2.field(blosc2.list(blosc2.int64()))  # noqa: RUF009
+        note: str = blosc2.field(text_spec)
+        right: int = 0
+
+    local = blosc2.CTable(WideRow, [(1, [2, 3], "note", 4)])
+    url = remote_table_url(tmp_path, local)
+    with blosc2.open(url) as table:
+        for name in table.col_names:
+            assert table._col_dtype(name) == getattr(local._cols[name], "dtype", None)
+        storage = table._remote_read_storage()
+        original = storage.open_columns
+        opened = []
+
+        def open_columns(table, names, load):
+            # Width fitting must leave opening to the concurrent reader.
+            assert not dict.keys(table._cols)
+            opened.extend(names)
+            return original(table, names, load)
+
+        monkeypatch.setattr(storage, "open_columns", open_columns)
+        result = table.to_string(max_rows=10, max_width=60)
+        assert "left" in result
+        assert "right" in result
+        assert "hidden" not in result
+        assert "note" not in result
+        assert opened == ["left", "right"]
+        assert set(dict.keys(table._cols)) == {"left", "right"}
+
+
 def test_reopen_root_table_artifact(tmp_path):
     url = remote_table_url(tmp_path, blosc2.CTable(Row, [(1, [2, 3], "one")]))
     artifact = tmp_path / "remote-table.b2z"
