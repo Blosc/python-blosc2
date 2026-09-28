@@ -41,6 +41,15 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
+def test_reopen_root_table_artifact(tmp_path):
+    url = remote_table_url(tmp_path, blosc2.CTable(Row, [(1, [2, 3], "one")]))
+    artifact = tmp_path / "remote-table.b2z"
+    with blosc2.RemoteCTable(url) as table:
+        table.save(artifact)
+    with blosc2.RemoteCTable(artifact) as reopened:
+        assert reopened.x[:] == [1]
+
+
 def test_remote_ctable_shared_seed_restores_batch_payload(tmp_path, monkeypatch):
     @dataclasses.dataclass
     class BatchRow:

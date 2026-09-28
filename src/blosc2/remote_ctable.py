@@ -202,6 +202,7 @@ class RemoteCTable(RemoteObject, CTable):
                 cache_dir=cache_dir,
                 hdf5_index=hdf5_index,
                 _allow_array_root=True,
+                allow_table_root=True,
                 _filesystem=_filesystem,
                 _filesystem_resolver=_filesystem_resolver,
                 _batch_validator=_batch_validator,
