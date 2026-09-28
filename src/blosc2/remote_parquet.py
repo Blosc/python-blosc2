@@ -625,21 +625,24 @@ class ParquetCache:
             path = None if self.cache_dir is None else self.cache_dir / _group_filename(number, physical)
             cache_file = path if path is not None and (owner.disk is not None or path.exists()) else None
             if cache_file is not None and cache_file.exists():
+                table = None
                 try:
                     table = CTable.open(cache_file)
                     start = 0 if number == 0 else int(owner.row_ends[number - 1])
-                    if len(table) == int(owner.row_ends[number]) - start:
-                        cache_file.touch()
-                        if owner.is_mutable:
-                            owner.cache_coordinator.touch(self, cache_file.name)
-                        try:
-                            yield table
-                        finally:
-                            table.close()
-                        return
-                    table.close()
+                    if len(table) != int(owner.row_ends[number]) - start:
+                        raise ValueError("Invalid cached Parquet row count")
                 except (OSError, ValueError, RuntimeError, KeyError, TypeError, zipfile.BadZipFile):
-                    pass
+                    if table is not None:
+                        table.close()
+                else:
+                    try:
+                        if owner.is_mutable:
+                            cache_file.touch()
+                            owner.cache_coordinator.touch(self, cache_file.name)
+                        yield table
+                    finally:
+                        table.close()
+                    return
             if owner.cache_coordinator.cached_only:
                 raise CacheMiss
             self._ensure_reader()
@@ -688,10 +691,6 @@ class ParquetCache:
                 owner.cache_coordinator.touch(self, cache_file.name)
                 owner.cache_coordinator.enforce()
                 owner.save_manifest()
-            elif owner.cache_policy is blosc2.CachePolicy.MEMORY or (
-                owner.disk is None and owner.cache_policy is not blosc2.CachePolicy.NONE
-            ):
-                pass
             try:
                 yield table
             finally:
@@ -725,11 +724,20 @@ class _ParquetColumn:
         self.shape = (storage.length,)
         self.chunks = (min(max(storage.length, 1), 65536),)
         self.blocks = self.chunks
-        self.dtype = np.dtype(bool) if mask else storage.schema.columns_by_name[name].dtype
+        column = storage.schema.columns_by_name[name]
+        self.dtype = np.dtype(bool) if mask else column.dtype
+        self.spec = column.spec
         self._dictionary = None
 
     def __len__(self):
         return self.shape[0]
+
+    def __iter__(self):
+        for start in range(0, len(self), self.chunks[0]):
+            yield from self[start : start + self.chunks[0]]
+
+    contains = blosc2.ListArray.contains
+    overlaps = blosc2.ListArray.overlaps
 
     @property
     def nbytes(self):
@@ -823,11 +831,11 @@ class _ParquetColumn:
             del ranges
             for target, value in zip(selected, part, strict=True):
                 values[int(target)] = value
-        result = (
-            np.asarray(values, dtype=self.dtype)
-            if self.dtype is not None and self.dtype != np.dtype(object)
-            else np.asarray(values, dtype=object)
-        )
+        if self.dtype is not None and self.dtype != np.dtype(object):
+            result = np.asarray(values, dtype=self.dtype)
+        else:
+            result = np.empty(len(values), dtype=object)
+            result[:] = values
         return result[0] if scalar else result
 
 

@@ -148,6 +148,57 @@ def test_narrow_read_uses_only_one_later_group(tmp_path):
         assert remote.traffic.requests == before + 1
 
 
+@pytest.mark.parametrize(
+    ("cells", "dtype"),
+    [
+        ([[1, 2], [3, 4]], pa.list_(pa.int64())),
+        ([[], []], pa.list_(pa.int64())),
+        ([[[1], [2]], [[3], [4]]], pa.list_(pa.list_(pa.int64()))),
+    ],
+)
+def test_equal_length_list_cells_preserve_rows(tmp_path, cells, dtype):
+    path = tmp_path / "lists.parquet"
+    source = pa.table({"items": pa.array(cells, type=dtype)})
+    pq.write_table(source, path, row_group_size=1)
+    with blosc2.open(path, cache_dir=tmp_path / "cache") as remote:
+        assert remote["items"][:].shape == (2,)
+        assert remote["items"][:].tolist() == cells
+        assert remote[0].items == cells[0]
+        assert remote.to_arrow().equals(source)
+
+
+def test_cached_group_propagates_consumer_error(tmp_path, monkeypatch):
+    path = tmp_path / "data.parquet"
+    pq.write_table(pa.table({"id": [1, 2]}), path)
+    with blosc2.open(path, cache_dir=tmp_path / "cache") as remote:
+        assert remote["id"][0] == 1
+        owner = remote._storage._owner
+
+        def no_source_read():
+            pytest.fail("A consumer error must not trigger a source reread")
+
+        monkeypatch.setattr(owner.parquet_cache, "_ensure_reader", no_source_read)
+        with pytest.raises(ValueError, match="consumer error"), owner.group(0, "id"):
+            raise ValueError("consumer error")
+        assert remote["id"][0] == 1
+
+
+def test_list_membership_matches_local_table(tmp_path):
+    path = tmp_path / "lists.parquet"
+    source = pa.table({"items": pa.array([[1, None], [], None, [4]], type=pa.list_(pa.int64()))})
+    pq.write_table(source, path, row_group_size=2)
+    with (
+        blosc2.open(path, cache_dir=tmp_path / "cache") as remote,
+        blosc2.CTable.from_parquet(path) as local,
+    ):
+        for table in (remote, remote[:3]):
+            expected = local[: len(table)]
+            np.testing.assert_array_equal(table["items"].contains(1)[:], expected["items"].contains(1)[:])
+            np.testing.assert_array_equal(
+                table["items"].overlaps([None, 4])[:], expected["items"].overlaps([None, 4])[:]
+            )
+
+
 def test_info_without_loading_parquet_groups(tmp_path):
     path = tmp_path / "info.parquet"
     pq.write_table(pa.table({"id": [1, 2, 3], "text": ["a", "bb", "ccc"]}), path)
