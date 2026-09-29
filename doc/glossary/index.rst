@@ -19,24 +19,20 @@ Glossary
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
 
-    codec
+    codec (:class:`API <blosc2.Codec>`)
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
 
-    compression parameters
+    compression parameters (:class:`API <blosc2.CParams>`)
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
 
-    cparams
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-        tempor incididunt ut labore et dolore magna aliqua.
-
-    CTable
+    CTable (:ref:`API <CTable>`)
         A columnar table for structured data. Columns are stored, compressed, and
         queried independently, with SUMMARY indexes available by default. Use with
         structured data that benefits from compression, speed, and persistence.
 
-    filters
+    filters (:class:`API <blosc2.Filter>`)
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
 
@@ -48,7 +44,7 @@ Glossary
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
 
-    NDArray
+    NDArray (:ref:`API <NDArray>`)
         A compressed, chunked multidimensional data array. Supports NumPy-like
         slicing and broadcasting, and out-of-core computation. Backed by an SChunk.
         Use for array workloads, especially when too large to fit in memory
@@ -62,7 +58,7 @@ Glossary
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
 
-    SChunk
+    SChunk (:ref:`API <SChunk>`)
         The foundational container for managing a sequence of individual,
         compressed chunks. NDArrays and CTable columns are built on top of SChunk.
         Use when you want to directly manipulate raw compresesd data and metadata.
