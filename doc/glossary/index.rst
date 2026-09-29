@@ -37,12 +37,20 @@ Glossary
         tempor incididunt ut labore et dolore magna aliqua.
 
     frame
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-        tempor incididunt ut labore et dolore magna aliqua.
+        A serialized format for storing chunks along with a header and trailer for
+        metadata. Frames may be contiguous (CFrame) or sparse (SFrame).
 
     FULL
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
         tempor incididunt ut labore et dolore magna aliqua.
+
+    LazyArray (:ref:`API <LazyArray>`)
+        API to store an expression or function and delay computation until the
+        value is explicitly requested. Executes and stores results chunk-by-chunk.
+
+    LaxyExpr (:ref:`API <LazyExpr>`)
+        Object that stores an expression consisting of at least one NDArray
+        object. Follows the LazyArray API for storage and deferred computation.
 
     NDArray (:ref:`API <NDArray>`)
         A compressed, chunked multidimensional data array. Supports NumPy-like
