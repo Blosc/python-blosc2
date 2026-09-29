@@ -188,22 +188,29 @@ def c2context(
 
 
 def _auth_headers(auth_token, headers=None):
-    auth_token = auth_token or _server_data["auth_token"]
+    # None means "inherit c2context"; an explicit empty string isolates a
+    # public reference from ambient credentials.
+    auth_token = _server_data["auth_token"] if auth_token is None else auth_token
     if auth_token:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_token
     return headers
 
 
-def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
+def _request_client(transport=None):
+    """Return an explicitly injected client or the process-wide default."""
+    return _sync_client() if transport is None else transport
+
+
+def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT, transport=None):
     headers = _auth_headers(auth_token, headers)
-    response = _sync_client().get(url, params=params, headers=headers, timeout=timeout)
+    response = _request_client(transport).get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
 
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
-    auth_token = auth_token or _server_data["auth_token"]
+    auth_token = _server_data["auth_token"] if auth_token is None else auth_token
     headers = {"Cookie": auth_token} if auth_token else None
     response = _sync_client().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
@@ -264,16 +271,18 @@ def login(username, password, urlbase):
     return "=".join(list(resp.cookies.items())[0])
 
 
-def info(path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None):
+def info(
+    path, urlbase, params=None, headers=None, model=None, auth_token=None, traffic=None, transport=None
+):
     url = _server_url(urlbase, f"api/info/{path}")
-    response = _xget(url, params, headers, auth_token)
+    response = _xget(url, params, headers, auth_token, transport=transport)
     if traffic is not None:
         traffic.charge(len(response.content))
     json = response.json()
     return json if model is None else model(**json)
 
 
-def _post_fetch(url, params, auth_token, retry_as_get=False):
+def _post_fetch(url, params, auth_token, retry_as_get=False, transport=None):
     """`api/fetch` again, with the parameters in the body.
 
     For a key too long to be a query and nothing else.  A server that has never
@@ -281,7 +290,9 @@ def _post_fetch(url, params, auth_token, retry_as_get=False):
     wrong: None where the caller has a GET left to try, and otherwise the
     sentence a caller can act on.
     """
-    response = _sync_client().post(url, json=params, headers=_auth_headers(auth_token), timeout=TIMEOUT)
+    response = _request_client(transport).post(
+        url, json=params, headers=_auth_headers(auth_token), timeout=TIMEOUT
+    )
     if response.status_code == 405 and retry_as_get:
         return None
     if response.status_code == 405:
@@ -294,23 +305,29 @@ def _post_fetch(url, params, auth_token, retry_as_get=False):
     return response
 
 
-def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=None):
+def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=None, transport=None):
     url = _server_url(urlbase, f"api/fetch/{path}")
     # What the client will actually put in the URL, not what was handed here: the
     # coordinates of a fancy key grow by about half again under percent-encoding
     # (`,` -> `%2C`, `[` -> `%5B`), and it is the encoded length that is capped
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
     if len(query) <= _MAX_QUERY_CHARS:
-        response = _xget(url, params=params, auth_token=auth_token)
+        response = _xget(url, params=params, auth_token=auth_token, transport=transport)
     else:
         # A query no front end will carry, so the parameters go in a body.  A
         # server without that route answers 405, and then a GET is worth trying
         # after all where the client can still build one: it may be that nothing
         # sits in front of this server, and a request that might work beats an
         # error that certainly does not
-        response = _post_fetch(url, params, auth_token, retry_as_get=len(query) <= _MAX_URL_CHARS)
+        response = _post_fetch(
+            url,
+            params,
+            auth_token,
+            retry_as_get=len(query) <= _MAX_URL_CHARS,
+            transport=transport,
+        )
         if response is None:
-            response = _xget(url, params=params, auth_token=auth_token)
+            response = _xget(url, params=params, auth_token=auth_token, transport=transport)
     data = response.content
     if traffic is not None:
         # A slice or a gather is data crossing the wire like any chunk, and the
@@ -623,6 +640,7 @@ class C2NDSource(ByteRangeNDSource):
     def __init__(self, array: C2Array, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
         self._url = _server_url(array.urlbase, f"api/fetch/{array.path}")
         self._auth_token = array.auth_token
+        self._transport = array._transport
         # Answers that did not carry their parts, in a row; see `read_ranges`
         self._misses = 0
         # The array's own tally, so that what it reads through `api/chunk` and
@@ -681,7 +699,7 @@ class C2NDSource(ByteRangeNDSource):
     def _get(self, spans: list[tuple[int, int]]) -> list[bytes]:
         wanted = ", ".join(f"{offset}-{offset + size - 1}" for offset, size in spans)
         headers = _auth_headers(self._auth_token, {"Range": f"bytes={wanted}"})
-        with _sync_client().stream("GET", self._url, headers=headers) as response:
+        with _request_client(self._transport).stream("GET", self._url, headers=headers) as response:
             if response.status_code != 206:
                 # Whatever this is, it is not the bytes that were asked for: a 200
                 # carries the whole dataset, which is the download this exists to
@@ -717,6 +735,8 @@ class C2Array(blosc2.Operand):
         auth_token: str | None = None,
         *,
         _traffic=None,
+        _meta=None,
+        _transport=None,
     ):
         """Create an instance of a remote NDArray.
 
@@ -763,6 +783,7 @@ class C2Array(blosc2.Operand):
         self.urlbase = urlbase
 
         self.auth_token = auth_token
+        self._transport = _transport
         self._aclient = None  # lazy async client, shared across aget_chunk calls
         # The block-reading source, built on first use: _UNTRIED, None (this
         # dataset cannot be read in ranges) or a C2NDSource
@@ -792,18 +813,19 @@ class C2Array(blosc2.Operand):
         """
 
         # Try to 'open' the remote path
-        try:
-            self.meta = info(
-                self.path,
-                self.urlbase,
-                auth_token=self.auth_token,
-                traffic=self.traffic,
-            )
-        except _httpx().HTTPStatusError as err:
-            # HTTPStatusError only (not the broader HTTPError, which also covers
-            # connection-level failures): a 404 means "not found", a connection
-            # failure should propagate as-is rather than be reported as missing.
-            raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
+        if _meta is not None:
+            self.meta = _meta
+        else:
+            try:
+                options = {"auth_token": self.auth_token, "traffic": self.traffic}
+                if self._transport is not None:
+                    options["transport"] = self._transport
+                self.meta = info(self.path, self.urlbase, **options)
+            except _httpx().HTTPStatusError as err:
+                # HTTPStatusError only (not the broader HTTPError, which also covers
+                # connection-level failures): a 404 means "not found", a connection
+                # failure should propagate as-is rather than be reported as missing.
+                raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
         cparams = self.meta["schunk"]["cparams"]
         # Remove "filters, meta" from cparams; this is an artifact from the server
         cparams.pop("filters, meta", None)
@@ -883,14 +905,14 @@ class C2Array(blosc2.Operand):
                [81, 82, 83]], dtype=uint16)
         """
         params = self._fetch_params(slice_)
-        return fetch_data(
-            self.path,
-            self.urlbase,
-            params,
-            auth_token=self.auth_token,
-            as_blosc2=False,
-            traffic=self.traffic,
-        )
+        options = {
+            "auth_token": self.auth_token,
+            "as_blosc2": False,
+            "traffic": self.traffic,
+        }
+        if self._transport is not None:
+            options["transport"] = self._transport
+        return fetch_data(self.path, self.urlbase, params, **options)
 
     def _fetch_params(self, key) -> dict:
         """What `api/fetch` is to be asked for *key*: coordinates, or a box.
@@ -937,14 +959,14 @@ class C2Array(blosc2.Operand):
         blosc2.ndarray.NDArray
         """
         params = self._fetch_params(slice_)
-        return fetch_data(
-            self.path,
-            self.urlbase,
-            params,
-            auth_token=self.auth_token,
-            as_blosc2=True,
-            traffic=self.traffic,
-        )
+        options = {
+            "auth_token": self.auth_token,
+            "as_blosc2": True,
+            "traffic": self.traffic,
+        }
+        if self._transport is not None:
+            options["transport"] = self._transport
+        return fetch_data(self.path, self.urlbase, params, **options)
 
     def __len__(self) -> int:
         """Returns the length of the first dimension of the array.
@@ -986,7 +1008,7 @@ class C2Array(blosc2.Operand):
         """
         url = self._chunk_url()
         params = {"nchunk": nchunk}
-        response = _xget(url, params=params, auth_token=self.auth_token)
+        response = _xget(url, params=params, auth_token=self.auth_token, transport=self._transport)
         self.traffic.charge(len(response.content))
         return response.content
 
@@ -1014,6 +1036,8 @@ class C2Array(blosc2.Operand):
         url = self._chunk_url()
         params = {"nchunk": nchunk}
         headers = _auth_headers(self.auth_token)
+        if self._transport is not None:
+            return await asyncio.to_thread(self.get_chunk, nchunk)
         if self._aclient is None:
             self._aclient = _httpx().AsyncClient(timeout=TIMEOUT)
         response = await self._aclient.get(url, params=params, headers=headers)
@@ -1177,12 +1201,10 @@ class C2Array(blosc2.Operand):
         """
         with self._meta_lock:
             seen = self._meta_epoch
-        meta = info(
-            self.path,
-            self.urlbase,
-            auth_token=self.auth_token,
-            traffic=self.traffic,
-        )
+        options = {"auth_token": self.auth_token, "traffic": self.traffic}
+        if self._transport is not None:
+            options["transport"] = self._transport
+        meta = info(self.path, self.urlbase, **options)
         with self._meta_lock:
             if self._meta_epoch != seen:
                 return

@@ -43,13 +43,19 @@ def lock_cache_file(file, *, blocking=False):
 
 class StoreDiskCache:
     @staticmethod
-    def path_for(parent, source):
-        identity = msgpack.packb(source, use_bin_type=True)
-        return Path(parent) / cache_directory_name(source["urlpath"], identity)
+    def path_for(parent, source, identity_source=None):
+        identity_source = source if identity_source is None else identity_source
+        identity = msgpack.packb(identity_source, use_bin_type=True)
+        source_url = source.get("urlpath")
+        if source_url is None and source.get("kind") == "caterva2":
+            source_url = source["urlbase"].rstrip("/") + "/" + source["path"]
+        if not isinstance(source_url, str):
+            raise ValueError("RemoteStore cache source has no URL identity")
+        return Path(parent) / cache_directory_name(source_url, identity)
 
-    def __init__(self, parent, source, *, blocking=False):
+    def __init__(self, parent, source, *, blocking=False, identity_source=None):
         self.source = source
-        self.path = self.path_for(parent, source)
+        self.path = self.path_for(parent, source, identity_source)
         self.path.mkdir(parents=True, exist_ok=True)
         self.file = (self.path / "owner.lock").open("a+b")
         try:
@@ -190,11 +196,17 @@ def atomic_write(path, data):
 class SharedStoreCache(StoreDiskCache):
     """Sparse server cache with operation-scoped ownership, never a lifetime lease."""
 
-    def __init__(self, parent, source):
+    def __init__(self, parent, source, *, identity_source=None):
         self.parent = Path(parent)
         self.source = source
-        identity = msgpack.packb(source, use_bin_type=True)
-        self.path = self.parent / cache_directory_name(source["urlpath"], identity)
+        identity_source = source if identity_source is None else identity_source
+        identity = msgpack.packb(identity_source, use_bin_type=True)
+        source_url = source.get("urlpath")
+        if source_url is None and source.get("kind") == "caterva2":
+            source_url = source["urlbase"].rstrip("/") + "/" + source["path"]
+        if not isinstance(source_url, str):
+            raise ValueError("RemoteStore cache source has no URL identity")
+        self.path = self.parent / cache_directory_name(source_url, identity)
         for path in (self.parent, self.path):
             if path.is_symlink():
                 raise ValueError("Shared store cache cannot be a symlink")

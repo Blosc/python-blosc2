@@ -2134,8 +2134,8 @@ def _open_non_lazy_c2(
     return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
 
 
-def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):
-    """Open a Caterva2 array directly, or through the same lazy cache API as fsspec."""
+def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):  # noqa: C901
+    """Discover and open a Caterva2 array, group, or CTable."""
     if mode != "r":
         raise NotImplementedError(f"Caterva2 arrays can only be opened with mode='r', not {mode!r}")
     if offset != 0:
@@ -2161,7 +2161,61 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
             urlpath, immutable_present, remote_array_options, cache_dir, cache_path, max_concurrency
         )
 
-    return _open_lazy_remote(urlpath, None, remote_array_options, shared_cache)
+    if shared_cache:
+        if cache_dir is None:
+            raise ValueError("shared_cache=True requires cache_dir")
+        if remote_array_options["cache_policy"] is not blosc2.CachePolicy.DISK:
+            raise ValueError("shared_cache=True requires cache_policy=CachePolicy.DISK")
+        if remote_array_options["assume_immutable"] is not True:
+            raise ValueError("shared_cache=True requires assume_immutable=True")
+    metadata = blosc2.c2array.info(urlpath.path, urlpath.urlbase, auth_token=urlpath.auth_token)
+    kind = metadata.get("kind")
+    if kind == "group":
+        if cache_path is not None:
+            raise ValueError("Caterva2 groups use cache_dir, not cache_path")
+        store_options = {"cache_policy": remote_array_options["cache_policy"]}
+        if "max_cache_bytes" in remote_array_options:
+            store_options["max_cache_bytes"] = remote_array_options["max_cache_bytes"]
+        if shared_cache:
+            if cache_dir is None:
+                raise ValueError("shared_cache=True requires cache_dir")
+            return blosc2.RemoteStore.with_sparse_cache(
+                urlpath, cache_dir, **{k: v for k, v in store_options.items() if k != "cache_policy"}
+            )
+        return blosc2.RemoteStore(
+            urlpath,
+            cache_dir=cache_dir,
+            **store_options,
+        )
+    if kind == "ctable":
+        if cache_path is not None:
+            raise ValueError("Caterva2 tables use cache_dir, not cache_path")
+        table_options = {}
+        if "max_cache_bytes" in remote_array_options:
+            table_options["max_cache_bytes"] = remote_array_options["max_cache_bytes"]
+        if shared_cache:
+            if cache_dir is None:
+                raise ValueError("shared_cache=True requires cache_dir")
+            return blosc2.RemoteCTable.with_sparse_cache(
+                urlpath,
+                cache_dir,
+                **table_options,
+                max_concurrency=max_concurrency or 8,
+            )
+        return blosc2.RemoteCTable(
+            urlpath,
+            cache_policy=remote_array_options["cache_policy"],
+            cache_dir=cache_dir,
+            max_concurrency=max_concurrency or 8,
+            **table_options,
+        )
+    source = blosc2.C2Array(
+        urlpath.path,
+        urlbase=urlpath.urlbase,
+        auth_token=urlpath.auth_token,
+        _meta=metadata,
+    )
+    return blosc2.RemoteArray(source, _shared_cache=shared_cache, **remote_array_options)
 
 
 def _validate_fsspec_lazy_options(urlpath: str, source_format, dataset, lazy: bool):

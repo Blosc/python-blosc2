@@ -4,18 +4,58 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
-"""Read-only remote CTable access through fsspec-backed B2Z sources."""
+"""Read-only remote CTable access through containers and Caterva2 APIs."""
 
 from __future__ import annotations
 
 import operator
 import os
+import weakref
 
 import blosc2
 from blosc2.ctable import CTable
 from blosc2.ctable_storage import RemoteTableStorage
 from blosc2.remote_array import CACHE_POLICY_DEFAULT, RemoteMetadataMapping
 from blosc2.remote_object import RemoteObject
+
+
+class _Caterva2Column:
+    """Lazy projected row reader for one Caterva2 table column."""
+
+    def __init__(self, table, name, template):
+        self._table = table
+        self._name = name
+        self._template = template
+
+    def __len__(self):
+        return self._table.nrows
+
+    def __getattr__(self, name):
+        return getattr(self._template, name)
+
+    @property
+    def shape(self):
+        return (self._table.nrows, *getattr(self._template, "shape", (0,))[1:])
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            index = key + self._table.nrows if key < 0 else key
+            if not 0 <= index < self._table.nrows:
+                raise IndexError("row index out of range")
+            start, stop, scalar = index, index + 1, True
+        elif isinstance(key, slice):
+            start, stop, step = key.indices(self._table.nrows)
+            if step != 1:
+                raise ValueError("Caterva2 remote columns only support step-1 slices")
+            stop = max(start, stop)
+            scalar = False
+        else:
+            raise TypeError("Caterva2 remote columns support integer and slice indexing")
+        result = self._table._caterva2_fetch(start, stop, self._name)
+        column = result._cols[self._name]
+        if scalar:
+            return column[0]
+        return column[:]
 
 
 def _positive_integer(name, value):
@@ -67,6 +107,11 @@ class RemoteCTable(RemoteObject, CTable):
     including columns backed by independent RemoteArray carriers. Those columns
     share the table owner's cache budget and traffic accounting; their persisted
     standalone policies are not used or modified by the table.
+
+    Caterva2 URLPath tables fetch bounded result cframes by row range and
+    projection. Exact repeated nonempty results share the root owner's cache;
+    dictionary, nested, timestamp, and nullable representations remain in their
+    CTable frame form instead of being flattened through NumPy rows.
 
     ``hdf5_index`` accepts a native index dictionary or a local/remote JSON
     path for PyTables/HDF5 sources. Supplying one skips HDF5 discovery.
@@ -225,6 +270,17 @@ class RemoteCTable(RemoteObject, CTable):
         # Construction is completed by CTable._open_from_storage() in __new__.
         pass
 
+    def __getattr__(self, name):
+        columns = self.__dict__.get("_cols")
+        if "_caterva2_owner" in self.__dict__ and isinstance(columns, dict) and name in columns:
+            return columns[name]
+        return super().__getattr__(name)
+
+    def __getitem__(self, key):
+        if hasattr(self, "_caterva2_owner") and isinstance(key, str) and key in self._cols:
+            return self._cols[key]
+        return super().__getitem__(key)
+
     @classmethod
     def open_reference(cls, path, *, storage_options=None, parquet_options=None):
         """Reopen a saved Parquet RemoteStore archive."""
@@ -310,6 +366,23 @@ class RemoteCTable(RemoteObject, CTable):
     @classmethod
     def _from_owner(cls, owner, full_path, **settings):
         settings = {name: _positive_integer(name, value) for name, value in settings.items()}
+        if owner.format == "caterva2":
+            metadata = owner.nodes[full_path][1]
+            empty_cframe = metadata.get("empty_cframe")
+            if not isinstance(empty_cframe, bytes):
+                raise ValueError("Caterva2 CTable metadata has no empty result frame")
+            empty = blosc2.ctable_from_cframe(empty_cframe)
+            obj = object.__new__(cls)
+            obj.__dict__ = empty.__dict__.copy()
+            obj._caterva2_owner = owner
+            obj._caterva2_root = full_path
+            obj._caterva2_fields = None
+            obj._caterva2_closed = False
+            owner.acquire()
+            obj._caterva2_finalizer = weakref.finalize(obj, owner.release)
+            obj._n_rows = int(metadata["info"]["nrows"])
+            obj._cols = {name: _Caterva2Column(obj, name, column) for name, column in obj._cols.items()}
+            return obj
         if owner.format == "parquet":
             from blosc2.remote_parquet import ParquetTableStorage
 
@@ -335,13 +408,77 @@ class RemoteCTable(RemoteObject, CTable):
         storage._check_open()
         return storage
 
+    def _caterva2_fetch(self, start, stop, field=None):
+        if getattr(self, "_caterva2_closed", False):
+            raise RuntimeError("RemoteCTable handle is closed")
+        owner = self._caterva2_owner
+        with owner.lock:
+            fields = self._caterva2_fields
+            if field is not None:
+                if fields is not None and field not in fields:
+                    raise KeyError(field)
+                return owner.fetch_caterva2_table(self._caterva2_root, start, stop, field)
+            result = owner.fetch_caterva2_table(self._caterva2_root, start, stop)
+            return result if fields is None else result.select(fields)
+
     def _check_open(self) -> None:
+        if hasattr(self, "_caterva2_owner"):
+            if self._caterva2_closed:
+                raise RuntimeError("RemoteCTable handle is closed")
+            return
         self._remote_storage()
 
     def close(self) -> None:
+        if hasattr(self, "_caterva2_owner"):
+            if not self._caterva2_closed:
+                self._caterva2_closed = True
+                self._caterva2_finalizer()
+            return
         storage = getattr(self, "_storage", None)
         if isinstance(storage, RemoteTableStorage):
             storage.close()
+
+    def slice(self, start, stop=None, /, *, copy=True):
+        if not hasattr(self, "_caterva2_owner"):
+            return super().slice(start, stop, copy=copy)
+        if not copy:
+            raise NotImplementedError("Caterva2 remote table slices are materialized result frames")
+        if isinstance(start, slice):
+            if stop is not None:
+                raise TypeError("pass either a slice or start/stop integers, not both")
+            key = start
+        else:
+            key = slice(0, start) if stop is None else slice(start, stop)
+        if key.step not in (None, 1):
+            raise ValueError("CTable.slice does not support a step")
+        lo, hi, _ = key.indices(self.nrows)
+        return self._caterva2_fetch(lo, max(lo, hi))
+
+    def select(self, cols):
+        if not hasattr(self, "_caterva2_owner"):
+            return super().select(cols)
+        if not cols:
+            raise ValueError("select() requires at least one column name.")
+        fields = []
+        for name in cols:
+            expanded = self._expand_logical_column_selector(name)
+            if not expanded:
+                raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+            fields.extend(expanded)
+        obj = object.__new__(type(self))
+        obj.__dict__ = self.__dict__.copy()
+        obj._caterva2_fields = fields
+        obj._caterva2_closed = False
+        obj.col_names = fields.copy()
+        obj._cols = {name: _Caterva2Column(obj, name, self._cols[name]._template) for name in fields}
+        obj._caterva2_owner.acquire()
+        obj._caterva2_finalizer = weakref.finalize(obj, obj._caterva2_owner.release)
+        return obj
+
+    def to_cframe(self, *, preserve_sources=False):
+        if hasattr(self, "_caterva2_owner"):
+            raise NotImplementedError("serialize a bounded Caterva2 table slice, not the whole remote table")
+        return super().to_cframe(preserve_sources=preserve_sources)
 
     def refresh(self) -> None:
         """Reload a standalone table and invalidate its old columns and views.
@@ -396,6 +533,8 @@ class RemoteCTable(RemoteObject, CTable):
 
     @property
     def vlmeta(self):
+        if hasattr(self, "_caterva2_owner"):
+            return RemoteMetadataMapping(self._caterva2_owner.attrs.get(self._caterva2_root, {}))
         return RemoteMetadataMapping(self._remote_storage().load_user_attrs())
 
     @property
@@ -405,7 +544,19 @@ class RemoteCTable(RemoteObject, CTable):
 
     @property
     def source(self):
+        if hasattr(self, "_caterva2_owner"):
+            from blosc2.remote_store import caterva2_source_descriptor
+
+            return caterva2_source_descriptor(
+                blosc2.URLPath(self._caterva2_root, urlbase=self._caterva2_owner.caterva2.urlbase)
+            )
         storage = self._remote_storage()
+        if storage._owner.format == "caterva2":
+            from blosc2.remote_store import caterva2_source_descriptor
+
+            return caterva2_source_descriptor(
+                blosc2.URLPath(storage._root_key, urlbase=storage._owner.caterva2.urlbase)
+            )
         from blosc2.remote_store import public_source_url
 
         return {
@@ -418,25 +569,50 @@ class RemoteCTable(RemoteObject, CTable):
 
     @property
     def traffic(self):
+        if hasattr(self, "_caterva2_owner"):
+            return self._caterva2_owner.traffic
         return self._remote_storage()._owner.traffic
 
     @property
     def cache_policy(self):
+        if hasattr(self, "_caterva2_owner"):
+            return self._caterva2_owner.cache_policy
         return self._remote_storage()._owner.cache_policy
 
     @property
     def max_cache_bytes(self):
+        if hasattr(self, "_caterva2_owner"):
+            return self._caterva2_owner.max_cache_bytes
         return self._remote_storage()._owner.max_cache_bytes
+
+    @property
+    def nbytes(self):
+        if hasattr(self, "_caterva2_owner"):
+            return int(self._caterva2_owner.nodes[self._caterva2_root][1]["info"].get("nbytes", 0))
+        return super().nbytes
+
+    @property
+    def cbytes(self):
+        if hasattr(self, "_caterva2_owner"):
+            return int(self._caterva2_owner.nodes[self._caterva2_root][1]["info"].get("cbytes", 0))
+        return super().cbytes
 
     @property
     def mutable(self) -> bool:
         """The export default mutability for future reference exports."""
+        if hasattr(self, "_caterva2_owner"):
+            return self._caterva2_owner.mutable
         return self._remote_storage()._owner.mutable
 
     @mutable.setter
     def mutable(self, value: bool) -> None:
         if not isinstance(value, bool):
             raise TypeError("mutable must be a boolean")
+        if hasattr(self, "_caterva2_owner"):
+            with self._caterva2_owner.lock:
+                self._check_open()
+                self._caterva2_owner.mutable = value
+            return
         storage = self._remote_storage()
         with storage._owner.lock:
             storage._check_open()
@@ -445,14 +621,21 @@ class RemoteCTable(RemoteObject, CTable):
     @property
     def is_cache_mutable(self) -> bool:
         """Whether the current local cache is writable, not the remote table."""
+        if hasattr(self, "_caterva2_owner"):
+            return self._caterva2_owner.is_mutable
         return self._remote_storage()._owner.is_mutable
 
     @property
     def cache_bytes(self):
+        if hasattr(self, "_caterva2_owner"):
+            return self._caterva2_owner.cache_coordinator.cache_bytes
         return self._remote_storage()._owner.cache_coordinator.cache_bytes
 
     @property
     def metadata_bytes(self):
+        if hasattr(self, "_caterva2_owner"):
+            self._caterva2_owner.save_manifest()
+            return self._caterva2_owner.metadata_bytes
         storage = self._remote_storage()
         storage._owner.save_manifest()
         return storage._owner.metadata_bytes
@@ -474,6 +657,16 @@ class RemoteCTable(RemoteObject, CTable):
         elif urlpath is not None:
             raise TypeError("destination and urlpath cannot both be specified")
 
+        if hasattr(self, "_caterva2_owner"):
+            with self._caterva2_owner.lock:
+                self._check_open()
+                return self._caterva2_owner.save_selection(
+                    self._caterva2_root,
+                    destination,
+                    include_cache=include_cache,
+                    mutable=mutable,
+                    overwrite=overwrite,
+                )
         storage = self._remote_storage()
         with storage._owner.lock:
             storage._check_open()

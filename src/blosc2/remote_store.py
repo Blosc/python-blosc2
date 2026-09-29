@@ -12,9 +12,12 @@ import threading
 import uuid
 import weakref
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit, urlunsplit
+
+import numpy as np
 
 import blosc2
 from blosc2.core import parse_container_url, storage_options_fingerprint
@@ -30,6 +33,121 @@ from blosc2.remote_array import (
 from blosc2.remote_object import RemoteObject
 
 RESERVED_NAMES = {"embed.b2e", "__vlmeta__"}
+
+
+class _Caterva2ArraySource(blosc2.C2Array):
+    """C2Array whose chunks are synthesized from bounded API slices."""
+
+    def _chunk_slice(self, nchunk):
+        grid = tuple(
+            (size + chunk - 1) // chunk for size, chunk in zip(self.shape, self.chunks, strict=True)
+        )
+        coords = np.unravel_index(nchunk, grid)
+        return tuple(
+            slice(int(index) * chunk, min((int(index) + 1) * chunk, size))
+            for index, chunk, size in zip(coords, self.chunks, self.shape, strict=True)
+        )
+
+    def get_chunk(self, nchunk):
+        from blosc2.c2array import fetch_data
+
+        selection = self._chunk_slice(nchunk)
+        data = fetch_data(
+            self.path,
+            self.urlbase,
+            {"slice_": blosc2.c2array.slice_to_string(selection)},
+            auth_token=self.auth_token,
+            as_blosc2=True,
+            traffic=self.traffic,
+            transport=self._transport,
+        )
+        full = np.zeros(self.chunks, dtype=self.dtype)
+        region = tuple(slice(0, item.stop - item.start) for item in selection)
+        full[region] = data[...]
+        packed = blosc2.asarray(full, chunks=self.chunks, blocks=self.blocks, cparams=self.cparams)
+        return packed.schunk.get_chunk(0)
+
+
+class _Caterva2FrameCache:
+    """Exact-result CTable cframe cache participating in a store budget."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self._cache_key = f"{owner.cache_namespace}:caterva2-rows"
+        self._cache_sizes = {}
+        self._cache_lru = OrderedDict()
+        self._memory = {}
+        self._load_disk_entries()
+        owner.cache_coordinator.register(self)
+
+    @property
+    def folder(self):
+        if self.owner.disk is None:
+            return None
+        return self.owner.disk.path / f"{self.owner.generation}.b2d" / "_caterva2_rows"
+
+    def _load_disk_entries(self):
+        folder = self.folder
+        if folder is None or not folder.is_dir():
+            return
+        for path in folder.glob("*.cframe"):
+            self._cache_sizes[path.stem] = path.stat().st_size
+            self._cache_lru[path.stem] = None
+
+    def _path(self, key):
+        return self.folder / f"{key}.cframe"
+
+    def get(self, key):
+        payload = self._memory.get(key)
+        if payload is None and self.folder is not None:
+            path = self._path(key)
+            if path.is_file():
+                payload = path.read_bytes()
+        if payload is not None:
+            self._cache_lru.pop(key, None)
+            self._cache_lru[key] = None
+            self.owner.cache_coordinator.touch(self, key)
+        return payload
+
+    def put(self, key, payload):
+        if self.owner.cache_policy is blosc2.CachePolicy.NONE:
+            return
+        if self.folder is None:
+            self._memory[key] = payload
+        else:
+            from blosc2.remote_store_cache import atomic_write
+
+            self.folder.mkdir(parents=True, exist_ok=True)
+            atomic_write(self._path(key), payload)
+        self._cache_sizes[key] = len(payload)
+        self._cache_lru.pop(key, None)
+        self._cache_lru[key] = None
+        self.owner.cache_coordinator.touch(self, key)
+        self.owner.cache_coordinator.enforce()
+
+    def _sync_evictions(self):
+        if self.folder is not None:
+            for key in tuple(self._cache_sizes):
+                if not self._path(key).is_file():
+                    self._cache_sizes.pop(key, None)
+                    self._cache_lru.pop(key, None)
+
+    def _retained_cache_bytes(self):
+        return sum(self._cache_sizes.values())
+
+    def _trim_cache(self, target_bytes, *, max_chunks=64):
+        removed = []
+        while self._retained_cache_bytes() > target_bytes and self._cache_lru and len(removed) < max_chunks:
+            key = next(iter(self._cache_lru))
+            self._cache_lru.pop(key, None)
+            self._cache_sizes.pop(key, None)
+            self._memory.pop(key, None)
+            if self.folder is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    self._path(key).unlink()
+            self.owner.cache_coordinator.forget(self, key)
+            removed.append(key)
+        return tuple(removed)
 
 
 def public_source_url(url):
@@ -85,6 +203,63 @@ def validate_remote_store_reference(descriptor):
         "cache_policy": policy.value,
         "max_cache_bytes": limit,
     }
+
+
+def caterva2_source_descriptor(urlpath, *, assume_immutable=True):
+    """Build the common persisted descriptor for a Caterva2 API source."""
+    if not isinstance(urlpath, blosc2.URLPath):
+        raise TypeError("Caterva2 sources require a URLPath")
+    if not isinstance(urlpath.urlbase, str) or not urlpath.urlbase:
+        raise ValueError("Persisted Caterva2 sources require an explicit urlbase")
+    validate_persistable_url(urlpath.urlbase)
+    parsed = urlsplit(urlpath.urlbase)
+    if parsed.scheme not in {"http", "https"} or parsed.query or parsed.fragment:
+        raise ValueError("Caterva2 urlbase must be an HTTP(S) server base without query or fragment")
+    path = urlpath.path
+    if (
+        not isinstance(path, str)
+        or not path
+        or path.startswith(("/", "\\"))
+        or "://" in path
+        or any(char in path for char in "\\%?#\0\n\r\t")
+        or any(part in {"", ".", ".."} for part in path.split("/"))
+    ):
+        raise ValueError("Invalid Caterva2 dataset path")
+    if not isinstance(assume_immutable, bool):
+        raise TypeError("assume_immutable must be a bool")
+    return {
+        "kind": "caterva2",
+        "version": 1,
+        "urlbase": urlpath.urlbase.rstrip("/") + "/",
+        "path": path,
+        "assume_immutable": assume_immutable,
+    }
+
+
+def _caterva2_urlpath(descriptor, auth_token=""):
+    if not isinstance(descriptor, dict) or descriptor.get("kind") != "caterva2":
+        raise ValueError("Invalid Caterva2 source descriptor")
+    expected = {"kind", "version", "urlbase", "path", "assume_immutable"}
+    if set(descriptor) != expected or descriptor.get("version") != 1:
+        raise ValueError("Invalid Caterva2 source descriptor")
+    candidate = blosc2.URLPath(
+        descriptor.get("path"), urlbase=descriptor.get("urlbase"), auth_token=auth_token
+    )
+    if (
+        caterva2_source_descriptor(candidate, assume_immutable=descriptor.get("assume_immutable"))
+        != descriptor
+    ):
+        raise ValueError("Non-canonical Caterva2 source descriptor")
+    return candidate
+
+
+def _caterva2_cache_identity(source, urlpath):
+    """Separate credential namespaces without persisting credentials."""
+    identity = dict(source)
+    token = urlpath.auth_token
+    if token:
+        identity["authorization_namespace"] = hashlib.sha256(token.encode()).hexdigest()
+    return identity
 
 
 def get_zip_offsets(zip_path: str) -> dict[str, dict[str, int]]:
@@ -161,13 +336,23 @@ class RemoteDiscovery:
         _hdf5_index=None,
         _hdf5_blob=None,
         _traffic=None,
+        _transport=None,
         _source_cache_dir=None,
         _refresh_source=False,
         _b2z_blob=None,
         _local_source=False,
         _parquet_conversion=None,
     ):
-        self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
+        self.caterva2 = urlpath if isinstance(urlpath, blosc2.URLPath) else None
+        if self.caterva2 is not None:
+            if dataset not in {None, "", self.caterva2.path}:
+                raise ValueError("dataset is not supported for Caterva2 URLPath sources")
+            descriptor = caterva2_source_descriptor(self.caterva2)
+            self.urlpath = descriptor["urlbase"]
+            dataset = descriptor["path"]
+            self.format = "caterva2"
+        else:
+            self.urlpath, dataset, self.format = parse_container_url(urlpath, dataset)
         if _source_format is not None:
             self.format = _source_format
         elif manifest is not None:
@@ -204,6 +389,7 @@ class RemoteDiscovery:
             ):
                 manifest = None  # Rebind legacy metadata/payload to the source digest once.
         self.traffic = _traffic if _traffic is not None else Traffic()
+        self.transport = _transport
         self.nodes = {}
         self.attrs = {}
         self.listed = {}
@@ -222,6 +408,7 @@ class RemoteDiscovery:
         self.source_descriptors = {}
         self.caches = {}
         self.batch_caches = {}
+        self.table_frame_cache = None
         self.linked_stores = {}
         self.linked_artifacts = {}
         self.disk = None
@@ -264,7 +451,11 @@ class RemoteDiscovery:
         self.lock = threading.RLock()
         try:
             self.filesystem = _filesystem
-            if self.filesystem is None and not (self.format == "hdf5" and os.path.isfile(self.urlpath)):
+            if (
+                self.filesystem is None
+                and self.format != "caterva2"
+                and not (self.format == "hdf5" and os.path.isfile(self.urlpath))
+            ):
                 import fsspec
 
                 options = {**self.storage_options, "skip_instance_cache": True}
@@ -280,6 +471,8 @@ class RemoteDiscovery:
                 from blosc2.remote_parquet import discover_parquet
 
                 discover_parquet(self, self.parquet_conversion)
+            elif self.format == "caterva2":
+                self._open_caterva2()
             else:
                 self._open_zarr()
             self._check_node_limit()
@@ -718,6 +911,90 @@ class RemoteDiscovery:
         self.nodes[self.root] = ("group" if isinstance(node, zarr.Group) else "ndarray", node)
         self.attrs[self.root] = dict(node.attrs)
 
+    @staticmethod
+    def _caterva2_kind(info):
+        kind = info.get("kind")
+        if kind in {"group", "ctable", "ndarray"}:
+            return kind
+        if "schema_dict" in info and "nrows" in info:
+            return "ctable"
+        if "shape" in info and "dtype" in info:
+            return "ndarray"
+        return "unsupported"
+
+    def _caterva2_table_metadata(self, path, info):
+        schema = info.get("schema_dict")
+        if not isinstance(schema, dict):
+            raise ValueError("Caterva2 CTable metadata has no schema_dict")
+        schema = dict(schema)
+        if "n_rows" not in schema and isinstance(info.get("nrows"), int):
+            schema["n_rows"] = info["nrows"]
+        from blosc2.c2array import _auth_headers, _server_url, _sync_client
+
+        url = _server_url(self.caterva2.urlbase, f"api/fetch/{path}")
+        response = _sync_client().get(
+            url,
+            params={"slice_": "0:0"},
+            headers=_auth_headers(self.caterva2.auth_token),
+        )
+        response.raise_for_status()
+        self.traffic.charge(len(response.content))
+        # Validate now so malformed frames never enter a durable manifest.
+        empty = blosc2.ctable_from_cframe(response.content)
+        if empty.nrows != 0:
+            raise ValueError("Caterva2 empty CTable fetch returned rows")
+        return {
+            "kind": "ctable",
+            "schema": json.dumps(schema),
+            "info": info,
+            "empty_cframe": response.content,
+        }
+
+    def _caterva2_get(self, endpoint, path):
+        from blosc2.c2array import _auth_headers, _server_url, _sync_client
+
+        url = _server_url(self.caterva2.urlbase, f"api/{endpoint}/{path}")
+        client = _sync_client() if self.transport is None else self.transport
+        response = client.get(url, headers=_auth_headers(self.caterva2.auth_token))
+        response.raise_for_status()
+        self.traffic.charge(len(response.content))
+        return response.json()
+
+    def _open_caterva2(self):
+        root_info = self._caterva2_get("info", self.root)
+        root_kind = self._caterva2_kind(root_info)
+        if root_kind == "ctable":
+            self._add(self.root, "ctable", self._caterva2_table_metadata(self.root, root_info))
+            self.attrs[self.root] = dict(root_info.get("attrs") or {})
+            return
+        if root_kind == "ndarray":
+            self._add(self.root, "ndarray")
+            self.attrs[self.root] = dict(root_info.get("attrs") or {})
+            return
+        if root_kind != "group":
+            raise ValueError("Caterva2 source root is not an array, group, or CTable")
+        self._add(self.root, "group")
+        self.attrs[self.root] = dict(root_info.get("attrs") or {})
+        leaves = self._caterva2_get("list", self.root)
+        if not isinstance(leaves, list) or any(not isinstance(path, str) for path in leaves):
+            raise ValueError("Invalid Caterva2 list response")
+        for relative in sorted(set(leaves)):
+            self._validate(relative)
+            full = "/".join((self.root, relative))
+            info = self._caterva2_get("info", full)
+            kind = self._caterva2_kind(info)
+            if kind == "ctable":
+                self._add(full, kind, self._caterva2_table_metadata(full, info))
+            elif kind in {"ndarray", "group"}:
+                self._add(full, kind)
+            else:
+                self._add(full, "unsupported", "Caterva2 object kind is unsupported")
+            self.attrs[full] = dict(info.get("attrs") or {})
+        for parent in (path for path, (kind, _) in self.nodes.items() if kind == "group"):
+            self.listed[parent] = sorted(
+                path for path in self.nodes if path != parent and path.rpartition("/")[0] == parent
+            )
+
     def _path(self, path):
         if not isinstance(path, str):
             raise TypeError("RemoteStore paths must be strings")
@@ -844,6 +1121,17 @@ class RemoteDiscovery:
                 _blob=self.hdf5_blob,
                 _ensure_allocations=self.ensure_hdf5_allocations,
             )
+        elif self.format == "caterva2":
+            source = _Caterva2ArraySource(
+                full,
+                urlbase=self.caterva2.urlbase,
+                auth_token=self.caterva2.auth_token,
+                _traffic=self.traffic,
+                _transport=self.transport,
+            )
+            self.source_descriptors[full] = caterva2_source_descriptor(
+                blosc2.URLPath(full, urlbase=self.caterva2.urlbase)
+            )
         else:
             from blosc2.zarr_source import ZarrNDSource
 
@@ -962,6 +1250,36 @@ class RemoteDiscovery:
         self.save_manifest()
         return dict(self.attrs[table_path])
 
+    def fetch_caterva2_table(self, table_path, start, stop, field=None):
+        """Fetch one bounded CTable result frame from a Caterva2 source."""
+        if self.format != "caterva2":
+            raise RuntimeError("Caterva2 table fetch used for a different source kind")
+        from blosc2.c2array import _auth_headers, _server_url, _sync_client
+
+        params = {"slice_": f"{start}:{stop}"}
+        if field is not None:
+            params["field"] = field
+        cache_key = hashlib.sha256(
+            json.dumps(
+                [self.generation, table_path, int(start), int(stop), field],
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        if start != stop and self.cache_policy is not blosc2.CachePolicy.NONE:
+            if self.table_frame_cache is None:
+                self.table_frame_cache = _Caterva2FrameCache(self)
+            cached = self.table_frame_cache.get(cache_key)
+            if cached is not None:
+                return blosc2.ctable_from_cframe(cached)
+        url = _server_url(self.caterva2.urlbase, f"api/fetch/{table_path}")
+        client = _sync_client() if self.transport is None else self.transport
+        response = client.get(url, params=params, headers=_auth_headers(self.caterva2.auth_token))
+        response.raise_for_status()
+        self.traffic.charge(len(response.content))
+        if start != stop and self.cache_policy is not blosc2.CachePolicy.NONE:
+            self.table_frame_cache.put(cache_key, response.content)
+        return blosc2.ctable_from_cframe(response.content)
+
     def _open_b2z_source(self, full):
         from blosc2.b2z_source import B2ZNDSource
 
@@ -1009,14 +1327,16 @@ class RemoteDiscovery:
             source = self.open_source(relative) if full in self.nodes else None
         if source is None:
             raise KeyError(full)
-        descriptor = {
-            "kind": self.format,
-            "version": 1,
-            "urlpath": source.urlpath,
-            "assume_immutable": True,
-        }
-        if self.format in {"b2z", "hdf5"}:
-            descriptor["dataset"] = full
+        descriptor = self.source_descriptors.get(full)
+        if descriptor is None:
+            descriptor = {
+                "kind": self.format,
+                "version": 1,
+                "urlpath": source.urlpath,
+                "assume_immutable": True,
+            }
+            if self.format in {"b2z", "hdf5"}:
+                descriptor["dataset"] = full
         return blosc2.RemoteArray(
             source,
             _source_descriptor=descriptor,
@@ -1282,6 +1602,7 @@ class RemoteDiscovery:
         getattr(self, "source_descriptors", {}).clear()
         self.caches.clear()
         getattr(self, "batch_caches", {}).clear()
+        self.table_frame_cache = None
         self.nodes.clear()
         self.attrs.clear()
         self.listed.clear()
@@ -1504,11 +1825,16 @@ class RemoteDiscovery:
         for path, (kind, _) in self.nodes.items():
             if kind == "ctable" and (path == group_full or not prefix or path.startswith(prefix)):
                 self.load_ctable_attrs(path)
-        exported_source = {
-            "urlpath": self.urlpath,
-            "dataset": group_full,
-            "kind": self.format,
-        }
+        if self.format == "caterva2":
+            exported_source = caterva2_source_descriptor(
+                blosc2.URLPath(group_full, urlbase=self.caterva2.urlbase)
+            )
+        else:
+            exported_source = {
+                "urlpath": self.urlpath,
+                "dataset": group_full,
+                "kind": self.format,
+            }
         if self.local_source:
             exported_source["local"] = True
         fingerprint = storage_options_fingerprint(getattr(self, "storage_options", None))
@@ -1590,7 +1916,7 @@ class RemoteDiscovery:
 
 
 class RemoteStore(RemoteObject):
-    """Read-only remote B2Z, Zarr or HDF5 hierarchy.
+    """Read-only remote B2Z, Zarr, HDF5, or Caterva2 API hierarchy.
 
     Also used for local hierarchies opened with ``blosc2.open(..., cache_dir=...)``.
 
@@ -1707,25 +2033,38 @@ class RemoteStore(RemoteObject):
         _hdf5_index=None,
         _hdf5_blob=None,
         _traffic=None,
+        _transport=None,
         nested_storage_options=None,
         _b2z_blob=None,
         _allow_local_source=False,
         _parquet_conversion=None,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
-        if not isinstance(urlpath, (str, os.PathLike)):
-            raise TypeError("RemoteStore requires a remote URL string")
-        urlpath = os.fspath(urlpath)
+        caterva2_input = isinstance(urlpath, blosc2.URLPath)
+        if not isinstance(urlpath, (str, os.PathLike, blosc2.URLPath)):
+            raise TypeError("RemoteStore requires a remote URL string or Caterva2 URLPath")
+        if caterva2_input:
+            caterva2_source_descriptor(urlpath)
+            if dataset is not None:
+                raise ValueError("dataset and path are not supported with a Caterva2 URLPath")
+            if storage_options is not None:
+                raise ValueError("storage_options is not supported with a Caterva2 URLPath")
+        else:
+            urlpath = os.fspath(urlpath)
         hdf5_index, _source_format = _resolve_hdf5_options(hdf5_index, _hdf5_index, _source_format)
-        artifact = self._try_open_artifact(
-            urlpath,
-            dataset,
-            storage_options,
-            cache_policy,
-            max_cache_bytes,
-            cache_dir,
-            _allow_array_root,
-            allow_table_root,
+        artifact = (
+            None
+            if caterva2_input
+            else self._try_open_artifact(
+                urlpath,
+                dataset,
+                storage_options,
+                cache_policy,
+                max_cache_bytes,
+                cache_dir,
+                _allow_array_root,
+                allow_table_root,
+            )
         )
         if artifact is not None:
             try:
@@ -1737,8 +2076,12 @@ class RemoteStore(RemoteObject):
             raise TypeError("dataset must be a string")
         self._validate_nested_storage_options(nested_storage_options)
         cache_policy, limit = self._validate_cache_config(cache_policy, max_cache_bytes, cache_dir)
-        base_url, dataset, _ = parse_container_url(urlpath, dataset)
-        urlpath = base_url
+        if caterva2_input:
+            base_url, dataset = urlpath.urlbase, urlpath.path
+            _source_format = "caterva2"
+        else:
+            base_url, dataset, _ = parse_container_url(urlpath, dataset)
+            urlpath = base_url
         local_source = bool(
             _allow_local_source
             and (not urlsplit(base_url).scheme or os.path.splitdrive(base_url)[0])
@@ -1747,6 +2090,8 @@ class RemoteStore(RemoteObject):
         if local_source:
             base_url = os.path.abspath(base_url)
             urlpath = base_url
+        elif caterva2_input:
+            pass
         elif (
             _source_format != "parquet" and parse_container_url(base_url)[2] != "parquet"
         ) or cache_policy is blosc2.CachePolicy.DISK:
@@ -1758,10 +2103,15 @@ class RemoteStore(RemoteObject):
         if cache_policy is blosc2.CachePolicy.DISK:
             from blosc2.remote_store_cache import StoreDiskCache
 
-            source = self._cache_source(
-                urlpath, dataset, _source_format, storage_options, _parquet_conversion
+            source = (
+                caterva2_source_descriptor(urlpath)
+                if caterva2_input
+                else self._cache_source(
+                    urlpath, dataset, _source_format, storage_options, _parquet_conversion
+                )
             )
-            disk = StoreDiskCache(cache_dir, source)
+            identity_source = _caterva2_cache_identity(source, urlpath) if caterva2_input else None
+            disk = StoreDiskCache(cache_dir, source, identity_source=identity_source)
         try:
             manifest = disk.load() if disk is not None else manifest
             if disk is not None and source["kind"] == "hdf5" and not local_hdf5:
@@ -1797,6 +2147,7 @@ class RemoteStore(RemoteObject):
                         _hdf5_index=hdf5_index,
                         _hdf5_blob=_hdf5_blob,
                         _traffic=_traffic,
+                        _transport=_transport,
                         _source_cache_dir=cache_dir if disk is not None else None,
                         _b2z_blob=_b2z_blob,
                         _local_source=local_source,
@@ -2005,6 +2356,7 @@ class RemoteStore(RemoteObject):
         _manifest_validator=None,
         _max_nodes=None,
         _traffic=None,
+        _transport=None,
         _source_format=None,
         _hdf5_index=None,
         _parquet_conversion=None,
@@ -2025,7 +2377,16 @@ class RemoteStore(RemoteObject):
 
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         limit = normalize_cache_limit(blosc2.CachePolicy.DISK, max_cache_bytes)
-        base, root, kind = parse_container_url(os.fspath(urlpath), dataset)
+        caterva2_input = isinstance(urlpath, blosc2.URLPath)
+        if caterva2_input:
+            if dataset is not None:
+                raise ValueError("dataset is not supported with a Caterva2 URLPath")
+            if storage_options is not None:
+                raise ValueError("storage_options is not supported with a Caterva2 URLPath")
+            source = caterva2_source_descriptor(urlpath)
+            base, root, kind = urlpath, urlpath.path, "caterva2"
+        else:
+            base, root, kind = parse_container_url(os.fspath(urlpath), dataset)
         if _source_format is not None:
             kind = _source_format
         local_parquet = kind == "parquet" and (
@@ -2033,9 +2394,10 @@ class RemoteStore(RemoteObject):
         )
         if local_parquet:
             base = os.path.abspath(base)
-        else:
+        elif not caterva2_input:
             validate_persistable_url(base)
-        source = {"urlpath": base, "dataset": (root or "").strip("/"), "kind": kind}
+        if not caterva2_input:
+            source = {"urlpath": base, "dataset": (root or "").strip("/"), "kind": kind}
         if local_parquet:
             source["local"] = True
         fingerprint = storage_options_fingerprint(storage_options)
@@ -2045,7 +2407,8 @@ class RemoteStore(RemoteObject):
             from blosc2.remote_parquet import parquet_identity
 
             source["options"] = parquet_identity(_parquet_conversion or {})
-        disk = SharedStoreCache(runtime_cache_path, source)
+        identity_source = _caterva2_cache_identity(source, urlpath) if caterva2_input else None
+        disk = SharedStoreCache(runtime_cache_path, source, identity_source=identity_source)
         with disk.guard():
             current = disk.load()
             seed_manifest = None
@@ -2074,6 +2437,7 @@ class RemoteStore(RemoteObject):
                 _manifest_validator=_manifest_validator,
                 _max_nodes=_max_nodes,
                 _traffic=_traffic,
+                _transport=_transport,
                 _source_format=kind,
                 _hdf5_index=_hdf5_index,
                 _parquet_conversion=_parquet_conversion,
@@ -2535,9 +2899,13 @@ class RemoteStore(RemoteObject):
         """Credential-free source descriptor, including this group's full path."""
         descriptor = getattr(self, "_deferred_reference", None)
         if descriptor is not None:
-            return {k: descriptor[k] for k in ("kind", "version", "urlpath", "dataset", "assume_immutable")}
+            return {
+                key: descriptor[key] for key in ("kind", "version", "urlpath", "dataset", "assume_immutable")
+            }
         with self._owner.lock:
             _, full = self._resolve("")
+            if self._owner.format == "caterva2":
+                return caterva2_source_descriptor(blosc2.URLPath(full, urlbase=self._owner.caterva2.urlbase))
             return {
                 "kind": self._owner.format,
                 "version": 1,
@@ -2714,14 +3082,19 @@ class RemoteStore(RemoteObject):
         if not isinstance(manifest.get("mutable", False), bool):
             raise ValueError("Invalid RemoteStore manifest mutable flag")
         source = manifest["source"]
-        if not isinstance(source, dict) or not isinstance(source.get("urlpath"), str):
+        if not isinstance(source, dict):
             raise ValueError("Invalid RemoteStore manifest source descriptor")
-        if not (
-            (source.get("kind") == "parquet" or os.path.isdir(urlpath))
-            and source.get("local")
-            and os.path.isfile(source["urlpath"])
-        ):
-            validate_persistable_url(source["urlpath"])
+        if source.get("kind") == "caterva2":
+            _caterva2_urlpath(source)
+        else:
+            if not isinstance(source.get("urlpath"), str):
+                raise ValueError("Invalid RemoteStore manifest source descriptor")
+            if not (
+                (source.get("kind") == "parquet" or os.path.isdir(urlpath))
+                and source.get("local")
+                and os.path.isfile(source["urlpath"])
+            ):
+                validate_persistable_url(source["urlpath"])
         cls._validate_artifact_manifest(manifest)
         return manifest, artifact_offsets
 
@@ -2733,10 +3106,12 @@ class RemoteStore(RemoteObject):
             raise ValueError("RemoteStore reference nesting exceeds the limit")
         validate_generation(manifest.get("generation"))
         source = manifest["source"]
-        root = source.get("dataset", "")
+        root = source.get("path", "") if source.get("kind") == "caterva2" else source.get("dataset", "")
         RemoteDiscovery._validate(root)
-        if source.get("kind") not in {"b2z", "hdf5", "zarr", "parquet"}:
+        if source.get("kind") not in {"b2z", "hdf5", "zarr", "parquet", "caterva2"}:
             raise ValueError("Invalid RemoteStore source kind")
+        if source.get("kind") == "caterva2":
+            _caterva2_urlpath(source)
         for field in ("nodes", "attrs", "listed", "metadata"):
             if not isinstance(manifest.get(field), dict):
                 raise ValueError(f"Invalid RemoteStore manifest {field}")
@@ -2767,7 +3142,7 @@ class RemoteStore(RemoteObject):
             if entry[0] == "ctable":
                 metadata = entry[1]
                 if (
-                    source.get("kind") not in {"b2z", "hdf5", "parquet"}
+                    source.get("kind") not in {"b2z", "hdf5", "parquet", "caterva2"}
                     or not isinstance(metadata, dict)
                     or metadata.get("kind") not in {"ctable", b"ctable"}
                     or (
@@ -2872,9 +3247,13 @@ class RemoteStore(RemoteObject):
         source_desc = manifest["source"]
         try:
             owner = RemoteDiscovery(
-                source_desc["urlpath"],
+                (
+                    _caterva2_urlpath(source_desc)
+                    if source_desc.get("kind") == "caterva2"
+                    else source_desc["urlpath"]
+                ),
                 storage_options,
-                dataset=source_desc.get("dataset"),
+                dataset=None if source_desc.get("kind") == "caterva2" else source_desc.get("dataset"),
                 manifest=manifest,
                 persist_metadata=True,
                 _local_source=source_desc.get("local", False),
@@ -2933,16 +3312,23 @@ class RemoteStore(RemoteObject):
         if cache_dir is not None:
             raise ValueError("cache_dir cannot be specified for an immutable RemoteStore artifact")
         source_desc = manifest["source"]
+        source_input = (
+            _caterva2_urlpath(source_desc)
+            if source_desc.get("kind") == "caterva2"
+            else source_desc["urlpath"]
+        )
         owner = RemoteDiscovery(
-            source_desc["urlpath"],
+            source_input,
             storage_options,
-            dataset=source_desc.get("dataset"),
+            dataset=None if source_desc.get("kind") == "caterva2" else source_desc.get("dataset"),
             manifest=manifest,
             persist_metadata=False,
             _local_source=source_desc.get("local", False),
             _traffic=_traffic,
             _filesystem=(
-                _filesystem_resolver(source_desc["urlpath"]) if _filesystem_resolver is not None else None
+                _filesystem_resolver(source_desc["urlpath"])
+                if _filesystem_resolver is not None and source_desc.get("kind") != "caterva2"
+                else None
             ),
             _filesystem_resolver=_filesystem_resolver,
             _source_validator=_source_validator,
