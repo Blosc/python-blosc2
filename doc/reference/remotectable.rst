@@ -52,11 +52,17 @@ Saving and materializing have different meanings:
 payload already retained in the cache. Missing data is still read from the
 original source after reopening. For Caterva2 tables, saved payload consists
 of exact row ranges and projections already read; those selections can also seed
-a new sparse cache. For other source formats, ``materialize()`` returns an
-independent local table and reads all data needed for it. ``copy()``,
-``to_b2z()``, and ``to_b2d()`` remain local materialization operations
-inherited from :class:`blosc2.CTable`. Full-table materialization is unsupported
-for Caterva2 API tables; materialize a bounded ``slice()`` result instead.
+a new sparse cache. ``materialize()`` returns an independent local table and
+reads all data needed for it. For Caterva2 API tables, large slices and
+materialization fetch consecutive bounded row ranges. ``copy()``, ``to_b2z()``,
+and ``to_b2d()`` also create local tables. Caterva2 exposes logical live rows,
+so either ``compact`` setting produces a dense local table. Materializing to
+``urlpath`` writes batches to disk and publishes only a complete result;
+in-memory materialization retains the whole result. Fetch batches and the
+remote cache can still consume substantial memory, especially for variable
+length columns. Remote Caterva2 predicates and whole-table Arrow, CSV, pandas,
+NumPy, cframe, and textual conversions remain unsupported; apply those methods
+to the local result returned by ``materialize()``.
 
 Table cache bytes, limits, and traffic are scoped to the shared remote owner and
 may include sibling leaves. This also applies when a table column is itself a

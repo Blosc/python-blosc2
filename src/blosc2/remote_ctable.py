@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import operator
 import os
+import tempfile
 import weakref
+
+import httpx
 
 import blosc2
 from blosc2.ctable import CTable
@@ -60,8 +63,11 @@ class _Caterva2Column:
             scalar = False
         else:
             raise TypeError("Caterva2 remote columns support integer and slice indexing")
-        result = self._table._caterva2_fetch(start, stop, self._name)
-        column = result._cols[self._name]
+        if stop == start or stop - start > 1024:
+            result = self._table._caterva2_copy_rows(start, stop, field=self._name)
+        else:
+            result = next(self._table._iter_caterva2_batches(start, stop, field=self._name))
+        column = result[self._name]
         if scalar:
             return column[0]
         return column[:]
@@ -313,9 +319,9 @@ class RemoteCTable(RemoteObject, CTable):
         if not hasattr(self, "_caterva2_owner"):
             yield from super().__iter__()
             return
-        for start in range(0, self.nrows, 1024):
-            self._check_open()
-            yield from self.slice(start, min(start + 1024, self.nrows))
+        self._check_open()
+        for batch in self._iter_caterva2_batches(0, self.nrows):
+            yield from batch
 
     def schema_dict(self):
         if hasattr(self, "_caterva2_owner") and self._caterva2_fields is not None:
@@ -495,6 +501,51 @@ class RemoteCTable(RemoteObject, CTable):
             result = owner.fetch_caterva2_table(self._caterva2_root, start, stop)
             return result if fields is None else result.select(fields)
 
+    def _caterva2_empty(self):
+        self._check_open()
+        frame = self._caterva2_owner.nodes[self._caterva2_root][1]["empty_cframe"]
+        empty = blosc2.ctable_from_cframe(frame)
+        if self._caterva2_fields is not None:
+            return empty.select(self._caterva2_fields).copy()
+        return empty.copy()
+
+    def _iter_caterva2_batches(self, start, stop, *, field=None):
+        """Yield validated, bounded result frames in logical row order."""
+        expected = self.schema_dict()
+        if field is not None:
+            expected = self._caterva2_empty().select([field]).schema_dict()
+        position = start
+        while position < stop:
+            self._check_open()
+            end = min(position + 1024, stop)
+            while True:
+                try:
+                    batch = self._caterva2_fetch(position, end, field)
+                    break
+                except httpx.HTTPStatusError as exc:
+                    limited = exc.response.status_code == 400 and (
+                        "table row selection exceeds 4096 rows" in exc.response.text
+                        or "table selection exceeds configured slice byte limit" in exc.response.text
+                    )
+                    if not limited or end - position == 1:
+                        raise
+                    end = position + max(1, (end - position) // 2)
+            self._check_open()
+            if batch.nrows != end - position or batch.schema_dict() != expected:
+                raise ValueError("Caterva2 table returned an incompatible row batch")
+            yield batch
+            position = end
+
+    def _caterva2_copy_rows(self, start, stop, *, field=None):
+        result = self._caterva2_empty()
+        if field is not None:
+            result = result.select([field]).copy()
+        for batch in self._iter_caterva2_batches(start, stop, field=field):
+            result.extend(batch, validate=False)
+        for name, value in self.attrs[:].items():
+            result.attrs[name] = value
+        return result
+
     def _check_open(self) -> None:
         if hasattr(self, "_caterva2_owner"):
             if self._caterva2_closed:
@@ -528,7 +579,10 @@ class RemoteCTable(RemoteObject, CTable):
         if key.step not in (None, 1):
             raise ValueError("CTable.slice does not support a step")
         lo, hi, _ = key.indices(self.nrows)
-        return self._caterva2_fetch(lo, max(lo, hi))
+        hi = max(lo, hi)
+        if hi == lo or hi - lo > 1024:
+            return self._caterva2_copy_rows(lo, hi)
+        return next(self._iter_caterva2_batches(lo, hi))
 
     def select(self, cols):
         if not hasattr(self, "_caterva2_owner"):
@@ -554,12 +608,57 @@ class RemoteCTable(RemoteObject, CTable):
         obj._caterva2_finalizer = weakref.finalize(obj, obj._caterva2_owner.release)
         return obj
 
-    def copy(self, *args, **kwargs):
-        if hasattr(self, "_caterva2_owner"):
-            raise NotImplementedError(
-                "materialize a bounded Caterva2 table slice, not the whole remote table"
+    def copy(
+        self,
+        compact=True,
+        *,
+        urlpath=None,
+        overwrite=False,
+        chunks=None,
+        blocks=None,
+        cparams=None,
+    ):
+        if not hasattr(self, "_caterva2_owner"):
+            return super().copy(
+                compact=compact,
+                urlpath=urlpath,
+                overwrite=overwrite,
+                chunks=chunks,
+                blocks=blocks,
+                cparams=cparams,
             )
-        return super().copy(*args, **kwargs)
+        self._check_open()
+        if urlpath is None:
+            result = self._caterva2_copy_rows(0, self.nrows)
+            if chunks is not None or blocks is not None or cparams is not None:
+                result = result.copy(chunks=chunks, blocks=blocks, cparams=cparams)
+            return result
+        from blosc2.store_materialize import publish_materialized
+
+        destination = os.path.abspath(os.fspath(urlpath))
+        parent = os.path.dirname(destination)
+        if not os.path.isdir(parent):
+            raise FileNotFoundError(parent)
+        if os.path.exists(destination) and not overwrite:
+            raise FileExistsError(destination)
+        with tempfile.TemporaryDirectory(prefix="materialize-", dir=parent) as staging:
+            working = os.path.join(staging, "table.b2d")
+            empty = self._caterva2_empty()
+            created = empty.copy(urlpath=working, chunks=chunks, blocks=blocks, cparams=cparams)
+            created.close()
+            with CTable.open(working, mode="a") as local:
+                for batch in self._iter_caterva2_batches(0, self.nrows):
+                    local.extend(batch, validate=False)
+                for name, value in self.attrs[:].items():
+                    local.attrs[name] = value
+            if destination.endswith(".b2z"):
+                staged = os.path.join(staging, "table.b2z")
+                with blosc2.TreeStore(working, mode="r") as packed:
+                    packed.to_b2z(filename=staged)
+            else:
+                staged = working
+            publish_materialized(staged, destination, overwrite, staging)
+        return CTable.open(destination, mode="r")
 
     def _check_full_export(self):
         if hasattr(self, "_caterva2_owner"):
@@ -578,13 +677,29 @@ class RemoteCTable(RemoteObject, CTable):
             )
         return super().take(*args, **kwargs)
 
-    def to_b2z(self, *args, **kwargs):
-        self._check_full_export()
-        return super().to_b2z(*args, **kwargs)
+    def to_b2z(self, urlpath, *, overwrite=False, compact=False, preserve_sources=False):
+        if hasattr(self, "_caterva2_owner"):
+            if not os.fspath(urlpath).endswith(".b2z"):
+                raise ValueError("urlpath must have a .b2z extension")
+            if preserve_sources:
+                raise ValueError("Use save() to preserve a Caterva2 source reference")
+            result = self.copy(compact=compact, urlpath=urlpath, overwrite=overwrite)
+            result.close()
+            return os.path.abspath(os.fspath(urlpath))
+        return super().to_b2z(
+            urlpath, overwrite=overwrite, compact=compact, preserve_sources=preserve_sources
+        )
 
-    def to_b2d(self, *args, **kwargs):
-        self._check_full_export()
-        return super().to_b2d(*args, **kwargs)
+    def to_b2d(self, urlpath, *, overwrite=False, compact=False, preserve_sources=False):
+        if hasattr(self, "_caterva2_owner"):
+            if preserve_sources:
+                raise ValueError("Use save() to preserve a Caterva2 source reference")
+            result = self.copy(compact=compact, urlpath=urlpath, overwrite=overwrite)
+            result.close()
+            return os.path.abspath(os.fspath(urlpath))
+        return super().to_b2d(
+            urlpath, overwrite=overwrite, compact=compact, preserve_sources=preserve_sources
+        )
 
     def to_arrow(self, *args, **kwargs):
         self._check_full_export()

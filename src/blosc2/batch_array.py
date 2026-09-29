@@ -588,6 +588,8 @@ class BatchArray:
             "arrow_schema": self._arrow_schema,
         }
         storage.meta = fixed_meta
+        if storage.urlpath is not None:
+            blosc2.remove_urlpath(storage.urlpath)
         schunk = blosc2.SChunk(
             chunksize=-1,
             data=None,

@@ -34,11 +34,11 @@ def materialize_store(source, destination, *, overwrite=False):
             staged = os.path.join(staging, "tree.b2z")
             with blosc2.TreeStore(working, mode="r") as packed:
                 packed.to_b2z(filename=staged)
-        _publish(staged, destination, overwrite, staging)
+        publish_materialized(staged, destination, overwrite, staging)
     return destination
 
 
-def _publish(staged, destination, overwrite, staging):
+def publish_materialized(staged, destination, overwrite, staging):
     previous = None
     if os.path.exists(destination):
         if not overwrite:
@@ -66,6 +66,8 @@ def _copy_attrs(attrs, target, path):
 
 def _identity(store):
     source = store.source
+    if source["kind"] == "caterva2":
+        return source["kind"], source["urlbase"], source["path"]
     return source["kind"], source["urlpath"], source.get("dataset", "")
 
 
@@ -148,7 +150,7 @@ def _copy_array(source, target, path, staging):
 
 def _copy_table(table, target, path):
     indexes = dict(table._get_index_catalog())
-    batch_rows = 2048
+    batch_rows = 1024 if hasattr(table, "_caterva2_owner") else 2048
     seed = table._empty_copy(capacity=1)
     seed._source_bound = False
     seed._source_columns = set()

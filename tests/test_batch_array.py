@@ -306,6 +306,20 @@ def test_batcharray_explicit_items_per_block():
     assert [batch[:] for batch in barray] == [[1, 2, 3], [4]]
 
 
+@pytest.mark.parametrize("contiguous", [True, False])
+def test_append_first_batch_after_reopening_empty_store(tmp_path, contiguous):
+    path = tmp_path / "empty.b2b"
+    created = blosc2.BatchArray(storage=_storage(contiguous, str(path)))
+    created.vlmeta["note"] = "preserved"
+
+    reopened = blosc2.open(str(path), mode="a")
+    reopened.append(["first", None, "last"])
+
+    readback = blosc2.open(str(path), mode="r")
+    assert readback[0][:] == ["first", None, "last"]
+    assert readback.vlmeta["note"] == "preserved"
+
+
 def test_batcharray_get_vlblock_and_scalar_access():
     urlpath = "test_batcharray_vlblock.b2b"
     blosc2.remove_urlpath(urlpath)

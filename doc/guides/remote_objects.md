@@ -70,6 +70,14 @@ selecting a known array path can still work.
 For one array, `cache_path="array-cache.b2nd"` selects an exact carrier filename.
 Tables and stores use `cache_dir`.
 
+Caterva2 tables can fetch large contiguous row slices in batches. Call
+`table.materialize()` for an independent local table, or pass
+`urlpath="local.b2z"` to write batches to disk. The latter publishes the file
+only after the full read succeeds. `table.save("reference.b2z")` instead writes
+a remote reference and any retained cache; it does not scan the entire table.
+Batching limits each request but does not bound the total memory used by an
+in-memory result or by variable-length cells and retained cache entries.
+
 ```python
 url = "https://f001.backblazeb2.com/file/blosc2/readings-large.parquet"
 

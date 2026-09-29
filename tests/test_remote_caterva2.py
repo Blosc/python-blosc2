@@ -20,6 +20,21 @@ class Reading:
     value: int = blosc2.field(blosc2.int32(), chunks=(4,), blocks=(2,))
 
 
+@dataclasses.dataclass
+class ReadingBig:
+    ident: int = blosc2.field(blosc2.int64(), chunks=(256,), blocks=(64,))
+    value: int = blosc2.field(blosc2.int32(), chunks=(256,), blocks=(64,))
+
+
+@dataclasses.dataclass
+class ReadingRich:
+    ident: int = blosc2.field(blosc2.int64())
+    text: str = blosc2.field(blosc2.utf8(null_storage="mask"))
+    category: str = blosc2.field(blosc2.dictionary(nullable=True))
+    tags: list[int] = blosc2.field(blosc2.list(blosc2.int32(), nullable=True, batch_rows=128))  # noqa: RUF009
+    when: object = blosc2.field(blosc2.timestamp(unit="ns", null_storage="mask"))
+
+
 def safe(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return safe(dataclasses.asdict(value))
@@ -35,10 +50,39 @@ def safe(value):
 
 
 @pytest.fixture
-def caterva2_source():
+def caterva2_source(request):
     array = blosc2.asarray(np.arange(60, dtype=np.int32).reshape(6, 10), chunks=(3, 5), blocks=(1, 5))
-    table = blosc2.CTable(Reading, [(index, index * 3) for index in range(12)], create_summary_index=False)
-    stats = {"fetches": 0, "cookies": [], "fields": []}
+    nrows = getattr(request, "param", 12)
+    if nrows == "rich":
+        table = blosc2.CTable(
+            ReadingRich,
+            [
+                (
+                    i,
+                    None if i % 7 == 0 else "" if i % 7 == 1 else f"row-{i}",
+                    None if i % 5 == 0 else "a" if i < 1024 else "b",
+                    None if i % 11 == 0 else [i, i + 1],
+                    None if i % 13 == 0 else np.datetime64("2025-01-01", "ns") + np.timedelta64(i, "ns"),
+                )
+                for i in range(1031)
+            ],
+            create_summary_index=False,
+        )
+    else:
+        table = blosc2.CTable(
+            Reading if nrows == 12 else ReadingBig,
+            [(index, index * 3) for index in range(nrows)],
+            create_summary_index=False,
+        )
+    stats = {
+        "fetches": 0,
+        "cookies": [],
+        "fields": [],
+        "ranges": [],
+        "limit_rows": None,
+        "fail_start": None,
+        "short_start": None,
+    }
 
     def array_info():
         return {
@@ -114,7 +158,14 @@ def caterva2_source():
                     return
                 if key in {"@public/group/table", "@public/table"}:
                     start, stop = (int(part) for part in selection.split(":"))
-                    result = table.slice(start, stop)
+                    stats["ranges"].append((start, stop))
+                    if stats["fail_start"] == start:
+                        self.send_error(503, "test batch failure")
+                        return
+                    if stats["limit_rows"] is not None and stop - start > stats["limit_rows"]:
+                        self.send_error(400, "table selection exceeds configured slice byte limit")
+                        return
+                    result = table.slice(start, stop - (stats["short_start"] == start))
                     field = query.get("field", [None])[0]
                     stats["fields"].append(field)
                     if field is not None:
@@ -177,23 +228,29 @@ def test_caterva2_table_dispatch_projection_and_roundtrip(caterva2_source, tmp_p
         assert "\n0" in str(table)
         assert [row.ident for row in table[:2]] == [0, 1]
         assert [row.ident for row in table] == list(range(12))
+        assert table.slice(3, 1).nrows == 0
+        np.testing.assert_array_equal(table.slice(slice(-3, None)).ident[:], [9, 10, 11])
         with table.select(["value"]) as projected:
             assert [column["name"] for column in projected.schema_dict()["columns"]] == ["value"]
             np.testing.assert_array_equal(projected.slice(4, 7).value[:], [12, 15, 18])
         assert stats["fields"][-1] == "value"
-        with pytest.raises(NotImplementedError, match="bounded"):
-            table.to_cframe()
-        with pytest.raises(NotImplementedError, match="bounded"):
-            table.materialize()
+        local = table.materialize()
+        assert isinstance(local, blosc2.CTable)
+        assert local.nrows == table.nrows
+        np.testing.assert_array_equal(local.value[:], np.arange(12) * 3)
+        assert local.attrs["fixture"] == "local"
         with pytest.raises(NotImplementedError, match="bounded"):
             table.value.sum()
         with pytest.raises(NotImplementedError, match="bounded"):
             table.to_string()
         for suffix, export in (("b2z", table.to_b2z), ("b2d", table.to_b2d)):
-            destination = tmp_path / f"not-written.{suffix}"
-            with pytest.raises(NotImplementedError, match="bounded"):
-                export(destination)
-            assert not destination.exists()
+            destination = tmp_path / f"materialized.{suffix}"
+            export(destination)
+            with blosc2.CTable.open(destination, mode="r") as persisted:
+                np.testing.assert_array_equal(persisted.value[:], np.arange(12) * 3)
+        with table.materialize(urlpath=tmp_path / "layout.b2d", chunks=8, blocks=4) as laid_out:
+            assert laid_out._cols["ident"].chunks[0] == 8
+            assert laid_out._cols["ident"].blocks[0] == 4
         warm = stats["fetches"]
         np.testing.assert_array_equal(table.select(["value"]).slice(4, 7).value[:], [12, 15, 18])
         assert stats["fetches"] == warm
@@ -299,6 +356,94 @@ def test_caterva2_table_discovery_uses_injected_transport(caterva2_source, tmp_p
             with store[""] as table:
                 assert table.nrows == 12
                 assert table.slice(0, 1).nrows == 1
+
+
+@pytest.mark.parametrize("caterva2_source", [4101], indirect=True)
+def test_caterva2_batches_large_slices_and_materialization(caterva2_source, tmp_path):
+    urlbase, _, _, stats = caterva2_source
+    stats["limit_rows"] = 600
+    source = blosc2.URLPath("@public/table", urlbase=urlbase)
+    with blosc2.RemoteCTable(source) as remote:
+        selected = remote.slice(100, 1501)
+        np.testing.assert_array_equal(selected.ident[:], np.arange(100, 1501))
+        np.testing.assert_array_equal(remote.value[100:1501], np.arange(100, 1501) * 3)
+        assert all(hi - lo <= 1024 for lo, hi in stats["ranges"])
+        assert any(hi - lo > 600 for lo, hi in stats["ranges"])
+        with remote.select(["value"]) as projected:
+            local = projected.materialize()
+            assert local.col_names == ["value"]
+            np.testing.assert_array_equal(local.value[:], np.arange(4101) * 3)
+        destination = tmp_path / "full.b2z"
+        with remote.materialize(urlpath=destination) as local:
+            assert local.nrows == 4101
+            np.testing.assert_array_equal(local.ident[4090:4101], np.arange(4090, 4101))
+        assert stats["ranges"][-1][1] == 4101
+        rows = iter(remote)
+        assert next(rows).ident == 0
+        before = stats["fetches"]
+        rows.close()
+        assert stats["fetches"] == before
+    with blosc2.CTable.open(destination, mode="r") as offline:
+        assert offline.nrows == 4101
+
+
+@pytest.mark.parametrize("caterva2_source", ["rich"], indirect=True)
+def test_caterva2_batches_preserve_types_and_nulls(caterva2_source, tmp_path):
+    urlbase, _, original, _ = caterva2_source
+    source = blosc2.URLPath("@public/table", urlbase=urlbase)
+    with blosc2.RemoteCTable(source) as remote:
+        materialized = remote.materialize()
+        assert materialized.schema_dict()["columns"] == original.schema_dict()["columns"]
+        assert list(materialized) == list(original)
+        with remote.select(["category", "text"]) as projected:
+            result = projected.slice(1010, 1031)
+            assert result.col_names == ["category", "text"]
+            assert list(result) == list(original.select(["category", "text"]).slice(1010, 1031))
+        destination = tmp_path / "rich.b2d"
+        with remote.materialize(urlpath=destination) as disk:
+            assert list(disk) == list(original)
+
+
+def test_caterva2_failed_batch_preserves_destination(caterva2_source, tmp_path):
+    import httpx
+
+    urlbase, _, _, stats = caterva2_source
+    stats["fail_start"] = 3
+    stats["limit_rows"] = 4
+    destination = tmp_path / "existing.b2z"
+    destination.write_bytes(b"previous result")
+    with blosc2.RemoteCTable(blosc2.URLPath("@public/table", urlbase=urlbase)) as remote:
+        with pytest.raises(httpx.HTTPStatusError):
+            remote.materialize(urlpath=destination, overwrite=True)
+    assert destination.read_bytes() == b"previous result"
+
+
+def test_caterva2_rejects_short_batch_and_single_row_limit(caterva2_source):
+    import httpx
+
+    urlbase, _, _, stats = caterva2_source
+    with blosc2.RemoteCTable(blosc2.URLPath("@public/table", urlbase=urlbase)) as remote:
+        stats["short_start"] = 0
+        with pytest.raises(ValueError, match="incompatible row batch"):
+            remote.slice(0, 2)
+        stats["short_start"] = None
+        stats["limit_rows"] = 0
+        with pytest.raises(httpx.HTTPStatusError, match="400"):
+            remote.materialize()
+        assert stats["ranges"][-1] == (0, 1)
+
+
+def test_caterva2_hierarchy_materialization(caterva2_source, tmp_path):
+    urlbase, _, table, _ = caterva2_source
+    source = blosc2.URLPath("@public/group", urlbase=urlbase)
+    destination = tmp_path / "local-tree.b2z"
+    with blosc2.RemoteStore(source) as store:
+        store.materialize(destination)
+    with blosc2.TreeStore(destination, mode="r") as local:
+        assert local.attrs["name"] == "fixture"
+        with local["table"] as copied:
+            np.testing.assert_array_equal(copied.ident[:], table.ident[:])
+        np.testing.assert_array_equal(local["array"][:], np.arange(60).reshape(6, 10))
 
 
 def test_c2array_only_maps_http_404_to_missing():
