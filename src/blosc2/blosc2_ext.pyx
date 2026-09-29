@@ -2739,7 +2739,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             input_buffers[i] = malloc(block_nbytes)
             if input_buffers[i] == NULL:
                 raise MemoryError("miniexpr: cannot allocate input block buffer")
-            memset(input_buffers[i], 0, block_nbytes)  # zero padding, matches b2nd semantics
+            if valid_nitems < blocknitems:
+                # Partial blocks need zero-filled padding. Full blocks are
+                # overwritten byte-for-byte by the raw NumPy gather below.
+                memset(input_buffers[i], 0, block_nbytes)
 
             np_ndim = udata.array.ndim
             blosc2_unidim_to_multidim(np_ndim, udata.chunks_in_array, nchunk, chunk_ndim)
