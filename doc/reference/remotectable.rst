@@ -4,8 +4,8 @@ RemoteCTable
 ============
 
 ``RemoteCTable`` is a read-only :class:`blosc2.CTable` backed by a remote B2Z
-archive, a local or remote PyTables/HDF5 table, or a Parquet file. Fixed-width,
-shaped, nullable, UTF-8, batch-backed variable-length,
+archive, a local or remote PyTables/HDF5 table, a Parquet file, or a Caterva2
+``URLPath`` table. Fixed-width, shaped, nullable, UTF-8, batch-backed variable-length,
 batch-backed list, struct/object, and dictionary columns are fetched on demand.
 Open local PyTables tables through :func:`blosc2.open` with ``path=`` or a
 ``::table`` selector.
@@ -28,7 +28,8 @@ remote list batches. A persisted ``kind="membership"`` index on a flat scalar
 list fetches only the compressed posting batches for requested values. If the
 result projects only other columns, the list payload remains unopened. Indexes
 on nested lists and structs are not supported. ListArray ``storage="vl"`` also
-remains unavailable through RemoteCTable.
+remains unavailable through RemoteCTable. Caterva2 API tables support bounded row
+slices, iteration, and column reads; predicates are unsupported for this source.
 
 Scalar queries automatically use persisted ``SUMMARY``, ``FULL``, ``PARTIAL``,
 ``OPSI``, and ``BUCKET`` indexes. Their sidecars are opened lazily and participate
@@ -49,9 +50,13 @@ Saving and materializing have different meanings:
 
 ``save()`` writes the source descriptor, table metadata, and by default only
 payload already retained in the cache. Missing data is still read from the
-original source after reopening. ``materialize()`` returns an independent local
-table and reads all data needed for it. ``copy()``, ``to_b2z()``, and ``to_b2d()``
-remain local materialization operations inherited from :class:`blosc2.CTable`.
+original source after reopening. For Caterva2 tables, saved payload consists
+of exact row ranges and projections already read; those selections can also seed
+a new sparse cache. For other source formats, ``materialize()`` returns an
+independent local table and reads all data needed for it. ``copy()``,
+``to_b2z()``, and ``to_b2d()`` remain local materialization operations
+inherited from :class:`blosc2.CTable`. Full-table materialization is unsupported
+for Caterva2 API tables; materialize a bounded ``slice()`` result instead.
 
 Table cache bytes, limits, and traffic are scoped to the shared remote owner and
 may include sibling leaves. This also applies when a table column is itself a

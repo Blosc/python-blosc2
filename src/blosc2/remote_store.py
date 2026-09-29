@@ -77,7 +77,17 @@ class _Caterva2FrameCache:
         self._cache_sizes = {}
         self._cache_lru = OrderedDict()
         self._memory = {}
+        self._artifact_keys = set()
         self._load_disk_entries()
+        if owner.artifact_path is not None and owner.disk is None and owner.restored_manifest:
+            self._artifact_keys = set(owner.restored_manifest.get("caterva2_frames", []))
+            for key in self._artifact_keys:
+                member = f"_caterva2_rows/{key}.cframe"
+                if owner.artifact_offsets is not None:
+                    self._cache_sizes[key] = owner.artifact_offsets[member]["length"]
+                else:
+                    self._cache_sizes[key] = (Path(owner.artifact_path) / member).stat().st_size
+                self._cache_lru[key] = None
         owner.cache_coordinator.register(self)
 
     @property
@@ -103,6 +113,13 @@ class _Caterva2FrameCache:
             path = self._path(key)
             if path.is_file():
                 payload = path.read_bytes()
+        if payload is None and key in self._artifact_keys and self.owner.artifact_path is not None:
+            member = f"_caterva2_rows/{key}.cframe"
+            if self.owner.artifact_offsets is None:
+                payload = (Path(self.owner.artifact_path) / member).read_bytes()
+            else:
+                with zipfile.ZipFile(self.owner.artifact_path) as archive:
+                    payload = archive.read(member)
         if payload is not None:
             self._cache_lru.pop(key, None)
             self._cache_lru[key] = None
@@ -128,7 +145,7 @@ class _Caterva2FrameCache:
     def _sync_evictions(self):
         if self.folder is not None:
             for key in tuple(self._cache_sizes):
-                if not self._path(key).is_file():
+                if not self._path(key).is_file() and key not in self._artifact_keys:
                     self._cache_sizes.pop(key, None)
                     self._cache_lru.pop(key, None)
 
@@ -253,6 +270,15 @@ def _caterva2_urlpath(descriptor, auth_token=""):
     return candidate
 
 
+def _caterva2_bound_urlpath(urlpath):
+    """Freeze inherited credentials for this handle and its cache namespace."""
+    if urlpath.auth_token is not None:
+        return urlpath
+    return blosc2.URLPath(
+        urlpath.path, urlbase=urlpath.urlbase, auth_token=blosc2.c2array._server_data["auth_token"] or ""
+    )
+
+
 def _caterva2_cache_identity(source, urlpath):
     """Separate credential namespaces without persisting credentials."""
     identity = dict(source)
@@ -343,7 +369,7 @@ class RemoteDiscovery:
         _local_source=False,
         _parquet_conversion=None,
     ):
-        self.caterva2 = urlpath if isinstance(urlpath, blosc2.URLPath) else None
+        self.caterva2 = _caterva2_bound_urlpath(urlpath) if isinstance(urlpath, blosc2.URLPath) else None
         if self.caterva2 is not None:
             if dataset not in {None, "", self.caterva2.path}:
                 raise ValueError("dataset is not supported for Caterva2 URLPath sources")
@@ -932,11 +958,8 @@ class RemoteDiscovery:
         from blosc2.c2array import _auth_headers, _server_url, _sync_client
 
         url = _server_url(self.caterva2.urlbase, f"api/fetch/{path}")
-        response = _sync_client().get(
-            url,
-            params={"slice_": "0:0"},
-            headers=_auth_headers(self.caterva2.auth_token),
-        )
+        client = _sync_client() if self.transport is None else self.transport
+        response = client.get(url, params={"slice_": "0:0"}, headers=_auth_headers(self.caterva2.auth_token))
         response.raise_for_status()
         self.traffic.charge(len(response.content))
         # Validate now so malformed frames never enter a durable manifest.
@@ -1259,12 +1282,16 @@ class RemoteDiscovery:
         params = {"slice_": f"{start}:{stop}"}
         if field is not None:
             params["field"] = field
-        cache_key = hashlib.sha256(
-            json.dumps(
-                [self.generation, table_path, int(start), int(stop), field],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        cache_key = (
+            hashlib.sha256(table_path.encode()).hexdigest()
+            + "-"
+            + hashlib.sha256(
+                json.dumps(
+                    [table_path, int(start), int(stop), field],
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        )
         if start != stop and self.cache_policy is not blosc2.CachePolicy.NONE:
             if self.table_frame_cache is None:
                 self.table_frame_cache = _Caterva2FrameCache(self)
@@ -1276,9 +1303,10 @@ class RemoteDiscovery:
         response = client.get(url, params=params, headers=_auth_headers(self.caterva2.auth_token))
         response.raise_for_status()
         self.traffic.charge(len(response.content))
+        result = blosc2.ctable_from_cframe(response.content)
         if start != stop and self.cache_policy is not blosc2.CachePolicy.NONE:
             self.table_frame_cache.put(cache_key, response.content)
-        return blosc2.ctable_from_cframe(response.content)
+        return result
 
     def _open_b2z_source(self, full):
         from blosc2.b2z_source import B2ZNDSource
@@ -1423,6 +1451,14 @@ class RemoteDiscovery:
                 self.get_cache(self.open_source(relative))
             for path in manifest.get("batch_caches", []):
                 self.open_ctable_batch(path)
+            if self.format == "caterva2" and (
+                manifest.get("caterva2_frames")
+                or (
+                    self.disk is not None
+                    and (self.disk.path / f"{self.generation}.b2d" / "_caterva2_rows").is_dir()
+                )
+            ):
+                self.table_frame_cache = _Caterva2FrameCache(self)
             self.cache_coordinator.enforce()
             self.restoring = False
 
@@ -1517,9 +1553,9 @@ class RemoteDiscovery:
         if not self.is_mutable:
             raise ValueError("Cannot refresh an immutable remote artifact; use a writable cache")
         replacement = RemoteDiscovery(
-            self.urlpath,
+            self.caterva2 if self.format == "caterva2" else self.urlpath,
             self.storage_options,
-            dataset=self.root,
+            dataset=None if self.format == "caterva2" else self.root,
             persist_metadata=self.disk is not None,
             _filesystem=self._external_filesystem,
             _source_validator=self.source_validator,
@@ -1528,6 +1564,7 @@ class RemoteDiscovery:
             _manifest_validator=self.manifest_validator,
             _max_nodes=self.max_nodes,
             _source_format=self.format,
+            _transport=self.transport,
             _source_cache_dir=self.source_cache_dir,
             _refresh_source=True,
             _local_source=self.local_source,
@@ -1711,6 +1748,26 @@ class RemoteDiscovery:
                                 shutil.copytree(path, destination)
                                 exported_parquet.append(path.name)
 
+                exported_frames = []
+                if self.format == "caterva2" and include_cache:
+                    if self.table_frame_cache is None:
+                        self.table_frame_cache = _Caterva2FrameCache(self)
+                    allowed = {
+                        hashlib.sha256(path.encode()).hexdigest()
+                        for path, (kind, _) in nodes.items()
+                        if kind == "ctable"
+                    }
+                    for key in self.table_frame_cache._cache_sizes:
+                        if key.partition("-")[0] not in allowed:
+                            continue
+                        payload = self.table_frame_cache.get(key)
+                        if payload is None:
+                            continue
+                        target = Path(staging_dir) / "_caterva2_rows" / f"{key}.cframe"
+                        target.parent.mkdir(exist_ok=True)
+                        target.write_bytes(payload)
+                        exported_frames.append(key)
+
                 linked_exports = self._export_linked_stores(full_path, staging_dir) if include_cache else {}
 
                 exported_manifest = {
@@ -1725,6 +1782,7 @@ class RemoteDiscovery:
                     "caches": sorted(exported_caches),
                     "batch_caches": sorted(exported_batches),
                     "parquet_caches": sorted(exported_parquet),
+                    "caterva2_frames": sorted(exported_frames),
                     "cache_policy": self.cache_policy.value,
                     "max_cache_bytes": self.max_cache_bytes,
                     "mutable": effective_mutable,
@@ -2045,6 +2103,7 @@ class RemoteStore(RemoteObject):
             raise TypeError("RemoteStore requires a remote URL string or Caterva2 URLPath")
         if caterva2_input:
             caterva2_source_descriptor(urlpath)
+            urlpath = _caterva2_bound_urlpath(urlpath)
             if dataset is not None:
                 raise ValueError("dataset and path are not supported with a Caterva2 URLPath")
             if storage_options is not None:
@@ -2379,6 +2438,7 @@ class RemoteStore(RemoteObject):
         limit = normalize_cache_limit(blosc2.CachePolicy.DISK, max_cache_bytes)
         caterva2_input = isinstance(urlpath, blosc2.URLPath)
         if caterva2_input:
+            urlpath = _caterva2_bound_urlpath(urlpath)
             if dataset is not None:
                 raise ValueError("dataset is not supported with a Caterva2 URLPath")
             if storage_options is not None:
@@ -2463,6 +2523,17 @@ class RemoteStore(RemoteObject):
                                 parts = PurePosixPath(info.filename).parts
                                 if len(parts) >= 3 and parts[0] == "parquet-groups" and parts[1] in names:
                                     archive.extract(info, target)
+                if seed_manifest is not None and kind == "caterva2":
+                    target = disk.path / f"{owner.generation}.b2d" / "_caterva2_rows"
+                    for key in seed_manifest.get("caterva2_frames", []):
+                        member = f"_caterva2_rows/{key}.cframe"
+                        if os.path.isdir(carrier):
+                            payload = (Path(carrier) / member).read_bytes()
+                        else:
+                            with zipfile.ZipFile(carrier) as archive:
+                                payload = archive.read(member)
+                        target.mkdir(parents=True, exist_ok=True)
+                        (target / f"{key}.cframe").write_bytes(payload)
                 owner.restore_caches(current)
                 if seed_manifest is not None:
                     for key in seed_manifest["caches"]:
@@ -3210,6 +3281,26 @@ class RemoteStore(RemoteObject):
             parquet_caches
         ):
             raise ValueError("Invalid cached Parquet group name")
+        frames = manifest.get("caterva2_frames", [])
+        if not isinstance(frames, list) or (frames and source.get("kind") != "caterva2"):
+            raise ValueError("Invalid cached Caterva2 table frames")
+        allowed = {
+            hashlib.sha256(path.encode()).hexdigest()
+            for path, (kind, _) in nodes.items()
+            if kind == "ctable"
+        }
+        if (
+            any(not isinstance(key, str) for key in frames)
+            or len(set(frames)) != len(frames)
+            or any(
+                len(key) != 129
+                or key[64] != "-"
+                or key[:64] not in allowed
+                or any(char not in "0123456789abcdef" for char in key[:64] + key[65:])
+                for key in frames
+            )
+        ):
+            raise ValueError("Invalid cached Caterva2 table frame key")
         linked = manifest.get("linked", {})
         if not isinstance(linked, dict):
             raise ValueError("Invalid nested RemoteStore artifacts")

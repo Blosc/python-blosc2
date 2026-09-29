@@ -6,8 +6,8 @@ one API. Data is read on demand and cached locally; remote sources are read-only
 | Selected source | Result |
 | --- | --- |
 | Standalone `.b2nd`, or a B2Z/Zarr/HDF5 array | {ref}`RemoteArray` |
-| Parquet file, B2Z CTable, or PyTables table | {ref}`RemoteCTable` |
-| B2Z, Zarr, or HDF5 group | {ref}`RemoteStore` |
+| Parquet file, B2Z CTable, PyTables table, or Caterva2 table | {ref}`RemoteCTable` |
+| B2Z, Zarr, HDF5, or Caterva2 group | {ref}`RemoteStore` |
 
 All three inherit {ref}`RemoteObject` and expose source metadata, cache controls,
 traffic counters, reference saving, and context-manager support. See
@@ -136,6 +136,8 @@ For HTTP authentication, use
 Credentials and live filesystems are not serialized into saved references;
 supply equivalent authentication when reopening. Authenticated users must use
 separate cache directories. Caterva2 authentication uses {func}`blosc2.c2context`.
+A Caterva2 store binds the active token when opened and separates its cache by
+token; open a new handle after changing accounts.
 
 ## Measure reads
 

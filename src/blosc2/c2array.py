@@ -822,9 +822,8 @@ class C2Array(blosc2.Operand):
                     options["transport"] = self._transport
                 self.meta = info(self.path, self.urlbase, **options)
             except _httpx().HTTPStatusError as err:
-                # HTTPStatusError only (not the broader HTTPError, which also covers
-                # connection-level failures): a 404 means "not found", a connection
-                # failure should propagate as-is rather than be reported as missing.
+                if err.response.status_code != 404:
+                    raise
                 raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
         cparams = self.meta["schunk"]["cparams"]
         # Remove "filters, meta" from cparams; this is an artifact from the server

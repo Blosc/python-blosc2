@@ -38,7 +38,7 @@ def safe(value):
 def caterva2_source():
     array = blosc2.asarray(np.arange(60, dtype=np.int32).reshape(6, 10), chunks=(3, 5), blocks=(1, 5))
     table = blosc2.CTable(Reading, [(index, index * 3) for index in range(12)], create_summary_index=False)
-    stats = {"fetches": 0, "cookies": []}
+    stats = {"fetches": 0, "cookies": [], "fields": []}
 
     def array_info():
         return {
@@ -116,6 +116,7 @@ def caterva2_source():
                     start, stop = (int(part) for part in selection.split(":"))
                     result = table.slice(start, stop)
                     field = query.get("field", [None])[0]
+                    stats["fields"].append(field)
                     if field is not None:
                         result = result.select([field])
                     self.send(result.to_cframe(), "application/octet-stream")
@@ -172,12 +173,36 @@ def test_caterva2_table_dispatch_projection_and_roundtrip(caterva2_source, tmp_p
         assert isinstance(table, blosc2.RemoteCTable)
         assert table.nrows == 12
         np.testing.assert_array_equal(table["value"][1:3], [3, 6])
-        np.testing.assert_array_equal(table.select(["value"]).slice(4, 7).value[:], [12, 15, 18])
+        assert table[0].ident == 0
+        assert "\n0" in str(table)
+        assert [row.ident for row in table[:2]] == [0, 1]
+        assert [row.ident for row in table] == list(range(12))
+        with table.select(["value"]) as projected:
+            assert [column["name"] for column in projected.schema_dict()["columns"]] == ["value"]
+            np.testing.assert_array_equal(projected.slice(4, 7).value[:], [12, 15, 18])
+        assert stats["fields"][-1] == "value"
         with pytest.raises(NotImplementedError, match="bounded"):
             table.to_cframe()
+        with pytest.raises(NotImplementedError, match="bounded"):
+            table.materialize()
+        with pytest.raises(NotImplementedError, match="bounded"):
+            table.value.sum()
+        with pytest.raises(NotImplementedError, match="bounded"):
+            table.to_string()
+        for suffix, export in (("b2z", table.to_b2z), ("b2d", table.to_b2d)):
+            destination = tmp_path / f"not-written.{suffix}"
+            with pytest.raises(NotImplementedError, match="bounded"):
+                export(destination)
+            assert not destination.exists()
         warm = stats["fetches"]
         np.testing.assert_array_equal(table.select(["value"]).slice(4, 7).value[:], [12, 15, 18])
         assert stats["fetches"] == warm
+        stale = table.select(["value"])
+        table.refresh()
+        with pytest.raises(RuntimeError, match="stale"):
+            stale.slice(0, 1)
+        stale.close()
+        assert table[0].ident == 0
         reference = tmp_path / "table.b2z"
         table.save(reference, include_cache=False, mutable=False)
 
@@ -195,8 +220,12 @@ def test_caterva2_table_sparse_cache_survives_restart(caterva2_source, tmp_path)
     warm = stats["fetches"]
     with blosc2.RemoteCTable.with_sparse_cache(source, cache) as table:
         np.testing.assert_array_equal(table.slice(2, 5).ident[:], [2, 3, 4])
-    # Discovery persisted the schema-preserving empty frame, and the first
-    # handle persisted the nonempty result, so reopening performs no fetch.
+        assert stats["fetches"] == warm
+        table.refresh()
+        assert table.slice(2, 5).nrows == 3
+    warm = stats["fetches"]
+    with blosc2.RemoteCTable.with_sparse_cache(source, cache) as table:
+        assert table.slice(2, 5).nrows == 3
     assert stats["fetches"] == warm
 
 
@@ -209,3 +238,81 @@ def test_caterva2_cache_identity_separates_credentials(caterva2_source, tmp_path
     with blosc2.RemoteStore(private, cache_dir=tmp_path, cache_policy=blosc2.CachePolicy.DISK):
         pass
     assert len([path for path in tmp_path.iterdir() if path.is_dir()]) == 2
+
+
+def test_caterva2_table_export_keeps_cached_rows(caterva2_source, tmp_path):
+    urlbase, _, _, stats = caterva2_source
+    source = blosc2.URLPath("@public/table", urlbase=urlbase)
+    artifact = tmp_path / "table.b2z"
+    with blosc2.RemoteCTable(source) as table:
+        table.slice(2, 4)
+        with table.select(["value"]) as projected:
+            projected.slice(4, 7)
+        table.save(artifact, include_cache=True, mutable=False)
+    manifest, _ = blosc2.RemoteStore._load_artifact_manifest(str(artifact))
+    manifest["caterva2_frames"] = [{}]
+    with pytest.raises(ValueError, match="frame key"):
+        blosc2.RemoteStore._validate_artifact_manifest(manifest)
+    warm = stats["fetches"]
+    with blosc2.open(artifact) as reopened:
+        assert reopened.slice(2, 4).nrows == 2
+        with reopened.select(["value"]) as projected:
+            assert projected.slice(4, 7).nrows == 3
+    assert stats["fetches"] == warm
+    with blosc2.RemoteCTable.with_sparse_cache(source, tmp_path / "cache", carrier=artifact) as attached:
+        assert attached.slice(2, 4).nrows == 2
+        with attached.select(["value"]) as projected:
+            assert projected.slice(4, 7).nrows == 3
+    assert stats["fetches"] == warm
+
+
+def test_caterva2_cache_identity_separates_inherited_credentials(caterva2_source, tmp_path):
+    urlbase, _, _, stats = caterva2_source
+    source = blosc2.URLPath("@public/table", urlbase=urlbase)
+    for token in ("account-A", "account-B"):
+        before = stats["fetches"]
+        with blosc2.c2context(auth_token=token):
+            with blosc2.RemoteCTable(
+                source, cache_dir=tmp_path, cache_policy=blosc2.CachePolicy.DISK
+            ) as table:
+                table.slice(0, 2)
+                with blosc2.c2context(auth_token="another-account"):
+                    table.slice(2, 3)
+                assert stats["cookies"][-1] == token
+        assert stats["fetches"] > before
+        assert stats["cookies"][-1] == token
+    assert len([path for path in tmp_path.iterdir() if path.is_dir()]) == 2
+
+
+def test_caterva2_table_discovery_uses_injected_transport(caterva2_source, tmp_path, monkeypatch):
+    import httpx
+
+    urlbase, _, _, _ = caterva2_source
+    source = blosc2.URLPath("@public/table", urlbase=urlbase)
+
+    def forbidden_default():
+        raise AssertionError("default HTTP transport used")
+
+    monkeypatch.setattr(blosc2.c2array, "_sync_client", forbidden_default)
+    with httpx.Client() as transport:
+        with blosc2.RemoteStore.with_sparse_cache(source, tmp_path / "cache", _transport=transport) as store:
+            with store[""] as table:
+                assert table.nrows == 12
+                assert table.slice(0, 1).nrows == 1
+
+
+def test_c2array_only_maps_http_404_to_missing():
+    import httpx
+
+    for status, expected in (
+        (404, FileNotFoundError),
+        (403, httpx.HTTPStatusError),
+        (503, httpx.HTTPStatusError),
+    ):
+
+        def respond(request, status=status):
+            return httpx.Response(status, request=request)
+
+        client = httpx.Client(transport=httpx.MockTransport(respond))
+        with client, pytest.raises(expected):
+            blosc2.C2Array("@public/missing", urlbase="https://example.invalid/", _transport=client)
