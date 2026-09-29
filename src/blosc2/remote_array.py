@@ -1865,6 +1865,36 @@ class RemoteArray(RemoteObject, blosc2.Operand):
         return blosc2.asarray(self[item], **kwargs)
 
     @_serialized_operation
+    def slice(self, item=(), **kwargs):
+        """Return a requested selection as an independent compressed NDArray.
+
+        Unlike :meth:`materialize`, this constructs the result with the NDArray
+        slicing machinery and does not first assemble the complete selection as
+        a NumPy array.  Integer indices and unit-step basic slices are supported;
+        output-construction keyword arguments are forwarded to
+        :meth:`NDArray.slice`.
+
+        Fetching, result construction, and post-operation cache eviction are one
+        serialized operation.  Consequently a selection may be larger than the
+        retained cache budget without cached chunks disappearing while the
+        result is being built.
+        """
+        backend = self._prepare_read()
+        if isinstance(backend, blosc2.Proxy):
+            if not self.is_cache_mutable and backend._missing_blocks(item):
+                temporary = blosc2.Proxy(self.src, _refresh_source=False)
+                temporary.fetch(item)
+                return temporary._cache.slice(item, **kwargs)
+            if self.is_cache_mutable:
+                backend.fetch(item)
+            return backend._cache.slice(item, **kwargs)
+        if isinstance(backend, blosc2.C2Array):
+            return backend.slice(item, **kwargs)
+        temporary = blosc2.Proxy(backend, _refresh_source=False)
+        temporary.fetch(item)
+        return temporary._cache.slice(item, **kwargs)
+
+    @_serialized_operation
     def get_chunk(self, nchunk: int) -> bytes:
         if self._store_owner is not None and self._store_owner.cache_coordinator.cached_only:
             from blosc2.remote_store import CacheMiss

@@ -648,6 +648,61 @@ def test_server_sparse_cache_reuses_partial_blocks(tmp_path):
     assert reopened.traffic.requests == 0
 
 
+def test_remote_array_slice_builds_independent_compressed_result(tmp_path):
+    data = np.arange(20 * 30, dtype=np.int32).reshape(20, 30)
+    source = blosc2.asarray(data, chunks=(10, 10), blocks=(5, 5))
+    url = "memory://server-slice.b2nd"
+    fsspec.filesystem("memory").pipe_file("server-slice.b2nd", source.to_cframe())
+    remote = blosc2.RemoteArray.with_sparse_cache(url, tmp_path / "slice-runtime")
+
+    result = remote.slice((slice(3, 17), 11), cparams={"codec": blosc2.Codec.LZ4, "clevel": 1})
+
+    assert isinstance(result, blosc2.NDArray)
+    assert result.shape == (14,)
+    assert result.dtype == data.dtype
+    assert result.cparams.codec is blosc2.Codec.LZ4
+    np.testing.assert_array_equal(result[:], data[3:17, 11])
+    source[:] = -1
+    np.testing.assert_array_equal(result[:], data[3:17, 11])
+
+
+@pytest.mark.parametrize("item", [(2, 3), (slice(4, 4), slice(None)), (slice(0, 10), slice(10, 20))])
+def test_remote_array_slice_scalar_empty_and_aligned(tmp_path, item):
+    data = np.arange(20 * 30, dtype=np.int32).reshape(20, 30)
+    source = blosc2.asarray(data, chunks=(10, 10), blocks=(5, 5))
+    name = f"server-slice-{abs(hash(repr(item)))}.b2nd"
+    url = f"memory://{name}"
+    fsspec.filesystem("memory").pipe_file(name, source.to_cframe())
+    remote = blosc2.RemoteArray.with_sparse_cache(url, tmp_path / name)
+
+    result = remote.slice(item)
+
+    np.testing.assert_array_equal(result[...], data[item])
+
+
+def test_remote_array_slice_assembles_before_eviction_and_reuses_cache(tmp_path, monkeypatch):
+    url, data = _remote_array("slice-eviction.b2nd", nchunks=4, chunk_size=10_000)
+    runtime_path = tmp_path / "slice-eviction-runtime"
+    remote = blosc2.RemoteArray.with_sparse_cache(url, runtime_path, max_cache_bytes=12_000)
+
+    def indexing_is_not_the_slice_path(*args, **kwargs):
+        raise AssertionError("RemoteArray.slice must not use RemoteArray.__getitem__")
+
+    monkeypatch.setattr(blosc2.RemoteArray, "__getitem__", indexing_is_not_the_slice_path)
+    result = remote.slice(slice(None))
+    np.testing.assert_array_equal(result[:], data)
+    assert remote.cache_bytes <= 12_000
+
+    reuse_path = tmp_path / "slice-reuse-runtime"
+    first = blosc2.RemoteArray.with_sparse_cache(url, reuse_path, max_cache_bytes=12_000)
+    np.testing.assert_array_equal(first.slice(slice(0, 10_000))[:], data[:10_000])
+    reopened = blosc2.RemoteArray.with_sparse_cache(url, reuse_path, max_cache_bytes=12_000)
+    reopened.traffic.reset()
+    warm = reopened.slice(slice(0, 10_000))
+    np.testing.assert_array_equal(warm[:], data[:10_000])
+    assert reopened.traffic.requests == 0
+
+
 def test_server_sparse_cache_invalidates_same_geometry_replacement(tmp_path):
     url, data = _remote_array("server-replaced.b2nd", nchunks=2, chunk_size=100)
     runtime_path = tmp_path / "replaced-runtime"

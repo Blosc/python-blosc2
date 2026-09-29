@@ -210,6 +210,7 @@ file. Read-only mode can use warm chunks but does not retain misses:
     .. automethod:: aget_chunk
     .. automethod:: save
     .. automethod:: materialize
+    .. automethod:: slice
     .. automethod:: to_cframe
     .. autoattribute:: shape
     .. autoattribute:: dtype
