@@ -400,20 +400,35 @@ def test_caterva2_batches_large_slices_and_materialization(caterva2_source, tmp_
     "caterva2_source", ["rich", pytest.param("rich-large", marks=pytest.mark.heavy)], indirect=True
 )
 def test_caterva2_batches_preserve_types_and_nulls(caterva2_source, tmp_path):
+    def assert_same_table(actual, expected):
+        assert actual.nrows == expected.nrows
+        assert actual.schema_dict()["columns"] == expected.schema_dict()["columns"]
+        for name in expected.col_names:
+            actual_values, expected_values = actual[name][:], expected[name][:]
+            if isinstance(expected_values, np.ndarray):
+                np.testing.assert_array_equal(actual_values, expected_values)
+            else:
+                assert actual_values == expected_values
+        # Full row iteration repeatedly scans the validity mask. Compare all
+        # values column-wise above, and sample row reconstruction at boundaries.
+        for index in sorted(
+            {0, expected.nrows - 1, min(1023, expected.nrows - 1), min(1024, expected.nrows - 1)}
+        ):
+            assert actual[index] == expected[index]
+
     urlbase, _, original, _ = caterva2_source
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
     with blosc2.RemoteCTable(source) as remote:
         materialized = remote.materialize()
-        assert materialized.schema_dict()["columns"] == original.schema_dict()["columns"]
-        assert list(materialized) == list(original)
+        assert_same_table(materialized, original)
         with remote.select(["category", "text"]) as projected:
             start, stop = original.nrows - 21, original.nrows
             result = projected.slice(start, stop)
             assert result.col_names == ["category", "text"]
-            assert list(result) == list(original.select(["category", "text"]).slice(start, stop))
+            assert_same_table(result, original.select(["category", "text"]).slice(start, stop))
         destination = tmp_path / "rich.b2d"
         with remote.materialize(urlpath=destination) as disk:
-            assert list(disk) == list(original)
+            assert_same_table(disk, original)
 
 
 def test_caterva2_failed_batch_preserves_destination(caterva2_source, tmp_path):
