@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.14.1 to 4.14.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.14.0 to 4.14.1
 
 Python-Blosc2 4.14.1 is a security and feature release introducing safe
