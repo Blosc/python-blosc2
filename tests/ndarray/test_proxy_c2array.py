@@ -86,7 +86,7 @@ def test_open(cat2_context):
     del a
     del b
 
-    b = blosc2.open(urlpath, mode="r")
+    b = blosc2.open(urlpath, mode="r", deserialize="full")
     a = get_array(shape, chunks_blocks)
 
     np.testing.assert_allclose(b[...], a[...])
