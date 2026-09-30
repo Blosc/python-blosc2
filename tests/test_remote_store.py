@@ -1900,18 +1900,29 @@ def test_materialize_preserves_metadata_and_expression_indexes(tmp_path, remote)
         table.close()
 
 
-def test_materialize_table_reads_bounded_row_batches(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "row_counts",
+    [(65, 33), pytest.param((5000, 3000), marks=pytest.mark.heavy)],
+    ids=["small", "large"],
+)
+def test_materialize_table_reads_bounded_row_batches(tmp_path, monkeypatch, row_counts):
+    from blosc2 import store_materialize
+
+    fixed_rows, payload_rows = row_counts
+    batch_rows = 32 if fixed_rows == 65 else 2048
+    monkeypatch.setattr(store_materialize, "TABLE_BATCH_ROWS", batch_rows)
+
     @dataclasses.dataclass
     class Payload:
-        value: bytes = blosc2.field(blosc2.vlbytes(batch_rows=128))
+        value: bytes = blosc2.field(blosc2.vlbytes(batch_rows=16 if fixed_rows == 65 else 128))
 
     source = tmp_path / "large-table.b2z"
     with blosc2.TreeStore(source, mode="w") as tree:
         tree["table"] = blosc2.CTable(
-            NestedIndexedRow, [(i,) for i in range(5000)], create_summary_index=False
+            NestedIndexedRow, [(i,) for i in range(fixed_rows)], create_summary_index=False
         )
         tree["batch"] = blosc2.CTable(
-            Payload, [(bytes([i % 251]),) for i in range(3000)], create_summary_index=False
+            Payload, [(bytes([i % 251]),) for i in range(payload_rows)], create_summary_index=False
         )
     url = f"memory://{tmp_path.name}-large-table.b2z"
     fsspec.filesystem("memory").pipe(url, source.read_bytes())
@@ -1919,17 +1930,29 @@ def test_materialize_table_reads_bounded_row_batches(tmp_path, monkeypatch):
     def no_full_copy(*args, **kwargs):
         raise AssertionError("materialization must not copy the whole table into memory")
 
+    reads = []
+    original_getitem = blosc2.CTable.__getitem__
+
+    def bounded_getitem(table, item):
+        if isinstance(item, slice):
+            reads.append((item.start, min(item.stop, len(table))))
+            assert item.stop - item.start <= batch_rows
+        return original_getitem(table, item)
+
     with blosc2.RemoteStore(url) as store:
         with monkeypatch.context() as patch:
             patch.setattr(blosc2.CTable, "copy", no_full_copy)
+            patch.setattr(blosc2.CTable, "__getitem__", bounded_getitem)
             store.materialize(tmp_path / "bounded-table.b2d")
+    assert sum(hi - lo for lo, hi in reads) == fixed_rows + payload_rows
+    assert len(reads) > 2
     with blosc2.open(tmp_path / "bounded-table.b2d", deserialize="full") as tree:
         with tree["table"] as table:
-            np.testing.assert_array_equal(table["value"][:], np.arange(5000))
+            np.testing.assert_array_equal(table["value"][:], np.arange(fixed_rows))
         with tree["batch"] as table:
-            assert len(table) == 3000
+            assert len(table) == payload_rows
             assert table["value"][0] == b"\x00"
-            assert table["value"][2999] == bytes([2999 % 251])
+            assert table["value"][payload_rows - 1] == bytes([(payload_rows - 1) % 251])
 
 
 def test_nested_reference_preserves_batch_cache(tmp_path):

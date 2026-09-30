@@ -21,6 +21,8 @@ from blosc2.ctable_storage import RemoteTableStorage
 from blosc2.remote_array import CACHE_POLICY_DEFAULT, RemoteMetadataMapping
 from blosc2.remote_object import RemoteObject
 
+CATERVA2_BATCH_ROWS = 1024
+
 
 class _Caterva2Column:
     """Lazy projected row reader for one Caterva2 table column."""
@@ -63,7 +65,7 @@ class _Caterva2Column:
             scalar = False
         else:
             raise TypeError("Caterva2 remote columns support integer and slice indexing")
-        if stop == start or stop - start > 1024:
+        if stop == start or stop - start > CATERVA2_BATCH_ROWS:
             result = self._table._caterva2_copy_rows(start, stop, field=self._name)
         else:
             result = next(self._table._iter_caterva2_batches(start, stop, field=self._name))
@@ -517,7 +519,7 @@ class RemoteCTable(RemoteObject, CTable):
         position = start
         while position < stop:
             self._check_open()
-            end = min(position + 1024, stop)
+            end = min(position + CATERVA2_BATCH_ROWS, stop)
             while True:
                 try:
                     batch = self._caterva2_fetch(position, end, field)
@@ -580,7 +582,7 @@ class RemoteCTable(RemoteObject, CTable):
             raise ValueError("CTable.slice does not support a step")
         lo, hi, _ = key.indices(self.nrows)
         hi = max(lo, hi)
-        if hi == lo or hi - lo > 1024:
+        if hi == lo or hi - lo > CATERVA2_BATCH_ROWS:
             return self._caterva2_copy_rows(lo, hi)
         return next(self._iter_caterva2_batches(lo, hi))
 

@@ -53,18 +53,20 @@ def safe(value):
 def caterva2_source(request):
     array = blosc2.asarray(np.arange(60, dtype=np.int32).reshape(6, 10), chunks=(3, 5), blocks=(1, 5))
     nrows = getattr(request, "param", 12)
-    if nrows == "rich":
+    if nrows in ("rich", "rich-large"):
+        rich_rows = 31 if nrows == "rich" else 1031
+        category_boundary = 16 if nrows == "rich" else 1024
         table = blosc2.CTable(
             ReadingRich,
             [
                 (
                     i,
                     None if i % 7 == 0 else "" if i % 7 == 1 else f"row-{i}",
-                    None if i % 5 == 0 else "a" if i < 1024 else "b",
+                    None if i % 5 == 0 else "a" if i < category_boundary else "b",
                     None if i % 11 == 0 else [i, i + 1],
                     None if i % 13 == 0 else np.datetime64("2025-01-01", "ns") + np.timedelta64(i, "ns"),
                 )
-                for i in range(1031)
+                for i in range(rich_rows)
             ],
             create_summary_index=False,
         )
@@ -178,13 +180,14 @@ def caterva2_source(request):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}/", array, table, stats
     finally:
         server.shutdown()
         server.server_close()
+        thread.join(timeout=5)
 
 
 def test_caterva2_group_arrays_tables_and_roundtrip(caterva2_source, tmp_path):
@@ -358,36 +361,44 @@ def test_caterva2_table_discovery_uses_injected_transport(caterva2_source, tmp_p
                 assert table.slice(0, 1).nrows == 1
 
 
-@pytest.mark.parametrize("caterva2_source", [4101], indirect=True)
-def test_caterva2_batches_large_slices_and_materialization(caterva2_source, tmp_path):
-    urlbase, _, _, stats = caterva2_source
-    stats["limit_rows"] = 600
+@pytest.mark.parametrize("caterva2_source", [41, pytest.param(4101, marks=pytest.mark.heavy)], indirect=True)
+def test_caterva2_batches_large_slices_and_materialization(caterva2_source, tmp_path, monkeypatch):
+    from blosc2 import remote_ctable
+
+    urlbase, _, original, stats = caterva2_source
+    nrows = original.nrows
+    if nrows == 41:
+        monkeypatch.setattr(remote_ctable, "CATERVA2_BATCH_ROWS", 32)
+    start, stop = (5, 41) if nrows == 41 else (100, 1501)
+    stats["limit_rows"] = limit = 16 if nrows == 41 else 600
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
     with blosc2.RemoteCTable(source) as remote:
-        selected = remote.slice(100, 1501)
-        np.testing.assert_array_equal(selected.ident[:], np.arange(100, 1501))
-        np.testing.assert_array_equal(remote.value[100:1501], np.arange(100, 1501) * 3)
+        selected = remote.slice(start, stop)
+        np.testing.assert_array_equal(selected.ident[:], np.arange(start, stop))
+        np.testing.assert_array_equal(remote.value[start:stop], np.arange(start, stop) * 3)
         assert all(hi - lo <= 1024 for lo, hi in stats["ranges"])
-        assert any(hi - lo > 600 for lo, hi in stats["ranges"])
+        assert any(hi - lo > limit for lo, hi in stats["ranges"])
         with remote.select(["value"]) as projected:
             local = projected.materialize()
             assert local.col_names == ["value"]
-            np.testing.assert_array_equal(local.value[:], np.arange(4101) * 3)
+            np.testing.assert_array_equal(local.value[:], np.arange(nrows) * 3)
         destination = tmp_path / "full.b2z"
         with remote.materialize(urlpath=destination) as local:
-            assert local.nrows == 4101
-            np.testing.assert_array_equal(local.ident[4090:4101], np.arange(4090, 4101))
-        assert stats["ranges"][-1][1] == 4101
+            assert local.nrows == nrows
+            np.testing.assert_array_equal(local.ident[nrows - 11 :], np.arange(nrows - 11, nrows))
+        assert stats["ranges"][-1][1] == nrows
         rows = iter(remote)
         assert next(rows).ident == 0
         before = stats["fetches"]
         rows.close()
         assert stats["fetches"] == before
     with blosc2.CTable.open(destination, mode="r") as offline:
-        assert offline.nrows == 4101
+        assert offline.nrows == nrows
 
 
-@pytest.mark.parametrize("caterva2_source", ["rich"], indirect=True)
+@pytest.mark.parametrize(
+    "caterva2_source", ["rich", pytest.param("rich-large", marks=pytest.mark.heavy)], indirect=True
+)
 def test_caterva2_batches_preserve_types_and_nulls(caterva2_source, tmp_path):
     urlbase, _, original, _ = caterva2_source
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
@@ -396,9 +407,10 @@ def test_caterva2_batches_preserve_types_and_nulls(caterva2_source, tmp_path):
         assert materialized.schema_dict()["columns"] == original.schema_dict()["columns"]
         assert list(materialized) == list(original)
         with remote.select(["category", "text"]) as projected:
-            result = projected.slice(1010, 1031)
+            start, stop = original.nrows - 21, original.nrows
+            result = projected.slice(start, stop)
             assert result.col_names == ["category", "text"]
-            assert list(result) == list(original.select(["category", "text"]).slice(1010, 1031))
+            assert list(result) == list(original.select(["category", "text"]).slice(start, stop))
         destination = tmp_path / "rich.b2d"
         with remote.materialize(urlpath=destination) as disk:
             assert list(disk) == list(original)

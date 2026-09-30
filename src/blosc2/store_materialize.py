@@ -148,9 +148,12 @@ def _copy_array(source, target, path, staging):
     target[path] = local
 
 
+TABLE_BATCH_ROWS = 2048
+
+
 def _copy_table(table, target, path):
     indexes = dict(table._get_index_catalog())
-    batch_rows = 1024 if hasattr(table, "_caterva2_owner") else 2048
+    batch_rows = 1024 if hasattr(table, "_caterva2_owner") else TABLE_BATCH_ROWS
     seed = table._empty_copy(capacity=1)
     seed._source_bound = False
     seed._source_columns = set()
