@@ -115,12 +115,13 @@ def cat2_context():
         yield c2params
 
 
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     # Skip network-marked tests when their endpoint or optional credentials are unavailable.
     if item.get_closest_marker("network") is None:
-        return
+        return (yield)
     try:
-        item.runtest()
+        return (yield)
     except _NETWORK_ERRORS as exc:
         pytest.skip(f"Skipping unavailable network test: {exc}")
 

@@ -34,10 +34,13 @@ import blosc2
 # The stand-in binds a real socket, which wasm32 has no listen(2) for, and
 # Windows serves badly enough to wedge an xdist worker (see
 # test_c2array_blocks.py); neither platform is tested as a server here.
-pytestmark = pytest.mark.skipif(
-    blosc2.IS_WASM or sys.platform == "win32",
-    reason="in-process HTTP servers not supported on wasm32 or Windows",
-)
+pytestmark = [
+    pytest.mark.network,
+    pytest.mark.skipif(
+        blosc2.IS_WASM or sys.platform == "win32",
+        reason="in-process HTTP servers not supported on wasm32 or Windows",
+    ),
+]
 
 CHUNKS = (1000,)
 BLOCKS = (250,)

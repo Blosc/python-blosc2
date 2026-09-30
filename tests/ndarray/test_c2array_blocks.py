@@ -35,10 +35,13 @@ import blosc2
 # with it rather than raising.  Windows serves the same stand-in badly -- a
 # client abort (WinError 10053) can leave an in-process server wedging the
 # xdist worker -- and serving HTTP from Windows is not what this suite covers.
-pytestmark = pytest.mark.skipif(
-    blosc2.IS_WASM or sys.platform == "win32",
-    reason="in-process HTTP servers not supported on wasm32 or Windows",
-)
+pytestmark = [
+    pytest.mark.network,
+    pytest.mark.skipif(
+        blosc2.IS_WASM or sys.platform == "win32",
+        reason="in-process HTTP servers not supported on wasm32 or Windows",
+    ),
+]
 
 
 class _Cat2Server:

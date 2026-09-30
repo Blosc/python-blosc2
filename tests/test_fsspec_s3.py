@@ -18,8 +18,8 @@ cover, both of which have already hidden a bug:
 - it is poorer in metadata than any real store (no mtime), which let a
   size-only cache stamp serve a stale chunk cache.
 
-These run offline -- moto is a local server, no credentials, no network -- so
-they are not marked ``network``.
+These need no external service or credentials, but moto binds a real localhost
+socket, so they are marked ``network`` and excluded from release-time tests.
 """
 
 import asyncio
@@ -28,6 +28,8 @@ import numpy as np
 import pytest
 
 import blosc2
+
+pytestmark = pytest.mark.network
 
 pytest.importorskip("s3fs")
 pytest.importorskip("moto")

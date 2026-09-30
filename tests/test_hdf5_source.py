@@ -1268,6 +1268,7 @@ def s3_server():
     server.stop()
 
 
+@pytest.mark.network
 def test_moto_s3_hdf5_read(s3_server):
     s3_opts = {
         "endpoint_url": s3_server,
@@ -1292,6 +1293,7 @@ def test_moto_s3_hdf5_read(s3_server):
     np.testing.assert_array_equal(proxy[:], data)
 
 
+@pytest.mark.network
 def test_moto_s3_hdf5_caching(s3_server, tmp_path):
     s3_opts = {
         "endpoint_url": s3_server,

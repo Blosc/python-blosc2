@@ -1785,6 +1785,7 @@ def test_save_failure_preserves_destination_and_live_cache(hierarchy, tmp_path, 
     sys.platform == "win32",
     reason="in-process HTTP servers not supported on Windows",
 )
+@pytest.mark.network
 def test_artifact_reopens_in_fresh_process(tmp_path):
     """A locally transported .b2z must be readable by another interpreter."""
     import functools

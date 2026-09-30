@@ -299,6 +299,7 @@ def test_small_member_prefetch_carries_vlmeta(monkeypatch):
 @pytest.mark.parametrize("small", [False, True])
 @pytest.mark.parametrize("ctable", [False, True])
 @pytest.mark.usefixtures("b2z_range_reads")
+@pytest.mark.network
 def test_http_tail_bootstrap(suffix, small, ctable, tmp_path):
     import http.server
     import threading

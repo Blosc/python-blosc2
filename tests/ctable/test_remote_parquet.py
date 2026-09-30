@@ -814,6 +814,7 @@ def test_http_b2_file_id_supplies_missing_cache_validator(monkeypatch):
     assert marker == {"size": "49961641", "x-bz-file-id": "file-version-1"}
 
 
+@pytest.mark.network
 def test_http_range_requests_are_narrow(tmp_path):
     path = tmp_path / "served.parquet"
     pq.write_table(
@@ -905,6 +906,7 @@ def test_s3_parquet_smoke():
             remote[remote.col_names[0]][0]
 
 
+@pytest.mark.network
 def test_http_without_range_support_fails_clearly(tmp_path):
     path = tmp_path / "large.parquet"
     pq.write_table(pa.table({"x": list(range(20_000))}), path, row_group_size=1_000)

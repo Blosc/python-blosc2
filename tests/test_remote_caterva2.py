@@ -190,6 +190,7 @@ def caterva2_source(request):
         thread.join(timeout=5)
 
 
+@pytest.mark.network
 def test_caterva2_group_arrays_tables_and_roundtrip(caterva2_source, tmp_path):
     urlbase, array, _, stats = caterva2_source
     source = blosc2.URLPath("@public/group", urlbase=urlbase)
@@ -220,6 +221,7 @@ def test_caterva2_group_arrays_tables_and_roundtrip(caterva2_source, tmp_path):
     assert set(stats["cookies"]) == {None}
 
 
+@pytest.mark.network
 def test_caterva2_table_dispatch_projection_and_roundtrip(caterva2_source, tmp_path):
     urlbase, _, _, stats = caterva2_source
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
@@ -271,6 +273,7 @@ def test_caterva2_table_dispatch_projection_and_roundtrip(caterva2_source, tmp_p
         np.testing.assert_array_equal(reopened.ident[1:3], [1, 2])
 
 
+@pytest.mark.network
 def test_caterva2_table_sparse_cache_survives_restart(caterva2_source, tmp_path):
     urlbase, _, _, stats = caterva2_source
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
@@ -289,6 +292,7 @@ def test_caterva2_table_sparse_cache_survives_restart(caterva2_source, tmp_path)
     assert stats["fetches"] == warm
 
 
+@pytest.mark.network
 def test_caterva2_cache_identity_separates_credentials(caterva2_source, tmp_path):
     urlbase, _, _, _ = caterva2_source
     public = blosc2.URLPath("@public/group", urlbase=urlbase, auth_token="")
@@ -300,6 +304,7 @@ def test_caterva2_cache_identity_separates_credentials(caterva2_source, tmp_path
     assert len([path for path in tmp_path.iterdir() if path.is_dir()]) == 2
 
 
+@pytest.mark.network
 def test_caterva2_table_export_keeps_cached_rows(caterva2_source, tmp_path):
     urlbase, _, _, stats = caterva2_source
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
@@ -326,6 +331,7 @@ def test_caterva2_table_export_keeps_cached_rows(caterva2_source, tmp_path):
     assert stats["fetches"] == warm
 
 
+@pytest.mark.network
 def test_caterva2_cache_identity_separates_inherited_credentials(caterva2_source, tmp_path):
     urlbase, _, _, stats = caterva2_source
     source = blosc2.URLPath("@public/table", urlbase=urlbase)
@@ -344,6 +350,7 @@ def test_caterva2_cache_identity_separates_inherited_credentials(caterva2_source
     assert len([path for path in tmp_path.iterdir() if path.is_dir()]) == 2
 
 
+@pytest.mark.network
 def test_caterva2_table_discovery_uses_injected_transport(caterva2_source, tmp_path, monkeypatch):
     import httpx
 
@@ -362,6 +369,7 @@ def test_caterva2_table_discovery_uses_injected_transport(caterva2_source, tmp_p
 
 
 @pytest.mark.parametrize("caterva2_source", [41, pytest.param(4101, marks=pytest.mark.heavy)], indirect=True)
+@pytest.mark.network
 def test_caterva2_batches_large_slices_and_materialization(caterva2_source, tmp_path, monkeypatch):
     from blosc2 import remote_ctable
 
@@ -399,6 +407,7 @@ def test_caterva2_batches_large_slices_and_materialization(caterva2_source, tmp_
 @pytest.mark.parametrize(
     "caterva2_source", ["rich", pytest.param("rich-large", marks=pytest.mark.heavy)], indirect=True
 )
+@pytest.mark.network
 def test_caterva2_batches_preserve_types_and_nulls(caterva2_source, tmp_path):
     def assert_same_table(actual, expected):
         assert actual.nrows == expected.nrows
@@ -431,6 +440,7 @@ def test_caterva2_batches_preserve_types_and_nulls(caterva2_source, tmp_path):
             assert_same_table(disk, original)
 
 
+@pytest.mark.network
 def test_caterva2_failed_batch_preserves_destination(caterva2_source, tmp_path):
     import httpx
 
@@ -445,6 +455,7 @@ def test_caterva2_failed_batch_preserves_destination(caterva2_source, tmp_path):
     assert destination.read_bytes() == b"previous result"
 
 
+@pytest.mark.network
 def test_caterva2_rejects_short_batch_and_single_row_limit(caterva2_source):
     import httpx
 
@@ -460,6 +471,7 @@ def test_caterva2_rejects_short_batch_and_single_row_limit(caterva2_source):
         assert stats["ranges"][-1] == (0, 1)
 
 
+@pytest.mark.network
 def test_caterva2_hierarchy_materialization(caterva2_source, tmp_path):
     urlbase, _, table, _ = caterva2_source
     source = blosc2.URLPath("@public/group", urlbase=urlbase)

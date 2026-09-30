@@ -645,6 +645,7 @@ _http_server_skip = pytest.mark.skipif(
 
 @_http_server_skip
 @pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+@pytest.mark.network
 def test_http_url_is_read_through_fsspec(tmp_path):
     # A frame behind a plain web server -- no Caterva2 there to ask anything of --
     # is a frame like any other: fsspec reads it in ranges wherever the server
@@ -673,6 +674,7 @@ def test_http_url_is_read_through_fsspec(tmp_path):
 
 @_http_server_skip
 @pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+@pytest.mark.network
 def test_http_shared_b2nd_cache_across_processes(tmp_path):
     pytest.importorskip("aiohttp")
     blosc2.asarray(
@@ -704,6 +706,7 @@ with blosc2.open(sys.argv[1], cache_dir=sys.argv[2], shared_cache=True) as array
 
 
 @_http_server_skip
+@pytest.mark.network
 def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     pytest.importorskip("aiohttp")
     path = tmp_path / "www"
@@ -726,6 +729,7 @@ def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
 
 
 @_http_server_skip
+@pytest.mark.network
 def test_http_remote_array_checks_identity_without_refetching_cached_data(tmp_path):
     pytest.importorskip("aiohttp")
     path = tmp_path / "www"
@@ -814,6 +818,7 @@ def _ranged_server(root, *, head_requests=None):
         server.server_close()
 
 
+@pytest.mark.network
 def test_http_hdf5_scan_and_warm_slice(tmp_path):
     h5py = pytest.importorskip("h5py")
     data = np.arange(10_000, dtype="int32")
@@ -830,6 +835,7 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
 
 
 @pytest.mark.parametrize("format", ["hdf5", "b2z"])
+@pytest.mark.network
 def test_http_source_cache_across_processes(tmp_path, format):
     data = np.zeros(100, dtype=[("id", "i4"), ("value", "f8")])
     data["id"] = np.arange(len(data))
@@ -881,6 +887,7 @@ def test_http_source_cache_across_processes(tmp_path, format):
         assert head_requests == []
 
 
+@pytest.mark.network
 def test_http_large_hdf5_keeps_range_reads(tmp_path):
     h5py = pytest.importorskip("h5py")
     path = tmp_path / "large-seekable.h5"
@@ -893,6 +900,7 @@ def test_http_large_hdf5_keeps_range_reads(tmp_path):
         assert all(request is not None for request in requests)
 
 
+@pytest.mark.network
 def test_http_hdf5_source_close_closes_session(tmp_path):
     h5py = pytest.importorskip("h5py")
     data = np.arange(10_000, dtype="int32")
@@ -923,6 +931,7 @@ def test_http_hdf5_source_close_closes_session(tmp_path):
             sparse.get_chunk(0)
 
 
+@pytest.mark.network
 def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):
     h5py = pytest.importorskip("h5py")
     import blosc2.hdf5_source as hdf5_source
@@ -947,6 +956,7 @@ def test_http_hdf5_scan_closes_owned_session(tmp_path, monkeypatch):
         assert created[0]._session.closed
 
 
+@pytest.mark.network
 def test_http_hdf5_failed_init_closes_owned_session(tmp_path, monkeypatch):
     h5py = pytest.importorskip("h5py")
     import blosc2.hdf5_source as hdf5_source
@@ -978,6 +988,7 @@ def test_http_hdf5_failed_init_closes_owned_session(tmp_path, monkeypatch):
         assert created[1]._session.closed
 
 
+@pytest.mark.network
 def test_http_hdf5_source_finalizer_closes_session(tmp_path):
     h5py = pytest.importorskip("h5py")
     data = np.arange(10_000, dtype="int32")
@@ -993,6 +1004,7 @@ def test_http_hdf5_source_finalizer_closes_session(tmp_path):
         assert session.closed
 
 
+@pytest.mark.network
 def test_http_store_disk_reopen_and_transport_close(tmp_path):
     h5py = pytest.importorskip("h5py")
     data = np.arange(10_000, dtype="int32")
