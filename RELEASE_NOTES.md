@@ -2,18 +2,56 @@
 
 ## Changes from 4.14.0 to 4.14.1
 
-XXX version-specific blurb XXX
+Python-Blosc2 4.14.1 is a security and feature release introducing safe
+persisted-object deserialization by default, Caterva2 remote stores and
+tables, compressed slicing for `RemoteArray`, and optimized expression
+gather performance.
 
 ### Safe persisted-object deserialization
 
-- Persisted-input APIs now default to ``deserialize="safe"``. This includes
-  ``open()``, ``load()``, CFrame constructors, store traversal, and CTable
-  variable-length columns. Safe mode rejects embedded objects, references,
-  remote/source descriptors, proxies, and lazy recipes before reconstruction.
+- Persisted-input APIs now default to `deserialize="safe"`. This includes
+  `open()`, `load()`, `from_cframe()`, CFrame constructors (`CFrameNDArray`,
+  `CFrameCTable`), store traversal (`TreeStore`, `DictStore`, `EmbedStore`),
+  and CTable variable-length and batch columns. Safe mode rejects embedded
+  objects, references, remote/source descriptors, proxies, and lazy recipes
+  before reconstruction.
 - Trusted callers that intentionally use rich persisted values must pass
-  ``deserialize="full"`` explicitly. Blocked values raise the new public
-  ``UnsafeDeserializationError``. This default change is intentionally
+  `deserialize="full"` explicitly. Blocked values raise the new public
+  `UnsafeDeserializationError`. This default change is intentionally
   behavior-breaking for authority-bearing serialized values.
+
+### Caterva2 remote stores and tables
+
+- `blosc2.open()` now opens Caterva2 groups as `RemoteStore` and Caterva2
+  `URLPath` tables as `RemoteCTable`.
+- `RemoteCTable` backed by Caterva2 supports on-demand reads, bounded row
+  slices, column projection (`select()`), iteration, and materialization.
+- Caterva2 tables fetch large row slices and materializations in bounded
+  batches, preventing out-of-memory issues on large datasets. Materializing
+  to `urlpath=` writes batches directly to disk and publishes only after the
+  entire read succeeds.
+- Caterva2 stores bind the active authentication token when opened and isolate
+  disk cache entries per token, ensuring isolation across accounts.
+
+### Compressed slicing for RemoteArray
+
+- Added `RemoteArray.slice(item=(), **kwargs)` to extract a requested selection
+  directly as an independent compressed `NDArray` without assembling the
+  complete selection as an uncompressed NumPy array.
+- Output-construction keyword arguments such as `cparams` are forwarded directly
+  to `NDArray.slice`.
+- Fetching, compressed result assembly, and cache eviction are serialized into
+  a single atomic operation, allowing selections to exceed the cache memory
+  budget without cached chunks disappearing mid-construction.
+
+### Performance improvements
+
+- Avoided zeroing full NumPy input blocks in `aux_miniexpr` during expression
+  gather operations (#728, PR #728). Full blocks are overwritten directly by
+  raw NumPy gather, keeping zero-padding only for partial edge blocks.
+  Thanks to @Johnny-Kao.
+- Sped up remote Caterva2 table verification in tests with column-wise
+  comparisons and boundary row sampling.
 
 ## Changes from 4.13.1 to 4.14.0
 
