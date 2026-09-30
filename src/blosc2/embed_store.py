@@ -16,6 +16,7 @@ import numpy as np
 
 import blosc2
 from blosc2.c2array import C2Array
+from blosc2.deserialization import DeserializeMode, get_deserialize, set_deserialize
 from blosc2.msgpack_utils import msgpack_unpackb
 
 if TYPE_CHECKING:
@@ -103,6 +104,7 @@ class EmbedStore:
         *,
         mmap_mode: str | None = None,
         meta: dict | None = None,
+        deserialize: str | None = None,
     ):
         """Initialize EmbedStore."""
 
@@ -118,6 +120,8 @@ class EmbedStore:
         self.mmap_mode = mmap_mode
 
         if _from_schunk is not None:
+            if deserialize is not None:
+                set_deserialize(_from_schunk, deserialize)
             self.urlpath = _from_schunk.urlpath
             self.cparams = _from_schunk.cparams
             self.dparams = _from_schunk.dparams
@@ -154,6 +158,7 @@ class EmbedStore:
             self._store = blosc2.blosc2_ext.open(
                 urlpath, mode=mode, offset=0, mmap_mode=mmap_mode, locking=self.storage.locking
             )
+            set_deserialize(self._store, DeserializeMode.SAFE if deserialize is None else deserialize)
             self.storage.meta = self._store.meta
             self._set_shared(self.storage.locking)
             self._load_metadata()
@@ -163,10 +168,12 @@ class EmbedStore:
         _cparams.typesize = 1  # ensure typesize is set to 1 for byte storage
         _storage = self.storage
         _storage.meta = meta if meta is not None else {"b2embed": {"version": 1}}
+        effective_deserialize = DeserializeMode.FULL if deserialize is None else deserialize
         if self._schunk_store:
             self._store = blosc2.SChunk(
                 chunksize=chunksize,
                 data=None,
+                deserialize=effective_deserialize,
                 cparams=_cparams,
                 dparams=self.dparams,
                 storage=_storage,
@@ -179,6 +186,8 @@ class EmbedStore:
                 dparams=self.dparams,
                 storage=_storage,
             )
+        if not self._schunk_store:
+            set_deserialize(self._backing_schunk, effective_deserialize)
         self._embed_map: dict = {}
         self._current_offset = 0
         self._set_shared(self.storage.locking)
@@ -220,7 +229,7 @@ class EmbedStore:
         tick = sc.change_tick
         if tick == self._meta_tick:
             return
-        metadata = msgpack_unpackb(raw)
+        metadata = msgpack_unpackb(raw, deserialize=get_deserialize(sc))
         self._embed_map = metadata["embed_map"]
         self._current_offset = metadata["current_offset"]
         self._meta_tick = tick
@@ -305,10 +314,16 @@ class EmbedStore:
 
         if urlbase:
             # Outside the lock: opening a C2Array involves an HTTP round trip
-            return blosc2.open(blosc2.URLPath(node_info["path"], urlbase=urlbase), mode="r")
+            if get_deserialize(self._backing_schunk) is DeserializeMode.SAFE:
+                raise blosc2.UnsafeDeserializationError("c2array", location=f"EmbedStore key {key!r}")
+            return blosc2.open(
+                blosc2.URLPath(node_info["path"], urlbase=urlbase), mode="r", deserialize="full"
+            )
         # It is safer to copy data here, as the reference to the SChunk may disappear
         # Use from_cframe so we can deserialize either an NDArray or an SChunk
-        return blosc2.from_cframe(serialized_data, copy=True)
+        return blosc2.from_cframe(
+            serialized_data, copy=True, deserialize=get_deserialize(self._backing_schunk)
+        )
 
     def get(
         self, key: str, default: Any = None
@@ -394,7 +409,7 @@ class EmbedStore:
         return False
 
 
-def estore_from_cframe(cframe: bytes, copy: bool = False) -> EmbedStore:
+def estore_from_cframe(cframe: bytes, copy: bool = False, *, deserialize: str = "safe") -> EmbedStore:
     """
     Deserialize a CFrame to an EmbedStore object.
 
@@ -410,8 +425,8 @@ def estore_from_cframe(cframe: bytes, copy: bool = False) -> EmbedStore:
     estore : EmbedStore
         The deserialized EmbedStore object.
     """
-    schunk = blosc2.schunk_from_cframe(cframe, copy=copy)
-    return EmbedStore(_from_schunk=schunk)
+    schunk = blosc2.schunk_from_cframe(cframe, copy=copy, deserialize=deserialize)
+    return EmbedStore(_from_schunk=schunk, deserialize=deserialize)
 
 
 if __name__ == "__main__":

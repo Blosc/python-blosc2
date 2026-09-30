@@ -31,6 +31,8 @@ from blosc2.core import (
     normalize_urlpath,
     parse_container_url,
 )
+from blosc2.deserialization import DeserializeMode, get_deserialize, normalize_deserialize, set_deserialize
+from blosc2.exceptions import UnsafeDeserializationError
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -126,7 +128,10 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
                 # Return all the vlmetalayers
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
-        return msgpack_unpackb(super().get_vlmeta(name))
+        try:
+            return msgpack_unpackb(super().get_vlmeta(name), deserialize=get_deserialize(self._owner))
+        except UnsafeDeserializationError as exc:
+            raise UnsafeDeserializationError(exc.kind, location=f"variable metadata key {name!r}") from exc
 
     def __delitem__(self, name):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -215,7 +220,13 @@ class Meta(Mapping):
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
         if self.__contains__(item):
-            return msgpack_unpackb(blosc2_ext.meta__getitem__(self.schunk, item))
+            try:
+                return msgpack_unpackb(
+                    blosc2_ext.meta__getitem__(self.schunk, item),
+                    deserialize=get_deserialize(self.schunk),
+                )
+            except UnsafeDeserializationError as exc:
+                raise UnsafeDeserializationError(exc.kind, location=f"fixed metadata key {item!r}") from exc
         else:
             raise KeyError(f"{item} not found")
 
@@ -258,6 +269,8 @@ class SChunk(blosc2_ext.SChunk):
         self,
         chunksize: int | None = None,
         data: object = None,
+        *,
+        deserialize: str | DeserializeMode | None = None,
         **kwargs: dict | blosc2.CParams | blosc2.Storage | blosc2.DParams,
     ) -> None:
         """Create a new super-chunk, or open an existing one.
@@ -380,6 +393,8 @@ class SChunk(blosc2_ext.SChunk):
             kwargs["dparams"] = asdict(kwargs.get("dparams"))
 
         urlpath = normalize_urlpath(kwargs.get("urlpath"))
+        mode = kwargs.get("mode", "a")
+        opens_existing = urlpath is not None and mode in ("r", "a") and os.path.exists(urlpath)
         if urlpath is not None:
             kwargs["urlpath"] = urlpath
         if is_fsspec_url(urlpath):
@@ -431,6 +446,9 @@ class SChunk(blosc2_ext.SChunk):
                 chunksize = 2**28
 
         super().__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
+        if deserialize is not None or sc is None:
+            default = DeserializeMode.SAFE if opens_existing else DeserializeMode.FULL
+            set_deserialize(self, default if deserialize is None else deserialize)
         self._vlmeta = vlmeta(self, super().c_schunk)
         self._cparams = super().get_cparams()
         self._dparams = super().get_dparams()
@@ -1807,26 +1825,26 @@ def _meta_from_store(urlpath, offset):
     return None
 
 
-def _store_from_extension(urlpath, mode, offset, **kwargs):
+def _store_from_extension(urlpath, mode, offset, *, deserialize=DeserializeMode.SAFE, **kwargs):
     """Dispatch to the right store constructor based on file extension."""
     if urlpath.endswith(".b2d"):
         if offset != 0:
             raise ValueError("Offset must be 0 for DictStore")
         from blosc2.dict_store import DictStore
 
-        return DictStore(urlpath, mode=mode, **kwargs)
+        return DictStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
     if urlpath.endswith(".b2z"):
         if offset != 0:
             raise ValueError("Offset must be 0 for TreeStore")
         from blosc2.tree_store import TreeStore
 
-        return TreeStore(urlpath, mode=mode, **kwargs)
+        return TreeStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
     if urlpath.endswith(".b2e"):
         if offset != 0:
             raise ValueError("Offset must be 0 for EmbedStore")
         from blosc2.embed_store import EmbedStore
 
-        return EmbedStore(urlpath, mode=mode, **kwargs)
+        return EmbedStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
     return None
 
 
@@ -1840,7 +1858,7 @@ def _resolve_store_alias(urlpath):
     return urlpath
 
 
-def _open_special_store(urlpath, mode, offset, **kwargs):
+def _open_special_store(urlpath, mode, offset, *, deserialize=DeserializeMode.SAFE, **kwargs):
     # Meta-based detection has priority over extension
     schunk_meta = _meta_from_store(urlpath, offset)
     if schunk_meta is not None:
@@ -1855,21 +1873,21 @@ def _open_special_store(urlpath, mode, offset, **kwargs):
                 raise ValueError("Offset must be 0 for EmbedStore")
             from blosc2.embed_store import EmbedStore
 
-            return EmbedStore(urlpath, mode=mode, **kwargs)
+            return EmbedStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
         if "b2dict" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for DictStore")
             from blosc2.dict_store import DictStore
 
-            return DictStore(urlpath, mode=mode, **kwargs)
+            return DictStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
         if "b2tree" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for TreeStore")
             from blosc2.tree_store import TreeStore
 
-            return TreeStore(urlpath, mode=mode, **kwargs)
+            return TreeStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
 
-    return _store_from_extension(urlpath, mode, offset, **kwargs)
+    return _store_from_extension(urlpath, mode, offset, deserialize=deserialize, **kwargs)
 
 
 def _set_default_dparams(kwargs):
@@ -1946,14 +1964,22 @@ def _reconstruct_legacy_proxy(proxy_cache, proxy_src):
     return None
 
 
-def process_opened_object(res):
+def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
+    deserialize = normalize_deserialize(deserialize)
+    set_deserialize(res, deserialize)
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
+        if deserialize is DeserializeMode.SAFE:
+            raise UnsafeDeserializationError("proxy")
         proxy = _reconstruct_legacy_proxy(res, meta["proxy-source"])
         if proxy is not None:
             return proxy
 
     if "b2o" in meta:
+        if deserialize is DeserializeMode.SAFE:
+            marker = meta["b2o"]
+            kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"
+            raise UnsafeDeserializationError(str(kind))
         return blosc2.open_b2object(res)
 
     if "listarray" in meta:
@@ -1972,6 +1998,8 @@ def process_opened_object(res):
         return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
+        if deserialize is DeserializeMode.SAFE:
+            raise UnsafeDeserializationError("LazyArray")
         return blosc2.open_lazyarray(res)
     else:
         return res
@@ -2242,17 +2270,19 @@ def _validate_non_lazy_fsspec_options(immutable_present, remote_array_options, c
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
 
 
-def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, hdf5_index):
+def _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, hdf5_index, deserialize):
     """Dispatch an already-localized fsspec container with its original selection."""
     if source_format == "b2z":
         # The localized archive is a plain local TreeStore now, and an
         # explicit B2Z selection must not be guessed back from its name.
         from blosc2.tree_store import TreeStore
 
-        return _open_treestore_root_object(TreeStore(localized, mode=mode), localized, mode)
+        return _open_treestore_root_object(
+            TreeStore(localized, mode=mode, deserialize=deserialize), localized, mode
+        )
     if dataset is not None or hdf5_index is not None:
         raise NotImplementedError("dataset and hdf5_index are only supported with lazy=True")
-    return open(localized, mode, offset, **kwargs)
+    return open(localized, mode, offset, deserialize=deserialize, **kwargs)
 
 
 def _infer_lazy(lazy: bool, dataset, source_format, urlpath: str) -> bool:
@@ -2386,7 +2416,7 @@ def _resolve_local_cache_lazy(local_source, cache_dir, cache_path, lazy, assume_
     return True if lazy is None else lazy
 
 
-def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
+def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict, deserialize=DeserializeMode.SAFE):
     """Open a container living behind an fsspec URL.
 
     Without lazy access, the whole object is fetched in one go and rebuilt in
@@ -2453,7 +2483,9 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     if cache_dir is not None:
         localized = localize_fsspec_url(urlpath, cache_dir, storage_options=storage_options)
-        return _open_localized_fsspec(localized, mode, offset, kwargs, source_format, dataset, hdf5_index)
+        return _open_localized_fsspec(
+            localized, mode, offset, kwargs, source_format, dataset, hdf5_index, deserialize
+        )
 
     if source_format == "b2z":
         raise NotImplementedError(
@@ -2473,7 +2505,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
             "passing cache_dir= to fetch them locally first"
         )
     with fsspec_open(urlpath, "rb", storage_options=storage_options) as f:
-        return blosc2.from_cframe(f.read())
+        return blosc2.from_cframe(f.read(), deserialize=deserialize)
 
 
 def _open_remote_b2z(urlpath, options):
@@ -2676,21 +2708,25 @@ def _should_use_fsspec_opener(urlpath, kwargs):
     return is_fsspec_url(urlpath) or _is_container_open_request(urlpath, kwargs) or local_cache_requested
 
 
-def _try_open_special_store(urlpath: str, mode: str, offset: int, kwargs: dict):
+def _try_open_special_store(
+    urlpath: str, mode: str, offset: int, kwargs: dict, deserialize=DeserializeMode.SAFE
+):
     if urlpath.endswith((".b2d", ".b2z", ".b2e")):
-        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        special = _open_special_store(urlpath, mode, offset, deserialize=deserialize, **kwargs)
         special = _finalize_special_open(special, urlpath, mode)
         if special is not None:
             return special
     return None
 
 
-def _try_open_aliased_store(urlpath: str, mode: str, offset: int, kwargs: dict):
+def _try_open_aliased_store(
+    urlpath: str, mode: str, offset: int, kwargs: dict, deserialize=DeserializeMode.SAFE
+):
     resolved_urlpath = _resolve_store_alias(urlpath)
     special_path = (
         resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
     )
-    special = _open_special_store(special_path, mode, offset, **kwargs)
+    special = _open_special_store(special_path, mode, offset, deserialize=deserialize, **kwargs)
     special = _finalize_special_open(special, special_path, mode)
     return special, special_path
 
@@ -2750,6 +2786,7 @@ def open(  # noqa: C901
     *,
     path: str | None = None,
     shared_cache: bool = False,
+    deserialize: str = "safe",
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2818,6 +2855,11 @@ def open(  # noqa: C901
         table/store owner; ``max_cache_bytes=None`` disables eviction.
         This does not bound total disk usage or peak RAM. Authenticated Caterva2
         users must use separate cache directories; tokens are not persisted.
+    deserialize: {"safe", "full"}, optional
+        Policy for values discovered inside persisted input. The default,
+        ``"safe"``, allows passive values but rejects references, embedded
+        objects, proxies, and lazy recipes before reconstruction. Use ``"full"``
+        only for trusted data that intentionally contains these values.
     kwargs: dict, optional
         lazy: bool or None, optional
             ``None`` (the default) automatically selects the access mode. ``True``
@@ -3020,6 +3062,7 @@ def open(  # noqa: C901
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    deserialize = normalize_deserialize(deserialize)
     dataset = blosc2.core.resolve_dataset_path(dataset, path)
     if kwargs.get("source_format") == "parquet" or (
         isinstance(urlpath, (str, pathlib.Path))
@@ -3071,12 +3114,14 @@ def open(  # noqa: C901
             if dataset is not None or hdf5_index is not None:
                 raise ValueError("dataset and hdf5_index cannot be combined with an embedded frame offset")
             _set_default_dparams(kwargs)
-            return process_opened_object(blosc2_ext.open(local_path, mode, offset, **kwargs))
+            return process_opened_object(
+                blosc2_ext.open(local_path, mode, offset, **kwargs), deserialize=deserialize
+            )
 
     urlpath = _normalize_open_target(urlpath, kwargs, dataset, hdf5_index)
 
     if _should_use_fsspec_opener(urlpath, kwargs):
-        return _open_fsspec_url(urlpath, mode, offset, kwargs)
+        return _open_fsspec_url(urlpath, mode, offset, kwargs, deserialize)
 
     # The native local opener does not consume the public lazy option.
     kwargs.pop("lazy", None)
@@ -3087,7 +3132,7 @@ def open(  # noqa: C901
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the
     # more expensive store probing when that fails.
-    special = _try_open_special_store(urlpath, mode, offset, kwargs)
+    special = _try_open_special_store(urlpath, mode, offset, kwargs, deserialize)
     if special is not None:
         return special
 
@@ -3099,9 +3144,9 @@ def open(  # noqa: C901
         except Exception as exc:
             regular_exc = exc
         else:
-            return process_opened_object(res)
+            return process_opened_object(res, deserialize=deserialize)
 
-    special, special_path = _try_open_aliased_store(urlpath, mode, offset, kwargs)
+    special, special_path = _try_open_aliased_store(urlpath, mode, offset, kwargs, deserialize)
     if special is not None:
         return special
 
@@ -3113,12 +3158,14 @@ def open(  # noqa: C901
     _set_default_dparams(kwargs)
     res = blosc2_ext.open(special_path, mode, offset, **kwargs)
 
-    return process_opened_object(res)
+    return process_opened_object(res, deserialize=deserialize)
 
 
 def load(
     urlpath: str | pathlib.Path,
     offset: int = 0,
+    *,
+    deserialize: str = "safe",
     **kwargs: dict,
 ):
     """Load a persistent Blosc2 object into memory.
@@ -3135,6 +3182,8 @@ def load(
     offset: int, optional
         Offset in the file where the object is located.  This is mainly useful
         for SChunk/NDArray objects embedded in a larger file.
+    deserialize: {"safe", "full"}, optional
+        Deserialization policy for the persisted object. Defaults to ``"safe"``.
     kwargs: dict, optional
         Additional read-time keyword arguments passed to :func:`open`, such as
         ``dparams``.
@@ -3161,7 +3210,8 @@ def load(
     True
     >>> blosc2.remove_urlpath("example.b2nd")
     """
-    opened = open(urlpath, mode="r", offset=offset, **kwargs)
+    deserialize = normalize_deserialize(deserialize)
+    opened = open(urlpath, mode="r", offset=offset, deserialize=deserialize, **kwargs)
 
     if isinstance(opened, blosc2.CTable):
         storage = getattr(opened, "_storage", None)
@@ -3169,13 +3219,15 @@ def load(
         close = getattr(opened, "close", None)
         if close is not None:
             close()
-        return blosc2.CTable.load(str(root))
+        return blosc2.CTable.load(str(root), deserialize=deserialize)
 
     if isinstance(opened, blosc2.NDArray):
-        return opened.copy()
+        result = opened.copy()
+        set_deserialize(result, deserialize)
+        return result
 
     if isinstance(opened, blosc2.SChunk):
-        return blosc2.schunk_from_cframe(opened.to_cframe())
+        return blosc2.schunk_from_cframe(opened.to_cframe(), deserialize=deserialize)
 
     if isinstance(opened, blosc2.ListArray | blosc2.BatchArray | blosc2.ObjectArray):
         return opened.copy()

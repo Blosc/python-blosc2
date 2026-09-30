@@ -6,6 +6,29 @@ Msgpack Serialization
 python-blosc2 uses msgpack as the default serializer for :class:`ObjectArray` and
 for the default ``"msgpack"`` mode of :class:`BatchArray`.
 
+Safe deserialization
+--------------------
+
+APIs that consume persisted data, including :func:`blosc2.open`,
+:func:`blosc2.load`, and :func:`blosc2.from_cframe`, default to
+``deserialize="safe"``.  Safe mode accepts passive MessagePack values but rejects
+embedded CFrames, references, remote objects, proxies, and lazy recipes before
+reconstructing them.  The resulting policy also applies to later item and
+metadata access.
+
+Trusted applications that intentionally persist these richer values must opt in
+at the input boundary:
+
+.. code-block:: python
+
+    objects = blosc2.open("trusted-objects.b2f", deserialize="full")
+    value = objects[0]
+
+An unsafe value raises :class:`blosc2.UnsafeDeserializationError` with an
+actionable message.  ``deserialize="safe"`` does not prevent access to the path
+or URL explicitly supplied by the caller, and it does not replace byte, memory,
+CPU, nesting, timeout, or concurrency limits for untrusted inputs.
+
 Two MessagePack extension codes are reserved by python-blosc2:
 
 - ``42``: Blosc2 objects serialized by value as CFrames
@@ -14,7 +37,7 @@ Two MessagePack extension codes are reserved by python-blosc2:
 CFrame-backed objects
 ---------------------
 
-The following objects are serialized by value using
+In ``deserialize="full"`` mode, the following objects are serialized by value using
 :meth:`to_cframe` / :func:`blosc2.from_cframe`:
 
 - ``NDArray``

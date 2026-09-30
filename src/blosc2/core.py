@@ -2197,7 +2197,9 @@ def remove_urlpath(path: str) -> None:
         blosc2_ext.remove_urlpath(path)
 
 
-def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk:
+def schunk_from_cframe(
+    cframe: bytes | str, copy: bool = False, *, deserialize: str = "safe"
+) -> blosc2.SChunk:
     """Create a :ref:`SChunk <SChunk>` instance from a contiguous frame buffer.
 
     Parameters
@@ -2208,6 +2210,8 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
         Whether to internally make a copy. If `False` (the default), the
         returned SChunk points into `cframe`'s buffer and keeps a reference
         to it, so the buffer lives for as long as the SChunk does.
+    deserialize: {"safe", "full"}, optional
+        Policy used by later metadata access. Defaults to ``"safe"``.
 
     Returns
     -------
@@ -2241,7 +2245,10 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
     >>> print("Expected slice:", expected_slice)
     Expected slice: [1000 1001 1002 1003 1004]
     """
+    from blosc2.deserialization import set_deserialize
+
     schunk = blosc2_ext.schunk_from_cframe(cframe, copy)
+    set_deserialize(schunk, deserialize)
     if not copy:
         # Zero-copy: the C schunk's data points INTO `cframe`'s buffer
         # (avoid_cframe_free only prevents the double-free); pin the buffer
@@ -2250,7 +2257,9 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
     return schunk
 
 
-def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArray:
+def ndarray_from_cframe(
+    cframe: bytes | str, copy: bool = False, *, deserialize: str = "safe"
+) -> blosc2.NDArray:
     """Create a :ref:`NDArray <NDArray>` instance from a contiguous frame buffer.
 
     Parameters
@@ -2261,6 +2270,8 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
         Whether to internally make a copy. If `False` (the default), the
         returned NDArray points into `cframe`'s buffer and keeps a reference
         to it, so the buffer lives for as long as the NDArray does.
+    deserialize: {"safe", "full"}, optional
+        Policy used by later metadata access. Defaults to ``"safe"``.
 
     Returns
     -------
@@ -2271,7 +2282,10 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
     --------
     :func:`~blosc2.NDArray.to_cframe`
     """
+    from blosc2.deserialization import set_deserialize
+
     arr = blosc2_ext.ndarray_from_cframe(cframe, copy)
+    set_deserialize(arr, deserialize)
     if not copy:
         # Same zero-copy pin as schunk_from_cframe; on the inner SChunk so
         # both `arr` and a handed-out `arr.schunk` reach it.
@@ -2280,7 +2294,7 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 
 
 def from_cframe(
-    cframe: bytes | str, copy: bool = True
+    cframe: bytes | str, copy: bool = True, *, deserialize: str = "safe"
 ) -> (
     blosc2.EmbedStore
     | blosc2.NDArray
@@ -2304,6 +2318,9 @@ def from_cframe(
         the returned object points into `cframe`'s buffer and keeps a
         reference to it (the buffer lives for as long as the object does),
         saving time/memory at the cost of the buffer staying pinned.
+    deserialize: {"safe", "full"}, optional
+        Deserialization policy for logical objects, nested values, and later
+        metadata/item access. Defaults to ``"safe"``.
 
     Returns
     -------
@@ -2319,21 +2336,29 @@ def from_cframe(
     :func:`~blosc2.schunk.SChunk.from_cframe`
     """
     # Retrieve the SChunk; not doing a copy is cheap
-    schunk = schunk_from_cframe(cframe, copy=False)
+    from blosc2.deserialization import DeserializeMode, normalize_deserialize
+    from blosc2.exceptions import UnsafeDeserializationError
+
+    deserialize = normalize_deserialize(deserialize)
+    schunk = schunk_from_cframe(cframe, copy=False, deserialize=deserialize)
     # Check the metalayer to determine the type
     if "b2embed" in schunk.meta:
-        return blosc2.estore_from_cframe(cframe, copy=copy)
+        return blosc2.estore_from_cframe(cframe, copy=copy, deserialize=deserialize)
     if "listarray" in schunk.meta:
-        return blosc2.ListArray(_from_schunk=schunk_from_cframe(cframe, copy=copy))
+        return blosc2.ListArray(_from_schunk=schunk_from_cframe(cframe, copy=copy, deserialize=deserialize))
     if "batcharray" in schunk.meta:
-        return blosc2.BatchArray(_from_schunk=schunk_from_cframe(cframe, copy=copy))
+        return blosc2.BatchArray(_from_schunk=schunk_from_cframe(cframe, copy=copy, deserialize=deserialize))
     if "vlarray" in schunk.meta:
-        return blosc2.objectarray_from_cframe(cframe, copy=copy)
+        return blosc2.objectarray_from_cframe(cframe, copy=copy, deserialize=deserialize)
     if "b2o" in schunk.meta:
-        return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy))
+        marker = schunk.meta["b2o"]
+        kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"
+        if deserialize is DeserializeMode.SAFE:
+            raise UnsafeDeserializationError(str(kind))
+        return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy, deserialize=deserialize))
     if "b2nd" in schunk.meta:
-        return ndarray_from_cframe(cframe, copy=copy)
-    return schunk_from_cframe(cframe, copy=copy)
+        return ndarray_from_cframe(cframe, copy=copy, deserialize=deserialize)
+    return schunk_from_cframe(cframe, copy=copy, deserialize=deserialize)
 
 
 def register_codec(

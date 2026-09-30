@@ -19,6 +19,7 @@ import numpy as np
 
 import blosc2
 from blosc2.batch_array import BatchArray
+from blosc2.deserialization import get_deserialize
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.objectarray import ObjectArray
 from blosc2.schema import DictionarySpec, ListSpec, SchemaSpec, StructSpec, timestamp
@@ -726,6 +727,7 @@ class ListArray:
         ListArray
             A new standalone copy.
         """
+        kwargs.setdefault("deserialize", get_deserialize(self.schunk))
         if self.spec.storage == "batch" and not self._pending_cells and "cparams" not in kwargs:
             return self._copy_fast_batch(**kwargs)
 

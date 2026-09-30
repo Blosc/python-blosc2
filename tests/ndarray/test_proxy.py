@@ -92,10 +92,10 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     del b
     if urlpath is None:
         with pytest.raises(RuntimeError):
-            _ = blosc2.open(proxy_urlpath, mode="a")
+            _ = blosc2.open(proxy_urlpath, mode="a", deserialize="full")
     else:
-        b = blosc2.open(proxy_urlpath, mode="a")
-        a = blosc2.open(urlpath, mode="r")
+        b = blosc2.open(proxy_urlpath, mode="a", deserialize="full")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
         if not struct_dtype:
             np.testing.assert_almost_equal(b[...], a[...])
         else:
@@ -118,7 +118,7 @@ def test_readonly_proxy_keeps_both_readonly(tmp_path):
     cached_size = proxy_path.stat().st_size
     del proxy, source
 
-    readonly = blosc2.open(proxy_path)
+    readonly = blosc2.open(proxy_path, deserialize="full")
 
     assert readonly.schunk.mode == "r"
     assert readonly.schunk.vlmeta.mode == "r"
@@ -126,7 +126,7 @@ def test_readonly_proxy_keeps_both_readonly(tmp_path):
     np.testing.assert_array_equal(readonly[:], data)
     assert proxy_path.stat().st_size == cached_size
 
-    with blosc2.open(proxy_path) as readonly_ctx:
+    with blosc2.open(proxy_path, deserialize="full") as readonly_ctx:
         assert isinstance(readonly_ctx, blosc2.Proxy)
         np.testing.assert_array_equal(readonly_ctx[:], data)
 
@@ -407,6 +407,6 @@ def test_caterva2_env_cache_reopens_as_raw_array(tmp_path):
     path = tmp_path / "server-cache.b2nd"
     proxy = blosc2.Proxy(blosc2.asarray(data), urlpath=path, caterva2_env=True)
     proxy.fetch()
-    reopened = blosc2.open(path)
+    reopened = blosc2.open(path, deserialize="full")
     assert isinstance(reopened, blosc2.NDArray)
     np.testing.assert_array_equal(reopened[:], data)

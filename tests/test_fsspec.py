@@ -37,11 +37,11 @@ def test_open_memory_url():
     with fsspec.open("memory://x.b2nd", "wb") as f:
         f.write(a.to_cframe())
 
-    b = blosc2.open("memory://x.b2nd")
+    b = blosc2.open("memory://x.b2nd", deserialize="full")
     assert isinstance(b, blosc2.RemoteArray)
     assert np.array_equal(b[:], a[:])
 
-    eager = blosc2.open("memory://x.b2nd", lazy=False)
+    eager = blosc2.open("memory://x.b2nd", lazy=False, deserialize="full")
     assert isinstance(eager, blosc2.NDArray)
     assert np.array_equal(eager[:], a[:])
 
@@ -62,7 +62,7 @@ def test_save_tensor_to_url():
 def test_save_ndarray_to_url():
     a = blosc2.arange(0, 100, dtype="i4", shape=(10, 10), chunks=(5, 10))
     a.save("memory://sv.b2nd")
-    b = blosc2.open("memory://sv.b2nd")
+    b = blosc2.open("memory://sv.b2nd", deserialize="full")
     assert np.array_equal(b[:], a[:])
     assert b.chunks == a.chunks
 
@@ -70,13 +70,13 @@ def test_save_ndarray_to_url():
 def test_module_save_to_url():
     a = blosc2.arange(0, 50, dtype="f8")
     blosc2.save(a, "memory://sv2.b2nd")
-    assert np.array_equal(blosc2.open("memory://sv2.b2nd")[:], a[:])
+    assert np.array_equal(blosc2.open("memory://sv2.b2nd", deserialize="full")[:], a[:])
 
 
 def test_save_to_url_honours_cparams():
     a = blosc2.arange(0, 100, dtype="i4", shape=(10, 10), chunks=(5, 10))
     a.save("memory://sv3.b2nd", cparams=blosc2.CParams(codec=blosc2.Codec.LZ4))
-    b = blosc2.open("memory://sv3.b2nd", lazy=False)
+    b = blosc2.open("memory://sv3.b2nd", lazy=False, deserialize="full")
     assert b.schunk.cparams.codec == blosc2.Codec.LZ4
     assert np.array_equal(b[:], a[:])
 
@@ -110,7 +110,7 @@ def test_schunk_roundtrip():
     with fsspec.open("memory://s.b2f", "wb") as f:
         f.write(schunk.to_cframe())
 
-    sc = blosc2.open("memory://s.b2f")
+    sc = blosc2.open("memory://s.b2f", deserialize="full")
     assert isinstance(sc, blosc2.SChunk)
     assert sc.nbytes == schunk.nbytes
 
@@ -124,34 +124,34 @@ def test_chained_url(tmp_path):
     with zipfile.ZipFile(zippath, "w") as zf:
         zf.writestr("inner.b2nd", a.to_cframe())
 
-    b = blosc2.open(f"zip://inner.b2nd::file://{zippath}")
+    b = blosc2.open(f"zip://inner.b2nd::file://{zippath}", deserialize="full")
     assert np.array_equal(b[:], a[:])
 
 
 @pytest.mark.parametrize("mode", ["a", "w"])
 def test_mode_not_supported(mode):
     with pytest.raises(NotImplementedError):
-        blosc2.open("memory://x.b2nd", mode=mode, cache_dir="/tmp/nope")
+        blosc2.open("memory://x.b2nd", mode=mode, cache_dir="/tmp/nope", deserialize="full")
 
 
 def test_offset_needs_cache():
     with pytest.raises(NotImplementedError, match="cache_dir"):
-        blosc2.open("memory://x.b2nd", offset=32)
+        blosc2.open("memory://x.b2nd", offset=32, deserialize="full")
 
 
 def test_mmap_needs_cache():
     with pytest.raises(NotImplementedError, match="cache_dir"):
-        blosc2.open("memory://x.b2nd", mmap_mode="r")
+        blosc2.open("memory://x.b2nd", mmap_mode="r", deserialize="full")
 
 
 def test_dir_container_needs_cache():
     with pytest.raises(NotImplementedError, match="cache_dir"):
-        blosc2.open("memory://store.b2d")
+        blosc2.open("memory://store.b2d", deserialize="full")
 
 
 def test_dir_container_with_query_needs_cache():
     with pytest.raises(NotImplementedError, match="cache_dir"):
-        blosc2.open("memory://store.b2d?version=1")
+        blosc2.open("memory://store.b2d?version=1", deserialize="full")
 
 
 def test_cached_open(tmp_path):
@@ -159,7 +159,7 @@ def test_cached_open(tmp_path):
     with fsspec.open("memory://c.b2nd", "wb") as f:
         f.write(a.to_cframe())
 
-    b = blosc2.open("memory://c.b2nd", cache_dir=tmp_path)
+    b = blosc2.open("memory://c.b2nd", cache_dir=tmp_path, deserialize="full")
     assert isinstance(b, blosc2.RemoteArray)
     assert np.array_equal(b[:], a[:])
     assert next(tmp_path.glob("c.b2nd--*/c.b2nd")).is_file()
@@ -171,7 +171,7 @@ def test_cached_open_is_local(tmp_path):
     with fsspec.open("memory://m.b2nd", "wb") as f:
         f.write(a.to_cframe())
 
-    b = blosc2.open("memory://m.b2nd", cache_dir=tmp_path, mmap_mode="r")
+    b = blosc2.open("memory://m.b2nd", cache_dir=tmp_path, mmap_mode="r", deserialize="full")
     assert np.array_equal(b[:], a[:])
 
 
@@ -187,21 +187,21 @@ def test_cache_hit_avoids_refetch(tmp_path, monkeypatch):
         memfs, "_open", lambda self, path, *a, **kw: (fetches.append(path), orig(self, path, *a, **kw))[1]
     )
 
-    blosc2.open("memory://h.b2nd", lazy=False, cache_dir=tmp_path)
+    blosc2.open("memory://h.b2nd", lazy=False, cache_dir=tmp_path, deserialize="full")
     assert len(fetches) == 1
     assert next(tmp_path.glob("h.b2nd--*/h.b2nd")).is_file()
-    blosc2.open("memory://h.b2nd", lazy=False, cache_dir=tmp_path)
+    blosc2.open("memory://h.b2nd", lazy=False, cache_dir=tmp_path, deserialize="full")
     assert len(fetches) == 1
 
 
 def test_cache_refetches_when_remote_changes(tmp_path):
     with fsspec.open("memory://s.b2nd", "wb") as f:
         f.write(blosc2.arange(10, dtype="i4").to_cframe())
-    assert blosc2.open("memory://s.b2nd", lazy=False, cache_dir=tmp_path).shape == (10,)
+    assert blosc2.open("memory://s.b2nd", lazy=False, cache_dir=tmp_path, deserialize="full").shape == (10,)
 
     with fsspec.open("memory://s.b2nd", "wb") as f:
         f.write(blosc2.arange(20, dtype="i4").to_cframe())
-    assert blosc2.open("memory://s.b2nd", lazy=False, cache_dir=tmp_path).shape == (20,)
+    assert blosc2.open("memory://s.b2nd", lazy=False, cache_dir=tmp_path, deserialize="full").shape == (20,)
 
 
 def test_cached_dict_store(tmp_path):
@@ -212,7 +212,7 @@ def test_cached_dict_store(tmp_path):
         dstore["/b"] = blosc2.arange(5, dtype="f8")
     fsspec.filesystem("memory").put(localstore, "memory://store.b2d", recursive=True)
 
-    with blosc2.open("memory://store.b2d", cache_dir=tmp_path / "cache") as dstore:
+    with blosc2.open("memory://store.b2d", cache_dir=tmp_path / "cache", deserialize="full") as dstore:
         assert sorted(dstore.keys()) == ["/a", "/b"]
         assert np.array_equal(dstore["/a"][:], np.arange(10, dtype="i4"))
     assert next((tmp_path / "cache").glob("store.b2d--*"), None) is not None
@@ -225,14 +225,14 @@ def test_cached_dir_refetches_when_remote_changes(tmp_path):
     with blosc2.DictStore(localstore, mode="w") as dstore:
         dstore["/a"] = blosc2.arange(10, dtype="i4")
     memfs.put(localstore, "memory://d.b2d", recursive=True)
-    with blosc2.open("memory://d.b2d", cache_dir=cache) as dstore:
+    with blosc2.open("memory://d.b2d", cache_dir=cache, deserialize="full") as dstore:
         assert list(dstore.keys()) == ["/a"]
 
     with blosc2.DictStore(localstore, mode="a") as dstore:
         dstore["/b"] = blosc2.arange(5, dtype="i4")
     memfs.rm("/d.b2d", recursive=True)
     memfs.put(localstore, "memory://d.b2d", recursive=True)
-    with blosc2.open("memory://d.b2d", cache_dir=cache) as dstore:
+    with blosc2.open("memory://d.b2d", cache_dir=cache, deserialize="full") as dstore:
         assert sorted(dstore.keys()) == ["/a", "/b"]
 
 
@@ -241,7 +241,7 @@ def test_cached_sparse_frame(tmp_path):
     a = blosc2.arange(1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
     fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
 
-    b = blosc2.open("memory://sparse.b2nd", lazy=False, cache_dir=tmp_path / "cache")
+    b = blosc2.open("memory://sparse.b2nd", lazy=False, cache_dir=tmp_path / "cache", deserialize="full")
     assert np.array_equal(b[:], a[:])
 
 
@@ -253,14 +253,14 @@ def _put(name, arr):
 @pytest.mark.parametrize("chunks", [(100,), (37,)])
 def test_lazy_roundtrip(chunks):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=chunks, blocks=(11,))
-    p = blosc2.open(_put("lazy.b2nd", a), lazy=True)
+    p = blosc2.open(_put("lazy.b2nd", a), lazy=True, deserialize="full")
     assert (p.shape, p.chunks, p.blocks, p.dtype) == (a.shape, a.chunks, a.blocks, a.dtype)
     assert np.array_equal(p[:], a[:])
 
 
 def test_lazy_multidim():
     a = blosc2.arange(0, 10000, dtype="f4", shape=(100, 100), chunks=(10, 100))
-    p = blosc2.open(_put("lazy2d.b2nd", a), lazy=True)
+    p = blosc2.open(_put("lazy2d.b2nd", a), lazy=True, deserialize="full")
     assert np.array_equal(p[3:7, 20:30], a[3:7, 20:30])
 
 
@@ -279,7 +279,7 @@ def test_lazy_multidim():
 )
 def test_lazy_special_chunks(arr):
     # Run-length chunks live in the offset itself, with no bytes in the file
-    p = blosc2.open(_put("special.b2nd", arr), lazy=True)
+    p = blosc2.open(_put("special.b2nd", arr), lazy=True, deserialize="full")
     assert p[:].shape == arr.shape
     if arr.dtype.kind == "f":
         assert np.allclose(p[:], arr[:], equal_nan=True)
@@ -290,7 +290,7 @@ def test_lazy_any_clevel(clevel):
     # The frame header's flags are a msgpack *string* of raw bytes, and clevel
     # rides in the high nibble of one of them: from 8 up it is not valid UTF-8
     a = blosc2.arange(0, 10000, dtype="i4", chunks=(1000,), cparams={"clevel": clevel})
-    p = blosc2.open(_put(f"clevel{clevel}.b2nd", a), lazy=True)
+    p = blosc2.open(_put(f"clevel{clevel}.b2nd", a), lazy=True, deserialize="full")
     assert np.array_equal(p[:], a[:])
 
 
@@ -298,7 +298,7 @@ def test_lazy_structured_dtype():
     data = np.zeros(1000, dtype=[("a", "<i4"), ("b", "<f8")])
     data["a"] = np.arange(1000)
     a = blosc2.asarray(data, chunks=(100,), blocks=(10,))
-    p = blosc2.open(_put("struct.b2nd", a), lazy=True)
+    p = blosc2.open(_put("struct.b2nd", a), lazy=True, deserialize="full")
     assert p.dtype == data.dtype
     assert np.array_equal(p[150:250], data[150:250])
 
@@ -307,7 +307,7 @@ def test_lazy_one_request_per_chunk(monkeypatch):
     from fsspec.implementations.memory import MemoryFileSystem
 
     a = blosc2.arange(0, 10000, dtype="i4", shape=(100, 100), chunks=(10, 100))
-    p = blosc2.open(_put("req.b2nd", a), lazy=True)
+    p = blosc2.open(_put("req.b2nd", a), lazy=True, deserialize="full")
 
     calls = []
     orig = MemoryFileSystem.cat_file
@@ -333,7 +333,7 @@ def test_lazy_reads_updated_chunks(tmp_path):
     a[250:350] = 7
 
     fsspec.filesystem("memory").pipe_file("/upd.b2nd", pathlib.Path(localpath).read_bytes())
-    p = blosc2.open("memory://upd.b2nd", lazy=True)
+    p = blosc2.open("memory://upd.b2nd", lazy=True, deserialize="full")
     assert np.array_equal(p[:], a[:])
 
 
@@ -349,7 +349,7 @@ def test_lazy_fetches_only_touched_chunks(monkeypatch):
         lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
     )
 
-    p = blosc2.open(url, lazy=True)
+    p = blosc2.open(url, lazy=True, deserialize="full")
     assert np.array_equal(p[150:250], a[150:250])
     assert fetched == [1, 2]
     # The proxy caches what it fetched, so asking again costs nothing
@@ -361,7 +361,7 @@ def test_lazy_afetch(monkeypatch):
     import asyncio
 
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
-    p = blosc2.open(_put("afetch.b2nd", a), lazy=True)
+    p = blosc2.open(_put("afetch.b2nd", a), lazy=True, deserialize="full")
 
     # aget_chunk must go through the blocking get_chunk in a worker thread.
     # Awaiting an async filesystem's own coroutine instead raises "got Future
@@ -382,7 +382,7 @@ def test_lazy_afetch(monkeypatch):
 
 def test_lazy_fetch_is_serial_when_asked(monkeypatch):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
-    p = blosc2.open(_put("serial.b2nd", a), lazy=True, max_concurrency=1)
+    p = blosc2.open(_put("serial.b2nd", a), lazy=True, max_concurrency=1, deserialize="full")
 
     threads = []
     orig = blosc2.FsspecNDSource.get_chunk
@@ -400,7 +400,7 @@ def test_lazy_fetch_is_serial_when_asked(monkeypatch):
 @pytest.mark.parametrize("kwargs", [{}, {"max_concurrency": 4}], ids=["default", "explicit"])
 def test_lazy_overlaps_fetches(monkeypatch, kwargs):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
-    p = blosc2.open(_put("concurrent.b2nd", a), lazy=True, **kwargs)
+    p = blosc2.open(_put("concurrent.b2nd", a), lazy=True, **kwargs, deserialize="full")
 
     # Each fetch waits for another one to be in flight, so this deadlocks into a
     # BrokenBarrierError if the fetches are actually serial
@@ -475,7 +475,7 @@ def test_lazy_needs_an_ndarray():
     schunk.append_data(np.arange(1000, dtype="u1"))
     fsspec.filesystem("memory").pipe_file("/plain.b2f", schunk.to_cframe())
     with pytest.raises(NotImplementedError, match="b2nd metalayer"):
-        blosc2.open("memory://plain.b2f", lazy=True)
+        blosc2.open("memory://plain.b2f", lazy=True, deserialize="full")
 
 
 def test_lazy_rejects_directories(tmp_path):
@@ -483,13 +483,13 @@ def test_lazy_rejects_directories(tmp_path):
     blosc2.arange(0, 1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
     fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
     with pytest.raises(NotImplementedError, match="cache_dir"):
-        blosc2.open("memory://sparse.b2nd", lazy=True)
+        blosc2.open("memory://sparse.b2nd", lazy=True, deserialize="full")
 
 
 def test_lazy_not_a_frame():
     fsspec.filesystem("memory").pipe_file("/junk.b2nd", b"not a frame at all" * 4)
     with pytest.raises(ValueError, match="contiguous frame"):
-        blosc2.open("memory://junk.b2nd", lazy=True)
+        blosc2.open("memory://junk.b2nd", lazy=True, deserialize="full")
 
 
 def test_lazy_with_cache_dir(tmp_path, monkeypatch):
@@ -504,14 +504,14 @@ def test_lazy_with_cache_dir(tmp_path, monkeypatch):
         lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
     )
 
-    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path, deserialize="full")
     assert p.cache_status == "created"
     assert np.array_equal(p[0:100], a[0:100])
     assert fetched == [0]
     del p
 
     # A later run starts from the chunks the previous one pulled
-    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path, deserialize="full")
     assert p.cache_status == "reused"
     assert np.array_equal(p[0:100], a[0:100])
     assert fetched == [0]
@@ -524,12 +524,12 @@ def test_lazy_with_exact_cache_path(tmp_path):
     url = _put("exactcache.b2nd", a)
     cache_path = tmp_path / "chosen.b2nd"
 
-    p = blosc2.open(url, lazy=True, cache_path=cache_path)
+    p = blosc2.open(url, lazy=True, cache_path=cache_path, deserialize="full")
     assert np.array_equal(p[0:100], a[0:100])
     assert p.cache_path == str(cache_path)
     assert cache_path.is_file()
 
-    q = blosc2.open(url, lazy=True, cache_path=cache_path)
+    q = blosc2.open(url, lazy=True, cache_path=cache_path, deserialize="full")
     assert np.array_equal(q[0:100], a[0:100])
 
 
@@ -537,7 +537,7 @@ def test_exact_cache_path_reopens_as_remote_array(tmp_path, monkeypatch):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
     url = _put("independentcache.b2nd", a)
     cache_path = tmp_path / "independent.b2nd"
-    p = blosc2.open(url, lazy=True, cache_path=cache_path)
+    p = blosc2.open(url, lazy=True, cache_path=cache_path, deserialize="full")
     assert np.array_equal(p[0:100], a[0:100])
     assert p.source["kind"] == "fsspec"
     assert p.source["urlpath"] == url
@@ -551,7 +551,7 @@ def test_exact_cache_path_reopens_as_remote_array(tmp_path, monkeypatch):
         lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
     )
 
-    reopened = blosc2.open(cache_path, mode="a")
+    reopened = blosc2.open(cache_path, mode="a", deserialize="full")
     assert isinstance(reopened, blosc2.RemoteArray)
     assert isinstance(reopened.src, blosc2.FsspecNDSource)
     assert np.array_equal(reopened[0:100], a[0:100])
@@ -578,7 +578,7 @@ def test_legacy_proxy_cache_reopens_as_proxy(tmp_path, monkeypatch):
         lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
     )
 
-    reopened = blosc2.open(cache_path, mode="a")
+    reopened = blosc2.open(cache_path, mode="a", deserialize="full")
     assert isinstance(reopened, blosc2.Proxy)
     assert isinstance(reopened.src, blosc2.FsspecNDSource)
     assert np.array_equal(reopened[0:100], a[0:100])
@@ -590,13 +590,15 @@ def test_legacy_proxy_cache_reopens_as_proxy(tmp_path, monkeypatch):
 def test_remote_cache_options_are_mutually_exclusive(tmp_path):
     url = _put("exclusivecache.b2nd", blosc2.arange(0, 10))
     with pytest.raises(ValueError, match="mutually exclusive"):
-        blosc2.open(url, lazy=True, cache_dir=tmp_path, cache_path=tmp_path / "cache.b2nd")
+        blosc2.open(
+            url, lazy=True, cache_dir=tmp_path, cache_path=tmp_path / "cache.b2nd", deserialize="full"
+        )
 
 
 def test_cache_storage_is_deprecated(tmp_path):
     url = _put("legacycache.b2nd", blosc2.arange(0, 10))
     with pytest.warns(DeprecationWarning, match="use cache_dir"):
-        p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+        p = blosc2.open(url, lazy=True, cache_storage=tmp_path, deserialize="full")
     assert np.array_equal(p[:], np.arange(10))
 
 
@@ -609,28 +611,28 @@ def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     assert len(a.to_cframe()) == len(b.to_cframe())
 
     url = _put("lazystale.b2nd", a)
-    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path, deserialize="full")
     assert np.array_equal(p[0:100], a[0:100])
     del p
 
     # Replacing the frame invalidates both the cached chunks and the offsets
     # they were fetched by, so the cache must be thrown away rather than reused
     _put("lazystale.b2nd", b)
-    p = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    p = blosc2.open(url, lazy=True, cache_dir=tmp_path, deserialize="full")
     assert p.cache_status == "invalidated/rebuilt"
     assert np.array_equal(p[0:100], b[0:100])
 
 
 def test_lazy_offset_not_supported():
     with pytest.raises(NotImplementedError, match="offset"):
-        blosc2.open("memory://x.b2nd", lazy=True, offset=32)
+        blosc2.open("memory://x.b2nd", lazy=True, offset=32, deserialize="full")
 
 
 def test_unknown_protocol():
     # fsspec owns this error; we only check that we do not swallow it into a
     # misleading FileNotFoundError
     with pytest.raises(ValueError):
-        blosc2.open("nosuchproto://bucket/key.b2nd")
+        blosc2.open("nosuchproto://bucket/key.b2nd", deserialize="full")
 
 
 # The stand-in server is not worth running on Windows: an in-process
@@ -655,11 +657,13 @@ def test_http_url_is_read_through_fsspec(tmp_path):
     blosc2.asarray(data, chunks=(50, 200), blocks=(10, 100), urlpath=str(root / "big.b2nd"))
 
     with _ranged_server(root) as (urlbase, requests):
-        whole = blosc2.open(f"{urlbase}/big.b2nd")  # fetched in one go, as s3:// is
+        whole = blosc2.open(f"{urlbase}/big.b2nd", deserialize="full")  # fetched in one go, as s3:// is
         assert np.array_equal(whole[:], data)
 
         requests.clear()
-        lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_dir=str(tmp_path / "cs"))
+        lazy = blosc2.open(
+            f"{urlbase}/big.b2nd", lazy=True, cache_dir=str(tmp_path / "cs"), deserialize="full"
+        )
         assert isinstance(lazy, blosc2.RemoteArray)
         assert isinstance(lazy.src, blosc2.FsspecNDSource)
         assert ":etag:" in lazy.src.stamp
@@ -712,12 +716,12 @@ def test_http_lazy_cache_rebuilt_when_remote_changes(tmp_path):
     with _ranged_server(path) as (urlbase, _):
         url = f"{urlbase}/{frame.name}"
         cache = tmp_path / "cache"
-        lazy = blosc2.open(url, lazy=True, cache_dir=cache)
+        lazy = blosc2.open(url, lazy=True, cache_dir=cache, deserialize="full")
         assert np.array_equal(lazy[3:5, 100:120], first[3:5, 100:120])
         del lazy
 
         blosc2.asarray(second, chunks=(50, 200), blocks=(10, 100), urlpath=frame, mode="w")
-        lazy = blosc2.open(url, lazy=True, cache_dir=cache)
+        lazy = blosc2.open(url, lazy=True, cache_dir=cache, deserialize="full")
         assert np.array_equal(lazy[3:5, 100:120], second[3:5, 100:120])
 
 
@@ -817,7 +821,7 @@ def test_http_hdf5_scan_and_warm_slice(tmp_path):
     with h5py.File(path, "w") as file:
         file.create_dataset("data", data=data, chunks=(1000,))
     with _ranged_server(tmp_path) as (urlbase, requests):
-        remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data")
+        remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data", deserialize="full")
         np.testing.assert_array_equal(remote[:10], data[:10])
         assert requests == [None]  # The small source is retained by one full GET.
         count = len(requests)
@@ -883,7 +887,7 @@ def test_http_large_hdf5_keeps_range_reads(tmp_path):
     with h5py.File(path, "w") as file:
         file.create_dataset("data", data=np.zeros(9 << 20, dtype="u1"), chunks=(1 << 20,))
     with _ranged_server(tmp_path) as (urlbase, requests):
-        remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data")
+        remote = blosc2.open(f"{urlbase}/{path.name}", lazy=True, dataset="data", deserialize="full")
         assert remote[0] == 0
         assert requests
         assert all(request is not None for request in requests)
@@ -1016,10 +1020,12 @@ def test_zip_store_lazy_default_and_explicit_localization(tmp_path):
         tstore["/a"] = blosc2.arange(10, dtype="i4")
     fsspec.filesystem("memory").pipe_file("/t.b2z", pathlib.Path(localpath).read_bytes())
 
-    with blosc2.open("memory://t.b2z") as tstore:
+    with blosc2.open("memory://t.b2z", deserialize="full") as tstore:
         assert isinstance(tstore, blosc2.RemoteStore)
         np.testing.assert_array_equal(tstore["/a"][:], np.arange(10, dtype="i4"))
-    with blosc2.open("memory://t.b2z", cache_dir=tmp_path / "cache", lazy=False) as tstore:
+    with blosc2.open(
+        "memory://t.b2z", cache_dir=tmp_path / "cache", lazy=False, deserialize="full"
+    ) as tstore:
         assert isinstance(tstore, blosc2.TreeStore)
         assert np.array_equal(tstore["/a"][:], np.arange(10, dtype="i4"))
 
@@ -1073,15 +1079,15 @@ def test_file_url_uses_the_local_path(tmp_path):
 
     a.save(url)
     assert (tmp_path / "f.b2nd").is_file()
-    assert np.array_equal(blosc2.open(url)[:], a[:])
-    assert np.array_equal(blosc2.open(url, mmap_mode="r")[:], a[:])
+    assert np.array_equal(blosc2.open(url, deserialize="full")[:], a[:])
+    assert np.array_equal(blosc2.open(url, mmap_mode="r", deserialize="full")[:], a[:])
 
 
 def test_file_url_backs_a_container(tmp_path):
     url = (tmp_path / "c.b2nd").as_uri()
     a = blosc2.arange(10, dtype="i4", urlpath=url, mode="w")
     a[0:5] = 7
-    assert np.array_equal(blosc2.open(url)[:], a[:])
+    assert np.array_equal(blosc2.open(url, deserialize="full")[:], a[:])
 
 
 def test_cached_dir_refetches_on_same_size_change(tmp_path):
@@ -1103,7 +1109,7 @@ def test_cached_dir_refetches_on_same_size_change(tmp_path):
 def test_local_path_untouched(tmp_path):
     urlpath = str(tmp_path / "local.b2nd")
     a = blosc2.arange(10, dtype="i4", urlpath=urlpath, mode="w")
-    assert np.array_equal(blosc2.open(urlpath)[:], a[:])
+    assert np.array_equal(blosc2.open(urlpath, deserialize="full")[:], a[:])
 
 
 def test_cached_container_keeps_its_extension(tmp_path):
@@ -1115,7 +1121,7 @@ def test_cached_container_keeps_its_extension(tmp_path):
     del estore
     fsspec.filesystem("memory").pipe_file("/e.b2e", pathlib.Path(localpath).read_bytes())
 
-    opened = blosc2.open("memory://e.b2e", cache_dir=tmp_path / "cache")
+    opened = blosc2.open("memory://e.b2e", cache_dir=tmp_path / "cache", deserialize="full")
     assert isinstance(opened, blosc2.EmbedStore)
     assert np.array_equal(opened["/a"][:], np.arange(10, dtype="i4"))
 
@@ -1126,7 +1132,7 @@ def test_lazy_empty_array(tmp_path):
     a = blosc2.asarray(np.zeros((0,), dtype="i4"))
     fsspec.filesystem("memory").pipe_file("/empty.b2nd", a.to_cframe())
 
-    b = blosc2.open("memory://empty.b2nd", lazy=True)
+    b = blosc2.open("memory://empty.b2nd", lazy=True, deserialize="full")
     assert b.shape == (0,)
     assert np.array_equal(b[:], np.zeros((0,), dtype="i4"))
 
@@ -1136,21 +1142,21 @@ def test_lazy_cache_preserved_when_corrupt(tmp_path):
     a = blosc2.arange(100, dtype="i4", chunks=(10,))
     fsspec.filesystem("memory").pipe_file("/c.b2nd", a.to_cframe())
 
-    with blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path) as b:
+    with blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path, deserialize="full") as b:
         assert np.array_equal(b[:10], a[:10])
     cache = next(tmp_path.glob("*/*.b2nd"))
     cache.write_bytes(cache.read_bytes()[:50])
 
     before = cache.read_bytes()
     with pytest.raises(RuntimeError):
-        blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path)
+        blosc2.open("memory://c.b2nd", lazy=True, cache_dir=tmp_path, deserialize="full")
     assert cache.read_bytes() == before
 
 
 def test_max_concurrency_needs_lazy(tmp_path):
     fsspec.filesystem("memory").pipe_file("/m.b2nd", blosc2.arange(10, dtype="i4").to_cframe())
     with pytest.raises(NotImplementedError, match="max_concurrency"):
-        blosc2.open("memory://m.b2nd", lazy=False, cache_dir=tmp_path, max_concurrency=4)
+        blosc2.open("memory://m.b2nd", lazy=False, cache_dir=tmp_path, max_concurrency=4, deserialize="full")
 
 
 def test_storage_mapping_is_normalized(tmp_path):
@@ -1159,7 +1165,7 @@ def test_storage_mapping_is_normalized(tmp_path):
     url = (tmp_path / "s.b2nd").as_uri()
     a = blosc2.zeros((10,), dtype="i4", storage={"urlpath": url, "mode": "w"})
     assert (tmp_path / "s.b2nd").is_file()
-    assert np.array_equal(blosc2.open(url)[:], a[:])
+    assert np.array_equal(blosc2.open(url, deserialize="full")[:], a[:])
 
     with pytest.raises(ValueError, match="fsspec URL"):
         blosc2.zeros((10,), dtype="i4", storage={"urlpath": "memory://s.b2nd", "mode": "w"})
@@ -1182,7 +1188,7 @@ def test_lazy_open_never_opens_a_handle(monkeypatch):
     memfs = type(fsspec.filesystem("memory"))
     monkeypatch.setattr(memfs, "_open", lambda *args, **kwargs: pytest.fail("opened a handle"))
 
-    b = blosc2.open("memory://ranges.b2nd", lazy=True)
+    b = blosc2.open("memory://ranges.b2nd", lazy=True, deserialize="full")
     assert np.array_equal(b[100:200], a[100:200])
 
 
@@ -1301,7 +1307,7 @@ def test_a_cache_keeps_where_the_chunks_and_blocks_are(monkeypatch, tmp_path):
     cache = str(tmp_path / "keptindex-cache.b2nd")
     blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
 
-    holder = blosc2.open(cache)
+    holder = blosc2.open(cache, deserialize="full")
     state = holder.schunk.vlmeta["proxy-index"]
     assert len(state["offsets"]) == 2 * 8  # one int64 per chunk of the frame
     assert [n for n, _ in state["layouts"]] == [0]  # the one chunk half held
@@ -1328,7 +1334,7 @@ def test_a_cache_keeps_nothing_for_a_source_that_cannot_name_its_bytes(tmp_path,
     src.stamp = None  # as a source that cannot name its bytes leaves it
     blosc2.Proxy(src, urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
 
-    holder = blosc2.open(cache)
+    holder = blosc2.open(cache, deserialize="full")
     assert "proxy-index" not in holder.schunk.vlmeta
     del holder
 
@@ -1349,7 +1355,7 @@ def test_a_kept_index_of_the_wrong_shape_is_dropped(tmp_path, monkeypatch):
     cache = str(tmp_path / "wrongindex-cache.b2nd")
     blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
 
-    holder = blosc2.open(cache, mode="a")
+    holder = blosc2.open(cache, mode="a", deserialize="full")
     state = dict(holder.schunk.vlmeta["proxy-index"])
     state["offsets"] = state["offsets"][:8]  # one chunk's worth, for a frame of two
     holder.schunk.vlmeta["proxy-index"] = state
@@ -1484,7 +1490,7 @@ def test_lazy_fetches_only_touched_blocks(monkeypatch):
     cbytes = a.schunk.cbytes // a.schunk.nchunks
     assert cbytes > blosc2.proxy_source.BLOCK_MIN_CBYTES
 
-    p = blosc2.open(_put("blocks.b2nd", a), lazy=True)
+    p = blosc2.open(_put("blocks.b2nd", a), lazy=True, deserialize="full")
     reads, chunks = _traffic(monkeypatch)  # after the open, which reads the header
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
     # One read for where the chunks are, one for the block offsets inside the one
@@ -1499,7 +1505,7 @@ def test_lazy_small_chunks_are_fetched_whole(monkeypatch):
     # a round trip; nothing must go looking for block offsets
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
 
-    p = blosc2.open(_put("smallblocks.b2nd", a), lazy=True)
+    p = blosc2.open(_put("smallblocks.b2nd", a), lazy=True, deserialize="full")
     reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[150:250], a[150:250])
     assert len(chunks) == 2
@@ -1510,7 +1516,7 @@ def test_lazy_whole_array_skips_the_block_path(monkeypatch, any_chunk_wants_bloc
     # Wanting every block of a chunk is what fetching the chunk already does
     data, a = _incompressible((200, 200), (100, 200), (10, 200))
 
-    p = blosc2.open(_put("wholeblocks.b2nd", a), lazy=True)
+    p = blosc2.open(_put("wholeblocks.b2nd", a), lazy=True, deserialize="full")
     reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[:], data)
     assert len(chunks) == 2
@@ -1532,7 +1538,7 @@ def test_lazy_whole_array_skips_the_block_path(monkeypatch, any_chunk_wants_bloc
 )
 def test_lazy_block_reads_are_correct(monkeypatch, any_chunk_wants_blocks, shape, chunks, blocks, item):
     data, a = _incompressible(shape, chunks, blocks)
-    p = blosc2.open(_put("geom.b2nd", a), lazy=True)
+    p = blosc2.open(_put("geom.b2nd", a), lazy=True, deserialize="full")
     assert np.array_equal(p[item], data[item])
     # ... and the rest of the array still arrives correctly afterwards
     assert np.array_equal(p[...], data)
@@ -1541,7 +1547,7 @@ def test_lazy_block_reads_are_correct(monkeypatch, any_chunk_wants_blocks, shape
 def test_lazy_blocks_accumulate_in_a_chunk(monkeypatch, any_chunk_wants_blocks):
     data, a = _incompressible((200, 200), (100, 200), (10, 20))
     reads, _ = _traffic(monkeypatch)
-    p = blosc2.open(_put("accum.b2nd", a), lazy=True)
+    p = blosc2.open(_put("accum.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     after_first = len(reads)
@@ -1581,7 +1587,7 @@ def test_lazy_blocks_merge_adjacent_reads(monkeypatch, any_chunk_wants_blocks):
     # of them must not cost one request each
     data, a = _incompressible((200, 200), (200, 200), (2, 200))
     reads, _ = _traffic(monkeypatch)
-    p = blosc2.open(_put("merge.b2nd", a), lazy=True)
+    p = blosc2.open(_put("merge.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:40], data[0:40])
     assert len(reads) < 1 + 20  # the offsets, plus fewer requests than blocks
@@ -1592,7 +1598,7 @@ def test_lazy_blocks_fall_back_for_memcpyed_chunks(monkeypatch, any_chunk_wants_
     data = np.random.default_rng(0).integers(0, 256, (300, 300), dtype="u1")
     a = blosc2.asarray(data, chunks=(150, 300), blocks=(15, 300), cparams={"clevel": 0})
 
-    p = blosc2.open(_put("memcpyed.b2nd", a), lazy=True)
+    p = blosc2.open(_put("memcpyed.b2nd", a), lazy=True, deserialize="full")
     reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
     assert len(chunks) == 1
@@ -1606,7 +1612,7 @@ def test_lazy_blocks_with_run_length_chunks(monkeypatch, any_chunk_wants_blocks)
     data = np.zeros((200, 200))
     data[100:] = np.random.default_rng(0).random((100, 200))
     a = blosc2.asarray(data, chunks=(100, 200), blocks=(10, 20))
-    p = blosc2.open(_put("runlen.b2nd", a), lazy=True)
+    p = blosc2.open(_put("runlen.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:2, 0:10], data[0:2, 0:10])
     assert np.array_equal(p[100:102, 0:10], data[100:102, 0:10])
@@ -1618,7 +1624,7 @@ def test_lazy_blocks_of_a_structured_array(monkeypatch, any_chunk_wants_blocks):
     rng = np.random.default_rng(0)
     data["a"], data["b"] = rng.integers(0, 1000, 10_000), rng.random(10_000)
     a = blosc2.asarray(data, chunks=(5_000,), blocks=(500,))
-    p = blosc2.open(_put("structured.b2nd", a), lazy=True)
+    p = blosc2.open(_put("structured.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[10:20], data[10:20])
     assert np.array_equal(p[...], data)
@@ -1628,7 +1634,7 @@ def test_lazy_blocks_serve_a_single_block_chunk(monkeypatch, any_chunk_wants_blo
     # A chunk of one block is its own block: nothing to take apart
     data, a = _incompressible((200, 200), (100, 200), (100, 200))
     reads, chunks = _traffic(monkeypatch)
-    p = blosc2.open(_put("oneblock.b2nd", a), lazy=True)
+    p = blosc2.open(_put("oneblock.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:2], data[0:2])
     assert len(chunks) == 1
@@ -1638,7 +1644,7 @@ def test_lazy_blocks_reuse_what_they_just_wrote(monkeypatch, any_chunk_wants_blo
     # Growing a chunk block by block must not read it back out of the cache each
     # time; the blocks already in it are still in hand
     data, a = _incompressible((200, 200), (100, 200), (10, 20))
-    p = blosc2.open(_put("hot.b2nd", a), lazy=True)
+    p = blosc2.open(_put("hot.b2nd", a), lazy=True, deserialize="full")
     read_back = []
     orig = p.schunk.get_chunk
     monkeypatch.setattr(p.schunk, "get_chunk", lambda n: (out := orig(n), read_back.append(n))[0])
@@ -1653,7 +1659,7 @@ def test_lazy_blocks_survive_eviction(monkeypatch, any_chunk_wants_blocks):
     # to reading the chunk back, which must reconstruct exactly the same blocks
     monkeypatch.setattr(blosc2.proxy, "BLOCK_HOT_CHUNKS", 2)
     data, a = _incompressible((400, 200), (100, 200), (10, 20))
-    p = blosc2.open(_put("evict.b2nd", a), lazy=True)
+    p = blosc2.open(_put("evict.b2nd", a), lazy=True, deserialize="full")
 
     for chunk_row in range(0, 400, 100):  # touch every chunk once, evicting as it goes
         assert np.array_equal(p[chunk_row : chunk_row + 5, 0:5], data[chunk_row : chunk_row + 5, 0:5])
@@ -1669,7 +1675,7 @@ def test_lazy_blocks_after_a_whole_chunk_arrives(any_chunk_wants_blocks):
     import asyncio
 
     data, a = _incompressible((200, 200), (100, 200), (10, 20))
-    p = blosc2.open(_put("mixed.b2nd", a), lazy=True)
+    p = blosc2.open(_put("mixed.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:5, 0:5], data[0:5, 0:5])
     asyncio.run(p.afetch((slice(0, 5), slice(None))))
@@ -1682,7 +1688,7 @@ def test_lazy_blocks_after_an_eviction(monkeypatch, any_chunk_wants_blocks):
     # including the copies the proxy keeps in hand for the next splice
     data, a = _incompressible((200, 200), (100, 200), (10, 20))
     reads, _ = _traffic(monkeypatch)
-    p = blosc2.open(_put("evicted.b2nd", a), lazy=True)
+    p = blosc2.open(_put("evicted.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     fetched = len(reads)
@@ -1709,7 +1715,7 @@ def test_lazy_blocks_skip_chunks_they_cannot_splice(monkeypatch, any_chunk_wants
     data = np.tile(rng.random(500), 400).reshape(400, 500)  # repetitive, so a dict pays
     a = blosc2.asarray(data, chunks=(200, 500), blocks=(20, 500), cparams=cparams)
     reads, chunks = _traffic(monkeypatch)
-    p = blosc2.open(_put(f"nosplice-{why}.b2nd", a), lazy=True)
+    p = blosc2.open(_put(f"nosplice-{why}.b2nd", a), lazy=True, deserialize="full")
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert len(chunks) == 1  # the whole chunk, after the one header read that found out
@@ -1724,13 +1730,13 @@ def test_lazy_eviction_survives_a_reopen(tmp_path, monkeypatch, any_chunk_wants_
     cache = str(tmp_path / "evicted-cache")
     reads, _ = _traffic(monkeypatch)
 
-    p = blosc2.open(url, lazy=True, cache_dir=cache)
+    p = blosc2.open(url, lazy=True, cache_dir=cache, deserialize="full")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     fetched = len(reads)
     p.schunk.update_special(0, blosc2.SpecialValue.UNINIT)
     del p
 
-    q = blosc2.open(url, lazy=True, cache_dir=cache)
+    q = blosc2.open(url, lazy=True, cache_dir=cache, deserialize="full")
     assert np.array_equal(q[0:5, 0:10], data[0:5, 0:10])
     assert len(reads) > fetched
 
@@ -1742,7 +1748,7 @@ def test_lazy_blocks_with_a_repeated_value_chunk(monkeypatch, any_chunk_wants_bl
     # them anyway walks into whatever follows the chunk.
     a = blosc2.full((400, 500), fill_value=3.5, chunks=(200, 500), blocks=(20, 500))
     reads, chunks = _traffic(monkeypatch)
-    p = blosc2.open(_put("repeated.b2nd", a), lazy=True)
+    p = blosc2.open(_put("repeated.b2nd", a), lazy=True, deserialize="full")
 
     assert p.src.chunk_layout(0) is None
     assert np.array_equal(p[0:5, 0:10], np.full((5, 10), 3.5))
@@ -1753,15 +1759,15 @@ def test_lazy_blocks_with_a_repeated_value_chunk(monkeypatch, any_chunk_wants_bl
 def test_open_memory_url_with_storage_options():
     a = blosc2.arange(10, dtype="i4")
     a.save("memory://so_test.b2nd", storage_options={})
-    b = blosc2.open("memory://so_test.b2nd", storage_options={})
+    b = blosc2.open("memory://so_test.b2nd", storage_options={}, deserialize="full")
     assert isinstance(b, blosc2.RemoteArray)
     assert np.array_equal(b[:], a[:])
 
-    eager_b = blosc2.open("memory://so_test.b2nd", lazy=False, storage_options={})
+    eager_b = blosc2.open("memory://so_test.b2nd", lazy=False, storage_options={}, deserialize="full")
     assert isinstance(eager_b, blosc2.NDArray)
     assert np.array_equal(eager_b[:], a[:])
 
-    lazy_b = blosc2.open("memory://so_test.b2nd", lazy=True, storage_options={})
+    lazy_b = blosc2.open("memory://so_test.b2nd", lazy=True, storage_options={}, deserialize="full")
     assert isinstance(lazy_b, blosc2.RemoteArray)
     assert np.array_equal(lazy_b[:], a[:])
 
@@ -1789,12 +1795,12 @@ def test_fsspec_hdf5_index_selects_hdf5_without_suffix(tmp_path):
     url = "memory://hdf5-index/container"
     index = scan_hdf5_index(url)
 
-    proxy = blosc2.open(url, dataset="data", hdf5_index=index)
+    proxy = blosc2.open(url, dataset="data", hdf5_index=index, deserialize="full")
     assert isinstance(proxy, blosc2.RemoteArray)
     np.testing.assert_array_equal(proxy[:], np.arange(10, dtype="i4"))
 
     with pytest.raises(ValueError, match="hdf5_index"):
-        blosc2.open("memory://hdf5-index/other.zarr", lazy=True, hdf5_index=index)
+        blosc2.open("memory://hdf5-index/other.zarr", lazy=True, hdf5_index=index, deserialize="full")
 
 
 def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
@@ -1806,7 +1812,9 @@ def test_non_lazy_cache_dir_preserves_explicit_b2z(tmp_path):
     url = "memory://nonlazy-b2z/data"
     fsspec.filesystem("memory").pipe_file("nonlazy-b2z/data", archive.read_bytes())
 
-    store = blosc2.open(url, lazy=False, cache_dir=tmp_path / "cache", source_format="b2z")
+    store = blosc2.open(
+        url, lazy=False, cache_dir=tmp_path / "cache", source_format="b2z", deserialize="full"
+    )
     assert isinstance(store, blosc2.TreeStore)
     np.testing.assert_array_equal(store["/group/a"][:], np.arange(10, dtype="i4"))
 
@@ -1819,6 +1827,7 @@ def test_non_lazy_cache_dir_rejects_hdf5_index(tmp_path):
             lazy=False,
             cache_dir=tmp_path / "cache",
             hdf5_index={"format": "invalid"},
+            deserialize="full",
         )
     # The rejection must not depend on the cache options that follow it.
     with pytest.raises(NotImplementedError, match="hdf5_index"):
@@ -1828,6 +1837,9 @@ def test_non_lazy_cache_dir_rejects_hdf5_index(tmp_path):
             cache_dir=tmp_path / "cache",
             cache_policy=blosc2.CachePolicy.DISK,
             hdf5_index={"format": "invalid"},
+            deserialize="full",
         )
     with pytest.raises(NotImplementedError, match="hdf5_index"):
-        blosc2.open("memory://nonlazy-index/data", lazy=False, hdf5_index={"format": "invalid"})
+        blosc2.open(
+            "memory://nonlazy-index/data", lazy=False, hdf5_index={"format": "invalid"}, deserialize="full"
+        )

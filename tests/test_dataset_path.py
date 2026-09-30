@@ -55,10 +55,10 @@ def test_path_alias(container, tmp_path, api):
         with pytest.raises(ValueError, match="both URL path and dataset"):
             opener(url + "::" + target, *args[1:], path=path)
     if api == "open":
-        with blosc2.open(filename, path=target) as obj:
+        with blosc2.open(filename, path=target, deserialize="full") as obj:
             np.testing.assert_array_equal(obj[:], np.arange(8))
         # The old positional dataset argument keeps its meaning.
-        with blosc2.open(url, "r", 0, target) as obj:
+        with blosc2.open(url, "r", 0, target, deserialize="full") as obj:
             np.testing.assert_array_equal(obj[:], np.arange(8))
 
 
@@ -76,15 +76,15 @@ def test_path_cache_and_artifact_compatibility(container, tmp_path):
     _, url = container
     cache = tmp_path / "cache"
     artifact = tmp_path / "reference.b2nd"
-    with blosc2.open(url, path="group/array", cache_dir=cache) as array:
+    with blosc2.open(url, path="group/array", cache_dir=cache, deserialize="full") as array:
         np.testing.assert_array_equal(array[:], np.arange(8))
         source = array._source.copy()
         array.save(artifact)
-    with blosc2.open(url, dataset="group/array", cache_dir=cache) as array:
+    with blosc2.open(url, dataset="group/array", cache_dir=cache, deserialize="full") as array:
         assert array._source == source
         np.testing.assert_array_equal(array[:], np.arange(8))
         assert array.traffic.requests == 0
-    with blosc2.open(artifact) as array:
+    with blosc2.open(artifact, deserialize="full") as array:
         assert array._source == source
         np.testing.assert_array_equal(array[:], np.arange(8))
 
@@ -125,7 +125,7 @@ def test_path_other_formats(tmp_path, format):
         filename = tmp_path / "selectors.zarr"
         group = zarr.open_group(filename, mode="w", zarr_format=int(format[-1]))
         group.create_group("group").create_array("array", data=data, chunks=(4,))
-    with blosc2.open(filename, path="group/array") as array:
+    with blosc2.open(filename, path="group/array", deserialize="full") as array:
         np.testing.assert_array_equal(array[:], data)
     url = f"memory://{tmp_path.name}/{filename.name}"
     fs = fsspec.filesystem("memory")
@@ -152,15 +152,15 @@ def test_remote_hdf5_group_dispatch(tmp_path, cached):
     fsspec.filesystem("memory").pipe(url, source.read_bytes())
     options = {"cache_dir": tmp_path / "cache"} if cached else {}
     for _ in range(2):
-        with blosc2.open(url, path="group", **options) as group:
+        with blosc2.open(url, path="group", **options, deserialize="full") as group:
             assert isinstance(group, blosc2.RemoteStore)
             assert group.keys() == ["data"]
             with group["data"] as array:
                 np.testing.assert_array_equal(array[:], np.arange(4))
     for target in (url, source):
         for root in (None, "", "/"):
-            with blosc2.open(target, path=root, **options) as group:
+            with blosc2.open(target, path=root, **options, deserialize="full") as group:
                 assert isinstance(group, blosc2.RemoteStore)
                 assert group.keys() == ["group"]
     with pytest.raises(ValueError, match="not found"):
-        blosc2.open(url, path="missing")
+        blosc2.open(url, path="missing", deserialize="full")

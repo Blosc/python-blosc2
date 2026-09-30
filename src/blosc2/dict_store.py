@@ -19,6 +19,7 @@ import numpy as np
 
 import blosc2
 from blosc2.c2array import C2Array
+from blosc2.deserialization import get_deserialize, normalize_deserialize, set_deserialize
 from blosc2.embed_store import EmbedStore
 from blosc2.info import InfoReporter
 from blosc2.schunk import SChunk, process_opened_object
@@ -152,6 +153,7 @@ class DictStore:
         mmap_mode: str | None = None,
         locking: bool = False,
         _storage_meta: dict | None = None,
+        deserialize: str | None = None,
     ):
         """
         See :class:`DictStore` for full documentation of parameters.
@@ -173,6 +175,11 @@ class DictStore:
         self.dparams = dparams or blosc2.DParams()
         self.storage = storage or blosc2.Storage()
         self._locking = bool(locking)
+        existed = os.path.exists(self.localpath)
+        default_deserialize = "safe" if mode == "r" or (mode == "a" and existed) else "full"
+        self._deserialize_mode = normalize_deserialize(
+            default_deserialize if deserialize is None else deserialize
+        )
 
         if _storage_meta:
             self.storage.meta = _storage_meta
@@ -277,7 +284,8 @@ class DictStore:
             )
             self._update_map_tree()
 
-        self._estore = EmbedStore(_from_schunk=schunk)
+        set_deserialize(schunk, self._deserialize_mode)
+        self._estore = EmbedStore(_from_schunk=schunk, deserialize=self._deserialize_mode)
         self.storage.meta = self._estore.storage.meta
 
     @staticmethod
@@ -313,7 +321,9 @@ class DictStore:
             kind = "ndarray"
             processed_name = type(opened).__name__
         else:
-            processed = process_opened_object(opened)
+            processed = process_opened_object(
+                opened, deserialize=getattr(opened, "_deserialize_mode", "safe")
+            )
             processed_name = type(processed).__name__
             if isinstance(processed, blosc2.BatchArray):
                 kind = "batcharray"
@@ -411,6 +421,7 @@ class DictStore:
             dparams=dparams,
             storage=storage,
             meta=self.storage.meta,
+            deserialize=self._deserialize_mode,
         )
         self._update_map_tree()
 
@@ -712,7 +723,7 @@ class DictStore:
             else:
                 if external_file:
                     # Embed a copy by using cframe
-                    value = blosc2.from_cframe(value.to_cframe())
+                    value = blosc2.from_cframe(value.to_cframe(), deserialize=get_deserialize(value))
                 self._estore[key] = value
 
     def __getitem__(
@@ -738,7 +749,9 @@ class DictStore:
                         mmap_mode=self.mmap_mode,
                         dparams=self.dparams,
                     )
-                    return self._annotate_external_value(key, process_opened_object(opened))
+                    return self._annotate_external_value(
+                        key, process_opened_object(opened, deserialize=self._deserialize_mode)
+                    )
                 else:
                     urlpath = os.path.join(self.working_dir, filepath)
                     if os.path.exists(urlpath):
@@ -749,6 +762,7 @@ class DictStore:
                                 mode="r" if self.mode == "r" else "a",
                                 mmap_mode=self.mmap_mode if self.mode == "r" else None,
                                 dparams=self.dparams,
+                                deserialize=self._deserialize_mode,
                             ),
                         )
                     else:
@@ -829,7 +843,8 @@ class DictStore:
                                     offset=offset,
                                     mmap_mode=self.mmap_mode,
                                     dparams=self.dparams,
-                                )
+                                ),
+                                deserialize=self._deserialize_mode,
                             ),
                         )
                 else:
@@ -841,6 +856,7 @@ class DictStore:
                             mode="r" if self.mode == "r" else "a",
                             mmap_mode=self.mmap_mode if self.mode == "r" else None,
                             dparams=self.dparams,
+                            deserialize=self._deserialize_mode,
                         ),
                     )
             elif key in self._estore:
@@ -870,7 +886,8 @@ class DictStore:
                                         offset=offset,
                                         mmap_mode=self.mmap_mode,
                                         dparams=self.dparams,
-                                    )
+                                    ),
+                                    deserialize=self._deserialize_mode,
                                 ),
                             ),
                         )
@@ -885,6 +902,7 @@ class DictStore:
                                 mode="r" if self.mode == "r" else "a",
                                 mmap_mode=self.mmap_mode if self.mode == "r" else None,
                                 dparams=self.dparams,
+                                deserialize=self._deserialize_mode,
                             ),
                         ),
                     )

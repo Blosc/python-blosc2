@@ -89,7 +89,7 @@ def test_save_materializes_by_default_and_can_preserve_sources(tmp_path):
 
     materialized_path = tmp_path / "materialized.b2z"
     table.save(materialized_path)
-    materialized = blosc2.open(materialized_path, mode="a")
+    materialized = blosc2.open(materialized_path, mode="a", deserialize="full")
     assert isinstance(materialized._cols["remote"], blosc2.NDArray)
     assert not isinstance(materialized._cols["remote"], blosc2.RemoteArray)
     assert not materialized._read_only
@@ -98,7 +98,7 @@ def test_save_materializes_by_default_and_can_preserve_sources(tmp_path):
 
     referenced_path = tmp_path / "referenced.b2z"
     table.save(referenced_path, preserve_sources=True)
-    referenced = blosc2.open(referenced_path)
+    referenced = blosc2.open(referenced_path, deserialize="full")
     assert isinstance(referenced._cols["remote"], blosc2.RemoteArray)
     assert referenced._read_only
     np.testing.assert_array_equal(referenced.remote[:], values)
@@ -119,12 +119,12 @@ def test_treestore_and_cframe_preserve_sources(tmp_path):
     path = tmp_path / "table-tree.b2z"
     with blosc2.TreeStore(path, mode="w") as tree:
         tree["table"] = table
-    with blosc2.TreeStore(path, mode="r") as tree:
+    with blosc2.TreeStore(path, mode="r", deserialize="full") as tree:
         reopened = tree["table"]
         assert isinstance(reopened._cols["remote"], blosc2.RemoteArray)
         np.testing.assert_array_equal(reopened.remote[:], values)
 
-    restored = blosc2.ctable_from_cframe(table.to_cframe(preserve_sources=True))
+    restored = blosc2.ctable_from_cframe(table.to_cframe(preserve_sources=True), deserialize="full")
     assert isinstance(restored._cols["remote"], blosc2.RemoteArray)
     np.testing.assert_array_equal(restored.remote[:], values)
 
@@ -162,7 +162,7 @@ def test_remote_ctable_owns_external_column_cache_policy(tmp_path, policy):
     if policy is blosc2.CachePolicy.MEMORY:
         artifact = tmp_path / "remote-artifact.b2z"
         remote.save(artifact)
-        restored = blosc2.open(artifact)
+        restored = blosc2.open(artifact, deserialize="full")
         assert restored.cache_policy is policy
         np.testing.assert_array_equal(restored.remote[:], values)
 

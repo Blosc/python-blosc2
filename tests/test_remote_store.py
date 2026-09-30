@@ -52,7 +52,7 @@ def test_parquet_shared_cache_export_and_refresh(tmp_path):
         store.save(archive)
         table.close()
 
-    with blosc2.open(archive) as table:
+    with blosc2.open(archive, deserialize="full") as table:
         before = table.traffic.requests
         assert table["value"][3] == 4
         assert table.traffic.requests == before
@@ -331,7 +331,7 @@ def test_artifact_keeps_storage_options_identity(hierarchy, tmp_path):
 
     # The access-configuration fingerprint is recorded, not required: a warm
     # artifact stays portable and reopens without live credentials.
-    with blosc2.open(artifact) as restored:
+    with blosc2.open(artifact, deserialize="full") as restored:
         with restored["group/a"] as a:
             np.testing.assert_array_equal(a[:2, :2], data[:2, :2])
 
@@ -341,7 +341,7 @@ def test_mutable_artifact_refresh_preserves_runtime_storage(hierarchy, tmp_path)
     artifact = tmp_path / "refresh.b2z"
     with blosc2.RemoteStore(url) as store:
         store.save(artifact, mutable=True)
-    with blosc2.open(artifact, max_cache_bytes=4096) as store:
+    with blosc2.open(artifact, max_cache_bytes=4096, deserialize="full") as store:
         store.mutable = True
         cache_root = store._owner.disk.path
         cleanup = store._owner._cleanup_dir
@@ -406,7 +406,7 @@ def test_disk_failed_refresh_and_portable_export(hierarchy, tmp_path, monkeypatc
                     store.refresh()
             assert store._owner.generation == generation
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
-            exported = blosc2.from_cframe(a.to_cframe(include_cache=True))
+            exported = blosc2.from_cframe(a.to_cframe(include_cache=True), deserialize="full")
     before = exported.traffic.nbytes
     np.testing.assert_array_equal(exported[:10, :10], data[:10, :10])
     assert exported.traffic.nbytes == before
@@ -517,17 +517,17 @@ def test_remote_store_info(hierarchy, tmp_path, monkeypatch):
 def test_open_remote_hierarchy(hierarchy, tmp_path):
     url, data = hierarchy
     for path in (None, "group"):
-        with blosc2.open(url, path=path, cache_dir=tmp_path / "cache") as store:
+        with blosc2.open(url, path=path, cache_dir=tmp_path / "cache", deserialize="full") as store:
             assert isinstance(store, blosc2.RemoteStore)
             key = "group/a" if path is None else "a"
             with store[key] as array:
                 np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
-    with blosc2.open(url, path="group/a") as array:
+    with blosc2.open(url, path="group/a", deserialize="full") as array:
         assert isinstance(array, blosc2.RemoteArray)
         np.testing.assert_array_equal(array[:2, :3], data[:2, :3])
     if url.endswith(".zarr"):
         with pytest.raises(NotImplementedError, match="cache_dir"):
-            blosc2.open(url, cache_path=tmp_path / "group.b2nd")
+            blosc2.open(url, cache_path=tmp_path / "group.b2nd", deserialize="full")
 
 
 def test_nested_remote_store_discovery_and_traversal(hierarchy, tmp_path):
@@ -654,7 +654,7 @@ def test_nested_remote_store_ctable_index_uses_outer_cache(tmp_path):
             assert remote_table.traffic is outer.traffic
         materialized = tmp_path / "nested-table-materialized.b2z"
         outer.materialize(materialized)
-    with blosc2.open(materialized) as local:
+    with blosc2.open(materialized, deserialize="full") as local:
         table = local["/remote/measurements"]
         assert table._get_index_catalog()["value"]["kind"] == "summary"
         np.testing.assert_array_equal(table.where("value >= 197").value[:], [197, 198, 199])
@@ -729,7 +729,7 @@ def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path, monkeypa
         outer.save(warm, include_cache=True)
         assert outer.traffic.requests == 0
 
-    with blosc2.open(cold) as reopened:
+    with blosc2.open(cold, deserialize="full") as reopened:
         np.testing.assert_array_equal(reopened["linked/data"][:20], data[:20])
 
     seed = tmp_path / "linked-seed.b2z"
@@ -757,7 +757,7 @@ def test_nested_remote_store_reference_artifact_cold_and_warm(tmp_path, monkeypa
     assert visited == [target_url]
 
     fs.rm(target_url)
-    with blosc2.open(warm) as reopened:
+    with blosc2.open(warm, deserialize="full") as reopened:
         with reopened["linked/data"] as array:
             reopened.traffic.reset()
             np.testing.assert_array_equal(array[:20], data[:20])
@@ -782,7 +782,7 @@ def test_nested_remote_store_materialize_mixed_source(hierarchy, tmp_path):
     fs.rm(url, recursive=True)
     fs.rm(host_url)
 
-    with blosc2.open(destination) as local:
+    with blosc2.open(destination, deserialize="full") as local:
         assert all(info.get("kind") != "remote_store" for info in local._objects_registry().values())
         assert local["/remote/empty"].attrs["empty"] is True
         assert local.get_subtree("/remote").attrs["title"] == "child"
@@ -801,7 +801,7 @@ def test_local_tree_materialize_remote_reference_to_b2d(tmp_path):
     destination = tmp_path / "local-materialized.b2d"
     with blosc2.TreeStore(catalog, mode="r") as tree:
         tree.materialize(destination)
-    with blosc2.open(destination) as local:
+    with blosc2.open(destination, deserialize="full") as local:
         np.testing.assert_array_equal(local["/mount/data"][:], np.arange(20))
 
 
@@ -824,7 +824,7 @@ def test_nested_remote_store_materialize_multiple_levels(tmp_path):
     destination = tmp_path / "multiple-levels.b2z"
     with blosc2.RemoteStore(outer_url) as outer:
         outer.materialize(destination)
-    with blosc2.open(destination) as local:
+    with blosc2.open(destination, deserialize="full") as local:
         np.testing.assert_array_equal(local["/middle/inner/data"][:], np.arange(20))
 
 
@@ -882,7 +882,7 @@ def test_sparse_store_shared_handles(hierarchy, tmp_path, api):
 
     def open_shared():
         if api == "open":
-            return blosc2.open(url, cache_dir=parent, shared_cache=True)
+            return blosc2.open(url, cache_dir=parent, shared_cache=True, deserialize="full")
         return blosc2.RemoteStore.with_sparse_cache(url, parent)
 
     with open_shared() as first:
@@ -903,13 +903,20 @@ def test_sparse_store_shared_handles(hierarchy, tmp_path, api):
 @pytest.mark.parametrize("limit", [None, 1])
 def test_open_shared_cache_budget_and_selected_array(hierarchy, tmp_path, limit):
     url, data = hierarchy
-    with blosc2.open(url, cache_dir=tmp_path / "cache", shared_cache=True, max_cache_bytes=limit) as store:
+    with blosc2.open(
+        url, cache_dir=tmp_path / "cache", shared_cache=True, max_cache_bytes=limit, deserialize="full"
+    ) as store:
         assert store.max_cache_bytes == limit
         with store["group/a"] as array:
             np.testing.assert_array_equal(array[:], data)
         assert (store.cache_bytes > 0) if limit is None else (store.cache_bytes <= limit)
     with blosc2.open(
-        url, path="group/a", cache_dir=tmp_path / "selected", shared_cache=True, max_concurrency=2
+        url,
+        path="group/a",
+        cache_dir=tmp_path / "selected",
+        shared_cache=True,
+        max_concurrency=2,
+        deserialize="full",
     ) as array:
         assert isinstance(array, blosc2.RemoteArray)
         np.testing.assert_array_equal(array[:], data)
@@ -924,7 +931,9 @@ def test_open_shared_cache_explicit_source_format(tmp_path):
     url = f"memory://{tmp_path.name}/no-suffix"
     fsspec.filesystem("memory").pipe(url, path.read_bytes())
     for _ in range(2):
-        with blosc2.open(url, source_format="b2z", cache_dir=tmp_path / "cache", shared_cache=True) as store:
+        with blosc2.open(
+            url, source_format="b2z", cache_dir=tmp_path / "cache", shared_cache=True, deserialize="full"
+        ) as store:
             with store["a"] as array:
                 np.testing.assert_array_equal(array[:], np.arange(10))
 
@@ -952,7 +961,7 @@ def test_open_shared_cache_explicit_source_format(tmp_path):
 def test_open_shared_cache_invalid_options(tmp_path, url, options, error, message):
     kwargs = {"cache_dir": tmp_path / "cache", "shared_cache": True, **options}
     with pytest.raises(error, match=message):
-        blosc2.open(url, **kwargs)
+        blosc2.open(url, **kwargs, deserialize="full")
     assert not (tmp_path / "cache").exists()
 
 
@@ -969,7 +978,7 @@ def test_sparse_store_trim_export_recovery(hierarchy, tmp_path):
         assert evicted
         assert remaining == 0
         assert store.cache_bytes == 0
-    with blosc2.open(tmp_path / "warm.b2z") as restored:
+    with blosc2.open(tmp_path / "warm.b2z", deserialize="full") as restored:
         with restored["group/a"] as a:
             np.testing.assert_array_equal(a[:], data)
 
@@ -1170,7 +1179,7 @@ def test_discovery_aliases_sources_and_lifetime(hierarchy, tmp_path, monkeypatch
 
     export = tmp_path / "leaf.b2nd"
     leaf.save(export)
-    np.testing.assert_array_equal(blosc2.open(export)[:2, :3], data[:2, :3])
+    np.testing.assert_array_equal(blosc2.open(export, deserialize="full")[:2, :3], data[:2, :3])
     if owner.format == "hdf5":
         assert translations == [1]  # The standalone export contains its own index.
 
@@ -1313,7 +1322,7 @@ def test_store_validation():
     with pytest.raises(TypeError, match="dataset must be a string"):
         blosc2.RemoteStore("memory://a.b2z", dataset=1)
     with pytest.raises(TypeError, match="dataset must be a string"):
-        blosc2.open("memory://a.b2z", dataset=1)
+        blosc2.open("memory://a.b2z", dataset=1, deserialize="full")
     with pytest.raises(ValueError, match="cache_dir"):
         blosc2.RemoteStore("memory://a.b2z", cache_policy=blosc2.CachePolicy.DISK)
     with pytest.raises(TypeError, match="CachePolicy"):
@@ -1366,7 +1375,7 @@ def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
         store.save(snapshot_cold, include_cache=False)
 
     # 1. Test immutable reopen
-    with blosc2.open(snapshot_imm) as restored:
+    with blosc2.open(snapshot_imm, deserialize="full") as restored:
         assert isinstance(restored, blosc2.RemoteStore)
         assert restored.mutable is False
         assert restored.is_cache_mutable is False
@@ -1392,7 +1401,7 @@ def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
     # Verify read-only permissions (chmod 0o444) and byte preservation
     snapshot_imm.chmod(0o444)
     sha_before = hashlib.sha256(snapshot_imm.read_bytes()).hexdigest()
-    with blosc2.open(snapshot_imm) as ro_store:
+    with blosc2.open(snapshot_imm, deserialize="full") as ro_store:
         with ro_store["group/a"] as a:
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
             np.testing.assert_array_equal(a[10:20, :10], data[10:20, :10])
@@ -1402,13 +1411,13 @@ def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
 
     # 2. Test budget rejection on immutable snapshot
     with pytest.raises(ValueError, match="smaller than retained immutable payload"):
-        blosc2.open(snapshot_imm, max_cache_bytes=10)
+        blosc2.open(snapshot_imm, max_cache_bytes=10, deserialize="full")
     with pytest.raises(ValueError, match=r"CachePolicy\.NONE"):
-        blosc2.open(snapshot_imm, cache_policy=blosc2.CachePolicy.NONE)
+        blosc2.open(snapshot_imm, cache_policy=blosc2.CachePolicy.NONE, deserialize="full")
 
     # 3. Test mutable reopen
     mut_sha_before = hashlib.sha256(snapshot_mut.read_bytes()).hexdigest()
-    with blosc2.open(snapshot_mut) as restored_mut:
+    with blosc2.open(snapshot_mut, deserialize="full") as restored_mut:
         assert isinstance(restored_mut, blosc2.RemoteStore)
         assert restored_mut.mutable is False  # export default is False
         assert restored_mut.is_cache_mutable is True
@@ -1428,12 +1437,12 @@ def test_save_and_reopen_immutable_and_mutable(hierarchy, tmp_path):
     assert mut_sha_after == mut_sha_before
 
     # 4. Test mutable trim on smaller requested allowance
-    with blosc2.open(snapshot_mut, max_cache_bytes=mut_cbytes // 2) as trimmed:
+    with blosc2.open(snapshot_mut, max_cache_bytes=mut_cbytes // 2, deserialize="full") as trimmed:
         assert trimmed.cache_bytes <= mut_cbytes // 2
         assert trimmed.max_cache_bytes == mut_cbytes // 2
 
     # 5. Test cold reopen
-    with blosc2.open(snapshot_cold) as restored_cold:
+    with blosc2.open(snapshot_cold, deserialize="full") as restored_cold:
         assert restored_cold.cache_bytes == 0
         with restored_cold["group/a"] as a:
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
@@ -1448,7 +1457,7 @@ def test_subtree_export(hierarchy, tmp_path):
         subtree_path = tmp_path / "subtree.b2z"
         group.save(subtree_path)
 
-    with blosc2.open(subtree_path) as sub:
+    with blosc2.open(subtree_path, deserialize="full") as sub:
         assert isinstance(sub, blosc2.RemoteStore)
         assert set(sub.keys()) >= {"a", "b", "empty"}
         assert sub.attrs.get("title") == "child"
@@ -1481,7 +1490,7 @@ def test_hdf5_single_index_preserved(hierarchy, tmp_path, monkeypatch):
     assert len(translations) == 1
 
     translations.clear()
-    with blosc2.open(snapshot) as restored:
+    with blosc2.open(snapshot, deserialize="full") as restored:
         with restored["group/a"] as a, restored["group/b"] as b:
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
             np.testing.assert_array_equal(b[:10, :10], data[:10, :10] + 1)
@@ -1505,7 +1514,7 @@ def test_hdf5_array_attrs_survive_manifest_and_export(tmp_path):
         np.testing.assert_array_equal(store.attrs["labels"], ["alpha", "beta"])
         store.save(snapshot)
 
-    with blosc2.open(snapshot) as restored:
+    with blosc2.open(snapshot, deserialize="full") as restored:
         np.testing.assert_array_equal(restored.attrs["numbers"], np.arange(3, dtype="i8"))
         np.testing.assert_array_equal(restored.attrs["labels"], ["alpha", "beta"])
 
@@ -1583,7 +1592,7 @@ def test_memory_store_save_and_reopen(hierarchy, tmp_path):
         # the live cache it was taken from.
         assert store.cache_bytes == retained
 
-    with blosc2.open(warm) as restored:
+    with blosc2.open(warm, deserialize="full") as restored:
         assert restored.is_cache_mutable is False
         assert restored.cache_bytes > 0
         with restored["group/a"] as a:
@@ -1594,7 +1603,7 @@ def test_memory_store_save_and_reopen(hierarchy, tmp_path):
             np.testing.assert_array_equal(a[20:30, :10], data[20:30, :10])
             assert restored.cache_bytes == before  # misses are transient
 
-    with blosc2.open(writable) as restored:
+    with blosc2.open(writable, deserialize="full") as restored:
         assert restored.is_cache_mutable is True
         with restored["group/a"] as a:
             restored.traffic.reset()
@@ -1612,14 +1621,14 @@ def test_cold_artifact_reopens_under_none(hierarchy, tmp_path):
         store.save(cold, include_cache=False)
         store.save(warm)
 
-    with blosc2.open(cold, cache_policy=blosc2.CachePolicy.NONE) as restored:
+    with blosc2.open(cold, cache_policy=blosc2.CachePolicy.NONE, deserialize="full") as restored:
         assert restored.cache_policy is blosc2.CachePolicy.NONE
         assert restored.cache_bytes == 0
         with restored["group/a"] as a:
             np.testing.assert_array_equal(a[:10, :10], data[:10, :10])
 
     with pytest.raises(ValueError, match=r"warm RemoteStore artifact with CachePolicy\.NONE"):
-        blosc2.open(warm, cache_policy=blosc2.CachePolicy.NONE)
+        blosc2.open(warm, cache_policy=blosc2.CachePolicy.NONE, deserialize="full")
 
 
 def test_artifact_reopen_modes_and_policies(hierarchy, tmp_path):
@@ -1633,17 +1642,17 @@ def test_artifact_reopen_modes_and_policies(hierarchy, tmp_path):
         store.save(writable, mutable=True)
 
     with pytest.raises(ValueError, match="only support modes"):
-        blosc2.open(immutable, mode="w")
+        blosc2.open(immutable, mode="w", deserialize="full")
     with pytest.raises(ValueError, match="read-only"):
-        blosc2.open(immutable, mode="a")
+        blosc2.open(immutable, mode="a", deserialize="full")
     with pytest.raises(ValueError, match=r"require CachePolicy\.DISK"):
-        blosc2.open(writable, cache_policy=blosc2.CachePolicy.MEMORY)
+        blosc2.open(writable, cache_policy=blosc2.CachePolicy.MEMORY, deserialize="full")
 
     # Neither artifact may be saved over itself, mutable or not.
-    with blosc2.open(immutable) as restored:
+    with blosc2.open(immutable, deserialize="full") as restored:
         with pytest.raises(ValueError, match="source artifact"):
             restored.save(immutable, overwrite=True)
-    with blosc2.open(writable) as restored:
+    with blosc2.open(writable, deserialize="full") as restored:
         with pytest.raises(ValueError, match="source artifact"):
             restored.save(writable, overwrite=True)
 
@@ -1689,7 +1698,7 @@ def test_artifact_generation_validated_before_staging(hierarchy, tmp_path, bad_g
     _rewrite_artifact(artifact, mutate_manifest=lambda m: m.update(generation=bad_generation))
     cache_dir = tmp_path / "destination"
     with pytest.raises(ValueError, match="generation"):
-        blosc2.open(artifact, cache_dir=cache_dir)
+        blosc2.open(artifact, cache_dir=cache_dir, deserialize="full")
     assert not cache_dir.exists()
     assert not (tmp_path / "escaped.b2d").exists()
 
@@ -1709,9 +1718,9 @@ def test_artifact_extraction_failure_releases_owner(hierarchy, tmp_path, monkeyp
     with monkeypatch.context() as patch:
         patch.setattr(zipfile.ZipFile, "extractall", fail)
         with pytest.raises(OSError, match="extraction failed"):
-            blosc2.open(artifact, cache_dir=cache_dir)
+            blosc2.open(artifact, cache_dir=cache_dir, deserialize="full")
     assert not list(cache_dir.rglob("active_generation.json"))
-    with blosc2.open(artifact, cache_dir=cache_dir) as reopened:
+    with blosc2.open(artifact, cache_dir=cache_dir, deserialize="full") as reopened:
         assert reopened.is_cache_mutable
 
 
@@ -1733,13 +1742,13 @@ def test_artifact_manifest_and_member_validation(hierarchy, tmp_path):
     shutil.copy2(artifact, bad_url)
     _rewrite_artifact(bad_url, mutate_manifest=inject_credentials)
     with pytest.raises(ValueError, match="user information"):
-        blosc2.open(bad_url)
+        blosc2.open(bad_url, deserialize="full")
 
     compressed = tmp_path / "compressed.b2z"
     shutil.copy2(artifact, compressed)
     _rewrite_artifact(compressed, compress=True)
     with pytest.raises(ValueError, match="ZIP_STORED"):
-        blosc2.open(compressed)
+        blosc2.open(compressed, deserialize="full")
 
 
 def test_save_failure_preserves_destination_and_live_cache(hierarchy, tmp_path, monkeypatch):
@@ -1878,7 +1887,7 @@ def test_materialize_preserves_metadata_and_expression_indexes(tmp_path, remote)
     destination = tmp_path / "materialized.b2z"
     with store:
         store.materialize(destination)
-    with blosc2.open(destination) as tree:
+    with blosc2.open(destination, deserialize="full") as tree:
         array = tree["array"]
         assert array.schunk.meta["units"] == "metres"
         assert array.attrs["description"] == "distance"
@@ -1914,7 +1923,7 @@ def test_materialize_table_reads_bounded_row_batches(tmp_path, monkeypatch):
         with monkeypatch.context() as patch:
             patch.setattr(blosc2.CTable, "copy", no_full_copy)
             store.materialize(tmp_path / "bounded-table.b2d")
-    with blosc2.open(tmp_path / "bounded-table.b2d") as tree:
+    with blosc2.open(tmp_path / "bounded-table.b2d", deserialize="full") as tree:
         with tree["table"] as table:
             np.testing.assert_array_equal(table["value"][:], np.arange(5000))
         with tree["batch"] as table:
@@ -1948,7 +1957,7 @@ def test_nested_reference_preserves_batch_cache(tmp_path):
         root.save(snapshot)
     fs.rm(source_url)
     fs.rm(host_url)
-    with blosc2.open(snapshot) as root:
+    with blosc2.open(snapshot, deserialize="full") as root:
         with root["linked/table"] as table:
             assert root.cache_bytes == retained
             assert table["value"][0] == value
@@ -1966,7 +1975,9 @@ def test_shared_generation_reload_replaces_batch_and_linked_owners(tmp_path):
     fs = fsspec.filesystem("memory")
     source_url = f"memory://{tmp_path.name}-generation-source.b2z"
     fs.pipe(source_url, source.read_bytes())
-    with blosc2.open(source_url, cache_dir=tmp_path / "leaf-cache", shared_cache=True) as root:
+    with blosc2.open(
+        source_url, cache_dir=tmp_path / "leaf-cache", shared_cache=True, deserialize="full"
+    ) as root:
         with root["table"] as table:
             assert table["value"][0] == b"old"
         old_batch = next(iter(root._owner.batch_caches.values()))
@@ -1984,7 +1995,7 @@ def test_shared_generation_reload_replaces_batch_and_linked_owners(tmp_path):
     host_url = f"memory://{tmp_path.name}-generation-host.b2z"
     fs.pipe(host_url, host.read_bytes())
 
-    with blosc2.open(host_url, cache_dir=tmp_path / "cache", shared_cache=True) as root:
+    with blosc2.open(host_url, cache_dir=tmp_path / "cache", shared_cache=True, deserialize="full") as root:
         with root["linked/table"] as table:
             assert table["value"][0] == b"old"
         old_linked = root._owner.linked_stores["linked"]._owner

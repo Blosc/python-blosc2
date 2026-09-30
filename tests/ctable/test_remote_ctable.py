@@ -1296,7 +1296,7 @@ def test_remote_ctable_rejects_unsafe_object_extension(tmp_path):
     local = blosc2.CTable(Unsafe, [(nested,)], create_summary_index=False)
     url = remote_table_url(tmp_path, local, "unsafe-object")
     with blosc2.RemoteCTable(url) as remote:
-        with pytest.raises(ValueError, match="Unsafe remote MessagePack extension code 42"):
+        with pytest.raises(blosc2.UnsafeDeserializationError, match="embedded cframe"):
             remote["payload"][0]
 
 

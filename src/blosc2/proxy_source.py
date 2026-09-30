@@ -685,7 +685,9 @@ def _parse_trailer_vlmeta(trailer_bytes: bytes) -> dict[str, Any]:
         try:
             from blosc2.msgpack_utils import msgpack_unpackb
 
-            val = msgpack_unpackb(decomp)
+            val = msgpack_unpackb(decomp, deserialize="safe")
+        except blosc2.UnsafeDeserializationError:
+            raise
         except Exception:
             try:
                 val = msgpack.unpackb(decomp, raw=False)

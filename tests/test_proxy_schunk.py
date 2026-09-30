@@ -68,9 +68,9 @@ def test_open(urlpath, chunksize, nchunks):
     del schunk
     if urlpath is None:
         with pytest.raises(RuntimeError):
-            _ = blosc2.open(proxy_urlpath, mode="a")
+            _ = blosc2.open(proxy_urlpath, mode="a", deserialize="full")
     else:
-        proxy = blosc2.open(proxy_urlpath, mode="a")
+        proxy = blosc2.open(proxy_urlpath, mode="a", deserialize="full")
         assert proxy[0 : len(data) * 4] == bytes_obj
 
     blosc2.remove_urlpath(urlpath)
@@ -88,7 +88,7 @@ def test_readonly_proxy_keeps_both_readonly(tmp_path):
     expected = data.tobytes()
     del proxy, source
 
-    readonly = blosc2.open(str(proxy_path))
+    readonly = blosc2.open(str(proxy_path), deserialize="full")
 
     assert readonly.schunk.mode == "r"
     assert readonly.schunk.vlmeta.mode == "r"

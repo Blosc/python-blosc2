@@ -516,7 +516,7 @@ def test_metadata_discovery_reopens_lazyexpr_leaf(tmp_path):
     expr_path = path / "unsupported_lazyexpr.b2nd"
     expr.save(str(expr_path))
 
-    dstore_read = DictStore(str(path), mode="r")
+    dstore_read = DictStore(str(path), mode="r", deserialize="full")
     with dstore_read:
         assert "/unsupported_lazyexpr" in dstore_read
         assert "/embedded" in dstore_read

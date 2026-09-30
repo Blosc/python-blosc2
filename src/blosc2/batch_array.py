@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 
 import blosc2
+from blosc2.deserialization import DeserializeMode, get_deserialize, set_deserialize
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -71,7 +72,9 @@ class Batch(Sequence[Any]):
     def _get_block(self, block_index: int) -> list[Any]:
         if self._cached_block_index == block_index and self._cached_block is not None:
             return self._cached_block
-        block = self._parent._deserialize_block(self._parent.schunk.get_vlblock(self._nbatch, block_index))
+        block = self._parent._deserialize_block_at(
+            self._parent.schunk.get_vlblock(self._nbatch, block_index), self._nbatch
+        )
         self._cached_block_index = block_index
         self._cached_block = block
         return block
@@ -265,12 +268,13 @@ class BatchArray:
         self._item_prefix_sums: np.ndarray | None = None
         self._validate_tag()
 
-    def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
+    def _maybe_open_existing(self, storage: blosc2.Storage, deserialize) -> bool:
         urlpath = storage.urlpath
         if urlpath is None or storage.mode not in ("r", "a") or not pathlib.Path(urlpath).exists():
             return False
 
         schunk = blosc2.blosc2_ext.open(urlpath, mode=storage.mode, offset=0, mmap_mode=storage.mmap_mode)
+        set_deserialize(schunk, DeserializeMode.SAFE if deserialize is None else deserialize)
         self._attach_schunk(schunk)
         return True
 
@@ -289,6 +293,7 @@ class BatchArray:
         items_per_block: int | None = None,
         serializer: str = "msgpack",
         _from_schunk: blosc2.SChunk | None = None,
+        deserialize: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Create a new BatchArray or reopen an existing one.
@@ -310,6 +315,8 @@ class BatchArray:
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
                 raise ValueError(f"Cannot pass {unexpected} together with `_from_schunk`")
+            if deserialize is not None:
+                set_deserialize(_from_schunk, deserialize)
             self._attach_schunk(_from_schunk)
             return
         cparams = kwargs.pop("cparams", None)
@@ -327,7 +334,7 @@ class BatchArray:
         if dparams is None:
             dparams = blosc2.DParams()
 
-        if self._maybe_open_existing(storage):
+        if self._maybe_open_existing(storage, deserialize):
             return
 
         fixed_meta = dict(storage.meta or {})
@@ -338,7 +345,14 @@ class BatchArray:
             "arrow_schema": self._arrow_schema,
         }
         storage.meta = fixed_meta
-        schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
+        schunk = blosc2.SChunk(
+            chunksize=-1,
+            data=None,
+            deserialize=DeserializeMode.FULL if deserialize is None else deserialize,
+            cparams=cparams,
+            dparams=dparams,
+            storage=storage,
+        )
         self._attach_schunk(schunk)
 
     def _validate_tag(self) -> None:
@@ -590,9 +604,11 @@ class BatchArray:
         storage.meta = fixed_meta
         if storage.urlpath is not None:
             blosc2.remove_urlpath(storage.urlpath)
+        deserialize = get_deserialize(self.schunk)
         schunk = blosc2.SChunk(
             chunksize=-1,
             data=None,
+            deserialize=deserialize,
             cparams=copy.deepcopy(self.cparams),
             dparams=copy.deepcopy(self.dparams),
             storage=storage,
@@ -665,10 +681,15 @@ class BatchArray:
         return self._serialize_msgpack_block(items)
 
     def _deserialize_msgpack_block(self, payload: bytes) -> list[Any]:
-        return msgpack_unpackb(payload)
+        return msgpack_unpackb(payload, deserialize=get_deserialize(self.schunk))
 
     def _deserialize_arrow_block_column(self, payload: bytes):
         pa, pa_ipc = self._require_pyarrow()
+        if get_deserialize(self.schunk) is DeserializeMode.SAFE and (
+            b"ARROW:extension:name" in payload
+            or (self._arrow_schema is not None and b"ARROW:extension:name" in self._arrow_schema)
+        ):
+            raise blosc2.UnsafeDeserializationError("Arrow extension type")
         try:
             reader = pa_ipc.open_stream(pa.BufferReader(payload))
             batch = reader.read_next_batch()
@@ -677,7 +698,33 @@ class BatchArray:
             # as bare serialized RecordBatch payloads.  Those cannot represent
             # dictionary batches reliably, so new blocks use IPC streams.
             batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
-        return batch.column(0)
+        column = batch.column(0)
+        if get_deserialize(self.schunk) is DeserializeMode.SAFE:
+            self._validate_safe_arrow_type(column.type)
+        return column
+
+    @classmethod
+    def _validate_safe_arrow_type(cls, datatype) -> None:
+        """Reject Arrow extension types before converting values to Python objects."""
+
+        pa, _ = cls._require_pyarrow()
+        if isinstance(datatype, pa.ExtensionType):
+            raise blosc2.UnsafeDeserializationError(f"Arrow extension type {datatype.extension_name!r}")
+        if (
+            pa.types.is_list(datatype)
+            or pa.types.is_large_list(datatype)
+            or pa.types.is_fixed_size_list(datatype)
+        ):
+            cls._validate_safe_arrow_type(datatype.value_type)
+        elif pa.types.is_struct(datatype):
+            for field in datatype:
+                cls._validate_safe_arrow_type(field.type)
+        elif pa.types.is_map(datatype):
+            cls._validate_safe_arrow_type(datatype.key_type)
+            cls._validate_safe_arrow_type(datatype.item_type)
+        elif pa.types.is_dictionary(datatype):
+            cls._validate_safe_arrow_type(datatype.index_type)
+            cls._validate_safe_arrow_type(datatype.value_type)
 
     def _deserialize_arrow_block(self, payload: bytes) -> list[Any]:
         return self._deserialize_arrow_block_column(payload).to_pylist()
@@ -686,6 +733,12 @@ class BatchArray:
         if self._serializer == "arrow":
             return self._deserialize_arrow_block(payload)
         return self._deserialize_msgpack_block(payload)
+
+    def _deserialize_block_at(self, payload: bytes, nbatch: int) -> list[Any]:
+        try:
+            return self._deserialize_block(payload)
+        except blosc2.UnsafeDeserializationError as exc:
+            raise blosc2.UnsafeDeserializationError(exc.kind, location=f"BatchArray batch {nbatch}") from exc
 
     def _deserialize_arrow_block_item(self, payload: bytes, item_index: int) -> Any:
         return self._deserialize_arrow_block_column(payload)[item_index].as_py()
@@ -714,7 +767,7 @@ class BatchArray:
         block_payloads = blosc2.blosc2_ext.vldecompress(
             self.schunk.get_chunk(nbatch), **self._vl_dparams_kwargs()
         )
-        return [self._deserialize_block(payload) for payload in block_payloads]
+        return [self._deserialize_block_at(payload, nbatch) for payload in block_payloads]
 
     def _get_batch(self, index: int) -> Batch:
         return Batch(self, index, self.schunk.get_lazychunk(index))
@@ -1022,6 +1075,7 @@ class BatchArray:
         kwargs.setdefault("dparams", copy.deepcopy(self.dparams))
         kwargs.setdefault("items_per_block", self.items_per_block)
         kwargs.setdefault("serializer", self.serializer)
+        kwargs.setdefault("deserialize", get_deserialize(self.schunk))
         kwargs.setdefault("contiguous", self.schunk.contiguous)
         if "urlpath" in kwargs and "mode" not in kwargs:
             kwargs["mode"] = "w"
@@ -1053,6 +1107,7 @@ class BatchArray:
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
         kwargs["items_per_block"] = kwargs.get("items_per_block", self.items_per_block)
         kwargs["serializer"] = kwargs.get("serializer", self.serializer)
+        kwargs.setdefault("deserialize", get_deserialize(self.schunk))
         user_vlmeta = self._user_vlmeta_items() if len(self.vlmeta) > 0 else {}
 
         if "storage" in kwargs:

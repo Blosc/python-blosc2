@@ -30,7 +30,7 @@ def test_local_b2nd_disk_cache(tmp_path):
     data = np.arange(40, dtype=np.int32)
     blosc2.asarray(data, urlpath=source)
 
-    with blosc2.open(source, cache_dir=cache_dir) as cached:
+    with blosc2.open(source, cache_dir=cache_dir, deserialize="full") as cached:
         assert isinstance(cached, blosc2.RemoteArray)
         np.testing.assert_array_equal(cached[::3], data[::3])
         cache_path = cached.cache_path
@@ -41,14 +41,14 @@ def test_local_b2nd_disk_cache(tmp_path):
             blosc2.Ref.from_object(cached)
     assert Path(cache_path).exists()
     with pytest.raises(ValueError, match="source descriptor"):
-        blosc2.open(cache_path)
+        blosc2.open(cache_path, deserialize="full")
 
-    with blosc2.open(source.resolve(), cache_dir=cache_dir) as reopened:
+    with blosc2.open(source.resolve(), cache_dir=cache_dir, deserialize="full") as reopened:
         assert reopened.cache_path == cache_path
         reopened.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
         np.testing.assert_array_equal(reopened[:], data)
 
-    with blosc2.open(source.as_uri(), cache_dir=cache_dir) as file_url:
+    with blosc2.open(source.as_uri(), cache_dir=cache_dir, deserialize="full") as file_url:
         assert file_url.cache_path == cache_path
         np.testing.assert_array_equal(file_url[:], data)
 
@@ -67,24 +67,24 @@ def test_local_b2nd_disk_cache(tmp_path):
     )
 
     with pytest.raises(ValueError, match="cannot overwrite the local source"):
-        blosc2.open(source, cache_path=source)
+        blosc2.open(source, cache_path=source, deserialize="full")
     with pytest.raises(NotImplementedError, match="omit lazy=False"):
-        blosc2.open(source, cache_dir=cache_dir, lazy=False)
+        blosc2.open(source, cache_dir=cache_dir, lazy=False, deserialize="full")
     with pytest.raises(NotImplementedError, match="assume_immutable=True"):
-        blosc2.open(source, cache_dir=cache_dir, assume_immutable=False)
+        blosc2.open(source, cache_dir=cache_dir, assume_immutable=False, deserialize="full")
     for options in ({"mode": "a"}, {"offset": 1}, {"mmap_mode": "r"}, {"shared_cache": True}):
         with pytest.raises((ValueError, NotImplementedError)):
-            blosc2.open(source, cache_dir=cache_dir, **options)
+            blosc2.open(source, cache_dir=cache_dir, **options, deserialize="full")
 
     other = tmp_path / "other.b2nd"
     blosc2.asarray(data + 1, urlpath=other)
     with pytest.raises(ValueError, match="different specification"):
-        blosc2.open(other, cache_path=cache_path)
+        blosc2.open(other, cache_path=cache_path, deserialize="full")
 
     sparse = tmp_path / "sparse.b2nd"
     blosc2.asarray(data, urlpath=sparse, contiguous=False)
     with pytest.raises(NotImplementedError, match="contiguous native frame"):
-        blosc2.open(sparse, cache_dir=cache_dir)
+        blosc2.open(sparse, cache_dir=cache_dir, deserialize="full")
 
 
 @pytest.mark.parametrize("format", ["b2nd", "b2z", "h5", "zarr"])
@@ -113,7 +113,7 @@ def test_local_array_refresh(tmp_path, format, placement, monkeypatch):
     new = np.arange(12, dtype="i4") + 100
     write(source, old)
     options = {placement: tmp_path / ("cache" if placement == "cache_dir" else "cache.b2nd")}
-    with blosc2.open(source, path=dataset, **options) as array:
+    with blosc2.open(source, path=dataset, **options, deserialize="full") as array:
         np.testing.assert_array_equal(array[:], old)
         carrier = array.cache_path
         write(replacement, new)
@@ -138,7 +138,7 @@ def test_local_array_refresh(tmp_path, format, placement, monkeypatch):
         assert array.cache_status == "refreshed"
         assert array.cache_path == carrier
         np.testing.assert_array_equal(array[:], new)
-    with blosc2.open(source, path=dataset, **options) as reopened:
+    with blosc2.open(source, path=dataset, **options, deserialize="full") as reopened:
         reopened.src.get_chunk = lambda n: (_ for _ in ()).throw(AssertionError("cache miss"))
         np.testing.assert_array_equal(reopened[:], new)
 
@@ -161,7 +161,7 @@ def test_remote_array_refresh_policies_and_store_owner(tmp_path):
     source = tmp_path / "source.b2z"
     with blosc2.TreeStore(source, mode="w", threshold=0) as tree:
         tree["values"] = blosc2.asarray(new)
-    with blosc2.open(source, cache_dir=tmp_path / "store-cache") as store:
+    with blosc2.open(source, cache_dir=tmp_path / "store-cache", deserialize="full") as store:
         with store["values"] as array:
             with pytest.raises(ValueError, match="root RemoteStore"):
                 array.refresh()
@@ -170,7 +170,7 @@ def test_remote_array_refresh_policies_and_store_owner(tmp_path):
     with pytest.raises(NotImplementedError, match="Shared sparse"):
         shared.refresh()
 
-    readonly = blosc2.from_cframe(shared.to_cframe(mutable=False))
+    readonly = blosc2.from_cframe(shared.to_cframe(mutable=False), deserialize="full")
     with pytest.raises(ValueError, match="immutable RemoteArray"):
         readonly.refresh()
 
@@ -195,13 +195,13 @@ def test_remote_container_array_refresh_discards_source_snapshot(tmp_path, forma
     new = np.arange(12, dtype="i4") + 100
     upload(old)
     cache_dir = tmp_path / "cache"
-    with blosc2.open(url, path="values", cache_dir=cache_dir) as array:
+    with blosc2.open(url, path="values", cache_dir=cache_dir, deserialize="full") as array:
         np.testing.assert_array_equal(array[:], old)
         upload(new)
         np.testing.assert_array_equal(array[:], old)
         array.refresh()
         np.testing.assert_array_equal(array[:], new)
-    with blosc2.open(url, path="values", cache_dir=cache_dir) as reopened:
+    with blosc2.open(url, path="values", cache_dir=cache_dir, deserialize="full") as reopened:
         reopened.src.get_chunk = lambda n: (_ for _ in ()).throw(AssertionError("cache miss"))
         np.testing.assert_array_equal(reopened[:], new)
 
@@ -222,18 +222,18 @@ def test_local_container_cache_selection(tmp_path, format):
         store = zarr.open_group(source, mode="w")
         store.create_array("values", data=data, chunks=(8,))
 
-    with blosc2.open(source, cache_dir=tmp_path / "group-cache") as group:
+    with blosc2.open(source, cache_dir=tmp_path / "group-cache", deserialize="full") as group:
         assert isinstance(group, blosc2.RemoteStore)
         with group["values"] as array:
             np.testing.assert_array_equal(array[:], data)
     with pytest.raises(NotImplementedError, match="cache_dir"):
-        blosc2.open(source, cache_path=tmp_path / "group.b2nd")
+        blosc2.open(source, cache_path=tmp_path / "group.b2nd", deserialize="full")
 
     for placement in ("cache_dir", "cache_path"):
         options = {placement: tmp_path / f"{placement}.b2nd"}
-        with blosc2.open(source, path="values", **options) as array:
+        with blosc2.open(source, path="values", **options, deserialize="full") as array:
             np.testing.assert_array_equal(array[:], data)
-        with blosc2.open(f"{source}::values", **options) as array:
+        with blosc2.open(f"{source}::values", **options, deserialize="full") as array:
             array.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
             np.testing.assert_array_equal(array[:], data)
 
@@ -247,7 +247,7 @@ def test_bounded_unbounded_cache_accounting_transition(tmp_path):
     bounded = blosc2.Proxy(creator.src, _cache=creator._carrier, _max_cache_bytes=20_000)
     np.testing.assert_array_equal(bounded[:10_000], data[:10_000])
     assert creator.schunk.vlmeta.get("proxy-cache-sizes")
-    unbounded = blosc2.open(path, mode="a")
+    unbounded = blosc2.open(path, mode="a", deserialize="full")
     np.testing.assert_array_equal(unbounded[:], data)
     assert "proxy-cache-sizes" not in unbounded.schunk.vlmeta
     bounded = blosc2.Proxy(unbounded.src, _cache=unbounded._carrier, _max_cache_bytes=20_000)
@@ -270,11 +270,11 @@ def test_immutable_cache_chunk_reads_and_mutation_paths(tmp_path, carrier_kind):
     live = blosc2.RemoteArray(url, cache_policy=blosc2.CachePolicy.DISK, cache_dir=tmp_path / "live")
     live[:1000]
     if carrier_kind == "memory":
-        frozen = blosc2.from_cframe(live.to_cframe())
+        frozen = blosc2.from_cframe(live.to_cframe(), deserialize="full")
     else:
         path = tmp_path / "snapshot.b2nd"
         live.save(path)
-        frozen = blosc2.open(path, mode=carrier_kind[-1])
+        frozen = blosc2.open(path, mode=carrier_kind[-1], deserialize="full")
     assert not frozen.is_cache_mutable
     before = frozen._carrier.to_cframe()
     retained = frozen.cache_bytes
@@ -314,11 +314,11 @@ def test_immutable_array_rejects_oversized_payload(tmp_path, carrier_kind):
         carrier.save(path)
         before = path.read_bytes()
         with pytest.raises(ValueError, match=r"immutable payload.*exceeds"):
-            blosc2.open(path, mode="a")
+            blosc2.open(path, mode="a", deserialize="full")
         assert path.read_bytes() == before
     else:
         with pytest.raises(ValueError, match=r"immutable payload.*exceeds"):
-            blosc2.from_cframe(carrier.to_cframe())
+            blosc2.from_cframe(carrier.to_cframe(), deserialize="full")
 
 
 def test_cache_policy_validation(tmp_path):
@@ -371,7 +371,7 @@ def test_cache_policy_validation(tmp_path):
 def test_assume_immutable_controls_identity_refresh(monkeypatch):
     url, _ = _remote_array("immutable-option.b2nd", nchunks=1, chunk_size=100)
     immutable = blosc2.RemoteArray(url)
-    mutable = blosc2.open(url, lazy=True, assume_immutable=False)
+    mutable = blosc2.open(url, lazy=True, assume_immutable=False, deserialize="full")
     refreshed = []
 
     monkeypatch.setattr(
@@ -413,35 +413,32 @@ def test_remote_array_operand_interface():
 def test_open_lazy_selects_remote_array(tmp_path):
     url, data = _remote_array("open-policy.b2nd")
 
-    mem = blosc2.open(url, lazy=True)
+    mem = blosc2.open(url, lazy=True, deserialize="full")
     assert isinstance(mem, blosc2.RemoteArray)
     assert mem.cache_policy is blosc2.CachePolicy.MEMORY
     assert mem.cache_path is None
     assert mem.max_cache_bytes == 256 * 2**20
     np.testing.assert_array_equal(mem[:100_000], data[:100_000])
 
-    none = blosc2.open(url, lazy=True, cache_policy=blosc2.CachePolicy.NONE)
+    none = blosc2.open(url, lazy=True, cache_policy=blosc2.CachePolicy.NONE, deserialize="full")
     assert isinstance(none, blosc2.RemoteArray)
     assert none.cache_policy is blosc2.CachePolicy.NONE
     np.testing.assert_array_equal(none[:100_000], data[:100_000])
 
-    mem_bounded = blosc2.open(url, lazy=True, max_cache_bytes=120_000)
+    mem_bounded = blosc2.open(url, lazy=True, max_cache_bytes=120_000, deserialize="full")
     assert isinstance(mem_bounded, blosc2.RemoteArray)
     assert mem_bounded.cache_policy is blosc2.CachePolicy.MEMORY
     assert mem_bounded.max_cache_bytes == 120_000
 
     disk = blosc2.open(
-        url,
-        lazy=True,
-        cache_path=tmp_path / "open-cache.b2nd",
-        max_cache_bytes=120_000,
+        url, lazy=True, cache_path=tmp_path / "open-cache.b2nd", max_cache_bytes=120_000, deserialize="full"
     )
     assert isinstance(disk, blosc2.RemoteArray)
     assert disk.cache_policy is blosc2.CachePolicy.DISK
     assert disk.max_cache_bytes == 120_000
 
     with pytest.raises(NotImplementedError, match="require lazy=True"):
-        blosc2.open(url, lazy=False, max_cache_bytes=120_000)
+        blosc2.open(url, lazy=False, max_cache_bytes=120_000, deserialize="full")
 
 
 def test_none_does_not_retain_remote_data():
@@ -500,12 +497,14 @@ def test_open_shared_b2nd(tmp_path, options, limit):
 
     url, data = _remote_array("shared-open.b2nd", nchunks=2, chunk_size=1000)
     cache_dir = tmp_path / "cache"
-    with blosc2.open(url, cache_dir=cache_dir, shared_cache=True, **options) as first:
+    with blosc2.open(url, cache_dir=cache_dir, shared_cache=True, **options, deserialize="full") as first:
         assert first.max_cache_bytes == limit
         assert first.schunk.contiguous is False
         assert Path(first.runtime_cache_path).is_dir()
         np.testing.assert_array_equal(first[:1000], data[:1000])
-        with blosc2.open(url, cache_dir=cache_dir, shared_cache=True, **options) as second:
+        with blosc2.open(
+            url, cache_dir=cache_dir, shared_cache=True, **options, deserialize="full"
+        ) as second:
             second.traffic.reset()
             np.testing.assert_array_equal(second[:1000], data[:1000])
             assert (second.traffic.requests > 0) if limit == 1 else (second.traffic.requests == 0)
@@ -521,7 +520,11 @@ def test_open_shared_b2nd_storage_options(tmp_path):
     paths = []
     for account in ("one", "two", "one"):
         with blosc2.open(
-            url, cache_dir=tmp_path, shared_cache=True, storage_options={"account": account}
+            url,
+            cache_dir=tmp_path,
+            shared_cache=True,
+            storage_options={"account": account},
+            deserialize="full",
         ) as array:
             paths.append(array.runtime_cache_path)
             array.traffic.reset()
@@ -533,14 +536,14 @@ def test_open_shared_b2nd_storage_options(tmp_path):
 @pytest.mark.parametrize("options", [{}, {"lazy": None}, {"lazy": True}])
 def test_open_shared_suffix_free_url(tmp_path, options):
     url, data = _remote_array("shared-no-suffix", nchunks=1, chunk_size=100)
-    with blosc2.open(url, cache_dir=tmp_path, shared_cache=True, **options) as array:
+    with blosc2.open(url, cache_dir=tmp_path, shared_cache=True, **options, deserialize="full") as array:
         assert isinstance(array, blosc2.RemoteArray)
         assert not array.schunk.contiguous
         np.testing.assert_array_equal(array[:], data)
     with pytest.raises(ValueError, match="shared_cache=True requires lazy=True"):
-        blosc2.open(url, cache_dir=tmp_path, shared_cache=True, lazy=False)
+        blosc2.open(url, cache_dir=tmp_path, shared_cache=True, lazy=False, deserialize="full")
     # Ordinary suffix-free URLs retain their existing eager default.
-    assert isinstance(blosc2.open(url), blosc2.NDArray)
+    assert isinstance(blosc2.open(url, deserialize="full"), blosc2.NDArray)
 
 
 @pytest.mark.parametrize("api", ["open", "factory"])
@@ -564,7 +567,7 @@ def test_sparse_cache_simultaneous_creation(tmp_path, monkeypatch, api):
     def read():
         barrier.wait(timeout=10)
         array = (
-            blosc2.open(url, cache_dir=tmp_path, shared_cache=True)
+            blosc2.open(url, cache_dir=tmp_path, shared_cache=True, deserialize="full")
             if api == "open"
             else blosc2.RemoteArray.with_sparse_cache(url, tmp_path / "runtime")
         )
@@ -786,7 +789,7 @@ def test_interrupted_fetch_leaves_a_reusable_carrier(tmp_path):
     proxy.src.get_chunk = get_chunk
     np.testing.assert_array_equal(proxy[:], data)
 
-    reopened = blosc2.open(cache_path, mode="r")
+    reopened = blosc2.open(cache_path, mode="r", deserialize="full")
     np.testing.assert_array_equal(reopened[:], data)
 
 
@@ -824,7 +827,7 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
 
     warm_path = tmp_path / "warm.b2nd"
     original.save(warm_path)
-    restored = blosc2.open(warm_path, mode="r")
+    restored = blosc2.open(warm_path, mode="r", deserialize="full")
     assert isinstance(restored, blosc2.RemoteArray)
     assert restored.cache_policy is blosc2.CachePolicy.DISK
     restored.traffic.reset()
@@ -833,26 +836,26 @@ def test_disk_roundtrip_preserves_warm_cache_and_cold_escape_hatch(tmp_path):
 
     cold_path = tmp_path / "cold.b2nd"
     original.save(cold_path, include_cache=False, mutable=True)
-    cold = blosc2.open(cold_path, mode="r")
+    cold = blosc2.open(cold_path, mode="r", deserialize="full")
     cold.traffic.reset()
     np.testing.assert_array_equal(cold[:100_000], data[:100_000])
     assert cold.traffic.requests > 0
     assert cold_path.stat().st_size < warm_path.stat().st_size
 
-    mutable = blosc2.open(cold_path, mode="a")
+    mutable = blosc2.open(cold_path, mode="a", deserialize="full")
     np.testing.assert_array_equal(mutable[:100_000], data[:100_000])
-    reopened = blosc2.open(cold_path, mode="r")
+    reopened = blosc2.open(cold_path, mode="r", deserialize="full")
     reopened.traffic.reset()
     np.testing.assert_array_equal(reopened[:100_000], data[:100_000])
     assert reopened.traffic.requests == 0
 
     immutable_path = tmp_path / "immutable.b2nd"
     original.save(immutable_path, include_cache=False)
-    imm = blosc2.open(immutable_path, mode="a")
+    imm = blosc2.open(immutable_path, mode="a", deserialize="full")
     imm.traffic.reset()
     np.testing.assert_array_equal(imm[:100_000], data[:100_000])
     assert imm.traffic.requests > 0
-    imm_reopened = blosc2.open(immutable_path, mode="r")
+    imm_reopened = blosc2.open(immutable_path, mode="r", deserialize="full")
     imm_reopened.traffic.reset()
     np.testing.assert_array_equal(imm_reopened[:100_000], data[:100_000])
     assert imm_reopened.traffic.requests > 0
@@ -895,7 +898,7 @@ def test_dict_store_externalizes_disk_remote_array(tmp_path):
     # The local DISK carrier, not the remote URL, is what gets externalized.
     assert (store_path / "leaf.b2nd").is_file()
 
-    with blosc2.DictStore(store_path, mode="r") as store:
+    with blosc2.DictStore(store_path, mode="r", deserialize="full") as store:
         np.testing.assert_array_equal(store["/leaf"][:], data)
 
 
@@ -907,14 +910,14 @@ def test_reference_rejects_changed_source_geometry(tmp_path):
     replacement = blosc2.arange(200, dtype=np.uint8, chunks=(100,), blocks=(100,))
     fsspec.filesystem("memory").pipe_file("changed-geometry.b2nd", replacement.to_cframe())
     with pytest.raises(ValueError, match="geometry no longer matches"):
-        blosc2.open(path, mode="r")
+        blosc2.open(path, mode="r", deserialize="full")
 
 
 def test_open_reference_rejects_geometry_changed_before_read(tmp_path):
     url, _ = _remote_array("changed-after-open.b2nd", nchunks=1, chunk_size=100)
     path = tmp_path / "changed-after-open-reference.b2nd"
     blosc2.RemoteArray(url, assume_immutable=False).save(path)
-    restored = blosc2.open(path, mode="r")
+    restored = blosc2.open(path, mode="r", deserialize="full")
 
     replacement = blosc2.arange(200, dtype=np.uint8, chunks=(100,), blocks=(100,))
     fsspec.filesystem("memory").pipe_file("changed-after-open.b2nd", replacement.to_cframe())
@@ -979,7 +982,7 @@ def test_reference_accepts_disk_policy_with_none_limit_in_payload(tmp_path):
     assert payload["max_cache_bytes"] is None
     assert decoded_carrier.max_cache_bytes is None
 
-    reopened = blosc2.open(cache_path)
+    reopened = blosc2.open(cache_path, deserialize="full")
     assert isinstance(reopened, blosc2.RemoteArray)
     assert reopened.cache_policy is blosc2.CachePolicy.DISK
     assert reopened.max_cache_bytes is None
@@ -1062,7 +1065,7 @@ def test_caterva2_reference_does_not_persist_auth(monkeypatch):
         "assume_immutable": True,
     }
 
-    restored = blosc2.from_cframe(remote.to_cframe())
+    restored = blosc2.from_cframe(remote.to_cframe(), deserialize="full")
     assert isinstance(restored, blosc2.RemoteArray)
     assert isinstance(restored.src, blosc2.C2Array)
     assert restored.src.auth_token is None
@@ -1137,7 +1140,7 @@ def test_remote_array_is_a_persistable_lazyexpr_operand():
     remote = blosc2.RemoteArray(url)
     expression = blosc2.lazyexpr("a + 1", operands={"a": remote})
 
-    restored = blosc2.from_cframe(expression.to_cframe())
+    restored = blosc2.from_cframe(expression.to_cframe(), deserialize="full")
     assert any(isinstance(operand, blosc2.RemoteArray) for operand in restored.operands.values())
     np.testing.assert_array_equal(restored[:], data + 1)
 
@@ -1211,8 +1214,8 @@ def test_save_after_disk_cache_use_preserves_or_strips_cache(tmp_path):
     cold_path = tmp_path / "saved-cold.b2nd"
     proxy.save(warm_path)
     proxy.save(cold_path, include_cache=False)
-    warm = blosc2.open(warm_path, mode="r")
-    cold = blosc2.open(cold_path, mode="r")
+    warm = blosc2.open(warm_path, mode="r", deserialize="full")
+    cold = blosc2.open(cold_path, mode="r", deserialize="full")
     warm.traffic.reset()
     cold.traffic.reset()
     np.testing.assert_array_equal(warm[:100_000], data[:100_000])
@@ -1302,7 +1305,7 @@ def test_memory_proxy_save_and_reopen(tmp_path):
     save_path = tmp_path / "saved_memory_proxy.b2nd"
     proxy.save(save_path)
 
-    reopened = blosc2.open(save_path, mode="r")
+    reopened = blosc2.open(save_path, mode="r", deserialize="full")
     assert isinstance(reopened, blosc2.RemoteArray)
     assert reopened.cache_policy is blosc2.CachePolicy.MEMORY
     assert reopened.max_cache_bytes == 100_000
@@ -1325,7 +1328,7 @@ def test_remote_array_fetch_rejects_none_policy():
 
 def test_prefetch_over_limit_and_materialize():
     url, data = _remote_array("prefetch-limit.b2nd", nchunks=3, chunk_size=10_000)
-    proxy = blosc2.open(url, lazy=True, max_cache_bytes=12_000)
+    proxy = blosc2.open(url, lazy=True, max_cache_bytes=12_000, deserialize="full")
     assert proxy.fetch() is proxy
     assert proxy.cache_bytes <= 12_000
     assert asyncio.run(proxy.afetch()) is proxy
@@ -1344,7 +1347,7 @@ def test_open_error_preserves_existing_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(blosc2.blosc2_ext, "open", fail)
     with pytest.raises(OSError, match="transient"):
-        blosc2.open(url, lazy=True, cache_path=path)
+        blosc2.open(url, lazy=True, cache_path=path, deserialize="full")
     assert path.read_bytes() == before
 
 
@@ -1377,7 +1380,7 @@ def test_completed_caterva2_reference_refreshes_identity(monkeypatch):
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
 def test_memory_export_policy(tmp_path, policy):
     url, data = _remote_array("export-policy.b2nd", nchunks=1, chunk_size=100)
-    proxy = blosc2.open(url, lazy=True)
+    proxy = blosc2.open(url, lazy=True, deserialize="full")
     proxy[:]
     frame = proxy.to_cframe(cache_policy=policy)
     carrier = blosc2.ndarray_from_cframe(frame)
@@ -1385,7 +1388,7 @@ def test_memory_export_policy(tmp_path, policy):
     assert not carrier.schunk.vlmeta.get("proxy-cache-sizes")
     path = tmp_path / "export.b2nd"
     proxy.save(path, cache_policy=policy)
-    reopened = blosc2.open(path)
+    reopened = blosc2.open(path, deserialize="full")
     assert reopened.cache_policy is policy
     np.testing.assert_array_equal(reopened[:], data)
     assert proxy.cache_policy is blosc2.CachePolicy.MEMORY
@@ -1394,7 +1397,7 @@ def test_memory_export_policy(tmp_path, policy):
 
 def test_runtime_signed_url_is_not_exportable():
     url, data = _remote_array("signed.b2nd?token=secret", nchunks=1, chunk_size=100)
-    proxy = blosc2.open(url, lazy=True)
+    proxy = blosc2.open(url, lazy=True, deserialize="full")
     np.testing.assert_array_equal(proxy[:], data)
     assert dict(proxy.info_items)["source"]["urlpath"] == "<runtime-only URL>"
     assert "secret" not in repr(proxy.info)
@@ -1408,7 +1411,7 @@ def test_runtime_signed_url_is_not_exportable():
 
 def test_interrupted_memory_fetch_enforces_limit(monkeypatch):
     url, _ = _remote_array("interrupted-memory.b2nd", nchunks=3, chunk_size=10_000)
-    proxy = blosc2.open(url, lazy=True, max_cache_bytes=100)
+    proxy = blosc2.open(url, lazy=True, max_cache_bytes=100, deserialize="full")
     original = proxy.src.get_chunk
 
     def interrupted(nchunk):
@@ -1426,7 +1429,7 @@ def test_concurrent_reads_with_eviction():
     from concurrent.futures import ThreadPoolExecutor
 
     url, data = _remote_array("concurrent-memory.b2nd", nchunks=3, chunk_size=10_000)
-    proxy = blosc2.open(url, lazy=True, max_cache_bytes=100)
+    proxy = blosc2.open(url, lazy=True, max_cache_bytes=100, deserialize="full")
     slices = [slice(0, 20_000), slice(10_000, 30_000)] * 4
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(proxy.__getitem__, slices))
@@ -1442,14 +1445,14 @@ def test_legacy_cache_url_open_preserves_file(tmp_path):
     np.testing.assert_array_equal(legacy[:], data)
     before = path.read_bytes()
     with pytest.raises(ValueError, match="open legacy Proxy caches directly"):
-        blosc2.open(url, lazy=True, cache_path=path)
+        blosc2.open(url, lazy=True, cache_path=path, deserialize="full")
     assert path.read_bytes() == before
-    np.testing.assert_array_equal(blosc2.open(path)[:], data)
+    np.testing.assert_array_equal(blosc2.open(path, deserialize="full")[:], data)
 
 
 def test_memory_warm_export_restores_retained_cache(tmp_path):
     url, data = _remote_array("warm-memory.b2nd", nchunks=2, chunk_size=100)
-    proxy = blosc2.open(url, lazy=True)
+    proxy = blosc2.open(url, lazy=True, deserialize="full")
     np.testing.assert_array_equal(proxy[:100], data[:100])
 
     frame = proxy.to_cframe()
@@ -1458,7 +1461,7 @@ def test_memory_warm_export_restores_retained_cache(tmp_path):
     assert carrier.schunk.vlmeta.get("proxy-fetched")
     assert proxy.cache_bytes > 0
 
-    restored = blosc2.from_cframe(frame)
+    restored = blosc2.from_cframe(frame, deserialize="full")
     restored.traffic.reset()
     np.testing.assert_array_equal(restored[:100], data[:100])
     assert restored.traffic.requests == 0
@@ -1467,7 +1470,7 @@ def test_memory_warm_export_restores_retained_cache(tmp_path):
 
     path = tmp_path / "warm-memory.b2nd"
     proxy.save(path)
-    reopened = blosc2.open(path)
+    reopened = blosc2.open(path, deserialize="full")
     reopened.traffic.reset()
     np.testing.assert_array_equal(reopened[:100], data[:100])
     assert reopened.traffic.requests == 0
@@ -1476,7 +1479,7 @@ def test_memory_warm_export_restores_retained_cache(tmp_path):
 def test_cold_export_cannot_overwrite_live_carrier(tmp_path):
     url, _ = _remote_array("same-export.b2nd", nchunks=1, chunk_size=100)
     path = tmp_path / "live.b2nd"
-    proxy = blosc2.open(url, lazy=True, cache_path=path)
+    proxy = blosc2.open(url, lazy=True, cache_path=path, deserialize="full")
     proxy[:]
     before = path.read_bytes()
     for kwargs in ({"include_cache": False}, {"cache_policy": blosc2.CachePolicy.NONE}):
@@ -1489,7 +1492,7 @@ def test_cold_export_cannot_overwrite_live_carrier(tmp_path):
 def test_warm_export_cannot_overwrite_live_carrier(tmp_path, mutable):
     url, data = _remote_array("live-export.b2nd", nchunks=2, chunk_size=100)
     path = tmp_path / "live.b2nd"
-    proxy = blosc2.open(url, lazy=True, cache_path=path)
+    proxy = blosc2.open(url, lazy=True, cache_path=path, deserialize="full")
     proxy[:100]
     before = path.read_bytes()
     with pytest.raises(ValueError, match="attached live cache"):
@@ -1504,7 +1507,7 @@ def test_array_export_overwrite(tmp_path, monkeypatch, contiguous, initial_conti
     import os
 
     url, data = _remote_array("sparse-export.b2nd", nchunks=2, chunk_size=100)
-    proxy = blosc2.open(url, lazy=True)
+    proxy = blosc2.open(url, lazy=True, deserialize="full")
     proxy[:100]
     path = tmp_path / "reference.b2nd"
     proxy.save(path, initial_contiguous)
@@ -1527,7 +1530,7 @@ def test_array_export_overwrite(tmp_path, monkeypatch, contiguous, initial_conti
             proxy.save(path, contiguous, overwrite=True)
     assert snapshot() == before
     proxy.save(path, contiguous, overwrite=True)
-    with blosc2.open(path) as reopened:
+    with blosc2.open(path, deserialize="full") as reopened:
         reopened.traffic.reset()
         np.testing.assert_array_equal(reopened[:], data)
         assert reopened.traffic.requests == 0
@@ -1536,7 +1539,7 @@ def test_array_export_overwrite(tmp_path, monkeypatch, contiguous, initial_conti
 def test_unlimited_disk_cache_does_not_evict(tmp_path):
     url, data = _remote_array("unlimited-disk.b2nd", nchunks=5, chunk_size=20)
     carrier_path = tmp_path / "unlimited.b2nd"
-    proxy = blosc2.open(url, lazy=True, cache_path=carrier_path, max_cache_bytes=None)
+    proxy = blosc2.open(url, lazy=True, cache_path=carrier_path, max_cache_bytes=None, deserialize="full")
     assert proxy.max_cache_bytes is None
 
     # Read all chunks
@@ -1702,7 +1705,7 @@ def test_remote_array_disk_cache_persists_metadata_and_offline_reopen(tmp_path):
     assert reopened.traffic.requests == 0
 
     # Open carrier directly using blosc2.open()
-    opened = blosc2.open(cache_path)
+    opened = blosc2.open(cache_path, deserialize="full")
     assert isinstance(opened, blosc2.RemoteArray)
     opened.traffic.reset()
     assert opened.meta["exp_header"] == "test_disk_meta"
@@ -1727,14 +1730,14 @@ def test_remote_array_export_preserves_metadata(tmp_path):
     # 1. Export via save()
     save_path = tmp_path / "saved_carrier.b2nd"
     proxy.save(save_path)
-    saved_proxy = blosc2.open(save_path)
+    saved_proxy = blosc2.open(save_path, deserialize="full")
     assert isinstance(saved_proxy, blosc2.RemoteArray)
     assert saved_proxy.meta["export_meta"] == {"model": "sensor_a"}
     assert saved_proxy.vlmeta["export_vlmeta"] == {"quality": "high"}
 
     # 2. Export via to_cframe()
     cframe = proxy.to_cframe()
-    restored_proxy = blosc2.from_cframe(cframe)
+    restored_proxy = blosc2.from_cframe(cframe, deserialize="full")
     assert isinstance(restored_proxy, blosc2.RemoteArray)
     assert restored_proxy.meta["export_meta"] == {"model": "sensor_a"}
     assert restored_proxy.vlmeta["export_vlmeta"] == {"quality": "high"}
@@ -1829,7 +1832,7 @@ def test_caterva2_vlmeta_filters_internal_keys(monkeypatch, attrs):
 
     # Export to carrier and verify roundtrip doesn't persist internal keys
     cframe = remote.to_cframe()
-    restored = blosc2.from_cframe(cframe)
+    restored = blosc2.from_cframe(cframe, deserialize="full")
     assert restored.vlmeta == expected
 
     previous_requests = requests
@@ -2078,15 +2081,15 @@ def test_readable_cache_ignores_legacy_and_checks_identity(tmp_path, monkeypatch
 
     url, data = _remote_array("readable.b2nd", nchunks=2, chunk_size=1000)
     legacy = tmp_path / (hashlib.sha256(url.encode()).hexdigest() + ".b2nd")
-    first = blosc2.open(url, lazy=True, cache_path=legacy)
+    first = blosc2.open(url, lazy=True, cache_path=legacy, deserialize="full")
     first[:]
-    second = blosc2.open(url, lazy=True, cache_dir=tmp_path)
+    second = blosc2.open(url, lazy=True, cache_dir=tmp_path, deserialize="full")
     assert second._cache_status == "created"
     assert Path(second.cache_path).name == "readable.b2nd"
     assert legacy.exists()
-    np.testing.assert_array_equal(blosc2.open(legacy)[:], data)
+    np.testing.assert_array_equal(blosc2.open(legacy, deserialize="full")[:], data)
     directory = Path(second.cache_path).parent.name
     monkeypatch.setattr(blosc2.core, "cache_directory_name", lambda *args: directory)
     other_url, _ = _remote_array("other/readable.b2nd", nchunks=2, chunk_size=1000)
     with pytest.raises(ValueError, match="different specification"):
-        blosc2.open(other_url, lazy=True, cache_dir=tmp_path)
+        blosc2.open(other_url, lazy=True, cache_dir=tmp_path, deserialize="full")

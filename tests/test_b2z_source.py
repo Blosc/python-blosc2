@@ -33,7 +33,7 @@ def test_small_archive_source_cache_shared_across_scopes(tmp_path, monkeypatch):
     from blosc2.b2z_source import b2z_source_cache
 
     url, data = memory_archive()
-    with blosc2.open(url + "::d0/a", cache_dir=tmp_path) as first:
+    with blosc2.open(url + "::d0/a", cache_dir=tmp_path, deserialize="full") as first:
         assert first.traffic.requests == 1
         assert first.traffic.nbytes == len(fsspec.filesystem("memory").cat_file(url))
     path, marker, blob = b2z_source_cache(url, tmp_path)
@@ -48,7 +48,7 @@ def test_small_archive_source_cache_shared_across_scopes(tmp_path, monkeypatch):
     monkeypatch.setattr(type(fs), "cat_file", no_network)
     monkeypatch.setattr(type(fs), "info", no_network)
     for dataset, expected in (("d0/a", data), ("d0/b", data[::-1])):
-        with blosc2.open(url, dataset=dataset, cache_dir=tmp_path) as array:
+        with blosc2.open(url, dataset=dataset, cache_dir=tmp_path, deserialize="full") as array:
             np.testing.assert_array_equal(array[:], expected)
             assert array.traffic.requests == 0
     with blosc2.RemoteStore(url, cache_dir=tmp_path) as store:
@@ -61,7 +61,7 @@ def test_small_archive_refresh_invalidates_other_scopes(tmp_path, large):
     from blosc2.b2z_source import b2z_source_cache
 
     url, data = memory_archive()
-    with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path) as array:
+    with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path, deserialize="full") as array:
         np.testing.assert_array_equal(array[:], data)
     with blosc2.RemoteStore(url, cache_dir=tmp_path) as store:
         changed = data ^ np.uint8(1)
@@ -78,7 +78,7 @@ def test_small_archive_refresh_invalidates_other_scopes(tmp_path, large):
     assert (blob is None) == large
     assert path.exists() != large
     assert (marker["sha256"] is None) == large
-    with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path) as array:
+    with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path, deserialize="full") as array:
         np.testing.assert_array_equal(array[:], changed)
 
 
@@ -93,7 +93,7 @@ def test_small_archive_legacy_cache_migration(tmp_path, monkeypatch, store):
             with blosc2.RemoteStore(url, cache_dir=tmp_path) as remote:
                 np.testing.assert_array_equal(remote["d0/a"][:], data)
         else:
-            with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path) as array:
+            with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path, deserialize="full") as array:
                 np.testing.assert_array_equal(array[:], data)
                 seed = array._carrier.schunk.vlmeta["b2z-frame"]
                 seed.pop("source_sha256", None)
@@ -103,7 +103,7 @@ def test_small_archive_legacy_cache_migration(tmp_path, monkeypatch, store):
         with blosc2.RemoteStore(url, cache_dir=tmp_path) as remote:
             np.testing.assert_array_equal(remote["d0/a"][:], data)
     else:
-        with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path) as array:
+        with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path, deserialize="full") as array:
             np.testing.assert_array_equal(array[:], data)
     assert bs.b2z_source_cache(url, tmp_path)[2] is not None
 
@@ -140,7 +140,7 @@ def test_archive_eager_download_threshold(tmp_path, extra):
         archive.writestr("padding", bytes(padding))
     assert len(buffer.getvalue()) == SMALL_REMOTE_FILE + extra
     fs.pipe_file(url, buffer.getvalue())
-    with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path) as array:
+    with blosc2.open(url, dataset="d0/a", cache_dir=tmp_path, deserialize="full") as array:
         assert (array.src._archive.blob is None) == bool(extra)
         if not extra:
             assert array.traffic.requests == 1
@@ -246,9 +246,9 @@ def test_addressing_and_hits(address, monkeypatch):
 
     monkeypatch.setattr(type(fs), "cat_file", counted)
     arr = (
-        blosc2.open(url, lazy=True, dataset="/d0/a/")
+        blosc2.open(url, lazy=True, dataset="/d0/a/", deserialize="full")
         if address == "keyword"
-        else blosc2.open(url + address, lazy=True)
+        else blosc2.open(url + address, lazy=True, deserialize="full")
     )
     assert arr.dataset == "d0/a"
     assert arr.source["kind"] == "b2z"
@@ -288,7 +288,7 @@ def test_small_member_prefetch_carries_vlmeta(monkeypatch):
         return original(self, path, start=start, end=end, **kwargs)
 
     monkeypatch.setattr(type(fs), "cat_file", counted)
-    arr = blosc2.open("memory://vlmeta_prefetch.b2z", dataset="d0/a", lazy=True)
+    arr = blosc2.open("memory://vlmeta_prefetch.b2z", dataset="d0/a", lazy=True, deserialize="full")
     # ZIP tail, then one whole-member request that also holds the frame trailer.
     assert len(reads) == 2
     assert dict(arr.vlmeta) == {"greeting": "hello"}
@@ -364,7 +364,7 @@ def test_http_tail_bootstrap(suffix, small, ctable, tmp_path):
         remote = (
             blosc2.RemoteCTable(url, storage_options=options)
             if ctable
-            else blosc2.open(url + "::/d0/a", storage_options=options)
+            else blosc2.open(url + "::/d0/a", storage_options=options, deserialize="full")
         )
         with remote as arr:
             assert requests[0] == ("GET", "bytes=-8192")
@@ -414,7 +414,7 @@ def test_disk_cache_reopen_replays_b2z_bootstrap(tmp_path, monkeypatch, reopen):
         return original(self, path, start=start, end=end, **kwargs)
 
     monkeypatch.setattr(type(fs), "cat_file", counted)
-    first = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path)
+    first = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path, deserialize="full")
     first[:200, :250]
     assert reads  # the cold open bootstrapped the ZIP
 
@@ -428,12 +428,12 @@ def test_disk_cache_reopen_replays_b2z_bootstrap(tmp_path, monkeypatch, reopen):
     monkeypatch.setattr(type(fs), "info", no_discovery)
     reads.clear()
     if reopen == "url":
-        second = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path)
+        second = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path, deserialize="full")
         assert second._cache_status == "reused"
     elif reopen == "carrier":
-        second = blosc2.open(first.cache_path)
+        second = blosc2.open(first.cache_path, deserialize="full")
     else:
-        second = blosc2.from_cframe(first.to_cframe())
+        second = blosc2.from_cframe(first.to_cframe(), deserialize="full")
     assert not reads  # the cached bootstrap replaced the remote ZIP bootstrap
     assert second.src._archive._fs is None
     np.testing.assert_array_equal(second[:200, :250], data[:200, :250])
@@ -449,15 +449,17 @@ def test_disk_cache_reopen_replays_b2z_bootstrap(tmp_path, monkeypatch, reopen):
 def test_disk_persistence_and_eviction(tmp_path, limit):
     url, data = memory_archive()
     path = tmp_path / "cache.b2nd"
-    arr = blosc2.open(url, dataset="d0/a", lazy=True, cache_path=path, max_cache_bytes=limit)
+    arr = blosc2.open(
+        url, dataset="d0/a", lazy=True, cache_path=path, max_cache_bytes=limit, deserialize="full"
+    )
     np.testing.assert_array_equal(arr[:40], data[:40])
     if limit is not None:
         assert arr.cache_bytes <= limit
-    reopened = blosc2.open(path, mode="a")
+    reopened = blosc2.open(path, mode="a", deserialize="full")
     before = reopened.traffic.nbytes
     np.testing.assert_array_equal(reopened[:40], data[:40])
     assert (reopened.traffic.nbytes == before) == (limit != 1000)
-    restored = blosc2.from_cframe(arr.to_cframe())
+    restored = blosc2.from_cframe(arr.to_cframe(), deserialize="full")
     np.testing.assert_array_equal(restored[-2:], data[-2:])
     assert restored.dataset == "d0/a"
 
@@ -470,26 +472,26 @@ def test_policies_exports_and_identity(tmp_path):
     before = none.traffic.nbytes
     np.testing.assert_array_equal(none[:2], data[:2])
     assert none.traffic.nbytes > before
-    memory = blosc2.open(url, dataset="d0/a", lazy=True)
+    memory = blosc2.open(url, dataset="d0/a", lazy=True, deserialize="full")
     memory[:2]
     memory.save(tmp_path / "warm.b2nd")
-    warm = blosc2.open(tmp_path / "warm.b2nd")
+    warm = blosc2.open(tmp_path / "warm.b2nd", deserialize="full")
     assert warm.cache_bytes > 0
     warm.traffic.reset()
     np.testing.assert_array_equal(warm[:2], data[:2])
     assert warm.traffic.requests == 0
     memory.save(tmp_path / "cold.b2nd", include_cache=False)
-    cold = blosc2.open(tmp_path / "cold.b2nd")
+    cold = blosc2.open(tmp_path / "cold.b2nd", deserialize="full")
     assert cold.cache_bytes == 0
     np.testing.assert_array_equal(cold.materialize((slice(0, 2),))[:], data[:2])
-    a = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path / "caches")
-    b = blosc2.open(url, dataset="d0/b", lazy=True, cache_dir=tmp_path / "caches")
+    a = blosc2.open(url, dataset="d0/a", lazy=True, cache_dir=tmp_path / "caches", deserialize="full")
+    b = blosc2.open(url, dataset="d0/b", lazy=True, cache_dir=tmp_path / "caches", deserialize="full")
     assert a.cache_path != b.cache_path
     np.testing.assert_array_equal(b[:2], data[::-1][:2])
     src = blosc2.B2ZNDSource(url, "d0/a")
     proxy = blosc2.Proxy(src, urlpath=str(tmp_path / "legacy.b2nd"), mode="w")
     proxy[:2]
-    np.testing.assert_array_equal(blosc2.open(tmp_path / "legacy.b2nd")[-2:], data[-2:])
+    np.testing.assert_array_equal(blosc2.open(tmp_path / "legacy.b2nd", deserialize="full")[-2:], data[-2:])
     sparse = blosc2.RemoteArray.with_sparse_cache(src, tmp_path / "sparse", source_descriptor=a.source)
     np.testing.assert_array_equal(sparse[:2], data[:2])
     assert sparse.cache_bytes > 0
@@ -526,7 +528,7 @@ def test_opening_buffer_fallbacks(variant):
                 for index in range(300):
                     archive.writestr(f"directory/padding-{index}", b"")
     fs.pipe_file("v10.b2z", buffer.getvalue())
-    arr = blosc2.open(url, dataset="d0/a", lazy=True)
+    arr = blosc2.open(url, dataset="d0/a", lazy=True, deserialize="full")
     np.testing.assert_array_equal(arr[:], data)
 
 
@@ -534,39 +536,42 @@ def test_opening_buffer_fallbacks(variant):
 def test_bad_datasets(dataset):
     url, _ = memory_archive()
     with pytest.raises(ValueError):
-        blosc2.open(url, lazy=True, dataset=dataset)
+        blosc2.open(url, lazy=True, dataset=dataset, deserialize="full")
 
 
 @pytest.mark.parametrize("dataset", [None, "", "/", "d0"])
 def test_open_b2z_groups(dataset):
     url, _ = memory_archive()
-    with blosc2.open(url, dataset=dataset) as store:
+    with blosc2.open(url, dataset=dataset, deserialize="full") as store:
         assert isinstance(store, blosc2.RemoteStore)
 
 
 def test_options_and_bad_archives():
     url, _ = memory_archive()
     with pytest.raises(NotImplementedError, match="mutable B2Z"):
-        blosc2.open(url, lazy=True, dataset="d0/a", assume_immutable=False)
+        blosc2.open(url, lazy=True, dataset="d0/a", assume_immutable=False, deserialize="full")
     with pytest.raises(ValueError, match="both"):
-        blosc2.open(url + "::d0/a", dataset="d0/a", lazy=True)
+        blosc2.open(url + "::d0/a", dataset="d0/a", lazy=True, deserialize="full")
     # A dataset path automatically selects lazy remote access.
-    with blosc2.open(url, dataset="d0/a") as arr:
+    with blosc2.open(url, dataset="d0/a", deserialize="full") as arr:
         assert isinstance(arr, blosc2.RemoteArray)
         assert arr.dataset == "d0/a"
     with pytest.raises(NotImplementedError, match="requires lazy=True"):
-        blosc2.open(url, dataset="d0/a", lazy=False)
+        blosc2.open(url, dataset="d0/a", lazy=False, deserialize="full")
     fs = fsspec.filesystem("memory")
     fs.pipe_file("suffix-free", fs.cat_file("v10.b2z"))
     assert (
-        blosc2.open("memory://suffix-free", source_format="b2z", dataset="d0/a", lazy=True).dataset == "d0/a"
+        blosc2.open(
+            "memory://suffix-free", source_format="b2z", dataset="d0/a", lazy=True, deserialize="full"
+        ).dataset
+        == "d0/a"
     )
     url, _ = memory_archive(compression=zipfile.ZIP_DEFLATED)
     with pytest.raises(NotImplementedError, match="ZIP_STORED"):
-        blosc2.open(url, dataset="d0/a", lazy=True)
+        blosc2.open(url, dataset="d0/a", lazy=True, deserialize="full")
     fs.pipe_file("v10.b2z", b"not a zip")
     with pytest.raises(zipfile.BadZipFile):
-        blosc2.open(url, dataset="d0/a", lazy=True)
+        blosc2.open(url, dataset="d0/a", lazy=True, deserialize="full")
 
 
 @pytest.mark.parametrize("separator", ["/", "::/"])
@@ -578,10 +583,10 @@ def test_parser_query_and_local_store(tmp_path, monkeypatch, separator):
     path = tmp_path / "local.b2z"
     with blosc2.TreeStore(path, mode="w") as store:
         store["/a"] = np.arange(10)
-    with blosc2.open(path) as store:
+    with blosc2.open(path, deserialize="full") as store:
         np.testing.assert_array_equal(store["/a"][:], np.arange(10))
     monkeypatch.chdir(tmp_path)
-    arr = blosc2.open(f"local.b2z{separator}a")
+    arr = blosc2.open(f"local.b2z{separator}a", deserialize="full")
     np.testing.assert_array_equal(arr[:], np.arange(10))
     assert dict(arr.info_items)["source"]["urlpath"] == "local.b2z"
     assert "local.b2z" in repr(arr.info)
@@ -594,7 +599,7 @@ def test_parser_query_and_local_store(tmp_path, monkeypatch, separator):
 def test_dtypes_and_edges(dtype):
     data = np.arange(41 * 253).reshape(41, 253).astype(dtype)
     url, _ = memory_archive(data)
-    arr = blosc2.open(url, dataset="d0/a", lazy=True)
+    arr = blosc2.open(url, dataset="d0/a", lazy=True, deserialize="full")
     np.testing.assert_array_equal(arr[:], data)
 
 
@@ -605,7 +610,7 @@ def test_scalar_and_empty(shape):
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("a.b2nd", blosc2.asarray(data).to_cframe())
     fsspec.filesystem("memory").pipe_file("empty.b2z", buffer.getvalue())
-    arr = blosc2.open("memory://empty.b2z", dataset="a", lazy=True)
+    arr = blosc2.open("memory://empty.b2z", dataset="a", lazy=True, deserialize="full")
     np.testing.assert_array_equal(arr[()], data)
 
 
@@ -641,21 +646,21 @@ def test_invalid_members(damage):
         raw = buffer.getvalue()
     fs.pipe_file("v10.b2z", raw)
     with pytest.raises((ValueError, NotImplementedError, zipfile.BadZipFile)):
-        blosc2.open(url, dataset="d0/a", lazy=True)
+        blosc2.open(url, dataset="d0/a", lazy=True, deserialize="full")
 
 
 def test_geometry_change_and_expression(tmp_path):
     url, data = memory_archive()
     path = tmp_path / "geometry.b2nd"
-    arr = blosc2.open(url, dataset="d0/a", lazy=True, cache_path=path)
+    arr = blosc2.open(url, dataset="d0/a", lazy=True, cache_path=path, deserialize="full")
     expr = arr + 2
     expr.save(tmp_path / "expr.b2nd")
-    np.testing.assert_array_equal(blosc2.open(tmp_path / "expr.b2nd")[:2], data[:2] + 2)
+    np.testing.assert_array_equal(blosc2.open(tmp_path / "expr.b2nd", deserialize="full")[:2], data[:2] + 2)
     # Legacy carriers without a bootstrap still discover and validate remote geometry.
     del arr._carrier.schunk.vlmeta["b2z-frame"]
     memory_archive(np.zeros((201, 1000), dtype="uint8"))
     with pytest.raises(ValueError, match="geometry"):
-        blosc2.open(path)
+        blosc2.open(path, deserialize="full")
 
 
 def test_b2z_metadata_and_caching():
@@ -693,7 +698,7 @@ def test_b2z_metadata_and_caching():
     assert plain_src.traffic.requests == 0
 
     # 2. Test RemoteArray over B2Z
-    proxy = blosc2.open("memory://meta_test.b2z", dataset="d0/with_meta", lazy=True)
+    proxy = blosc2.open("memory://meta_test.b2z", dataset="d0/with_meta", lazy=True, deserialize="full")
     assert isinstance(proxy.meta, blosc2.RemoteMetadataMapping)
     assert isinstance(proxy.vlmeta, blosc2.RemoteMetadataMapping)
     assert proxy.meta["sensor_info"] == {"model": "X1", "rate": 100}
@@ -768,6 +773,7 @@ def test_s3_b2z_slice():
         "s3://blosc2/hierarchy.b2z::/d0/a3",
         lazy=True,
         storage_options={"profile": "blosc2", "endpoint_url": "https://s3.us-west-001.backblazeb2.com"},
+        deserialize="full",
     )
     expected = np.arange(10)[:, None] * 1_000_000 + np.arange(5)
     np.testing.assert_array_equal(arr[:10, 0, :5], expected)
@@ -778,7 +784,9 @@ def test_s3_b2z_slice():
 
 @pytest.mark.network
 def test_https_b2z_slice():
-    arr = blosc2.open("https://f001.backblazeb2.com/file/blosc2/hierarchy.b2z::/d0/a3", lazy=True)
+    arr = blosc2.open(
+        "https://f001.backblazeb2.com/file/blosc2/hierarchy.b2z::/d0/a3", lazy=True, deserialize="full"
+    )
     expected = np.arange(10)[:, None] * 1_000_000 + np.arange(5)
     np.testing.assert_array_equal(arr[:10, 0, :5], expected)
     before = arr.traffic.nbytes
@@ -813,16 +821,16 @@ def test_whole_member_prefetch_counts_and_obeys_budget(tmp_path, policy, limit):
     assert (arr.traffic.requests == 0) == bool(retained)
     assert arr.cache_bytes == retained  # Reading does not duplicate the prefetch.
     if policy is blosc2.CachePolicy.DISK:
-        reopened = blosc2.open(arr.cache_path, mode="a")
+        reopened = blosc2.open(arr.cache_path, mode="a", deserialize="full")
         assert reopened.traffic.requests == 0
         assert reopened.cache_bytes == retained
-        exported = blosc2.from_cframe(arr.to_cframe())
+        exported = blosc2.from_cframe(arr.to_cframe(), deserialize="full")
         assert exported.cache_bytes == retained
-        cold = blosc2.from_cframe(arr.to_cframe(include_cache=False))
+        cold = blosc2.from_cframe(arr.to_cframe(include_cache=False), deserialize="full")
         assert cold.cache_bytes == 0
         reopened.trim_cache(0)
         assert reopened.cache_bytes == 0
-        again = blosc2.open(arr.cache_path)
+        again = blosc2.open(arr.cache_path, deserialize="full")
         assert again.cache_bytes == 0  # The bootstrap cannot resurrect evicted data.
 
 
@@ -836,15 +844,15 @@ def test_legacy_whole_member_bootstrap_moves_into_chunk_cache(tmp_path, direct):
         archive.writestr("a.b2nd", frame)
     fsspec.filesystem("memory").pipe_file("legacy-prefetch.b2z", buffer.getvalue())
     url = "memory://legacy-prefetch.b2z"
-    arr = blosc2.open(url, dataset="a", lazy=True, cache_dir=tmp_path)
+    arr = blosc2.open(url, dataset="a", lazy=True, cache_dir=tmp_path, deserialize="full")
     arr.trim_cache(0)
     # Reproduce the old carrier representation: all data hidden in b2z-frame.
     seed = dict(arr.src._seed, prefix=frame)
     arr._carrier.schunk.vlmeta["b2z-frame"] = seed
     reopened = (
-        blosc2.open(arr.cache_path, mode="a")
+        blosc2.open(arr.cache_path, mode="a", deserialize="full")
         if direct
-        else blosc2.open(url, dataset="a", lazy=True, cache_dir=tmp_path)
+        else blosc2.open(url, dataset="a", lazy=True, cache_dir=tmp_path, deserialize="full")
     )
     assert reopened.traffic.requests == 0
     assert reopened.cache_bytes == sum(len(array.schunk.get_chunk(i)) for i in range(array.schunk.nchunks))

@@ -143,15 +143,15 @@ class Ref:
             payload["urlbase"] = self.urlbase
         return payload
 
-    def open(self):
+    def open(self, *, deserialize: str = "safe"):
         import blosc2
 
         if self.kind == "urlpath":
             # Structured refs are used to reopen operands for persisted recipes.
             # Read-only access avoids allocating unnecessary writable state.
-            return blosc2.open(self.urlpath, mode="r")
+            return blosc2.open(self.urlpath, mode="r", deserialize=deserialize)
         if self.kind == "dictstore_key":
-            return blosc2.DictStore(self.urlpath, mode="r")[self.key]
+            return blosc2.DictStore(self.urlpath, mode="r", deserialize=deserialize)[self.key]
         if self.kind in {"b2z", "hdf5"}:
             return blosc2.RemoteArray(self.urlpath, source_format=self.kind, dataset=self.key)
         if self.kind == "c2array":

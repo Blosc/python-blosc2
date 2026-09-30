@@ -4902,6 +4902,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
         create_summary_index: bool = True,
+        deserialize: str | None = None,
     ) -> None:
         """Create a new CTable or open an existing one.
 
@@ -4933,6 +4934,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             logical copy and do **not** trigger the build; index the source
             table (or the reopened result) explicitly if you need it.
         """
+        if deserialize is not None:
+            from blosc2.deserialization import normalize_deserialize
+
+            deserialize = normalize_deserialize(deserialize)
         if sources is not None and new_data is not None:
             raise ValueError("sources and new_data are mutually exclusive")
         if sources is not None and not isinstance(sources, Mapping):
@@ -4977,12 +4982,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         # Choose storage backend
         if urlpath is not None:
+            existed = os.path.exists(urlpath)
+            effective_deserialize = (
+                deserialize
+                if deserialize is not None
+                else ("safe" if mode in ("r", "a") and existed else "full")
+            )
             if mode == "w" and os.path.exists(urlpath):
                 if os.path.isdir(urlpath):
                     shutil.rmtree(urlpath)
                 else:
                     os.remove(urlpath)
-            storage: TableStorage = FileTableStorage(urlpath, mode)
+            storage: TableStorage = FileTableStorage(urlpath, mode, deserialize=effective_deserialize)
         else:
             storage = InMemoryTableStorage()
         self._storage = storage
@@ -6917,7 +6928,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return cls._open_from_storage(storage)
 
     @classmethod
-    def open(cls, urlpath: str, *, mode: str = "r", mmap_mode: str | None = None) -> CTable:
+    def open(
+        cls,
+        urlpath: str,
+        *,
+        mode: str = "r",
+        mmap_mode: str | None = None,
+        deserialize: str = "safe",
+    ) -> CTable:
         """Open a persistent CTable from *urlpath*.
 
         Parameters
@@ -6943,7 +6961,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             If the metadata at *urlpath* does not identify a CTable, or if
             ``mmap_mode`` is used with a writable ``mode``.
         """
-        storage = FileTableStorage(urlpath, mode, mmap_mode=mmap_mode)
+        storage = FileTableStorage(urlpath, mode, mmap_mode=mmap_mode, deserialize=deserialize)
         if not storage.table_exists():
             raise FileNotFoundError(f"No CTable found at {urlpath!r}")
         return cls._open_from_storage(storage)
@@ -7408,7 +7426,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             materialized.save(urlpath, overwrite=overwrite)
             return
 
-        file_storage = FileTableStorage(urlpath, "w")
+        file_storage = FileTableStorage(urlpath, "w", deserialize="full")
         target_path = file_storage._root
         if os.path.exists(target_path):
             if not overwrite:
@@ -7511,7 +7529,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return cls._open_from_storage(storage)
 
     @classmethod
-    def load(cls, urlpath: str) -> CTable:  # noqa: C901
+    def load(cls, urlpath: str, *, deserialize: str = "safe") -> CTable:  # noqa: C901
         """Load a persistent table from *urlpath* into RAM.
 
         The schema is read from the table's metadata — the original Python
@@ -7530,7 +7548,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ValueError
             If the metadata at *urlpath* does not identify a CTable.
         """
-        file_storage = FileTableStorage(urlpath, "r")
+        file_storage = FileTableStorage(urlpath, "r", deserialize=deserialize)
         if not file_storage.table_exists():
             raise FileNotFoundError(f"No CTable found at {urlpath!r}")
         file_storage.check_kind()
@@ -9087,7 +9105,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 f"No CTable found at {urlpath!r}: mode='a' opens an existing table; "
                 "use mode='w' to create a new one."
             )
-        return FileTableStorage(urlpath, mode)
+        return FileTableStorage(urlpath, mode, deserialize="full")
 
     @classmethod
     def _create_arrow_import_columns(
@@ -14767,7 +14785,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 # intermediate is needed.
                 _chunks = (chunks,) if isinstance(chunks, int) else chunks
                 _blocks = (blocks,) if isinstance(blocks, int) else blocks
-                file_storage = FileTableStorage(urlpath, "w")
+                file_storage = FileTableStorage(urlpath, "w", deserialize="full")
                 target_path = file_storage._root
                 if os.path.exists(target_path):
                     if not overwrite:
@@ -16418,7 +16436,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return self.view(new_mask)
 
 
-def ctable_from_cframe(cframe: bytes, *, copy: bool = True) -> CTable:
+def ctable_from_cframe(cframe: bytes, *, copy: bool = True, deserialize: str = "safe") -> CTable:
     """Deserialize a CFrame into a :class:`CTable`.
 
     The counterpart of :meth:`CTable.to_cframe`.  The cframe is decoded into an
@@ -16447,10 +16465,10 @@ def ctable_from_cframe(cframe: bytes, *, copy: bool = True) -> CTable:
 
     # Probe the cframe type with a cheap non-copying open; bail early on
     # non-EmbedStore / non-CTable frames so callers can try-fallback.
-    probe = blosc2.schunk_from_cframe(cframe, copy=False)
+    probe = blosc2.schunk_from_cframe(cframe, copy=False, deserialize=deserialize)
     if "b2embed" not in probe.meta:
         raise ValueError("Not an EmbedStore cframe (no b2embed marker)")
-    estore = blosc2.from_cframe(cframe, copy=copy)
+    estore = blosc2.from_cframe(cframe, copy=copy, deserialize=deserialize)
     storage = EmbedStoreTableStorage(estore)
     storage.check_kind()  # raise if not a CTable
     return CTable._open_from_storage(storage)

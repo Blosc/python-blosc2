@@ -581,6 +581,8 @@ from ._utf8_array import UTF8Array, from_utf8, to_utf8, utf8_array
 from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
+from .deserialization import DeserializeMode
+from .exceptions import UnsafeDeserializationError
 
 from .c2array import c2context, C2Array, C2NDSource, ChunkAlreadyWritten, URLPath
 
@@ -892,6 +894,7 @@ __all__ = [  # noqa : RUF022
     "Codec",
     "CachePolicy",
     "DParams",
+    "DeserializeMode",
     "DictStore",
     "EmbedStore",
     "Filter",
@@ -933,6 +936,7 @@ __all__ = [  # noqa : RUF022
     "URLPath",
     "ObjectArray",
     "UTF8Array",
+    "UnsafeDeserializationError",
     # Version
     "__version__",
     # Utils

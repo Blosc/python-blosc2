@@ -119,8 +119,8 @@ def test_open_remote_zarr_scalar_and_empty(zarr):
     scalar[()] = 42
     zarr.create_array(empty_url, shape=(0,), chunks=(1,), dtype="i4")
 
-    scalar_proxy = blosc2.open(scalar_url, lazy=True)
-    empty_proxy = blosc2.open(empty_url, lazy=True)
+    scalar_proxy = blosc2.open(scalar_url, lazy=True, deserialize="full")
+    empty_proxy = blosc2.open(empty_url, lazy=True, deserialize="full")
 
     assert isinstance(scalar_proxy, blosc2.RemoteArray)
     assert scalar_proxy[()] == 42
@@ -161,7 +161,7 @@ def test_open_remote_zarr_as_remote_array(zarr, url, source_format):
     array[:] = data
 
     kwargs = {} if source_format is None else {"source_format": source_format}
-    proxy = blosc2.open(url, lazy=True, **kwargs)
+    proxy = blosc2.open(url, lazy=True, **kwargs, deserialize="full")
 
     assert isinstance(proxy, blosc2.RemoteArray)
     assert proxy.source == {
@@ -189,7 +189,7 @@ def test_remote_zarr_disk_carrier_reopens_warm(tmp_path, zarr):
     )
     np.testing.assert_array_equal(proxy[:3, :4], data[:3, :4])
 
-    reopened = blosc2.open(path)
+    reopened = blosc2.open(path, deserialize="full")
     assert isinstance(reopened, blosc2.RemoteArray)
     reopened.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
     np.testing.assert_array_equal(reopened[:3, :4], data[:3, :4])
@@ -205,7 +205,7 @@ def test_zarr_infers_lazy_open(zarr, zarr_format, path, options):
     data = np.arange(35, dtype=np.int32).reshape(5, 7)
     zarr.create_array(url, data=data, chunks=(3, 4), zarr_format=zarr_format)
 
-    proxy = blosc2.open(url, **options)
+    proxy = blosc2.open(url, **options, deserialize="full")
     assert isinstance(proxy, blosc2.RemoteArray)
     assert proxy.source["kind"] == "zarr"
     assert "RemoteArray" in repr(proxy.info)
@@ -216,7 +216,7 @@ def test_zarr_rejects_explicit_eager_open(zarr):
     url = "memory://zarr-tests/explicit-eager.zarr"
     zarr.create_array(url, shape=(3,), chunks=(3,), dtype="i4")
     with pytest.raises(NotImplementedError, match="requires lazy=True"):
-        blosc2.open(url, lazy=False)
+        blosc2.open(url, lazy=False, deserialize="full")
 
 
 def test_zarr_rejects_mutable_source_mode():
@@ -235,7 +235,7 @@ def test_explicit_blosc2_format_overrides_zarr_suffix():
     array = blosc2.asarray(data, chunks=(4,), blocks=(4,))
     fsspec.filesystem("memory").pipe_file("zarr-tests/blosc2-array.zarr", array.to_cframe())
 
-    proxy = blosc2.open(url, lazy=True, source_format="blosc2")
+    proxy = blosc2.open(url, lazy=True, source_format="blosc2", deserialize="full")
     assert proxy.source["kind"] == "fsspec"
     np.testing.assert_array_equal(proxy[:], data)
 
@@ -262,7 +262,7 @@ def test_direct_proxy_zarr_cache_reopens(tmp_path, zarr):
     proxy = blosc2.Proxy(blosc2.ZarrNDSource(source_path), urlpath=cache_path, mode="w")
     np.testing.assert_array_equal(proxy[:3, :4], data[:3, :4])
 
-    reopened = blosc2.open(cache_path)
+    reopened = blosc2.open(cache_path, deserialize="full")
     assert isinstance(reopened.src, blosc2.ZarrNDSource)
     reopened.src.get_chunk = lambda nchunk: (_ for _ in ()).throw(AssertionError("cache miss"))
     np.testing.assert_array_equal(reopened[:3, :4], data[:3, :4])
@@ -275,13 +275,13 @@ def test_local_zarr_open_uses_disk_cache(tmp_path, zarr):
     array[:] = data
     cache_dir = tmp_path / "cache"
 
-    with blosc2.open(source, path="", cache_dir=cache_dir) as cached:
+    with blosc2.open(source, path="", cache_dir=cache_dir, deserialize="full") as cached:
         assert isinstance(cached, blosc2.RemoteArray)
         np.testing.assert_array_equal(cached[:], data)
         assert cached.cache_bytes > 0
         assert cached.cache_path is not None
 
-    with blosc2.open(source.resolve(), cache_dir=cache_dir) as reopened:
+    with blosc2.open(source.resolve(), cache_dir=cache_dir, deserialize="full") as reopened:
         np.testing.assert_array_equal(reopened[:], data)
 
 
@@ -306,7 +306,9 @@ def test_zarr_ref_preserves_explicit_suffix_free_format(zarr):
 
     assert ref.kind == "zarr"
     np.testing.assert_array_equal(ref.open()[:], data)
-    restored = blosc2.from_cframe(blosc2.lazyexpr("a + 1", operands={"a": proxy}).to_cframe())
+    restored = blosc2.from_cframe(
+        blosc2.lazyexpr("a + 1", operands={"a": proxy}).to_cframe(), deserialize="full"
+    )
     np.testing.assert_array_equal(restored[:], data + 1)
 
 
@@ -336,10 +338,10 @@ def test_open_remote_zarr_with_dataset(zarr):
     array = zarr.create_array(f"{root_url}/sub/arr", shape=data.shape, chunks=(2, 3), dtype=data.dtype)
     array[:] = data
 
-    p1 = blosc2.open(f"{root_url}/sub/arr", lazy=True)
-    p2 = blosc2.open(f"{root_url}::sub/arr", lazy=True)
-    p3 = blosc2.open(f"{root_url}::/sub/arr", lazy=True)
-    p4 = blosc2.open(root_url, lazy=True, dataset="sub/arr")
+    p1 = blosc2.open(f"{root_url}/sub/arr", lazy=True, deserialize="full")
+    p2 = blosc2.open(f"{root_url}::sub/arr", lazy=True, deserialize="full")
+    p3 = blosc2.open(f"{root_url}::/sub/arr", lazy=True, deserialize="full")
+    p4 = blosc2.open(root_url, lazy=True, dataset="sub/arr", deserialize="full")
 
     for p in (p1, p2, p3, p4):
         assert p.dataset == "sub/arr"
@@ -405,7 +407,7 @@ def test_remote_zarr_bootstrap_reopens_without_metadata_reads(
         zarr_format=zarr_format,
         attributes={"greeting": "hello"},
     )
-    first = blosc2.open(root_url, dataset="/d0/a", lazy=True, cache_dir=tmp_path)
+    first = blosc2.open(root_url, dataset="/d0/a", lazy=True, cache_dir=tmp_path, deserialize="full")
     np.testing.assert_array_equal(first[:3, :4], data[:3, :4])
     metadata = first._carrier.schunk.vlmeta["zarr-metadata"]
     assert metadata
@@ -421,12 +423,12 @@ def test_remote_zarr_bootstrap_reopens_without_metadata_reads(
 
     monkeypatch.setattr(zarr.storage.FsspecStore, "get", counted)
     if reopen == "url":
-        second = blosc2.open(root_url, dataset="/d0/a", lazy=True, cache_dir=tmp_path)
+        second = blosc2.open(root_url, dataset="/d0/a", lazy=True, cache_dir=tmp_path, deserialize="full")
         assert second._cache_status == "reused"
     elif reopen == "carrier":
-        second = blosc2.open(first.cache_path)
+        second = blosc2.open(first.cache_path, deserialize="full")
     else:
-        second = blosc2.from_cframe(first.to_cframe())
+        second = blosc2.from_cframe(first.to_cframe(), deserialize="full")
     assert not reads
     assert dict(second.vlmeta) == dict(array.attrs)
     np.testing.assert_array_equal(second[:3, :4], data[:3, :4])

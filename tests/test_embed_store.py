@@ -51,7 +51,7 @@ def test_basic(populate_nodes):
     del estore["/node1"]
     assert "/node1" not in estore
 
-    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")
+    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r", deserialize="full")
     assert "b2embed" in estore_read.storage.meta
     assert set(estore_read.keys()) == {"/node2", "/node3"}
     for value in estore_read.values():
@@ -71,7 +71,7 @@ def test_with_remote(populate_nodes):
         pytest.skip(f"Remote C2 access unavailable in this environment: {exc}")
     estore["/node4"] = arr_remote
 
-    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")
+    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r", deserialize="full")
     assert set(estore_read.keys()) == {"/node1", "/node2", "/node3", "/node4"}
     for key, value in estore_read.items():
         assert hasattr(value, "shape")

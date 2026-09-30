@@ -13,6 +13,7 @@ from blosc2.batch_array import (
     BatchArray,
     BatchArrayItems,
 )
+from blosc2.deserialization import set_deserialize
 
 
 class _RemoteBatch(Batch):
@@ -35,13 +36,17 @@ class _RemoteBatch(Batch):
     def _decode_items(self):
         if self._items is None:
             self._items = [
-                item for payload in self._payloads() for item in self._parent._deserialize_block(payload)
+                item
+                for payload in self._payloads()
+                for item in self._parent._deserialize_block_at(payload, self._nbatch)
             ]
         return self._items
 
     def _get_block(self, block_index):
         if self._cached_block_index != block_index or self._cached_block is None:
-            self._cached_block = self._parent._deserialize_block(self._payloads()[block_index])
+            self._cached_block = self._parent._deserialize_block_at(
+                self._payloads()[block_index], self._nbatch
+            )
             self._cached_block_index = block_index
         return self._cached_block
 
@@ -67,6 +72,7 @@ class _RemoteBatchArray(BatchArray):
         self._arrow_schema_obj = None
         self._source = source
         self.schunk = _RemoteBatchSChunk(source)
+        set_deserialize(self.schunk, "safe")
         self.mode = "r"
         self.mmap_mode = None
         self._batch_lengths = self._validated_lengths(column)
@@ -95,11 +101,6 @@ class _RemoteBatchArray(BatchArray):
     def _get_batch(self, index):
         self._check_open()
         return _RemoteBatch(self, index, self._source.get_chunk(index))
-
-    def _deserialize_msgpack_block(self, payload):
-        from blosc2.msgpack_utils import _safe_msgpack_unpackb
-
-        return _safe_msgpack_unpackb(payload)
 
     def _check_writable(self):
         self._check_open()

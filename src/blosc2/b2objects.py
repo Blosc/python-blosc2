@@ -67,7 +67,7 @@ def decode_operand_reference(payload, *, base_path=None):
         payload = dict(payload)
         payload["urlpath"] = (base_path / payload["urlpath"]).as_posix()
     ref = blosc2.Ref.from_dict(payload)
-    return ref.open()
+    return ref.open(deserialize="full")
 
 
 def encode_b2object_payload(obj) -> dict[str, Any] | None:
@@ -123,7 +123,7 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carri
         raise ValueError(f"Unsupported persisted Blosc2 object version: {version!r}")
     if kind == "c2array":
         ref = blosc2.Ref.from_dict(payload)
-        return ref.open()
+        return ref.open(deserialize="full")
     if kind == "remote_array":
         if carrier is None:
             raise ValueError("A persisted RemoteArray requires its B2ND carrier")

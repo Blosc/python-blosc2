@@ -114,9 +114,9 @@ def _make_persistent_backend(spec, urlpath: str, mode: str, *, cparams=None, dpa
     )
 
 
-def _open_persistent_backend(urlpath: str, mode: str, spec=None) -> BatchArray:
+def _open_persistent_backend(urlpath: str, mode: str, spec=None, *, deserialize="safe") -> BatchArray:
     """Reopen an existing persistent BatchArray (any mode)."""
-    backend = BatchArray(urlpath=urlpath, mode=mode)
+    backend = BatchArray(urlpath=urlpath, mode=mode, deserialize=deserialize)
     if spec is not None:
         _validate_role_metadata(backend, spec)
     return backend

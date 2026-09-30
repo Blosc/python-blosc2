@@ -64,7 +64,7 @@ def test_c2array_from_cframe_roundtrip(monkeypatch):
         "urlbase": original.urlbase,
     }
 
-    restored = blosc2.from_cframe(original.to_cframe())
+    restored = blosc2.from_cframe(original.to_cframe(), deserialize="full")
 
     assert isinstance(restored, blosc2.C2Array)
     assert restored.path == original.path
@@ -79,7 +79,7 @@ def test_c2array_open_roundtrip(tmp_path, monkeypatch):
     urlpath = tmp_path / "remote-array.b2nd"
 
     original.save(urlpath)
-    restored = blosc2.open(urlpath, mode="r")
+    restored = blosc2.open(urlpath, mode="r", deserialize="full")
 
     assert isinstance(restored, blosc2.C2Array)
     assert restored.path == original.path
@@ -107,7 +107,7 @@ def test_lazyexpr_from_cframe_roundtrip(tmp_path):
         },
     }
 
-    restored = blosc2.from_cframe(expr.to_cframe())
+    restored = blosc2.from_cframe(expr.to_cframe(), deserialize="full")
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
@@ -120,7 +120,7 @@ def test_lazyexpr_open_roundtrip(tmp_path):
     urlpath = tmp_path / "expr.b2nd"
 
     expr.save(urlpath)
-    restored = blosc2.open(urlpath, mode="r")
+    restored = blosc2.open(urlpath, mode="r", deserialize="full")
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
@@ -129,7 +129,7 @@ def test_lazyexpr_open_roundtrip(tmp_path):
 def test_legacy_lazyexpr_open_backward_compat():
     fixture = Path(__file__).parent / "data" / "legacy_lazyexpr_v1" / "expr.b2nd"
 
-    restored = blosc2.open(fixture, mode="r")
+    restored = blosc2.open(fixture, mode="r", deserialize="full")
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
@@ -138,7 +138,7 @@ def test_legacy_lazyexpr_open_backward_compat():
 def test_legacy_lazyudf_open_backward_compat():
     fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
 
-    restored = blosc2.open(fixture, mode="r")
+    restored = blosc2.open(fixture, mode="r", deserialize="full")
 
     assert isinstance(restored, blosc2.LazyUDF)
     np.testing.assert_allclose(restored.compute()[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
@@ -165,7 +165,7 @@ def test_lazyudf_from_cframe_roundtrip(tmp_path):
         "o1": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "b.b2nd").as_posix()},
     }
 
-    restored = blosc2.from_cframe(expr.to_cframe())
+    restored = blosc2.from_cframe(expr.to_cframe(), deserialize="full")
 
     assert isinstance(restored, blosc2.LazyUDF)
     np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
@@ -178,7 +178,7 @@ def test_lazyudf_open_roundtrip(tmp_path):
     urlpath = tmp_path / "expr.b2nd"
 
     expr.save(urlpath)
-    restored = blosc2.open(urlpath, mode="r")
+    restored = blosc2.open(urlpath, mode="r", deserialize="full")
 
     assert isinstance(restored, blosc2.LazyUDF)
     np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
@@ -199,7 +199,7 @@ def test_b2z_bundle_with_lazy_recipes_opens_read_only(tmp_path):
         store["/recipes/expr"] = blosc2.ndarray_from_cframe(expr.to_cframe())
         store["/recipes/udf"] = blosc2.ndarray_from_cframe(udf.to_cframe())
 
-    with blosc2.open(str(bundle_path), mode="r") as store:
+    with blosc2.open(str(bundle_path), mode="r", deserialize="full") as store:
         restored_expr = store["/recipes/expr"]
         restored_udf = store["/recipes/udf"]
 

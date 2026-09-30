@@ -488,7 +488,7 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     else:
         a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
     if disk:
-        a = blosc2.open(urlpath, mode="r")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
     na = a[:]
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         axis = 0 if axis is None else axis
@@ -532,7 +532,7 @@ def test_miniexpr_slice(chunks, blocks, disk, fill_value, reduce_op):
     else:
         a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
     if disk:
-        a = blosc2.open(urlpath, mode="r")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
     na = a[:]
     # Test slice
     # TODO: Make this work with miniexpr (currently just skips to normal reduction eval)
@@ -564,8 +564,8 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
         b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
-        a = blosc2.open(urlpath, mode="r")
-        b = blosc2.open("b.b2nd", mode="r")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
+        b = blosc2.open("b.b2nd", mode="r", deserialize="full")
     na = a[:]
     nb = b[:]
 
@@ -575,7 +575,7 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
     assert lexpr.shape == a.shape
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
@@ -610,8 +610,8 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
         b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
-        a = blosc2.open(urlpath, mode="r")
-        b = blosc2.open("b.b2nd", mode="r")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
+        b = blosc2.open("b.b2nd", mode="r", deserialize="full")
     na = a[:]
     nb = b[:]
 
@@ -620,7 +620,7 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
     lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
@@ -655,8 +655,8 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
         b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
-        a = blosc2.open(urlpath, mode="r")
-        b = blosc2.open("b.b2nd", mode="r")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
+        b = blosc2.open("b.b2nd", mode="r", deserialize="full")
     na = a[:]
     nb = b[:]
 
@@ -665,7 +665,7 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
     lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
@@ -700,8 +700,8 @@ def test_save_version4(disk, fill_value, reduce_op, axis):
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
         b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
-        a = blosc2.open(urlpath, mode="r")
-        b = blosc2.open("b.b2nd", mode="r")
+        a = blosc2.open(urlpath, mode="r", deserialize="full")
+        b = blosc2.open("b.b2nd", mode="r", deserialize="full")
     na = a[:]
 
     # Just a single reduction
@@ -709,7 +709,7 @@ def test_save_version4(disk, fill_value, reduce_op, axis):
     lexpr = blosc2.lazyexpr(expr, operands={"a": a})
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
@@ -737,7 +737,7 @@ def test_save_constructor_reduce(shape, disk, compute):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
     if compute:
         res = lexpr.compute()
         res = res[()]  # for later comparison with nres
@@ -766,7 +766,7 @@ def test_save_constructor_reduce2(shape, disk, compute):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
     if compute:
         res = lexpr.compute()
         res = res[()]  # for later comparison with nres

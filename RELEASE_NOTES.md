@@ -4,6 +4,17 @@
 
 XXX version-specific blurb XXX
 
+### Safe persisted-object deserialization
+
+- Persisted-input APIs now default to ``deserialize="safe"``. This includes
+  ``open()``, ``load()``, CFrame constructors, store traversal, and CTable
+  variable-length columns. Safe mode rejects embedded objects, references,
+  remote/source descriptors, proxies, and lazy recipes before reconstruction.
+- Trusted callers that intentionally use rich persisted values must pass
+  ``deserialize="full"`` explicitly. Blocked values raise the new public
+  ``UnsafeDeserializationError``. This default change is intentionally
+  behavior-breaking for authority-bearing serialized values.
+
 ## Changes from 4.13.1 to 4.14.0
 
 Python-Blosc2 4.14.0 adds remote tables, shared caches, native HDF5 range reads,

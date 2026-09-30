@@ -1202,6 +1202,7 @@ class FileTableStorage(TableStorage):
         mode: str,
         store: blosc2.TreeStore | None = None,
         mmap_mode: str | None = None,
+        deserialize: str = "safe",
     ) -> None:
         if mode not in ("r", "a", "w"):
             raise ValueError(f"mode must be 'r', 'a', or 'w'; got {mode!r}")
@@ -1210,6 +1211,7 @@ class FileTableStorage(TableStorage):
         self._root = urlpath
         self._mode = mode
         self._mmap_mode = mmap_mode
+        self._deserialize_mode = deserialize
         self._meta: blosc2.SChunk | None = None
         self._vlmeta: blosc2.SChunk | None = None
         # CTable internals must always use external-file storage (never the
@@ -1273,7 +1275,7 @@ class FileTableStorage(TableStorage):
                 # from mapped pages (for .b2z, at their offsets inside the
                 # single mapped container file, shared across readers).
                 kwargs["mmap_mode"] = self._mmap_mode
-            self._store = blosc2.TreeStore(self._root, **kwargs)
+            self._store = blosc2.TreeStore(self._root, deserialize=self._deserialize_mode, **kwargs)
         return self._store
 
     # ------------------------------------------------------------------
@@ -1339,8 +1341,8 @@ class FileTableStorage(TableStorage):
             opened = blosc2.blosc2_ext.open(
                 store.b2z_path, mode="r", offset=store.offsets[rel]["offset"], mmap_mode=store.mmap_mode
             )
-            return process_opened_object(opened)
-        return blosc2.open(self._list_col_path(name), mode=self._mode)
+            return process_opened_object(opened, deserialize=self._deserialize_mode)
+        return blosc2.open(self._list_col_path(name), mode=self._mode, deserialize=self._deserialize_mode)
 
     def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None) -> _ScalarVarLenArray:
         if isinstance(spec, UTF8Spec):
@@ -1370,10 +1372,13 @@ class FileTableStorage(TableStorage):
             backend = BatchArray(
                 _from_schunk=blosc2.blosc2_ext.open(
                     store.b2z_path, mode="r", offset=store.offsets[rel]["offset"], mmap_mode=store.mmap_mode
-                )
+                ),
+                deserialize=self._deserialize_mode,
             )
         else:
-            backend = _open_persistent_backend(path, self._mode, spec=spec)
+            backend = _open_persistent_backend(
+                path, self._mode, spec=spec, deserialize=self._deserialize_mode
+            )
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
 
@@ -1421,10 +1426,13 @@ class FileTableStorage(TableStorage):
             dict_backend = BatchArray(
                 _from_schunk=blosc2.blosc2_ext.open(
                     store.b2z_path, mode="r", offset=store.offsets[rel]["offset"], mmap_mode=store.mmap_mode
-                )
+                ),
+                deserialize=self._deserialize_mode,
             )
         else:
-            dict_backend = _open_persistent_backend(dict_path, self._mode, spec=dict_spec)
+            dict_backend = _open_persistent_backend(
+                dict_path, self._mode, spec=dict_spec, deserialize=self._deserialize_mode
+            )
         dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
         return DictionaryColumn(spec, codes, dict_store)
 
@@ -1943,8 +1951,10 @@ class TreeStoreTableStorage(TableStorage):
                 offset=self._store.offsets[rel]["offset"],
                 mmap_mode=self._store.mmap_mode,
             )
-            return process_opened_object(opened)
-        return blosc2.open(self._list_col_path(name), mode=self._mode)
+            return process_opened_object(opened, deserialize=self._store._deserialize_mode)
+        return blosc2.open(
+            self._list_col_path(name), mode=self._mode, deserialize=self._store._deserialize_mode
+        )
 
     def create_varlen_scalar_column(
         self,
@@ -1991,10 +2001,16 @@ class TreeStoreTableStorage(TableStorage):
                     mode="r",
                     offset=self._store.offsets[rel]["offset"],
                     mmap_mode=self._store.mmap_mode,
-                )
+                ),
+                deserialize=self._store._deserialize_mode,
             )
         else:
-            backend = _open_persistent_backend(self._list_col_path(name), self._mode, spec=spec)
+            backend = _open_persistent_backend(
+                self._list_col_path(name),
+                self._mode,
+                spec=spec,
+                deserialize=self._store._deserialize_mode,
+            )
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
 
@@ -2048,10 +2064,16 @@ class TreeStoreTableStorage(TableStorage):
                     mode="r",
                     offset=self._store.offsets[rel]["offset"],
                     mmap_mode=self._store.mmap_mode,
-                )
+                ),
+                deserialize=self._store._deserialize_mode,
             )
         else:
-            dict_backend = _open_persistent_backend(self._dict_col_path(name), self._mode, spec=dict_spec)
+            dict_backend = _open_persistent_backend(
+                self._dict_col_path(name),
+                self._mode,
+                spec=dict_spec,
+                deserialize=self._store._deserialize_mode,
+            )
         dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
         return DictionaryColumn(spec, codes, dict_store)
 

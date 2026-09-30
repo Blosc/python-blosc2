@@ -12,6 +12,7 @@ import pathlib
 from typing import TYPE_CHECKING, Any
 
 import blosc2
+from blosc2.deserialization import DeserializeMode, get_deserialize, set_deserialize
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -108,12 +109,13 @@ class ObjectArray:
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
         self._validate_tag()
 
-    def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
+    def _maybe_open_existing(self, storage: blosc2.Storage, deserialize) -> bool:
         urlpath = storage.urlpath
         if urlpath is None or storage.mode not in ("r", "a") or not pathlib.Path(urlpath).exists():
             return False
 
         schunk = blosc2.blosc2_ext.open(urlpath, mode=storage.mode, offset=0, mmap_mode=storage.mmap_mode)
+        set_deserialize(schunk, DeserializeMode.SAFE if deserialize is None else deserialize)
         self._attach_schunk(schunk)
         return True
 
@@ -131,6 +133,7 @@ class ObjectArray:
         self,
         chunksize: int | None = None,
         _from_schunk: SChunk | None = None,
+        deserialize: str | None = None,
         **kwargs: Any,
     ) -> None:
         if _from_schunk is not None:
@@ -139,6 +142,8 @@ class ObjectArray:
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
                 raise ValueError(f"Cannot pass {unexpected} together with `_from_schunk`")
+            if deserialize is not None:
+                set_deserialize(_from_schunk, deserialize)
             self._attach_schunk(_from_schunk)
             return
 
@@ -157,7 +162,7 @@ class ObjectArray:
         if dparams is None:
             dparams = blosc2.DParams()
 
-        if self._maybe_open_existing(storage):
+        if self._maybe_open_existing(storage, deserialize):
             return
 
         fixed_meta = dict(storage.meta or {})
@@ -166,7 +171,12 @@ class ObjectArray:
         if chunksize is None:
             chunksize = -1
         schunk = blosc2.SChunk(
-            chunksize=chunksize, data=None, cparams=cparams, dparams=dparams, storage=storage
+            chunksize=chunksize,
+            data=None,
+            deserialize=DeserializeMode.FULL if deserialize is None else deserialize,
+            cparams=cparams,
+            dparams=dparams,
+            storage=storage,
         )
         self._attach_schunk(schunk)
 
@@ -270,9 +280,11 @@ class ObjectArray:
         storage = self._make_storage()
         if storage.urlpath is not None:
             blosc2.remove_urlpath(storage.urlpath)
+        deserialize = get_deserialize(self.schunk)
         schunk = blosc2.SChunk(
             chunksize=-1,
             data=None,
+            deserialize=deserialize,
             cparams=copy.deepcopy(self.cparams),
             dparams=copy.deepcopy(self.dparams),
             storage=storage,
@@ -284,7 +296,10 @@ class ObjectArray:
             return [self[i] for i in self._slice_indices(index)]
         index = self._normalize_index(index)
         payload = self.schunk.decompress_chunk(index)
-        return msgpack_unpackb(payload)
+        try:
+            return msgpack_unpackb(payload, deserialize=get_deserialize(self.schunk))
+        except blosc2.UnsafeDeserializationError as exc:
+            raise blosc2.UnsafeDeserializationError(exc.kind, location=f"ObjectArray index {index}") from exc
 
     def __setitem__(self, index: int, value: Any) -> None:
         if isinstance(index, slice):
@@ -413,6 +428,7 @@ class ObjectArray:
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
         kwargs["chunksize"] = kwargs.get("chunksize", -1)
+        kwargs.setdefault("deserialize", get_deserialize(self.schunk))
 
         if "storage" not in kwargs:
             kwargs["meta"] = self._copy_meta()
@@ -434,8 +450,8 @@ class ObjectArray:
         return f"ObjectArray(len={len(self)}, urlpath={self.urlpath!r})"
 
 
-def objectarray_from_cframe(cframe: bytes, copy: bool = True) -> ObjectArray:
+def objectarray_from_cframe(cframe: bytes, copy: bool = True, *, deserialize: str = "safe") -> ObjectArray:
     """Deserialize a CFrame buffer into an :class:`ObjectArray`."""
 
-    schunk = blosc2.schunk_from_cframe(cframe, copy=copy)
+    schunk = blosc2.schunk_from_cframe(cframe, copy=copy, deserialize=deserialize)
     return ObjectArray(_from_schunk=schunk)

@@ -87,9 +87,9 @@ class _Cat2Server:
         raw = pathlib.Path(self.path).read_bytes()
         self.mtime = pathlib.Path(self.path).stat().st_mtime
         if self.key is None:
-            self.frame, self.array = raw, blosc2.open(self.path)
+            self.frame, self.array = raw, blosc2.open(self.path, deserialize="full")
             return
-        store = blosc2.open(self.path)
+        store = blosc2.open(self.path, deserialize="full")
         offset, nbytes = store.member_window(self.key)
         self.frame, self.array = raw[offset : offset + nbytes], store[self.key]
 
@@ -336,7 +336,7 @@ def test_open_urlpath_lazy_memory_cache(server, any_chunk_wants_blocks):
     urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
 
     srv.log.clear()
-    proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3)
+    proxy = blosc2.open(urlpath, lazy=True, max_concurrency=3, deserialize="full")
 
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert isinstance(proxy, blosc2.RemoteArray)
@@ -359,14 +359,14 @@ def test_open_urlpath_lazy_persistent_cache(tmp_path, server, any_chunk_wants_bl
     cache_dir = tmp_path / "cache"
 
     srv.log.clear()
-    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir, deserialize="full")
     assert isinstance(proxy, blosc2.RemoteArray)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     del proxy
 
     srv.log.clear()
-    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir, deserialize="full")
     assert isinstance(proxy, blosc2.RemoteArray)
     assert [endpoint for endpoint, _, _ in srv.log] == ["info"]
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
@@ -380,7 +380,7 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
     urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
     cache_path = tmp_path / "chosen.b2nd"
 
-    proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path)
+    proxy = blosc2.open(urlpath, lazy=True, cache_path=cache_path, deserialize="full")
     assert isinstance(proxy, blosc2.RemoteArray)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     assert proxy.cache_path == str(cache_path)
@@ -388,7 +388,7 @@ def test_open_urlpath_lazy_exact_cache_path(tmp_path, server, any_chunk_wants_bl
     del proxy
 
     srv.log.clear()
-    proxy = blosc2.open(cache_path, mode="a")
+    proxy = blosc2.open(cache_path, mode="a", deserialize="full")
     assert isinstance(proxy, blosc2.RemoteArray)
     assert isinstance(proxy.src, blosc2.C2Array)
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
@@ -405,13 +405,13 @@ def test_open_urlpath_lazy_uses_c2context_without_persisting_token(tmp_path, ser
     cache_dir = tmp_path / "cache"
 
     with blosc2.c2context(urlbase=array.urlbase, auth_token=token):
-        proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+        proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir, deserialize="full")
         assert np.array_equal(proxy[0:5, 0:5], data[0:5, 0:5])
         assert proxy.source["kind"] == "caterva2"
         assert "auth_token" not in proxy.source
 
         cache = next(cache_dir.glob("*/*.b2nd"))
-        reopened = blosc2.open(cache, mode="a")
+        reopened = blosc2.open(cache, mode="a", deserialize="full")
         assert np.array_equal(reopened[0:5, 0:5], data[0:5, 0:5])
 
 
@@ -421,14 +421,14 @@ def test_open_urlpath_lazy_rebuilds_stale_cache(tmp_path, server, any_chunk_want
     urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
     cache_dir = tmp_path / "cache"
 
-    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir, deserialize="full")
     assert np.array_equal(proxy[0:5, 0:10], data[0:5, 0:10])
     del proxy
 
     other = _incompressible((200, 200), seed=1)
     _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
 
-    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir)
+    proxy = blosc2.open(urlpath, lazy=True, cache_dir=cache_dir, deserialize="full")
     assert np.array_equal(proxy[0:5, 0:10], other[0:5, 0:10])
 
 
@@ -437,11 +437,11 @@ def test_open_urlpath_cache_options_need_lazy(tmp_path, server):
     array, _ = server(data, chunks=(10, 20), blocks=(5, 10))
     urlpath = blosc2.URLPath(array.path, urlbase=array.urlbase)
 
-    assert isinstance(blosc2.open(urlpath), blosc2.C2Array)
+    assert isinstance(blosc2.open(urlpath, deserialize="full"), blosc2.C2Array)
     with pytest.raises(NotImplementedError, match=r"cache_dir.*lazy=True"):
-        blosc2.open(urlpath, cache_dir=tmp_path)
+        blosc2.open(urlpath, cache_dir=tmp_path, deserialize="full")
     with pytest.raises(NotImplementedError, match=r"max_concurrency.*lazy=True"):
-        blosc2.open(urlpath, max_concurrency=2)
+        blosc2.open(urlpath, max_concurrency=2, deserialize="full")
 
 
 @pytest.mark.parametrize("context_auth", [False, True])
@@ -457,13 +457,18 @@ def test_open_shared_caterva_cache(tmp_path, server, any_chunk_wants_blocks, con
         context = blosc2.c2context(urlbase=array.urlbase, auth_token=token)
     with context:
         first = blosc2.open(
-            urlpath, cache_dir=tmp_path / "cache", shared_cache=True, max_concurrency=2, **options
+            urlpath,
+            cache_dir=tmp_path / "cache",
+            shared_cache=True,
+            max_concurrency=2,
+            **options,
+            deserialize="full",
         )
         assert first.max_cache_bytes == 256 << 20
         assert first.schunk.contiguous is False
         assert first.src.max_concurrency == 2
         np.testing.assert_array_equal(first[:5, :10], data[:5, :10])
-        second = blosc2.open(urlpath, cache_dir=tmp_path / "cache", shared_cache=True)
+        second = blosc2.open(urlpath, cache_dir=tmp_path / "cache", shared_cache=True, deserialize="full")
         srv.log.clear()
         np.testing.assert_array_equal(second[:5, :10], data[:5, :10])
         assert srv.log == []
@@ -481,7 +486,7 @@ def test_open_shared_caterva_cache(tmp_path, server, any_chunk_wants_blocks, con
 def _shared_caterva_reader(urlpath, cache, barrier, results):
     try:
         barrier.wait(timeout=30)
-        with blosc2.open(urlpath, cache_dir=cache, shared_cache=True) as array:
+        with blosc2.open(urlpath, cache_dir=cache, shared_cache=True, deserialize="full") as array:
             array.traffic.reset()
             np.testing.assert_array_equal(array[:100], np.arange(100))
             requests = array.traffic.requests
@@ -536,7 +541,9 @@ def test_open_shared_caterva_processes(tmp_path, server):
 def test_open_shared_caterva_invalid_options(tmp_path, options, error, message):
     urlpath = blosc2.URLPath("@public/array.b2nd", urlbase="https://example.org")
     with pytest.raises(error, match=message):
-        blosc2.open(urlpath, **{"cache_dir": tmp_path / "cache", "shared_cache": True, **options})
+        blosc2.open(
+            urlpath, **{"cache_dir": tmp_path / "cache", "shared_cache": True, **options}, deserialize="full"
+        )
     assert not (tmp_path / "cache").exists()
 
 
@@ -1376,7 +1383,7 @@ def test_a_cache_of_bytes_that_were_replaced_is_emptied(tmp_path, server, any_ch
     other = _incompressible((200, 200), seed=1)
     _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
 
-    reopened = blosc2.open(cache, mode="a")
+    reopened = blosc2.open(cache, mode="a", deserialize="full")
     assert np.array_equal(reopened[0:5, 0:10], other[0:5, 0:10])
     assert np.array_equal(reopened[...], other)
 
@@ -1394,10 +1401,10 @@ def test_a_cache_emptied_of_replaced_bytes_stays_emptied(tmp_path, server, any_c
 
     other = _incompressible((200, 200), seed=1)
     _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
-    noticed = blosc2.open(cache, mode="a")  # opened over the new bytes, dropped unread
+    noticed = blosc2.open(cache, mode="a", deserialize="full")  # opened over the new bytes, dropped unread
     del noticed
 
-    again = blosc2.open(cache, mode="a")
+    again = blosc2.open(cache, mode="a", deserialize="full")
     assert again.schunk.vlmeta["proxy-stamp"] == blosc2.C2Array(array.path, urlbase=array.urlbase).stamp
     assert np.array_equal(again[...], other)
 
@@ -1416,7 +1423,7 @@ def test_a_read_only_cache_of_replaced_bytes_reads_past_it(tmp_path, server, any
     other = _incompressible((200, 200), seed=1)
     _replace(srv, other, chunks=(100, 200), blocks=(10, 20))
 
-    reopened = blosc2.open(cache, mode="r")
+    reopened = blosc2.open(cache, mode="r", deserialize="full")
     assert np.array_equal(reopened[:], other)  # read past the cache, off the source
     # ... and the cache is left exactly as it was, stamp and chunks alike
     assert reopened.schunk.vlmeta["proxy-stamp"] != blosc2.C2Array(array.path, urlbase=array.urlbase).stamp
@@ -1464,7 +1471,7 @@ def test_a_read_only_cache_is_not_stamped(tmp_path, server):
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     del p
 
-    reopened = blosc2.open(cache, mode="r")
+    reopened = blosc2.open(cache, mode="r", deserialize="full")
     assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])
 
 
@@ -1574,7 +1581,7 @@ def test_a_proxy_over_a_cache_survives_a_dataset_that_became_computed(
 
     srv.geometry = False
     assert not blosc2.C2Array(array.path, urlbase=array.urlbase).serves_blocks
-    reopened = blosc2.open(cache)
+    reopened = blosc2.open(cache, deserialize="full")
     assert isinstance(reopened, blosc2.Proxy)
     assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])  # out of the cache
 

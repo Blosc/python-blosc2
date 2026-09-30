@@ -15,6 +15,8 @@ from msgpack import ExtType, packb, unpackb
 
 from blosc2 import blosc2_ext
 from blosc2.b2objects import decode_b2object_payload, encode_b2object_payload
+from blosc2.deserialization import DeserializeMode, normalize_deserialize
+from blosc2.exceptions import UnsafeDeserializationError
 from blosc2.ref import Ref
 
 # Msgpack extension type codes are application-defined.  Reserve code 42 in
@@ -78,10 +80,10 @@ def _encode_ndarray(value):
     return ExtType(_BLOSC2_NDARRAY_EXT_CODE, msgpack_packb(payload))
 
 
-def _decode_ndarray(data):
+def _decode_ndarray(data, *, deserialize=DeserializeMode.FULL):
     from blosc2.hdf5_source import dtype_from_value
 
-    payload = msgpack_unpackb(data)
+    payload = msgpack_unpackb(data, deserialize=deserialize)
     shape = payload["shape"]
     if "values" in payload:
         result = np.empty(shape, dtype=object)
@@ -141,20 +143,29 @@ def _decode_msgpack_ext(code, data):
     import blosc2
 
     if code == _BLOSC2_EXT_CODE:
-        return blosc2.from_cframe(data, copy=True)
+        return blosc2.from_cframe(data, copy=True, deserialize="full")
     if code == _BLOSC2_STRUCTURED_EXT_CODE:
         return _decode_structured_reference(data)
     if code == _BLOSC2_COMPLEX_EXT_CODE:
         real, imag = struct.unpack(">dd", data)
         return complex(real, imag)
     if code == _BLOSC2_NDARRAY_EXT_CODE:
-        return _decode_ndarray(data)
+        return _decode_ndarray(data, deserialize=DeserializeMode.FULL)
     if code == _BLOSC2_SET_EXT_CODE:
         return set(msgpack_unpackb(data))
     return ExtType(code, data)
 
 
-def msgpack_unpackb(payload):
+def msgpack_unpackb(payload, *, deserialize=DeserializeMode.FULL):
+    """Decode a Blosc2 MessagePack value under the selected policy.
+
+    This low-level helper retains ``"full"`` as its default for compatibility.
+    APIs accepting persisted input pass their safe-by-default policy explicitly.
+    """
+
+    mode = normalize_deserialize(deserialize)
+    if mode is DeserializeMode.SAFE:
+        return _safe_msgpack_unpackb(payload)
     return unpackb(payload, list_hook=decode_tuple_list_hook, ext_hook=_decode_msgpack_ext)
 
 
@@ -191,6 +202,17 @@ def _safe_msgpack_unpackb(payload):
             if dtype.hasobject or not isinstance(data, bytes) or len(data) != count * dtype.itemsize:
                 raise ValueError("Invalid remote NumPy extension payload")
             return np.frombuffer(data, dtype=dtype).reshape(shape)
-        raise ValueError(f"Unsafe remote MessagePack extension code {code}")
+        if code == _BLOSC2_EXT_CODE:
+            kind = "embedded cframe"
+        elif code == _BLOSC2_STRUCTURED_EXT_CODE:
+            try:
+                envelope = unpackb(data)
+                candidate = envelope.get("kind") if isinstance(envelope, dict) else None
+                kind = candidate if isinstance(candidate, str) else "structured reference"
+            except Exception:
+                kind = "structured reference"
+        else:
+            kind = f"MessagePack extension code {code}"
+        raise UnsafeDeserializationError(str(kind))
 
     return unpackb(payload, list_hook=decode_tuple_list_hook, ext_hook=decode_ext)

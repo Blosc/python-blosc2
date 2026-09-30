@@ -78,18 +78,18 @@ def stored(s3_endpoint):
 
 def test_save_and_open_whole(stored):
     urlpath, a = stored
-    assert np.array_equal(blosc2.open(urlpath)[:], a[:])
+    assert np.array_equal(blosc2.open(urlpath, deserialize="full")[:], a[:])
 
 
 def test_cache_dir(stored, tmp_path):
     urlpath, a = stored
-    b = blosc2.open(urlpath, cache_dir=tmp_path, mmap_mode="r")
+    b = blosc2.open(urlpath, cache_dir=tmp_path, mmap_mode="r", deserialize="full")
     assert np.array_equal(b[:], a[:])
 
 
 def test_lazy_range_reads(stored):
     urlpath, a = stored
-    p = blosc2.open(urlpath, lazy=True)
+    p = blosc2.open(urlpath, lazy=True, deserialize="full")
     assert np.array_equal(p[150:250], a[150:250])
     assert np.array_equal(p[:], a[:])
 
@@ -97,7 +97,7 @@ def test_lazy_range_reads(stored):
 @pytest.mark.parametrize("max_concurrency", [1, 8])
 def test_lazy_concurrency(stored, max_concurrency):
     urlpath, a = stored
-    p = blosc2.open(urlpath, lazy=True, max_concurrency=max_concurrency)
+    p = blosc2.open(urlpath, lazy=True, max_concurrency=max_concurrency, deserialize="full")
     assert np.array_equal(p[:], a[:])
 
 
@@ -106,14 +106,14 @@ def test_afetch_on_an_async_backend(stored, max_concurrency):
     # The regression this file exists for: s3fs runs its coroutines on a private
     # event loop, so awaiting one from the caller's loop fails outright
     urlpath, a = stored
-    p = blosc2.open(urlpath, lazy=True)
+    p = blosc2.open(urlpath, lazy=True, deserialize="full")
     cache = asyncio.run(p.afetch(slice(150, 250), max_concurrency=max_concurrency))
     assert np.array_equal(cache[150:250], a[150:250])
 
 
 def test_lazy_expression(stored):
     urlpath, a = stored
-    p = blosc2.open(urlpath, lazy=True)
+    p = blosc2.open(urlpath, lazy=True, deserialize="full")
     assert np.array_equal((p * 2)[150:250], a[150:250] * 2)
 
 
@@ -131,7 +131,7 @@ def blocky(s3_endpoint):
 @pytest.mark.parametrize("max_concurrency", [1, 8])
 def test_lazy_block_reads(blocky, max_concurrency):
     urlpath, data = blocky
-    p = blosc2.open(urlpath, lazy=True, max_concurrency=max_concurrency)
+    p = blosc2.open(urlpath, lazy=True, max_concurrency=max_concurrency, deserialize="full")
     traffic = []
     original = p.src.read_range
     p.src.read_range = lambda *args: (out := original(*args), traffic.append(len(out)))[0]
@@ -162,7 +162,7 @@ def test_a_kept_index_is_refused_when_the_object_was_replaced(s3_endpoint, tmp_p
     p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
     del p
-    holder = blosc2.open(cache)
+    holder = blosc2.open(cache, deserialize="full")
     assert "proxy-index" in holder.schunk.vlmeta  # where the chunks and blocks are
     del holder
 
@@ -213,16 +213,16 @@ def test_storage_options(s3_endpoint, tmp_path):
     a.save(url, mode="w", storage_options=storage_options)
 
     # Open whole with storage_options
-    b = blosc2.open(url, storage_options=storage_options)
+    b = blosc2.open(url, storage_options=storage_options, deserialize="full")
     assert np.array_equal(b[:], data)
 
     # Open lazy with storage_options
-    lazy_b = blosc2.open(url, lazy=True, storage_options=storage_options)
+    lazy_b = blosc2.open(url, lazy=True, storage_options=storage_options, deserialize="full")
     assert np.array_equal(lazy_b[50:150], data[50:150])
     assert np.array_equal(lazy_b[:], data)
 
     # Open with cache_dir and storage_options
-    cached_b = blosc2.open(url, cache_dir=tmp_path, storage_options=storage_options)
+    cached_b = blosc2.open(url, cache_dir=tmp_path, storage_options=storage_options, deserialize="full")
     assert np.array_equal(cached_b[:], data)
 
     # save_array and save_tensor with storage_options
@@ -240,7 +240,7 @@ def test_storage_options_invalid_path(tmp_path):
     a = blosc2.arange(10)
     a.save(local_file)
     with pytest.raises(ValueError, match="storage_options is only supported for fsspec URLs"):
-        blosc2.open(local_file, storage_options={"foo": "bar"})
+        blosc2.open(local_file, storage_options={"foo": "bar"}, deserialize="full")
     with pytest.raises(ValueError, match="storage_options is only supported for fsspec URLs"):
         a.save(local_file, mode="w", storage_options={"foo": "bar"})
     with pytest.raises(ValueError, match="storage_options is only supported for fsspec URLs"):
