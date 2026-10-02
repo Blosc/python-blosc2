@@ -14,14 +14,14 @@ Data containers
 
     CTable (:ref:`API <CTable>`)
         A columnar table for structured data. Columns are stored, compressed, and
-        queried independently, with SUMMARY indexes available by default. Use with
+        queried independently, with SUMMARY indexes available when eligible. Use with
         structured data that benefits from compression, speed, and persistence.
 
     LazyArray (:ref:`API <LazyArray>`)
         API to store an expression or function and delay computation until the
         value is explicitly requested. Executes and stores results chunk-by-chunk.
 
-    LaxyExpr (:ref:`API <LazyExpr>`)
+    LazyExpr (:ref:`API <LazyExpr>`)
         Object that stores an expression consisting of at least one NDArray
         object. Follows the LazyArray API for storage and deferred computation.
 
@@ -48,7 +48,7 @@ Low-level data structures
     SChunk (:ref:`API <SChunk>`)
         The foundational container for managing a sequence of individual,
         compressed chunks. NDArrays and CTable columns are built on top of SChunk.
-        Use when you want to directly manipulate raw compresesd data and metadata.
+        Use when you want to directly manipulate raw compressed data and metadata.
 
     frame
         A serialized format for storing chunks along with a header and trailer for
@@ -69,6 +69,10 @@ Indexes
 -------
 
 .. glossary::
+
+    index (:ref:`API <Index>`)
+        Auxiliary data attached to an NDArray or CTable to speed up queries.
+        Allows queries to skip chunks, blocks, or rows of data that do not match.
 
     SUMMARY
         Lightweight index that stores per-segment minimum and maximum values to skip segments that cannot match a query.
