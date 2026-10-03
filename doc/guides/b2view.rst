@@ -63,6 +63,46 @@ You can also jump straight to a node and panel:
 Remote containers and arrays
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Caterva2 and shared cat2lite repositories
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Open a Caterva2-compatible server, a published root, or a selected group/leaf:
+
+.. code-block:: console
+
+    b2view http://localhost:8000
+    b2view http://localhost:8000/@public
+    b2view http://localhost:8000/@public/hdf5 /d0/d1/a2
+    b2view https://cat2.cloud/demo/@public/example
+
+A bare server URL probes ``api/roots``. A single visible root opens directly;
+multiple roots appear as children of a repository group. An empty server shows
+"No accessible roots". Deployment prefixes such as ``/demo`` are preserved.
+For scripts and reproducible starting paths, prefer an explicit root URL.
+
+Group expansion discovers mounted hierarchies on demand. Arrays and tables use
+bounded previews/pages through the server API; the viewer does not download the
+whole source container. Catalog annotations appear separately as
+``catalog_attrs`` in metadata, without replacing source attrs.
+
+Use ``--remote-service fsspec`` when an ordinary HTTP data URL happens to contain
+an ``@``-prefixed path component. Use ``--remote-service caterva2`` to require
+service discovery rather than falling back to a file opener.
+
+``--cache-dir`` and ``--max-cache-bytes`` configure the **client** cache, not the
+server's shared cache. Multi-root repository budgets are per opened root.
+The cat2lite administrator configures shared upstream caching independently.
+Sources are assumed immutable; updates require deliberate cache invalidation.
+Overlapping reads across clients benefit most from a shared server cache.
+
+Remote tables support previews and projection, but filtering, sorting, and
+grouping are disabled rather than implicitly downloading the whole table.
+Table plotting requires a bounded locked row window (``v``). Source formats
+behind cat2lite need their dependencies on the server, not on each viewer client.
+
+Direct source URLs
+^^^^^^^^^^^^^^^^^^
+
 Browse remote B2Z, Zarr, and HDF5 containers directly from their root:
 
 .. code-block:: console
