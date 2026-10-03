@@ -43,6 +43,13 @@ def test_pdf_and_binary_do_not_fetch():
         assert file.reads == []
 
 
+def test_missing_image_dependency_does_not_read(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "PIL", None)
+    file = BytesFile("image.png", b"not needed")
+    assert "needs Pillow" in preview_file(file)["message"]
+    assert file.reads == []
+
+
 def test_image_preview_and_limits(monkeypatch):
     pil = pytest.importorskip("PIL.Image")
     stream = io.BytesIO()
@@ -189,3 +196,52 @@ async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, im
         )
         await wait_until(pilot, lambda: not app.query_one("#file-image").children)
     app.wait_for_close()
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
+async def test_slow_transfer_can_cancel_without_blocking_ui(file_source, tmp_path, monkeypatch):  # noqa: F811
+    import threading
+
+    from textual.widgets import Input
+
+    import blosc2
+    from blosc2.b2view.app import B2ViewApp, FileTransferScreen
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = blosc2.RemoteFile._chunk
+
+    def slow(file, index, cancel=None):
+        if cancel is not None:
+            entered.set()
+            assert release.wait(5)
+        try:
+            return original(file, index, cancel)
+        finally:
+            if cancel is not None:
+                finished.set()
+
+    monkeypatch.setattr(blosc2.RemoteFile, "_chunk", slow)
+    base, _, _ = file_source
+    app = B2ViewApp(base, start_path="/README.md")
+    destination = tmp_path / "cancelled.md"
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await wait_until(
+                pilot, lambda: app._selected_info is not None and app._selected_info.kind == "file"
+            )
+            app.action_download_file()
+            await wait_until(pilot, lambda: isinstance(app.screen, FileTransferScreen))
+            app.screen.query_one(Input).value = str(destination)
+            await pilot.press("enter")
+            await wait_until(pilot, entered.is_set)
+            await pilot.press("escape")
+            assert not isinstance(app.screen, FileTransferScreen)
+            await pilot.press("tab")
+            release.set()
+            await wait_until(pilot, finished.is_set)
+            await wait_until(pilot, lambda: not list(tmp_path.glob(".b2view-download-*")))
+            assert not destination.exists()
+    finally:
+        release.set()
+        app.wait_for_close()

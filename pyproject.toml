@@ -58,9 +58,10 @@ hdf5 = ["h5py", "hdf5plugin"]
 # wasm32 (no TTY).  Install with `pip install "blosc2[tui]"`.  This also pulls
 # textual-plotext for the in-terminal braille plot (the 'p' key).
 tui = ["textual", "textual-plotext"]
+images = ["blosc2[tui]", "textual-image", "pillow"]
 # Adds the high-res 'h' view on top of [tui], rendering a real matplotlib image
 # (kitty/iTerm2/sixel, or half-cells elsewhere) — matplotlib is the heavy part.
-hires = ["blosc2[tui]", "textual-image", "matplotlib"]
+hires = ["blosc2[images]", "matplotlib"]
 # Read/write single-file containers through any fsspec URL (https://, s3://,
 # gs://, zip://, memory://...).  HTTP support is included; the other protocol
 # backends (s3fs, gcsfs, adlfs...) are the caller's install:

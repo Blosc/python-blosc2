@@ -157,6 +157,7 @@ container APIs above.
     remotearray
     remotestore
     remoterepository
+    remotefile
     remotectable
     proxysource
     proxyndsource

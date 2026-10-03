@@ -8,11 +8,19 @@ one API. Data is read on demand and cached locally; remote sources are read-only
 | Standalone `.b2nd`, or a B2Z/Zarr/HDF5 array | {ref}`RemoteArray` |
 | Parquet file, B2Z CTable, PyTables table, or Caterva2 table | {ref}`RemoteCTable` |
 | B2Z, Zarr, HDF5, or Caterva2 group | {ref}`RemoteStore` |
+| Caterva2 ordinary-file / fixed-chunk SChunk byte stream | {ref}`RemoteFile` |
 
-All three inherit {ref}`RemoteObject` and expose source metadata, cache controls,
+These types inherit {ref}`RemoteObject` and expose source metadata, cache controls,
 traffic counters, reference saving, and context-manager support. See
 {doc}`remote_arrays` for array computations and {doc}`remote_tables` for table
 queries and format-specific behavior.
+
+For ordinary Caterva2 files, `file.read_bytes(start, stop)` reads original byte
+ranges and `file.download(destination)` streams original content. Download is
+atomic and refuses overwrite by default. File reference persistence is currently
+unsupported; use download rather than `save`. Fixed-chunk byte streams share
+cache budgets and owner lifetime with array/table leaves, but oversized chunks
+and irregular layouts are refused. See {ref}`RemoteFile` for bounds and callbacks.
 
 ```python
 import blosc2

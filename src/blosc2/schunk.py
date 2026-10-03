@@ -2861,6 +2861,7 @@ def open(  # noqa: C901
     | blosc2.CTable
     | blosc2.RemoteCTable
     | blosc2.RemoteStore
+    | blosc2.RemoteFile
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -3033,6 +3034,10 @@ def open(  # noqa: C901
             :class:`RemoteRepository`. ``"caterva2"`` requires service access and
             disables ordinary-file fallback. Client cache budgets on a repository
             are per root, independent of the server's shared cache.
+            Regular fixed-chunk Caterva2 SChunk leaves return :class:`RemoteFile`
+            with lazy access. ``read_bytes`` reads bounded original-byte ranges;
+            ``download`` streams the original file without exporting its Blosc
+            carrier. Irregular streams and oversized chunks are refused explicitly.
         parquet_options: dict, optional
             PyArrow ``ParquetFile`` reader options for a Parquet source. Conversion
             options such as ``columns`` and ``max_rows`` are passed separately.

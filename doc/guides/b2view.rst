@@ -100,6 +100,40 @@ grouping are disabled rather than implicitly downloading the whole table.
 Table plotting requires a bounded locked row window (``v``). Source formats
 behind cat2lite need their dependencies on the server, not on each viewer client.
 
+Ordinary Caterva2 files
+^^^^^^^^^^^^^^^^^^^^^^
+
+Published ordinary files (compressed SChunk byte streams) appear as file nodes.
+Metadata inspection does not fetch their payload. Text and Markdown preview a
+UTF-8 prefix, bounded to 64 KiB and 1,000 lines; truncated/invalid text is labelled.
+Markdown links/images are passive and never fetch other resources. ``T`` toggles
+raw text and Markdown; terminal controls are stripped from file content.
+
+Install ``blosc2[images]`` for JPEG/PNG previews using Pillow and textual-image,
+without requiring matplotlib. Terminal protocol support may fall back to colored
+half-cells. Missing dependencies/display support show a download/open notice.
+Automatic image input is limited to 16 MiB; original pixel count is limited to
+16,777,216 pixels (64 MiB RGBA). Orientation is corrected, the first frame is used,
+and the displayed image is reduced to at most 1600 × 1200 pixels. These limits
+bound individual buffers, not total process RAM including decoder copies.
+
+``D`` prompts for a destination and streams the **original file**, not its Blosc
+carrier. ``O`` additionally asks for explicit trust consent before launching the
+completed local download in the platform's external viewer. Both actions work for
+PDFs, which deliberately need no terminal PDF renderer. External opening is
+restricted to PDF, JPEG/PNG, Markdown, and text; other binary files remain
+downloadable. No shell or credential-bearing URL is passed to the launcher.
+Downloads are user-owned: they remain after closing the dialog or b2view, including
+when external opening fails. Existing destinations are never overwritten by the
+viewer; choose another name. Escape cancels an active transfer.
+
+File reads/downloads have per-chunk limits of 8 MiB compressed and 16 MiB decoded.
+A small preview may require a much larger chunk. Oversized or irregular sources
+require server-side rechunking; the viewer never silently fetches a whole file
+to work around these limits. Local/direct-fsspec regular files and file reference
+archives are not supported by this feature. Incompatible files do not hide healthy
+siblings.
+
 Direct source URLs
 ^^^^^^^^^^^^^^^^^^
 

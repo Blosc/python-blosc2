@@ -107,12 +107,16 @@ class _Caterva2FrameCache:
     def _path(self, key):
         return self.folder / f"{key}.cframe"
 
-    def get(self, key):
+    def get(self, key, *, max_bytes=None):
         payload = self._memory.get(key)
         if payload is None and self.folder is not None:
             path = self._path(key)
             if path.is_file():
-                payload = path.read_bytes()
+                if max_bytes is None:
+                    payload = path.read_bytes()
+                else:
+                    with path.open("rb") as file:
+                        payload = file.read(max_bytes + 1)
         if payload is None and key in self._artifact_keys and self.owner.artifact_path is not None:
             member = f"_caterva2_rows/{key}.cframe"
             if self.owner.artifact_offsets is None:
@@ -121,6 +125,8 @@ class _Caterva2FrameCache:
                 with zipfile.ZipFile(self.owner.artifact_path) as archive:
                     payload = archive.read(member)
         if payload is not None:
+            if max_bytes is not None and len(payload) > max_bytes:
+                raise ValueError("Cached file chunk exceeds compressed limit")
             self._cache_lru.pop(key, None)
             self._cache_lru[key] = None
             self.owner.cache_coordinator.touch(self, key)
