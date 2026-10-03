@@ -49,6 +49,21 @@ def test_repository_browser_and_broken_sibling(caterva2_source):  # noqa: F811
             ("empty", "group"),
             ("table", "ctable"),
         ]
+        assert next(node for node in children if node.name == "broken").has_children
+        stats["groups"]["@public/mount/broken"] = []
+        assert browser.list_children("/mount/broken") == []
+
+
+def test_published_extensions_do_not_select_direct_file_backends(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["aliases"]["@public/group.h5"] = "@public/group"
+    stats["aliases"]["@public/table.parquet"] = "@public/table"
+    with StoreBrowser(base + "@public/group.h5") as browser:
+        assert browser.is_tree
+        assert [node.name for node in browser.list_children()] == ["array", "table"]
+    with StoreBrowser(base + "@public/table.parquet") as browser:
+        assert browser.kind("/") == "ctable"
+        assert browser.preview("/", stop=2)["nrows"] == 12
 
 
 @pytest.mark.tui
@@ -80,3 +95,57 @@ def test_cli_service_override():
 
     args = build_parser().parse_args(["https://host/@data/a.h5", "--remote-service", "fsspec"])
     assert args.remote_service == "fsspec"
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
+async def test_remote_table_window_is_background_and_stale_results_are_discarded(
+    caterva2_source,  # noqa: F811
+    monkeypatch,
+):
+    import threading
+
+    from blosc2.b2view.app import B2ViewApp
+
+    base, _, _, _ = caterva2_source
+    entered, release = threading.Event(), threading.Event()
+    original = StoreBrowser.prepare_row_window
+
+    def slow(self, path, start, stop):
+        entered.set()
+        assert release.wait(5)
+        return original(self, path, start, stop)
+
+    monkeypatch.setattr(StoreBrowser, "prepare_row_window", slow)
+    app = B2ViewApp(base, start_path="/mount/table")
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await wait_until(
+                pilot, lambda: app.table_page is not None and app.table_page.get("source_kind") == "ctable"
+            )
+            app._enter_row_window(2, 5, backend="ctable")
+            await wait_until(pilot, entered.is_set)
+            # A slow bounded table fetch must not block event handling.
+            await pilot.press("tab")
+            app.update_panels("/mount")
+            release.set()
+            await wait_until(
+                pilot, lambda: app._selected_info is not None and app._selected_info.path == "/mount"
+            )
+            assert not app.browser.get_row_window("/mount/table")
+            app.update_panels("/mount/table")
+            await wait_until(
+                pilot, lambda: app.table_page is not None and app.table_page.get("source_kind") == "ctable"
+            )
+            app._enter_row_window(2, 5, backend="ctable")
+            await wait_until(
+                pilot,
+                lambda: app.row_window == (2, 5) and app.table_page and bool(app.table_page["columns"]),
+            )
+            assert app.table_page["nrows"] == 3
+            np.testing.assert_array_equal(app.table_page["data"]["ident"], [2, 3, 4])
+            plotted = app.browser.plot_series("/mount/table", column="ident")
+            assert plotted["n"] == 3
+    finally:
+        release.set()
+        app.wait_for_close()

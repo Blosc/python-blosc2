@@ -399,7 +399,7 @@ class StoreBrowser:
                             path=self.normalize_path(path.rstrip("/") + "/" + name),
                             name=name,
                             kind=kind,
-                            has_children=kind in {"group", "remote_store"},
+                            has_children=kind in {"group", "remote_store", "unavailable"},
                         )
                     )
                 self._remote_child_counts[path] = len(children)
@@ -1058,6 +1058,10 @@ class StoreBrowser:
         currently visible (so it composes over any active row filter).  Paging
         then cannot leave the range because the view reports only its own rows.
         """
+        return self.install_row_window(path, self.prepare_row_window(path, start, stop))
+
+    def prepare_row_window(self, path: str, start: int, stop: int):
+        """Read a bounded window without publishing it (may perform remote I/O)."""
         path = self.normalize_path(path)
         # The sort view already incorporates any filter, so prefer it; fall back
         # to the bare filter view, then the base table.
@@ -1067,8 +1071,11 @@ class StoreBrowser:
             base = self._filter_views[path]
         else:
             base = self._get_object(path)
-        view = base.slice(start, stop, copy=False)
-        self._window_views[path] = view
+        return base.slice(start, stop, copy=isinstance(base, blosc2.RemoteCTable))
+
+    def install_row_window(self, path: str, view) -> int:
+        """Publish an already prepared window without remote I/O."""
+        self._window_views[self.normalize_path(path)] = view
         return len(view)
 
     def clear_row_window(self, path: str) -> None:

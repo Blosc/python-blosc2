@@ -94,6 +94,7 @@ def caterva2_source(request):
             "@public/group": ["array", "table"],
         },
         "fail_list": None,
+        "aliases": {},
     }
 
     def array_info():
@@ -142,6 +143,12 @@ def caterva2_source(request):
             path = urllib.parse.unquote(parsed.path)
             path = path.removeprefix("/demo")
             stats["requests"].append(path)
+            for endpoint in ("info", "list", "fetch"):
+                prefix = f"/api/{endpoint}/"
+                if path.startswith(prefix):
+                    key = path.removeprefix(prefix)
+                    path = prefix + stats["aliases"].get(key, key)
+                    break
             if path == "/api/roots":
                 if stats["roots_status"] != 200:
                     self.send_error(stats["roots_status"])

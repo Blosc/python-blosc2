@@ -157,9 +157,7 @@ def test_repository_is_lazy_and_children_outlive_it(caterva2_source, tmp_path): 
         assert repo.keys() == ["@broken", "@public"]
         assert stats["requests"] == ["/api/roots"]
         assert repo.kind("@broken") == "group"
-        import httpx
-
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(KeyError):
             repo["@broken"]
         with repo[""] as alias:
             child = alias["@public/mount/array"]
@@ -200,6 +198,7 @@ def test_direct_format_does_not_probe(monkeypatch):
     )
     for url in (
         "https://host/a.b2nd",
+        "https://host/a.b2",
         "https://host/a.zarr/",
         "https://host/a.h5::/group",
         "https://host/a.b2z?version=2",
@@ -281,3 +280,69 @@ def test_repository_freezes_auth_context(caterva2_source):  # noqa: F811
         with repo["@public"] as root:
             assert root.keys() == ["mount"]
     assert set(stats["cookies"]) == {"alice=secret"}
+
+
+def test_nonlazy_groups_and_lookup_escaping_fail_clearly(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    with pytest.raises(NotImplementedError, match="requires lazy=True"):
+        blosc2.open(base + "@public", lazy=False)
+    with blosc2.open(base + "@public") as store:
+        before = stats["requests"].copy()
+        for path in ("mount/array?x=1", "mount/array#x", "mount/array%2F"):
+            with pytest.raises(ValueError, match="Unsafe"):
+                store.get_info(path)
+        assert stats["requests"] == before
+        with pytest.raises(KeyError):
+            store["nonexistent"]
+
+
+def test_old_catalog_listing_cache_is_rediscovered(caterva2_source, tmp_path):  # noqa: F811
+    base, _, _, _ = caterva2_source
+    cache = tmp_path / "cache"
+    with blosc2.open(base + "@public", cache_dir=cache) as store:
+        with store["mount"] as mount:
+            assert mount.keys() == ["array", "empty", "table"]
+        manifest = store._owner.disk.load()
+        manifest["metadata"].pop("caterva2_listing_version")
+        manifest["listed"]["@public/mount"] = []
+        store._owner.disk.publish(manifest)
+    with blosc2.open(base + "@public", cache_dir=cache) as reopened:
+        with reopened["mount"] as mount:
+            assert mount.keys() == ["array", "empty", "table"]
+
+
+def test_equivalent_openers_share_cache_identity_and_auth_does_not(caterva2_source, tmp_path):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    cache = tmp_path / "cache"
+    folders = []
+    for token, source in [
+        ("alice=secret", base + "@public/group"),
+        ("alice=secret", blosc2.URLPath("@public/group", urlbase=base)),
+        ("bob=secret", base + "@public/group"),
+    ]:
+        with blosc2.c2context(auth_token=token), blosc2.open(source, lazy=True, cache_dir=cache) as store:
+            folders.append(store._owner.disk.path)
+            with store["array"] as remote:
+                remote[:1, :2]
+    assert folders[0] == folders[1]
+    assert folders[0] != folders[2]
+    assert stats["fetches"] == 2
+
+
+def test_hierarchy_summary_isolates_failed_sources(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["groups"]["@public/mount"].append("broken")
+    with blosc2.open(base + "@public") as store:
+        summary = str(store.info)
+        assert "listing incomplete" in summary
+        assert "[unavailable]" in summary
+        assert "array" in summary
+
+
+def test_default_discovery_limits(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["groups"]["@public"] = ["mount/array"] * 100001
+    with blosc2.open(base + "@public") as store:
+        assert store._owner.max_nodes == 10000
+        with pytest.raises(ValueError, match="100000-entry"):
+            store.keys()

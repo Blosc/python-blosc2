@@ -2159,7 +2159,12 @@ def _open_non_lazy_c2(
         raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
     if max_concurrency is not None:
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
-    return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+    metadata = blosc2.c2array.info(urlpath.path, urlpath.urlbase, auth_token=urlpath.auth_token)
+    if "shape" not in metadata or "dtype" not in metadata:
+        raise NotImplementedError("Caterva2 group/table access requires lazy=True")
+    return blosc2.C2Array(
+        urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token, _meta=metadata
+    )
 
 
 def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):  # noqa: C901

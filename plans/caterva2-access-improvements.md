@@ -1,6 +1,8 @@
 # Caterva2 access improvements for Python-Blosc2 and b2view
 
-Status: implementation proposal; no implementation implied by this document.
+Status: M0–M5 implemented and validated on `cat2-improvements`; final review
+fixes included. The sections below retain the delivery design and acceptance
+criteria; the implementation record is the authoritative completion evidence.
 
 Implementation record (updated as milestones land):
 
@@ -46,6 +48,24 @@ Implementation record (updated as milestones land):
   source headers, no warm payload refetch). API/viewer docs and release notes
   updated. Full default offline suite: 10,640 passed, 36 skipped. Gateway
   acceptance passed with CAT2LITE_SERVER set; it is skipped by default.
+- Final review: old eager-list cache snapshots rediscover listings without
+  discarding retained payload; direct paths reject query/fragment/escape
+  ambiguity; missing nodes raise KeyError; nonlazy groups/tables fail clearly.
+  Added default node/list/discovery-response limits, avoided full-registry copies
+  per node inspection, and isolated failed sources in hierarchy summaries.
+  Failed viewer nodes remain expandable for retry. Row-window reads are prepared
+  in background workers and published only if selection/session still match;
+  Caterva2 windows materialize explicitly bounded selections for local plotting.
+- Final validation: 10,646 default-suite tests passed, 37 skipped (including
+  the opt-in gateway test); 213 focused access/Caterva2/viewer/model tests passed
+  with headless TUI cases enabled; real cat2lite gateway acceptance passed again
+  with the same cache traffic measurements. Ruff lint/format and diff checks
+  passed. HTML docs built in external temporary storage with notebook execution
+  disabled, generated/stashed doc copies excluded, and type-comment introspection
+  disabled; the wider documentation build still emits many autosummary/theme/
+  cross-reference warnings (754), so this is not a warnings-clean documentation
+  build. No Python native-extension rebuild was required; cat2lite's three debug
+  binaries were rebuilt for cross-project acceptance.
 
 ## 1. Goal
 
@@ -71,7 +91,7 @@ b2view http://localhost:8000/@public
 b2view https://cat2.cloud/demo/@public/example
 ```
 
-The examples above describe proposed behavior. Preserve existing direct-file
+The examples above describe implemented behavior. Preserve existing direct-file
 opening, including HTTP B2ND/B2Z, HDF5, Zarr, and Parquet sources.
 
 Architecture:
@@ -166,9 +186,9 @@ Rules:
 An ordinary file server can legitimately contain `@` path components. Provide
 an explicit bypass for Caterva2 recognition and repository probing.
 
-Proposed API decision for M0: a narrowly scoped selector such as
+Selected API: the narrowly scoped selector
 `remote_service="auto" | "caterva2" | "fsspec"` on `blosc2.open`.
-This name is provisional. Audit existing options before adding it; do not
+This selects the service backend independently of data format; do not
 overload `source_format`, which currently describes data formats.
 
 - `auto`: root-marker shorthand, known-file dispatch, then eligible base probe.
