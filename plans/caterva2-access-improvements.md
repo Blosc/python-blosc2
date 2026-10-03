@@ -18,6 +18,12 @@ Implementation record (updated as milestones land):
 - Roots discovery uses the mapping response implemented by cat2lite and
   Caterva2, not an assumed list. No global discovery cache is introduced.
 - M1 validation: 20 offline URL/dispatch tests passed in the blosc2 environment.
+- M2: Caterva2 groups now discover immediate children on demand, support direct
+  descendant lookup, memoize completed listings under the owner lock, and roll
+  back node-limit failures. Opening a string root uses the opener's metadata
+  seed to avoid duplicate info calls. Catalog annotations are exposed separately
+  on RemoteNode and retained in discovery metadata. Focused URL/Caterva2 tests:
+  37 passed, including existing reference/table/cache regressions.
 
 ## 1. Goal
 

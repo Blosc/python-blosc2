@@ -332,6 +332,7 @@ class RemoteNode:
     kind: str
     attrs: RemoteMetadataMapping | None
     diagnostic: str | None = None
+    catalog_attrs: RemoteMetadataMapping | None = None
 
 
 def _resolve_hdf5_options(hdf5_index, private_index, source_format):
@@ -368,6 +369,7 @@ class RemoteDiscovery:
         _b2z_blob=None,
         _local_source=False,
         _parquet_conversion=None,
+        _root_info=None,
     ):
         self.caterva2 = _caterva2_bound_urlpath(urlpath) if isinstance(urlpath, blosc2.URLPath) else None
         if self.caterva2 is not None:
@@ -416,6 +418,7 @@ class RemoteDiscovery:
                 manifest = None  # Rebind legacy metadata/payload to the source digest once.
         self.traffic = _traffic if _traffic is not None else Traffic()
         self.transport = _transport
+        self.root_info = _root_info
         self.nodes = {}
         self.attrs = {}
         self.listed = {}
@@ -982,39 +985,63 @@ class RemoteDiscovery:
         return response.json()
 
     def _open_caterva2(self):
-        root_info = self._caterva2_get("info", self.root)
-        root_kind = self._caterva2_kind(root_info)
-        if root_kind == "ctable":
-            self._add(self.root, "ctable", self._caterva2_table_metadata(self.root, root_info))
-            self.attrs[self.root] = dict(root_info.get("attrs") or {})
-            return
-        if root_kind == "ndarray":
-            self._add(self.root, "ndarray")
-            self.attrs[self.root] = dict(root_info.get("attrs") or {})
-            return
-        if root_kind != "group":
+        self._discover_caterva2_node(self.root)
+        if self.nodes[self.root][0] not in {"group", "ctable", "ndarray"}:
             raise ValueError("Caterva2 source root is not an array, group, or CTable")
-        self._add(self.root, "group")
-        self.attrs[self.root] = dict(root_info.get("attrs") or {})
-        leaves = self._caterva2_get("list", self.root)
+
+    def _discover_caterva2_node(self, full):
+        # attrs membership distinguishes actual metadata from structural group
+        # placeholders. An unlisted mount must not be mistaken for an empty group.
+        if full in self.attrs:
+            return
+        info = (
+            self.root_info
+            if full == self.root and self.root_info is not None
+            else self._caterva2_get("info", full)
+        )
+        if not isinstance(info, dict):
+            raise ValueError("Invalid Caterva2 info response")
+        kind = self._caterva2_kind(info)
+        value = self._caterva2_table_metadata(full, info) if kind == "ctable" else None
+        if kind == "unsupported":
+            value = "Caterva2 object kind is unsupported"
+        attrs = dict(info.get("attrs") or {})
+        annotations = dict(info.get("catalog_attrs") or {})
+        # Validate all potentially failing work before changing the registry.
+        previous = self.nodes.copy()
+        try:
+            self.nodes.pop(full, None)
+            self._add(full, kind, value)
+        except BaseException:
+            self.nodes = previous
+            raise
+        self.attrs[full] = attrs
+        if annotations:
+            self.metadata.setdefault("catalog_attrs", {})[full] = annotations
+
+    def _list_caterva2(self, full):
+        leaves = self._caterva2_get("list", full)
         if not isinstance(leaves, list) or any(not isinstance(path, str) for path in leaves):
             raise ValueError("Invalid Caterva2 list response")
-        for relative in sorted(set(leaves)):
+        children = set()
+        for relative in leaves:
+            if not relative:
+                raise ValueError("Invalid empty Caterva2 list entry")
             self._validate(relative)
-            full = "/".join((self.root, relative))
-            info = self._caterva2_get("info", full)
-            kind = self._caterva2_kind(info)
-            if kind == "ctable":
-                self._add(full, kind, self._caterva2_table_metadata(full, info))
-            elif kind in {"ndarray", "group"}:
-                self._add(full, kind)
-            else:
-                self._add(full, "unsupported", "Caterva2 object kind is unsupported")
-            self.attrs[full] = dict(info.get("attrs") or {})
-        for parent in (path for path, (kind, _) in self.nodes.items() if kind == "group"):
-            self.listed[parent] = sorted(
-                path for path in self.nodes if path != parent and path.rpartition("/")[0] == parent
-            )
+            if any(c in relative for c in "%?#"):
+                raise ValueError("Unsafe Caterva2 list path")
+            children.add(full + "/" + relative.split("/", 1)[0])
+        previous = self.nodes.copy()
+        try:
+            for child in sorted(children):
+                if child not in self.nodes:
+                    self._add(child, "group")
+        except BaseException:
+            self.nodes = previous
+            raise
+        # Only the queried group is complete. Recursive server listings do not
+        # imply that descendant groups/mounts have themselves been listed.
+        self.listed[full] = sorted(children)
 
     def _path(self, path):
         if not isinstance(path, str):
@@ -1026,6 +1053,8 @@ class RemoteDiscovery:
     def resolve(self, path):
         """Resolve a relative path without listing a Zarr parent."""
         full = self._path(path)
+        if self.format == "caterva2":
+            self._discover_caterva2_node(full)
         if self.format == "zarr" and (
             full not in self.nodes or (self.nodes[full][0] != "unsupported" and self.nodes[full][1] is None)
         ):
@@ -1046,14 +1075,16 @@ class RemoteDiscovery:
         return full
 
     def kind(self, path):
-        return self.nodes[self._path(path)][0]
+        return self.nodes[self.resolve(path)][0]
 
     def list_children(self, path):  # noqa: C901
         full = self._path(path)
         if self.nodes[full][0] != "group":
             return []
         if full not in self.listed:
-            if self.format == "zarr":
+            if self.format == "caterva2":
+                self._list_caterva2(full)
+            elif self.format == "zarr":
                 import zarr
 
                 group = self.nodes[full][1]
@@ -2094,6 +2125,7 @@ class RemoteStore(RemoteObject):
         _b2z_blob=None,
         _allow_local_source=False,
         _parquet_conversion=None,
+        _root_info=None,
     ):
         dataset = blosc2.core.resolve_dataset_path(dataset, path)
         caterva2_input = isinstance(urlpath, blosc2.URLPath)
@@ -2209,6 +2241,7 @@ class RemoteStore(RemoteObject):
                         _b2z_blob=_b2z_blob,
                         _local_source=local_source,
                         _parquet_conversion=_parquet_conversion,
+                        _root_info=_root_info,
                     )
                     break
                 except (KeyError, TypeError, ValueError):
@@ -2907,6 +2940,7 @@ class RemoteStore(RemoteObject):
                 kind,
                 None if attrs is None else RemoteMetadataMapping(attrs),
                 diagnostic,
+                RemoteMetadataMapping(self._owner.metadata.get("catalog_attrs", {}).get(full, {})),
             )
 
     def kind(self, path=""):
@@ -2941,7 +2975,8 @@ class RemoteStore(RemoteObject):
                     continue
                 for child in children:
                     relative = child[len(root) + 1 :] if root else child
-                    kind = self._owner.nodes[child][0]
+                    owner_path = child[len(self._owner.root) + 1 :] if self._owner.root else child
+                    kind = self._owner.nodes[self._owner.resolve(owner_path)][0]
                     entries[relative] = f" [{kind}]"
                     if kind == "group":
                         pending.append(relative)

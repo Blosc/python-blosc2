@@ -84,6 +84,16 @@ def caterva2_source(request):
         "limit_rows": None,
         "fail_start": None,
         "short_start": None,
+        "requests": [],
+        "roots": {"@public": {"name": "@public"}},
+        "roots_status": 200,
+        "groups": {
+            "@public": ["mount"],
+            "@public/mount": ["array", "table", "empty"],
+            "@public/mount/empty": [],
+            "@public/group": ["array", "table"],
+        },
+        "fail_list": None,
     }
 
     def array_info():
@@ -130,35 +140,53 @@ def caterva2_source(request):
             stats["cookies"].append(self.headers.get("Cookie"))
             parsed = urllib.parse.urlsplit(self.path)
             path = urllib.parse.unquote(parsed.path)
+            path = path.removeprefix("/demo")
+            stats["requests"].append(path)
+            if path == "/api/roots":
+                if stats["roots_status"] != 200:
+                    self.send_error(stats["roots_status"])
+                else:
+                    self.send(json.dumps(stats["roots"]).encode(), "application/json")
+                return
             if path.startswith("/api/info/"):
                 key = path.removeprefix("/api/info/")
-                if key == "@public/group":
-                    info = {"kind": "group", "attrs": {"name": "fixture"}}
-                elif key == "@public/group/array":
+                if key in stats["groups"]:
+                    info = {
+                        "kind": "group",
+                        "attrs": {"name": "fixture"},
+                        "catalog_attrs": {"note": "curated"},
+                    }
+                elif key in {"@public/group/array", "@public/mount/array"}:
                     info = array_info()
-                elif key in {"@public/group/table", "@public/table"}:
+                elif key in {"@public/group/table", "@public/table", "@public/mount/table"}:
                     info = table_info()
                 else:
                     self.send_error(404)
                     return
                 self.send(json.dumps(info).encode(), "application/json")
                 return
-            if path == "/api/list/@public/group":
-                self.send(json.dumps(["array", "table"]).encode(), "application/json")
+            if path.startswith("/api/list/"):
+                key = path.removeprefix("/api/list/")
+                if key == stats["fail_list"]:
+                    self.send_error(503)
+                elif key in stats["groups"]:
+                    self.send(json.dumps(stats["groups"][key]).encode(), "application/json")
+                else:
+                    self.send_error(404)
                 return
             if path.startswith("/api/fetch/"):
                 stats["fetches"] += 1
                 key = path.removeprefix("/api/fetch/")
                 query = urllib.parse.parse_qs(parsed.query)
                 selection = query.get("slice_", [""])[0]
-                if key == "@public/group/array":
+                if key in {"@public/group/array", "@public/mount/array"}:
                     axes = tuple(
                         slice(*(int(part) if part else None for part in axis.split(":")))
                         for axis in selection.split(",")
                     )
                     self.send(array.slice(axes).to_cframe(), "application/octet-stream")
                     return
-                if key in {"@public/group/table", "@public/table"}:
+                if key in {"@public/group/table", "@public/table", "@public/mount/table"}:
                     start, stop = (int(part) for part in selection.split(":"))
                     stats["ranges"].append((start, stop))
                     if stats["fail_start"] == start:

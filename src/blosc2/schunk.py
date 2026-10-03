@@ -2213,6 +2213,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         return blosc2.RemoteStore(
             urlpath,
             cache_dir=cache_dir,
+            _root_info=metadata,
             **store_options,
         )
     if kind == "ctable":
