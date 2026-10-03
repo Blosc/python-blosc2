@@ -33,6 +33,52 @@ call. See {doc}`remote_arrays` for local-source caching and selector details.
 
 ## Explore a hierarchy
 
+### Caterva2 servers and shared caching gateways
+
+```python
+with blosc2.open("http://localhost:8000") as repository:
+    print(repository.keys())
+
+with blosc2.open("http://localhost:8000/@public/hdf5") as group:
+    print(group.keys())
+    with group["d0/d1/a2"] as array:
+        values = array[:10, :10]
+```
+
+An HTTP(S) path component starting with `@` identifies a Caterva2 root. The
+preceding path stays in the deployment base, e.g. `https://host/demo/@public`.
+These string service references default to lazy access and return the selected
+group, array, or table type. Explicit `URLPath` inputs retain their existing
+lazy defaults. Dataset selectors are in the service URL, not `path=` or `::`.
+
+An ambiguous bare base URL probes `<base>/api/roots` with a short timeout. A
+single visible root opens directly. Zero or multiple roots return
+{ref}`RemoteRepository`, with root names as children and independent, lazily
+opened root owners. Prefer explicit root URLs for scripts: relative paths on
+a bare service can change if its root count changes. Repository persistence and
+materialization are unsupported; select a specific root for those operations.
+
+Use `remote_service="fsspec"` to disable recognition/probing for ordinary data
+URLs containing `@` components, or for extensionless file sources. Use
+`remote_service="caterva2"` to require a service without file fallback. Known
+direct-format URLs are not probed in auto mode. Malformed/non-service responses
+allow file fallback; authentication, connection, and server errors remain errors.
+Discovery redirects are limited to the same origin. Authentication uses existing
+{func}`blosc2.c2context`/`URLPath` facilities and is bound to opened owners.
+
+Caterva2 groups list immediate children on demand. A catalog mount not expanded
+yet is not treated as empty. Direct descendant lookup also works without parent
+expansion. `RemoteNode.catalog_attrs` contains catalog annotations separately
+from source `attrs`. Existing servers may return recursive listings; their
+response cost cannot be eliminated without a server-side pagination extension.
+
+A cat2lite gateway can share cached upstream chunks between independent clients.
+Python-Blosc2's `cache_dir`, `cache_policy`, and `max_cache_bytes` still configure
+the **client** cache. They do not configure the gateway cache, and `shared_cache`
+does not mean “use the server cache.” Repository allowances apply per opened
+root; retained payload totals can therefore exceed a single root's allowance.
+Immutable-source assumptions and explicit invalidation requirements still apply.
+
 - `store.keys()` or iteration lists immediate children.
 - `store["group/array"]` and `store["group"]["array"]` select the same leaf.
 - `store.attrs` exposes group attributes.

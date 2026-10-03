@@ -46,6 +46,23 @@ XXX version-specific blurb XXX
   requirements, environment precedence, caching, and diagnostics. Corrected the
   generated allocation declaration that caused an Apple Clang warning.
 
+### Caterva2 repository access
+
+- `blosc2.open()` recognizes HTTP(S) dataset URLs such as
+  `http://localhost:8000/@public/group`, including deployment prefixes and IPv6.
+  String service URLs default to lazy access; explicit `URLPath` behavior is unchanged.
+- Bare server/base URLs discover `api/roots`. One root opens directly; empty or
+  multiple-root services return a lazy `RemoteRepository` browsing facade.
+- `remote_service="auto" | "caterva2" | "fsspec"` controls service recognition
+  independently of source format. The fsspec override preserves ordinary URLs
+  with literal `@` path components and disables service probes.
+- Caterva2 `RemoteStore` groups expand lazily, including catalog mount boundaries;
+  catalog annotations are separate from source attributes.
+- `b2view` browses these server/root URLs with the existing interface, including
+  bounded array/table previews. Remote table-wide transforms are disabled;
+  plotting requires an explicit bounded row window. Client caches are separate
+  from a shared cat2lite server cache; repository allowances are per root.
+
 ## Changes from 4.14.0 to 4.14.1
 
 Python-Blosc2 4.14.1 is a security and feature release introducing safe
