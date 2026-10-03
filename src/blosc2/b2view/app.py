@@ -42,7 +42,7 @@ except ImportError:  # plotting is optional
     PlotextPlot = None
 
 try:
-    # Auto-selects the best terminal image protocol (kitty/iTerm2/sixel),
+    # Auto-selects a supported terminal image protocol (kitty/sixel),
     # degrading to colored half-cells; used by the high-res 'h' plot view.
     from textual_image.widget import Image as TextualImage
 except ImportError:  # high-res view is optional
@@ -297,7 +297,7 @@ class HelpScreen(ModalScreen[None]):
             "Ordinary files",
             [
                 ("D", "download original bytes to a chosen destination (no overwrite)"),
-                ("O", "download and open a document externally (requires explicit trust consent)"),
+                ("O", "download and open a document externally"),
                 ("T", "toggle raw text / Markdown rendering"),
                 ("escape", "cancel a file download or close its dialog"),
             ],
@@ -1895,7 +1895,7 @@ class DownloadScreen(ModalScreen["bool | str"]):
 
 
 class FileTransferScreen(ModalScreen):
-    """Explicit destination/consent and cancellable background original-byte download."""
+    """Explicit destination and cancellable background original-byte download/open."""
 
     CSS = """
     FileTransferScreen { align: center middle; }
@@ -1916,17 +1916,14 @@ class FileTransferScreen(ModalScreen):
         from blosc2.b2view.file_preview import safe_text
 
         name = safe_text(self.file.name).replace("\\", "_").replace("/", "_")
+        action = "Download and open externally" if self.external else "Download original file"
         with Vertical(id="file-transfer"):
             yield Static(
-                f"Download original file: {name} ({self.file.nbytes:,} bytes)\n"
+                f"{action}: {name} ({self.file.nbytes:,} bytes)\n"
                 "Choose a destination; Enter starts. Escape cancels. Existing files are not overwritten.",
                 markup=False,
             )
             yield Input(value=str(Path.cwd() / name), id="file-destination")
-            if self.external:
-                yield Checkbox(
-                    "I trust this file and want to open it in an external application", id="file-consent"
-                )
             yield Static("", id="file-status", markup=False)
             yield ProgressBar(id="file-progress")
 
@@ -1936,11 +1933,6 @@ class FileTransferScreen(ModalScreen):
 
     def on_input_submitted(self):
         if self.started:
-            return
-        if self.external and not self.query_one("#file-consent", Checkbox).value:
-            self.query_one("#file-status", Static).update(
-                "Explicit consent is required for external opening."
-            )
             return
         destination = self.query_one(Input).value
         if not destination.strip():
@@ -2658,7 +2650,12 @@ class B2ViewApp(App):
             )
             return
         try:
-            await body.mount(TextualImage(data["file_image"]))
+            image = TextualImage(data["file_image"])
+            # The default fractional height collapses inside an auto-height
+            # container. Let the widget derive its height from the image ratio.
+            image.styles.width = "auto"
+            image.styles.height = "auto"
+            await body.mount(image)
         except Exception as error:
             self.query_one("#preview", Static).update(f"Image display unavailable: {error}; use D or O.")
 

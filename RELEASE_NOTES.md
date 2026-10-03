@@ -52,7 +52,7 @@ XXX version-specific blurb XXX
   reads, shared compressed-chunk caching, and atomic streaming downloads.
 - b2view previews text/Markdown and optional JPEG/PNG images (`blosc2[images]`).
   PDF and other unrenderable content remain downloadable; supported documents
-  can open externally only after explicit trust consent. No PDF dependency is
+  can open externally through the explicit `O` action and destination dialog. No PDF dependency is
   required. `D` downloads, `O` opens externally, and `T` toggles raw Markdown.
 
 - `blosc2.open()` recognizes HTTP(S) dataset URLs such as
