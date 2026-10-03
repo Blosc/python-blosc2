@@ -127,8 +127,8 @@ async def test_tui_file_preview_and_download(file_source, tmp_path):  # noqa: F8
 
 @pytest.mark.tui
 @pytest.mark.asyncio
-async def test_pdf_external_open_requires_consent(file_source, tmp_path, monkeypatch):  # noqa: F811
-    from textual.widgets import Checkbox, Input, Static
+async def test_pdf_external_open_requires_only_explicit_action(file_source, tmp_path, monkeypatch):  # noqa: F811
+    from textual.widgets import Input
 
     import blosc2
     from blosc2.b2view.app import B2ViewApp, FileTransferScreen
@@ -149,11 +149,9 @@ async def test_pdf_external_open_requires_consent(file_source, tmp_path, monkeyp
         await wait_until(pilot, lambda: isinstance(app.screen, FileTransferScreen))
         destination = tmp_path / "doc.pdf"
         app.screen.query_one(Input).value = str(destination)
-        await pilot.press("enter")
+        assert not app.screen.query("#file-consent")
         assert not destination.exists()
         assert not launched
-        assert "consent" in str(app.screen.query_one("#file-status", Static).render())
-        app.screen.query_one(Checkbox).value = True
         await pilot.press("enter")
         await wait_until(pilot, lambda: bool(launched))
         assert destination.read_bytes() == data
@@ -163,7 +161,7 @@ async def test_pdf_external_open_requires_consent(file_source, tmp_path, monkeyp
 
 @pytest.mark.tui
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_widget", [True, False])
+@pytest.mark.parametrize("image_widget", [True, False, "real"])
 async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, image_widget):  # noqa: F811
     from textual.widgets import Static
 
@@ -178,14 +176,23 @@ async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, im
     stream.append_data(encoded.getvalue())
     stats["files"]["@public/image.png"] = stream
     stats["groups"]["@public"].append("image.png")
-    monkeypatch.setattr(
-        "blosc2.b2view.app.TextualImage",
-        (lambda image: Static(f"Image {image.size}")) if image_widget else None,
-    )
+    if image_widget == "real":
+        pytest.importorskip("textual_image.widget")
+    else:
+        monkeypatch.setattr(
+            "blosc2.b2view.app.TextualImage",
+            (lambda image: Static(f"Image {image.size}")) if image_widget else None,
+        )
     app = B2ViewApp(base, start_path="/image.png")
     async with app.run_test(size=(120, 40)) as pilot:
         if image_widget:
             await wait_until(pilot, lambda: bool(app.query_one("#file-image").children))
+            await wait_until(pilot, lambda: app.query_one("#file-image").children[0].region.height > 0)
+            image = app.query_one("#file-image").children[0]
+            assert image.region.overlaps(app.query_one("#data-scroll").region)
+            await pilot.resize_terminal(80, 30)
+            await wait_until(pilot, lambda: image.region.height > 0)
+            assert image.region.overlaps(app.query_one("#data-scroll").region)
         else:
             await wait_until(
                 pilot, lambda: "needs textual-image" in str(app.query_one("#preview", Static).render())

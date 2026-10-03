@@ -118,8 +118,9 @@ and the displayed image is reduced to at most 1600 × 1200 pixels. These limits
 bound individual buffers, not total process RAM including decoder copies.
 
 ``D`` prompts for a destination and streams the **original file**, not its Blosc
-carrier. ``O`` additionally asks for explicit trust consent before launching the
-completed local download in the platform's external viewer. Both actions work for
+carrier. ``O`` downloads and opens the completed local file in the platform's
+external viewer after you submit the destination dialog, without an extra trust
+checkbox. Both actions work for
 PDFs, which deliberately need no terminal PDF renderer. External opening is
 restricted to PDF, JPEG/PNG, Markdown, and text; other binary files remain
 downloadable. No shell or credential-bearing URL is passed to the launcher.

@@ -7,6 +7,12 @@ lazy hierarchy browsing, and viewer integration work.
 
 ## Implementation record
 
+- Follow-up UX decision: the extra trust checkbox is removed for all supported
+  documents, including images and PDFs. The explicit O action and destination
+  submission initiate external opening; signature/type restrictions and stale
+  request/shutdown guards remain. Earlier checkbox requirements below are
+  superseded by this user-requested decision.
+
 - M0: verified Caterva2 demo README transport: `api/chunk?nchunk=0` returns
   a 552-byte compressed chunk that decompresses to the original 811 bytes;
   `api/download` returns original Markdown bytes, not the `.b2` carrier.
