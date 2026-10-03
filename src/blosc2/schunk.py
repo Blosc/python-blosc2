@@ -2787,6 +2787,7 @@ def open(  # noqa: C901
     path: str | None = None,
     shared_cache: bool = False,
     deserialize: str = "safe",
+    remote_service: str = "auto",
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2959,6 +2960,12 @@ def open(  # noqa: C901
             a ``.b2z`` path selects B2Z automatically. An explicit value supports
             suffix-free paths. Zarr, HDF5, B2Z and Parquet sources automatically enable
             ``lazy=True``.
+        remote_service: {"auto", "caterva2", "fsspec"}, optional
+            Select remote access independently of the source format. In auto mode,
+            HTTP(S) URLs with an @-prefixed root component are Caterva2 dataset
+            references and default to lazy access. Use ``"fsspec"`` to open an
+            ordinary remote source containing such a component without service
+            recognition. Explicit :ref:`URLPath` inputs retain their lazy defaults.
         parquet_options: dict, optional
             PyArrow ``ParquetFile`` reader options for a Parquet source. Conversion
             options such as ``columns`` and ``max_rows`` are passed separately.
@@ -3064,6 +3071,28 @@ def open(  # noqa: C901
     """
     deserialize = normalize_deserialize(deserialize)
     dataset = blosc2.core.resolve_dataset_path(dataset, path)
+    if remote_service not in {"auto", "caterva2", "fsspec"}:
+        raise ValueError("remote_service must be 'auto', 'caterva2', or 'fsspec'")
+    if isinstance(urlpath, blosc2.URLPath):
+        if remote_service == "fsspec":
+            raise ValueError("remote_service='fsspec' conflicts with URLPath")
+    else:
+        from blosc2.caterva2_url import caterva2_urlpath
+
+        service_path = None if remote_service == "fsspec" else caterva2_urlpath(urlpath)
+        if service_path is not None:
+            urlpath = service_path
+            kwargs.setdefault("lazy", True)
+        elif remote_service == "caterva2":
+            raise ValueError("A Caterva2 dataset URL requires an @-prefixed root")
+        elif remote_service == "fsspec" and not is_fsspec_url(urlpath):
+            raise ValueError("remote_service='fsspec' requires a remote URL")
+    if isinstance(urlpath, blosc2.URLPath):
+        if dataset is not None or hdf5_index is not None:
+            raise ValueError("dataset/path and hdf5_index are unsupported for Caterva2 sources")
+        _reject_table_buffer_options(kwargs)
+        _validate_shared_cache_request(urlpath, shared_cache, kwargs)
+        return _open_c2_urlpath(urlpath, mode, offset, kwargs)
     if kwargs.get("source_format") == "parquet" or (
         isinstance(urlpath, (str, pathlib.Path))
         and str(urlpath).split("?", 1)[0].lower().endswith(".parquet")
