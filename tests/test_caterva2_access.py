@@ -136,3 +136,148 @@ def test_concurrent_expansion_is_coalesced(caterva2_source):  # noqa: F811
         results = list(executor.map(lambda _: store.keys(), range(12)))
         assert results == [["mount"]] * 12
         assert stats["requests"].count("/api/list/@public") == 1
+
+
+def test_bare_and_prefixed_service(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    for url in (base.rstrip("/"), base + "demo"):
+        with blosc2.open(url) as store:
+            assert isinstance(store, blosc2.RemoteStore)
+            assert not isinstance(store, blosc2.RemoteRepository)
+            assert store.keys() == ["mount"]
+    assert stats["requests"].count("/api/roots") == 2
+
+
+def test_repository_is_lazy_and_children_outlive_it(caterva2_source, tmp_path):  # noqa: F811
+    base, array, _, stats = caterva2_source
+    stats["roots"]["@broken"] = {"name": "@broken"}
+    repo = blosc2.open(base, cache_dir=tmp_path / "cache")
+    try:
+        assert isinstance(repo, blosc2.RemoteRepository)
+        assert repo.keys() == ["@broken", "@public"]
+        assert stats["requests"] == ["/api/roots"]
+        assert repo.kind("@broken") == "group"
+        import httpx
+
+        with pytest.raises(httpx.HTTPStatusError):
+            repo["@broken"]
+        with repo[""] as alias:
+            child = alias["@public/mount/array"]
+            assert child is not None
+        with pytest.raises(NotImplementedError, match="persistence"):
+            repo.save(tmp_path / "repository.b2z")
+        assert repo.cache_policy is blosc2.CachePolicy.DISK
+        assert repo.cache_bytes == 0
+        assert "per root" in str(repo.info)
+    finally:
+        repo.close()
+    with child:
+        assert (child[0:1, 0:2] == array[0:1, 0:2]).all()
+    with pytest.raises(RuntimeError, match="closed"):
+        repo.keys()
+
+
+def test_empty_service_and_repository_option_validation(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["roots"] = {}
+    with blosc2.open(base) as repo:
+        assert repo.keys() == []
+        assert repo.kind() == "group"
+    for options in (
+        {"lazy": False},
+        {"cache_path": "a.b2nd"},
+        {"shared_cache": True},
+        {"storage_options": {}, "remote_service": "caterva2"},
+    ):
+        with pytest.raises((ValueError, NotImplementedError)):
+            blosc2.open(base, **options)
+
+
+def test_direct_format_does_not_probe(monkeypatch):
+    monkeypatch.setattr(blosc2.schunk, "_open_fsspec_url", lambda *args: "ordinary-file")
+    monkeypatch.setattr(
+        blosc2.caterva2_url, "discover_service", lambda *args, **kwargs: pytest.fail("unexpected probe")
+    )
+    for url in (
+        "https://host/a.b2nd",
+        "https://host/a.zarr/",
+        "https://host/a.h5::/group",
+        "https://host/a.b2z?version=2",
+    ):
+        assert blosc2.open(url) == "ordinary-file"
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 503])
+def test_discovery_preserves_http_failure(caterva2_source, status):  # noqa: F811
+    import httpx
+
+    base, _, _, stats = caterva2_source
+    stats["roots_status"] = status
+    with pytest.raises(httpx.HTTPStatusError) as error:
+        blosc2.open(base)
+    assert error.value.response.status_code == status
+    assert stats["requests"] == ["/api/roots"]
+
+
+@pytest.mark.parametrize("roots", [[], {"../evil": {}}, {"@public": "bad"}, {"@public": {"name": "other"}}])
+def test_invalid_discovery_falls_back_only_in_auto(caterva2_source, monkeypatch, roots):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["roots"] = roots
+    monkeypatch.setattr(blosc2.schunk, "_open_fsspec_url", lambda *args: "ordinary-file")
+    assert blosc2.open(base) == "ordinary-file"
+    with pytest.raises(ValueError, match="roots response"):
+        blosc2.open(base, remote_service="caterva2")
+
+
+def test_discovery_redirects_timeout_and_response_limits(monkeypatch):
+    import httpx
+
+    from blosc2.caterva2_url import discover_service
+
+    cases = [
+        (
+            lambda request: httpx.Response(302, headers={"location": "https://elsewhere/api/roots"}),
+            ValueError,
+        ),
+        (lambda request: httpx.Response(200, content=b"x" * ((1 << 20) + 1)), ValueError),
+        (lambda request: httpx.Response(302, headers={"location": str(request.url)}), ValueError),
+    ]
+    for handler, error in cases:
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+            with pytest.raises(error):
+                discover_service("https://host/demo", auth_token="secret")
+
+    def timeout(request):
+        raise httpx.ReadTimeout("slow service", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(timeout)) as client:
+        monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+        with pytest.raises(httpx.ReadTimeout):
+            discover_service("https://host")
+
+    seen = []
+
+    def redirect(request):
+        seen.append(str(request.url))
+        return (
+            httpx.Response(302, headers={"location": "/demo/api/roots/"})
+            if len(seen) == 1
+            else httpx.Response(200, json={"@public": {"name": "@public"}})
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(redirect)) as client:
+        monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+        assert discover_service("https://host/demo") == {"@public": {"name": "@public"}}
+    assert seen == ["https://host/demo/api/roots", "https://host/demo/api/roots/"]
+
+
+def test_repository_freezes_auth_context(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["roots"]["@broken"] = {"name": "@broken"}
+    with blosc2.c2context(auth_token="alice=secret"):
+        repo = blosc2.open(base)
+    with blosc2.c2context(auth_token="bob=secret"), repo:
+        with repo["@public"] as root:
+            assert root.keys() == ["mount"]
+    assert set(stats["cookies"]) == {"alice=secret"}

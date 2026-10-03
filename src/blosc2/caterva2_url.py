@@ -66,3 +66,105 @@ def caterva2_urlpath(value):
         raise ValueError("Caterva2 URL requires a root and nonempty dataset components")
     base = urlunsplit((parsed.scheme, parsed.netloc, "/".join(components[:marker]), "", ""))
     return blosc2.URLPath("/".join(logical), urlbase=base)
+
+
+def service_probe_candidate(value):
+    """Whether an HTTP URL is ambiguous rather than a recognized data source."""
+    if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+        return False
+    parsed = urlsplit(value)
+    if parsed.query or parsed.fragment or "::" in parsed.path:
+        return False
+    suffixes = (
+        ".b2nd",
+        ".b2z",
+        ".b2d",
+        ".b2f",
+        ".b2frame",
+        ".b2b",
+        ".b2e",
+        ".h5",
+        ".hdf5",
+        ".zarr",
+        ".parquet",
+    )
+    return not any(
+        decode_service_component(part).lower().endswith(suffixes) for part in parsed.path.split("/")
+    )
+
+
+def validate_roots(roots):
+    """Validate the Caterva2 roots mapping without assuming a root name prefix."""
+    if not isinstance(roots, dict) or len(roots) > 1000:
+        raise ValueError("Invalid Caterva2 roots response")
+    for name, metadata in roots.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in {".", ".."}
+            or any(c in name for c in "/\\:%?#")
+            or any(ord(c) < 32 or ord(c) == 127 for c in name)
+            or not isinstance(metadata, dict)
+            or metadata.get("name", name) != name
+        ):
+            raise ValueError("Invalid Caterva2 root entry")
+    return roots
+
+
+def discover_service(value, *, required=False, auth_token=None):
+    """Probe api/roots with bounded bytes, time, and same-origin redirects.
+
+    Return a validated roots mapping or None for a conclusively non-service
+    response. Authentication, connectivity, and server failures are preserved.
+    """
+    import time
+
+    from blosc2.c2array import _auth_headers, _server_url, _sync_client
+
+    parsed = validate_service_url(value)
+    url = _server_url(value.rstrip("/"), "api/roots")
+    client = _sync_client()
+    deadline = time.monotonic() + 3
+    for _ in range(4):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Caterva2 service discovery exceeded 3 seconds")
+        with client.stream(
+            "GET", url, headers=_auth_headers(auth_token), timeout=remaining, follow_redirects=False
+        ) as response:
+            if response.status_code in {301, 302, 303, 307, 308}:
+                from urllib.parse import urljoin
+
+                target = urljoin(url, response.headers.get("location", ""))
+                redirect = urlsplit(target)
+                if (redirect.scheme, redirect.hostname, redirect.port) != (
+                    parsed.scheme,
+                    parsed.hostname,
+                    parsed.port,
+                ):
+                    raise ValueError("Caterva2 discovery cannot redirect credentials to another origin")
+                if redirect.username is not None or redirect.password is not None:
+                    raise ValueError("Unsafe Caterva2 discovery redirect")
+                url = target
+                continue
+            if response.status_code in {404, 405}:
+                if required:
+                    response.raise_for_status()
+                return None
+            response.raise_for_status()
+            payload = bytearray()
+            for chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Caterva2 service discovery exceeded 3 seconds")
+                payload.extend(chunk)
+                if len(payload) > 1 << 20:
+                    raise ValueError("Caterva2 roots response exceeds 1 MiB")
+            import json
+
+            try:
+                return validate_roots(json.loads(payload))
+            except (ValueError, TypeError) as error:
+                if required:
+                    raise ValueError("Invalid Caterva2 roots response") from error
+                return None
+    raise ValueError("Too many Caterva2 discovery redirects")

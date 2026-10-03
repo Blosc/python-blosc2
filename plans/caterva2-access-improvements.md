@@ -24,6 +24,13 @@ Implementation record (updated as milestones land):
   seed to avoid duplicate info calls. Catalog annotations are exposed separately
   on RemoteNode and retained in discovery metadata. Focused URL/Caterva2 tests:
   37 passed, including existing reference/table/cache regressions.
+- M3: added bounded roots discovery (3-second deadline, 1 MiB response bound,
+  same-origin redirects only), direct-source bypass, strict error/fallback
+  classification, and the public RemoteRepository browsing facade. Roots open
+  independently and lazily; facade aliases share owners, returned children
+  outlive the facade, and authentication is frozen at opening. Per-root cache
+  budgets and unsupported repository persistence are explicit. Validation:
+  38 access tests passed, including zero/one/multiple roots and error handling.
 
 ## 1. Goal
 
