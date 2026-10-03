@@ -131,6 +131,7 @@ class ObjectInfo:
     kind: str
     metadata: dict[str, Any]
     user_attrs: dict[str, Any] | None = None
+    display_path: str | None = None
 
 
 @dataclass
@@ -464,7 +465,27 @@ class StoreBrowser:
         if user_attrs is None and self.is_tree:
             store_attrs = getattr(self.store, "attrs", getattr(self.store, "vlmeta", None))
             user_attrs = self._attrs_dict(store_attrs)
-        return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
+        return ObjectInfo(
+            path=path,
+            kind=kind,
+            metadata=metadata,
+            user_attrs=user_attrs,
+            display_path=self._display_path(path),
+        )
+
+    def _display_path(self, path):
+        """Keep service paths fully qualified without changing browser navigation."""
+        if isinstance(self.store, (blosc2.RemoteStore, blosc2.RemoteArray, blosc2.RemoteCTable)):
+            source = self.store.source
+            if source["kind"] == "caterva2":
+                full = "/".join(part for part in (source["path"], path.strip("/")) if part)
+                return full if full.startswith("@") else "/" + full
+            if source["kind"] == "caterva2_repository" and path.startswith("/@"):
+                return path.lstrip("/")
+        elif isinstance(self.store, blosc2.C2Array):
+            full = self.store.path.strip("/")
+            return full if full.startswith("@") else "/" + full
+        return path
 
     def _remote_info(self, path):
         node = self.store.get_info(path)
@@ -486,7 +507,7 @@ class StoreBrowser:
                 metadata["preview" if node.kind == "unsupported" else "notice"] = node.diagnostic
             if isinstance(self.store, blosc2.RemoteRepository) and path == "/" and not self.store.keys():
                 metadata["notice"] = "No accessible roots"
-        return ObjectInfo(path, node.kind, metadata, attrs)
+        return ObjectInfo(path, node.kind, metadata, attrs, display_path=self._display_path(path))
 
     def preview(
         self,
