@@ -1346,17 +1346,17 @@ def test_s3_hdf5_open_and_slice():
     remote = blosc2.open(
         url, lazy=True, dataset="d0/d1/a2", storage_options=STORAGE_OPTIONS, deserialize="full"
     )
-    assert remote.shape == (10, 1000, 1000)
+    assert remote.shape == (1000, 1000)
     assert remote.dtype == np.dtype("int32")
-    assert remote.chunks == (2, 500, 500)
+    assert remote.chunks == (500, 500)
 
-    slice_remote = remote[0, :3, :3]
+    slice_remote = remote[:3, :3]
     if LOCAL_HIERARCHY.exists():
         with h5py.File(LOCAL_HIERARCHY, "r") as f:
-            local_slice = f["d0/d1/a2"][0, :3, :3]
+            local_slice = f["d0/d1/a2"][:3, :3]
         np.testing.assert_array_equal(slice_remote, local_slice)
     else:
-        assert list(slice_remote[0]) == [0, 1, 2]
+        np.testing.assert_array_equal(slice_remote, [[0, 1, 2], [1000, 1001, 1002], [2000, 2001, 2002]])
 
 
 @pytest.mark.network
@@ -1366,11 +1366,11 @@ def test_s3_hdf5_cache_hit():
     remote = blosc2.open(
         url, lazy=True, dataset="d0/d1/a2", storage_options=STORAGE_OPTIONS, deserialize="full"
     )
-    _ = remote[0, :3, :3]
+    _ = remote[:3, :3]
     traffic_after_first = remote.traffic.nbytes
     assert traffic_after_first > 0
 
-    _ = remote[0, :3, :3]
+    _ = remote[:3, :3]
     assert remote.traffic.nbytes == traffic_after_first
 
 
@@ -1387,25 +1387,39 @@ def test_s3_hdf5_disk_carrier(tmp_path):
         cache_path=cache_path,
         deserialize="full",
     )
-    val = remote[0, :3, :3]
-    assert list(val[0]) == [0, 1, 2]
+    val = remote[:3, :3]
+    np.testing.assert_array_equal(val, [[0, 1, 2], [1000, 1001, 1002], [2000, 2001, 2002]])
 
     reopened = blosc2.open(cache_path, deserialize="full")
-    np.testing.assert_array_equal(reopened[0, :3, :3], val)
+    np.testing.assert_array_equal(reopened[:3, :3], val)
 
 
 @pytest.mark.network
-def test_s3_hdf5_nested_datasets():
+@pytest.mark.parametrize(
+    ("ds_path", "shape", "dtype", "selection", "result_shape"),
+    [
+        ("d0/a0", (), "int32", (), ()),
+        ("d0/d1/a1", (10000,), "float32", slice(0, 5), (5,)),
+        ("d0/d1/a2", (1000, 1000), "int32", (slice(0, 3), slice(0, 3)), (3, 3)),
+        ("d0/d1/d2/a3", (10, 1000, 1000), "int32", (0, slice(0, 3), slice(0, 3)), (3, 3)),
+    ],
+)
+def test_s3_hdf5_nested_datasets(ds_path, shape, dtype, selection, result_shape):
     pytest.importorskip("s3fs")
     url = "s3://blosc2/hierarchy.h5"
-    for ds_path in ["d0/a0", "d0/d1/a1", "d0/d1/d2/a3"]:
-        proxy = blosc2.open(
-            url, lazy=True, dataset=ds_path, storage_options=STORAGE_OPTIONS, deserialize="full"
-        )
-        assert proxy.shape == (10, 1000, 1000)
-        assert proxy.dtype == np.dtype("int32")
-        val = proxy[0, :3, :3]
-        assert val.shape == (3, 3)
+    proxy = blosc2.open(url, lazy=True, dataset=ds_path, storage_options=STORAGE_OPTIONS, deserialize="full")
+    assert proxy.shape == shape
+    assert proxy.dtype == np.dtype(dtype)
+    val = proxy[selection]
+    assert np.shape(val) == result_shape
+    if not shape:
+        assert val == 0
+    elif len(shape) == 1:
+        # a1 contains positive, perturbed Gaussian samples, not integer arange data.
+        assert np.all(np.isfinite(val))
+        assert np.all(val > 0)
+    else:
+        np.testing.assert_array_equal(val, [[0, 1, 2], [1000, 1001, 1002], [2000, 2001, 2002]])
 
 
 @pytest.mark.network
@@ -1475,7 +1489,7 @@ def test_s3_hdf5_matches_zarr():
 
     assert h5_proxy.shape == zarr_proxy.shape
     assert h5_proxy.dtype == zarr_proxy.dtype
-    np.testing.assert_array_equal(h5_proxy[0, :5, :5], zarr_proxy[0, :5, :5])
+    np.testing.assert_array_equal(h5_proxy[:5, :5], zarr_proxy[:5, :5])
 
 
 @pytest.mark.network
@@ -1488,9 +1502,14 @@ def test_s3_hdf5_traffic():
     initial_traffic = proxy.traffic.nbytes
     assert initial_traffic > 0
 
-    _ = proxy[2:4, :5, :5]
+    val = proxy[2:4, :5]
+    np.testing.assert_array_equal(val, [[2000, 2001, 2002, 2003, 2004], [3000, 3001, 3002, 3003, 3004]])
     traffic_after_read = proxy.traffic.nbytes
-    assert traffic_after_read > initial_traffic
+    if proxy.src._blob is not None:
+        # Small fixtures are prefetched in full during discovery.
+        assert traffic_after_read == initial_traffic
+    else:
+        assert traffic_after_read > initial_traffic
 
-    _ = proxy[2:4, :5, :5]
+    np.testing.assert_array_equal(proxy[2:4, :5], val)
     assert proxy.traffic.nbytes == traffic_after_read
