@@ -95,6 +95,9 @@ def caterva2_source(request):
         },
         "fail_list": None,
         "aliases": {},
+        "files": {},
+        "file_chunks": [],
+        "file_metadata": {},
     }
 
     def array_info():
@@ -157,7 +160,18 @@ def caterva2_source(request):
                 return
             if path.startswith("/api/info/"):
                 key = path.removeprefix("/api/info/")
-                if key in stats["groups"]:
+                if key in stats["files"]:
+                    stream = stats["files"][key]
+                    info = {
+                        "nbytes": stream.nbytes,
+                        "cbytes": stream.cbytes,
+                        "nchunks": stream.nchunks,
+                        "chunksize": stream.chunksize,
+                        "cparams": safe(stream.cparams),
+                        "vlmeta": {"title": "ordinary file"},
+                    }
+                    info.update(stats["file_metadata"].get(key, {}))
+                elif key in stats["groups"]:
                     info = {
                         "kind": "group",
                         "attrs": {"name": "fixture"},
@@ -181,6 +195,13 @@ def caterva2_source(request):
                 else:
                     self.send_error(404)
                 return
+            if path.startswith("/api/chunk/"):
+                key = path.removeprefix("/api/chunk/")
+                if key in stats["files"]:
+                    index = int(urllib.parse.parse_qs(parsed.query)["nchunk"][0])
+                    stats["file_chunks"].append((key, index))
+                    self.send(stats["files"][key].get_chunk(index), "application/octet-stream")
+                    return
             if path.startswith("/api/fetch/"):
                 stats["fetches"] += 1
                 key = path.removeprefix("/api/fetch/")

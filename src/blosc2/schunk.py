@@ -2202,7 +2202,25 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         if remote_array_options["assume_immutable"] is not True:
             raise ValueError("shared_cache=True requires assume_immutable=True")
     metadata = blosc2.c2array.info(urlpath.path, urlpath.urlbase, auth_token=urlpath.auth_token)
-    kind = metadata.get("kind")
+    from blosc2.remote_store import RemoteDiscovery
+
+    kind = RemoteDiscovery._caterva2_kind(metadata)
+    if kind == "file":
+        if remote_array_options.get("assume_immutable") is not True:
+            raise ValueError("RemoteFile requires assume_immutable=True")
+        if cache_path is not None or shared_cache or max_concurrency is not None:
+            raise NotImplementedError(
+                "RemoteFile uses cache_dir; shared_cache and max_concurrency are unsupported"
+            )
+        options = {
+            key: remote_array_options[key]
+            for key in ("cache_policy", "max_cache_bytes")
+            if key in remote_array_options
+        }
+        with blosc2.RemoteStore(
+            urlpath, cache_dir=cache_dir, _allow_array_root=True, _root_info=metadata, **options
+        ) as store:
+            return store[""]
     if kind == "group":
         if cache_path is not None:
             raise ValueError("Caterva2 groups use cache_dir, not cache_path")
