@@ -1,6 +1,7 @@
 # Caterva2 ordinary-file access and previews in b2view
 
-Status: implementation in progress following explicit user authorization.
+Status: M0–M5 implemented and validated on `cat2-improvements` following explicit
+user authorization. The design below is retained as the delivery/acceptance record.
 It follows `plans/caterva2-access-improvements.md` and its completed URL discovery,
 lazy hierarchy browsing, and viewer integration work.
 
@@ -29,6 +30,38 @@ lazy hierarchy browsing, and viewer integration work.
   plus file transport regressions: 175 passed with TUI cases enabled. Live demo
   checks: README renders; the JPEG decodes as 2034 × 1144 (bounded preview 1600 ×
   900); PDF offers download/external opening without fetching content on selection.
+- M5/final review: added API/guide/installation/release documentation and the
+  `images` extra (Pillow/textual-image, no matplotlib; included by hires). Real
+  cat2lite native `.b2frame` file transport/download passes alongside existing
+  remote-format/shared-cache acceptance. Native cat2lite exposes this carrier
+  name; arbitrary ordinary-file publication/aliasing is not added to that server.
+- Review hardening: bounded network and cached chunk reads before decompression;
+  identity HTTP encoding, content-length/body caps, 10-second I/O timeouts and a
+  checked 20-second chunk deadline; independent transfer aliases prepared on a
+  background worker; no launcher after stale selection/session or shutdown.
+  Old unsupported file snapshots rediscover metadata. Added download publication
+  race, cancellation, empty-stream, corruption, cache eviction/refresh, auth,
+  missing image dependency, consent, and responsive slow-transfer regressions.
+- Final validation: default suite 10,670 passed, 38 skipped; focused offline
+  access/file/viewer/model suite 230 passed with headless TUI cases enabled;
+  opt-in live Caterva2 demo file downloads passed; both actual cat2lite acceptance
+  tests passed. Ruff/diff checks passed. HTML docs built using the existing
+  type-comment/notebook/generated-copy workarounds, with 764 wider autosummary/
+  theme/cross-reference warnings; the build is not warnings-clean.
+- Remaining constraints: fixed-chunk byte streams only; 8 MiB compressed / 16 MiB
+  decoded chunk caps apply to downloads too, so large single-chunk files need
+  server-side rechunking. No-overwrite downloads require hard-link-capable
+  destination filesystems. File reference persistence/hierarchy export is deferred.
+  MIME is a filename hint; binary/unknown files have no automatic preview. Image
+  decoder copies are not a whole-process memory limit. External launchers depend
+  on platform/GUI associations and are not a sandbox; tests mock launchers, never
+  open documents automatically. User-selected downloads are retained (no hidden
+  temporary external-viewer copies to manage). Local/fsspec regular-file support
+  and in-terminal PDF rendering remain explicit non-goals.
+- Live headless image integration also verified the real demo JPEG mounts an
+  `AutoImage` widget with the installed textual-image package (not a mocked
+  renderer). Explicit downloads remain bounded even when previews are unavailable;
+  no automatic raw-download endpoint fallback bypasses chunk safety limits.
 
 ## 1. Goal and delivery order
 

@@ -6,6 +6,13 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Ordinary Caterva2 files now open lazily as `RemoteFile`: bounded original-byte
+  reads, shared compressed-chunk caching, and atomic streaming downloads.
+- b2view previews text/Markdown and optional JPEG/PNG images (`blosc2[images]`).
+  PDF and other unrenderable content remain downloadable; supported documents
+  can open externally only after explicit trust consent. No PDF dependency is
+  required. `D` downloads, `O` opens externally, and `T` toggles raw Markdown.
+
 - `blosc2.open()` recognizes HTTP(S) dataset URLs such as
   `http://localhost:8000/@public/group`, including deployment prefixes and IPv6.
   String service URLs default to lazy access; explicit `URLPath` behavior is unchanged.

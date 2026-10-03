@@ -39,6 +39,8 @@ def test_discovery_ranges_and_download(file_source, tmp_path):
             assert progress[-1] == (len(payload), len(payload))
             with pytest.raises(FileExistsError):
                 file.download(dest)
+            with pytest.raises(TypeError, match="bool"):
+                file.download(dest, overwrite="false")
             with pytest.raises(NotImplementedError):
                 file.save(tmp_path / "file.b2z")
 
@@ -152,6 +154,46 @@ def test_budget_eviction_and_refresh(file_source):
         with store["README.md"] as reopened:
             assert reopened.read_bytes(0, 10) == payload[:10]
     assert stats["file_chunks"]
+
+
+def test_response_bounds_and_auth_isolation(file_source, monkeypatch):
+    import httpx
+
+    base, _, stats = file_source
+    calls = []
+    for token in ("alice=secret", "bob=secret"):
+        with blosc2.c2context(auth_token=token), blosc2.open(base + "@public/README.md") as file:
+            file.read_bytes(0, 1)
+    assert set(stats["cookies"]) >= {"alice=secret", "bob=secret"}
+    assert len(stats["file_chunks"]) == 2
+    with blosc2.open(base + "@public/README.md", cache_policy=blosc2.CachePolicy.NONE) as file:
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(200, headers={"content-length": str(9 << 20)}, content=b"small")
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            file._owner.transport = client
+            with pytest.raises(ValueError, match="8 MiB"):
+                file.read_bytes(0, 1)
+        assert calls[-1].headers["Accept-Encoding"] == "identity"
+        file._meta.update(nbytes=17 << 20, chunksize=17 << 20, nchunks=1)
+        with pytest.raises(ValueError, match="16 MiB decoded"):
+            file.read_bytes(0, 1)
+
+
+def test_old_unsupported_file_snapshot_is_rediscovered(file_source, tmp_path):
+    base, _, _ = file_source
+    options = {"cache_dir": tmp_path / "cache"}
+    with blosc2.open(base + "@public", **options) as store:
+        assert store.kind("README.md") == "file"
+        store._owner.save_manifest()
+        manifest = store._owner.disk.load()
+        manifest["nodes"]["@public/README.md"] = ["unsupported", "legacy"]
+        manifest["metadata"].pop("caterva2_files")
+        store._owner.disk.publish(manifest)
+    with blosc2.open(base + "@public", **options) as store:
+        assert store.kind("README.md") == "file"
 
 
 @pytest.mark.network

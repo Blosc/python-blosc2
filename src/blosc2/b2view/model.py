@@ -1424,8 +1424,11 @@ def object_metadata(obj: Any) -> dict[str, Any]:
         return {
             "type": "Caterva2 file",
             "name": obj.name,
+            "media type (hint)": obj.media_type,
             "nbytes": obj.nbytes,
             "cbytes": obj.cbytes,
+            "chunksize": obj.chunksize,
+            "nchunks": obj.nchunks,
             "actions": "D: download original · O: open externally · T: raw/Markdown",
         }
     if kind in {"ndarray", "c2array"}:

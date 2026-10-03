@@ -4,6 +4,7 @@ import hashlib
 import os
 import struct
 import tempfile
+import time
 import weakref
 from pathlib import Path
 
@@ -70,6 +71,13 @@ class RemoteFile(RemoteObject):
         return self.path.rsplit("/", 1)[-1]
 
     @property
+    def media_type(self):
+        """A filename-based MIME hint, not a guarantee about the payload."""
+        import mimetypes
+
+        return mimetypes.guess_type(self.name)[0]
+
+    @property
     def nbytes(self):
         self._check_open()
         return self._meta["nbytes"]
@@ -78,6 +86,16 @@ class RemoteFile(RemoteObject):
     def cbytes(self):
         self._check_open()
         return self._meta["cbytes"]
+
+    @property
+    def chunksize(self):
+        self._check_open()
+        return self._meta["chunksize"]
+
+    @property
+    def nchunks(self):
+        self._check_open()
+        return self._meta["nchunks"]
 
     @property
     def attrs(self):
@@ -125,12 +143,42 @@ class RemoteFile(RemoteObject):
             ("source", self.source),
             ("nbytes", self.nbytes),
             ("cbytes", self.cbytes),
+            ("chunksize", self._meta["chunksize"]),
+            ("nchunks", self._meta["nchunks"]),
             ("cache policy", self.cache_policy),
             ("cache bytes (owner)", self.cache_bytes),
         ]
 
-    def _chunk(self, index, cancel=None):
+    def _fetch_chunk(self, index, cancel):
         from blosc2.c2array import _auth_headers, _server_url, _sync_client
+
+        owner = self._owner
+        url = _server_url(owner.caterva2.urlbase, f"api/chunk/{self.path}")
+        client = owner.transport or _sync_client()
+        data = bytearray()
+        deadline = time.monotonic() + 20
+        headers = dict(_auth_headers(owner.caterva2.auth_token) or {})
+        headers["Accept-Encoding"] = "identity"
+        with client.stream(
+            "GET", url, params={"nchunk": index}, headers=headers, timeout=10, follow_redirects=False
+        ) as response:
+            response.raise_for_status()
+            if response.headers.get("content-encoding", "identity") != "identity":
+                raise ValueError("Encoded file chunk responses are unsupported")
+            if int(response.headers.get("content-length", 0)) > MAX_COMPRESSED_CHUNK:
+                raise ValueError("File chunk exceeds 8 MiB compressed limit")
+            for part in response.iter_bytes():
+                owner.traffic.charge(len(part))
+                if time.monotonic() > deadline:
+                    raise TimeoutError("File chunk transfer exceeded 20 seconds")
+                if cancel is not None and cancel():
+                    raise InterruptedError("File operation cancelled")
+                if len(data) + len(part) > MAX_COMPRESSED_CHUNK:
+                    raise ValueError("File chunk exceeds 8 MiB compressed limit")
+                data.extend(part)
+        return bytes(data)
+
+    def _chunk(self, index, cancel=None):
         from blosc2.remote_store import _Caterva2FrameCache
 
         self._check_open()
@@ -146,31 +194,10 @@ class RemoteFile(RemoteObject):
             if owner.table_frame_cache is None:
                 owner.table_frame_cache = _Caterva2FrameCache(owner)
             cache = owner.table_frame_cache
-        payload = None if cache is None else cache.get(key)
+        payload = None if cache is None else cache.get(key, max_bytes=MAX_COMPRESSED_CHUNK)
         missing = payload is None
         if payload is None:
-            url = _server_url(owner.caterva2.urlbase, f"api/chunk/{self.path}")
-            client = owner.transport or _sync_client()
-            data = bytearray()
-            with client.stream(
-                "GET",
-                url,
-                params={"nchunk": index},
-                headers=_auth_headers(owner.caterva2.auth_token),
-                timeout=10,
-                follow_redirects=False,
-            ) as response:
-                response.raise_for_status()
-                if response.is_redirect:
-                    raise ValueError("File chunk redirects are unsupported")
-                for part in response.iter_bytes(chunk_size=64 << 10):
-                    owner.traffic.charge(len(part))
-                    if cancel is not None and cancel():
-                        raise InterruptedError("File operation cancelled")
-                    if len(data) + len(part) > MAX_COMPRESSED_CHUNK:
-                        raise ValueError("File chunk exceeds 8 MiB compressed limit")
-                    data.extend(part)
-            payload = bytes(data)
+            payload = self._fetch_chunk(index, cancel)
         if len(payload) < 16 or len(payload) > MAX_COMPRESSED_CHUNK:
             raise ValueError("Invalid compressed file chunk length")
         nbytes, _, cbytes = struct.unpack_from("<III", payload, 4)
@@ -208,6 +235,12 @@ class RemoteFile(RemoteObject):
         A false overwrite uses an atomic hard-link publish to avoid races.
         """
         self._check_open()
+        if not isinstance(overwrite, bool):
+            raise TypeError("overwrite must be a bool")
+        if (progress is not None and not callable(progress)) or (
+            cancel is not None and not callable(cancel)
+        ):
+            raise TypeError("progress and cancel must be callable or None")
         destination = Path(destination).absolute()
         if not overwrite and destination.exists():
             raise FileExistsError(destination)

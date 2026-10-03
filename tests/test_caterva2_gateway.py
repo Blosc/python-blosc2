@@ -32,8 +32,9 @@ def gateway(base, catalog):
         f'[server]\nlisten = "127.0.0.1:0"\npython = {json.dumps(sys.executable)}\n'
         f"[remote]\ncache_dir = {json.dumps(str(base / 'server-cache'))}\n"
     )
+    source_args = ["--data-dir", str(catalog)] if catalog.is_dir() else [str(catalog)]
     process = subprocess.Popen(
-        [os.environ["CAT2LITE_SERVER"], "--config", str(config), str(catalog)],
+        [os.environ["CAT2LITE_SERVER"], "--config", str(config), *source_args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -43,7 +44,7 @@ def gateway(base, catalog):
         line = process.stdout.readline()
         while line and not line.startswith("listening on "):
             line = process.stdout.readline()
-        assert line.startswith("listening on "), line
+        assert line.startswith("listening on "), line or process.stderr.read()
         address = line.removeprefix("listening on ").strip()
         yield address if address.startswith("http") else "http://" + address
     finally:
@@ -51,6 +52,26 @@ def gateway(base, catalog):
         process.wait(timeout=15)
         for stream in (process.stdout, process.stderr):
             stream.close()
+
+
+def test_real_cat2lite_schunk_file_download(tmp_path):
+    from blosc2.b2view.model import StoreBrowser
+
+    data = tmp_path / "files"
+    data.mkdir()
+    payload = b"ordinary file bytes\n" * 10
+    stream = blosc2.SChunk(chunksize=64, cparams={"typesize": 1})
+    for offset in range(0, len(payload), 64):
+        stream.append_data(payload[offset : offset + 64])
+    (data / "bytes.b2frame").write_bytes(stream.to_cframe())
+    with gateway(tmp_path, data) as url:
+        with StoreBrowser(url) as browser:
+            assert browser.kind("/bytes.b2frame") == "file"
+            assert browser.get_info("/bytes.b2frame").metadata["nbytes"] == len(payload)
+        with blosc2.open(url + "/@public/bytes.b2frame") as file:
+            assert file.read_bytes(61, 135) == payload[61:135]
+            file.download(tmp_path / "original.bin")
+            assert (tmp_path / "original.bin").read_bytes() == payload
 
 
 def test_real_catalog_browsing_and_shared_server_cache(tmp_path):
