@@ -344,8 +344,6 @@ def _open_hdf5_file(path, *, local=False, filesystem=None, traffic=None, blob=No
 
 
 def _filesystem_and_path(urlpath, storage_options=None, filesystem=None):
-    import fsspec
-
     if filesystem is not None:
         return filesystem, filesystem._strip_protocol(urlpath)
     # Owned filesystems must never be the process-wide fsspec instance: closing
@@ -354,7 +352,7 @@ def _filesystem_and_path(urlpath, storage_options=None, filesystem=None):
     # close() treats the filesystem as owned.
     options = dict(storage_options or {})
     options["skip_instance_cache"] = True
-    return fsspec.core.url_to_fs(urlpath, **options)
+    return blosc2.core.fsspec_filesystem(urlpath, options)
 
 
 def _close_owned_filesystem(filesystem):
@@ -575,9 +573,7 @@ def load_hdf5_index(index, urlpath, storage_options=None, *, filesystem=None, da
     if isinstance(index, (str, os.PathLike)):
         index_path = os.fspath(index)
         if urlsplit(index_path).scheme:
-            import fsspec
-
-            with fsspec.open(index_path, "r", **(storage_options or {})) as file:
+            with blosc2.core.fsspec_open(index_path, "r", storage_options) as file:
                 index = json.load(file)
         else:
             with open(index_path) as file:
@@ -865,8 +861,9 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
     if not isinstance(url, (str, os.PathLike)):
         raise TypeError("url must be a URL string, path-like object, or HDF5 index")
     url_str = blosc2.core.normalize_urlpath(os.fspath(url))
-    if "::" in url_str and "://" not in url_str.split("::", 1)[1]:
-        url_str = url_str.split("::", 1)[0].rstrip("/")
+    separator = blosc2.core.find_url_separator(url_str)
+    if separator != -1 and "://" not in url_str[separator + 2 :]:
+        url_str = url_str[:separator].rstrip("/")
     lower = url_str.lower()
     for ext in (".h5/", ".hdf5/"):
         index = lower.find(ext)
@@ -877,9 +874,7 @@ def available_datasets(url, storage_options: dict | None = None) -> list[str]:
         if not urlsplit(url_str).scheme or os.path.isabs(url_str):
             with open(url_str) as file:
                 return sorted(validate_hdf5_index(json.load(file))["datasets"])
-        import fsspec
-
-        with fsspec.open(url_str, "r", **(storage_options or {})) as file:
+        with blosc2.core.fsspec_open(url_str, "r", storage_options) as file:
             return sorted(validate_hdf5_index(json.load(file))["datasets"])
     if not urlsplit(url_str).scheme or os.path.isabs(url_str):
         _check_h5py_dependencies()
@@ -1080,8 +1075,9 @@ class HDF5NDSource(ProxyNDSource):
     @staticmethod
     def _parse_url(urlpath, dataset):
         urlpath = blosc2.core.normalize_urlpath(os.fspath(urlpath))
-        if "::" in urlpath and "://" not in urlpath.split("::", 1)[1]:
-            base, embedded = urlpath.split("::", 1)
+        separator = blosc2.core.find_url_separator(urlpath)
+        if separator != -1 and "://" not in urlpath[separator + 2 :]:
+            base, embedded = urlpath[:separator], urlpath[separator + 2 :]
             embedded = embedded.strip("/")
             if dataset is not None and dataset != embedded:
                 raise ValueError("Cannot specify dataset in both URL path and dataset parameter")

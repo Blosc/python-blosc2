@@ -14,7 +14,7 @@ import uuid
 import zipfile
 from contextlib import contextmanager
 
-from blosc2.core import _import_fsspec, resolve_dataset_path
+from blosc2.core import fsspec_filesystem, resolve_dataset_path
 from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource, Traffic
 from blosc2.remote_source_cache import (
     SMALL_REMOTE_FILE,
@@ -117,9 +117,8 @@ class B2ZArchive:
     ):
         self.storage_options = storage_options or {}
         self.urlpath = urlpath
-        fsspec = _import_fsspec(urlpath)
         if _filesystem is None:
-            self._fs, self._path = fsspec.url_to_fs(urlpath, **self.storage_options)
+            self._fs, self._path = fsspec_filesystem(urlpath, self.storage_options)
         else:
             self._fs, self._path = _filesystem, _filesystem._strip_protocol(urlpath)
         self.traffic = _traffic if _traffic is not None else Traffic()
@@ -342,7 +341,7 @@ class _SeededArchive:
         """Resolve a seeded transport on the owner thread before parallel reads."""
         if self._fs is None:
             if self._filesystem is None:
-                fs, path = _import_fsspec(self.urlpath).url_to_fs(self.urlpath, **self.storage_options)
+                fs, path = fsspec_filesystem(self.urlpath, self.storage_options)
             else:
                 fs = self._filesystem
                 path = fs._strip_protocol(self.urlpath)

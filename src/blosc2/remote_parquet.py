@@ -168,13 +168,12 @@ class _CountingHandle:
 
 
 def _source_marker(urlpath, storage_options, filesystem=None):
-    import fsspec
     from fsspec.asyn import sync
 
     fs, path = (
         (filesystem, urlpath)
         if filesystem is not None
-        else fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+        else blosc2.core.fsspec_filesystem(urlpath, storage_options)
     )
     if urlsplit(urlpath).scheme in {"http", "https"} and hasattr(fs, "set_session"):
         try:
@@ -225,12 +224,10 @@ async def _http_source_info(fs, path):
 
 
 def _open_source_handle(urlpath, storage_options, marker, traffic, filesystem=None):
-    import fsspec
-
     fs, path = (
         (filesystem, urlpath)
         if filesystem is not None
-        else fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+        else blosc2.core.fsspec_filesystem(urlpath, storage_options)
     )
     kwargs = (
         {"size": int(marker["size"])}

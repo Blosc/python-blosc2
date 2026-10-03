@@ -221,7 +221,7 @@ def _serialized_operation(method):
 
 def validate_persistable_url(url: str) -> None:
     """Reject URL features that would put credentials in a portable carrier."""
-    if "::" in url:
+    if blosc2.core.find_url_separator(url) != -1:
         raise ValueError("RemoteArray does not persist chained fsspec URLs")
     parsed = urlsplit(url)
     if not parsed.scheme:

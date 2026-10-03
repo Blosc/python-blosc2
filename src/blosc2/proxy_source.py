@@ -1458,11 +1458,8 @@ class FsspecNDSource(ByteRangeNDSource):
         _filesystem=None,
         _traffic=None,
     ):
-        from blosc2.core import _import_fsspec
-
-        fsspec = _import_fsspec(urlpath)
         if _filesystem is None:
-            fs, path = fsspec.url_to_fs(urlpath, **(storage_options or {}))
+            fs, path = blosc2.core.fsspec_filesystem(urlpath, storage_options)
         else:
             fs = _filesystem
             path = fs._strip_protocol(urlpath)

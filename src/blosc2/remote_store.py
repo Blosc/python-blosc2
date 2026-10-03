@@ -482,10 +482,8 @@ class RemoteDiscovery:
                 and self.format != "caterva2"
                 and not (self.format == "hdf5" and os.path.isfile(self.urlpath))
             ):
-                import fsspec
-
                 options = {**self.storage_options, "skip_instance_cache": True}
-                self.filesystem, _ = fsspec.core.url_to_fs(self.urlpath, **options)
+                self.filesystem, _ = blosc2.core.fsspec_filesystem(self.urlpath, options)
             self.restored_manifest = manifest
             if manifest:
                 self._restore_manifest(manifest)

@@ -689,8 +689,40 @@ def split_h5_url(url: str) -> tuple[str, str | None]:
     return url, None
 
 
+def find_url_separator(url: str) -> int:
+    """Find the first ``::`` outside a bracketed IPv6 URL host, or return -1."""
+    parsed = urllib.parse.urlsplit(url)
+    index = url.find("::")
+    if parsed.netloc and parsed.hostname and ":" in parsed.hostname:
+        start = url.find("//") + 2 + parsed.netloc.rfind("[")
+        end = url.find("]", start) + 1
+        if start <= index < end:
+            index = url.find("::", end)
+    return index
+
+
+def fsspec_filesystem(urlpath: str, storage_options: dict | None = None):
+    """Resolve a filesystem without fsspec mistaking an IPv6 host for a chain."""
+    fsspec = _import_fsspec(urlpath)
+    parsed = urllib.parse.urlsplit(urlpath)
+    if (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname
+        and ":" in parsed.hostname
+        and find_url_separator(urlpath) == -1
+    ):
+        # fsspec.url_to_fs currently splits on every ::, even inside [::1].
+        # A direct HTTP filesystem preserves the complete URL as its path.
+        options = dict(storage_options or {})
+        protocol_options = dict(options.pop(parsed.scheme, {}))
+        protocol_options.update(options)
+        fs = fsspec.filesystem(parsed.scheme, **protocol_options)
+        return fs, fs._strip_protocol(urlpath)
+    return fsspec.core.url_to_fs(urlpath, **(storage_options or {}))
+
+
 def _parse_b2z_url(urlpath, dataset):
-    if "::" in urlpath:
+    if find_url_separator(urlpath) != -1:
         return None  # A remaining separator belongs to an fsspec protocol chain.
     parsed = urllib.parse.urlsplit(urlpath)
     path_str = f"{parsed.netloc}/{parsed.path}" if parsed.netloc else parsed.path
@@ -740,8 +772,9 @@ def parse_container_url(
     if not isinstance(urlpath, str):
         return urlpath, dataset, None
 
-    if "::" in urlpath:
-        parts = urlpath.split("::", 1)
+    separator = find_url_separator(urlpath)
+    if separator != -1:
+        parts = (urlpath[:separator], urlpath[separator + 2 :])
         if "://" not in parts[1]:
             if dataset is not None:
                 raise ValueError("Cannot specify dataset in both URL path and dataset parameter")
@@ -789,6 +822,12 @@ def _import_fsspec(urlpath: str):
 
 def fsspec_open(urlpath: str, mode: str, storage_options: dict | None = None):
     """`fsspec.open()`, but complaining properly when fsspec is missing."""
+    parsed = urllib.parse.urlsplit(urlpath)
+    if parsed.scheme in {"http", "https"} and parsed.hostname and ":" in parsed.hostname:
+        fs, path = fsspec_filesystem(urlpath, storage_options)
+        from fsspec.core import OpenFile
+
+        return OpenFile(fs, path, mode)
     return _import_fsspec(urlpath).open(urlpath, mode, **(storage_options or {}))
 
 
@@ -892,7 +931,7 @@ def localize_fsspec_url(
     from fsspec.utils import tokenize
 
     cache_storage = str(cache_storage)
-    fs, path = fsspec.url_to_fs(urlpath, **(storage_options or {}))
+    fs, path = fsspec_filesystem(urlpath, storage_options)
 
     if not fs.isdir(path):
         # check_files is off by default in fsspec, which would happily serve a
@@ -903,7 +942,7 @@ def localize_fsspec_url(
             "check_files": True,
             "cache_mapper": _basename_cache_mapper(),
         }
-        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts, **(storage_options or {})) as f:
+        with fsspec.filesystem("filecache", fs=fs, **opts).open(path, "rb") as f:
             return f.name
 
     localdir = fsspec_cache_path(urlpath, cache_storage)
