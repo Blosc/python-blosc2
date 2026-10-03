@@ -475,7 +475,9 @@ class StoreBrowser:
 
     def _display_path(self, path):
         """Keep service paths fully qualified without changing browser navigation."""
-        if isinstance(self.store, (blosc2.RemoteStore, blosc2.RemoteArray, blosc2.RemoteCTable)):
+        if isinstance(
+            self.store, (blosc2.RemoteStore, blosc2.RemoteArray, blosc2.RemoteCTable, blosc2.RemoteFile)
+        ):
             source = self.store.source
             if source["kind"] == "caterva2":
                 full = "/".join(part for part in (source["path"], path.strip("/")) if part)
@@ -493,7 +495,7 @@ class StoreBrowser:
         if node.catalog_attrs:
             metadata["catalog_attrs"] = dict(node.catalog_attrs)
         attrs = node.attrs
-        if node.kind in {"ndarray", "ctable"}:
+        if node.kind in {"ndarray", "ctable", "file"}:
             obj = self._get_object(path)
             metadata.update(object_metadata(obj))
             if node.kind == "ctable":
@@ -522,6 +524,7 @@ class StoreBrowser:
         col_start: int = 0,
         slice_indices: list[int] | None = None,
         layout: DataSliceLayout | None = None,
+        raw_text: bool = False,
     ) -> Any:
         """Return a bounded data preview for *path*.
 
@@ -531,6 +534,10 @@ class StoreBrowser:
         path = self.normalize_path(path)
         obj = self._get_object(path)
         kind = object_kind(obj)
+        if kind == "file":
+            from blosc2.b2view.file_preview import preview_file
+
+            return preview_file(obj, raw=raw_text)
         if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
             if slices is None:
@@ -1397,6 +1404,8 @@ def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
+    if isinstance(obj, blosc2.RemoteFile):
+        return "file"
     if isinstance(obj, (blosc2.NDArray, blosc2.RemoteArray, blosc2.Proxy)):
         return "ndarray"
     if isinstance(obj, blosc2.CTable):
@@ -1411,6 +1420,14 @@ def object_kind(obj: Any) -> str:
 def object_metadata(obj: Any) -> dict[str, Any]:
     """Extract lightweight metadata from a supported object."""
     kind = object_kind(obj)
+    if kind == "file":
+        return {
+            "type": "Caterva2 file",
+            "name": obj.name,
+            "nbytes": obj.nbytes,
+            "cbytes": obj.cbytes,
+            "actions": "D: download original · O: open externally · T: raw/Markdown",
+        }
     if kind in {"ndarray", "c2array"}:
         try:
             cbytes = getattr(obj, "cbytes", None)

@@ -41,6 +41,20 @@ def make_preview_renderables(preview: Any):
     from rich.table import Table
     from rich.text import Text
 
+    if isinstance(preview, dict) and "file_text" in preview:
+        from rich.markdown import Markdown
+
+        body = (
+            Markdown(preview["file_text"], hyperlinks=False)
+            if preview.get("markdown")
+            else Text(preview["file_text"])
+        )
+        return Text(
+            " · ".join(part for part in (preview.get("notice"), preview.get("message")) if part)
+        ), body
+    if isinstance(preview, dict) and "file_image" in preview:
+        return None, Text(preview["message"])
+
     if isinstance(preview, np.ndarray):
         return None, Text(np.array2string(preview, threshold=200, edgeitems=5), no_wrap=False)
 
