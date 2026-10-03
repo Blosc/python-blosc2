@@ -520,7 +520,7 @@ class RemoteDiscovery:
             if (
                 not isinstance(entry, (list, tuple))
                 or len(entry) != 2
-                or entry[0] not in {"group", "ndarray", "ctable", "remote_store", "unsupported"}
+                or entry[0] not in {"group", "ndarray", "ctable", "remote_store", "unsupported", "file"}
             ):
                 raise ValueError("Invalid RemoteStore node")
             self.nodes[path] = tuple(entry)
@@ -536,6 +536,10 @@ class RemoteDiscovery:
             ):
                 raise ValueError("Invalid RemoteStore child list")
         self.attrs = manifest["attrs"]
+        if self.format == "caterva2":
+            for key, (kind, _) in self.nodes.items():
+                if kind == "unsupported":
+                    self.attrs.pop(key, None)
         self.listed = manifest["listed"]
         if self.format == "caterva2" and self.metadata.get("caterva2_listing_version") != 2:
             # Earlier snapshots marked all discovered groups as fully listed,
@@ -953,6 +957,13 @@ class RemoteDiscovery:
             return "ctable"
         if "shape" in info and "dtype" in info:
             return "ndarray"
+        if kind in {"file", "schunk"} or all(
+            key in info for key in ("nbytes", "nchunks", "chunksize", "cparams")
+        ):
+            from blosc2.remote_file import validate_file_metadata
+
+            validate_file_metadata(info)
+            return "file"
         return "unsupported"
 
     def _caterva2_table_metadata(self, path, info):
@@ -995,7 +1006,7 @@ class RemoteDiscovery:
     def _open_caterva2(self):
         self.metadata["caterva2_listing_version"] = 2
         self._discover_caterva2_node(self.root)
-        if self.nodes[self.root][0] not in {"group", "ctable", "ndarray"}:
+        if self.nodes[self.root][0] not in {"group", "ctable", "ndarray", "file"}:
             raise ValueError("Caterva2 source root is not an array, group, or CTable")
 
     def _discover_caterva2_node(self, full):
@@ -1019,7 +1030,7 @@ class RemoteDiscovery:
         value = self._caterva2_table_metadata(full, info) if kind == "ctable" else None
         if kind == "unsupported":
             value = "Caterva2 object kind is unsupported"
-        attrs = dict(info.get("attrs") or {})
+        attrs = dict(info.get("attrs") or info.get("vlmeta") or {})
         annotations = dict(info.get("catalog_attrs") or {})
         # Validate all potentially failing work before changing the registry.
         # Only this node and its ancestors can change. Do not copy a complete
@@ -1039,6 +1050,10 @@ class RemoteDiscovery:
                     self.nodes[key] = old
             raise
         self.attrs[full] = attrs
+        if kind == "file":
+            from blosc2.remote_file import validate_file_metadata
+
+            self.metadata.setdefault("caterva2_files", {})[full] = validate_file_metadata(info)
         if annotations:
             self.metadata.setdefault("catalog_attrs", {})[full] = annotations
 
@@ -1773,6 +1788,10 @@ class RemoteDiscovery:
             metadata = self._export_metadata()
 
             src_desc, nodes, attrs, listed, candidates = self._collect_export_nodes(full_path, include_cache)
+            if any(kind == "file" for kind, _ in nodes.values()):
+                raise NotImplementedError(
+                    "Hierarchy export containing files is unsupported; download files individually"
+                )
 
             staging_dir = tempfile.mkdtemp(prefix="b2z-export-", dir=dest_dir)
             fd, tmp_zip = tempfile.mkstemp(prefix="export-", suffix=".b2z.tmp", dir=dest_dir)
@@ -2941,6 +2960,8 @@ class RemoteStore(RemoteObject):
                 return group
             if kind == "ctable":
                 return blosc2.RemoteCTable._from_owner(self._owner, full)
+            if kind == "file":
+                return blosc2.RemoteFile._from_owner(self._owner, full)
             if kind == "unsupported":
                 raise NotImplementedError(f"{path!r}: {value}")
             self._owner.open_source(relative)
@@ -3176,6 +3197,10 @@ class RemoteStore(RemoteObject):
     ) -> str:
         """Export the current store or subtree to a portable .b2z reference archive."""
         self._ensure_open()
+        if self._owner.metadata.get("caterva2_files"):
+            raise NotImplementedError(
+                "Caterva2 hierarchy export with ordinary files is unsupported; download files individually"
+            )
         with self._owner.lock:
             _, full = self._resolve("")
             return self._owner.save_selection(

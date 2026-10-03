@@ -627,6 +627,7 @@ from .proxy import (
 from .remote_object import RemoteObject
 from .remote_array import RemoteMetadataMapping, RemoteArray
 from .remote_store import RemoteNode, RemoteStore
+from .remote_file import RemoteFile
 from .remote_repository import RemoteRepository
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
@@ -932,6 +933,7 @@ __all__ = [  # noqa : RUF022
     "RemoteCTable",
     "RemoteNode",
     "RemoteStore",
+    "RemoteFile",
     "RemoteRepository",
     "SChunk",
     "SimpleProxy",
