@@ -19,6 +19,16 @@ lazy hierarchy browsing, and viewer integration work.
   fetch payload. Downloads stage on the destination filesystem and publish
   atomically with no overwrite by default. Focused transport/access regression
   validation: 62 tests passed in the blosc2 environment.
+- M2–M4: b2view recognizes file leaves, renders passive bounded text/Markdown
+  (64 KiB / 1,000 lines), toggles raw text, and decodes JPEG/PNG under independent
+  file/chunk/pixel limits. Image widgets reuse textual-image without matplotlib;
+  absent dependencies have download/open fallbacks. PDFs require no renderer:
+  D downloads original bytes and O prompts for destination and explicit trust
+  consent before a shell-free platform launch. All fetch/decode/download work is
+  backgrounded; downloads use independent handles and cancellation. Viewer/model
+  plus file transport regressions: 175 passed with TUI cases enabled. Live demo
+  checks: README renders; the JPEG decodes as 2034 × 1144 (bounded preview 1600 ×
+  900); PDF offers download/external opening without fetching content on selection.
 
 ## 1. Goal and delivery order
 

@@ -91,3 +91,78 @@ def test_metadata_validation(file_source):
         stats["file_metadata"]["@public/README.md"] = overrides
         with pytest.raises(ValueError):
             blosc2.open(base + "@public/README.md")
+
+
+def test_empty_file_and_metadata_only(file_source, tmp_path):
+    base, _, stats = file_source
+    stats["files"]["@public/empty.txt"] = blosc2.SChunk(chunksize=64, cparams={"typesize": 1})
+    with blosc2.open(base + "@public/empty.txt") as file:
+        assert file.read_bytes() == b""
+        file.download(tmp_path / "empty.txt")
+        assert (tmp_path / "empty.txt").read_bytes() == b""
+        assert not stats["file_chunks"]
+
+
+def test_download_publish_race_and_cancellation(file_source, tmp_path):
+    base, _, _ = file_source
+    dest = tmp_path / "race.md"
+    with blosc2.open(base + "@public/README.md") as file:
+        with pytest.raises(FileExistsError):
+            file.download(dest, progress=lambda *_: dest.write_bytes(b"concurrent creator"))
+        assert dest.read_bytes() == b"concurrent creator"
+        assert not list(tmp_path.glob(".b2view-download-*"))
+        cancelled = []
+        with pytest.raises(InterruptedError):
+            file.download(
+                dest,
+                overwrite=True,
+                cancel=lambda: bool(cancelled),
+                progress=lambda *_: cancelled.append(True),
+            )
+        assert dest.read_bytes() == b"concurrent creator"
+
+
+def test_corrupt_chunk_rejected_before_decompression(file_source, monkeypatch):
+    import struct
+
+    import httpx
+
+    base, _, _ = file_source
+    with blosc2.open(base + "@public/README.md", cache_policy=blosc2.CachePolicy.NONE) as file:
+        payload = b"\0" * 4 + struct.pack("<III", 1000000000, 32, 16)
+        with httpx.Client(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, content=payload))
+        ) as client:
+            file._owner.transport = client
+            monkeypatch.setattr(blosc2, "decompress", lambda *_: pytest.fail("unsafe decompression"))
+            with pytest.raises(ValueError, match="metadata"):
+                file.read_bytes(0, 1)
+
+
+def test_budget_eviction_and_refresh(file_source):
+    base, payload, stats = file_source
+    with blosc2.open(base + "@public", max_cache_bytes=80) as store:
+        file = store["README.md"]
+        assert file.read_bytes(0, 200) == payload[:200]
+        assert store.cache_bytes <= 80
+        store.refresh()
+        with pytest.raises(RuntimeError, match="stale"):
+            file.read_bytes(0, 1)
+        file.close()
+        with store["README.md"] as reopened:
+            assert reopened.read_bytes(0, 10) == payload[:10]
+    assert stats["file_chunks"]
+
+
+@pytest.mark.network
+def test_live_caterva2_demo_original_files(tmp_path):
+    base = "https://cat2.cloud/demo/@public/examples/"
+    for name, signature in (
+        ("README.md", b"#"),
+        ("Wutujing-River.jpg", b"\xff\xd8\xff"),
+        ("cat2cloud-brochure.pdf", b"%PDF-"),
+    ):
+        with blosc2.open(base + name) as file:
+            assert file.read_bytes(0, min(file.nbytes, 10)).startswith(signature)
+            file.download(tmp_path / name)
+            assert (tmp_path / name).stat().st_size == file.nbytes

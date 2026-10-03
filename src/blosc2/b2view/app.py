@@ -67,6 +67,7 @@ _KIND_ICONS = {
     "c2array": "▦",
     "ctable": "▤",
     "schunk": "▣",
+    "file": "📄",
     "unknown": "?",
 }
 
@@ -290,6 +291,15 @@ class HelpScreen(ModalScreen[None]):
                 ("v", "lock the data grid to the current range (esc unlocks)"),
                 ("h", "high-res matplotlib image of the current range"),
                 ("escape", "close the plot (q quits b2view)"),
+            ],
+        ),
+        (
+            "Ordinary files",
+            [
+                ("D", "download original bytes to a chosen destination (no overwrite)"),
+                ("O", "download and open a document externally (requires explicit trust consent)"),
+                ("T", "toggle raw text / Markdown rendering"),
+                ("escape", "cancel a file download or close its dialog"),
             ],
         ),
         (
@@ -1884,6 +1894,102 @@ class DownloadScreen(ModalScreen["bool | str"]):
         self.app.call_from_thread(self.dismiss, True)
 
 
+class FileTransferScreen(ModalScreen):
+    """Explicit destination/consent and cancellable background original-byte download."""
+
+    CSS = """
+    FileTransferScreen { align: center middle; }
+    #file-transfer { width: 75; height: auto; border: thick $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, file, *, external=False):
+        super().__init__()
+        self.file = file
+        self.external = external
+        self.cancelled = threading.Event()
+        self.started = False
+
+    def compose(self):
+        from pathlib import Path
+
+        from blosc2.b2view.file_preview import safe_text
+
+        name = safe_text(self.file.name).replace("\\", "_").replace("/", "_")
+        with Vertical(id="file-transfer"):
+            yield Static(
+                f"Download original file: {name} ({self.file.nbytes:,} bytes)\n"
+                "Choose a destination; Enter starts. Escape cancels. Existing files are not overwritten.",
+                markup=False,
+            )
+            yield Input(value=str(Path.cwd() / name), id="file-destination")
+            if self.external:
+                yield Checkbox(
+                    "I trust this file and want to open it in an external application", id="file-consent"
+                )
+            yield Static("", id="file-status", markup=False)
+            yield ProgressBar(id="file-progress")
+
+    def on_mount(self):
+        self.origin = (self.app._remote_session, self.app._remote_request, self.app.selected_path)
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self):
+        if self.started:
+            return
+        if self.external and not self.query_one("#file-consent", Checkbox).value:
+            self.query_one("#file-status", Static).update(
+                "Explicit consent is required for external opening."
+            )
+            return
+        destination = self.query_one(Input).value
+        if not destination.strip():
+            return
+        self.started = True
+        self.query_one(Input).disabled = True
+        self._transfer(destination)
+
+    @work(thread=True, exit_on_error=False)
+    def _transfer(self, destination):
+        def progress(done, total):
+            self.app.call_from_thread(
+                self.query_one("#file-progress", ProgressBar).update, total=total, progress=done
+            )
+
+        try:
+            path = self.file.download(destination, progress=progress, cancel=self.cancelled.is_set)
+            # Navigation/refresh/shutdown must never launch an obsolete request.
+            current = (self.app._remote_session, self.app._remote_request, self.app.selected_path)
+            if (
+                not self.cancelled.is_set()
+                and self.external
+                and current == self.origin
+                and not self.app._closing
+            ):
+                from blosc2.b2view.file_preview import open_external
+
+                open_external(path)
+            if not self.cancelled.is_set():
+                self.app.call_from_thread(self._finished, f"Saved: {path}")
+        except Exception as error:
+            if not self.cancelled.is_set():
+                self.app.call_from_thread(self._finished, f"{error}\nDestination: {destination}")
+        finally:
+            self.file.close()
+
+    def _finished(self, message):
+        self.query_one("#file-status", Static).update(message + "\nEscape closes this dialog.")
+
+    def action_cancel(self):
+        self.cancelled.set()
+        self.dismiss()
+
+    def on_unmount(self):
+        self.cancelled.set()
+        if not self.started:
+            self.file.close()
+
+
 class B2ViewHeader(Header):
     """App header that also shows the open bundle's filename, left of the title.
 
@@ -1980,6 +2086,7 @@ class B2ViewApp(App):
     #data-header { height: auto; padding: 0 1; }
     #data-table-row { height: 1fr; }
     #data-table { width: 1fr; height: 1fr; }
+    #file-image { height: auto; }
     #row-scrollbar { width: 1; height: 1fr; color: $primary; }
     #col-scrollbar { height: 1; width: 1fr; color: $primary; }
     #meta-scroll, #attrs-scroll, #data-scroll { height: 1fr; padding: 0 1; }
@@ -2013,6 +2120,9 @@ class B2ViewApp(App):
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
+        Binding("D", "download_file", "Download file", show=False),
+        Binding("O", "open_file", "Open externally", show=False),
+        Binding("T", "raw_file", "Raw/Markdown", show=False),
     ]
 
     def __init__(
@@ -2063,6 +2173,7 @@ class B2ViewApp(App):
         self._remote = is_fsspec_url(urlpath)
         self._remote_session = 0
         self._remote_request = 0
+        self._file_raw = False
         self._remote_page_request = 0
         self._remote_page_pending = False
         self._remote_col_end = None
@@ -2119,6 +2230,7 @@ class B2ViewApp(App):
                     yield Static("", id="col-scrollbar")
                     with VerticalScroll(id="data-scroll", can_focus=True):
                         yield Static("", id="preview")
+                        yield Vertical(id="file-image")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -2439,7 +2551,9 @@ class B2ViewApp(App):
                 if info.kind == "unsupported":
                     data = {"message": info.metadata.get("preview", "Preview unavailable")}
                 elif info.kind not in {"group", "remote_store"} and not self._uses_grid_preview(info):
-                    data = browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
+                    data = browser.preview(
+                        path, max_rows=self.preview_rows, max_cols=self.preview_cols, raw_text=self._file_raw
+                    )
             self._deliver_remote(session, self._finish_remote_info, request, path, info, data, None)
         except Exception as exc:
             self._deliver_remote(session, self._finish_remote_info, request, path, None, None, exc)
@@ -2459,6 +2573,7 @@ class B2ViewApp(App):
         data_table_row = self.query_one("#data-table-row", Horizontal)
         data_scroll = self.query_one("#data-scroll", VerticalScroll)
         preview = self.query_one("#preview", Static)
+        self.run_worker(self._show_file_image(path, remote_data), exclusive=True, group="file-image")
         attrs_pane = self.query_one("#attrs-pane", B2ViewPanel)
         attrs_widget = self.query_one("#attrs-data", Static)
         try:
@@ -2531,6 +2646,79 @@ class B2ViewApp(App):
         if self._apply_focus_on_next_update:
             self._apply_focus_on_next_update = False
             self.call_after_refresh(self._apply_start_focus)
+
+    async def _show_file_image(self, path, data):
+        body = self.query_one("#file-image", Vertical)
+        await body.remove_children()
+        if path != self.selected_path or not isinstance(data, dict) or "file_image" not in data:
+            return
+        if TextualImage is None:
+            self.query_one("#preview", Static).update(
+                data["message"] + "\nTerminal image preview needs textual-image; use D or O."
+            )
+            return
+        try:
+            await body.mount(TextualImage(data["file_image"]))
+        except Exception as error:
+            self.query_one("#preview", Static).update(f"Image display unavailable: {error}; use D or O.")
+
+    def _file_action(self, external=False):
+        if self.browser is None or self._selected_info is None or self._selected_info.kind != "file":
+            self.notify("Select an ordinary file first", severity="warning")
+            return
+        self._prepare_file_transfer(
+            self._remote_session, self._remote_request, self.browser, self.selected_path, external
+        )
+
+    @work(thread=True, exit_on_error=False)
+    def _prepare_file_transfer(self, session, request, browser, path, external):
+        from pathlib import PurePosixPath
+
+        from blosc2.b2view.file_preview import EXTERNAL_SUFFIXES
+
+        alias = None
+        try:
+            with browser.io_lock:
+                if session != self._remote_session or request != self._remote_request:
+                    return
+                obj = browser._get_object(path)
+                if not isinstance(obj, blosc2.RemoteFile):
+                    return
+                if external and PurePosixPath(obj.name).suffix.lower() not in EXTERNAL_SUFFIXES:
+                    raise ValueError(
+                        "External opening is restricted to document/image files; use D to download"
+                    )
+                alias = blosc2.RemoteFile._from_owner(obj._owner, obj.path)
+            delivered = self._deliver_remote(
+                session, self._finish_file_transfer, request, path, alias, external, None
+            )
+            if not delivered:
+                alias.close()
+        except Exception as error:
+            if alias is not None:
+                alias.close()
+            self._deliver_remote(session, self._finish_file_transfer, request, path, None, external, error)
+
+    def _finish_file_transfer(self, request, path, file, external, error):
+        if request != self._remote_request or path != self.selected_path:
+            if file is not None:
+                file.close()
+            return
+        if error is not None:
+            self.notify(str(error), severity="warning")
+            return
+        self.push_screen(FileTransferScreen(file, external=external))
+
+    def action_download_file(self):
+        self._file_action()
+
+    def action_open_file(self):
+        self._file_action(external=True)
+
+    def action_raw_file(self):
+        if self._selected_info is not None and self._selected_info.kind == "file":
+            self._file_raw = not self._file_raw
+            self.update_panels(self.selected_path)
 
     @staticmethod
     def _format_attr_value(value: Any) -> str:
