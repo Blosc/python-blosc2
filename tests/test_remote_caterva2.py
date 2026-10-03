@@ -98,9 +98,11 @@ def caterva2_source(request):
         "files": {},
         "file_chunks": [],
         "file_metadata": {},
+        "arrays": {},
+        "array_metadata": {},
     }
 
-    def array_info():
+    def array_info(array=array):
         return {
             "kind": "ndarray",
             "shape": array.shape,
@@ -111,7 +113,7 @@ def caterva2_source(request):
             "schunk": {
                 "nbytes": array.nbytes,
                 "cbytes": array.cbytes,
-                "nchunks": 4,
+                "nchunks": array.schunk.nchunks,
                 "cparams": safe(array.cparams),
                 "vlmeta": {},
             },
@@ -177,6 +179,9 @@ def caterva2_source(request):
                         "attrs": {"name": "fixture"},
                         "catalog_attrs": {"note": "curated"},
                     }
+                elif key in stats["arrays"]:
+                    info = array_info(stats["arrays"][key])
+                    info.update(stats["array_metadata"].get(key, {}))
                 elif key in {"@public/group/array", "@public/mount/array"}:
                     info = array_info()
                 elif key in {"@public/group/table", "@public/table", "@public/mount/table"}:
@@ -197,6 +202,10 @@ def caterva2_source(request):
                 return
             if path.startswith("/api/chunk/"):
                 key = path.removeprefix("/api/chunk/")
+                if key in stats["arrays"]:
+                    index = int(urllib.parse.parse_qs(parsed.query)["nchunk"][0])
+                    self.send(stats["arrays"][key].schunk.get_chunk(index), "application/octet-stream")
+                    return
                 if key in stats["files"]:
                     index = int(urllib.parse.parse_qs(parsed.query)["nchunk"][0])
                     stats["file_chunks"].append((key, index))
@@ -207,12 +216,13 @@ def caterva2_source(request):
                 key = path.removeprefix("/api/fetch/")
                 query = urllib.parse.parse_qs(parsed.query)
                 selection = query.get("slice_", [""])[0]
-                if key in {"@public/group/array", "@public/mount/array"}:
+                if key in stats["arrays"] or key in {"@public/group/array", "@public/mount/array"}:
+                    source = stats["arrays"].get(key, array)
                     axes = tuple(
                         slice(*(int(part) if part else None for part in axis.split(":")))
                         for axis in selection.split(",")
                     )
-                    self.send(array.slice(axes).to_cframe(), "application/octet-stream")
+                    self.send(source.slice(axes).to_cframe(), "application/octet-stream")
                     return
                 if key in {"@public/group/table", "@public/table", "@public/mount/table"}:
                     start, stop = (int(part) for part in selection.split(":"))

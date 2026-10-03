@@ -64,7 +64,16 @@ class _Caterva2ArraySource(blosc2.C2Array):
         full = np.zeros(self.chunks, dtype=self.dtype)
         region = tuple(slice(0, item.stop - item.start) for item in selection)
         full[region] = data[...]
-        packed = blosc2.asarray(full, chunks=self.chunks, blocks=self.blocks, cparams=self.cparams)
+        # NumPy expands a top-level subarray dtype into trailing dimensions.
+        # Keep the synthesized chunk's block ordering consistent with that
+        # expanded buffer, without changing the source's logical geometry.
+        inner_shape = self.dtype.subdtype[1] if self.dtype.subdtype is not None else ()
+        packed = blosc2.asarray(
+            full,
+            chunks=(*self.chunks, *inner_shape),
+            blocks=(*self.blocks, *inner_shape),
+            cparams=self.cparams,
+        )
         return packed.schunk.get_chunk(0)
 
 

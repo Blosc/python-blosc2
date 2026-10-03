@@ -48,6 +48,9 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Fix structured and subarray dtype decoding in `C2Array` and synthesized
+  RemoteStore chunks, including compound/subarray HDF5 leaves.
+
 - Ordinary Caterva2 files now open lazily as `RemoteFile`: bounded original-byte
   reads, shared compressed-chunk caching, and atomic streaming downloads.
 - b2view previews text/Markdown and optional JPEG/PNG images (`blosc2[images]`).

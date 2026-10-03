@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import atexit
 import json
@@ -1607,7 +1608,13 @@ class C2Array(blosc2.Operand):
     @property
     def dtype(self) -> np.dtype:
         """The dtype of the remote array"""
-        return np.dtype(self.meta["dtype"])
+        dtype = self.meta["dtype"]
+        try:
+            return np.dtype(dtype)
+        except (TypeError, ValueError):
+            # Caterva2 sends structured/subarray descriptors as their Python repr,
+            # just like the b2nd metalayer. Parse literals, never executable code.
+            return np.dtype(ast.literal_eval(dtype))
 
     @property
     def cparams(self) -> blosc2.CParams:
