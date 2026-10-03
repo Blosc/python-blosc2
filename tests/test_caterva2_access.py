@@ -75,3 +75,64 @@ def test_override_and_option_validation(monkeypatch):
             blosc2.open("https://host/@public/a", **options)
     with pytest.raises(ValueError):
         blosc2.open(blosc2.URLPath("@public", urlbase="https://host"), remote_service="fsspec")
+
+
+def test_mount_expansion_is_lazy_and_memoized(caterva2_source):  # noqa: F811
+    base, array, _, stats = caterva2_source
+    with blosc2.open(base + "@public") as store:
+        assert stats["requests"] == ["/api/info/@public"]
+        assert dict(store.get_info().catalog_attrs) == {"note": "curated"}
+        assert dict(store.attrs) == {"name": "fixture"}
+        assert store.keys() == ["mount"]
+        assert "/api/list/@public/mount" not in stats["requests"]
+        with store["mount"] as mount:
+            assert mount.keys() == ["array", "empty", "table"]
+            assert mount.kind("array") == "ndarray"
+            with mount["empty"] as empty:
+                assert empty.keys() == []
+            before = stats["requests"].copy()
+            assert mount.keys() == ["array", "empty", "table"]
+            assert stats["requests"] == before
+        with store["mount/array"] as remote:
+            assert (remote[0:1, 0:2] == array[0:1, 0:2]).all()
+
+
+def test_direct_lookup_and_recursive_list(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["groups"]["@public"] = ["mount/array", "mount/table", "mount/empty", "mount/array"]
+    with blosc2.open(base + "@public") as store:
+        assert store.kind("mount/array") == "ndarray"
+        assert not any("/api/list/" in request for request in stats["requests"])
+        assert store.keys() == ["mount"]
+        assert "/api/info/@public/mount/table" not in stats["requests"]
+        with store["mount"] as mount:
+            assert mount.keys() == ["array", "empty", "table"]
+
+
+def test_listing_failure_can_retry_and_limits_are_atomic(caterva2_source):  # noqa: F811
+    import httpx
+
+    base, _, _, stats = caterva2_source
+    with blosc2.RemoteStore(blosc2.URLPath("@public", urlbase=base), _max_nodes=5) as store:
+        assert store.keys() == ["mount"]
+        stats["fail_list"] = "@public/mount"
+        with store["mount"] as mount:
+            with pytest.raises(httpx.HTTPStatusError):
+                mount.keys()
+            stats["fail_list"] = None
+            previous = store._owner.nodes.copy()
+            with pytest.raises(ValueError, match="node limit"):
+                mount.keys()
+            assert store._owner.nodes == previous
+            stats["groups"]["@public/mount"] = ["empty"]
+            assert mount.keys() == ["empty"]
+
+
+def test_concurrent_expansion_is_coalesced(caterva2_source):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+
+    base, _, _, stats = caterva2_source
+    with blosc2.open(base + "@public") as store, ThreadPoolExecutor(4) as executor:
+        results = list(executor.map(lambda _: store.keys(), range(12)))
+        assert results == [["mount"]] * 12
+        assert stats["requests"].count("/api/list/@public") == 1
