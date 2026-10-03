@@ -31,6 +31,13 @@ Implementation record (updated as milestones land):
   outlive the facade, and authentication is frozen at opening. Per-root cache
   budgets and unsupported repository persistence are explicit. Validation:
   38 access tests passed, including zero/one/multiple roots and error handling.
+- M4: b2view uses shared service recognition ahead of direct-format handling,
+  supports the backend override, displays catalog annotations and empty-root
+  notices, and keeps mounted-source metadata failures isolated. Remote table
+  metadata/paging work without table-wide downloads; transforms are disabled
+  and plotting requires an explicit bounded row window. Fixed metadata display
+  for remote sources that do not report compressed size. All viewer/model
+  regressions, including headless Textual and fresh-process decoders: 155 passed.
 
 ## 1. Goal
 

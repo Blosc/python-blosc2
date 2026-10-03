@@ -2029,6 +2029,7 @@ class B2ViewApp(App):
         storage_options: dict[str, Any] | None = None,
         cache_dir: str | None = None,
         max_cache_bytes: int | None = None,
+        remote_service: str = "auto",
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
@@ -2043,6 +2044,7 @@ class B2ViewApp(App):
         self.storage_options = storage_options
         self.cache_dir = cache_dir
         self.max_cache_bytes = max_cache_bytes
+        self.remote_service = remote_service
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
         # Header label: the path as given on the CLI, or the @public-relative
@@ -2164,6 +2166,7 @@ class B2ViewApp(App):
         browser_kwargs: dict[str, Any] = {
             "storage_options": self.storage_options,
             "cache_dir": self.cache_dir,
+            "remote_service": self.remote_service,
         }
         if self.max_cache_bytes is not None:
             browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
@@ -2312,6 +2315,7 @@ class B2ViewApp(App):
             browser_kwargs: dict[str, Any] = {
                 "storage_options": self.storage_options,
                 "cache_dir": self.cache_dir,
+                "remote_service": self.remote_service,
             }
             if self.max_cache_bytes is not None:
                 browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
@@ -3524,6 +3528,12 @@ class B2ViewApp(App):
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Filtering is only supported for CTable nodes", severity="warning")
             return
+        if not self.browser.supports_table_transforms(self.selected_path):
+            self.notify(
+                "Filtering remote tables is unsupported; materialize a bounded selection first",
+                severity="warning",
+            )
+            return
         if self.browser.get_group(self.selected_path):
             self.notify("Ungroup (Esc) before filtering", severity="warning")
             return
@@ -3535,6 +3545,12 @@ class B2ViewApp(App):
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Sorting is only supported for CTable nodes", severity="warning")
+            return
+        if not self.browser.supports_table_transforms(self.selected_path):
+            self.notify(
+                "Sorting remote tables is unsupported; materialize a bounded selection first",
+                severity="warning",
+            )
             return
         if self.browser.get_group(self.selected_path):
             # Sort the (tiny) grouped result by any of its columns — key or aggregate.
@@ -3626,6 +3642,12 @@ class B2ViewApp(App):
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Grouping is only supported for CTable nodes", severity="warning")
+            return
+        if not self.browser.supports_table_transforms(self.selected_path):
+            self.notify(
+                "Grouping remote tables is unsupported; materialize a bounded selection first",
+                severity="warning",
+            )
             return
         keys = self.browser.group_key_columns(self.selected_path)
         if not keys:
