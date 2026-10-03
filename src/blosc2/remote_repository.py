@@ -177,7 +177,12 @@ class RemoteRepository(RemoteStore):
 
     @property
     def mutable(self):
+        self._ensure_open()
         return False
+
+    @mutable.setter
+    def mutable(self, value):
+        raise NotImplementedError("Repository persistence is unsupported; select a specific root")
 
     @property
     def is_cache_mutable(self):
@@ -190,8 +195,15 @@ class RemoteRepository(RemoteStore):
             name, _, suffix = path.strip("/").partition("/")
             return self._root(name).read_cached(suffix, item, nchunk=nchunk)
 
+    def read_cached_table(self, operation):
+        raise NotImplementedError("Select a specific root for cached table operations")
+
     def save(self, *args, **kwargs):
         raise NotImplementedError("Repository persistence is unsupported; save a specific root")
+
+    @classmethod
+    def with_sparse_cache(cls, *args, **kwargs):
+        raise NotImplementedError("Repository shared sparse caching requires selecting a specific root")
 
     def materialize(self, *args, **kwargs):
         raise NotImplementedError("Repository materialization is unsupported; select a specific root")

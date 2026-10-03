@@ -77,6 +77,9 @@ def service_probe_candidate(value):
         return False
     suffixes = (
         ".b2nd",
+        ".b2",
+        ".b2t",
+        ".b2o",
         ".b2z",
         ".b2d",
         ".b2f",
@@ -137,10 +140,14 @@ def discover_service(value, *, required=False, auth_token=None):
 
                 target = urljoin(url, response.headers.get("location", ""))
                 redirect = urlsplit(target)
-                if (redirect.scheme, redirect.hostname, redirect.port) != (
+                if (
+                    redirect.scheme,
+                    redirect.hostname,
+                    redirect.port or (443 if redirect.scheme == "https" else 80),
+                ) != (
                     parsed.scheme,
                     parsed.hostname,
-                    parsed.port,
+                    parsed.port or (443 if parsed.scheme == "https" else 80),
                 ):
                     raise ValueError("Caterva2 discovery cannot redirect credentials to another origin")
                 if redirect.username is not None or redirect.password is not None:

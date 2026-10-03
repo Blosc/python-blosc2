@@ -3470,6 +3470,13 @@ class B2ViewApp(App):
     def _enter_row_window(self, start: int, stop: int, *, backend: str) -> None:
         """Replace the grid with a locked [start:stop] window (in place)."""
         if backend == "ctable":
+            if self._remote:
+                self._remote_request += 1
+                self._prepare_remote_window(
+                    self._remote_session, self._remote_request, self.browser, self.selected_path, start, stop
+                )
+                self.query_one("#metadata", Static).update("Loading row window…")
+                return
             try:
                 self.browser.set_row_window(self.selected_path, start, stop)
             except Exception as exc:  # pragma: no cover - defensive
@@ -3479,6 +3486,32 @@ class B2ViewApp(App):
             self._data_layout.row_window = (start, stop)
             self._data_layout.row_start = 0
             self._data_layout.row_stop = 0
+        self.row_window = (start, stop)
+        self._reload_row_window(0)
+        self.notify(f"Locked to rows {start}:{stop} · esc to unlock")
+
+    @work(thread=True, exit_on_error=False)
+    def _prepare_remote_window(self, session, request, browser, path, start, stop):
+        try:
+            with browser.io_lock:
+                if session != self._remote_session or request != self._remote_request:
+                    return
+                view = browser.prepare_row_window(path, start, stop)
+            self._deliver_remote(
+                session, self._finish_remote_window, request, browser, path, start, stop, view, None
+            )
+        except Exception as exc:
+            self._deliver_remote(
+                session, self._finish_remote_window, request, browser, path, start, stop, None, exc
+            )
+
+    def _finish_remote_window(self, request, browser, path, start, stop, view, error):
+        if request != self._remote_request or path != self.selected_path or browser is not self.browser:
+            return
+        if error is not None:
+            self._remote_error(error)
+            return
+        browser.install_row_window(path, view)
         self.row_window = (start, stop)
         self._reload_row_window(0)
         self.notify(f"Locked to rows {start}:{stop} · esc to unlock")

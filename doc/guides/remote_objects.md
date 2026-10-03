@@ -71,6 +71,11 @@ yet is not treated as empty. Direct descendant lookup also works without parent
 expansion. `RemoteNode.catalog_attrs` contains catalog annotations separately
 from source `attrs`. Existing servers may return recursive listings; their
 response cost cannot be eliminated without a server-side pagination extension.
+Caterva2 discovery retains at most 10,000 nodes per owner by default, rejects
+list responses above 100,000 entries, and rejects discovery bodies above 8 MiB
+before JSON decoding. Existing transports buffer those discovery bodies before
+the size check. Explicit hierarchy summaries (`store.info`) visit groups and can
+contact mounted sources; failures are reported as incomplete listings.
 
 A cat2lite gateway can share cached upstream chunks between independent clients.
 Python-Blosc2's `cache_dir`, `cache_policy`, and `max_cache_bytes` still configure

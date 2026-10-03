@@ -463,7 +463,7 @@ class RemoteDiscovery:
         self.batch_validator = _batch_validator
         self.filesystem_resolver = _filesystem_resolver
         self.manifest_validator = _manifest_validator
-        self.max_nodes = _max_nodes
+        self.max_nodes = 10000 if self.format == "caterva2" and _max_nodes is None else _max_nodes
         self.metadata_bytes = 0
         self.restoring = False
         self.filesystem = None
@@ -537,6 +537,12 @@ class RemoteDiscovery:
                 raise ValueError("Invalid RemoteStore child list")
         self.attrs = manifest["attrs"]
         self.listed = manifest["listed"]
+        if self.format == "caterva2" and self.metadata.get("caterva2_listing_version") != 2:
+            # Earlier snapshots marked all discovered groups as fully listed,
+            # including unexpanded catalog mounts. Retain payload, rediscover
+            # listings rather than permanently restoring false empty groups.
+            self.listed = {}
+            self.metadata["caterva2_listing_version"] = 2
         self.notice = manifest.get("notice")
         if self.format == "b2z" and self.archive is None:
             from blosc2.b2z_source import B2ZArchive
@@ -982,9 +988,12 @@ class RemoteDiscovery:
         response = client.get(url, headers=_auth_headers(self.caterva2.auth_token))
         response.raise_for_status()
         self.traffic.charge(len(response.content))
+        if len(response.content) > 8 << 20:
+            raise ValueError("Caterva2 discovery response exceeds 8 MiB")
         return response.json()
 
     def _open_caterva2(self):
+        self.metadata["caterva2_listing_version"] = 2
         self._discover_caterva2_node(self.root)
         if self.nodes[self.root][0] not in {"group", "ctable", "ndarray"}:
             raise ValueError("Caterva2 source root is not an array, group, or CTable")
@@ -994,11 +1003,16 @@ class RemoteDiscovery:
         # placeholders. An unlisted mount must not be mistaken for an empty group.
         if full in self.attrs:
             return
-        info = (
-            self.root_info
-            if full == self.root and self.root_info is not None
-            else self._caterva2_get("info", full)
-        )
+        try:
+            info = (
+                self.root_info
+                if full == self.root and self.root_info is not None
+                else self._caterva2_get("info", full)
+            )
+        except Exception as error:
+            if getattr(getattr(error, "response", None), "status_code", None) == 404:
+                raise KeyError(full) from error
+            raise
         if not isinstance(info, dict):
             raise ValueError("Invalid Caterva2 info response")
         kind = self._caterva2_kind(info)
@@ -1008,12 +1022,21 @@ class RemoteDiscovery:
         attrs = dict(info.get("attrs") or {})
         annotations = dict(info.get("catalog_attrs") or {})
         # Validate all potentially failing work before changing the registry.
-        previous = self.nodes.copy()
+        # Only this node and its ancestors can change. Do not copy a complete
+        # large catalog for each child's metadata request.
+        ancestors = [full]
+        while ancestors[-1]:
+            ancestors.append(ancestors[-1].rpartition("/")[0])
+        previous = {key: self.nodes.get(key) for key in ancestors}
         try:
             self.nodes.pop(full, None)
             self._add(full, kind, value)
         except BaseException:
-            self.nodes = previous
+            for key, old in previous.items():
+                if old is None:
+                    self.nodes.pop(key, None)
+                else:
+                    self.nodes[key] = old
             raise
         self.attrs[full] = attrs
         if annotations:
@@ -1023,6 +1046,8 @@ class RemoteDiscovery:
         leaves = self._caterva2_get("list", full)
         if not isinstance(leaves, list) or any(not isinstance(path, str) for path in leaves):
             raise ValueError("Invalid Caterva2 list response")
+        if len(leaves) > 100000:
+            raise ValueError("Caterva2 listing exceeds the 100000-entry discovery limit")
         children = set()
         for relative in leaves:
             if not relative:
@@ -1048,6 +1073,8 @@ class RemoteDiscovery:
             raise TypeError("RemoteStore paths must be strings")
         relative = path.strip("/")
         self._validate(relative)
+        if self.format == "caterva2" and any(c in relative for c in "%?#"):
+            raise ValueError("Unsafe Caterva2 dataset path")
         return "/".join(p for p in (self.root, relative) if p)
 
     def resolve(self, path):
@@ -2966,17 +2993,26 @@ class RemoteStore(RemoteObject):
             entries = {}
             unavailable = []
             pending = [""]
+            listing_errors = (OSError, KeyError, ValueError)
+            if self._owner.format == "caterva2":
+                listing_errors += (blosc2.c2array._httpx().HTTPError,)
             while pending:
-                path, _ = self._resolve(pending.pop())
+                requested = pending.pop()
                 try:
+                    path, _ = self._resolve(requested)
                     children = self._owner.list_children(path)
-                except OSError as exc:
-                    unavailable.append(f"/{path}: {exc}")
+                except listing_errors as exc:
+                    unavailable.append(f"/{requested}: {exc}")
                     continue
                 for child in children:
                     relative = child[len(root) + 1 :] if root else child
                     owner_path = child[len(self._owner.root) + 1 :] if self._owner.root else child
-                    kind = self._owner.nodes[self._owner.resolve(owner_path)][0]
+                    try:
+                        kind = self._owner.nodes[self._owner.resolve(owner_path)][0]
+                    except listing_errors as exc:
+                        unavailable.append(f"/{relative}: {exc}")
+                        entries[relative] = " [unavailable]"
+                        continue
                     entries[relative] = f" [{kind}]"
                     if kind == "group":
                         pending.append(relative)
