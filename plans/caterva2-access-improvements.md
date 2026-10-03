@@ -38,6 +38,14 @@ Implementation record (updated as milestones land):
   and plotting requires an explicit bounded row window. Fixed metadata display
   for remote sources that do not report compressed size. All viewer/model
   regressions, including headless Textual and fresh-process decoders: 155 passed.
+- M5: added opt-in `tests/test_caterva2_gateway.py` against a real debug
+  cat2lite server and deterministic loopback B2ND/HDF5/Zarr/Parquet sources,
+  including headless b2view and independent no-client-cache subprocesses.
+  Measured large-array upstream reads: 72,950 bytes / 3 GETs after warming;
+  second client unchanged; after server restart 81,142 bytes / 4 GETs (8 KiB
+  source headers, no warm payload refetch). API/viewer docs and release notes
+  updated. Full default offline suite: 10,640 passed, 36 skipped. Gateway
+  acceptance passed with CAT2LITE_SERVER set; it is skipped by default.
 
 ## 1. Goal
 

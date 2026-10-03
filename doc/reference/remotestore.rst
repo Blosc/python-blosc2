@@ -8,6 +8,13 @@ RemoteStore
 source session: a B2Z archive, a native HDF5 index, or a Zarr store. Zarr listing
 remains lazy.
 
+Caterva2 groups also list lazily, through explicit ``URLPath`` inputs or service
+URL strings passed to ``blosc2.open``. Each group is expanded independently,
+including virtual catalog mount boundaries. ``RemoteNode.catalog_attrs`` exposes
+catalog annotations separately from source attrs. See
+:doc:`../guides/remote_objects` for URL discovery and :ref:`RemoteRepository`
+for browsing services with multiple roots.
+
 The default ``CachePolicy.MEMORY`` shares a 256 MiB allowance across all leaves.
 Set ``max_cache_bytes`` to a positive integer to change it. ``CachePolicy.NONE``
 retains no payload and rejects a limit. Passing ``cache_dir`` selects DISK when
