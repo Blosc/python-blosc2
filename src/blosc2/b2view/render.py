@@ -17,7 +17,7 @@ def make_metadata_renderable(info, *, show_path=True):
     table.add_column("key", style="bold cyan", no_wrap=True)
     table.add_column("value")
     if show_path:
-        table.add_row("path", info.path)
+        table.add_row("path", info.display_path or info.path)
     table.add_row("kind", info.kind)
     for key, value in info.metadata.items():
         table.add_row(str(key), _format_metadata_value(value))

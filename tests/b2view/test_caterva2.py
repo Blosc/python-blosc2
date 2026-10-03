@@ -97,6 +97,40 @@ def test_cli_service_override():
     assert args.remote_service == "fsspec"
 
 
+@pytest.mark.parametrize(
+    ("target", "relative", "expected"),
+    [
+        ("", "/", "@public"),
+        ("", "/mount/table", "@public/mount/table"),
+        ("@public", "/mount/table", "@public/mount/table"),
+        ("@public/mount", "/array", "@public/mount/array"),
+        ("@public/table", "/", "@public/table"),
+    ],
+)
+def test_service_metadata_displays_full_path(caterva2_source, target, relative, expected):  # noqa: F811
+    from rich.console import Console
+
+    from blosc2.b2view.render import make_metadata_renderable
+
+    base, _, _, _ = caterva2_source
+    with StoreBrowser(base + target) as browser:
+        info = browser.get_info(relative)
+        assert info.path == relative
+        assert info.display_path == expected
+        console = Console(record=True, width=120)
+        console.print(make_metadata_renderable(info))
+        assert expected in console.export_text()
+        assert "/@public" not in console.export_text()
+
+
+def test_multiroot_display_does_not_duplicate_prefix(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["roots"]["@broken"] = {"name": "@broken"}
+    with StoreBrowser(base) as browser:
+        info = browser.get_info("/@public/mount/table")
+        assert info.display_path == "@public/mount/table"
+
+
 @pytest.mark.tui
 @pytest.mark.asyncio
 async def test_remote_table_window_is_background_and_stale_results_are_discarded(
