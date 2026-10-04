@@ -50,10 +50,6 @@ Low-level data structures
         compressed chunks. NDArrays and CTable columns are built on top of SChunk.
         Use when you want to directly manipulate raw compressed data and metadata.
 
-    frame
-        A serialized format for storing chunks along with a header and trailer for
-        metadata. Frames may be contiguous (CFrame) or sparse (SFrame).
-
     chunk
         The unit of storage and compression, stored within a SChunk. Chunks are
         sized to fit disk/network I/O, typically 1-64MB.
@@ -64,6 +60,18 @@ Low-level data structures
 
     subblock
         An indexing segment within a block. One eighth the length of a block.
+
+    frame
+        A serialized format for storing chunks along with metadata. Frames may
+        be contiguous (CFrame) or sparse (SFrame).
+
+    CFrame
+        Frame format for storing chunks contiguously either in-memory or on-disk.
+        Short for contiguous frame. See `CFrame format <https://blosc.org/c-blosc2/format/cframe_format.html>`_.
+
+    SFrame
+        Frame format for storing chunks non-contiguously on-disk. Short for sparse
+        frame. See `SFrame format <https://blosc.org/c-blosc2/format/sframe_format.html>`_.
 
 Indexes
 -------
