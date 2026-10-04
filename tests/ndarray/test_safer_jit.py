@@ -166,6 +166,15 @@ def test_cc_reuses_disk_cache_in_fresh_process(tmp_path):
     assert list((tmp_path / "miniexpr-jit").glob("kernel_*.meta"))
 
 
+def test_cc_compiler_output_is_opt_in(tmp_path):
+    compiler = tmp_path / "test-cc"
+    compiler.write_text("#!/bin/sh\necho test-compiler-diagnostic >&2\nexit 1\n")
+    compiler.chmod(0o700)
+    result = run_probe(tmp_path, backend="cc", CC=str(compiler), ME_DSL_JIT_DEBUG_CC="1")
+    assert "test-compiler-diagnostic" in result.stderr
+    assert "jit runtime fallback:" not in result.stderr  # Runtime tracing is independently disabled.
+
+
 def test_blosc_me_jit_environment_values(monkeypatch):
     monkeypatch.setenv("BLOSC_ME_JIT", "cc")
     assert _jit_from_env(False, "tcc") == (True, "cc")
