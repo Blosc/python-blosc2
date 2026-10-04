@@ -212,6 +212,10 @@ Contrarily to lazy functions, reduction functions are evaluated eagerly, and the
 
 Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`. Again, although these can be part of a :ref:`LazyExpr <LazyExpr>`, you must be aware that they are not lazy, but will be evaluated eagerly during the construction of a LazyExpr instance (this might change in the future). When the input is a :ref:`LazyExpr`, reductions accept ``fp_accuracy`` to control floating-point accuracy, and it is forwarded to :func:`LazyExpr.compute`.
 
+Eligible lazy-expression reductions accept ``jit`` and ``jit_backend`` through
+their evaluation options. See :ref:`JITOptions`; native JIT requests remain best
+effort and can use the interpreter when compilation or loading is unavailable.
+
 .. currentmodule:: blosc2
 
 .. autosummary::
