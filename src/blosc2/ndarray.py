@@ -6207,6 +6207,14 @@ def arange(
 
     Other Parameters
     ----------------
+    jit: bool or None, optional
+        Execution policy for the DSL-backed ramp: None (default) or True tries
+        JIT; False disables it. Native compilation or allocation failure falls
+        back quietly to the interpreter. See :ref:`JITOptions`.
+    jit_backend: {"tcc", "cc", "js"} or None, optional
+        Select the runtime compiler. Native defaults use bundled TCC without
+        disk caching. CC needs an installed compiler and uses persistent caching;
+        JS is WebAssembly/Pyodide-only. See :ref:`JITOptions` for limitations.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -6320,8 +6328,18 @@ def linspace(
         efficient, as it does not require an intermediate copy of the array.
         Default is True.
     **kwargs: Any
-        Keyword arguments accepted by the :func:`empty` constructor.
+        Storage arguments accepted by :func:`empty`, plus the execution options below.
 
+    Other Parameters
+    ----------------
+    jit: bool or None, optional
+        Execution policy for the DSL-backed ramp: None (default) or True tries
+        JIT; False disables it. Native compilation or allocation failure falls
+        back quietly to the interpreter. See :ref:`JITOptions`.
+    jit_backend: {"tcc", "cc", "js"} or None, optional
+        Select the runtime compiler. Native defaults use bundled TCC without
+        disk caching. CC needs an installed compiler and uses persistent caching;
+        JS is WebAssembly/Pyodide-only. See :ref:`JITOptions` for limitations.
 
     Returns
     -------

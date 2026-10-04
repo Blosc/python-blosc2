@@ -591,8 +591,9 @@ class LazyArray(ABC, blosc2.Operand):
             - ``jit`` (bool | None): enable (``True``) or disable (``False``) JIT compilation
               of the expression via miniexpr.  When ``None`` (default), JIT is only used
               for DSL kernels; plain expressions are evaluated by the bytecode interpreter.
-              Setting ``jit=True`` forces auto-lift of plain expressions into JIT-compiled
-              kernels.
+              Setting ``jit=True`` requests auto-lift of plain expressions into DSL
+              kernels. Native JIT is best effort: compilation/allocation/loading
+              failures use the interpreter quietly. See :ref:`JITOptions`.
 
             - ``jit_backend`` (str | None): select the JIT compiler backend.  Valid
               values are ``"tcc"`` (bundled Tiny C Compiler), ``"cc"`` (system C
@@ -613,9 +614,10 @@ class LazyArray(ABC, blosc2.Operand):
 
             - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
               ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` and overrides
-              both the ``jit`` and ``jit_backend`` arguments — this lets you switch
-              JIT on or change backends from the command line without touching code.
-              Setting it to ``"tcc"`` or ``"cc"`` also selects that backend.
+              ``jit`` on paths calling ``LazyExpr.compute()``. Setting it to
+              ``"tcc"`` or ``"cc"`` additionally overrides ``jit_backend``. It is
+              not a universal constructor/LazyUDF override, and ``"0"`` does not
+              disable JIT. Use ``ME_DSL_JIT=0`` to disable miniexpr runtime JIT.
 
             - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
               ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
@@ -5408,9 +5410,12 @@ def lazyudf(
         JIT backend selection. ``None`` uses backend defaults (miniexpr "tcc"), except under
         WebAssembly where — unless ``jit=False`` — it *prefers* ``"js"`` for transpilable
         float DSL kernels and falls back to miniexpr otherwise (``jit=True`` prefers ``"js"``
-        too, since it is JIT-compiled by the JS engine). ``"tcc"`` forces libtcc, ``"cc"``
-        forces the C compiler backend, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
-        to JavaScript (browser/Pyodide only; raises elsewhere).
+        too, since it is JIT-compiled by the JS engine). ``"tcc"`` selects bundled
+        libtcc without a disk cache, ``"cc"`` selects an installed C compiler with
+        persistent caching, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
+        to JavaScript (browser/Pyodide only; raises elsewhere). Native JIT requests
+        remain best effort and use the interpreter if compilation or loading fails.
+        See :ref:`JITOptions` for requirements, diagnostics, and environment settings.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and

@@ -38,6 +38,10 @@ It is a direct alias for ``array.vlmeta`` and uses the same persistent storage.
 
 Constructors
 ------------
+The ``arange`` and ``linspace`` constructors accept ``jit`` and ``jit_backend``
+execution options through ``**kwargs``. See :ref:`JITOptions` for defaults,
+backend requirements, and quiet interpreter fallback.
+
 .. _NDArrayConstructors:
 .. autosummary::
 

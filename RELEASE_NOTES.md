@@ -4,6 +4,20 @@
 
 XXX version-specific blurb XXX
 
+### Safer native JIT execution
+
+- Bundled TCC now uses anonymous memfd-backed RW/RX executable storage on Linux,
+  avoiding the executable-heap failure reported with SELinux (#730). Its runtime
+  path no longer creates or requires a filesystem JIT cache. No installed system
+  compiler or libselinux dependency is required.
+- Native TCC/CC compilation and loading failures fall back quietly to miniexpr's
+  interpreter, including explicit `jit=True` requests. `ME_DSL_TRACE=1` reports
+  fallback reasons; compiler output remains opt-in. CC still supports optimized
+  compilation and persistent shared-library caching.
+- Added a JIT options API reference, including constructor kwargs, backend
+  requirements, environment precedence, caching, and diagnostics. Corrected the
+  generated allocation declaration that caused an Apple Clang warning.
+
 ## Changes from 4.14.0 to 4.14.1
 
 Python-Blosc2 4.14.1 is a security and feature release introducing safe

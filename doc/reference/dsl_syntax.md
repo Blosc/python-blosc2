@@ -269,12 +269,19 @@ Runtime error examples:
 
 ## Execution backends
 
-A DSL kernel is compiled and run by one of two backends, selected per evaluation
-via the `jit` / `jit_backend` arguments to `compute()` / `__getitem__`:
+A DSL kernel can use the following execution backends. Set `jit` / `jit_backend`
+on `lazyudf()` or `compute()`; indexing uses the configured/default settings.
+See the [JIT options reference](jit.rst) for defaults, environment precedence,
+caching, and diagnostics:
 
 - **miniexpr** (default on native builds): a runtime JIT (TinyCC, `jit_backend="tcc"`)
-  with an interpreter fallback (`jit=False`). Supports the full DSL described here,
+  with an interpreter fallback. `jit=False` skips JIT; `jit=True` is best effort
+  and also falls back if executable allocation or compilation is denied. Supports the full DSL described here,
   including integer/complex dtypes and reductions.
+- **System C compiler** (`jit_backend="cc"`): miniexpr generates optimized shared
+  libraries using an installed compiler and caches them for subsequent processes.
+  Compilation or loading failures also fall back to the interpreter. TCC instead
+  compiles in memory without creating JIT cache artifacts.
 - **JavaScript** (`jit_backend="js"`): transpiles the kernel to JavaScript and runs it
   through the browser's JIT. **WebAssembly/Pyodide only** — requesting it elsewhere raises.
   Under WebAssembly it is also the *default* for eligible kernels (set `jit=False` or
