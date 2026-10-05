@@ -33,6 +33,9 @@ explicit form — it always requires the DSL to compile, equivalent to
 - Leading blank lines and header comments are allowed.
 - Any extra trailing content after the function is a parse error.
 - Nested `def` inside the function body is not allowed.
+- The first statement may be a docstring: single/double-quoted or triple-quoted,
+  including multiline strings and `r`/`u` prefixes. It is ignored during execution;
+  `@blosc2.dsl_kernel` preserves the Python function's `__doc__`.
 
 ## Header pragmas
 
@@ -74,6 +77,28 @@ General rules:
 - Empty blocks are invalid.
 - `elif`/`else` must belong to a matching `if`.
 - Deprecated forms like `break if cond` / `continue if cond` are not part of DSL syntax.
+- Simple statements may share a line, separated by `;`, including inside indented
+  blocks. A trailing `;` is allowed; empty statements (`;;`) are not.
+- Compound statements (`if`, `for`, `while`) require their own lines and indented
+  bodies; they cannot follow a semicolon. Inline suites such as `if x: return x`
+  are not supported.
+- Expressions and calls can continue across lines inside parentheses, including
+  comments. This does not add list literals or indexing to the expression grammar.
+
+### Docstrings and semicolon-separated statements
+
+```python
+@blosc2.dsl_kernel
+def kernel(x):
+    """Transform each element.
+
+    Documentation is not evaluated by the interpreter or JIT.
+    """
+    y = x + 1; z = y * y
+    if z > 4:
+        z -= 2; z *= 3
+    return z
+```
 
 ### `if` / `elif` / `else` example
 

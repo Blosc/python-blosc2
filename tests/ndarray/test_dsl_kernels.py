@@ -1062,13 +1062,87 @@ def test_dsl_save_dictstore_operands(tmp_path):
 #     G3 (variable name colliding with miniexpr codegen identifier) ---
 
 
-def test_kernel_semicolon_statements_rejected():
+@pytest.mark.parametrize("jit", [False, True])
+def test_kernel_semicolon_statements(jit):
     # Source built from a string so the formatter cannot rewrite the ';'-join away.
-    result = validate_dsl(
-        kernel_from_source("def k(a, b):\n    x = a * a; y = b * b\n    return x + y\n", "k")
+    kernel = kernel_from_source("def k(a, b):\n    x = a * a; y = b * b\n    return x + y\n", "k")
+    assert validate_dsl(kernel)["valid"]
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64, np.float64], np.float64))
+    a = np.arange(24, dtype=np.float64)
+    b = a + 1
+    result = blosc2.lazyudf(kernel, (a, b), dtype=np.float64, jit=jit)
+    np.testing.assert_array_equal(result[:], a * a + b * b)
+
+
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize(
+    "doc",
+    [
+        "'Single line; # comment-like text'",
+        '"Double quoted"',
+        '"""Multiple lines.\nNo indentation required here; # text\n    End."""',
+        "'''Multiple\n    lines with \\' quotes.'''",
+        'r"Raw \\n text"',
+        'u"Unicode text"',
+    ],
+)
+def test_kernel_docstrings(doc, jit):
+    kernel = kernel_from_source(f"def k(a):\n    {doc}\n    x = a + 1; return x\n", "k")
+    assert kernel.__doc__ == kernel.func.__doc__
+    assert validate_dsl(kernel)["valid"]
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64], np.float64))
+    a = np.arange(24, dtype=np.float64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
+    np.testing.assert_array_equal(result[:], a + 1)
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_kernel_semicolons_in_nested_blocks(jit):
+    kernel = kernel_from_source(
+        "def k(a):\n"
+        "    x = a; y = 0\n"
+        "    for i in range(3):\n"
+        "        y += 1; x += y\n"
+        "    if x > 6:\n"
+        "        x += 2; x *= 3; # trailing comment\n"
+        "    else:\n"
+        "        x -= 1; x *= 2\n"
+        "    return x;\n",
+        "k",
     )
-    assert not result["valid"]
-    assert "one statement per line" in result["error"].lower()
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64], np.float64))
+    a = np.arange(24, dtype=np.float64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
+    np.testing.assert_array_equal(result[:], np.where(a + 6 > 6, (a + 8) * 3, (a + 5) * 2))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_kernel_parenthesized_continuation_with_comments(jit):
+    kernel = kernel_from_source(
+        "def k(a):\n"
+        "    x = (a + # punctuation in comment: ); ' \"\n"
+        "         1)\n"
+        "    for i in range(\n"
+        "        3 # ); ignored\n"
+        "    ):\n"
+        "        x += i\n"
+        "    if (x >\n"
+        "        4 # ); ignored\n"
+        "    ):\n"
+        "        x *= 2; x += (\n"
+        "            1 # ignored\n"
+        "        )\n"
+        "    return x\n",
+        "k",
+    )
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64], np.float64))
+    a = np.arange(24, dtype=np.float64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
+    np.testing.assert_array_equal(result[:], np.where(a + 4 > 4, (a + 4) * 2 + 1, a + 4))
 
 
 def test_dsl_kernel_reassigning_input_param_rejected():

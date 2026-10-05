@@ -505,21 +505,11 @@ class DSLValidator:
         self._args(func_node)
         if not func_node.body:
             self._err(func_node, "DSL kernel must have a body")
-        self._one_per_line(func_node.body)
-        for stmt in func_node.body:
-            self._stmt(stmt)
-
-    def _one_per_line(self, body: list[ast.stmt]):
-        # G1: miniexpr parses one statement per line; `;`-joined siblings share a lineno.
-        prev = None
+        body = func_node.body
+        if ast.get_docstring(func_node, clean=False) is not None:
+            body = body[1:]
         for stmt in body:
-            if prev is not None and stmt.lineno == prev:
-                self._err(
-                    stmt,
-                    "Only one statement per line is supported in DSL kernels; "
-                    "split ';'-joined statements onto separate lines",
-                )
-            prev = stmt.lineno
+            self._stmt(stmt)
 
     def _err(self, node: ast.AST, msg: str, *, line: int | None = None, col: int | None = None):
         if line is None:
@@ -584,8 +574,6 @@ class DSLValidator:
             self._expr(node.test)
             if not node.body:
                 self._err(node, "Empty if blocks are not supported in DSL kernels")
-            self._one_per_line(node.body)
-            self._one_per_line(node.orelse)
             for stmt in node.body:
                 self._stmt(stmt)
             for stmt in node.orelse:
@@ -607,7 +595,6 @@ class DSLValidator:
                 self._expr(arg)
             if not node.body:
                 self._err(node, "Empty for-loop bodies are not supported in DSL kernels")
-            self._one_per_line(node.body)
             for stmt in node.body:
                 self._stmt(stmt)
             return
@@ -617,7 +604,6 @@ class DSLValidator:
             self._expr(node.test)
             if not node.body:
                 self._err(node, "Empty while-loop bodies are not supported in DSL kernels")
-            self._one_per_line(node.body)
             for stmt in node.body:
                 self._stmt(stmt)
             return

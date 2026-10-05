@@ -4,6 +4,14 @@
 
 XXX version-specific blurb XXX
 
+### More Python-like DSL kernels
+
+- DSL kernels accept single-line and multiline docstrings, preserving Python
+  `__doc__` while ignoring documentation during interpreter/JIT execution.
+- Simple statements can share a line using semicolons, including inside nested
+  blocks. Compound statements still require their own lines and indented bodies.
+- Parenthesized multiline expressions and calls now support embedded comments.
+
 ### Safer native JIT execution
 
 - Added `set_jit_options()`, `get_jit_options()`, and task/thread-local
