@@ -161,6 +161,9 @@ async def test_remote_table_startup_and_reload_keep_content_stable(caterva2_sour
             await wait_until(pilot, lambda: app.table_page is not None and bool(app.table_page["columns"]))
             await pilot.pause()
             assert len(calls) == 1
+            assert not app._data_busy
+            pane = app.query_one("#data-pane")
+            assert str(pane.border_title) == "data"
             table = app.query_one("#data-table", DataTable)
             metadata = app.query_one("#metadata", Static)
             page, content, count = app.table_page, metadata.content, table.row_count
@@ -177,6 +180,12 @@ async def test_remote_table_startup_and_reload_keep_content_stable(caterva2_sour
                 )
                 app._update_data_table(pending)
             await wait_until(pilot, entered.is_set)
+            assert app._data_busy
+            assert "loading" in str(pane.border_title)
+            frame, size = app._data_busy_frame, pane.size
+            await pilot.pause(0.25)
+            assert app._data_busy_frame > frame
+            assert pane.size == size
             request = app._remote_page_request
             for _ in range(3):
                 app._ensure_viewport_consistent()
@@ -186,6 +195,8 @@ async def test_remote_table_startup_and_reload_keep_content_stable(caterva2_sour
             assert app.table_page is page
             release.set()
             await wait_until(pilot, lambda: not app._remote_page_pending)
+            assert not app._data_busy
+            assert str(pane.border_title) == "data"
             assert len(calls) == 2
             # Height-only resize reuses the prefetched rows, not the network.
             await pilot.resize_terminal(120, 45)
@@ -195,6 +206,30 @@ async def test_remote_table_startup_and_reload_keep_content_stable(caterva2_sour
     finally:
         release.set()
         app.wait_for_close()
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
+async def test_remote_loading_indicator_stops_on_page_error(caterva2_source, monkeypatch):  # noqa: F811
+    from blosc2.b2view.app import B2ViewApp
+
+    base, _, _, _ = caterva2_source
+    app = B2ViewApp(base + "@public/mount/table")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_until(pilot, lambda: app.table_page is not None and bool(app.table_page["columns"]))
+
+        def failed(*args, **kwargs):
+            raise OSError("Test page failure")
+
+        monkeypatch.setattr(StoreBrowser, "preview", failed)
+        app.table_buffer = None
+        app._load_table_page("/", 0)
+        assert app._data_busy
+        await wait_until(pilot, lambda: not app._remote_page_pending)
+        assert not app._data_busy
+        assert str(app.query_one("#data-pane").border_title) == "data"
+        assert app.table_page["columns"]
+    app.wait_for_close()
 
 
 @pytest.mark.tui

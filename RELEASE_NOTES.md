@@ -48,6 +48,9 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Show unobtrusive animated loading dots in b2view's data-pane border while
+  background metadata/previews/pages are pending, without hiding current data.
+
 - Browse fsspec `.b2` document carriers with bounded range-based metadata and
   chunk reads, original-name previews and streamed decoded copies. HTTP requires
   validated byte-range responses; native dataset behavior remains unchanged.

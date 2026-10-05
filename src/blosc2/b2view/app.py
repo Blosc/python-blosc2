@@ -2195,6 +2195,9 @@ class B2ViewApp(App):
         self._active_dim = 0
         self._dim_mode = False
         self.loading_table_page = False
+        self._data_busy = False
+        self._data_busy_frame = 0
+        self._data_busy_timer = None
         # One-shot: apply the --panel start focus after the first update_panels,
         # once the data panel's display/contents have settled (see update_panels).
         self._apply_focus_on_next_update = False
@@ -2238,6 +2241,7 @@ class B2ViewApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._data_busy_timer = self.set_interval(0.2, self._animate_data_busy, pause=True)
         if self.download_url:
             # Fetch the bundle first, then open it from _after_download.  The
             # message shows the @public-relative path (e.g. "large/foo.b2z"),
@@ -2274,6 +2278,7 @@ class B2ViewApp(App):
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
         if self._remote:
+            self._set_data_busy(True)
             self.query_one("#metadata", Static).update("Loading remote container…")
             self._open_remote(self._remote_session, self.start_path)
             return
@@ -2508,7 +2513,33 @@ class B2ViewApp(App):
         self.exit(return_code=1, message=Text(self.startup_error))
 
     def _remote_error(self, exc):
+        if not self._remote_page_pending:
+            self._set_data_busy(False)
         self.query_one("#metadata", Static).update(self._error_message(exc))
+
+    def _set_data_busy(self, busy):
+        """Animate only border text: never hide data or change pane geometry."""
+        self._data_busy = busy
+        if busy:
+            self._data_busy_frame = 0
+            self._animate_data_busy()
+            if self._data_busy_timer is not None:
+                self._data_busy_timer.resume()
+        else:
+            if self._data_busy_timer is not None:
+                self._data_busy_timer.pause()
+            self.query_one("#data-pane", B2ViewPanel).border_title = "data"
+
+    def _animate_data_busy(self):
+        if not self._data_busy:
+            return
+        from rich.text import Text
+
+        dots = ("·  ", "·· ", "···", " ··", "  ·", "   ")
+        title = Text("data")
+        title.append(" · loading " + dots[self._data_busy_frame % len(dots)], style="dim")
+        self.query_one("#data-pane", B2ViewPanel).border_title = title
+        self._data_busy_frame += 1
 
     def load_children(self, node) -> None:
         path = node.data or "/"
@@ -2607,6 +2638,7 @@ class B2ViewApp(App):
         self._remote_request += 1
         self._remote_page_request += 1
         if self._remote:
+            self._set_data_busy(True)
             self.table_page = self.table_buffer = None
             self.query_one("#metadata", Static).update("Loading node…")
             self.query_one("#data-table", DataTable).clear(columns=True)
@@ -2638,6 +2670,7 @@ class B2ViewApp(App):
     def _finish_remote_info(self, request, path, info, data, error):
         if request != self._remote_request:
             return
+        self._set_data_busy(False)
         if error is not None:
             self._remote_error(error)
             return
@@ -3092,6 +3125,7 @@ class B2ViewApp(App):
             self._remote_page_request += 1
             request = self._remote_page_request
             self._remote_page_pending = True
+            self._set_data_busy(True)
             if layout is not None:
                 self._sync_layout_scroll(start, layout)
             column_end, self._remote_col_end = self._remote_col_end, None
@@ -3174,6 +3208,7 @@ class B2ViewApp(App):
         if request != self._remote_page_request:
             return
         self._remote_page_pending = False
+        self._set_data_busy(False)
         if error is not None:
             self._remote_error(error)
             return

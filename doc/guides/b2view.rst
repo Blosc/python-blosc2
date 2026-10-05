@@ -129,6 +129,9 @@ when external opening fails. Existing destinations are never overwritten by the
 viewer; choose another name. Escape cancels an active transfer.
 
 File reads/downloads have per-chunk limits of 32 MiB compressed and 256 MiB decoded.
+Animated ``loading`` dots in the data-pane border indicate pending background
+loads without hiding the current page or changing the layout. The indicator
+disappears when the load completes or fails; it is activity, not byte progress.
 Even a small preview can decode one complete chunk; temporary buffers can bring
 peak memory above the decoded-chunk limit. Preview and per-call read limits
 remain independent of these chunk limits.
