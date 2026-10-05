@@ -138,8 +138,8 @@ All Python, test and build commands used the `blosc2` conda environment.
    allocation model, not a sandbox or strict physical-page W^X. Stricter policies
    may deny it; interpreter fallback is intentional.
 3. **Windows/WebAssembly were not runtime-tested.** Their allocation paths are
-   preserved. Windows gains callback capture/serialization. Broken local Node
-   prevents the existing JavaScript smoke test from running.
+    preserved. Windows gains callback capture/serialization. Homebrew Node was
+    repaired by the user; the JavaScript glue smoke test now passes locally.
 4. **Concurrency coverage is limited.** The new lock protects libtcc discovery and
    compile/delete, not all pre-existing miniexpr global positive/negative caches.
    A comprehensive threaded/sanitizer audit remains separate work.
@@ -157,3 +157,31 @@ All Python, test and build commands used the `blosc2` conda environment.
    published; local builds used explicit source overrides.
 
 Issue #730 is not platform-verified until item 1 is completed.
+
+## Follow-up: Python configuration and native call-local options
+
+Implemented process defaults (`set_jit_options`, `get_jit_options`) and nested
+`contextvars` overrides (`jit_options`) for JIT enablement/backend, accuracy,
+tracing, compiler command/flags, exact CC cache directories and compiler output.
+Evaluation takes a settings snapshot without modifying the environment. Explicit
+per-call and LazyUDF settings retain precedence over Python defaults; existing
+environment overrides retain precedence where supported. See the consolidated
+parameter/precedence documentation in `doc/reference/jit.rst`.
+
+Miniexpr accepts borrowed call-local settings through
+`me_compile_nd_jit_options`; compiling-thread settings restore on success and
+failure. Compiler-affecting settings now enter process-cache keys. CC-generated
+file paths are shell-quoted, including spaces, apostrophes and dollar signs.
+TCC remains filesystem-independent and ignores CC-specific settings.
+
+Validation: the full Python suite passed with **10,635 passed, 36 skipped**.
+After the final compiler-path parsing improvement, the 36 focused configuration
+and fallback tests and all 38 miniexpr tests passed; Ruff checks passed. Sphinx
+builds successfully, with unrelated existing warnings and no JIT-page warnings
+after fixing heading underlines. The TCC-disabled native build also succeeds.
+Linux enforcing SELinux and Windows/WebAssembly runtime validation remain open.
+
+Dependency integration pins published miniexpr revision
+`a1c950522b6da2b8f812c8fd89f21b7ce5446c51`, including the native options API
+and the compiler-command parser fix. Local validation used the sibling miniexpr
+source override; the user confirmed publication and a green test suite.

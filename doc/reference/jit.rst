@@ -7,6 +7,118 @@ Blosc2 can compile eligible computations at runtime (JIT compilation). Native
 builds use the bundled Tiny C Compiler (TCC) by default, so installing a system
 compiler is **not** necessary to use Blosc2 or its default JIT.
 
+Global defaults and scoped options
+----------------------------------
+
+Use :func:`blosc2.set_jit_options` to configure a script, or
+:func:`blosc2.jit_options` for a temporary thread/task-local override:
+
+.. code-block:: python
+
+    import blosc2
+
+    previous = blosc2.set_jit_options(jit_backend="cc")
+    a = blosc2.linspace(0, 10, 10_000)
+    expr = a * 2 + 1
+    with blosc2.jit_options(jit=True, trace=True, cflags="-O2"):
+        result = expr.compute()
+    blosc2.set_jit_options(**previous)
+
+Both functions accept the same keyword-only parameters:
+
+.. list-table::
+    :header-rows: 1
+    :widths: 25 20 55
+
+    * - Parameter
+      - Built-in default
+      - Meaning
+    * - ``jit``
+      - ``None``
+      - Existing best-effort JIT policy; ``True`` also requests eligible plain
+        expression auto-lifting. ``False`` disables JIT.
+    * - ``jit_backend``
+      - ``None``
+      - ``"tcc"``, ``"cc"``, or ``"js"``. JavaScript is WebAssembly/Pyodide-only.
+    * - ``fp_accuracy``
+      - ``FPAccuracy.DEFAULT``
+      - Existing floating-point function accuracy policy, not a compiler flag.
+        Use an actual :class:`blosc2.FPAccuracy` member.
+    * - ``trace``
+      - ``False``
+      - Python routing and native compilation/cache/fallback diagnostics on
+        stderr. Does not enable external compiler output.
+    * - ``compiler``
+      - ``None``
+      - CC compiler command, normally ``cc``. A string or path-like object.
+        Quoted commands can name executables with spaces; path-like objects
+        are converted to shell-quoted executable paths automatically.
+    * - ``cflags``
+      - ``None``
+      - Additional CC flags as a string, appended to the normal optimization and
+        floating-point flags. Compiler-specific; changing them can affect accuracy.
+    * - ``cache_dir``
+      - ``None``
+      - Actual persistent CC cache directory, not a ``TMPDIR`` root. Accepts a
+        string/path-like object and resolves relative paths when configured.
+        Created on demand only by CC; TCC does not use it.
+    * - ``compiler_output``
+      - ``False``
+      - Opt into the external compiler's output independently of ``trace``.
+
+Compiler commands/flags are trusted shell configuration, not safe inputs from
+untrusted users. Choose protected cache storage. CC-specific options have no
+effect on TCC, JavaScript, or non-JIT execution.
+
+For setters and contexts, an omitted argument leaves/inherits that setting;
+``None`` resets it to the built-in default. The setter returns the previous
+process defaults as a fresh dictionary. :func:`blosc2.get_jit_options` returns
+a fresh dictionary of the current Python defaults, including context overrides,
+but excluding environment overrides and per-evaluation arguments. Validation is
+atomic: an invalid setting leaves the defaults unchanged.
+
+Within Python, precedence is:
+
+**explicit evaluation settings → explicit LazyUDF settings → context defaults →
+process defaults → built-in defaults**.
+
+The execution options also work as per-call kwargs on the evaluation entry points
+listed below. For these existing per-call APIs, ``None`` means inherit, not reset;
+use a resetting context to select built-in defaults locally. ``fp_accuracy`` now
+defaults to ``None`` on lazy compute/reduction methods, so omitted accuracy
+inherits rather than masking configured defaults. Without configured defaults,
+behavior is unchanged.
+
+Settings resolve at evaluation time: an expression constructed outside a context
+can be evaluated inside it. Explicit settings attached to a LazyUDF remain
+authoritative unless overridden on its ``compute()`` call. Changes do not modify
+already compiled kernels. Contexts nest and restore settings even after exceptions;
+they never mutate environment variables or process-wide defaults. Async tasks
+inherit their creation context but do not affect unrelated tasks. Thread context
+propagation follows Python's ``contextvars`` rules (including explicit copied
+contexts, ``asyncio.to_thread()``, and Python's thread-context inheritance setting).
+Process-wide setters still affect all threads without a contextual override.
+
+Compiler command/flags and explicit cache directories participate in native cache
+identity, including process-local positive/negative caches. Changing them must not
+reuse an incompatible kernel. Tracing/compiler-output toggles do not change cache
+identity. ``fp_accuracy`` retains the existing evaluator accuracy semantics;
+it does not select miniexpr's separate strict/contract/fast compiler mode.
+
+Existing nonempty environment overrides remain authoritative: ``CC`` overrides
+``compiler``, ``CFLAGS`` overrides ``cflags``, ``ME_DSL_TRACE`` overrides ``trace``,
+``ME_DSL_JIT_DEBUG_CC`` overrides ``compiler_output``, and
+``ME_DSL_JIT_CACHE_DIR`` overrides ``cache_dir``. ``TMPDIR`` is used only when no
+explicit cache directory is selected. The JIT enable/backend environment rules
+below remain unchanged. Configuration does not require changing environment
+variables; native compilation receives a call-local settings snapshot.
+
+.. autofunction:: blosc2.set_jit_options
+
+.. autofunction:: blosc2.get_jit_options
+
+.. autofunction:: blosc2.jit_options
+
 JIT is best effort
 ------------------
 
@@ -141,6 +253,9 @@ controls have different scopes; neither is an indication that JIT actually ran.
     * - ``TMPDIR``
       - CC cache root: artifacts go into ``$TMPDIR/miniexpr-jit``. When unset,
         Linux/macOS use ``/tmp/miniexpr-jit-<uid>``. TCC does not use this cache.
+    * - ``ME_DSL_JIT_CACHE_DIR``
+      - Exact CC cache directory; overrides Python ``cache_dir`` and the
+        ``TMPDIR``-based default. TCC ignores it.
     * - ``ME_DSL_JIT_TCC_OPTIONS``
       - Extra options for compiling generated C with TCC. Not build flags that
         change libtcc's executable allocator.
@@ -156,7 +271,7 @@ controls have different scopes; neither is an indication that JIT actually ran.
         by Python's ``jit_backend`` option. Prefer per-call options ordinarily.
 
 Tracing and restricted environments
-----------------------------------
+-----------------------------------
 
 .. code-block:: sh
 

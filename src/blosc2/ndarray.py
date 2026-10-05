@@ -6208,8 +6208,9 @@ def arange(
     Other Parameters
     ----------------
     jit: bool or None, optional
-        Execution policy for the DSL-backed ramp: None (default) or True tries
-        JIT; False disables it. Native compilation or allocation failure falls
+        Execution policy for the DSL-backed ramp: None (default) inherits the
+        configured JIT policy (tries JIT with built-in defaults); True tries JIT,
+        and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
         Select the runtime compiler. Native defaults use bundled TCC without
@@ -6333,8 +6334,9 @@ def linspace(
     Other Parameters
     ----------------
     jit: bool or None, optional
-        Execution policy for the DSL-backed ramp: None (default) or True tries
-        JIT; False disables it. Native compilation or allocation failure falls
+        Execution policy for the DSL-backed ramp: None (default) inherits the
+        configured JIT policy (tries JIT with built-in defaults); True tries JIT,
+        and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
         Select the runtime compiler. Native defaults use bundled TCC without

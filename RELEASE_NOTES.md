@@ -6,6 +6,15 @@ XXX version-specific blurb XXX
 
 ### Safer native JIT execution
 
+- Added `set_jit_options()`, `get_jit_options()`, and task/thread-local
+  `jit_options()` contexts. Configure JIT policy/backend, floating-point accuracy,
+  tracing, CC compiler/flags/cache directory and compiler output without changing
+  process environment variables. Explicit per-call settings remain authoritative
+  over Python defaults; existing environment overrides are preserved.
+- Native compilation receives call-local settings. Toolchain settings now
+  participate in process-cache identity, preventing stale reuse after changing
+  compiler flags or the selected compiler.
+
 - Bundled TCC now uses anonymous memfd-backed RW/RX executable storage on Linux,
   avoiding the executable-heap failure reported with SELinux (#730). Its runtime
   path no longer creates or requires a filesystem JIT cache. No installed system
