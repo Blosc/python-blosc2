@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 
 import blosc2
+from blosc2.b2view.directory import DirectoryStore, is_directory
+from blosc2.b2view.ordinary_file import OrdinaryFile, ordinary_source
 from blosc2.core import is_fsspec_url, parse_container_url
 
 # Above this uncompressed size, plot_series does not read the whole series at
@@ -277,7 +279,7 @@ class StoreBrowser:
             max_cache_bytes=max_cache_bytes,
             remote_service=remote_service,
         )
-        self.is_tree = isinstance(self.store, blosc2.TreeStore) or (
+        self.is_tree = isinstance(self.store, (blosc2.TreeStore, DirectoryStore)) or (
             isinstance(self.store, blosc2.RemoteStore) and self.store.kind() == "group"
         )
         # Per-path row filters for CTable nodes (path -> expr / where() view)
@@ -315,6 +317,33 @@ class StoreBrowser:
         options = {} if storage_options is None else {"storage_options": storage_options}
         from blosc2.caterva2_url import caterva2_urlpath
 
+        if ordinary_source(urlpath, remote_service):
+            from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
+
+            if is_directory(urlpath, storage_options):
+                return DirectoryStore(
+                    urlpath,
+                    storage_options=storage_options,
+                    cache_dir=cache_dir,
+                    max_cache_bytes=max_cache_bytes,
+                    remote_service=remote_service,
+                )
+            file = OrdinaryFile(urlpath, storage_options)
+            # Preserve native frames with nonstandard names. Known ordinary
+            # document types need no payload fetch merely to identify them.
+            suffix = PurePosixPath(file.name).suffix.lower()
+            try:
+                native = (
+                    suffix not in TEXT_SUFFIXES | IMAGE_SUFFIXES | {".pdf", ".ipynb"}
+                    and file.nbytes >= 10
+                    and file.read_bytes(0, 10) == b"\x9e\xa8b2frame\x00"
+                )
+            except BaseException:
+                file.close()
+                raise
+            if not native:
+                return file
+            file.close()
         if remote_service == "caterva2" or (
             remote_service == "auto" and caterva2_urlpath(urlpath) is not None
         ):
@@ -382,6 +411,8 @@ class StoreBrowser:
     def list_children(self, path: str = "/") -> list[NodeInfo]:
         """Return direct children for *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, DirectoryStore):
+            return self.store.list_children(path)
         if isinstance(self.store, blosc2.RemoteStore):
             if self.store.kind(path) not in {"group", "remote_store"}:
                 return []
@@ -427,6 +458,8 @@ class StoreBrowser:
     def kind(self, path: str) -> str:
         """Classify a browser path."""
         path = self.normalize_path(path)
+        if isinstance(self.store, DirectoryStore):
+            return self.store.get_info(path).kind
         if isinstance(self.store, blosc2.RemoteStore):
             return self.store.kind(path)
         if not self.is_tree:
@@ -440,6 +473,8 @@ class StoreBrowser:
     def get_info(self, path: str) -> ObjectInfo:
         """Return metadata for *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, DirectoryStore):
+            return self.store.get_info(path)
         if isinstance(self.store, blosc2.RemoteStore):
             return self._remote_info(path)
         kind = self.kind(path)
@@ -1407,7 +1442,7 @@ def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
-    if isinstance(obj, blosc2.RemoteFile):
+    if isinstance(obj, (blosc2.RemoteFile, OrdinaryFile)):
         return "file"
     if isinstance(obj, (blosc2.NDArray, blosc2.RemoteArray, blosc2.Proxy)):
         return "ndarray"
@@ -1424,16 +1459,22 @@ def object_metadata(obj: Any) -> dict[str, Any]:
     """Extract lightweight metadata from a supported object."""
     kind = object_kind(obj)
     if kind == "file":
-        return {
-            "type": "Caterva2 file",
+        from blosc2.b2view.file_preview import file_actions
+
+        metadata = {
+            "type": "Caterva2 file"
+            if isinstance(obj, blosc2.RemoteFile)
+            else "Local file"
+            if obj.fs is None
+            else "FSSPEC file",
             "name": obj.name,
             "media type (hint)": obj.media_type,
             "nbytes": obj.nbytes,
-            "cbytes": obj.cbytes,
-            "chunksize": obj.chunksize,
-            "nchunks": obj.nchunks,
-            "actions": "D: download original · O: open externally · T: raw/Markdown",
+            "actions": file_actions(obj.name, markdown=True),
         }
+        if isinstance(obj, blosc2.RemoteFile):
+            metadata.update(cbytes=obj.cbytes, chunksize=obj.chunksize, nchunks=obj.nchunks)
+        return metadata
     if kind in {"ndarray", "c2array"}:
         try:
             cbytes = getattr(obj, "cbytes", None)

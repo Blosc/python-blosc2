@@ -1965,7 +1965,9 @@ class FileTransferScreen(ModalScreen):
                 self.app.call_from_thread(self._finished, f"Saved: {path}")
         except Exception as error:
             if not self.cancelled.is_set():
-                self.app.call_from_thread(self._finished, f"{error}\nDestination: {destination}")
+                self.app.call_from_thread(
+                    self._finished, f"{self.app._error_message(error)}\nDestination: {destination}"
+                )
         finally:
             self.file.close()
 
@@ -2164,7 +2166,10 @@ class B2ViewApp(App):
         # lets teardown wait for the cache-dir lock to be released.
         self._browser_close_thread: threading.Thread | None = None
         self.loaded_paths: set[str] = set()
-        self._remote = is_fsspec_url(urlpath)
+        from blosc2.b2view.ordinary_file import ordinary_source
+
+        # Keep ordinary-file disk I/O and image decoding off the UI thread too.
+        self._remote = is_fsspec_url(urlpath) or ordinary_source(urlpath, remote_service)
         self._remote_session = 0
         self._remote_request = 0
         self._file_raw = False
@@ -2720,6 +2725,7 @@ class B2ViewApp(App):
         from pathlib import PurePosixPath
 
         from blosc2.b2view.file_preview import EXTERNAL_SUFFIXES
+        from blosc2.b2view.ordinary_file import OrdinaryFile
 
         alias = None
         try:
@@ -2727,13 +2733,17 @@ class B2ViewApp(App):
                 if session != self._remote_session or request != self._remote_request:
                     return
                 obj = browser._get_object(path)
-                if not isinstance(obj, blosc2.RemoteFile):
+                if not isinstance(obj, (blosc2.RemoteFile, OrdinaryFile)):
                     return
                 if external and PurePosixPath(obj.name).suffix.lower() not in EXTERNAL_SUFFIXES:
                     raise ValueError(
                         "External opening is restricted to document/image files; use D to download"
                     )
-                alias = blosc2.RemoteFile._from_owner(obj._owner, obj.path)
+                alias = (
+                    obj.alias()
+                    if isinstance(obj, OrdinaryFile)
+                    else blosc2.RemoteFile._from_owner(obj._owner, obj.path)
+                )
             delivered = self._deliver_remote(
                 session, self._finish_file_transfer, request, path, alias, external, None
             )

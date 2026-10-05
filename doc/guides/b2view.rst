@@ -131,9 +131,70 @@ viewer; choose another name. Escape cancels an active transfer.
 File reads/downloads have per-chunk limits of 8 MiB compressed and 16 MiB decoded.
 A small preview may require a much larger chunk. Oversized or irregular sources
 require server-side rechunking; the viewer never silently fetches a whole file
-to work around these limits. Local/direct-fsspec regular files and file reference
-archives are not supported by this feature. Incompatible files do not hide healthy
+to work around these limits. File reference archives are not supported by this
+feature. Incompatible files do not hide healthy
 siblings.
+
+Local and direct-fsspec ordinary files
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Open a regular file directly with the same previews, fallback panels and actions:
+
+.. code-block:: console
+
+    b2view README.md
+    b2view photo.png
+    b2view brochure.pdf
+    b2view https://example.org/README.md
+    b2view --profile blosc2 s3://my-bucket/notes/README.md
+
+Local ``file://`` URLs and fsspec protocol chains are supported too. Install
+``blosc2[fsspec]`` and the relevant filesystem dependency for remote files.
+Authentication/storage options use the same CLI flags as direct dataset URLs.
+For an HTTP file without a filename extension, or a file URL containing an
+``@`` path component, pass ``--remote-service fsspec`` to bypass service discovery.
+
+Direct files open without a tree panel. Reads and image decoding run in the
+background; preview text/image limits are unchanged. ``D`` copies original bytes
+to a chosen local destination; ``O`` copies and opens the supported document
+after explicit destination submission. Local sources are never modified, and
+existing destinations are not overwritten. Choose a different destination when
+the dialog defaults to the source's own name. Transfers stream in 1 MiB spans
+and support cancellation and atomic publication, rather than loading the whole
+file into memory. Ordinary files must have a known size; a short read or a size
+change during copying fails without publishing a partial destination.
+
+These viewer-only handles do not extend ``blosc2.open`` or Caterva2's caches.
+``--cache-dir``/``--max-cache-bytes`` do not configure direct ordinary-file caching;
+filesystem backends may have their own buffering (notably chained archives).
+HTTP operations have a default 10-second timeout. Existing Blosc2/Zarr/HDF5
+hierarchies keep their dataset semantics.
+Recognized dataset extensions retain their normal opener and corruption errors;
+unrecognized filenames receive a small native-frame signature check, not object
+deserialization or automatic content execution.
+
+Ordinary directories
+^^^^^^^^^^^^^^^^^^^^
+
+Local directories (including ``file://`` URLs) and directories on fsspec
+filesystems with directory-listing support open as lazy tree roots:
+
+.. code-block:: console
+
+    b2view ./documents/
+    b2view ../cat2lite/tests/fixtures/data-cat2-demo/root-example/
+    b2view --profile blosc2 s3://my-bucket/documents/
+
+Only immediate children are listed; expanding a directory discovers the next
+level. Selecting a file uses the same previews and copy/open actions as a direct
+file input. Dataset containers such as B2Z, HDF5 and Zarr can be expanded as
+mounted subtrees without first downloading the whole container. A corrupt leaf
+does not hide its siblings. Refresh reopens the directory and its selected node.
+Local symlinks are shown but not followed, and parent-path navigation cannot
+escape the opened root. Opening a dataset directory such as ``.b2d`` or ``.zarr``
+directly continues to use the dataset opener, not the ordinary-directory browser.
+Client cache directories are separated per mounted dataset; cache-byte budgets
+apply per mounted source, not as a global limit for the whole directory tree.
 
 Direct source URLs
 ^^^^^^^^^^^^^^^^^^

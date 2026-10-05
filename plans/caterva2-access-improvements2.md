@@ -12,7 +12,20 @@ lazy hierarchy browsing, and viewer integration work.
   reason and capability-aware action hints. Successful text previews share the
   same hints (O only for supported external document types; T only for Markdown).
   Read failures preserve file metadata and redact transport URLs/option values.
-  Local/fsspec ordinary-file support remains a separate follow-up.
+  Local/fsspec ordinary-file support is delivered as a separate viewer-only
+  follow-up: direct regular-file inputs, shared passive previews/actions,
+  background I/O, known-size bounded reads and streamed atomic copies. Native
+  container formats retain their openers; unknown names get a small frame-magic
+  check. Generic directories, hierarchy export and new public RemoteFile
+  backends remain outside this follow-up. Backend caches are not Caterva2 caches.
+  Earlier local/fsspec exclusions in this delivery record are superseded for
+  direct ordinary-file inputs only.
+
+- User-requested directory follow-up: ordinary local/file-URL/fsspec directories
+  now expose immediate children lazily, with file previews/actions and dataset
+  containers mounted as browsable subtrees. Native dataset directories preserve
+  their opener. Parent traversal and local symlink following are refused.
+  Earlier generic-directory exclusions are superseded by this follow-up.
 
 - Follow-up UX decision: the extra trust checkbox is removed for all supported
   documents, including images and PDFs. The explicit O action and destination

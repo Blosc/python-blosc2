@@ -55,6 +55,14 @@ XXX version-specific blurb XXX
   dependencies and read/display failures, with consistent capability-aware
   action hints. Preview errors retain file metadata and redact transport URLs.
 
+- Open local and direct-fsspec ordinary files in b2view with the same bounded
+  text/image previews, PDF fallbacks and explicit copy/external-open actions.
+  Transfers are streamed, cancellable and atomic, with no overwrite by default;
+  existing container/dataset opening remains unchanged.
+
+- Open ordinary local/fsspec directories as lazy b2view tree roots. Preview
+  files and expand dataset containers in place; local symlinks are not followed.
+
 - Fix structured and subarray dtype decoding in `C2Array` and synthesized
   RemoteStore chunks, including compound/subarray HDF5 leaves.
 
