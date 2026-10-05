@@ -636,11 +636,11 @@ class DSLValidator:
                 self._expr(value)
             return
         if isinstance(node, ast.Compare):
-            if len(node.ops) != 1 or len(node.comparators) != 1:
-                self._err(node, "Chained comparisons are not supported in DSL")
-            self._cmpop(node.ops[0])
+            for op in node.ops:
+                self._cmpop(op)
             self._expr(node.left)
-            self._expr(node.comparators[0])
+            for operand in node.comparators:
+                self._expr(operand)
             return
         if isinstance(node, ast.Call):
             self._call_name(node.func)
@@ -1336,6 +1336,8 @@ class DSLBuilder:
             return f"({left} {op} {right})"
         if isinstance(node, ast.BoolOp):
             op = "&" if isinstance(node.op, ast.And) else "|"
+            if any(isinstance(n, ast.Compare) and len(n.ops) > 1 for n in ast.walk(node)):
+                op = "and" if isinstance(node.op, ast.And) else "or"
             values = [self._expr(v) for v in node.values]
             expr = values[0]
             for val in values[1:]:
@@ -1343,7 +1345,10 @@ class DSLBuilder:
             return expr
         if isinstance(node, ast.Compare):
             if len(node.ops) != 1 or len(node.comparators) != 1:
-                raise ValueError("Chained comparisons are not supported in DSL")
+                parts = [self._expr(node.left)]
+                for op, operand in zip(node.ops, node.comparators, strict=True):
+                    parts.extend((self._cmpop(op), self._expr(operand)))
+                return f"({' '.join(parts)})"
             left = self._expr(node.left)
             right = self._expr(node.comparators[0])
             op = self._cmpop(node.ops[0])

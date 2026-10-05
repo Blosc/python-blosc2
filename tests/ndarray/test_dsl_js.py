@@ -122,6 +122,23 @@ def test_pass_and_python_numeric_literals():
     np.testing.assert_array_equal(_run_node(module, points, []), [kernel(p[0]) for p in points])
 
 
+def test_chained_comparisons_and_short_circuit():
+    source = (
+        "def kernel(x):\n"
+        "    y = x\n"
+        "    while 0 <= y < 3:\n"
+        "        y += 1\n"
+        "        continue\n"
+        "    return (0 < y < 10) and (0 < x < 10 // x)\n"
+    )
+    namespace = {}
+    exec(source, namespace)
+    points = [[float(x)] for x in range(-3, 8)]
+    module = build_js_module(source)
+    expected = [bool(namespace["kernel"](p[0])) for p in points]
+    np.testing.assert_array_equal(_run_node(module, points, []), expected)
+
+
 def test_transpile_structure():
     js_src, params = dsl_to_js(newton_dsl)
     assert params == ["a", "b", "max_iter", "relax"]

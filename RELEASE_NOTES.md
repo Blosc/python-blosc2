@@ -6,6 +6,11 @@ XXX version-specific blurb XXX
 
 ### More Python-like DSL kernels
 
+- Added Python chained comparisons such as `0 <= x < 10`, with single operand
+  evaluation and short-circuiting across interpreter, native JIT, and JavaScript.
+- Chain handling lives in miniexpr's native DSL front end: C and other callers
+  can use the same raw DSL syntax without Python preprocessing.
+- Fixed numeric intermediate typing in Boolean-output DSL kernels.
 - Added `pass` as a no-op, including otherwise empty branch and loop bodies.
 - Corrected native JIT range loops to retain the last visited loop-variable
   value after completion, matching the interpreter and Python.

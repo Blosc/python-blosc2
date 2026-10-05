@@ -162,6 +162,20 @@ Commonly supported:
 - Function calls to supported miniexpr functions
 - User-registered C functions/closures passed in `me_variable`
 
+DSL kernels accept chained comparisons such as `0 <= x < 10` or
+`a < b <= c != d`. Operands are evaluated left-to-right, each at most once;
+later operands are skipped as soon as a comparison fails. Chains work in
+expressions, assignments, branches, and loop conditions (including `continue`).
+The native miniexpr DSL front end lowers them to temporary variables and guarded
+statements for both the interpreter and TCC/CC JIT. C and other callers can pass
+raw chain syntax directly, without Python preprocessing. JavaScript emission
+performs equivalent lowering separately. Existing DSL `and`/`or` Boolean-result
+rules apply. This syntax extension applies to DSL kernels, not the separate
+classic expression API.
+
+Chaining does not expand the supported operand types or functions: existing
+string-comparison and per-element reduction restrictions still apply.
+
 Cast intrinsics:
 
 - `int(expr)`
@@ -190,6 +204,8 @@ In this example, `temp` is inferred from `sin(x) ** 2` (typically a floating typ
 Notes:
 
 - You do not need to declare local variable types.
+- Boolean output does not force numeric temporaries to Boolean: operand types
+  are inferred independently, and the return value is converted to Boolean.
 - If you assign a value with an incompatible dtype to the same local later, compilation fails.
 
 ## Loops
