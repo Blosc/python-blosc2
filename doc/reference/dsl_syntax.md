@@ -70,6 +70,7 @@ Supported statement forms:
 - While loop: `while cond:`
 - For loop: `for i in range(...):`
 - Loop control: `break`, `continue`
+- No-op: `pass` (also valid as the sole statement in a branch or loop body)
 
 General rules:
 
@@ -138,6 +139,19 @@ def kernel(x):
 ## Expressions and function calls
 
 Expressions are compiled by miniexpr with DSL checks.
+
+### Numeric literals
+
+Python-style digit separators are accepted in integers and floating-point
+literals: `1_000`, `1_000.2_5`, `.1_25`, and `1e1_0`. Integer literals also accept
+binary (`0b1010`), octal (`0o755`), and hexadecimal (`0xff`) prefixes, including
+uppercase prefixes and separators such as `0x_FF` or `0b10_10`.
+
+Malformed separators, invalid base digits, and nonzero decimal integers with
+leading zeros are rejected. Prefixed integer magnitudes must fit in an unsigned
+64-bit value; numeric evaluation retains the existing dtype and precision rules,
+not Python's arbitrary-precision integer arithmetic. Strings and identifiers
+(such as `x_1`) are not modified.
 
 Commonly supported:
 

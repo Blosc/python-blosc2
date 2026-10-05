@@ -549,6 +549,8 @@ class DSLValidator:
             )
 
     def _stmt(self, node: ast.stmt):  # noqa: C901
+        if isinstance(node, ast.Pass):
+            return
         if isinstance(node, ast.Assign):
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 self._err(node, "Only simple assignments are supported in DSL kernels")
@@ -1192,6 +1194,9 @@ class DSLBuilder:
         return names
 
     def _stmt(self, node: ast.stmt, indent: int):
+        if isinstance(node, ast.Pass):
+            self._emit("pass", indent)
+            return
         if isinstance(node, ast.Assign):
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 raise ValueError("Only simple assignments are supported in DSL kernels")
@@ -1414,6 +1419,8 @@ class DSLReducer:
         return names
 
     def _stmt(self, node: ast.stmt) -> bool:  # noqa: C901
+        if isinstance(node, ast.Pass):
+            return True
         if isinstance(node, ast.Assign):
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 return False

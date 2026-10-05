@@ -105,6 +105,23 @@ console.log(JSON.stringify(Array.from(out)));
     return json.loads(res.stdout)
 
 
+def test_pass_and_python_numeric_literals():
+    def kernel(a):
+        pass
+        x = a + 1_000 + 0xFF + 0b1010 + 0o755
+        if x > 0:
+            pass
+        else:
+            x += 1
+        for _i in range(3):
+            pass
+        return x
+
+    module = build_js_module(kernel)
+    points = [[-2000.0], [0.0], [3.0]]
+    np.testing.assert_array_equal(_run_node(module, points, []), [kernel(p[0]) for p in points])
+
+
 def test_transpile_structure():
     js_src, params = dsl_to_js(newton_dsl)
     assert params == ["a", "b", "max_iter", "relax"]

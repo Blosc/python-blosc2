@@ -6,6 +6,12 @@ XXX version-specific blurb XXX
 
 ### More Python-like DSL kernels
 
+- Added `pass` as a no-op, including otherwise empty branch and loop bodies.
+- Corrected native JIT range loops to retain the last visited loop-variable
+  value after completion, matching the interpreter and Python.
+- Numeric literals accept Python-style digit separators and binary/octal/hex
+  integer prefixes. Normalization is shared by interpreter and native JIT paths;
+  malformed literals are rejected without changing strings or identifiers.
 - DSL kernels accept single-line and multiline docstrings, preserving Python
   `__doc__` while ignoring documentation during interpreter/JIT execution.
 - Simple statements can share a line using semicolons, including inside nested

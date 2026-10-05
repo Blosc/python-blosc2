@@ -6,6 +6,7 @@
 #######################################################################
 
 
+import ast
 import subprocess
 import sys
 import tempfile
@@ -1143,6 +1144,94 @@ def test_kernel_parenthesized_continuation_with_comments(jit):
     a = np.arange(24, dtype=np.float64)
     result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
     np.testing.assert_array_equal(result[:], np.where(a + 4 > 4, (a + 4) * 2 + 1, a + 4))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_kernel_pass(jit):
+    kernel = kernel_from_source(
+        "def k(a):\n"
+        "    pass; x = a\n"
+        "    if x > 0:\n"
+        "        pass\n"
+        "    else:\n"
+        "        x -= 1; pass\n"
+        "    pass\n"
+        "    for i in range(0b11):\n"
+        "        pass\n"
+        "    while x < 0:\n"
+        "        x += 1; pass\n"
+        "    return x + 0x_FF\n",
+        "k",
+    )
+    assert validate_dsl(kernel)["valid"]
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64], np.float64))
+    a = np.arange(-3, 5, dtype=np.float64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
+    np.testing.assert_array_equal(result[:], np.maximum(a, 0) + 255)
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_kernel_pass_loop_retains_iteration_variable(jit):
+    kernel = kernel_from_source(
+        "def k(a):\n    for i in range(0b11):\n        pass\n    return a + i\n", "k"
+    )
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64], np.float64))
+    a = np.arange(12, dtype=np.float64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
+    np.testing.assert_array_equal(result[:], a + 2)
+
+
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "1_000",
+        "0_0",
+        "0b1010",
+        "0B_10_10",
+        "0o755",
+        "0O_7_5_5",
+        "0xff",
+        "0X_FF",
+        "0xCA_FE",
+        "1_000.2_5",
+        ".1_25",
+        "1_0.",
+        "1e1_0",
+        "1_2.5e-0_2",
+        "0_1.0",
+        "-0b1010",
+        "-0x_FF",
+    ],
+)
+def test_kernel_python_numeric_literals(literal, jit):
+    kernel = kernel_from_source(f"def k(a):\n    return a + {literal}\n", "k")
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.float64], np.float64))
+    a = np.arange(12, dtype=np.float64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.float64, jit=jit)
+    np.testing.assert_allclose(result[:], a + ast.literal_eval(literal))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_kernel_numeric_literals_in_conditions_and_ranges(jit):
+    kernel = kernel_from_source(
+        "def k(a):\n"
+        "    x_1 = a\n"
+        "    for i in range(0b_1, 0x_4, 0o_1):\n"
+        "        x_1 += 1_0\n"
+        "    if x_1 > 3_2:\n"
+        "        x_1 += 0b1_0\n"
+        "    return x_1\n",
+        "k",
+    )
+    if jit:
+        _expect_jit(blosc2.validate_dsl_jit(kernel, [np.int64], np.int64))
+    a = np.arange(12, dtype=np.int64)
+    result = blosc2.lazyudf(kernel, (a,), dtype=np.int64, jit=jit)
+    np.testing.assert_array_equal(result[:], np.where(a + 30 > 32, a + 32, a + 30))
 
 
 def test_dsl_kernel_reassigning_input_param_rejected():

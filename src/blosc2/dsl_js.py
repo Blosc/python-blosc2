@@ -178,6 +178,8 @@ class _Transpiler:
             return f"{pad}break;\n"
         if isinstance(node, ast.Continue):
             return f"{pad}continue;\n"
+        if isinstance(node, ast.Pass):
+            return f"{pad};\n"
         raise _DSLToJSError(f"unsupported statement: {type(node).__name__}")
 
     def _augassign(self, node):
