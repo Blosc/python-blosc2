@@ -224,5 +224,6 @@
     Tutorials <tutorials/index>
     Guides <guides/index>
     API Reference <reference/index>
+    Glossary <glossary/index>
     Development <development/index>
     Release Notes <release_notes/index>
