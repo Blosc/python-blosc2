@@ -336,9 +336,10 @@ def test_prefer_js_selection(monkeypatch):
 
 @pytest.mark.parametrize("dtype", [np.int64, np.uint64])
 @pytest.mark.parametrize("jit", [None, True])
-def test_prefer_js_preserves_wide_integer_inputs(dtype, jit, monkeypatch):
+@pytest.mark.parametrize("array", [np.asarray, blosc2.asarray])
+def test_prefer_js_preserves_wide_integer_inputs(dtype, jit, array, monkeypatch):
     monkeypatch.setattr(blosc2, "IS_WASM", True)
-    operand = blosc2.asarray(np.arange(6, dtype=dtype) + 2**54)
+    operand = array(np.arange(6, dtype=dtype) + 2**54)
     expr, resolved_jit, backend = lx._maybe_js_backend(
         _add, jit, None, {}, {"a": operand, "b": operand}, {"dtype": np.float64}
     )

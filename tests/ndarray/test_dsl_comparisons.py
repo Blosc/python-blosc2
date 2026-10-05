@@ -124,7 +124,10 @@ def test_chain_boolean_output_preserves_float_operands(jit):
 
 
 @pytest.mark.parametrize("jit", [False, True])
-def test_chain_float_output_preserves_large_integer_operands(jit):
+@pytest.mark.parametrize("wasm_dispatch", [False, True])
+def test_chain_float_output_preserves_large_integer_operands(jit, wasm_dispatch, monkeypatch):
+    if wasm_dispatch:
+        monkeypatch.setattr(blosc2, "IS_WASM", True)
     kernel = kernel_from_source("def k(x, lo, hi):\n    return lo < x < hi\n", "k")
     x = np.arange(6, dtype=np.int64) + 2**54
     lo = np.full(6, 2**54 + 1, dtype=np.int64)

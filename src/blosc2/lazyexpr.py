@@ -1587,18 +1587,14 @@ def _js_dtypes_ok(operands, kwargs) -> bool:
     dt = kwargs.get("dtype")
     if dt is None:
         # Inferred output: only safe when all operands are float (so the output is float too).
-        return all(
-            np.issubdtype(op.dtype, np.floating)
-            for op in operands.values()
-            if isinstance(op, blosc2.NDArray)
-        )
+        return all(np.issubdtype(op.dtype, np.floating) for op in operands.values() if hasattr(op, "dtype"))
     if not np.issubdtype(np.dtype(dt), np.floating):
         return False
     return all(
         np.issubdtype(op.dtype, np.floating)
         or (np.issubdtype(op.dtype, np.integer) and op.dtype.itemsize < 8)
         for op in operands.values()
-        if isinstance(op, blosc2.NDArray)
+        if hasattr(op, "dtype")
     )
 
 
