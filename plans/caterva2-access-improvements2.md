@@ -7,6 +7,12 @@ lazy hierarchy browsing, and viewer integration work.
 
 ## Implementation record
 
+- Notebook follow-up: passive nbformat-4 cell views for local/fsspec/Caterva2
+  files and local `.ipynb.b2` carriers. Markdown/code/raw cells and saved text
+  outputs share 64 KiB / 1,000 displayed lines and 100-cell limits; complete JSON
+  input is capped at 2 MiB. T toggles a bounded raw prefix. No Jupyter/kernel
+  dependency, execution, HTML/JavaScript, widget or embedded-media rendering.
+
 - Compressed local document follow-up: supported text/image/PDF names ending in
   `.b2` are read-only mapped SChunk byte streams. Metadata stays payload-free;
   text prefixes decode only intersecting chunks, images retain input/pixel caps,

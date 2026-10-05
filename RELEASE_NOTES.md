@@ -71,6 +71,10 @@ XXX version-specific blurb XXX
   using bounded, lazy SChunk decoding. Copies stream original bytes under the
   original filename; oversized chunks and non-document container types are refused.
 
+- Preview nbformat-4 Jupyter notebooks passively in b2view: Markdown, highlighted
+  code and bounded saved plain-text outputs, with a raw-JSON toggle. No kernels
+  or active HTML/media rendering; supported across existing file backends.
+
 - Fix structured and subarray dtype decoding in `C2Array` and synthesized
   RemoteStore chunks, including compound/subarray HDF5 leaves.
 

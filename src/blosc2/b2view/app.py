@@ -299,7 +299,7 @@ class HelpScreen(ModalScreen[None]):
             [
                 ("D", "download original bytes to a chosen destination (no overwrite)"),
                 ("O", "download and open a document externally"),
-                ("T", "toggle raw text / Markdown rendering"),
+                ("T", "toggle raw text / Markdown or notebook rendering"),
                 ("escape", "cancel a file download or close its dialog"),
             ],
         ),
@@ -2118,7 +2118,7 @@ class B2ViewApp(App):
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
         Binding("D", "download_file", "Download file", show=False),
         Binding("O", "open_file", "Open externally", show=False),
-        Binding("T", "raw_file", "Raw/Markdown", show=False),
+        Binding("T", "raw_file", "Raw/Rendered", show=False),
     ]
 
     def __init__(

@@ -228,6 +228,33 @@ carrier metadata retains the on-disk filename. No entire document is assembled
 for downloading, and no original-file payload is deserialized or executed.
 Sources are assumed immutable while open; refresh after replacing a carrier.
 
+Passive Jupyter notebook previews
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``.ipynb`` files open as passive nbformat-4 documents, not executable notebooks:
+
+.. code-block:: console
+
+    b2view analysis.ipynb
+    b2view analysis.ipynb.b2
+    b2view https://cat2.cloud/demo/@public/examples/slice-time.ipynb
+
+Markdown cells render without active links/images; code cells are syntax
+highlighted using the declared supported language (otherwise plain text).
+Raw cells, saved stdout/stderr, plain-text result representations and tracebacks
+are shown as text with terminal controls removed. No kernel starts, cells never
+execute, and HTML/JavaScript, widget outputs and embedded media are omitted with
+a notice. There is no requirement for Jupyter or nbformat to be installed.
+
+Parsing requires the complete JSON document, so input is capped at 2 MiB.
+Displayed source/output text shares a 64 KiB / 1,000-line budget, with at most
+100 cells. Truncation is labelled; oversized or unsupported notebooks show the
+normal fallback panel rather than being fetched without bounds. ``T`` switches
+between the cell view and a bounded raw-JSON prefix; ``D`` copies the original
+notebook. Notebook external opening is not enabled. These previews work with
+local, fsspec and Caterva2 files, and local ``.ipynb.b2`` document carriers, under
+their existing transport/chunk limits.
+
 Find nodes in local or remote trees
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

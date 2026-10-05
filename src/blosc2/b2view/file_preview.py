@@ -10,7 +10,7 @@ TEXT_BYTES = 64 << 10
 TEXT_LINES = 1000
 IMAGE_BYTES = 16 << 20
 IMAGE_PIXELS = (64 << 20) // 4
-TEXT_SUFFIXES = {".md", ".txt", ".rst", ".csv", ".json", ".yaml", ".yml", ".log", ".py"}
+TEXT_SUFFIXES = {".md", ".txt", ".rst", ".csv", ".json", ".yaml", ".yml", ".log", ".py", ".ipynb"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 EXTERNAL_SUFFIXES = IMAGE_SUFFIXES | {".pdf", ".md", ".txt"}
 
@@ -23,6 +23,8 @@ def file_actions(name, *, markdown=False):
         actions.append("O: open externally")
     if markdown and suffix == ".md":
         actions.append("T: raw/Markdown")
+    elif markdown and suffix == ".ipynb":
+        actions.append("T: raw/notebook")
     return " · ".join(actions)
 
 
@@ -31,7 +33,7 @@ def file_fallback(name, status, reason):
     return {
         "preview_status": status,
         "message": safe_text(reason),
-        "actions": file_actions(name),
+        "actions": file_actions(name, markdown=PurePosixPath(name).suffix.lower() == ".ipynb"),
     }
 
 
@@ -50,6 +52,10 @@ def preview_file(file, *, raw=False):
             return file_fallback(file.name, "Preview unavailable", "PDF has no inline preview.")
         if suffix in IMAGE_SUFFIXES:
             return preview_image(file)
+        if suffix == ".ipynb" and not raw:
+            from blosc2.b2view.notebook_preview import preview_notebook
+
+            return preview_notebook(file)
         if suffix not in TEXT_SUFFIXES:
             return file_fallback(file.name, "Preview unavailable", "Binary/unknown file.")
         data = file.read_bytes(0, min(file.nbytes, TEXT_BYTES))
