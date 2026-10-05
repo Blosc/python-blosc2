@@ -81,7 +81,7 @@ def test_nested_context_and_exception():
     assert blosc2.get_jit_options()["jit"] is True
 
 
-def test_context_isolation():
+def test_async_context_isolation():
     async def worker(backend):
         with blosc2.jit_options(jit_backend=backend):
             await asyncio.sleep(0)
@@ -91,6 +91,10 @@ def test_context_isolation():
         return await asyncio.gather(worker("cc"), worker("tcc"))
 
     assert asyncio.run(run()) == ["cc", "tcc"]
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten cannot start threads")
+def test_thread_context_isolation():
     with blosc2.jit_options(jit_backend="cc"), ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(blosc2.get_jit_options).result()["jit_backend"] is None
 

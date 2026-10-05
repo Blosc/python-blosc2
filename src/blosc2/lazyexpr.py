@@ -1580,10 +1580,10 @@ def _js_dtypes_ok(operands, kwargs) -> bool:
 
     The output dtype must be floating: integer/complex *output* goes to miniexpr (the bridge
     can't reproduce integer division/overflow/truncation semantics, and float64 can't hold
-    int64 exactly).  Given a floating output, integer *inputs* are fine -- the bridge converts
-    every operand to float64, which is exactly what miniexpr does when promoting integer inputs
-    for a float result (so any values above 2**53 lose precision identically).  Complex inputs
-    are rejected (the bridge is real-only)."""
+    int64 exactly). Smaller integer inputs are exactly representable in float64,
+    but 64-bit integer inputs must stay on miniexpr: comparisons can retain their
+    integer precision even with a float output. Complex inputs are rejected
+    (the bridge is real-only)."""
     dt = kwargs.get("dtype")
     if dt is None:
         # Inferred output: only safe when all operands are float (so the output is float too).
@@ -1595,7 +1595,8 @@ def _js_dtypes_ok(operands, kwargs) -> bool:
     if not np.issubdtype(np.dtype(dt), np.floating):
         return False
     return all(
-        np.issubdtype(op.dtype, np.floating) or np.issubdtype(op.dtype, np.integer)
+        np.issubdtype(op.dtype, np.floating)
+        or (np.issubdtype(op.dtype, np.integer) and op.dtype.itemsize < 8)
         for op in operands.values()
         if isinstance(op, blosc2.NDArray)
     )

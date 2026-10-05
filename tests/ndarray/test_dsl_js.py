@@ -79,6 +79,8 @@ def misc_dsl(x, y):
 
 def _run_node(module, pts, scalars):
     """Run the emitted JS over `pts` (list of input rows) and return the output list."""
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot spawn the node subprocess")
     node = shutil.which("node")
     if not node:
         pytest.skip("node not found; skipping JS numeric-equivalence check")
@@ -202,6 +204,8 @@ def test_index_symbols_need_ndim_and_valid_axis():
 
 def _run_node_index(module, gshape, off, cshape, ncols=1):
     """Run an index-aware module over one block and return the (flat) output list."""
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot spawn the node subprocess")
     node = shutil.which("node")
     if not node:
         pytest.skip("node not found; skipping JS numeric-equivalence check")
@@ -293,7 +297,7 @@ def _idx(a):
 def test_prefer_js_selection(monkeypatch):
     monkeypatch.setattr(blosc2, "IS_WASM", True)
     af = blosc2.asarray(np.ones((4, 4), dtype=np.float64))
-    ai = blosc2.asarray(np.ones((4, 4), dtype=np.int64))
+    ai = blosc2.asarray(np.ones((4, 4), dtype=np.int32))
 
     def sel(jit, jit_backend, operands, kwargs, reduce_args=None):
         return lx._maybe_js_backend(_add, jit, jit_backend, reduce_args or {}, operands, kwargs)
@@ -328,6 +332,19 @@ def test_prefer_js_selection(monkeypatch):
     expr, *_ = sel(None, None, {"a": ai, "b": ai}, {"dtype": np.float64})
     assert callable(expr)
     assert not lx._is_dsl_kernel_expression(expr)
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.uint64])
+@pytest.mark.parametrize("jit", [None, True])
+def test_prefer_js_preserves_wide_integer_inputs(dtype, jit, monkeypatch):
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    operand = blosc2.asarray(np.arange(6, dtype=dtype) + 2**54)
+    expr, resolved_jit, backend = lx._maybe_js_backend(
+        _add, jit, None, {}, {"a": operand, "b": operand}, {"dtype": np.float64}
+    )
+    assert expr is _add
+    assert resolved_jit is jit
+    assert backend is None
 
 
 def test_prefer_js_index_needs_shape(monkeypatch):
