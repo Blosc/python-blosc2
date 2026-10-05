@@ -48,6 +48,10 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Display saved PNG/JPEG notebook outputs beneath their cells in b2view, using
+  passive terminal-image rendering with shared image-count/byte/pixel limits.
+  Invalid images retain readable cells; HTML, SVG, scripts and widgets stay disabled.
+
 - Reduce b2view startup and remote-page flicker by sizing requests after layout,
   retaining visible metadata/data during reloads, and reusing buffered rows for
   height-only resizes instead of fetching them again.

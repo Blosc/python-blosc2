@@ -1,5 +1,7 @@
 """Passive notebook previews share file transports without executing kernels."""
 
+import base64
+import io
 import json
 
 import pytest
@@ -55,6 +57,130 @@ def sample_notebook():
             {"cell_type": "raw", "source": "plain raw cell", "metadata": {}},
         ]
     )
+
+
+def saved_plot(mime="image/png", size=(20, 10)):
+    pil = pytest.importorskip("PIL.Image")
+    stream = io.BytesIO()
+    pil.new("RGB", size, "red").save(stream, format="PNG" if mime == "image/png" else "JPEG")
+    return base64.b64encode(stream.getvalue()).decode("ascii")
+
+
+def plot_notebook(data):
+    return notebook(
+        [
+            {
+                "cell_type": "code",
+                "source": "# saved plot, never executed",
+                "outputs": [
+                    {"output_type": "display_data", "data": data},
+                ],
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize("mime", ["image/png", "image/jpeg"])
+def test_saved_notebook_images_are_passive(mime):
+    encoded = saved_plot(mime)
+    preview = preview_file(
+        NotebookFile(
+            plot_notebook({mime: [encoded[:20] + "\n", encoded[20:]], "text/plain": "Saved figure"})
+        )
+    )
+    cell = preview["notebook_cells"][0]
+    assert cell["images"][0].size == (20, 10)
+    assert cell["output"] == "Saved figure"
+    assert not preview["notice"]
+
+
+def test_notebook_images_share_count_pixel_and_byte_limits(monkeypatch):
+    from blosc2.b2view import notebook_preview
+
+    encoded = saved_plot()
+    cells = plot_notebook({"image/png": encoded})["cells"] * (notebook_preview.NOTEBOOK_IMAGES + 1)
+    preview = preview_file(NotebookFile(notebook(cells)))
+    assert sum(len(cell["images"]) for cell in preview["notebook_cells"]) == notebook_preview.NOTEBOOK_IMAGES
+    assert "budget" in preview["notice"]
+    monkeypatch.setattr(notebook_preview, "IMAGE_PIXELS", 300)
+    preview = preview_file(NotebookFile(notebook(cells[:2])))
+    assert [len(cell["images"]) for cell in preview["notebook_cells"]] == [1, 0]
+    assert "pixel budget" in preview["notice"]
+    monkeypatch.setattr(notebook_preview, "IMAGE_BYTES", 1)
+    monkeypatch.setattr(
+        notebook_preview,
+        "preview_image_bytes",
+        lambda *args, **kwargs: pytest.fail("Over-budget image reached decoder"),
+    )
+    preview = preview_file(NotebookFile(plot_notebook({"image/png": encoded})))
+    assert not preview["notebook_cells"][0]["images"]
+    assert "byte budget" in preview["notice"]
+
+
+@pytest.mark.parametrize("value", ["not base64!", "", 42, base64.b64encode(b"not an image").decode()])
+def test_invalid_saved_image_keeps_notebook_text(value):
+    preview = preview_file(NotebookFile(plot_notebook({"image/png": value, "text/plain": "still readable"})))
+    assert preview["notebook_cells"][0]["output"] == "still readable"
+    assert not preview["notebook_cells"][0]["images"]
+    assert "omitted" in preview["notice"]
+
+
+def test_notebook_image_decoder_failure_preserves_cells(monkeypatch):
+    monkeypatch.setattr(
+        "blosc2.b2view.notebook_preview.preview_image_bytes",
+        lambda *args, **kwargs: {"message": "Image preview needs Pillow."},
+    )
+    preview = preview_file(NotebookFile(plot_notebook({"image/png": saved_plot()})))
+    assert not preview["notebook_cells"][0]["images"]
+    assert "Pillow" in preview["notice"]
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
+@pytest.mark.parametrize("widget", ["real", "missing", "broken"])
+async def test_notebook_saved_plots_inline_and_raw_toggle(tmp_path, monkeypatch, widget):
+    from textual.widgets import Static
+
+    from blosc2.b2view.app import B2ViewApp
+
+    if widget == "real":
+        pytest.importorskip("textual_image.widget")
+    elif widget == "missing":
+        monkeypatch.setattr("blosc2.b2view.app.TextualImage", None)
+    else:
+
+        def broken(*args):
+            raise RuntimeError("secret must not appear")
+
+        monkeypatch.setattr("blosc2.b2view.app.TextualImage", broken)
+    path = tmp_path / "plots.ipynb"
+    path.write_text(json.dumps(plot_notebook({"image/png": saved_plot()})))
+    app = B2ViewApp(str(path))
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_until(pilot, lambda: bool(app.query_one("#file-image").children))
+        container = app.query_one("#file-image")
+        if widget == "real":
+            assert len(container.children) == 2
+            await wait_until(pilot, lambda: container.children[1].region.height > 0)
+            assert "Cell 1" in container.children[0].content.title.plain
+            assert app.query_one("#preview", Static).content == ""
+        elif widget == "missing":
+            assert "textual-image" in str(container.children[0].render())
+            from rich.console import Console
+
+            console = Console()
+            with console.capture() as capture:
+                console.print(app.query_one("#preview", Static).content)
+            assert "Cell 1" in capture.get()
+        else:
+            assert "could not be displayed" in str(container.children[1].render())
+            assert "secret" not in str(container.children[1].render())
+        await pilot.press("T")
+        await wait_until(pilot, lambda: not container.children)
+        assert "nbformat" in str(app.query_one("#preview", Static).render())
+        await pilot.press("T")
+        await wait_until(pilot, lambda: bool(container.children))
+    app.wait_for_close()
 
 
 def test_cells_and_outputs_are_passive_and_safe():

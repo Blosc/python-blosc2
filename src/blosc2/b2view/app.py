@@ -2729,7 +2729,12 @@ class B2ViewApp(App):
     async def _show_file_image(self, path, data):
         body = self.query_one("#file-image", Vertical)
         await body.remove_children()
-        if path != self.selected_path or not isinstance(data, dict) or "file_image" not in data:
+        if path != self.selected_path or not isinstance(data, dict):
+            return
+        if "notebook_cells" in data:
+            await self._show_notebook_images(body, data)
+            return
+        if "file_image" not in data:
             return
         if TextualImage is None:
             self._show_image_fallback(
@@ -2745,6 +2750,28 @@ class B2ViewApp(App):
             await body.mount(image)
         except Exception as error:
             self._show_image_fallback("Preview failed", self._error_message(error))
+
+    async def _show_notebook_images(self, body, data):
+        if not any(cell.get("images") for cell in data["notebook_cells"]):
+            return
+        if TextualImage is None:
+            await body.mount(Static("Saved plots need textual-image. Install blosc2[images]."))
+            return
+        from blosc2.b2view.render import notebook_cell_renderable
+
+        widgets = []
+        for cell in data["notebook_cells"]:
+            widgets.append(Static(notebook_cell_renderable(cell, data["language"])))
+            for payload in cell.get("images", []):
+                try:
+                    image = TextualImage(payload)
+                    image.styles.width = "auto"
+                    image.styles.height = "auto"
+                    widgets.append(image)
+                except Exception:
+                    widgets.append(Static("Saved plot could not be displayed."))
+        await body.mount(*widgets)
+        self.query_one("#preview", Static).update("")
 
     def _show_image_fallback(self, status, reason):
         from blosc2.b2view.file_preview import file_fallback

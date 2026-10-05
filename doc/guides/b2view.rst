@@ -243,8 +243,19 @@ Markdown cells render without active links/images; code cells are syntax
 highlighted using the declared supported language (otherwise plain text).
 Raw cells, saved stdout/stderr, plain-text result representations and tracebacks
 are shown as text with terminal controls removed. No kernel starts, cells never
-execute, and HTML/JavaScript, widget outputs and embedded media are omitted with
-a notice. There is no requirement for Jupyter or nbformat to be installed.
+execute. Saved PNG/JPEG outputs are decoded from the notebook and displayed
+beneath their cells using the existing terminal-image support
+(``blosc2[images]``). HTML/JavaScript, SVG, widget outputs and other media remain
+omitted with a notice. There is no requirement for Jupyter or nbformat to be
+installed. Markdown image links/attachments are not fetched.
+
+At most eight saved images are displayed. They share a 16 MiB encoded-image-byte
+budget and a 16,777,216 decoded-pixel budget (64 MiB at RGBA), in addition to the
+2 MiB notebook input cap below. Images are validated before pixel decoding and
+reduced to at most 1600 by 1200 pixels for display. Invalid or oversized images
+are skipped with a notice, keeping cell text available. Only saved static
+images are shown; interactive plots/widgets are not executed, and animated
+images show only their first frame.
 
 Parsing requires the complete JSON document, so input is capped at 2 MiB.
 Displayed source/output text shares a 64 KiB / 1,000-line budget, with at most

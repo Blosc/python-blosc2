@@ -88,23 +88,29 @@ def make_preview_renderables(preview: Any):
 
 def _notebook_renderables(preview):
     from rich.console import Group
+    from rich.text import Text
+
+    cells = [notebook_cell_renderable(cell, preview["language"]) for cell in preview["notebook_cells"]]
+    header = Text(" · ".join(part for part in (preview.get("notice"), preview["message"]) if part))
+    return header, Group(*cells) if cells else Text("Empty notebook.")
+
+
+def notebook_cell_renderable(cell, language):
+    """Render one passive cell, shared by the text and inline-image layouts."""
+    from rich.console import Group
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.syntax import Syntax
     from rich.text import Text
 
-    cells = []
-    for cell in preview["notebook_cells"]:
-        if cell["kind"] == "markdown":
-            source = Markdown(cell["source"], hyperlinks=False)
-        elif cell["kind"] == "code":
-            source = Syntax(cell["source"], preview["language"], word_wrap=True)
-        else:
-            source = Text(cell["source"])
-        body = Group(source, Text(cell["output"])) if cell["output"] else source
-        cells.append(Panel(body, title=Text(f"Cell {cell['index']} · {cell['kind']}")))
-    header = Text(" · ".join(part for part in (preview.get("notice"), preview["message"]) if part))
-    return header, Group(*cells) if cells else Text("Empty notebook.")
+    if cell["kind"] == "markdown":
+        source = Markdown(cell["source"], hyperlinks=False)
+    elif cell["kind"] == "code":
+        source = Syntax(cell["source"], language, word_wrap=True)
+    else:
+        source = Text(cell["source"])
+    body = Group(source, Text(cell["output"])) if cell["output"] else source
+    return Panel(body, title=Text(f"Cell {cell['index']} · {cell['kind']}"))
 
 
 def _make_ctable_header(preview: dict[str, Any], widths: dict[str, int]):

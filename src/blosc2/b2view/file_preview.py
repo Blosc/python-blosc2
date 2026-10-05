@@ -88,22 +88,35 @@ def preview_file(file, *, raw=False):
 
 def preview_image(file):
     try:
-        from PIL import Image, ImageOps
+        from PIL import Image  # noqa: F401
     except ImportError:
         return file_fallback(
             file.name, "Missing dependency", "Image preview needs Pillow. Install blosc2[images]."
         )
     if file.nbytes > IMAGE_BYTES:
         return file_fallback(file.name, "Preview unavailable", "Automatic image preview exceeds 16 MiB.")
-    data = file.read_bytes(0, file.nbytes)
+    return preview_image_bytes(file.read_bytes(0, file.nbytes), file.name)
+
+
+def preview_image_bytes(data, name, *, max_pixels=None):
+    """Decode passive PNG/JPEG bytes with the shared image safety limits."""
+    max_pixels = IMAGE_PIXELS if max_pixels is None else min(max_pixels, IMAGE_PIXELS)
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return file_fallback(
+            name, "Missing dependency", "Image preview needs Pillow. Install blosc2[images]."
+        )
+    if len(data) > IMAGE_BYTES:
+        return file_fallback(name, "Preview unavailable", "Automatic image preview exceeds 16 MiB.")
     if not (data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG\r\n\x1a\n")):
-        return file_fallback(file.name, "Preview failed", "Invalid JPEG/PNG signature.")
+        return file_fallback(name, "Preview failed", "Invalid JPEG/PNG signature.")
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         with Image.open(io.BytesIO(data)) as original:
-            if original.format not in {"JPEG", "PNG"} or original.width * original.height > IMAGE_PIXELS:
+            if original.format not in {"JPEG", "PNG"} or original.width * original.height > max_pixels:
                 return file_fallback(
-                    file.name, "Preview unavailable", "Image exceeds decoded pixel budget (64 MiB RGBA)."
+                    name, "Preview unavailable", "Image exceeds decoded pixel budget (64 MiB RGBA)."
                 )
             size, format_name = original.size, original.format
             original.seek(0)
@@ -112,7 +125,8 @@ def preview_image(file):
             image = image.convert("RGB")
     return {
         "file_image": image,
-        "message": f"{format_name} · {size[0]} × {size[1]} · {file_actions(file.name)}",
+        "image_pixels": size[0] * size[1],
+        "message": f"{format_name} · {size[0]} × {size[1]} · {file_actions(name)}",
     }
 
 
