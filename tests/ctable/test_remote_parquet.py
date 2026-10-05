@@ -148,6 +148,58 @@ def test_narrow_read_uses_only_one_later_group(tmp_path):
         assert remote.traffic.requests == before + 1
 
 
+@pytest.mark.parametrize("projected", [False, True])
+def test_empty_parquet_slice_is_metadata_only(tmp_path, monkeypatch, projected):
+    path = tmp_path / "dictionary.parquet"
+    source = pa.table({"id": range(12), "category": pa.array(["a", None, "b"] * 4).dictionary_encode()})
+    pq.write_table(source, path, row_group_size=3)
+    with blosc2.open(str(path), lazy=True, cache_policy=blosc2.CachePolicy.NONE) as remote:
+        table = remote.select(["category"]) if projected else remote
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("Empty slice read Parquet data or enumerated live rows")
+
+        monkeypatch.setattr(remote_parquet.ParquetCache, "group", forbidden)
+        monkeypatch.setattr(CTable, "_live_positions_from_valid_rows_chunks", forbidden)
+        for empty in (table.slice(0, 0), table.take([])):
+            assert empty.nrows == 0
+            assert empty.col_names == table.col_names
+            assert schema_to_dict(empty._schema) == schema_to_dict(table._schema)
+            restored = blosc2.ctable_from_cframe(empty.to_cframe())
+            assert restored.nrows == 0
+            assert restored.col_names == table.col_names
+
+
+@pytest.mark.parametrize("projected", [False, True])
+def test_parquet_take_dictionary_reads_only_selected_groups(tmp_path, monkeypatch, projected):
+    path = tmp_path / "dictionary.parquet"
+    source = pa.table(
+        {
+            "id": range(9),
+            "category": pa.array(["a", "b", "a", "c", None, "c", "d", "e", "d"]).dictionary_encode(),
+        }
+    )
+    pq.write_table(source, path, row_group_size=3)
+    with blosc2.open(str(path), lazy=True, cache_policy=blosc2.CachePolicy.NONE) as remote:
+        table = remote.select(["category"]) if projected else remote
+        calls = []
+        original = remote_parquet.ParquetCache.group
+
+        def group(owner, number, physical):
+            calls.append((number, physical))
+            assert number == 1
+            return original(owner, number, physical)
+
+        monkeypatch.setattr(remote_parquet.ParquetCache, "group", group)
+        for result, positions in ((table.slice(3, 6), [3, 4, 5]), (table.take([5, 4, 3, 5]), [5, 4, 3, 5])):
+            expected = source.take(pa.array(positions))
+            if projected:
+                expected = expected.select(["category"])
+            assert result.to_arrow().to_pylist() == expected.to_pylist()
+            assert result._cols["category"].dictionary == ["c"]
+        assert calls
+
+
 @pytest.mark.parametrize(
     ("cells", "dtype"),
     [

@@ -27,6 +27,49 @@ from blosc2.schema_compiler import (
 # -------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("marker", ["nan", "inf", "-inf"])
+def test_strict_json_nonfinite_schema_values(marker):
+    schema = schema_from_dict(
+        {
+            "version": 1,
+            "columns": [
+                {
+                    "name": "value",
+                    "kind": "float64",
+                    "nullable": True,
+                    "null_value": {"__float__": marker},
+                    "default": {"__float__": marker},
+                }
+            ],
+        }
+    )
+    spec = schema.columns[0].spec
+    if marker == "nan":
+        assert np.isnan(spec.null_value)
+        assert np.isnan(schema.columns[0].default)
+    else:
+        assert spec.null_value == float(marker)
+        assert schema.columns[0].default == float(marker)
+
+
+def test_strict_json_nonfinite_nested_schema():
+    from blosc2.schema_compiler import spec_from_metadata_dict
+
+    spec = spec_from_metadata_dict(
+        {
+            "kind": "list",
+            "item": {
+                "kind": "float32",
+                "nullable": True,
+                "null_value": {"__float__": "nan"},
+            },
+        }
+    )
+    assert np.isnan(spec.item_spec.null_value)
+    with pytest.raises(ValueError, match="Invalid non-finite"):
+        spec_from_metadata_dict({"kind": "float64", "null_value": {"__float__": "invalid"}})
+
+
 @dataclass
 class Simple:
     id: int = blosc2.field(blosc2.int64(ge=0))

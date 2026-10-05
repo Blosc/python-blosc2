@@ -48,6 +48,14 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Restore tagged non-finite floating-point schema values from strict-JSON
+  Caterva2 metadata, preserving NaN/infinity null sentinels and defaults.
+
+- Empty lazy Parquet table slices no longer read row data or scan dictionaries,
+  fixing slow Caterva2 schema fetches. Small slices/takes build dictionaries from
+  selected rows instead of scanning every row group; native table dictionaries
+  retain their existing copy behavior.
+
 - b2view now exits cleanly with a clear diagnostic and nonzero status when
   its initial source cannot be opened, rather than leaving an unusable TUI.
 
