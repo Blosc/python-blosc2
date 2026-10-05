@@ -3,6 +3,7 @@
 import asyncio
 import os
 import shutil
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -187,6 +188,69 @@ def test_statistical_reductions_slice_execution_options(method, axis, monkeypatc
         assert kwargs["jit"] is False
         assert kwargs["trace"] is False
         assert kwargs["fp_accuracy"] == blosc2.FPAccuracy.MEDIUM
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("shape", [None, (0, 2)])
+@pytest.mark.parametrize("jit", [False, True, None])
+def test_empty_ramps_accept_execution_options(constructor, dtype, shape, jit, tmp_path, capfd):
+    options = {
+        "jit": jit,
+        "jit_backend": "cc",
+        "fp_accuracy": blosc2.FPAccuracy.HIGH,
+        "trace": True,
+        "compiler": "/no/compiler",
+        "cflags": "-invalid-unused-option",
+        "cache_dir": tmp_path / "unused-cache",
+        "compiler_output": True,
+    }
+    urlpath = tmp_path / "empty.b2nd"
+    args = (0,) if constructor == "arange" else (0, 1, 0)
+    result = getattr(blosc2, constructor)(
+        *args, dtype=dtype, shape=shape, urlpath=urlpath, mode="w", **options
+    )
+    assert result.shape == ((0,) if shape is None else shape)
+    assert result.dtype == dtype
+    assert result[:].size == 0
+    assert urlpath.exists()
+    assert not (tmp_path / "unused-cache").exists()
+    assert capfd.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+def test_empty_ramps_accept_inherited_execution_options(constructor):
+    options = dict.fromkeys(blosc2.get_jit_options())
+    args = (0,) if constructor == "arange" else (0, 1, 0)
+    with blosc2.jit_options(jit=True, trace=True):
+        result = getattr(blosc2, constructor)(*args, **options)
+    assert result.shape == (0,)
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ({"jit": "invalid"}, TypeError),
+        ({"trace": "invalid"}, TypeError),
+        ({"jit_backend": "invalid"}, ValueError),
+        ({"fp_accuracy": 1}, TypeError),
+        ({"cflags": "\0"}, ValueError),
+    ],
+)
+def test_empty_ramps_validate_execution_options(constructor, options, error):
+    args = (0,) if constructor == "arange" else (0, 1, 0)
+    with pytest.raises(error):
+        getattr(blosc2, constructor)(*args, **options)
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+def test_ramp_metadata_shortcut_strips_execution_options(constructor, monkeypatch):
+    monkeypatch.setattr(sys.modules["blosc2.ndarray"], "is_inside_new_expr", lambda: True)
+    args = (3,) if constructor == "arange" else (0, 1, 3)
+    result = getattr(blosc2, constructor)(*args, jit=True, jit_backend="tcc", trace=True)
+    assert result.shape == (3,)
+    np.testing.assert_array_equal(result[:], 0)
 
 
 @blosc2.dsl_kernel
