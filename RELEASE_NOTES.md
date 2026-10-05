@@ -48,6 +48,10 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Reduce b2view startup and remote-page flicker by sizing requests after layout,
+  retaining visible metadata/data during reloads, and reusing buffered rows for
+  height-only resizes instead of fetching them again.
+
 - Restore tagged non-finite floating-point schema values from strict-JSON
   Caterva2 metadata, preserving NaN/infinity null sentinels and defaults.
 

@@ -133,6 +133,72 @@ def test_multiroot_display_does_not_duplicate_prefix(caterva2_source):  # noqa: 
 
 @pytest.mark.tui
 @pytest.mark.asyncio
+async def test_remote_table_startup_and_reload_keep_content_stable(caterva2_source, monkeypatch):  # noqa: F811
+    import threading
+
+    from textual.widgets import DataTable, Static
+
+    from blosc2.b2view.app import B2ViewApp
+
+    base, _, _, _ = caterva2_source
+    calls = []
+    entered, release = threading.Event(), threading.Event()
+    original = StoreBrowser.preview
+    block = False
+
+    def preview(browser, path, **options):
+        calls.append(options)
+        if block:
+            entered.set()
+            assert release.wait(5)
+        return original(browser, path, **options)
+
+    monkeypatch.setattr(StoreBrowser, "preview", preview)
+    app = B2ViewApp(base + "@public/mount/table")
+    assert app.theme == "blosc2"
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await wait_until(pilot, lambda: app.table_page is not None and bool(app.table_page["columns"]))
+            await pilot.pause()
+            assert len(calls) == 1
+            table = app.query_one("#data-table", DataTable)
+            metadata = app.query_one("#metadata", Static)
+            page, content, count = app.table_page, metadata.content, table.row_count
+            assert page["viewport_width"] == table.size.width
+            # Repeated viewport checks while a slow fetch is pending must not
+            # clear the visible page or enqueue replacement fetches.
+            block = True
+            app.table_buffer = None
+            pending = app._load_table_page("/", 0)
+            assert pending is page
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    table, "clear", lambda **kwargs: pytest.fail("Pending reload cleared the grid")
+                )
+                app._update_data_table(pending)
+            await wait_until(pilot, entered.is_set)
+            request = app._remote_page_request
+            for _ in range(3):
+                app._ensure_viewport_consistent()
+            assert app._remote_page_request == request
+            assert table.row_count == count
+            assert metadata.content == content
+            assert app.table_page is page
+            release.set()
+            await wait_until(pilot, lambda: not app._remote_page_pending)
+            assert len(calls) == 2
+            # Height-only resize reuses the prefetched rows, not the network.
+            await pilot.resize_terminal(120, 45)
+            await pilot.pause()
+            assert len(calls) == 2
+            assert table.row_count == count
+    finally:
+        release.set()
+        app.wait_for_close()
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
 async def test_remote_table_window_is_background_and_stale_results_are_discarded(
     caterva2_source,  # noqa: F811
     monkeypatch,

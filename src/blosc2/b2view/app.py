@@ -2138,6 +2138,8 @@ class B2ViewApp(App):
         remote_service: str = "auto",
     ):
         super().__init__()
+        self.register_theme(BLOSC2_THEME)
+        self.theme = "blosc2"
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
         if parse_container_url(urlpath)[2] in {"zarr", "hdf5"}:
             # Initialize before Textual captures stderr (fileno=-1), which
@@ -2236,8 +2238,6 @@ class B2ViewApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.register_theme(BLOSC2_THEME)
-        self.theme = "blosc2"
         if self.download_url:
             # Fetch the bundle first, then open it from _after_download.  The
             # message shows the @public-relative path (e.g. "large/foo.b2z"),
@@ -3067,18 +3067,16 @@ class B2ViewApp(App):
             self._remote_page_pending = True
             if layout is not None:
                 self._sync_layout_scroll(start, layout)
-            options = {"max_rows": page_size * 10, "max_cols": self._candidate_max_cols()}
-            if layout is not None:
-                options["layout"] = copy.deepcopy(layout)
-            else:
-                options.update(start=start, stop=start + page_size * 10, col_start=self.grid_col_start)
             column_end, self._remote_col_end = self._remote_col_end, None
-            if column_end is not None:
-                options["max_cols"] = column_end - self.grid_col_start
-            self._read_remote_page(
-                self._remote_session, request, self.browser, path, start, options, column_end
+            # Showing the grid changes its geometry. Size the request after
+            # that layout pass, rather than fetching a provisional viewport.
+            self.call_after_refresh(
+                self._start_remote_page, self._remote_session, request, path, start, column_end
             )
-            self.query_one("#metadata", Static).update("Loading array page…")
+            # Keep the last rendered page and metadata visible during paging
+            # and resize requests. Only a new node needs an empty placeholder.
+            if self.table_page is not None and self.table_page["columns"]:
+                return self.table_page
             shape = tuple(self._selected_info.metadata.get("shape", ()))
             row_dim = layout.navigable_dims[0] if layout and layout.navigable_dims else None
             nrows = layout.total_for_dim(row_dim) if row_dim is not None else (shape[0] if shape else 1)
@@ -3119,6 +3117,20 @@ class B2ViewApp(App):
                 col_start=self.grid_col_start,
             )
         return self._store_table_buffer(data, start, page_size)
+
+    def _start_remote_page(self, session, request, path, start, column_end):
+        if session != self._remote_session or request != self._remote_page_request or self.browser is None:
+            return
+        page_size = self._table_page_size()
+        options = {"max_rows": page_size * 10, "max_cols": self._candidate_max_cols()}
+        if self._data_layout is not None:
+            self._sync_layout_scroll(start, self._data_layout)
+            options["layout"] = copy.deepcopy(self._data_layout)
+        else:
+            options.update(start=start, stop=start + page_size * 10, col_start=self.grid_col_start)
+        if column_end is not None:
+            options["max_cols"] = column_end - self.grid_col_start
+        self._read_remote_page(session, request, self.browser, path, start, options, column_end)
 
     @work(thread=True, exit_on_error=False)
     def _read_remote_page(self, session, request, browser, path, start, options, column_end):
@@ -3241,6 +3253,9 @@ class B2ViewApp(App):
 
     def _update_data_table(self, data: dict, *, cursor_row: int = 0, cursor_col: int | None = None) -> None:
         """Refresh the data grid; *cursor_col* None keeps the current column."""
+        if self._remote_page_pending and data is self.table_page and data["columns"]:
+            self.loading_table_page = True
+            return
         table = self.query_one("#data-table", DataTable)
         if cursor_col is None:
             cursor_col = table.cursor_column
@@ -4166,6 +4181,8 @@ class B2ViewApp(App):
         determine the window.  Later paging then uses the settled viewport
         sizes, so the windows would drift unless we reload once here.
         """
+        if self._remote_page_pending:
+            return
         page = self.table_page
         if self._remote and page is not None and not page["columns"]:
             return
@@ -4191,7 +4208,10 @@ class B2ViewApp(App):
         current = self.table_page["start"] + self.query_one("#data-table", DataTable).cursor_row
         page_size = self._table_page_size()
         start = (current // page_size) * page_size
-        self.table_buffer = None
+        # Height-only changes can be served from the prefetched row buffer.
+        # A width change needs new column fitting (and possibly more columns).
+        if self.table_page.get("viewport_width") != self._data_table_width():
+            self.table_buffer = None
         data = self._load_table_page(self.selected_path, start)
         self._update_data_table(data, cursor_row=current - data["start"])
         self._update_data_header(data)
