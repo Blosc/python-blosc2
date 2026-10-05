@@ -48,6 +48,10 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Browse fsspec `.b2` document carriers with bounded range-based metadata and
+  chunk reads, original-name previews and streamed decoded copies. HTTP requires
+  validated byte-range responses; native dataset behavior remains unchanged.
+
 - Raise document chunk limits to 32 MiB compressed / 256 MiB decoded for
   Caterva2 files and local `.b2` carriers. Preview and per-read limits remain
   unchanged; even a small preview may decode a complete 256 MiB chunk.

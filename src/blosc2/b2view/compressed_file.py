@@ -1,4 +1,4 @@
-"""Lazy local document carriers; never deserialize the original file payload."""
+"""Lazy local/fsspec document carriers; never deserialize the original payload."""
 
 import mimetypes
 import os
@@ -9,31 +9,49 @@ from urllib.parse import unquote, urlsplit
 import blosc2
 from blosc2 import blosc2_ext
 from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
-from blosc2.b2view.ordinary_file import MAX_READ_BYTES, OrdinaryFile, local_path
-from blosc2.core import is_fsspec_url
+from blosc2.b2view.ordinary_file import MAX_READ_BYTES, OrdinaryFile, local_path, ordinary_filesystem
+from blosc2.core import is_fsspec_url, parse_container_url
 from blosc2.deserialization import set_deserialize
 from blosc2.remote_file import MAX_COMPRESSED_CHUNK, MAX_DECODED_CHUNK
 
 
 def compressed_document(source):
-    """Recognize local supported-document suffixes followed by .b2, not bare .b2."""
+    """Recognize supported-document suffixes followed by .b2, not bare .b2."""
     source = os.fspath(source)
-    if is_fsspec_url(source):
+    _, dataset, source_format = parse_container_url(source)
+    if dataset is not None or source_format is not None:
         return False
-    name = PurePosixPath(unquote(urlsplit(source).path) if source.startswith("file://") else source).name
+    name = PurePosixPath(unquote(urlsplit(source).path) if "://" in source else source).name
     return name.lower().endswith(".b2") and PurePosixPath(name[:-3]).suffix.lower() in (
         TEXT_SUFFIXES | IMAGE_SUFFIXES | {".pdf"}
     )
 
 
 class CompressedFile(OrdinaryFile):
-    """A fixed-chunk SChunk containing original document bytes, mapped read-only."""
+    """Original document bytes in a read-only mapped or range-backed SChunk."""
 
-    def __init__(self, source):
+    def __init__(self, source, storage_options=None):
         self._closed = False
         self.fs = None
         self.source_path = os.fspath(source)
-        self.path = local_path(self.source_path).absolute()
+        self.storage_options = storage_options
+        if is_fsspec_url(self.source_path):
+            from blosc2.proxy_source import ByteRangeSChunkSource
+
+            self.fs, self.path = ordinary_filesystem(self.source_path, storage_options)
+            info = self.fs.info(self.path)
+            if info.get("type") != "file" or type(info.get("size")) is not int:
+                raise ValueError("Document carrier requires a regular file with a known size")
+            self._frame_size = info["size"]
+            self._schunk = ByteRangeSChunkSource(self._range, self._frame_size)
+            self.carrier = PurePosixPath(unquote(urlsplit(self.source_path).path)).name
+        else:
+            self.path = local_path(self.source_path).absolute()
+            self._schunk = self._open_local()
+            self.carrier = self.path.name
+        self._set_metadata()
+
+    def _open_local(self):
         # Open only a native SChunk: do not invoke public-open dispatch for
         # persistent expressions, object serialization or remote references.
         self._schunk = blosc2_ext.open(str(self.path), "r", 0, mmap_mode="r")
@@ -41,6 +59,9 @@ class CompressedFile(OrdinaryFile):
             self._schunk = None
             raise ValueError("Document carrier must be an SChunk byte stream, not an array or table")
         set_deserialize(self._schunk, "safe")
+        return self._schunk
+
+    def _set_metadata(self):
         structural = {
             "b2tree",
             "b2o",
@@ -68,13 +89,28 @@ class CompressedFile(OrdinaryFile):
         if (self.nbytes and self.chunksize <= 0) or self.nchunks != expected:
             self._schunk = None
             raise ValueError("Document carrier requires a fixed-chunk byte stream")
-        self.name = self.path.name[:-3]
+        self.name = self.carrier[:-3]
         self.media_type = mimetypes.guess_type(self.name)[0]
 
     def alias(self):
         self._check_open()
         # Transfers have independent mappings and native lifetimes.
-        return CompressedFile(self.path)
+        return CompressedFile(self.source_path, self.storage_options)
+
+    def _range(self, offset, size):
+        self._check_open()
+        if not 0 <= offset <= self._frame_size - size or not 0 <= size <= MAX_COMPRESSED_CHUNK:
+            raise ValueError("Document byte range exceeds bounds")
+        if urlsplit(self.source_path).scheme in {"http", "https"}:
+            from fsspec.asyn import sync
+
+            return sync(self.fs.loop, _http_range, self.fs, self.path, offset, size, self._frame_size)
+        with self.fs.open(self.path, "rb", cache_type="none") as stream:
+            stream.seek(offset)
+            data = stream.read(size)
+        if len(data) != size:
+            raise ValueError("Document changed or returned a short range")
+        return data
 
     def _chunk(self, index):
         self._check_open()
@@ -110,6 +146,32 @@ class CompressedFile(OrdinaryFile):
     def close(self):
         self._closed = True
         self._schunk = None
+
+
+async def _http_range(fs, path, offset, size, frame_size):
+    """Validate HTTP range headers before reading any response body."""
+    kwargs = dict(fs.kwargs)
+    headers = dict(kwargs.pop("headers", {}))
+    headers.update(Range=f"bytes={offset}-{offset + size - 1}", **{"Accept-Encoding": "identity"})
+    session = await fs.set_session()
+    async with session.get(fs.encode_url(path), headers=headers, **kwargs) as response:
+        response.raise_for_status()
+        if (
+            response.status != 206
+            or response.headers.get("Content-Range") != f"bytes {offset}-{offset + size - 1}/{frame_size}"
+            or response.headers.get("Content-Encoding", "identity") != "identity"
+        ):
+            raise ValueError("Remote document requires valid HTTP byte-range support")
+        if int(response.headers.get("Content-Length", size)) != size:
+            raise ValueError("HTTP document range has an invalid length")
+        data = bytearray()
+        async for part in response.content.iter_chunked(64 << 10):
+            if len(data) + len(part) > size:
+                raise ValueError("HTTP document range exceeds requested bytes")
+            data.extend(part)
+        if len(data) != size:
+            raise ValueError("HTTP document range returned a short read")
+        return bytes(data)
 
 
 class _ChunkReader:

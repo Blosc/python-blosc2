@@ -199,23 +199,34 @@ directly continues to use the dataset opener, not the ordinary-directory browser
 Client cache directories are separated per mounted dataset; cache-byte budgets
 apply per mounted source, not as a global limit for the whole directory tree.
 
-Compressed local documents
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Compressed local and fsspec documents
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Local document carriers such as ``README.md.b2``, ``photo.png.b2`` and
+Document carriers such as ``README.md.b2``, ``photo.png.b2`` and
 ``brochure.pdf.b2`` use the same file previews/actions as their originals:
 
 .. code-block:: console
 
     b2view README.md.b2
     b2view ./documents/ /README.md.b2
+    b2view s3://bucket/documents/README.md.b2
+    b2view https://example.org/documents/analysis.ipynb.b2
 
 Supported text, JPEG/PNG and PDF suffixes followed by ``.b2`` identify this
 viewer-only convention. A carrier must be a plain fixed-chunk SChunk byte stream,
-not an NDArray, serialized object or remote reference. It is mapped read-only;
-metadata inspection does not decompress its payload. Plain ``data.b2`` and
-``.b2frame`` datasets keep their normal native behavior. Direct-fsspec compressed
-document carriers are not added by this local-file feature.
+not an NDArray, serialized object or remote reference. Local carriers are mapped
+read-only; fsspec carriers use byte ranges on contiguous frames. Metadata
+inspection does not decompress document chunks. Plain ``data.b2`` and
+``.b2frame`` datasets keep their normal native behavior.
+
+Remote reads fetch the frame header, then a bounded chunk index when values are
+first requested, and each needed chunk's header before its payload. HTTP servers
+must return valid ``206`` byte-range responses; ignored ranges, incorrect
+lengths and encoded responses are refused without reading the complete body.
+Frame headers are capped at 1 MiB and chunk indexes at 8 MiB compressed/decoded.
+Sparse frames and nonzero special-value chunks are not supported remotely.
+Filesystem storage options (including authentication) apply to previews and
+independent transfer handles. Other fsspec backends may have their own buffering.
 
 Text previews decode only chunks covering the first 64 KiB, displaying at most
 1,000 lines. Images decode complete original bytes only within the existing
@@ -266,7 +277,7 @@ Displayed source/output text shares a 64 KiB / 1,000-line budget, with at most
 normal fallback panel rather than being fetched without bounds. ``T`` switches
 between the cell view and a bounded raw-JSON prefix; ``D`` copies the original
 notebook. Notebook external opening is not enabled. These previews work with
-local, fsspec and Caterva2 files, and local ``.ipynb.b2`` document carriers, under
+local, fsspec and Caterva2 files, and local/fsspec ``.ipynb.b2`` document carriers, under
 their existing transport/chunk limits.
 
 Find nodes in local or remote trees

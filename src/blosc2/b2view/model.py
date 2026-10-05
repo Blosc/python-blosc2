@@ -251,7 +251,7 @@ def _open_viewer_source(urlpath, storage_options, **options):
     from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
 
     if compressed_document(urlpath):
-        return CompressedFile(urlpath)
+        return CompressedFile(urlpath, storage_options)
     if is_directory(urlpath, storage_options):
         return DirectoryStore(urlpath, storage_options=storage_options, **options)
     file = OrdinaryFile(urlpath, storage_options)
@@ -1487,8 +1487,8 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             metadata.update(cbytes=obj.cbytes, chunksize=obj.chunksize, nchunks=obj.nchunks)
         elif isinstance(obj, CompressedFile):
             metadata.update(
-                type="Compressed local file",
-                carrier=obj.path.name,
+                type="Compressed remote file" if obj.fs is not None else "Compressed local file",
+                carrier=obj.carrier,
                 cbytes=obj.cbytes,
                 chunksize=obj.chunksize,
                 nchunks=obj.nchunks,
