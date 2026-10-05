@@ -63,6 +63,10 @@ XXX version-specific blurb XXX
 - Open ordinary local/fsspec directories as lazy b2view tree roots. Preview
   files and expand dataset containers in place; local symlinks are not followed.
 
+- Use Ctrl+F to filter discovered tree paths without network access, or explicitly
+  search local/Caterva2/fsspec hierarchies recursively with progress, cancellation
+  and discovery limits. Selecting a result reveals it in the existing tree.
+
 - Fix structured and subarray dtype decoding in `C2Array` and synthesized
   RemoteStore chunks, including compound/subarray HDF5 leaves.
 

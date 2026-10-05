@@ -196,6 +196,35 @@ directly continues to use the dataset opener, not the ordinary-directory browser
 Client cache directories are separated per mounted dataset; cache-byte budgets
 apply per mounted source, not as a global limit for the whole directory tree.
 
+Find nodes in local or remote trees
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Press ``f`` with the tree focused, or ``ctrl+f`` from any panel, to open tree
+search. The tree frame includes a compact key hint. Typing filters **already discovered** paths
+by case-insensitive substring, without network requests. Matching nodes retain
+their ancestor context. An empty filter shows discovered nodes again; Escape
+closes the dialog without changing the main tree's selection or expansion state.
+The dialog displays at most 500 matches at once; refine the filter for more.
+
+Choose **Search recursively** to discover unopened directories/groups in the
+background. This works with local trees, Caterva2 repositories and fsspec
+hierarchies using their existing listing APIs. It requests listings and necessary
+metadata, not file previews, array values or table rows. For example, Caterva2
+table classification can require an empty frame containing its schema.
+
+Progress, listing errors and incomplete/cancelled status are shown explicitly.
+Search stops after 200 directories, 10,000 discovered nodes or depth 12; the final
+indivisible backend listing can exceed the node budget. **Cancel search** retains
+completed results; Escape cancels and closes. An in-flight backend operation may
+finish before cancellation takes effect, but the dialog can close immediately.
+Discovered listings are reused in subsequent searches; refresh the tree to
+invalidate them. No recursive discovery happens merely by typing a filter.
+
+Press Enter in the input to focus the result tree, then select a matching node
+with Enter (or the mouse) to reveal its ancestors in the main tree and open its
+normal preview. Row/column filtering shortcuts remain unchanged. Standalone
+files and arrays have no tree to search.
+
 Direct source URLs
 ^^^^^^^^^^^^^^^^^^
 

@@ -254,6 +254,7 @@ class HelpScreen(ModalScreen[None]):
             [
                 ("up / down", "move between nodes"),
                 ("enter", "select node (and expand groups)"),
+                ("f / ctrl+f", "filter discovered paths; optionally search recursively"),
             ],
         ),
         (
@@ -2100,12 +2101,13 @@ class B2ViewApp(App):
         Binding("g", "go_to_row", "Go to row", show=False),
         ("m", "maximize_panel", "Maximize"),
         ("r", "restore_or_refresh", "Restore/Refresh"),
+        ("ctrl+f", "tree_search", "Find"),
         Binding("t", "grid_row_top", "Top", show=False),
         Binding("b", "grid_row_bottom", "Bottom", show=False),
         Binding("s", "grid_col_start", "Row start", show=False),
         Binding("e", "grid_col_end", "Row end", show=False),
         Binding("c", "go_to_column", "Go to column", show=False),
-        Binding("f", "filter_rows", "Filter rows", show=False),
+        Binding("f", "find_or_filter", "Find / Filter rows", show=False),
         Binding("S", "sort_rows", "Sort by", show=False),
         Binding("R", "reverse_sort", "Reverse sort", show=False),
         Binding("G", "group_rows", "Group by", show=False),
@@ -2205,6 +2207,7 @@ class B2ViewApp(App):
         with Horizontal(id="main"):
             with B2ViewPanel(id="tree-pane") as tree_pane:
                 tree_pane.border_title = "tree"
+                tree_pane.border_subtitle = "?(help) | f(ind) | r(efresh)"
                 yield Tree("/", id="tree")
             with Vertical(id="right-pane"):
                 with Horizontal(id="top-row"):
@@ -2336,7 +2339,7 @@ class B2ViewApp(App):
         if getter is not None:
             getter().focus()
 
-    def _navigate_to_path(self, path: str) -> None:
+    def _navigate_to_path(self, path: str, *, focus_tree: bool = False) -> None:
         """Expand the tree and select the node at *path*."""
         tree = self.query_one("#tree", Tree)
         parts = [p for p in path.split("/") if p]
@@ -2365,6 +2368,8 @@ class B2ViewApp(App):
         def _do_select():
             tree.select_node(node)
             tree.scroll_to_node(node)
+            if focus_tree:
+                tree.focus()
 
         self.call_after_refresh(_do_select)
 
@@ -2554,6 +2559,43 @@ class B2ViewApp(App):
         self.update_panels(path)
         if event.node.allow_expand:
             self.load_children(event.node)
+
+    def action_tree_search(self):
+        if self.browser is None or not self.browser.is_tree:
+            self.notify("Search requires a directory or repository tree", severity="warning")
+            return
+        from blosc2.b2view.model import NodeInfo
+        from blosc2.b2view.search_screen import TreeSearchScreen
+
+        listings = dict(self._remote_children)
+        if not self._remote:
+            pending = [self.query_one("#tree", Tree).root]
+            while pending:
+                node = pending.pop()
+                pending.extend(node.children)
+                if node.data in self.loaded_paths:
+                    listings[node.data] = [
+                        NodeInfo(
+                            child.data,
+                            child.data.rsplit("/", 1)[-1],
+                            "group" if child.allow_expand else "unknown",
+                            child.allow_expand,
+                        )
+                        for child in node.children
+                    ]
+        browser, session = self.browser, self._remote_session
+        screen = TreeSearchScreen(browser, listings, session)
+
+        def reveal(selection):
+            if self.browser is not browser or self._remote_session != session:
+                return
+            # Retain discovered listings without changing the main tree's
+            # expansion/selection when the dialog is simply closed.
+            self._remote_children.update(screen.listings)
+            if selection is not None:
+                self._navigate_to_path(selection.path, focus_tree=True)
+
+        self.push_screen(screen, reveal)
 
     def update_panels(self, path: str) -> None:
         if self.browser is None:
@@ -3798,6 +3840,12 @@ class B2ViewApp(App):
             screen = GoToColumnScreen(ncols=page["ncols"], current=current, names=None)
         self.push_screen(screen, self._go_to_column)
 
+    def action_find_or_filter(self) -> None:
+        if self.query_one("#tree", Tree).has_focus:
+            self.action_tree_search()
+        else:
+            self.action_filter_rows()
+
     def action_filter_rows(self) -> None:
         if not self._in_data_grid():
             return
@@ -4194,6 +4242,7 @@ class B2ViewApp(App):
             return
         tree = self.query_one("#tree", Tree)
         node = tree.cursor_node or tree.root
+        self._remote_children.clear()
         self.loaded_paths.discard(node.data or "/")
         node.remove_children()
         self.load_children(node)
