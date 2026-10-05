@@ -85,9 +85,13 @@ class CompressedFile(OrdinaryFile):
             raise ValueError("Invalid document chunk header")
         nbytes, _, cbytes = struct.unpack_from("<III", header, 4)
         if nbytes > MAX_DECODED_CHUNK:
-            raise ValueError("Document chunk exceeds 16 MiB decoded limit; rechunk the carrier")
+            raise ValueError(
+                f"Document chunk exceeds {MAX_DECODED_CHUNK >> 20} MiB decoded limit; rechunk the carrier"
+            )
         if cbytes > MAX_COMPRESSED_CHUNK:
-            raise ValueError("Document chunk exceeds 8 MiB compressed limit; rechunk the carrier")
+            raise ValueError(
+                f"Document chunk exceeds {MAX_COMPRESSED_CHUNK >> 20} MiB compressed limit; rechunk the carrier"
+            )
         expected = min(self.chunksize, self.nbytes - index * self.chunksize)
         if nbytes != expected:
             raise ValueError("Document chunk does not match fixed-chunk metadata")

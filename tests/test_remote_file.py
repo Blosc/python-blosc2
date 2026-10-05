@@ -170,16 +170,31 @@ def test_response_bounds_and_auth_isolation(file_source, monkeypatch):
 
         def handler(request):
             calls.append(request)
-            return httpx.Response(200, headers={"content-length": str(9 << 20)}, content=b"small")
+            return httpx.Response(200, headers={"content-length": str(33 << 20)}, content=b"small")
 
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             file._owner.transport = client
-            with pytest.raises(ValueError, match="8 MiB"):
+            with pytest.raises(ValueError, match="32 MiB"):
                 file.read_bytes(0, 1)
         assert calls[-1].headers["Accept-Encoding"] == "identity"
-        file._meta.update(nbytes=17 << 20, chunksize=17 << 20, nchunks=1)
-        with pytest.raises(ValueError, match="16 MiB decoded"):
+        file._meta.update(nbytes=257 << 20, chunksize=257 << 20, nchunks=1)
+        with pytest.raises(ValueError, match="256 MiB decoded"):
             file.read_bytes(0, 1)
+
+
+def test_larger_decoded_chunks_keep_read_and_download_bounds(file_source, tmp_path):
+    base, _, stats = file_source
+    payload = b"a" * (17 << 20)
+    stream = blosc2.SChunk(chunksize=len(payload), cparams={"typesize": 1})
+    stream.append_data(payload)
+    stats["files"]["@public/large.txt"] = stream
+    with blosc2.open(base + "@public/large.txt") as file:
+        assert file.read_bytes(0, 64) == payload[:64]
+        with pytest.raises(ValueError, match="16 MiB"):
+            file.read_bytes(0, (16 << 20) + 1)
+        destination = tmp_path / "large.txt"
+        file.download(destination)
+        assert destination.read_bytes() == payload
 
 
 def test_old_unsupported_file_snapshot_is_rediscovered(file_source, tmp_path):

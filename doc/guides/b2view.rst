@@ -128,7 +128,10 @@ Downloads are user-owned: they remain after closing the dialog or b2view, includ
 when external opening fails. Existing destinations are never overwritten by the
 viewer; choose another name. Escape cancels an active transfer.
 
-File reads/downloads have per-chunk limits of 8 MiB compressed and 16 MiB decoded.
+File reads/downloads have per-chunk limits of 32 MiB compressed and 256 MiB decoded.
+Even a small preview can decode one complete chunk; temporary buffers can bring
+peak memory above the decoded-chunk limit. Preview and per-call read limits
+remain independent of these chunk limits.
 A small preview may require a much larger chunk. Oversized or irregular sources
 require server-side rechunking; the viewer never silently fetches a whole file
 to work around these limits. File reference archives are not supported by this
@@ -218,7 +221,7 @@ Text previews decode only chunks covering the first 64 KiB, displaying at most
 1,000 lines. Images decode complete original bytes only within the existing
 16 MiB input and pixel limits. PDF selection needs no decompression. Chunk
 headers are checked before copying/decompressing payload: each chunk must fit
-8 MiB compressed and 16 MiB decoded. Oversized/irregular carriers are refused;
+32 MiB compressed and 256 MiB decoded. Oversized/irregular carriers are refused;
 rechunk them rather than increasing automatic preview memory usage.
 
 ``D`` streams decoded original bytes to the destination, keeping at most one

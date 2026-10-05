@@ -48,6 +48,10 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- Raise document chunk limits to 32 MiB compressed / 256 MiB decoded for
+  Caterva2 files and local `.b2` carriers. Preview and per-read limits remain
+  unchanged; even a small preview may decode a complete 256 MiB chunk.
+
 - Display saved PNG/JPEG notebook outputs beneath their cells in b2view, using
   passive terminal-image rendering with shared image-count/byte/pixel limits.
   Invalid images retain readable cells; HTML, SVG, scripts and widgets stay disabled.

@@ -1,6 +1,7 @@
 """Local .b2 document carriers use bounded chunk decoding, not eager reads."""
 
 import io
+import struct
 
 import numpy as np
 import pytest
@@ -78,7 +79,7 @@ def test_streamed_download_and_alias_lifetime(tmp_path, monkeypatch):
 
 def test_oversized_chunk_rejected_before_decompression(tmp_path, monkeypatch):
     path = tmp_path / "large.txt.b2"
-    payload = b"a" * ((16 << 20) + 1)
+    payload = b"small"
     write_carrier(path, payload, chunksize=len(payload))
     with StoreBrowser(str(path)) as browser:
 
@@ -86,10 +87,13 @@ def test_oversized_chunk_rejected_before_decompression(tmp_path, monkeypatch):
             pytest.fail("Oversized chunk was fetched/decompressed")
 
         monkeypatch.setattr(blosc2.SChunk, "get_chunk", forbidden)
+        header = bytearray(browser.store._schunk.get_lazychunk(0))
+        struct.pack_into("<I", header, 4, (256 << 20) + 1)
+        monkeypatch.setattr(blosc2.SChunk, "get_lazychunk", lambda *args: header)
         preview = browser.preview("/")
         assert preview["preview_status"] == "Preview failed"
-        assert "16 MiB" in str(preview["preview_error"])
-        with pytest.raises(ValueError, match="16 MiB"):
+        assert "256 MiB" in str(preview["preview_error"])
+        with pytest.raises(ValueError, match="256 MiB"):
             browser.store.download(tmp_path / "large.txt")
     assert not (tmp_path / "large.txt").exists()
     assert not list(tmp_path.glob(".b2view-download-*"))
@@ -97,7 +101,7 @@ def test_oversized_chunk_rejected_before_decompression(tmp_path, monkeypatch):
 
 def test_compressed_size_limit_before_payload_copy(tmp_path, monkeypatch):
     path = tmp_path / "random.txt.b2"
-    payload = np.random.default_rng(42).integers(0, 256, size=9 << 20, dtype=np.uint8).tobytes()
+    payload = b"small"
     write_carrier(path, payload, chunksize=len(payload))
     file = CompressedFile(path)
 
@@ -105,9 +109,28 @@ def test_compressed_size_limit_before_payload_copy(tmp_path, monkeypatch):
         pytest.fail("Oversized compressed chunk was copied")
 
     monkeypatch.setattr(blosc2.SChunk, "get_chunk", forbidden)
-    with pytest.raises(ValueError, match="8 MiB compressed"):
+    header = bytearray(file._schunk.get_lazychunk(0))
+    struct.pack_into("<I", header, 12, (32 << 20) + 1)
+    monkeypatch.setattr(blosc2.SChunk, "get_lazychunk", lambda *args: header)
+    with pytest.raises(ValueError, match="32 MiB compressed"):
         file.read_bytes(0, 1)
     file.close()
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_chunks_above_previous_limits_are_readable(tmp_path, compressed):
+    path = tmp_path / "large.txt.b2"
+    payload = (
+        np.random.default_rng(42).integers(0, 256, size=9 << 20, dtype=np.uint8).tobytes()
+        if compressed
+        else b"a" * (17 << 20)
+    )
+    write_carrier(path, payload, chunksize=len(payload))
+    file = CompressedFile(path)
+    try:
+        assert file.read_bytes(0, 64) == payload[:64]
+    finally:
+        file.close()
 
 
 def test_nonzero_byte_ranges_and_closed_handle(tmp_path):

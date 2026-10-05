@@ -20,7 +20,7 @@ object deserialization or implicit interpretation as an array.
 ``read_bytes(start, stop)`` returns original bytes, with at most 16 MiB per call.
 The omitted stop means the file end, not an unbounded streaming read. Use
 ``download`` for larger files. A chunk can contain more data than the requested
-range: transfers are chunk-granular, bounded at 8 MiB compressed and 16 MiB
+range: transfers are chunk-granular, bounded at 32 MiB compressed and 256 MiB
 decoded per chunk. Oversized/irregular streams require rechunking on the server.
 Generic fixed-chunk typed SChunks expose their raw byte representation; they do
 not imply a text/image/document format.

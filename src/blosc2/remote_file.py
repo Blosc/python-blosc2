@@ -12,8 +12,8 @@ import blosc2
 from blosc2.remote_array import RemoteMetadataMapping
 from blosc2.remote_object import RemoteObject
 
-MAX_COMPRESSED_CHUNK = 8 << 20
-MAX_DECODED_CHUNK = 16 << 20
+MAX_COMPRESSED_CHUNK = 32 << 20
+MAX_DECODED_CHUNK = 256 << 20
 MAX_READ_BYTES = 16 << 20
 
 
@@ -37,7 +37,7 @@ class RemoteFile(RemoteObject):
 
     ``read_bytes(start, stop)`` returns original bytes (at most 16 MiB per call).
     ``download(destination)`` streams original bytes with atomic publication and
-    no overwrite by default. Chunk work is limited to 8 MiB compressed / 16 MiB
+    no overwrite by default. Chunk work is limited to 32 MiB compressed / 256 MiB
     decoded; oversized or irregular streams require server-side rechunking.
     Caches and lifetime are shared with the containing RemoteStore owner.
     """
@@ -166,7 +166,7 @@ class RemoteFile(RemoteObject):
             if response.headers.get("content-encoding", "identity") != "identity":
                 raise ValueError("Encoded file chunk responses are unsupported")
             if int(response.headers.get("content-length", 0)) > MAX_COMPRESSED_CHUNK:
-                raise ValueError("File chunk exceeds 8 MiB compressed limit")
+                raise ValueError(f"File chunk exceeds {MAX_COMPRESSED_CHUNK >> 20} MiB compressed limit")
             for part in response.iter_bytes():
                 owner.traffic.charge(len(part))
                 if time.monotonic() > deadline:
@@ -174,7 +174,7 @@ class RemoteFile(RemoteObject):
                 if cancel is not None and cancel():
                     raise InterruptedError("File operation cancelled")
                 if len(data) + len(part) > MAX_COMPRESSED_CHUNK:
-                    raise ValueError("File chunk exceeds 8 MiB compressed limit")
+                    raise ValueError(f"File chunk exceeds {MAX_COMPRESSED_CHUNK >> 20} MiB compressed limit")
                 data.extend(part)
         return bytes(data)
 
@@ -186,7 +186,9 @@ class RemoteFile(RemoteObject):
             raise InterruptedError("File operation cancelled")
         size = min(self._meta["chunksize"], self.nbytes - index * self._meta["chunksize"])
         if size > MAX_DECODED_CHUNK:
-            raise ValueError("File chunk exceeds 16 MiB decoded limit; rechunk on the server")
+            raise ValueError(
+                f"File chunk exceeds {MAX_DECODED_CHUNK >> 20} MiB decoded limit; rechunk on the server"
+            )
         owner = self._owner
         key = hashlib.sha256(f"file-chunk:{self.path}:{index}".encode()).hexdigest()
         cache = None
