@@ -94,6 +94,101 @@ def test_context_isolation():
         assert pool.submit(blosc2.get_jit_options).result()["jit_backend"] is None
 
 
+@pytest.mark.parametrize("method", ["mean", "var", "std"])
+@pytest.mark.parametrize("axis", [None, 0])
+@pytest.mark.parametrize("keepdims", [False, True])
+@pytest.mark.parametrize("masked", [False, True])
+def test_statistical_reductions_forward_execution_options(
+    method, axis, keepdims, masked, tmp_path, monkeypatch
+):
+    data = np.arange(48, dtype=np.float64).reshape(8, 6) / 4
+    expr = blosc2.asarray(data) + 1
+    mask = (data % 3) != 0 if masked else None
+    options = {
+        "jit": False,
+        "jit_backend": "cc",
+        "trace": False,
+        "compiler": "/no/compiler",
+        "cflags": "-O1",
+        "cache_dir": str(tmp_path / "cache"),
+        "compiler_output": False,
+    }
+    observed = []
+    original = blosc2.LazyExpr.sum
+
+    def capture(self, *args, **kwargs):
+        observed.append(kwargs.copy())
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(blosc2.LazyExpr, "sum", capture)
+    statistic_kwargs = {"ddof": 1} if method != "mean" else {}
+    storage_kwargs = {"urlpath": str(tmp_path / "result.b2nd"), "mode": "w"} if axis == 0 else {}
+    result = getattr(expr, method)(
+        axis=axis,
+        keepdims=keepdims,
+        where=mask,
+        fp_accuracy=blosc2.FPAccuracy.MEDIUM,
+        **statistic_kwargs,
+        **options,
+        **storage_kwargs,
+    )
+    expected = getattr(np, method)(
+        data + 1, axis=axis, keepdims=keepdims, where=True if mask is None else mask, **statistic_kwargs
+    )
+    if axis == 0:
+        assert isinstance(result, blosc2.NDArray)
+        assert (tmp_path / "result.b2nd").exists()
+        result = result[:]
+    np.testing.assert_allclose(result, expected)
+    assert observed
+    for kwargs in observed:
+        assert {name: kwargs.get(name) for name in options} == options
+        assert kwargs["fp_accuracy"] == blosc2.FPAccuracy.MEDIUM
+        assert "urlpath" not in kwargs
+        assert "mode" not in kwargs
+
+
+@pytest.mark.parametrize("method", ["mean", "var", "std"])
+def test_statistical_reductions_execution_options_with_out(method):
+    data = np.arange(24, dtype=np.float64).reshape(4, 6)
+    expr = blosc2.asarray(data) + 1
+    out = blosc2.empty((6,), dtype=np.float64)
+    result = getattr(expr, method)(axis=0, out=out, jit=True, trace=False)
+    assert result is out
+    np.testing.assert_allclose(out[:], getattr(np, method)(data + 1, axis=0))
+
+
+@pytest.mark.parametrize("method", ["mean", "var", "std"])
+def test_statistical_reductions_reject_invalid_execution_options(method):
+    expr = blosc2.asarray(np.arange(12, dtype=np.float64)) + 1
+    with pytest.raises(TypeError, match="jit must be bool"):
+        getattr(expr, method)(jit="invalid")
+
+
+@pytest.mark.parametrize("method", ["mean", "var", "std"])
+@pytest.mark.parametrize("axis", [None, 0])
+def test_statistical_reductions_slice_execution_options(method, axis, monkeypatch):
+    data = np.arange(48, dtype=np.float64).reshape(8, 6)
+    expr = blosc2.asarray(data) + 1
+    observed = []
+    original = blosc2.LazyExpr.compute
+
+    def capture(self, *args, **kwargs):
+        observed.append(kwargs.copy())
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(blosc2.LazyExpr, "compute", capture)
+    result = getattr(expr, method)(
+        axis=axis, item=slice(1, 5), jit=False, trace=False, fp_accuracy=blosc2.FPAccuracy.MEDIUM
+    )
+    np.testing.assert_allclose(result, getattr(np, method)(data[1:5] + 1, axis=axis))
+    assert observed
+    for kwargs in observed:
+        assert kwargs["jit"] is False
+        assert kwargs["trace"] is False
+        assert kwargs["fp_accuracy"] == blosc2.FPAccuracy.MEDIUM
+
+
 @blosc2.dsl_kernel
 def kernel(x):
     return x * 2 + 1

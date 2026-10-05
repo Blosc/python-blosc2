@@ -150,16 +150,24 @@ def trace_enabled():
     return env != "0" if env else execution_options()["trace"]
 
 
+def pop_execution_options(kwargs):
+    """Separate validated per-call execution options from storage kwargs.
+
+    None inherits for evaluation APIs; it must still be removed from kwargs
+    before those kwargs are passed to a storage-only constructor.
+    """
+    explicit = {name: kwargs.pop(name) for name in _BUILTIN if name in kwargs}
+    explicit = {name: value for name, value in explicit.items() if value is not None}
+    return _validate(explicit, check_platform=False)
+
+
 def jit_execution(func):
     """Resolve evaluation kwargs and strip non-storage execution options."""
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
         options = execution_options()
-        explicit = {name: kwargs.pop(name) for name in _BUILTIN if name in kwargs}
-        # Existing per-call APIs use None to inherit, unlike defaults setters.
-        explicit = {name: value for name, value in explicit.items() if value is not None}
-        options.update(_validate(explicit, check_platform=False))
+        options.update(pop_execution_options(kwargs))
         token = _execution.set((options, _context.get()))
         kwargs.update({name: options[name] for name in ("jit", "jit_backend", "fp_accuracy")})
         try:

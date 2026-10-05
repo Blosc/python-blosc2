@@ -4081,14 +4081,18 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def get_num_elements(self, axis, item):
+    def get_num_elements(self, axis, item, fp_accuracy=None, **execution_kwargs):
         if hasattr(self, "_where_args") and len(self._where_args) == 1:
             # We have a where condition, so we need to count the number of elements
             # fulfilling the condition
             orig_where_args = self._where_args
             self._where_args = {"_where_x": blosc2.ones(self.shape, dtype=np.int8)}
-            num_elements = self.sum(axis=axis, dtype=np.int64, item=item)
-            self._where_args = orig_where_args
+            try:
+                num_elements = self.sum(
+                    axis=axis, dtype=np.int64, item=item, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
+            finally:
+                self._where_args = orig_where_args
             return num_elements
         # Compute the number of elements in the array
         shape = self.shape
@@ -4110,6 +4114,7 @@ class LazyExpr(LazyArray):
         fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         expr = self if where is None else where.where(self, 0)
         item = kwargs.pop("item", ())
@@ -4119,11 +4124,14 @@ class LazyExpr(LazyArray):
             keepdims=keepdims,
             item=item,
             fp_accuracy=fp_accuracy,
+            **execution_kwargs,
         )
         num_elements = (
-            self.get_num_elements(axis, item)
+            self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
             if where is None
-            else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+            else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+            )
         )
         if np.isscalar(num_elements) and num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
@@ -4146,26 +4154,47 @@ class LazyExpr(LazyArray):
         fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         item = kwargs.pop("item", ())
         if item == ():  # fast path
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             expr = (self - mean_value) ** 2
         else:
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, item=item, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                item=item,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke std function that executed within slice_eval to avoid this probably.
-            expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, fp_accuracy=fp_accuracy)
+            expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
+        out = expr.mean(
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            where=where,
+            fp_accuracy=fp_accuracy,
+            **execution_kwargs,
+        )
         if ddof != 0:
             num_elements = (
-                self.get_num_elements(axis, item)
+                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
                 if where is None
-                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
             )
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
@@ -4188,26 +4217,47 @@ class LazyExpr(LazyArray):
         fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         item = kwargs.pop("item", ())
         if item == ():  # fast path
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             expr = (self - mean_value) ** 2
         else:
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, item=item, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                item=item,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke var function that executed within slice_eval to avoid this probably.
-            expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, fp_accuracy=fp_accuracy)
+            expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
+        out = expr.mean(
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            where=where,
+            fp_accuracy=fp_accuracy,
+            **execution_kwargs,
+        )
         if ddof != 0:
             num_elements = (
-                self.get_num_elements(axis, item)
+                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
                 if where is None
-                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
             )
             out = out * num_elements / (num_elements - ddof)
         out2 = kwargs.pop("out", None)
