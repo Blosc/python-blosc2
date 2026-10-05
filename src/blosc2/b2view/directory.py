@@ -60,6 +60,7 @@ class DirectoryStore:
         return physical, None, "/"
 
     def list_children(self, path):
+        from blosc2.b2view.compressed_file import compressed_document
         from blosc2.b2view.model import NodeInfo
 
         physical, browser, inner = self._resolve(path)
@@ -91,6 +92,8 @@ class DirectoryStore:
                 )
             )
             nodes.append(NodeInfo(prefix + "/" + name, name, kind, not symlink and (directory or mount)))
+            if self.fs is None and not is_dir and not symlink and compressed_document(name):
+                nodes[-1] = NodeInfo(prefix + "/" + name, name, "file", False)
         self._counts[path] = len(nodes)
         return nodes
 

@@ -196,6 +196,38 @@ directly continues to use the dataset opener, not the ordinary-directory browser
 Client cache directories are separated per mounted dataset; cache-byte budgets
 apply per mounted source, not as a global limit for the whole directory tree.
 
+Compressed local documents
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Local document carriers such as ``README.md.b2``, ``photo.png.b2`` and
+``brochure.pdf.b2`` use the same file previews/actions as their originals:
+
+.. code-block:: console
+
+    b2view README.md.b2
+    b2view ./documents/ /README.md.b2
+
+Supported text, JPEG/PNG and PDF suffixes followed by ``.b2`` identify this
+viewer-only convention. A carrier must be a plain fixed-chunk SChunk byte stream,
+not an NDArray, serialized object or remote reference. It is mapped read-only;
+metadata inspection does not decompress its payload. Plain ``data.b2`` and
+``.b2frame`` datasets keep their normal native behavior. Direct-fsspec compressed
+document carriers are not added by this local-file feature.
+
+Text previews decode only chunks covering the first 64 KiB, displaying at most
+1,000 lines. Images decode complete original bytes only within the existing
+16 MiB input and pixel limits. PDF selection needs no decompression. Chunk
+headers are checked before copying/decompressing payload: each chunk must fit
+8 MiB compressed and 16 MiB decoded. Oversized/irregular carriers are refused;
+rechunk them rather than increasing automatic preview memory usage.
+
+``D`` streams decoded original bytes to the destination, keeping at most one
+decoded chunk between reads. ``O`` uses the same explicit copy/external-open
+workflow. Both suggest the original name (``README.md``, not ``README.md.b2``);
+carrier metadata retains the on-disk filename. No entire document is assembled
+for downloading, and no original-file payload is deserialized or executed.
+Sources are assumed immutable while open; refresh after replacing a carrier.
+
 Find nodes in local or remote trees
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

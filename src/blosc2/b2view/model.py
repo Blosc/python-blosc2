@@ -246,6 +246,33 @@ class DataSliceLayout:
         return 0
 
 
+def _open_viewer_source(urlpath, storage_options, **options):
+    from blosc2.b2view.compressed_file import CompressedFile, compressed_document
+    from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
+
+    if compressed_document(urlpath):
+        return CompressedFile(urlpath)
+    if is_directory(urlpath, storage_options):
+        return DirectoryStore(urlpath, storage_options=storage_options, **options)
+    file = OrdinaryFile(urlpath, storage_options)
+    # Preserve native frames with nonstandard names. Known ordinary document
+    # types need no payload fetch merely to identify them.
+    suffix = PurePosixPath(file.name).suffix.lower()
+    try:
+        native = (
+            suffix not in TEXT_SUFFIXES | IMAGE_SUFFIXES | {".pdf", ".ipynb"}
+            and file.nbytes >= 10
+            and file.read_bytes(0, 10) == b"\x9e\xa8b2frame\x00"
+        )
+    except BaseException:
+        file.close()
+        raise
+    if not native:
+        return file
+    file.close()
+    return None
+
+
 class StoreBrowser:
     """Small, read-only adapter used by the b2view UI.
 
@@ -318,32 +345,15 @@ class StoreBrowser:
         from blosc2.caterva2_url import caterva2_urlpath
 
         if ordinary_source(urlpath, remote_service):
-            from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
-
-            if is_directory(urlpath, storage_options):
-                return DirectoryStore(
-                    urlpath,
-                    storage_options=storage_options,
-                    cache_dir=cache_dir,
-                    max_cache_bytes=max_cache_bytes,
-                    remote_service=remote_service,
-                )
-            file = OrdinaryFile(urlpath, storage_options)
-            # Preserve native frames with nonstandard names. Known ordinary
-            # document types need no payload fetch merely to identify them.
-            suffix = PurePosixPath(file.name).suffix.lower()
-            try:
-                native = (
-                    suffix not in TEXT_SUFFIXES | IMAGE_SUFFIXES | {".pdf", ".ipynb"}
-                    and file.nbytes >= 10
-                    and file.read_bytes(0, 10) == b"\x9e\xa8b2frame\x00"
-                )
-            except BaseException:
-                file.close()
-                raise
-            if not native:
+            file = _open_viewer_source(
+                urlpath,
+                storage_options,
+                cache_dir=cache_dir,
+                max_cache_bytes=max_cache_bytes,
+                remote_service=remote_service,
+            )
+            if file is not None:
                 return file
-            file.close()
         if remote_service == "caterva2" or (
             remote_service == "auto" and caterva2_urlpath(urlpath) is not None
         ):
@@ -1459,6 +1469,7 @@ def object_metadata(obj: Any) -> dict[str, Any]:
     """Extract lightweight metadata from a supported object."""
     kind = object_kind(obj)
     if kind == "file":
+        from blosc2.b2view.compressed_file import CompressedFile
         from blosc2.b2view.file_preview import file_actions
 
         metadata = {
@@ -1474,6 +1485,14 @@ def object_metadata(obj: Any) -> dict[str, Any]:
         }
         if isinstance(obj, blosc2.RemoteFile):
             metadata.update(cbytes=obj.cbytes, chunksize=obj.chunksize, nchunks=obj.nchunks)
+        elif isinstance(obj, CompressedFile):
+            metadata.update(
+                type="Compressed local file",
+                carrier=obj.path.name,
+                cbytes=obj.cbytes,
+                chunksize=obj.chunksize,
+                nchunks=obj.nchunks,
+            )
         return metadata
     if kind in {"ndarray", "c2array"}:
         try:

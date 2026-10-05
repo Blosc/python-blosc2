@@ -67,6 +67,10 @@ XXX version-specific blurb XXX
   search local/Caterva2/fsspec hierarchies recursively with progress, cancellation
   and discovery limits. Selecting a result reveals it in the existing tree.
 
+- Preview local compressed documents such as `README.md.b2` and `photo.png.b2`
+  using bounded, lazy SChunk decoding. Copies stream original bytes under the
+  original filename; oversized chunks and non-document container types are refused.
+
 - Fix structured and subarray dtype decoding in `C2Array` and synthesized
   RemoteStore chunks, including compound/subarray HDF5 leaves.
 

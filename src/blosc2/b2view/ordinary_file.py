@@ -26,6 +26,10 @@ def ordinary_source(urlpath, remote_service="auto"):
     urlpath = os.fspath(urlpath)
     if remote_service == "caterva2" or (remote_service == "auto" and caterva2_urlpath(urlpath) is not None):
         return False
+    from blosc2.b2view.compressed_file import compressed_document
+
+    if compressed_document(urlpath):
+        return True
     base, dataset, source_format = parse_container_url(urlpath)
     if dataset is not None or source_format is not None:
         return False

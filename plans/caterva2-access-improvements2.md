@@ -7,6 +7,15 @@ lazy hierarchy browsing, and viewer integration work.
 
 ## Implementation record
 
+- Compressed local document follow-up: supported text/image/PDF names ending in
+  `.b2` are read-only mapped SChunk byte streams. Metadata stays payload-free;
+  text prefixes decode only intersecting chunks, images retain input/pixel caps,
+  and copies decode/write incrementally under the original filename. Lazy chunk
+  headers enforce 8 MiB compressed / 16 MiB decoded limits before payload copies.
+  Native arrays/serialized objects/references are not document carriers; plain
+  `.b2`/`.b2frame` dataset behavior is unchanged. Direct-fsspec carriers remain
+  separate work. No original file content is deserialized or executed.
+
 - Follow-up interface consistency: fallback panels have separate unavailable,
   missing-dependency and failed-preview states, with a common status header,
   reason and capability-aware action hints. Successful text previews share the
