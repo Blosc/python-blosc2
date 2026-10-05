@@ -95,9 +95,9 @@ def kernel(x):
 
     Documentation is not evaluated by the interpreter or JIT.
     """
-    y = x + 1; z = y * y
+    y = x + 1; z = y * y  # fmt: skip
     if z > 4:
-        z -= 2; z *= 3
+        z -= 2; z *= 3  # fmt: skip
     return z
 ```
 

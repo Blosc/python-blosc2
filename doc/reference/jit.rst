@@ -211,9 +211,11 @@ Examples
     expr = a * 2 + 1
     result = expr.compute(jit=True, jit_backend="cc")  # NDArray
 
+
     @blosc2.dsl_kernel
     def squared(x):
         return x * x
+
 
     udf = blosc2.lazyudf(squared, (a,), dtype=a.dtype, jit_backend="tcc")
     values = udf[:]  # NumPy values
