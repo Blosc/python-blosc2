@@ -74,6 +74,7 @@ def test_hdf5_mount_in_directory(tmp_path):
 
 
 def test_chained_fsspec_directory(tmp_path):
+    pytest.importorskip("fsspec")
     import zipfile
 
     archive = tmp_path / "files.zip"

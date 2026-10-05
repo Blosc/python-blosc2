@@ -150,6 +150,7 @@ def test_empty_unknown_pdf_and_missing_files(tmp_path):
 
 
 def test_chained_fsspec_file_and_storage_options(tmp_path, monkeypatch):
+    pytest.importorskip("fsspec")
     import zipfile
 
     from blosc2.b2view import ordinary_file
@@ -177,7 +178,7 @@ def test_chained_fsspec_file_and_storage_options(tmp_path, monkeypatch):
         assert all(options == {"custom": "value"} for options in seen)
 
 
-def test_publication_race_and_late_cancellation(tmp_path, monkeypatch):
+def test_late_cancellation(tmp_path):
     source = tmp_path / "source.txt"
     source.write_bytes(b"hello")
     file = OrdinaryFile(source)
@@ -192,6 +193,14 @@ def test_publication_race_and_late_cancellation(tmp_path, monkeypatch):
         file.download(destination, progress=progress, cancel=lambda: cancelled)
     assert not destination.exists()
     assert not list(tmp_path.glob(".b2view-download-*"))
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten has no hard links")
+def test_publication_race(tmp_path, monkeypatch):
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"hello")
+    file = OrdinaryFile(source)
+    destination = tmp_path / "destination.txt"
     original = __import__("os").link
 
     def race(temporary, target):
@@ -202,6 +211,30 @@ def test_publication_race_and_late_cancellation(tmp_path, monkeypatch):
     with pytest.raises(FileExistsError):
         file.download(destination)
     assert destination.read_bytes() == b"existing"
+    assert not list(tmp_path.glob(".b2view-download-*"))
+
+
+@pytest.mark.parametrize("competing_writer", [False, True])
+def test_wasm_download_publication(tmp_path, monkeypatch, competing_writer):
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"hello")
+    destination = tmp_path / "destination.txt"
+    file = OrdinaryFile(source)
+
+    def progress(done, total):
+        if competing_writer:
+            destination.write_bytes(b"existing")
+
+    if competing_writer:
+        with pytest.raises(FileExistsError):
+            file.download(destination, progress=progress)
+        assert destination.read_bytes() == b"existing"
+    else:
+        file.download(destination, progress=progress)
+        assert destination.read_bytes() == b"hello"
+        with pytest.raises(FileExistsError):
+            file.download(destination)
     assert not list(tmp_path.glob(".b2view-download-*"))
 
 

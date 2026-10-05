@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
+import blosc2
 from blosc2.core import find_url_separator, fsspec_filesystem, is_fsspec_url, parse_container_url
 
 MAX_READ_BYTES = 16 << 20
@@ -69,6 +70,19 @@ def ordinary_filesystem(source, storage_options=None):
         client_options.setdefault("timeout", aiohttp.ClientTimeout(total=10))
         options["client_kwargs"] = client_options
     return fsspec_filesystem(source, options)
+
+
+def _publish_download(temporary, destination, overwrite):
+    if overwrite:
+        os.replace(temporary, destination)
+    elif blosc2.IS_WASM:
+        # Emscripten has no hard links. Its single-threaded virtual FS cannot
+        # interleave a writer between this check and rename (no callbacks/awaits).
+        if os.path.lexists(destination):
+            raise FileExistsError(destination)
+        os.rename(temporary, destination)
+    else:
+        os.link(temporary, destination)
 
 
 class OrdinaryFile:
@@ -186,10 +200,7 @@ class OrdinaryFile:
             self._check_open()
             if cancel is not None and cancel():
                 raise InterruptedError("File operation cancelled")
-            if overwrite:
-                os.replace(temporary, destination)
-            else:
-                os.link(temporary, destination)
+            _publish_download(temporary, destination, overwrite)
             return str(destination)
         finally:
             Path(temporary).unlink(missing_ok=True)
