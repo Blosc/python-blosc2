@@ -48,6 +48,9 @@ XXX version-specific blurb XXX
 
 ### Caterva2 repository access
 
+- b2view now exits cleanly with a clear diagnostic and nonzero status when
+  its initial source cannot be opened, rather than leaving an unusable TUI.
+
 - Fix structured and subarray dtype decoding in `C2Array` and synthesized
   RemoteStore chunks, including compound/subarray HDF5 leaves.
 

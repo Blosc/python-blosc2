@@ -2158,6 +2158,8 @@ class B2ViewApp(App):
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
+        self._source_opened = False
+        self.startup_error: str | None = None
         # Set when a remote browser is closed on its own thread (on_unmount);
         # lets teardown wait for the cache-dir lock to be released.
         self._browser_close_thread: threading.Thread | None = None
@@ -2259,7 +2261,7 @@ class B2ViewApp(App):
         if result is True:
             self._start_browsing()
         else:
-            self.exit(message=f"Download failed: {result}")
+            self._source_open_error(RuntimeError(f"Download failed: {result}"))
 
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
@@ -2274,7 +2276,12 @@ class B2ViewApp(App):
         }
         if self.max_cache_bytes is not None:
             browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
-        self.browser = StoreBrowser(self.urlpath, **browser_kwargs)
+        try:
+            self.browser = StoreBrowser(self.urlpath, **browser_kwargs)
+        except Exception as exc:
+            self._source_open_error(exc)
+            return
+        self._source_opened = True
         self._populate_browser()
 
     def _populate_browser(self) -> None:
@@ -2439,15 +2446,18 @@ class B2ViewApp(App):
                 browser.close()
         except Exception as exc:
             if browser is not None:
-                browser.close()
-            self._deliver_remote(session, self._remote_error, exc)
+                # Cleanup must not mask the opening failure and strand the UI.
+                with contextlib.suppress(Exception):
+                    browser.close()
+            self._deliver_remote(session, self._source_open_error, exc)
 
     def _finish_remote_open(self, browser, children):
         self.browser = browser
+        self._source_opened = True
         self._remote_children = children
         self._populate_browser()
 
-    def _remote_error(self, exc):
+    def _error_message(self, exc):
         # Transport exceptions can include signed URLs or credentials. Keep
         # source-specific limitations, but remove runtime URLs and option values.
         import re
@@ -2463,7 +2473,32 @@ class B2ViewApp(App):
                     message = message.replace(value, "<option>")
 
         redact(self.storage_options or {})
-        self.query_one("#metadata", Static).update(f"{type(exc).__name__}: {message}")
+        from blosc2.b2view.file_preview import safe_text
+
+        return safe_text(f"{type(exc).__name__}: {message}")
+
+    def _source_open_error(self, exc):
+        if self._source_opened:
+            # A failed refresh must not turn a recoverable session into a
+            # startup failure. Leaf/list/page failures remain nonfatal too.
+            self._remote_error(exc)
+            return
+        import httpx
+        from rich.text import Text
+
+        if isinstance(exc, httpx.HTTPStatusError):
+            response = exc.response
+            reason = httpx.codes.get_reason_phrase(response.status_code)
+            detail = f"HTTP {response.status_code} {reason}."
+        else:
+            detail = self._error_message(exc)
+        self.startup_error = f"b2view: Could not open source: {detail}"
+        # Textual restores the terminal before printing this to its error
+        # console. Text prevents markup in exception strings being interpreted.
+        self.exit(return_code=1, message=Text(self.startup_error))
+
+    def _remote_error(self, exc):
+        self.query_one("#metadata", Static).update(self._error_message(exc))
 
     def load_children(self, node) -> None:
         path = node.data or "/"

@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         or None,
     )
     app.run(mouse=args.mouse)
-    return 0
+    return app.return_code or 0
 
 
 if __name__ == "__main__":
