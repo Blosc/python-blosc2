@@ -181,7 +181,10 @@ builds successfully, with unrelated existing warnings and no JIT-page warnings
 after fixing heading underlines. The TCC-disabled native build also succeeds.
 Linux enforcing SELinux and Windows/WebAssembly runtime validation remain open.
 
-Dependency integration pins published miniexpr revision
-`a1c950522b6da2b8f812c8fd89f21b7ce5446c51`, including the native options API
-and the compiler-command parser fix. Local validation used the sibling miniexpr
-source override; the user confirmed publication and a green test suite.
+Current dependency integration pins published miniexpr revision
+`3f4db93a628aedc662b7d27a5f35c97ffaeb0424`, matching `CMakeLists.txt`. It includes
+the native options API and compiler-command parser fix, plus the subsequent native
+DSL syntax extensions and chained-comparison support. The configuration-specific
+validation above originally used `a1c950522b6da2b8f812c8fd89f21b7ce5446c51` through
+the sibling source override. The later integrated syntax validation passed with
+**10,737 Python tests passed, 36 skipped**, and **42 native tests passed**.
