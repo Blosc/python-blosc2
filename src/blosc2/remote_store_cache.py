@@ -30,9 +30,9 @@ def lock_cache_file(file, *, blocking=False):
     if os.name == "nt":
         import msvcrt
 
-        if not file.tell():
-            file.write(b"\0")
-            file.flush()
+        # Windows permits locking a byte beyond EOF. Do not initialize the byte:
+        # another owner may already have locked it, making even a write fail
+        # before LK_LOCK gets a chance to wait for ownership.
         file.seek(0)
         msvcrt.locking(file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
     else:
