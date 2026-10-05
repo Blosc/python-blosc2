@@ -7,6 +7,13 @@ lazy hierarchy browsing, and viewer integration work.
 
 ## Implementation record
 
+- Follow-up interface consistency: fallback panels have separate unavailable,
+  missing-dependency and failed-preview states, with a common status header,
+  reason and capability-aware action hints. Successful text previews share the
+  same hints (O only for supported external document types; T only for Markdown).
+  Read failures preserve file metadata and redact transport URLs/option values.
+  Local/fsspec ordinary-file support remains a separate follow-up.
+
 - Follow-up UX decision: the extra trust checkbox is removed for all supported
   documents, including images and PDFs. The explicit O action and destination
   submission initiate external opening; signature/type restrictions and stale

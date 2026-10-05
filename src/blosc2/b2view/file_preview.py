@@ -15,6 +15,26 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 EXTERNAL_SUFFIXES = IMAGE_SUFFIXES | {".pdf", ".md", ".txt"}
 
 
+def file_actions(name, *, markdown=False):
+    """Use the same action hints for successful previews and fallback panels."""
+    suffix = PurePosixPath(name).suffix.lower()
+    actions = ["D: download"]
+    if suffix in EXTERNAL_SUFFIXES:
+        actions.append("O: open externally")
+    if markdown and suffix == ".md":
+        actions.append("T: raw/Markdown")
+    return " · ".join(actions)
+
+
+def file_fallback(name, status, reason):
+    """Describe a passive preview failure without suggesting unsupported actions."""
+    return {
+        "preview_status": status,
+        "message": safe_text(reason),
+        "actions": file_actions(name),
+    }
+
+
 def safe_text(text):
     """Remove ANSI/OSC sequences and unsafe terminal controls from decoded text."""
     text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", text)
@@ -27,14 +47,14 @@ def preview_file(file, *, raw=False):
     suffix = PurePosixPath(file.name).suffix.lower()
     try:
         if suffix == ".pdf":
-            return {"message": "PDF preview unavailable; use D to download or O to open externally."}
+            return file_fallback(file.name, "Preview unavailable", "PDF has no inline preview.")
         if suffix in IMAGE_SUFFIXES:
             return preview_image(file)
         if suffix not in TEXT_SUFFIXES:
-            return {"message": "Binary/unknown file; use D to download original bytes."}
+            return file_fallback(file.name, "Preview unavailable", "Binary/unknown file.")
         data = file.read_bytes(0, min(file.nbytes, TEXT_BYTES))
         if b"\0" in data:
-            return {"message": "Binary content despite text suffix; use D to download."}
+            return file_fallback(file.name, "Preview unavailable", "Binary content despite text suffix.")
         truncated = file.nbytes > len(data)
         decoder = codecs.getincrementaldecoder("utf-8-sig")("replace")
         text = safe_text(decoder.decode(data, final=not truncated))
@@ -48,27 +68,37 @@ def preview_file(file, *, raw=False):
             "file_text": text,
             "markdown": suffix == ".md" and not raw,
             "notice": notice,
-            "message": "D: download · O: open externally · T: raw/Markdown",
+            "message": file_actions(file.name, markdown=True),
         }
     except Exception as error:
-        return {"message": f"Preview unavailable: {error}. Use D to download (chunk limits still apply)."}
+        # The app supplies a credential-redacted diagnostic. Do not expose raw
+        # transport exception strings to standalone render callers either.
+        result = file_fallback(
+            file.name, "Preview failed", f"{type(error).__name__}: Could not read preview."
+        )
+        result["preview_error"] = error
+        return result
 
 
 def preview_image(file):
     try:
         from PIL import Image, ImageOps
     except ImportError:
-        return {"message": "Image preview needs Pillow; download (D) or open externally (O)."}
+        return file_fallback(
+            file.name, "Missing dependency", "Image preview needs Pillow. Install blosc2[images]."
+        )
     if file.nbytes > IMAGE_BYTES:
-        return {"message": "Automatic image preview exceeds 16 MiB; download (D) or open externally (O)."}
+        return file_fallback(file.name, "Preview unavailable", "Automatic image preview exceeds 16 MiB.")
     data = file.read_bytes(0, file.nbytes)
     if not (data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG\r\n\x1a\n")):
-        return {"message": "Invalid JPEG/PNG signature; download available (D)."}
+        return file_fallback(file.name, "Preview failed", "Invalid JPEG/PNG signature.")
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         with Image.open(io.BytesIO(data)) as original:
             if original.format not in {"JPEG", "PNG"} or original.width * original.height > IMAGE_PIXELS:
-                raise ValueError("Image exceeds decoded pixel budget (64 MiB RGBA)")
+                return file_fallback(
+                    file.name, "Preview unavailable", "Image exceeds decoded pixel budget (64 MiB RGBA)."
+                )
             size, format_name = original.size, original.format
             original.seek(0)
             image = ImageOps.exif_transpose(original)
@@ -76,7 +106,7 @@ def preview_image(file):
             image = image.convert("RGB")
     return {
         "file_image": image,
-        "message": f"{format_name} · {size[0]} × {size[1]} · D: download · O: open externally",
+        "message": f"{format_name} · {size[0]} × {size[1]} · {file_actions(file.name)}",
     }
 
 

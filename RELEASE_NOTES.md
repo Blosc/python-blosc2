@@ -51,6 +51,10 @@ XXX version-specific blurb XXX
 - b2view now exits cleanly with a clear diagnostic and nonzero status when
   its initial source cannot be opened, rather than leaving an unusable TUI.
 
+- b2view file fallback panels distinguish unavailable previews, missing optional
+  dependencies and read/display failures, with consistent capability-aware
+  action hints. Preview errors retain file metadata and redact transport URLs.
+
 - Fix structured and subarray dtype decoding in `C2Array` and synthesized
   RemoteStore chunks, including compound/subarray HDF5 leaves.
 

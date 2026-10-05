@@ -39,7 +39,9 @@ def test_text_limits_controls_and_binary_fallback():
 def test_pdf_and_binary_do_not_fetch():
     for name in ("doc.pdf", "unknown.bin"):
         file = BytesFile(name, b"unknown payload")
-        assert "download" in preview_file(file)["message"]
+        result = preview_file(file)
+        assert result["preview_status"] == "Preview unavailable"
+        assert "download" in result["actions"]
         assert file.reads == []
 
 
@@ -47,7 +49,81 @@ def test_missing_image_dependency_does_not_read(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "PIL", None)
     file = BytesFile("image.png", b"not needed")
     assert "needs Pillow" in preview_file(file)["message"]
+    assert preview_file(file)["preview_status"] == "Missing dependency"
     assert file.reads == []
+
+
+@pytest.mark.parametrize(
+    ("name", "external", "toggle"),
+    [
+        ("README.md", True, True),
+        ("note.txt", True, False),
+        ("data.json", False, False),
+        ("run.py", False, False),
+        ("doc.pdf", True, False),
+        ("image.png", True, False),
+        ("unknown.bin", False, False),
+    ],
+)
+def test_file_action_hints_match_capabilities(name, external, toggle):
+    from blosc2.b2view.file_preview import file_actions, file_fallback
+    from blosc2.b2view.render import make_preview_renderables
+
+    hints = file_actions(name, markdown=True)
+    assert "D: download" in hints
+    assert ("O:" in hints) == external
+    assert ("T:" in hints) == toggle
+    fallback = file_fallback(name, "Preview unavailable", "No inline preview.")
+    header, body = make_preview_renderables(fallback)
+    assert header.plain == "Preview unavailable"
+    assert body.plain == "No inline preview.\n\n" + file_actions(name)
+    assert "T:" not in fallback["actions"]
+
+
+def test_read_failure_is_not_an_unsupported_preview():
+    class BrokenFile(BytesFile):
+        def read_bytes(self, start, stop):
+            raise OSError("https://host/path?token=secret")
+
+    result = preview_file(BrokenFile("note.txt", b"hello"))
+    assert result["preview_status"] == "Preview failed"
+    assert "secret" not in result["message"]
+    assert isinstance(result["preview_error"], OSError)
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
+async def test_read_failure_preserves_metadata_and_has_safe_fallback(file_source, monkeypatch):  # noqa: F811
+    from textual.widgets import Static
+
+    import blosc2
+    from blosc2.b2view.app import B2ViewApp
+
+    def fail(*args, **kwargs):
+        raise OSError("Cannot read https://host/file?token=secret\x1b[31m")
+
+    monkeypatch.setattr(blosc2.RemoteFile, "read_bytes", fail)
+    base, _, _ = file_source
+    app = B2ViewApp(base, start_path="/README.md")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_until(
+            pilot, lambda: "Preview failed" in str(app.query_one("#data-header", Static).render())
+        )
+        body = str(app.query_one("#preview", Static).render())
+        assert "OSError" in body
+        assert "secret" not in body
+        assert "\x1b" not in body
+        assert "D: download" in body
+        assert "O: open externally" in body
+        assert "T:" not in body
+        assert app._selected_info.kind == "file"
+        from rich.console import Console
+
+        console = Console(file=io.StringIO(), width=120)
+        console.print(app.query_one("#metadata", Static).content)
+        assert "README.md" in console.file.getvalue()
+        assert app.return_code is None
+    app.wait_for_close()
 
 
 def test_image_preview_and_limits(monkeypatch):
@@ -161,7 +237,7 @@ async def test_pdf_external_open_requires_only_explicit_action(file_source, tmp_
 
 @pytest.mark.tui
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_widget", [True, False, "real"])
+@pytest.mark.parametrize("image_widget", [True, False, "real", "broken"])
 async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, image_widget):  # noqa: F811
     from textual.widgets import Static
 
@@ -178,6 +254,12 @@ async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, im
     stats["groups"]["@public"].append("image.png")
     if image_widget == "real":
         pytest.importorskip("textual_image.widget")
+    elif image_widget == "broken":
+
+        def broken_widget(image):
+            raise RuntimeError("Cannot display https://host/image?token=secret")
+
+        monkeypatch.setattr("blosc2.b2view.app.TextualImage", broken_widget)
     else:
         monkeypatch.setattr(
             "blosc2.b2view.app.TextualImage",
@@ -185,7 +267,16 @@ async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, im
         )
     app = B2ViewApp(base, start_path="/image.png")
     async with app.run_test(size=(120, 40)) as pilot:
-        if image_widget:
+        if image_widget == "broken":
+            await wait_until(
+                pilot, lambda: "Preview failed" in str(app.query_one("#data-header", Static).render())
+            )
+            body = str(app.query_one("#preview", Static).render())
+            assert "RuntimeError" in body
+            assert "secret" not in body
+            assert "D: download" in body
+            assert "O: open externally" in body
+        elif image_widget:
             await wait_until(pilot, lambda: bool(app.query_one("#file-image").children))
             await wait_until(pilot, lambda: app.query_one("#file-image").children[0].region.height > 0)
             image = app.query_one("#file-image").children[0]
@@ -197,6 +288,9 @@ async def test_image_widget_and_dependency_fallback(file_source, monkeypatch, im
             await wait_until(
                 pilot, lambda: "needs textual-image" in str(app.query_one("#preview", Static).render())
             )
+            assert "Missing dependency" in str(app.query_one("#data-header", Static).render())
+            assert "D: download" in str(app.query_one("#preview", Static).render())
+            assert "O: open externally" in str(app.query_one("#preview", Static).render())
         app.update_panels("/mount")
         await wait_until(
             pilot, lambda: app._selected_info is not None and app._selected_info.kind == "group"

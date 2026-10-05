@@ -34,12 +34,18 @@ def make_preview_renderables(preview: Any):
     """Return ``(header, body)`` Rich renderables for a preview object.
 
     CTable previews get a separate header renderable so the UI can keep column
-    titles fixed while only the row body scrolls. Other preview kinds return
-    ``None`` for the header.
+    titles fixed while only the row body scrolls. File previews use the header
+    for notices/actions or a fallback status; other kinds may return ``None``.
     """
     from rich.pretty import Pretty
     from rich.table import Table
     from rich.text import Text
+
+    if isinstance(preview, dict) and "preview_status" in preview:
+        body = str(preview["message"])
+        if preview.get("actions"):
+            body += "\n\n" + preview["actions"]
+        return Text(preview["preview_status"]), Text(body)
 
     if isinstance(preview, dict) and "file_text" in preview:
         from rich.markdown import Markdown

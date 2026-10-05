@@ -2576,7 +2576,10 @@ class B2ViewApp(App):
                 info = browser.get_info(path)
                 data = None
                 if info.kind == "unsupported":
-                    data = {"message": info.metadata.get("preview", "Preview unavailable")}
+                    data = {
+                        "preview_status": "Preview unavailable",
+                        "message": info.metadata.get("preview", "Unsupported object type."),
+                    }
                 elif info.kind not in {"group", "remote_store"} and not self._uses_grid_preview(info):
                     data = browser.preview(
                         path, max_rows=self.preview_rows, max_cols=self.preview_cols, raw_text=self._file_raw
@@ -2620,7 +2623,7 @@ class B2ViewApp(App):
                 data_scroll.display = True
                 self.query_one("#col-scrollbar", Static).display = False
                 data_header.update("")
-                preview.update("Group node; select an array or table to preview.")
+                preview.update("Group node; select an array, table or file to preview.")
                 self._update_attrs(attrs_pane, attrs_widget, path)
             else:
                 if self._uses_grid_preview(info):
@@ -2648,6 +2651,8 @@ class B2ViewApp(App):
                     self._update_data_header(data)
                     self.call_after_refresh(self._ensure_viewport_consistent)
                 else:
+                    if isinstance(data, dict) and "preview_error" in data:
+                        data = {**data, "message": self._error_message(data["preview_error"])}
                     header, body = make_preview_renderables(data)
                     data_header.display = header is not None
                     data_table_row.display = False
@@ -2680,8 +2685,8 @@ class B2ViewApp(App):
         if path != self.selected_path or not isinstance(data, dict) or "file_image" not in data:
             return
         if TextualImage is None:
-            self.query_one("#preview", Static).update(
-                data["message"] + "\nTerminal image preview needs textual-image; use D or O."
+            self._show_image_fallback(
+                "Missing dependency", "Terminal image preview needs textual-image. Install blosc2[images]."
             )
             return
         try:
@@ -2692,7 +2697,15 @@ class B2ViewApp(App):
             image.styles.height = "auto"
             await body.mount(image)
         except Exception as error:
-            self.query_one("#preview", Static).update(f"Image display unavailable: {error}; use D or O.")
+            self._show_image_fallback("Preview failed", self._error_message(error))
+
+    def _show_image_fallback(self, status, reason):
+        from blosc2.b2view.file_preview import file_fallback
+
+        header, body = make_preview_renderables(file_fallback("image.png", status, reason))
+        self.query_one("#data-header", Static).display = True
+        self.query_one("#data-header", Static).update(header)
+        self.query_one("#preview", Static).update(body)
 
     def _file_action(self, external=False):
         if self.browser is None or self._selected_info is None or self._selected_info.kind != "file":

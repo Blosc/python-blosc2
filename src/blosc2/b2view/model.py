@@ -577,7 +577,10 @@ class StoreBrowser:
         if kind == "schunk":
             stop = start + max_rows if stop is None else stop
             return preview_schunk(obj, start=start, stop=stop)
-        return {"message": f"Preview is not supported for {kind!r} objects."}
+        return {
+            "preview_status": "Preview unavailable",
+            "message": f"Preview is not supported for {kind!r} objects.",
+        }
 
     def plot_series(
         self,
