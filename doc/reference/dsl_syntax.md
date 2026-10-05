@@ -33,6 +33,9 @@ explicit form — it always requires the DSL to compile, equivalent to
 - Leading blank lines and header comments are allowed.
 - Any extra trailing content after the function is a parse error.
 - Nested `def` inside the function body is not allowed.
+- The first statement may be a docstring: single/double-quoted or triple-quoted,
+  including multiline strings and `r`/`u` prefixes. It is ignored during execution;
+  `@blosc2.dsl_kernel` preserves the Python function's `__doc__`.
 
 ## Header pragmas
 
@@ -67,6 +70,7 @@ Supported statement forms:
 - While loop: `while cond:`
 - For loop: `for i in range(...):`
 - Loop control: `break`, `continue`
+- No-op: `pass` (also valid as the sole statement in a branch or loop body)
 
 General rules:
 
@@ -74,6 +78,28 @@ General rules:
 - Empty blocks are invalid.
 - `elif`/`else` must belong to a matching `if`.
 - Deprecated forms like `break if cond` / `continue if cond` are not part of DSL syntax.
+- Simple statements may share a line, separated by `;`, including inside indented
+  blocks. A trailing `;` is allowed; empty statements (`;;`) are not.
+- Compound statements (`if`, `for`, `while`) require their own lines and indented
+  bodies; they cannot follow a semicolon. Inline suites such as `if x: return x`
+  are not supported.
+- Expressions and calls can continue across lines inside parentheses, including
+  comments. This does not add list literals or indexing to the expression grammar.
+
+### Docstrings and semicolon-separated statements
+
+```python
+@blosc2.dsl_kernel
+def kernel(x):
+    """Transform each element.
+
+    Documentation is not evaluated by the interpreter or JIT.
+    """
+    y = x + 1; z = y * y  # fmt: skip
+    if z > 4:
+        z -= 2; z *= 3  # fmt: skip
+    return z
+```
 
 ### `if` / `elif` / `else` example
 
@@ -114,6 +140,19 @@ def kernel(x):
 
 Expressions are compiled by miniexpr with DSL checks.
 
+### Numeric literals
+
+Python-style digit separators are accepted in integers and floating-point
+literals: `1_000`, `1_000.2_5`, `.1_25`, and `1e1_0`. Integer literals also accept
+binary (`0b1010`), octal (`0o755`), and hexadecimal (`0xff`) prefixes, including
+uppercase prefixes and separators such as `0x_FF` or `0b10_10`.
+
+Malformed separators, invalid base digits, and nonzero decimal integers with
+leading zeros are rejected. Prefixed integer magnitudes must fit in an unsigned
+64-bit value; numeric evaluation retains the existing dtype and precision rules,
+not Python's arbitrary-precision integer arithmetic. Strings and identifiers
+(such as `x_1`) are not modified.
+
 Commonly supported:
 
 - Names and numeric constants
@@ -122,6 +161,20 @@ Commonly supported:
 - Comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Function calls to supported miniexpr functions
 - User-registered C functions/closures passed in `me_variable`
+
+DSL kernels accept chained comparisons such as `0 <= x < 10` or
+`a < b <= c != d`. Operands are evaluated left-to-right, each at most once;
+later operands are skipped as soon as a comparison fails. Chains work in
+expressions, assignments, branches, and loop conditions (including `continue`).
+The native miniexpr DSL front end lowers them to temporary variables and guarded
+statements for both the interpreter and TCC/CC JIT. C and other callers can pass
+raw chain syntax directly, without Python preprocessing. JavaScript emission
+performs equivalent lowering separately. Existing DSL `and`/`or` Boolean-result
+rules apply. This syntax extension applies to DSL kernels, not the separate
+classic expression API.
+
+Chaining does not expand the supported operand types or functions: existing
+string-comparison and per-element reduction restrictions still apply.
 
 Cast intrinsics:
 
@@ -151,6 +204,8 @@ In this example, `temp` is inferred from `sin(x) ** 2` (typically a floating typ
 Notes:
 
 - You do not need to declare local variable types.
+- Boolean output does not force numeric temporaries to Boolean: operand types
+  are inferred independently, and the return value is converted to Boolean.
 - If you assign a value with an incompatible dtype to the same local later, compilation fails.
 
 ## Loops
@@ -230,14 +285,18 @@ When referenced, these are synthesized by DSL compiler/runtime:
 
 ### Compute dtype and integer exactness
 
-The kernel's *output* dtype determines the compute dtype for the whole expression:
+The kernel's *output* dtype generally determines the arithmetic compute dtype:
 
 - With an integer output dtype, arithmetic is exact int64. Intermediates must fit in
   int64: products at or above 2^63 overflow and give wrong results.
-- With a float output dtype, integer inputs and temporaries are evaluated in float64,
+- With a float output dtype, integer arithmetic is generally evaluated in float64,
   where integer operations are exact only below 2^53. Keep products under that bound
   (e.g. a 32-bit value times a multiplier below 2^21); larger products silently lose
   low bits.
+- Native chained-comparison captures retain each operand's inferred dtype, so
+  comparisons of int64 operands can remain exact even with a float output.
+  Automatic JavaScript dispatch therefore leaves 64-bit integer input arrays on
+  miniexpr; the JavaScript bridge converts inputs to float64.
 - Values outside the output dtype's range wrap two's-complement on the final store
   (e.g. returning a value in `[0, 2^32)` into an int32 output yields the full
   `[-2^31, 2^31)` range).
@@ -269,12 +328,19 @@ Runtime error examples:
 
 ## Execution backends
 
-A DSL kernel is compiled and run by one of two backends, selected per evaluation
-via the `jit` / `jit_backend` arguments to `compute()` / `__getitem__`:
+A DSL kernel can use the following execution backends. Set `jit` / `jit_backend`
+on `lazyudf()` or `compute()`; indexing uses the configured/default settings.
+See the [JIT options reference](jit.rst) for defaults, environment precedence,
+caching, and diagnostics:
 
 - **miniexpr** (default on native builds): a runtime JIT (TinyCC, `jit_backend="tcc"`)
-  with an interpreter fallback (`jit=False`). Supports the full DSL described here,
+  with an interpreter fallback. `jit=False` skips JIT; `jit=True` is best effort
+  and also falls back if executable allocation or compilation is denied. Supports the full DSL described here,
   including integer/complex dtypes and reductions.
+- **System C compiler** (`jit_backend="cc"`): miniexpr generates optimized shared
+  libraries using an installed compiler and caches them for subsequent processes.
+  Compilation or loading failures also fall back to the interpreter. TCC instead
+  compiles in memory without creating JIT cache artifacts.
 - **JavaScript** (`jit_backend="js"`): transpiles the kernel to JavaScript and runs it
   through the browser's JIT. **WebAssembly/Pyodide only** — requesting it elsewhere raises.
   Under WebAssembly it is also the *default* for eligible kernels (set `jit=False` or

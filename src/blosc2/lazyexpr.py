@@ -561,7 +561,7 @@ class LazyArray(ABC, blosc2.Operand):
     def compute(
         self,
         item: slice | list[slice] | None = None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs: Any,
     ) -> blosc2.NDArray:
         """
@@ -589,10 +589,12 @@ class LazyArray(ABC, blosc2.Operand):
               WebAssembly prefer-js default, keeping it on miniexpr.
 
             - ``jit`` (bool | None): enable (``True``) or disable (``False``) JIT compilation
-              of the expression via miniexpr.  When ``None`` (default), JIT is only used
+              of the expression via miniexpr. None inherits :ref:`JITOptions` defaults.
+              With built-in defaults, JIT is only used
               for DSL kernels; plain expressions are evaluated by the bytecode interpreter.
-              Setting ``jit=True`` forces auto-lift of plain expressions into JIT-compiled
-              kernels.
+              Setting ``jit=True`` requests auto-lift of plain expressions into DSL
+              kernels. Native JIT is best effort: compilation/allocation/loading
+              failures use the interpreter quietly. See :ref:`JITOptions`.
 
             - ``jit_backend`` (str | None): select the JIT compiler backend.  Valid
               values are ``"tcc"`` (bundled Tiny C Compiler), ``"cc"`` (system C
@@ -613,9 +615,10 @@ class LazyArray(ABC, blosc2.Operand):
 
             - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
               ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` and overrides
-              both the ``jit`` and ``jit_backend`` arguments — this lets you switch
-              JIT on or change backends from the command line without touching code.
-              Setting it to ``"tcc"`` or ``"cc"`` also selects that backend.
+              ``jit`` on paths calling ``LazyExpr.compute()``. Setting it to
+              ``"tcc"`` or ``"cc"`` additionally overrides ``jit_backend``. It is
+              not a universal constructor/LazyUDF override, and ``"0"`` does not
+              disable JIT. Use ``ME_DSL_JIT=0`` to disable miniexpr runtime JIT.
 
             - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
               ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
@@ -1577,34 +1580,36 @@ def _js_dtypes_ok(operands, kwargs) -> bool:
 
     The output dtype must be floating: integer/complex *output* goes to miniexpr (the bridge
     can't reproduce integer division/overflow/truncation semantics, and float64 can't hold
-    int64 exactly).  Given a floating output, integer *inputs* are fine -- the bridge converts
-    every operand to float64, which is exactly what miniexpr does when promoting integer inputs
-    for a float result (so any values above 2**53 lose precision identically).  Complex inputs
-    are rejected (the bridge is real-only)."""
+    int64 exactly). Smaller integer inputs are exactly representable in float64,
+    but 64-bit integer inputs must stay on miniexpr: comparisons can retain their
+    integer precision even with a float output. Complex inputs are rejected
+    (the bridge is real-only)."""
     dt = kwargs.get("dtype")
     if dt is None:
         # Inferred output: only safe when all operands are float (so the output is float too).
-        return all(
-            np.issubdtype(op.dtype, np.floating)
-            for op in operands.values()
-            if isinstance(op, blosc2.NDArray)
-        )
+        return all(np.issubdtype(op.dtype, np.floating) for op in operands.values() if hasattr(op, "dtype"))
     if not np.issubdtype(np.dtype(dt), np.floating):
         return False
     return all(
-        np.issubdtype(op.dtype, np.floating) or np.issubdtype(op.dtype, np.integer)
+        np.issubdtype(op.dtype, np.floating)
+        or (np.issubdtype(op.dtype, np.integer) and op.dtype.itemsize < 8)
         for op in operands.values()
-        if isinstance(op, blosc2.NDArray)
+        if hasattr(op, "dtype")
     )
 
 
 def _trace_js_backend(expression):
     """BLOSC_ME_JIT_TRACE counterpart for the JS bridge, which never reaches
     miniexpr's trace point in `fast_eval` (see there for the message format)."""
-    if os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in ("1", "true", "on"):
+    if blosc2.jit_config.trace_enabled() or os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in (
+        "1",
+        "true",
+        "on",
+    ):
         source = getattr(expression, "dsl_source", None) or expression
         expr_short = str(source)[:120].replace("\n", " ")
-        print(f"[blosc2] engine=js expr={expr_short}", flush=True)
+        stream = sys.stderr if blosc2.jit_config.trace_enabled() else sys.stdout
+        print(f"[blosc2] engine=js expr={expr_short}", file=stream, flush=True)
 
 
 def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwargs, shape=None):
@@ -1702,6 +1707,7 @@ def _miniexpr_integer_atan2(expression, operands):
     )
 
 
+@blosc2.jit_config.jit_execution
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -1910,13 +1916,18 @@ def fast_eval(  # noqa: C901
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
 
-    if os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in ("1", "true", "on"):
+    if blosc2.jit_config.trace_enabled() or os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in (
+        "1",
+        "true",
+        "on",
+    ):
         engine = (
             "miniexpr" if use_miniexpr else ("ne_evaluate" if isinstance(expr_string, str) else "python-udf")
         )
         jit_info = f"jit={jit}, backend={jit_backend}" if use_miniexpr else ""
         expr_short = str(expr_string)[:120].replace("\n", " ")
-        print(f"[blosc2] engine={engine} {jit_info} expr={expr_short}", flush=True)
+        stream = sys.stderr if blosc2.jit_config.trace_enabled() else sys.stdout
+        print(f"[blosc2] engine={engine} {jit_info} expr={expr_short}", file=stream, flush=True)
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", None)
@@ -2674,6 +2685,7 @@ def step_handler(cslice, _slice):
     return out
 
 
+@blosc2.jit_config.jit_execution
 def reduce_slices(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -3259,6 +3271,7 @@ def _eval_zero_input_dsl_if_needed(
     return True, full_res
 
 
+@blosc2.jit_config.jit_execution
 def chunked_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
@@ -4027,7 +4040,7 @@ class LazyExpr(LazyArray):
         dtype=None,
         keepdims=False,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         if where is not None:
@@ -4049,7 +4062,7 @@ class LazyExpr(LazyArray):
         dtype=None,
         keepdims=False,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         if where is not None:
@@ -4065,14 +4078,18 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def get_num_elements(self, axis, item):
+    def get_num_elements(self, axis, item, fp_accuracy=None, **execution_kwargs):
         if hasattr(self, "_where_args") and len(self._where_args) == 1:
             # We have a where condition, so we need to count the number of elements
             # fulfilling the condition
             orig_where_args = self._where_args
             self._where_args = {"_where_x": blosc2.ones(self.shape, dtype=np.int8)}
-            num_elements = self.sum(axis=axis, dtype=np.int64, item=item)
-            self._where_args = orig_where_args
+            try:
+                num_elements = self.sum(
+                    axis=axis, dtype=np.int64, item=item, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
+            finally:
+                self._where_args = orig_where_args
             return num_elements
         # Compute the number of elements in the array
         shape = self.shape
@@ -4091,9 +4108,10 @@ class LazyExpr(LazyArray):
         dtype=None,
         keepdims=False,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         expr = self if where is None else where.where(self, 0)
         item = kwargs.pop("item", ())
@@ -4103,11 +4121,14 @@ class LazyExpr(LazyArray):
             keepdims=keepdims,
             item=item,
             fp_accuracy=fp_accuracy,
+            **execution_kwargs,
         )
         num_elements = (
-            self.get_num_elements(axis, item)
+            self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
             if where is None
-            else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+            else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+            )
         )
         if np.isscalar(num_elements) and num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
@@ -4127,29 +4148,50 @@ class LazyExpr(LazyArray):
         keepdims=False,
         ddof=0,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         item = kwargs.pop("item", ())
         if item == ():  # fast path
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             expr = (self - mean_value) ** 2
         else:
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, item=item, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                item=item,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke std function that executed within slice_eval to avoid this probably.
-            expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, fp_accuracy=fp_accuracy)
+            expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
+        out = expr.mean(
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            where=where,
+            fp_accuracy=fp_accuracy,
+            **execution_kwargs,
+        )
         if ddof != 0:
             num_elements = (
-                self.get_num_elements(axis, item)
+                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
                 if where is None
-                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
             )
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
@@ -4169,29 +4211,50 @@ class LazyExpr(LazyArray):
         keepdims=False,
         ddof=0,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         item = kwargs.pop("item", ())
         if item == ():  # fast path
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             expr = (self - mean_value) ** 2
         else:
             mean_value = self.mean(
-                axis=axis, dtype=dtype, keepdims=True, where=where, item=item, fp_accuracy=fp_accuracy
+                axis=axis,
+                dtype=dtype,
+                keepdims=True,
+                where=where,
+                item=item,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
             )
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke var function that executed within slice_eval to avoid this probably.
-            expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, fp_accuracy=fp_accuracy)
+            expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
+        out = expr.mean(
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            where=where,
+            fp_accuracy=fp_accuracy,
+            **execution_kwargs,
+        )
         if ddof != 0:
             num_elements = (
-                self.get_num_elements(axis, item)
+                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
                 if where is None
-                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
             )
             out = out * num_elements / (num_elements - ddof)
         out2 = kwargs.pop("out", None)
@@ -4207,7 +4270,7 @@ class LazyExpr(LazyArray):
         axis=None,
         keepdims=False,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         if where is not None:
@@ -4228,7 +4291,7 @@ class LazyExpr(LazyArray):
         axis=None,
         keepdims=False,
         where=None,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         if where is not None:
@@ -4248,7 +4311,7 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         keepdims=False,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         reduce_args = {
@@ -4263,7 +4326,7 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         keepdims=False,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         reduce_args = {
@@ -4278,7 +4341,7 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         keepdims=False,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         reduce_args = {
@@ -4292,7 +4355,7 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         keepdims=False,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         reduce_args = {
@@ -4306,7 +4369,7 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         include_initial: bool = False,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         reduce_args = {
@@ -4322,7 +4385,7 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         include_initial: bool = False,
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
         reduce_args = {
@@ -4650,7 +4713,7 @@ class LazyExpr(LazyArray):
     def compute(
         self,
         item=(),
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         jit=None,
         jit_backend: str | None = None,
         **kwargs,
@@ -5133,7 +5196,7 @@ class LazyUDF(LazyArray):
     def compute(
         self,
         item=(),
-        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        fp_accuracy: blosc2.FPAccuracy | None = None,
         jit=None,
         jit_backend=None,
         **kwargs,
@@ -5178,6 +5241,8 @@ class LazyUDF(LazyArray):
             aux_kwargs["jit"] = jit
         if jit_backend is not None:
             aux_kwargs["jit_backend"] = jit_backend
+        if fp_accuracy is not None:
+            aux_kwargs["fp_accuracy"] = fp_accuracy
         urlpath = kwargs.get("urlpath")
         if urlpath is not None and urlpath == aux_kwargs.get(
             "urlpath",
@@ -5403,14 +5468,18 @@ def lazyudf(
         Whether to evaluate the function in chunks or not (blocks).
     jit: bool or None, optional
         JIT policy for miniexpr-backed execution:
-        ``None`` uses default behavior (currently, JIT is tried out), ``True`` prefers JIT, ``False`` disables JIT.
+        ``None`` inherits configured defaults (built-in DSL defaults try JIT),
+        ``True`` prefers JIT, ``False`` disables JIT.
     jit_backend: {"tcc", "cc", "js"} or None, optional
         JIT backend selection. ``None`` uses backend defaults (miniexpr "tcc"), except under
         WebAssembly where — unless ``jit=False`` — it *prefers* ``"js"`` for transpilable
         float DSL kernels and falls back to miniexpr otherwise (``jit=True`` prefers ``"js"``
-        too, since it is JIT-compiled by the JS engine). ``"tcc"`` forces libtcc, ``"cc"``
-        forces the C compiler backend, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
-        to JavaScript (browser/Pyodide only; raises elsewhere).
+        too, since it is JIT-compiled by the JS engine). ``"tcc"`` selects bundled
+        libtcc without a disk cache, ``"cc"`` selects an installed C compiler with
+        persistent caching, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
+        to JavaScript (browser/Pyodide only; raises elsewhere). Native JIT requests
+        remain best effort and use the interpreter if compilation or loading fails.
+        See :ref:`JITOptions` for requirements, diagnostics, and environment settings.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and

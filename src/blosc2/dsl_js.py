@@ -122,6 +122,9 @@ def _get_source(obj) -> str:
 
 class _Transpiler:
     def transpile(self, func: ast.FunctionDef):
+        from .dsl_compare import lower_chained_comparisons
+
+        func = lower_chained_comparisons(func)
         self.params = [a.arg for a in func.args.args]
         used_index = self._collect_index_symbols(func)
         hoist = self._hoist_names(func)
@@ -178,6 +181,8 @@ class _Transpiler:
             return f"{pad}break;\n"
         if isinstance(node, ast.Continue):
             return f"{pad}continue;\n"
+        if isinstance(node, ast.Pass):
+            return f"{pad};\n"
         raise _DSLToJSError(f"unsupported statement: {type(node).__name__}")
 
     def _augassign(self, node):

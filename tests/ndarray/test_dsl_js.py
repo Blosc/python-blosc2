@@ -79,6 +79,8 @@ def misc_dsl(x, y):
 
 def _run_node(module, pts, scalars):
     """Run the emitted JS over `pts` (list of input rows) and return the output list."""
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot spawn the node subprocess")
     node = shutil.which("node")
     if not node:
         pytest.skip("node not found; skipping JS numeric-equivalence check")
@@ -103,6 +105,40 @@ console.log(JSON.stringify(Array.from(out)));
     if res.returncode != 0:
         raise AssertionError(f"node failed:\n{res.stderr}")
     return json.loads(res.stdout)
+
+
+def test_pass_and_python_numeric_literals():
+    def kernel(a):
+        pass
+        x = a + 1_000 + 0xFF + 0b1010 + 0o755
+        if x > 0:
+            pass
+        else:
+            x += 1
+        for _i in range(3):
+            pass
+        return x
+
+    module = build_js_module(kernel)
+    points = [[-2000.0], [0.0], [3.0]]
+    np.testing.assert_array_equal(_run_node(module, points, []), [kernel(p[0]) for p in points])
+
+
+def test_chained_comparisons_and_short_circuit():
+    source = (
+        "def kernel(x):\n"
+        "    y = x\n"
+        "    while 0 <= y < 3:\n"
+        "        y += 1\n"
+        "        continue\n"
+        "    return (0 < y < 10) and (0 < x < 10 // x)\n"
+    )
+    namespace = {}
+    exec(source, namespace)
+    points = [[float(x)] for x in range(-3, 8)]
+    module = build_js_module(source)
+    expected = [bool(namespace["kernel"](p[0])) for p in points]
+    np.testing.assert_array_equal(_run_node(module, points, []), expected)
 
 
 def test_transpile_structure():
@@ -168,6 +204,8 @@ def test_index_symbols_need_ndim_and_valid_axis():
 
 def _run_node_index(module, gshape, off, cshape, ncols=1):
     """Run an index-aware module over one block and return the (flat) output list."""
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot spawn the node subprocess")
     node = shutil.which("node")
     if not node:
         pytest.skip("node not found; skipping JS numeric-equivalence check")
@@ -259,7 +297,7 @@ def _idx(a):
 def test_prefer_js_selection(monkeypatch):
     monkeypatch.setattr(blosc2, "IS_WASM", True)
     af = blosc2.asarray(np.ones((4, 4), dtype=np.float64))
-    ai = blosc2.asarray(np.ones((4, 4), dtype=np.int64))
+    ai = blosc2.asarray(np.ones((4, 4), dtype=np.int32))
 
     def sel(jit, jit_backend, operands, kwargs, reduce_args=None):
         return lx._maybe_js_backend(_add, jit, jit_backend, reduce_args or {}, operands, kwargs)
@@ -294,6 +332,20 @@ def test_prefer_js_selection(monkeypatch):
     expr, *_ = sel(None, None, {"a": ai, "b": ai}, {"dtype": np.float64})
     assert callable(expr)
     assert not lx._is_dsl_kernel_expression(expr)
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.uint64])
+@pytest.mark.parametrize("jit", [None, True])
+@pytest.mark.parametrize("array", [np.asarray, blosc2.asarray])
+def test_prefer_js_preserves_wide_integer_inputs(dtype, jit, array, monkeypatch):
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    operand = array(np.arange(6, dtype=dtype) + 2**54)
+    expr, resolved_jit, backend = lx._maybe_js_backend(
+        _add, jit, None, {}, {"a": operand, "b": operand}, {"dtype": np.float64}
+    )
+    assert expr is _add
+    assert resolved_jit is jit
+    assert backend is None
 
 
 def test_prefer_js_index_needs_shape(monkeypatch):

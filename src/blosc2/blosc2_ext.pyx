@@ -705,6 +705,18 @@ cdef extern from "miniexpr.h":
     int me_compile(const char *expression, const me_variable *variables,
                    int var_count, me_dtype dtype, int *error, me_expr **out)
 
+    ctypedef struct me_jit_options:
+        const char *compiler
+        const char *cflags
+        const char *cache_dir
+        int trace
+        int compiler_output
+
+    int me_compile_nd_jit_options(const char *expression, const me_variable *variables,
+        int var_count, me_dtype dtype, int ndims, const int64_t *shape,
+        const int32_t *chunkshape, const int32_t *blockshape, int jit_mode,
+        const me_jit_options *options, int *error, me_expr **out)
+
     int me_compile_nd_jit(const char *expression, const me_variable *variables,
                           int var_count, me_dtype dtype, int ndims,
                           const int64_t *shape, const int32_t *chunkshape,
@@ -1041,6 +1053,23 @@ cdef inline void _free_me_udata_tables(me_udata* udata, b2nd_array_t** inputs_,
     free(np_data)
     free(np_typesizes)
     free(udata)
+
+
+cdef int _me_compile_nd_configured(const char *expression, const me_variable *variables,
+    int n, me_dtype dtype, int ndims, const int64_t *shape, const int32_t *chunkshape,
+    const int32_t *blockshape, int jit_mode, int *error, me_expr **out_expr) except *:
+    options = blosc2.jit_config.execution_options()
+    cdef bytes compiler_bytes = options["compiler"].encode("utf-8") if options["compiler"] is not None else b""
+    cdef bytes flags_bytes = options["cflags"].encode("utf-8") if options["cflags"] is not None else b""
+    cdef bytes cache_bytes = options["cache_dir"].encode("utf-8") if options["cache_dir"] is not None else b""
+    cdef me_jit_options native_options
+    native_options.compiler = <const char *>compiler_bytes if compiler_bytes else NULL
+    native_options.cflags = <const char *>flags_bytes if flags_bytes else NULL
+    native_options.cache_dir = <const char *>cache_bytes if cache_bytes else NULL
+    native_options.trace = int(options["trace"])
+    native_options.compiler_output = int(options["compiler_output"])
+    return me_compile_nd_jit_options(expression, variables, n, dtype, ndims, shape,
+                                    chunkshape, blockshape, jit_mode, &native_options, error, out_expr)
 
 
 cdef inline str _me_compile_status_name(int rc):
@@ -4396,9 +4425,9 @@ cdef class NDArray:
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd_jit(expression_bytes, variables, n, me_dtype, ndims,
-                                        shape, chunkshape, blockshape, jit_mode,
-                                        &error, &out_expr)
+        cdef int rc = _me_compile_nd_configured(expression_bytes, variables, n, me_dtype, ndims,
+                                         shape, chunkshape, blockshape, jit_mode,
+                                         &error, &out_expr)
         cdef str me_error_msg = _me_compile_error_details(rc, error)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression_display}; details: {me_error_msg}")
@@ -4478,6 +4507,10 @@ cdef class NDArray:
             var.context = NULL
             var.itemsize = v.dtype.itemsize if v.dtype.num in (18, 19) else 0
 
+        backend = blosc2.jit_config.execution_options()["jit_backend"]
+        if backend in ("tcc", "cc"):
+            from blosc2.lazyexpr import _apply_jit_backend_pragma
+            expression = _apply_jit_backend_pragma(expression, inputs, backend)
         cdef bytes expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
         )
@@ -4487,7 +4520,7 @@ cdef class NDArray:
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd_jit(expression_bytes, variables, n, me_output_dtype, ndims,
+        cdef int rc = _me_compile_nd_configured(expression_bytes, variables, n, me_output_dtype, ndims,
                                         shape, chunkshape, blockshape, ME_JIT_ON,
                                         &error, &out_expr)
         for i in range(n):

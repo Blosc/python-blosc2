@@ -12,3 +12,4 @@ API Reference
     save_load
     utilities
     dsl_syntax
+    jit

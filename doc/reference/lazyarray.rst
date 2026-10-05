@@ -21,6 +21,9 @@ underlying carrier and survives reopening.
 
 See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 
+See :ref:`JITOptions` for ``jit``/``jit_backend`` controls, environment settings,
+backend caching, and automatic interpreter fallback.
+
 .. currentmodule:: blosc2
 
 .. autoclass:: LazyArray

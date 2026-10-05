@@ -56,8 +56,9 @@ and avoid introducing new compiler warnings. Link issues when applicable and
 include clear reproduction steps for bug fixes.
 
 **IMPORTANT — Agent commit policy**: Never run `git commit`, `git push`,
-`git reset`, `git rebase`, or any other destructive/state-changing git operation.
-Committing and all repo state changes are exclusively the user’s decision.
+`git reset`, `git rebase`, or any other destructive/state-changing git operation
+without explicit user's consent. Committing and all repo state changes are
+exclusively the user’s decision.
 
 Never ask, offer, suggest, or otherwise raise the topic of committing — not
 "Want me to commit?", not "Should I commit these as one commit or split?", not

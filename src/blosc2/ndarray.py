@@ -6207,6 +6207,15 @@ def arange(
 
     Other Parameters
     ----------------
+    jit: bool or None, optional
+        Execution policy for the DSL-backed ramp: None (default) inherits the
+        configured JIT policy (tries JIT with built-in defaults); True tries JIT,
+        and False disables it. Native compilation or allocation failure falls
+        back quietly to the interpreter. See :ref:`JITOptions`.
+    jit_backend: {"tcc", "cc", "js"} or None, optional
+        Select the runtime compiler. Native defaults use bundled TCC without
+        disk caching. CC needs an installed compiler and uses persistent caching;
+        JS is WebAssembly/Pyodide-only. See :ref:`JITOptions` for limitations.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -6264,6 +6273,7 @@ def arange(
 
     if is_inside_new_expr() or NUM == 0:
         # We already have the dtype and shape, so return immediately
+        blosc2.jit_config.pop_execution_options(kwargs)
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
     # Windows and wasm32 does not support complex numbers in DSL
@@ -6320,8 +6330,19 @@ def linspace(
         efficient, as it does not require an intermediate copy of the array.
         Default is True.
     **kwargs: Any
-        Keyword arguments accepted by the :func:`empty` constructor.
+        Storage arguments accepted by :func:`empty`, plus the execution options below.
 
+    Other Parameters
+    ----------------
+    jit: bool or None, optional
+        Execution policy for the DSL-backed ramp: None (default) inherits the
+        configured JIT policy (tries JIT with built-in defaults); True tries JIT,
+        and False disables it. Native compilation or allocation failure falls
+        back quietly to the interpreter. See :ref:`JITOptions`.
+    jit_backend: {"tcc", "cc", "js"} or None, optional
+        Select the runtime compiler. Native defaults use bundled TCC without
+        disk caching. CC needs an installed compiler and uses persistent caching;
+        JS is WebAssembly/Pyodide-only. See :ref:`JITOptions` for limitations.
 
     Returns
     -------
@@ -6374,6 +6395,7 @@ def linspace(
 
     if is_inside_new_expr() or num == 0:
         # We already have the dtype and shape, so return immediately
+        blosc2.jit_config.pop_execution_options(kwargs)
         return blosc2.zeros(shape, dtype=dtype, **kwargs)  # will return empty array for num == 0
 
     # Windows and wasm32 does not support complex numbers in DSL

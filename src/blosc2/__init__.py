@@ -587,6 +587,7 @@ from .exceptions import UnsafeDeserializationError
 from .c2array import c2context, C2Array, C2NDSource, ChunkAlreadyWritten, URLPath
 
 from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl, validate_dsl_jit
+from .jit_config import get_jit_options, jit_options, set_jit_options
 from .lazyexpr import (
     LazyExpr,
     lazyudf,
@@ -876,6 +877,10 @@ __all__ = [  # noqa : RUF022
     "to_utf8",
     # Grouped reductions
     "group_reduce",
+    # JIT configuration
+    "get_jit_options",
+    "set_jit_options",
+    "jit_options",
     # Classes
     "C2Array",
     "C2NDSource",

@@ -4,6 +4,48 @@
 
 XXX version-specific blurb XXX
 
+### More Python-like DSL kernels
+
+- Added Python chained comparisons such as `0 <= x < 10`, with single operand
+  evaluation and short-circuiting across interpreter, native JIT, and JavaScript.
+- Chain handling lives in miniexpr's native DSL front end: C and other callers
+  can use the same raw DSL syntax without Python preprocessing.
+- Fixed numeric intermediate typing in Boolean-output DSL kernels.
+- Added `pass` as a no-op, including otherwise empty branch and loop bodies.
+- Corrected native JIT range loops to retain the last visited loop-variable
+  value after completion, matching the interpreter and Python.
+- Numeric literals accept Python-style digit separators and binary/octal/hex
+  integer prefixes. Normalization is shared by interpreter and native JIT paths;
+  malformed literals are rejected without changing strings or identifiers.
+- DSL kernels accept single-line and multiline docstrings, preserving Python
+  `__doc__` while ignoring documentation during interpreter/JIT execution.
+- Simple statements can share a line using semicolons, including inside nested
+  blocks. Compound statements still require their own lines and indented bodies.
+- Parenthesized multiline expressions and calls now support embedded comments.
+
+### Safer native JIT execution
+
+- Added `set_jit_options()`, `get_jit_options()`, and task/thread-local
+  `jit_options()` contexts. Configure JIT policy/backend, floating-point accuracy,
+  tracing, CC compiler/flags/cache directory and compiler output without changing
+  process environment variables. Explicit per-call settings remain authoritative
+  over Python defaults; existing environment overrides are preserved.
+- Native compilation receives call-local settings. Toolchain settings now
+  participate in process-cache identity, preventing stale reuse after changing
+  compiler flags or the selected compiler.
+
+- Bundled TCC now uses anonymous memfd-backed RW/RX executable storage on Linux,
+  avoiding the executable-heap failure reported with SELinux (#730). Its runtime
+  path no longer creates or requires a filesystem JIT cache. No installed system
+  compiler or libselinux dependency is required.
+- Native TCC/CC compilation and loading failures fall back quietly to miniexpr's
+  interpreter, including explicit `jit=True` requests. `ME_DSL_TRACE=1` reports
+  fallback reasons; compiler output remains opt-in. CC still supports optimized
+  compilation and persistent shared-library caching.
+- Added a JIT options API reference, including constructor kwargs, backend
+  requirements, environment precedence, caching, and diagnostics. Corrected the
+  generated allocation declaration that caused an Apple Clang warning.
+
 ## Changes from 4.14.0 to 4.14.1
 
 Python-Blosc2 4.14.1 is a security and feature release introducing safe
