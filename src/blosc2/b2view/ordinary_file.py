@@ -5,7 +5,8 @@ import os
 import stat
 import tempfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from blosc2.core import find_url_separator, fsspec_filesystem, is_fsspec_url, parse_container_url
 
@@ -53,7 +54,8 @@ def local_path(source):
         parsed = urlsplit(source)
         if parsed.netloc not in {"", "localhost"}:
             raise ValueError("file:// URLs must refer to the local host")
-        return Path(unquote(parsed.path))
+        # url2pathname handles /C:/ drive prefixes on Windows as well as escapes.
+        return Path(url2pathname(parsed.path))
     return Path(source)
 
 

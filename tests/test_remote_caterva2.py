@@ -51,6 +51,8 @@ def safe(value):
 
 @pytest.fixture
 def caterva2_source(request):
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot run a threaded HTTP server")
     array = blosc2.asarray(np.arange(60, dtype=np.int32).reshape(6, 10), chunks=(3, 5), blocks=(1, 5))
     nrows = getattr(request, "param", 12)
     if nrows in ("rich", "rich-large"):

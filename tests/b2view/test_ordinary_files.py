@@ -11,11 +11,22 @@ from tui_wait import wait_until
 
 import blosc2
 from blosc2.b2view.model import StoreBrowser
-from blosc2.b2view.ordinary_file import MAX_READ_BYTES, OrdinaryFile, ordinary_source
+from blosc2.b2view.ordinary_file import MAX_READ_BYTES, OrdinaryFile, local_path, ordinary_source
+
+
+@pytest.mark.parametrize("name", ["README.md", "a space.md", "literal%20.md", "café.md"])
+def test_local_file_url_roundtrip(tmp_path, name):
+    path = tmp_path / name
+    assert local_path(path.as_uri()) == path
+    assert local_path(path.as_uri().replace("file:///", "file://localhost/", 1)) == path
+    assert local_path(str(path)) == path
 
 
 @pytest.fixture
 def ordinary_http(tmp_path):
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot run a threaded HTTP server")
+
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass

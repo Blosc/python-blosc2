@@ -119,6 +119,8 @@ def test_remote_carriers_refuse_structural_metadata_and_large_chunks(monkeypatch
 
 @pytest.fixture
 def document_http():
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot run a threaded HTTP server")
     state = {"frame": carrier(b"# Hello\n" * 10000), "mode": "range", "requests": []}
 
     class Handler(http.server.BaseHTTPRequestHandler):
