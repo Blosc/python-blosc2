@@ -2,6 +2,13 @@
 # Copyright (c) 2026, Blosc Development Team <blosc@blosc.org>
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+"""Portable host integration, with separate semantic and execution matrices.
+
+The exhaustive shared DSL corpus is certified by native miniexpr CTest. Here,
+boundary values live in compact dtype/operator scenarios; engine/length checks
+are independent. Rejected features do not multiply across unused JIT/size axes.
+"""
+
 import ast
 import json
 import os
@@ -20,11 +27,6 @@ CORPUS = Path(
     )
 )
 ARTIFACTS = CORPUS.parent / "portable-artifacts"
-EXCLUDED = (
-    set((CORPUS / "frozen-excluded.txt").read_text().split())
-    if (CORPUS / "frozen-excluded.txt").is_file()
-    else set()
-)
 SCALE = 2.0
 BIAS = -1.0
 
@@ -62,6 +64,10 @@ def assert_frozen_rejection(source, inputs, output):
         ("x + 0.5", "int64", "int64"),
         ("x == 9007199254740993.0", "int64", "bool"),
         ("float(x)", "int64", "float32"),
+        ("float(-(x * 0.1))", "float32", "float32"),
+        ("bool(int(x + 0.25))", "float64", "bool"),
+        ("float(int(x) / 2)", "float32", "float32"),
+        ("int(x) / 2", "float64", "int64"),
     ],
 )
 def test_frozen_boundary_without_corpus(native_artifacts, expression, input_dtype, output_dtype):
@@ -392,9 +398,45 @@ def test_optional_adapter_availability():
             blosc2.PortableKernel.from_json("{}", jit=False)
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
+# Execution engines and sizes are independent of the numeric scenario matrix.
+# Exercise scalar, short-vector, and tile-tail execution, including repeated
+# handles, Boolean bytes, float32 rounding, and local negative zero.
+@pytest.mark.parametrize(
+    ("compiler", "jit"),
+    [
+        pytest.param("tcc", False, id="interpreter"),
+        pytest.param("tcc", True, id="tcc"),
+        pytest.param("cc", True, id="cc"),
+    ],
+)
 @pytest.mark.parametrize("count", [1, 2, 257])
+def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
+    cases = [
+        ("bool", "bool", "    half = x * 0.5\n    return half\n", [True, False], [True, False]),
+        (
+            "float32",
+            "float32",
+            "    rounded = float(x) + 0.1\n    return rounded - float(x)\n",
+            [2**24, -(2**24)],
+            [0.0, 0.0],
+        ),
+        ("float64", "float64", "    truth = bool(x)\n    return -truth\n", [0.0, 1.0], [-0.0, -1.0]),
+    ]
+    for input_dtype, output_dtype, body, samples, expected in cases:
+        source = f"# me:compiler={compiler}\ndef k(x):\n{body}"
+        artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+        kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+        assert kernel.has_jit == jit
+        for _ in range(2):
+            actual = kernel.evaluate({"x": np.resize(np.array(samples, dtype=input_dtype), count)})
+            desired = np.resize(np.array(expected, dtype=output_dtype), count)
+            np.testing.assert_array_equal(actual, desired)
+            if output_dtype == "bool":
+                assert np.all(actual.view("uint8") <= 1)
+            else:
+                np.testing.assert_array_equal(np.signbit(actual), np.signbit(desired))
+
+
 @pytest.mark.parametrize(
     ("body", "samples"),
     [
@@ -411,7 +453,8 @@ def test_optional_adapter_availability():
         ("    return (x + 9007199254740992) - 9007199254740992\n", [False, True]),
     ],
 )
-def test_bool_output_numeric_arithmetic(native_artifacts, compiler, jit, count, body, samples):
+def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
+    compiler, jit, count = "tcc", False, 257
     if "int(x +" in body:
         assert_frozen_rejection(f"# me:compiler={compiler}\ndef k(x):\n{body}", {"x": "bool"}, "bool")
         return
@@ -430,16 +473,29 @@ def test_bool_output_numeric_arithmetic(native_artifacts, compiler, jit, count, 
         assert np.all(actual.view("uint8") <= 1)
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("input_dtype", ["bool", "int32", "int64", "float32", "float64"])
-@pytest.mark.parametrize("output_dtype", ["float32", "float64"])
-@pytest.mark.parametrize("count", [1, 10, 257])
-@pytest.mark.parametrize("operation", ["sum", "difference", "product", "negation"])
-@pytest.mark.parametrize("local", [False, True])
+# Test each dtype/operation once, rotating the independent execution paths and
+# output widths. Backend/length coverage is tested separately below, not crossed
+# with every numeric scenario. Locals and direct expressions both remain covered.
+@pytest.mark.parametrize(
+    ("input_dtype", "operation", "compiler", "jit", "output_dtype", "local"),
+    [
+        pytest.param(
+            dtype,
+            operation,
+            "cc" if (d + o) % 3 == 2 else "tcc",
+            (d + o) % 3 != 0,
+            "float32" if (d + o) % 2 == 0 else "float64",
+            (d // 2 + o) % 2 == 1,
+            id=f"{dtype}-{operation}",
+        )
+        for d, dtype in enumerate(["bool", "int32", "int64", "float32", "float64"])
+        for o, operation in enumerate(["sum", "difference", "product", "negation"])
+    ],
+)
 def test_bool_cast_floating_arithmetic(
-    native_artifacts, compiler, jit, input_dtype, output_dtype, count, operation, local
+    native_artifacts, compiler, jit, input_dtype, output_dtype, operation, local
 ):
+    count = 257
     expressions = {
         "sum": "bool(x) + bool(x)",
         "difference": "bool(x) - bool(x)",
@@ -476,22 +532,10 @@ def test_bool_cast_floating_arithmetic(
         np.testing.assert_array_equal(np.signbit(actual[zeros]), np.signbit(expected[zeros]))
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("count", [1, 10, 257])
 @pytest.mark.parametrize("output_dtype", ["float32", "float64"])
-@pytest.mark.parametrize("operation", ["leaf", "nested", "repeated", "negation"])
-def test_float_cast_arithmetic_rounding(native_artifacts, compiler, jit, count, output_dtype, operation):
-    expressions = {
-        "leaf": "(float(x) + 0.1) - float(x)",
-        "nested": "float(x + 0.1) - float(x)",
-        "repeated": "float(float(x) + 0.1) - float(float(x))",
-        "negation": "float(-(x * 0.1))",
-    }
-    source = f"# me:compiler={compiler}\ndef k(x):\n    return {expressions[operation]}\n"
-    if operation != "leaf":
-        assert_frozen_rejection(source, {"x": "float32"}, output_dtype)
-        return
+def test_float_cast_arithmetic_rounding(native_artifacts, output_dtype):
+    compiler, jit, count = "tcc", False, 257
+    source = f"# me:compiler={compiler}\ndef k(x):\n    return (float(x) + 0.1) - float(x)\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     if jit:
@@ -515,9 +559,7 @@ def test_float_cast_arithmetic_rounding(native_artifacts, compiler, jit, count, 
     computation = values.astype(output_dtype)
     constant = np.array(0.1, dtype=output_dtype)
     with np.errstate(all="ignore"):
-        expected = (
-            -(computation * constant) if operation == "negation" else (computation + constant) - computation
-        )
+        expected = (computation + constant) - computation
     for _ in range(2):
         actual = kernel.evaluate({"x": values})
         np.testing.assert_array_equal(actual, expected)
@@ -525,77 +567,10 @@ def test_float_cast_arithmetic_rounding(native_artifacts, compiler, jit, count, 
         np.testing.assert_array_equal(np.signbit(actual[zeros]), np.signbit(expected[zeros]))
 
 
-@pytest.mark.parametrize("case", ["math_widen", "math_condition", "math_local_widen"])
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("count", [1, 2, 257])
-def test_math_is_outside_frozen_profile(native_artifacts, case, compiler, jit, count):
-    if not CORPUS.is_dir():
-        pytest.skip("Native fixtures unavailable")
-    words = (CORPUS / f"{case}.txt").read_text().split()
-    input_dtype, output_dtype = words[1:3]
-    source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
-    assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
-
-
-@pytest.mark.parametrize(
-    "case",
-    [
-        "division_int",
-        "division_bool",
-        "division_literals",
-        "division_locals",
-        "division_loop",
-        "division_float32",
-        "division_condition",
-        "arithmetic_round",
-        "arithmetic_decimal",
-        "arithmetic_scalar_sub",
-        "arithmetic_local_round",
-        "arithmetic_widen",
-        "arithmetic_float_cast",
-        "arithmetic_float_nested",
-        "arithmetic_float_local",
-        "arithmetic_float_widen",
-        "bool_float_sum",
-        "bool_float_neg",
-        "bool_float_product",
-        "bool_float_difference",
-        "bool_float_local_neg",
-    ],
-)
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-def test_typed_arithmetic_artifact(native_artifacts, case, compiler, jit):
-    if not (CORPUS / f"{case}.txt").is_file():
-        pytest.skip("Native arithmetic fixtures unavailable")
-    if jit:
-        control = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n    return x\n")
-        control = blosc2.PortableKernel.from_json(control.export({"x": "float64"}, "float64"), jit=True)
-        if not control.has_jit:
-            pytest.skip(f"{compiler} backend unavailable")
-    words = (CORPUS / f"{case}.txt").read_text().split()
-    input_dtype, output_dtype = words[1:3]
-    rows = np.array(words[6:]).reshape(int(words[3]), 2)
-    source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
-    if case in EXCLUDED:
-        assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
-        return
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    assert kernel.has_jit == jit
-    np.testing.assert_array_equal(
-        kernel.evaluate({"x": np.array(rows[:, 0], dtype=input_dtype)}),
-        np.array(rows[:, 1], dtype=output_dtype),
-    )
-
-
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("count", [1, 5, 257])
 @pytest.mark.parametrize("output_dtype", ["float32", "float64"])
 @pytest.mark.parametrize("operation", ["add", "subtract", "multiply"])
-def test_float_arithmetic_constant_rounding(native_artifacts, compiler, jit, count, output_dtype, operation):
+def test_float_arithmetic_constant_rounding(native_artifacts, output_dtype, operation):
+    compiler, jit, count = "cc", True, 257
     expressions = {
         "add": "(x + 0.1) - x",
         "subtract": "x - 0.1",
@@ -622,11 +597,10 @@ def test_float_arithmetic_constant_rounding(native_artifacts, compiler, jit, cou
         np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("count", [1, 5, 257])
+@pytest.mark.parametrize(("compiler", "jit"), [("tcc", False), ("tcc", True), ("cc", True)])
 @pytest.mark.parametrize("cap", ["3", "0", "-1", "invalid"])
-def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, count, cap):
+def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, cap):
+    count = 257
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", cap)
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
@@ -647,8 +621,7 @@ def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, count, c
     assert kernel.evaluate({"x": np.empty(0, dtype="int64")}).size == 0
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize(("compiler", "jit"), [("tcc", False), ("tcc", True), ("cc", True)])
 @pytest.mark.parametrize("compile_cap", ["0", "3"])
 def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler, jit, compile_cap):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", compile_cap)
@@ -674,22 +647,11 @@ def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler,
         kernel.evaluate({"x": values})
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-def test_while_cap_hybrid_cleanup(native_artifacts, monkeypatch, compiler):
-    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
-    source = (
-        f"# me:compiler={compiler}\ndef k(x):\n    value = sin(x)\n    n = 0\n"
-        "    while n < x:\n        n = n + 1\n    return value\n"
-    )
-    assert_frozen_rejection(source, {"x": "float64"}, "float64")
-
-
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("dtype", ["int32", "int64", "float32", "float64"])
-@pytest.mark.parametrize("count", [1, 3, 257])
-@pytest.mark.parametrize("samples", [[0, 2, 3, -1], [3, 2, 0, -1]])
-def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dtype, count, samples):
+@pytest.mark.parametrize(
+    ("dtype", "compiler", "jit"),
+    [("int32", "tcc", False), ("int64", "tcc", True), ("float32", "cc", True), ("float64", "tcc", True)],
+)
+def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dtype):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     source = (
         (CORPUS / "while_cap_chain.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
@@ -698,18 +660,22 @@ def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dt
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     if jit:
         assert kernel.has_jit
-    values = np.resize(np.array(samples, dtype=dtype), count)
-    expected = np.maximum(values, np.array(0, dtype=dtype))
-    for _ in range(2):
-        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
+    # Lane ordering is the actual regression boundary, not every size/backend
+    # combination. Keep both first-lane states in each dtype scenario.
+    for samples in [[0, 2, 3, -1], [3, 2, 0, -1]]:
+        values = np.resize(np.array(samples, dtype=dtype), 257)
+        expected = np.maximum(values, np.array(0, dtype=dtype))
+        for _ in range(2):
+            np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("dtype", ["int32", "int64", "float32", "float64"])
-@pytest.mark.parametrize("count", [4, 257])
+@pytest.mark.parametrize(
+    ("dtype", "compiler", "jit"),
+    [("int32", "tcc", False), ("int64", "tcc", True), ("float32", "cc", True), ("float64", "tcc", True)],
+)
 @pytest.mark.parametrize("case", ["masked_local_chain", "masked_bool_chain"])
-def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, count, case):
+def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, case):
+    count = 257
     source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, "bool")
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
@@ -721,31 +687,39 @@ def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, cou
         np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
 
 
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize("jit", [False, True])
+# Cap policy and post-load changes above cover all engines. These scenarios
+# isolate control-flow semantics rather than crossing the same policy again.
 @pytest.mark.parametrize(
-    ("body", "expected"),
+    ("body", "expected", "compiler", "jit"),
     [
-        ("    n = 0\n    while 0 <= n < 3:\n        n = n + 1\n    return n\n", 3),
+        ("    n = 0\n    while 0 <= n < 3:\n        n = n + 1\n    return n\n", 3, "tcc", False),
         (
             "    n = 0\n    while x:\n        n = n + 1\n        if n == 3:\n            break\n    return n\n",
             3,
+            "tcc",
+            True,
         ),
         (
             "    n = 0\n    while x:\n        n = n + 1\n        if n == 3:\n            return n\n    return n\n",
             3,
+            "cc",
+            True,
         ),
         (
             "    total = 0\n    for i in range(2):\n        n = 0\n        while n < 3:\n"
             "            n = n + 1\n            total = total + 1\n    return total\n",
             6,
+            "tcc",
+            True,
         ),
         (
             "    total = 0\n    n = 0\n    while n < 3:\n        n = n + 1\n        m = 0\n"
             "        while m < 3:\n            m = m + 1\n            total = total + 1\n    return total\n",
             9,
+            "cc",
+            True,
         ),
-        ("    if x > 1:\n        while x:\n            pass\n    return x\n", 1),
+        ("    if x > 1:\n        while x:\n            pass\n    return x\n", 1, "tcc", False),
     ],
 )
 def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, body, expected):
@@ -759,48 +733,6 @@ def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, bo
     np.testing.assert_array_equal(
         kernel.evaluate({"x": np.ones(5, dtype="int64")}), np.full(5, expected, dtype="int64")
     )
-
-
-@pytest.mark.parametrize("compiler", ["tcc", "cc"])
-@pytest.mark.parametrize(
-    ("body", "output_dtype", "expected"),
-    [
-        ("return int(x / 2) / 2", "float64", [-0.5, 0, 0, 0, 0.5]),
-        ("return int(x) / 2", "int64", [-1, 0, 0, 0, 1]),
-        ("return int(x + 0.25) / 2", "float64", [-1.5, -0.5, 0, 1, 2]),
-        ("if (int(x) / 2) > 0:\n        return 1.0\n    return 0.0", "float64", [0, 0, 0, 1, 1]),
-    ],
-)
-def test_unsupported_division_is_rejected(native_artifacts, compiler, body, output_dtype, expected):
-    source = f"# me:compiler={compiler}\ndef k(x):\n    {body}\n"
-    assert_frozen_rejection(source, {"x": "float64"}, output_dtype)
-
-
-@pytest.mark.parametrize("input_dtype", ["float32", "float64"])
-@pytest.mark.parametrize("output_dtype", ["float32", "float64"])
-@pytest.mark.parametrize("count", [1, 5, 257])
-@pytest.mark.parametrize("jit", [False, True])
-def test_nested_conversion_is_rejected(native_artifacts, input_dtype, output_dtype, count, jit):
-    source = "def k(x):\n    return float(int(x) / 2)\n"
-    assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
-
-
-@pytest.mark.parametrize(
-    ("expression", "expected"),
-    [
-        ("int(x + 0.25)", [-1, 0, 0, 2, 5]),
-        ("bool(x + 0.25)", [1, 0, 1, 1, 1]),
-        ("bool(int(x + 0.25))", [1, 0, 0, 1, 1]),
-    ],
-)
-@pytest.mark.parametrize("input_dtype", ["float32", "float64"])
-@pytest.mark.parametrize("output_dtype", ["bool", "int32", "int64", "float32", "float64"])
-@pytest.mark.parametrize("jit", [False, True])
-def test_floating_expression_casts_are_rejected(
-    native_artifacts, expression, expected, input_dtype, output_dtype, jit
-):
-    source = f"# me:compiler=tcc\ndef k(x):\n    return {expression}\n"
-    assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
 
 
 @pytest.mark.parametrize("jit", [False, True])

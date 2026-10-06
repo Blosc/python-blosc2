@@ -145,6 +145,12 @@ accept them through ``**kwargs``. Eligible lazy-expression reductions, such as
 settings tune execution rather than array storage; they are not options to
 :func:`blosc2.empty`.
 
+Scalar miniexpr reductions currently use the native interpreter, even when JIT
+is requested. Elementwise DSL returns (including automatically lifted expressions)
+write a block of values and cannot safely target a single reduction accumulator.
+Other execution options still apply, and non-scalar reduction paths retain their
+usual evaluation policies.
+
 ``jit=None`` (default)
     Use the entry point's default policy. DSL kernels, including the real-valued
     ramps used by ``arange`` and ``linspace``, try JIT. Plain expressions do not
@@ -268,9 +274,9 @@ controls have different scopes; neither is an indication that JIT actually ran.
       - Disable applicable process-local positive-cache reuse. This does not
         disable persistent CC disk-cache reuse.
     * - ``ME_DSL_JIT_COMPILER``
-      - Advanced miniexpr-wide compiler override, ``tcc`` or ``cc``. It overrides
-        native compiler selection in DSL pragmas, including the selection emitted
-        by Python's ``jit_backend`` option. Prefer per-call options ordinarily.
+      - Advanced miniexpr-wide compiler default, ``tcc`` or ``cc``. It overrides
+        Python's ``jit_backend`` selection, but an explicit author-written
+        ``# me:compiler=tcc|cc`` pragma remains authoritative.
 
 Tracing and restricted environments
 -----------------------------------

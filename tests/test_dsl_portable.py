@@ -1,4 +1,4 @@
-"""Initial raw-source portable conformance; the corpus is owned by miniexpr."""
+"""Representative Python host conformance; exhaustive fixtures belong to miniexpr."""
 
 import os
 import subprocess
@@ -18,71 +18,25 @@ CORPUS = Path(
 )
 
 
+# Native CTest runs every fixture under its supported execution engines. Python
+# tests only distinct host boundaries here, plus every exact output conversion;
+# numerical/JIT scenarios are covered separately by test_portable_artifact.py.
 CASES = [
     "affine",
     "chains",
     "loops",
-    "int32",
-    "int64",
-    "float32",
-    "bool",
-    "compare",
     "special_floats",
     "flow",
-    "boolean_results",
-    "cast_int",
     "math",
-    "division_int",
     "division_bool",
     "division_literals",
     "division_locals",
-    "division_loop",
-    "division_float32",
-    "division_condition",
-    "cast_argument_int",
-    "cast_argument_bool",
-    "cast_argument_nested",
-    "cast_integer_exact",
-    "cast_nonfinite_truth",
-    "math_widen",
-    "math_condition",
-    "math_local_widen",
-    "arithmetic_round",
-    "arithmetic_decimal",
-    "arithmetic_scalar_sub",
-    "arithmetic_local_round",
-    "arithmetic_widen",
-    "arithmetic_float_cast",
-    "arithmetic_float_nested",
-    "arithmetic_float_local",
-    "arithmetic_float_widen",
-    "bool_float_sum",
-    "bool_float_neg",
-    "bool_float_product",
-    "bool_float_difference",
-    "bool_float_local_neg",
-    "bool_output_fraction",
-    "bool_output_add",
-    "bool_output_cast",
-    "bool_numeric_local",
-    "bool_numeric_int_cast",
-    "while_cap_exact",
     "while_cap_exceeded",
-    "while_cap_continue",
-    "while_cap_hybrid",
-    "while_cap_chain",
-    "masked_local_chain",
-    "masked_bool_chain",
     "unknown_name",
-    "invalid_index",
     "zero_step",
-    "missing_return",
-    "missing_return_ok",
     "missing_return_mixed",
     "missing_return_loop",
     "missing_return_loop_ok",
-    "missing_return_hybrid",
-    "missing_return_hybrid_ok",
 ]
 TYPES = ("bool", "int32", "int64", "float32", "float64")
 EXCLUDED = (
@@ -115,8 +69,8 @@ def assert_typed_result(actual, expected, *, exact=False):
 
 
 @pytest.mark.parametrize("case", CASES)
-@pytest.mark.parametrize("jit", [False, True])
-def test_native_source_corpus(case, jit, monkeypatch):
+def test_native_source_corpus(case, portable_validator, monkeypatch):
+    jit = True
     if case.startswith("while_cap_"):
         monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     if not CORPUS.is_dir():
@@ -126,6 +80,10 @@ def test_native_source_corpus(case, jit, monkeypatch):
     outcome, input_type, output_type = words[:3]
     count, nvars = map(int, words[3:5])
     names = words[5 : 5 + nvars]
+    info = portable_validator(source, dict.fromkeys(names, input_type), output_type)
+    assert info["valid"] == (outcome != "compile_error" and case not in EXCLUDED), info
+    if case in EXCLUDED:
+        assert info["status"] == "unsupported_feature"
     rows = np.array(words[5 + nvars :]).reshape(count, nvars + 1)
     input_dtype, output_dtype = np.dtype(input_type), np.dtype(output_type)
     expected = typed_values(rows[:, -1], output_dtype)
@@ -215,20 +173,6 @@ def portable_validator():
         pytest.skip("Rebuild with miniexpr portable validation support")
     assert info == {"valid": True, "status": "success", "line": 0, "column": 0, "error": None}
     return blosc2.validate_portable_dsl
-
-
-@pytest.mark.parametrize("case", CASES)
-def test_portable_profile_corpus(portable_validator, case):
-    if not CORPUS.is_dir():
-        pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
-    words = (CORPUS / f"{case}.txt").read_text().split()
-    outcome, input_type, output_type = words[:3]
-    nvars = int(words[4])
-    inputs = dict.fromkeys(words[5 : 5 + nvars], input_type)
-    info = portable_validator(corpus_source(case).read_text(), inputs, output_type)
-    assert info["valid"] == (outcome != "compile_error" and case not in EXCLUDED), info
-    if case in EXCLUDED:
-        assert info["status"] == "unsupported_feature"
 
 
 @pytest.mark.parametrize(

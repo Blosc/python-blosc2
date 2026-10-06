@@ -1530,6 +1530,10 @@ def fill_chunk_operands(
 
 
 def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | None) -> str:
+    # Author-written pragmas are authoritative. Python's synthesized pragma is
+    # only a local default and must not override the native environment policy.
+    if "# me:compiler=" in expression:
+        return expression
     if jit_backend is None:
         return expression
     if jit_backend == "js":
@@ -1538,11 +1542,15 @@ def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | 
     if jit_backend not in ("tcc", "cc"):
         raise ValueError("jit_backend must be one of: None, 'tcc', 'cc', 'js'")
 
+    env_backend = os.environ.get("ME_DSL_JIT_COMPILER", "").strip().lower()
+    if env_backend in ("tcc", "cc"):
+        jit_backend = env_backend
+
     pragma = f"# me:compiler={jit_backend}\n"
-    stripped = expression.lstrip()
+    stripped = "\n".join(
+        line for line in expression.splitlines() if not line.lstrip().startswith("#")
+    ).lstrip()
     if stripped.startswith("def "):
-        if "# me:compiler=" in expression:
-            return expression
         return pragma + expression
     params = ", ".join(k for k, v in inputs.items() if hasattr(v, "dtype"))
     return f"{pragma}def __me_auto({params}):\n    return {expression}"
@@ -2733,8 +2741,9 @@ def reduce_slices(  # noqa: C901
     if ne_args is None:
         ne_args = {}
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
-    jit = kwargs.pop("jit", None)
-    jit_backend = kwargs.pop("jit_backend", None)
+    # Scalar native reductions cannot use elementwise DSL JIT output buffers.
+    kwargs.pop("jit", None)
+    kwargs.pop("jit_backend", None)
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
     reduce_op_str = reduce_args.pop("op_str", None)
@@ -2912,8 +2921,13 @@ def reduce_slices(  # noqa: C901
                 expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
             else:
                 expression_miniexpr = f"{reduce_op_str}({expression})"
-            expression_miniexpr = _apply_jit_backend_pragma(expression_miniexpr, operands, jit_backend)
-            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=jit)
+            # Keep reductions as native scalar expressions. A DSL return
+            # broadcasts a reduced value across the output block, whereas this
+            # prefilter supplies only one accumulator slot per block. Explicit
+            # JIT_ON also auto-lifts plain expressions in the native compiler,
+            # so use the scalar interpreter until reduction JIT has a separate
+            # output-cardinality contract.
+            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=False)
             prefilter_set = True
             # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
