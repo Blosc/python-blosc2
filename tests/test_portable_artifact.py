@@ -353,6 +353,41 @@ def test_optional_adapter_availability():
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("count", [1, 2, 257])
+@pytest.mark.parametrize(
+    ("body", "samples"),
+    [
+        ("    return x + 0.5\n", [True, True]),
+        ("    return x * 0.5\n", [False, True]),
+        ("    return bool(x + 0.5)\n", [True, True]),
+        ("    return (x + x) == 2\n", [False, True]),
+        ("    return (x * 0.5) == 0.5\n", [False, True]),
+        ("    return int(x + 0.5) == 0\n", [True, False]),
+        ("    half = x * 0.5\n    return half == 0.5\n", [False, True]),
+        ("    half = x * 0.5\n    return half * 2 == x\n", [True, True]),
+        ("    return x - 1\n", [True, False]),
+        ("    return -x\n", [False, True]),
+        ("    return (x + 9007199254740992) - 9007199254740992\n", [False, True]),
+    ],
+)
+def test_bool_output_numeric_arithmetic(native_artifacts, compiler, jit, count, body, samples):
+    artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
+        {"x": "bool"}, "bool"
+    )
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    values = np.resize(np.array([False, True]), count)
+    expected = np.resize(np.array(samples), count)
+    for _ in range(2):
+        actual = kernel.evaluate({"x": values})
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.dtype == np.dtype("bool")
+        assert np.all(actual.view("uint8") <= 1)
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.parametrize("input_dtype", ["bool", "int32", "int64", "float32", "float64"])
 @pytest.mark.parametrize("output_dtype", ["float32", "float64"])
 @pytest.mark.parametrize("count", [1, 10, 257])

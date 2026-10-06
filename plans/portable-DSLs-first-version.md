@@ -260,6 +260,19 @@ failures or new native build warnings. `audit/bool_output_fraction` preserves an
 unresolved Boolean-output arithmetic discrepancy, not a normative rule; that
 domain and broader mixed-type promotion remain publication gates.
 
+The next slice implements the user-selected numeric-then-truth Boolean contract.
+Boolean operands are numeric zero/one, fractional literals and intermediates
+stay numeric, and truth conversion occurs only at a Boolean output or explicit
+`bool()` call. Boolean-only/integral-literal contexts compute in int64;
+fractional-literal contexts compute in float64. Locals and cast arguments retain
+numeric values, and a `2**53` cancellation regression checks exact integral
+intermediates. `bool_output_fraction` is promoted from the audit corpus, with
+four additional shared fixtures and scalar/vector backend matrices. Cache
+version is 20. Validation passed 413 regular native tests, 322 AddressSanitizer
+tests, and 2161 focused Python tests without expected failures or new native
+compiler warnings. This closes the sampled Boolean-output discrepancy, not the
+remaining arbitrary mixed-type promotion and overflow contracts.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently
