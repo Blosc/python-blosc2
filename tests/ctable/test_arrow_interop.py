@@ -19,6 +19,96 @@ from blosc2 import CTable
 pa = pytest.importorskip("pyarrow")
 
 
+@pytest.mark.parametrize("first_rows", [0, 1, 7])
+@pytest.mark.parametrize("producer", ["schema", "reader"])
+def test_unknown_arrow_stream_grid_is_independent_of_first_batch(first_rows, producer, monkeypatch):
+    source = pa.table({"flag": [True, False] * 20, "count": list(range(40)), "name": ["hello"] * 40})
+    batches = (
+        [source.slice(0, first_rows).to_batches()[0]]
+        if first_rows
+        else [
+            pa.RecordBatch.from_arrays(
+                [pa.array([], type=f.type) for f in source.schema], schema=source.schema
+            )
+        ]
+    )
+    batches.extend(source.slice(first_rows).to_batches(max_chunksize=9))
+    original = CTable._create_arrow_import_columns
+    initial = []
+
+    def capture(cls, *args, **kwargs):
+        columns, valid = original(*args, **kwargs)
+        initial.append((valid.shape, valid.chunks, valid.blocks))
+        return columns, valid
+
+    monkeypatch.setattr(CTable, "_create_arrow_import_columns", classmethod(capture))
+    if producer == "reader":
+        args = (pa.RecordBatchReader.from_batches(source.schema, iter(batches)),)
+    else:
+        args = (source.schema, iter(batches))
+    with CTable.from_arrow(*args) as table:
+        assert initial[0][0] == (max(first_rows, 1),)
+        assert initial[0][1][0] > 1
+        assert table._valid_rows.chunks == initial[0][1]
+        assert table._valid_rows.blocks == initial[0][2]
+        for name in ("flag", "count"):
+            assert table._cols[name].chunks == table._valid_rows.chunks
+            assert table._cols[name].blocks == table._valid_rows.blocks
+        assert table.to_arrow().cast(source.schema).equals(source, check_metadata=False)
+
+
+@pytest.mark.parametrize("hint", [None, 3])
+def test_arrow_table_infers_capacity_without_overriding_explicit_hint(hint, monkeypatch):
+    source = pa.table({"count": list(range(20))})
+    original = CTable._create_arrow_import_columns
+    sizes = []
+
+    def capture(cls, *args, **kwargs):
+        sizes.append((args[2], kwargs["grid_capacity"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(CTable, "_create_arrow_import_columns", classmethod(capture))
+    with CTable.from_arrow(source, capacity_hint=hint) as table:
+        assert sizes == [(hint or 20, hint or 20)]
+        assert table.to_arrow().cast(source.schema).equals(source, check_metadata=False)
+
+
+@pytest.mark.parametrize("producer", ["schema", "reader", "table"])
+def test_empty_arrow_import_can_grow_with_selected_grid(producer):
+    source = pa.table({"count": pa.array([], type=pa.int64())})
+    args = {
+        "schema": (source.schema, iter(())),
+        "reader": (pa.RecordBatchReader.from_batches(source.schema, iter(())),),
+        "table": (source,),
+    }[producer]
+    with CTable.from_arrow(*args) as table:
+        assert len(table) == 0
+        assert table.to_arrow().cast(source.schema).equals(source, check_metadata=False)
+        # The importer trims logical capacity; normal append must still work.
+        table.extend({"count": [1, 2, 3]})
+        assert table.to_arrow().column("count").to_pylist() == [1, 2, 3]
+
+
+@pytest.mark.parametrize("hint", [None, 100])
+def test_arrow_import_preserves_chunk_block_overrides(hint):
+    source = pa.table({"count": list(range(20))})
+    with CTable.from_arrow(
+        source.schema, iter(source.to_batches()), capacity_hint=hint, chunks=8, blocks=4
+    ) as table:
+        assert table._cols["count"].chunks == (8,)
+        assert table._cols["count"].blocks == (4,)
+        assert table.to_arrow().cast(source.schema).equals(source, check_metadata=False)
+
+
+def test_flattened_arrow_table_does_not_use_outer_row_count_for_grid():
+    dtype = pa.list_(pa.struct([pa.field("count", pa.int64())]))
+    source = pa.table({"": pa.array([[{"count": i} for i in range(40)]], type=dtype)})
+    with CTable.from_arrow(source, separate_nested_cols=True) as table:
+        assert len(table) == 40
+        assert table._cols["count"].chunks[0] > 1
+        assert table.to_arrow().column("count").to_pylist() == list(range(40))
+
+
 def test_imported_arrow_list_exports_null_children():
     source = pa.table({"tags": pa.array([[1, None], [], None], type=pa.list_(pa.int16()))})
     with CTable.from_arrow(source, list_serializer="arrow") as table:

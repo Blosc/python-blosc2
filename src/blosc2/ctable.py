@@ -9137,11 +9137,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         dparams,
         chunks_override: tuple[int, ...] | None = None,
         blocks_override: tuple[int, ...] | None = None,
+        grid_capacity: int | None = None,
     ):
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        # An unknown-length stream can start with one row without imposing
+        # one-row chunks on every subsequent resize. Size the grid separately
+        # from the initially allocated logical shape.
+        grid_capacity = capacity if grid_capacity is None else grid_capacity
+        default_chunks, default_blocks = compute_chunks_blocks((grid_capacity,))
         # Align fixed-size scalar columns (and the _valid_rows mask) on one
         # shared grid so lazy expressions over them take the fast_eval path.
-        shared_chunks, shared_blocks, aligned_names = cls._compute_aligned_grid(columns, capacity)
+        shared_chunks, shared_blocks, aligned_names = cls._compute_aligned_grid(columns, grid_capacity)
         valid_chunks = shared_chunks if shared_chunks is not None else default_chunks
         valid_blocks = shared_blocks if shared_blocks is not None else default_blocks
         new_valid = storage.create_valid_rows(shape=(capacity,), chunks=valid_chunks, blocks=valid_blocks)
@@ -9163,7 +9168,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if shared_chunks is not None:
                     codes_chunks, codes_blocks = shared_chunks, shared_blocks
                 else:
-                    codes_chunks, codes_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(np.int32))
+                    codes_chunks, codes_blocks = compute_chunks_blocks(
+                        (grid_capacity,), dtype=np.dtype(np.int32)
+                    )
                 new_cols[col.name] = storage.create_dictionary_column(
                     col.name,
                     spec=col.spec,
@@ -9179,7 +9186,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if col.name in aligned_names:
                     chunks, blocks = shared_chunks, shared_blocks
                 elif col.dtype is not None:
-                    chunks, blocks = cls._column_chunks_blocks(col, shape)
+                    grid_shape = cls._column_physical_shape(col, grid_capacity)
+                    chunks, blocks = cls._column_chunks_blocks(col, grid_shape)
                 if chunks_override is not None:
                     chunks = chunks_override
                     if blocks_override is None:
@@ -9723,8 +9731,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             t = blosc2.CTable.from_arrow(polars_df)
             t = blosc2.CTable.from_arrow(duckdb_result, urlpath="out.b2z")
+
+        A PyArrow Table supplies its row count automatically unless
+        ``capacity_hint`` is explicit. For unknown-length streams, initial
+        capacity comes from the first batch, while chunk/block sizing uses
+        CTable's default expected size independently. Tiny initial batches
+        therefore do not force one-row chunks throughout the import.
         """
         pa = cls._require_pyarrow("from_arrow()")
+        known_rows = schema.num_rows if isinstance(schema, pa.Table) else None
         if hasattr(schema, "__arrow_c_stream__"):
             if batches is not None:
                 raise TypeError(
@@ -9756,16 +9771,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # element becomes a CTable row.  The struct fields become ordinary
         # top-level columns and are further flattened by the struct-leaf
         # machinery below.
-        original_root_metadata: dict | None = None
         if separate_nested_cols and cls._detect_unnamed_root_list_struct(pa, schema):
+            # Source rows are outer lists, not the resulting flattened rows.
+            known_rows = None
             inner_schema = cls._inner_schema_for_unnamed_root(pa, schema)
             batches = cls._flatten_root_list_struct_batches(pa, inner_schema, batches)
             schema = inner_schema
-            original_root_metadata = {
-                "kind": "unnamed_list_struct",
-                "field_name": "",
-                "preserve_grouping": False,
-            }
 
         batches = iter(batches)
         first_batch = None
@@ -9776,8 +9787,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 original_top_level_struct_specs[join_field_path((f.name,))] = cls._arrow_type_to_spec(
                     pa, f.type, nullable=f.nullable, object_fallback=object_fallback
                 )
-        if string_max_length is None or isinstance(string_max_length, Mapping):
-            first_batch = next(batches, None)
+        first_batch = next(batches, None)
 
         # Flatten top-level Arrow structs into dotted leaf columns so CTable can
         # persist nested scalar leaves as physical columns.
@@ -9852,22 +9862,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             import itertools as _it
 
             batches = _it.chain([first_batch], batches)
-        # Use capacity_hint to size initial NDArray chunks/blocks correctly.
-        # When capacity_hint is None and we are in the unnamed-root flatten path,
-        # fall back to _EXPECTED_SIZE_DEFAULT (1 M) so that compute_chunks_blocks
-        # produces a reasonable block size instead of (1,) which causes catastrophic
-        # storage fragmentation.  For non-unnamed-root imports capacity_hint is
-        # always supplied by from_parquet (pf.metadata.num_rows), so the fallback
-        # only matters for direct from_arrow() calls without a hint.
-        if capacity_hint is None and original_root_metadata is not None:
-            capacity = _EXPECTED_SIZE_DEFAULT
+        if capacity_hint is None and known_rows is not None:
+            capacity = grid_capacity = max(known_rows, 1)
+        elif capacity_hint is None:
+            capacity = max(len(first_batch) if first_batch is not None else 0, 1)
+            grid_capacity = _EXPECTED_SIZE_DEFAULT
         else:
-            capacity = max(capacity_hint or 1, 1)
+            capacity = grid_capacity = max(capacity_hint, 1)
         _chunks = (chunks,) if isinstance(chunks, int) else chunks
         _blocks = (blocks,) if isinstance(blocks, int) else blocks
         storage = cls._storage_for_arrow_import(urlpath, mode)
         new_cols, new_valid = cls._create_arrow_import_columns(
-            storage, columns, capacity, cparams, dparams, _chunks, _blocks
+            storage,
+            columns,
+            capacity,
+            cparams,
+            dparams,
+            _chunks,
+            _blocks,
+            grid_capacity=grid_capacity,
         )
         storage.save_schema(schema_to_dict(compiled))
         obj = cls._new_arrow_import_ctable(
@@ -10190,10 +10203,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             batches = _limited_batches(batches, max_rows)
 
         # When flattening a root list<struct<...>>, the actual element count is not
-        # known ahead of time.  Pass capacity_hint=None so that from_arrow falls back
-        # to _EXPECTED_SIZE_DEFAULT (1 M), which gives compute_chunks_blocks() a
-        # reasonable block size instead of the catastrophic (1, 1) produced by
-        # capacity=1.  The CLI path computes a better estimate by sampling.
+        # known ahead of time. With capacity_hint=None, from_arrow sizes the grid
+        # from _EXPECTED_SIZE_DEFAULT independently of the first batch's capacity.
+        # The CLI path computes a better estimate by sampling.
         if _is_unnamed_root_flatten:
             _capacity_hint = None
         elif pf.metadata is not None:
