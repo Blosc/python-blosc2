@@ -26,7 +26,7 @@ are tested independently. Integrating the updated native dependency remains
 necessary before claiming the precedence change in distributed Python builds.
 
 This is **not yet the full v0.1 completion gate**: the wider dtype/semantic audit,
-artifact schema/loader, and captured-constant export
+artifact packaging/integration, Python artifact import, and captured-constant export
 are still pending. The raw-source constructor accepts native DSL, not only the
 draft portable subset. No new dependency or persisted artifact format has been
 introduced.
@@ -47,6 +47,29 @@ Validation for this slice passed: 137 full native tests, 70 conformance/validati
 tests with bundled TCC disabled, 24 AddressSanitizer checks, and 210 focused Python
 tests with standalone native-runner comparisons enabled. Ruff and diff whitespace
 checks passed; the native builds emitted no new compiler warnings.
+
+P3 now has a candidate artifact schema in `../miniexpr/doc/dsl-spec/artifact-0.1.md`
+and a separate optional `miniexpr_artifact` C adapter. With user approval, it uses
+yyjson 0.12.0 pinned to `8b4a38dc994a110abaec8a400615567bd996105f`; the raw compiler
+does not fetch/link yyjson when `MINIEXPR_BUILD_ARTIFACT` is OFF (the default).
+The adapter validates strict JSON structure and duplicate keys, versions and
+capabilities, typed scalar encodings, entry point and exact binding coverage,
+and portable-profile compilation. It owns source/names/scalars, binds runtime
+buffers by name, broadcasts constants in bounded tiles, and separates load,
+binding, native evaluation, and allocation failures. Required strict FP semantics
+are made explicit on an internal source copy when no FP pragma is supplied;
+retained compiler pragmas remain preferences rather than compatibility requirements.
+The hand-authored affine artifact runs in the standalone C runner without Python.
+The schema/profile remain experimental; native adapter packaging, Python artifact
+export/import (P4), captures, and the remaining semantic audit are still pending.
+
+P3 validation passed: 143 full native tests, 75 conformance/validation/artifact
+checks with bundled TCC disabled, 29 AddressSanitizer checks, and 210 focused
+Python regression tests. A fresh static-only raw-compiler build without artifact,
+SLEEF, TCC, or Accelerate dependencies passed 70 conformance/validation checks;
+yyjson was not fetched. The adapter and tests also passed `-Wall -Wextra -Werror`
+syntax checks. A test-only deprecated `sprintf` warning was fixed; final native
+builds emitted no new compiler warnings.
 
 The next conformance slice expands the shared corpus with explicit
 input/output dtypes and expected compile/evaluation outcomes. It covers all five
