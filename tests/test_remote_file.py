@@ -6,6 +6,44 @@ from test_remote_caterva2 import caterva2_source  # noqa: F401
 import blosc2
 
 
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "empty"])
+def test_chunk_traffic_counts_responses_not_fragments(outcome):
+    from types import SimpleNamespace
+
+    import httpx
+
+    from blosc2.proxy_source import Traffic
+
+    class Fragments(httpx.SyncByteStream):
+        def __iter__(self):
+            if outcome == "empty":
+                return
+            yield b"abc"
+            if outcome == "failure":
+                raise httpx.ReadError("broken stream")
+            yield b"defgh"
+
+    traffic = Traffic()
+    file = object.__new__(blosc2.RemoteFile)
+    file.path = "@public/README.md"
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=Fragments()))
+    ) as client:
+        file._owner = SimpleNamespace(
+            caterva2=SimpleNamespace(urlbase="https://host", auth_token=""),
+            traffic=traffic,
+            transport=client,
+        )
+        if outcome in {"failure", "cancel"}:
+            error = httpx.ReadError if outcome == "failure" else InterruptedError
+            with pytest.raises(error):
+                file._fetch_chunk(0, lambda: outcome == "cancel")
+        else:
+            assert file._fetch_chunk(0, None) == (b"" if outcome == "empty" else b"abcdefgh")
+    assert traffic.requests == 1
+    assert traffic.nbytes == {"success": 8, "failure": 3, "cancel": 3, "empty": 0}[outcome]
+
+
 @pytest.fixture
 def file_source(caterva2_source):  # noqa: F811
     base, _, _, stats = caterva2_source

@@ -167,15 +167,21 @@ class RemoteFile(RemoteObject):
                 raise ValueError("Encoded file chunk responses are unsupported")
             if int(response.headers.get("content-length", 0)) > MAX_COMPRESSED_CHUNK:
                 raise ValueError(f"File chunk exceeds {MAX_COMPRESSED_CHUNK >> 20} MiB compressed limit")
-            for part in response.iter_bytes():
-                owner.traffic.charge(len(part))
-                if time.monotonic() > deadline:
-                    raise TimeoutError("File chunk transfer exceeded 20 seconds")
-                if cancel is not None and cancel():
-                    raise InterruptedError("File operation cancelled")
-                if len(data) + len(part) > MAX_COMPRESSED_CHUNK:
-                    raise ValueError(f"File chunk exceeds {MAX_COMPRESSED_CHUNK >> 20} MiB compressed limit")
-                data.extend(part)
+            received = 0
+            try:
+                for part in response.iter_bytes():
+                    received += len(part)
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("File chunk transfer exceeded 20 seconds")
+                    if cancel is not None and cancel():
+                        raise InterruptedError("File operation cancelled")
+                    if len(data) + len(part) > MAX_COMPRESSED_CHUNK:
+                        raise ValueError(f"File chunk exceeds {MAX_COMPRESSED_CHUNK >> 20} MiB compressed limit")
+                    data.extend(part)
+            finally:
+                # One HTTP response is one request, regardless of fragmentation.
+                # Also retain bytes already received on failure/cancellation.
+                owner.traffic.charge(received)
         return bytes(data)
 
     def _chunk(self, index, cancel=None):
