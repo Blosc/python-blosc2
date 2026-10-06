@@ -43,6 +43,12 @@ CASES = [
     "missing_return_hybrid",
     "missing_return_hybrid_ok",
 ]
+TYPES = ("bool", "int32", "int64", "float32", "float64")
+CASES += [f"convert_{input_type}_{output_type}" for input_type in TYPES for output_type in TYPES]
+
+
+def corpus_source(case):
+    return CORPUS / ("identity.dsl" if case.startswith("convert_") else f"{case}.dsl")
 
 
 def typed_values(values, dtype):
@@ -50,13 +56,14 @@ def typed_values(values, dtype):
     return np.array([int(value) for value in values] if dtype == np.dtype("bool") else values, dtype=dtype)
 
 
-def assert_typed_result(actual, expected):
+def assert_typed_result(actual, expected, *, exact=False):
     assert actual.dtype == expected.dtype
-    if expected.dtype.kind in "biu":
+    if expected.dtype.kind in "biu" or exact:
         np.testing.assert_array_equal(actual, expected)
-    else:
-        tolerance = 1e-6 if expected.dtype == np.dtype("float32") else 1e-12
-        np.testing.assert_allclose(actual, expected, rtol=tolerance, atol=tolerance, equal_nan=True)
+    if expected.dtype.kind == "f":
+        if not exact:
+            tolerance = 1e-6 if expected.dtype == np.dtype("float32") else 1e-12
+            np.testing.assert_allclose(actual, expected, rtol=tolerance, atol=tolerance, equal_nan=True)
         zeros = expected == 0
         np.testing.assert_array_equal(np.signbit(actual[zeros]), np.signbit(expected[zeros]))
 
@@ -66,7 +73,7 @@ def assert_typed_result(actual, expected):
 def test_native_source_corpus(case, jit):
     if not CORPUS.is_dir():
         pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
-    source = (CORPUS / f"{case}.dsl").read_text()
+    source = corpus_source(case).read_text()
     words = (CORPUS / f"{case}.txt").read_text().split()
     outcome, input_type, output_type = words[:3]
     count, nvars = map(int, words[3:5])
@@ -77,9 +84,9 @@ def test_native_source_corpus(case, jit):
     kernel = DSLKernel.from_source(source)
     by_name = {name: typed_values(rows[:, index], input_dtype) for index, name in enumerate(names)}
     inputs = [by_name[name] for name in kernel.input_names]
-    if outcome == "ok":
+    if outcome in {"ok", "ok_exact"}:
         result = blosc2.lazyudf(kernel, inputs, dtype=output_dtype, jit=jit)[:]
-        assert_typed_result(result, expected)
+        assert_typed_result(result, expected, exact=outcome == "ok_exact")
     else:
         with pytest.raises((NotImplementedError, RuntimeError)):
             blosc2.lazyudf(kernel, inputs, dtype=output_dtype, jit=jit)[:]
@@ -91,7 +98,7 @@ def test_native_source_corpus(case, jit):
         completed = subprocess.run(
             [
                 runner,
-                str(CORPUS / f"{case}.dsl"),
+                str(corpus_source(case)),
                 str(CORPUS / f"{case}.txt"),
                 "on" if jit else "off",
             ],
@@ -107,7 +114,9 @@ def test_native_source_corpus(case, jit):
             if outcome == "eval_error":
                 assert lines[1:] == [outcome]
             else:
-                assert_typed_result(typed_values(lines[1:], output_dtype), expected)
+                assert_typed_result(
+                    typed_values(lines[1:], output_dtype), expected, exact=outcome == "ok_exact"
+                )
 
 
 def test_from_source_never_executes_python(tmp_path):
@@ -167,7 +176,7 @@ def test_portable_profile_corpus(portable_validator, case):
     outcome, input_type, output_type = words[:3]
     nvars = int(words[4])
     inputs = dict.fromkeys(words[5 : 5 + nvars], input_type)
-    info = portable_validator((CORPUS / f"{case}.dsl").read_text(), inputs, output_type)
+    info = portable_validator(corpus_source(case).read_text(), inputs, output_type)
     assert info["valid"] == (outcome != "compile_error"), info
 
 
@@ -243,3 +252,11 @@ def test_portable_profile_missing_native_support(monkeypatch):
 def test_portable_profile_rejects_nul(source, inputs, version):
     with pytest.raises(ValueError, match="NUL"):
         blosc2.validate_portable_dsl(source, inputs, "float64", language_version=version)
+
+
+@pytest.mark.parametrize("literal", ["9007199254740993", "9_007_199_254_740_993", "0x20000000000001"])
+def test_portable_integer_literal_bound_is_exact(portable_validator, literal):
+    info = portable_validator(f"def k(x):\n    return x + {literal}\n", {"x": "int64"}, "int64")
+    assert not info["valid"]
+    assert info["status"] == "unsupported_feature"
+    assert "portable range" in info["error"]

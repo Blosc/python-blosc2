@@ -112,6 +112,23 @@ without interpreter retry; generic backend failures retain existing fallback.
 This advances P2 coverage but does not freeze
 overflow, general promotions/conversions, or global transcendental accuracy rules.
 
+The numeric stabilization slice adds 25 shared exact output-conversion fixtures
+(the full supported 5×5 dtype matrix), including representable cast boundaries,
+int64 rounding, signed zero, subnormals, and non-finite identity/truth values.
+Native integer-literal validation now checks normalized digits exactly so
+`2**53 + 1` cannot bypass the profile limit through double rounding.
+The audit found unresolved integer-valued division promotion and float32 math
+intermediate/condition discrepancies across JIT and linked interpreter paths.
+Shared reproducers and strict expected-failure artifact tests preserve the gaps;
+they block freezing rather than redefining portable semantics. Details are in
+`../miniexpr/doc/dsl-spec/numeric-audit-0.1.md`. Native publication, dependency
+integration, and the rest of the semantic matrix remain pending.
+
+This slice passed 328 focused Python tests with 10 strict expected JIT failures,
+202 native portable/profile checks in the TCC-enabled build, and 55 selected
+interpreter-only portable/profile/artifact checks. Ruff and whitespace checks
+passed, and the native builds emitted no new warnings.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently

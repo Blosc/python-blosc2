@@ -349,3 +349,30 @@ def test_optional_adapter_availability():
     else:
         with pytest.raises(NotImplementedError, match="artifact support"):
             blosc2.PortableKernel.from_json("{}", jit=False)
+
+
+@pytest.mark.parametrize(
+    "case", ["division_int", "division_bool", "division_literals", "math_widen", "math_condition"]
+)
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+def test_numeric_audit_gaps(native_artifacts, case, compiler, jit, request):
+    """Expected JIT gaps remain visible and block freezing, not silently standardized."""
+    audit = CORPUS / "audit"
+    if not audit.is_dir():
+        pytest.skip("Native audit fixtures unavailable")
+    words = (audit / f"{case}.txt").read_text().split()
+    input_dtype, output_dtype = words[1:3]
+    rows = np.array(words[6:]).reshape(int(words[3]), 2)
+    source = (audit / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit and not kernel.has_jit:
+        pytest.skip(f"{compiler} backend unavailable")
+    actual = kernel.evaluate({"x": np.array(rows[:, 0], dtype=input_dtype)})
+    expected = np.array(rows[:, 1], dtype=output_dtype)
+    if jit:
+        # Add the marker only after successful compilation/backend preparation and
+        # execution, so unrelated setup/runtime failures cannot hide as xfails.
+        request.node.add_marker(pytest.mark.xfail(strict=True, reason=f"Open typed JIT codegen gap: {case}"))
+    np.testing.assert_array_equal(actual, expected)
