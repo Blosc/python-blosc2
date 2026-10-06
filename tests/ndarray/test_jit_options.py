@@ -391,7 +391,12 @@ def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, ji
     values = np.arange(128, dtype=np.float64)
     expr = blosc2.asarray(values) * 2 + 1
     assert expr.sum(jit=jit, jit_backend=backend) == (values * 2 + 1).sum()
-    assert calls
+    if blosc2.IS_WASM:
+        # WASM currently uses the non-prefilter reduction path. It must still
+        # produce correct results without introducing an elementwise wrapper.
+        assert not calls
+    else:
+        assert calls
     assert all(expression.startswith("sum(") for expression in calls)
 
 

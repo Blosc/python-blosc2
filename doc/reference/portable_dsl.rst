@@ -68,6 +68,10 @@ interpretation. Semantic evaluation errors never retry the kernel. Artifacts
 enforce strict FP independently of host defaults. Host while-loop limits remain
 execution policy rather than artifact constants.
 
+Windows certification covers the interpreter baseline, not optional JIT support.
+Wasm32 kernels containing ``int()`` use the interpreter to preserve exact int64
+values, which the current wasm JIT cast adapter cannot represent.
+
 The authoritative language and artifact specifications are maintained in the
 pinned miniexpr dependency under ``doc/dsl-spec/0.1.md`` and
 ``doc/dsl-spec/artifact-0.1.md``. The feature boundary is frozen; certification
