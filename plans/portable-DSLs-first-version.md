@@ -246,6 +246,20 @@ infinities, and NaNs. Code-generation cache version is 18. Validation passed all
 373 regular native tests, 292 AddressSanitizer tests, and 1019 focused Python
 tests without expected failures or new native build warnings.
 
+The Boolean-operand floating-arithmetic slice corrects interpreter storage:
+`bool(x) + bool(x)` with integral inputs and floating output now returns two
+for nonzero input rather than writing an invalid Boolean byte before conversion.
+The DSL preserves the requested floating computation dtype for Boolean-inferred
+arithmetic, while casts still consume their arguments in their own dtype.
+Typed unary negation casts before operating so false produces floating negative
+zero, including top-level bool-assigned locals. Float64 lowering stays narrow
+to preserve hybrid branch/select plans; cache version is 19. Five shared fixtures
+and direct/local scalar/vector matrices passed 393 regular native tests,
+307 AddressSanitizer tests, and 2014 focused Python tests without expected
+failures or new native build warnings. `audit/bool_output_fraction` preserves an
+unresolved Boolean-output arithmetic discrepancy, not a normative rule; that
+domain and broader mixed-type promotion remain publication gates.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently

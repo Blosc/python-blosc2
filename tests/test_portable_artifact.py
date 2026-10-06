@@ -353,6 +353,52 @@ def test_optional_adapter_availability():
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("input_dtype", ["bool", "int32", "int64", "float32", "float64"])
+@pytest.mark.parametrize("output_dtype", ["float32", "float64"])
+@pytest.mark.parametrize("count", [1, 10, 257])
+@pytest.mark.parametrize("operation", ["sum", "difference", "product", "negation"])
+@pytest.mark.parametrize("local", [False, True])
+def test_bool_cast_floating_arithmetic(
+    native_artifacts, compiler, jit, input_dtype, output_dtype, count, operation, local
+):
+    expressions = {
+        "sum": "bool(x) + bool(x)",
+        "difference": "bool(x) - bool(x)",
+        "product": "bool(x) * bool(x)",
+        "negation": "-bool(x)",
+    }
+    expression = expressions[operation]
+    body = ""
+    if local:
+        expression = expression.replace("bool(x)", "truth")
+        body = "    truth = bool(x)\n"
+    source = f"# me:compiler={compiler}\ndef k(x):\n{body}    return {expression}\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    samples = [0, 1, -1, 2]
+    if input_dtype == "int64":
+        samples += [2**53 + 1, -(2**53 + 1)]
+    elif input_dtype.startswith("float"):
+        samples += [-0.0, np.finfo(input_dtype).smallest_subnormal, np.inf, -np.inf, np.nan]
+    values = np.resize(np.array(samples, dtype=input_dtype), count)
+    truth = (values != 0).astype(output_dtype)
+    expected = {
+        "sum": truth + truth,
+        "difference": truth - truth,
+        "product": truth * truth,
+        "negation": -truth,
+    }[operation]
+    for _ in range(2):
+        actual = kernel.evaluate({"x": values})
+        np.testing.assert_array_equal(actual, expected)
+        zeros = expected == 0
+        np.testing.assert_array_equal(np.signbit(actual[zeros]), np.signbit(expected[zeros]))
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.parametrize("count", [1, 10, 257])
 @pytest.mark.parametrize("output_dtype", ["float32", "float64"])
 @pytest.mark.parametrize("operation", ["leaf", "nested", "repeated", "negation"])
@@ -438,6 +484,11 @@ def test_float32_leaf_math(native_artifacts, case, compiler, jit, count):
         "arithmetic_float_nested",
         "arithmetic_float_local",
         "arithmetic_float_widen",
+        "bool_float_sum",
+        "bool_float_neg",
+        "bool_float_product",
+        "bool_float_difference",
+        "bool_float_local_neg",
     ],
 )
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
