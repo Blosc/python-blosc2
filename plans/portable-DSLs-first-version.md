@@ -31,6 +31,20 @@ are still pending. The raw-source constructor accepts native DSL, not only the
 draft portable subset. No new dependency or persisted artifact format has been
 introduced.
 
+The next conformance slice expands the shared corpus with explicit
+input/output dtypes and expected compile/evaluation outcomes. It covers all five
+candidate dtypes, exact int64 boundaries and comparisons above `2**53`, signed
+zero and non-finite identity, Boolean-result semantics, bounded loop control,
+small finite casts, and sampled `sin` results. Integer fixtures are decoded and
+compared without a floating-point intermediate. CTest also generates CC variants
+that change only the compiler preference, uses build-local JIT caches, and applies
+timeouts. Missing-return kernels now have runtime JIT support: successful paths,
+mixed successful/failing elements, loop returns, and hybrid vector cleanup are
+tested under required-JIT policies. Semantic missing-return errors propagate
+without interpreter retry; generic backend failures retain existing fallback.
+This advances P2 coverage but does not freeze
+overflow, general promotions/conversions, or global transcendental accuracy rules.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently
