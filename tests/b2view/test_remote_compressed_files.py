@@ -24,6 +24,33 @@ def carrier(payload, chunksize=4096, **kwargs):
     return stream.to_cframe()
 
 
+@pytest.mark.parametrize("member", ["notes/README.md.b2", "README.md.b2"])
+def test_chained_document_uses_member_filename(tmp_path, member):
+    import zipfile
+
+    from blosc2.b2view.compressed_file import compressed_document
+
+    payload = b"# Archive document\n"
+    archive = tmp_path / "docs.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr(member, carrier(payload))
+    source = f"zip://{member}::{archive.as_uri()}"
+    assert compressed_document(source)
+    file = CompressedFile(source)
+    try:
+        assert file.carrier == "README.md.b2"
+        assert file.name == "README.md"
+    finally:
+        file.close()
+    with StoreBrowser(source) as browser:
+        assert browser.get_info("/").metadata["name"] == "README.md"
+        assert browser.preview("/")["markdown"]
+        assert browser.preview("/")["file_text"] == payload.decode()
+        destination = tmp_path / browser.store.name
+        browser.store.download(destination)
+        assert destination.read_bytes() == payload
+
+
 def test_remote_text_preview_reads_only_needed_chunks(monkeypatch, tmp_path):
     payload = b"a" * (256 << 10)
     fs = fsspec.filesystem("memory")

@@ -10,9 +10,18 @@ import blosc2
 from blosc2 import blosc2_ext
 from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
 from blosc2.b2view.ordinary_file import MAX_READ_BYTES, OrdinaryFile, local_path, ordinary_filesystem
-from blosc2.core import is_fsspec_url, parse_container_url
+from blosc2.core import find_url_separator, is_fsspec_url, parse_container_url
 from blosc2.deserialization import set_deserialize
 from blosc2.remote_file import MAX_COMPRESSED_CHUNK, MAX_DECODED_CHUNK
+
+
+def _carrier_name(source):
+    separator = find_url_separator(source)
+    member = source if separator == -1 else source[:separator]
+    if "://" in member:
+        parsed = urlsplit(member)
+        member = unquote(parsed.path or parsed.netloc)
+    return PurePosixPath(member).name
 
 
 def compressed_document(source):
@@ -21,7 +30,7 @@ def compressed_document(source):
     _, dataset, source_format = parse_container_url(source)
     if dataset is not None or source_format is not None:
         return False
-    name = PurePosixPath(unquote(urlsplit(source).path) if "://" in source else source).name
+    name = _carrier_name(source)
     return name.lower().endswith(".b2") and PurePosixPath(name[:-3]).suffix.lower() in (
         TEXT_SUFFIXES | IMAGE_SUFFIXES | {".pdf"}
     )
@@ -44,7 +53,7 @@ class CompressedFile(OrdinaryFile):
                 raise ValueError("Document carrier requires a regular file with a known size")
             self._frame_size = info["size"]
             self._schunk = ByteRangeSChunkSource(self._range, self._frame_size)
-            self.carrier = PurePosixPath(unquote(urlsplit(self.source_path).path)).name
+            self.carrier = _carrier_name(self.source_path)
         else:
             self.path = local_path(self.source_path).absolute()
             self._schunk = self._open_local()
