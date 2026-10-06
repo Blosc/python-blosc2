@@ -25,6 +25,16 @@ SCALE = 2.0
 BIAS = -1.0
 
 
+def assert_execution_mode(kernel, jit):
+    # Portable 0.1 certifies Windows' interpreter baseline, not its optional
+    # accelerator. Still execute all semantic assertions there, including
+    # JIT-requested fallback. On certified JIT hosts fallback must not hide a
+    # code-generation regression; JIT_OFF must disable it on every platform.
+    if jit and sys.platform == "win32":
+        return
+    assert kernel.has_jit == jit
+
+
 def assert_frozen_rejection(source, inputs, output):
     """Check both authoring and native import, without disguising setup errors."""
     info = blosc2.validate_portable_dsl(source, inputs, output)
@@ -422,7 +432,7 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
         source = f"# me:compiler={compiler}\ndef k(x):\n{body}"
         artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
         kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-        assert kernel.has_jit == jit
+        assert_execution_mode(kernel, jit)
         for _ in range(2):
             actual = kernel.evaluate({"x": np.resize(np.array(samples, dtype=input_dtype), count)})
             desired = np.resize(np.array(expected, dtype=output_dtype), count)
@@ -458,8 +468,7 @@ def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
         {"x": "bool"}, "bool"
     )
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     values = np.resize(np.array([False, True]), count)
     expected = np.resize(np.array(samples), count)
     for _ in range(2):
@@ -506,8 +515,7 @@ def test_bool_cast_floating_arithmetic(
     source = f"# me:compiler={compiler}\ndef k(x):\n{body}    return {expression}\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     samples = [0, 1, -1, 2]
     if input_dtype == "int64":
         samples += [2**53 + 1, -(2**53 + 1)]
@@ -534,8 +542,7 @@ def test_float_cast_arithmetic_rounding(native_artifacts, output_dtype):
     source = f"# me:compiler={compiler}\ndef k(x):\n    return (float(x) + 0.1) - float(x)\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     samples = np.array(
         [
             2**24,
@@ -575,8 +582,7 @@ def test_float_arithmetic_constant_rounding(native_artifacts, output_dtype, oper
     source = f"# me:compiler={compiler}\n# me:fp=strict\ndef k(x):\n    return {expressions[operation]}\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0.1, -1, 0, 1, 16777216], dtype="float32"), count)
     # These expressions contain a floating literal: native compilation types
     # that constant from the requested floating output context. Each operation
@@ -601,8 +607,7 @@ def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, cap):
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     for target in [0, 2, 3, 4]:
         values = np.full(count, target, dtype="int64")
         if cap == "3" and target == 4:
@@ -624,8 +629,7 @@ def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler,
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     values = np.array([4], dtype="int64")
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "2")
     with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
@@ -635,8 +639,7 @@ def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler,
     # The identical source loaded under a different cap must not reuse code
     # compiled with the old cap from the shared JIT cache.
     new_kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert new_kernel.has_jit
+    assert_execution_mode(new_kernel, jit)
     np.testing.assert_array_equal(new_kernel.evaluate({"x": values}), values)
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
@@ -655,8 +658,7 @@ def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dt
     )
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     # Lane ordering is the actual regression boundary, not every size/backend
     # combination. Keep both first-lane states in each dtype scenario.
     for samples in [[0, 2, 3, -1], [3, 2, 0, -1]]:
@@ -683,8 +685,7 @@ def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, cas
     source = f"# me:compiler={compiler}\ndef {case}(x):\n{bodies[case]}"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, "bool")
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0, 1, 2, -1], dtype=dtype), count)
     expected = np.resize(np.array([False, True, True, case == "masked_bool_chain"]), count)
     for _ in range(2):
@@ -732,8 +733,7 @@ def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, bo
         {"x": "int64"}, "int64"
     )
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
+    assert_execution_mode(kernel, jit)
     np.testing.assert_array_equal(
         kernel.evaluate({"x": np.ones(5, dtype="int64")}), np.full(5, expected, dtype="int64")
     )
