@@ -65,6 +65,7 @@ add_custom_command(
   COMMAND Python::Interpreter -m cython
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx" --output-file blosc2_ext.c
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
   VERBATIM)
 
 add_custom_command(
@@ -147,6 +148,10 @@ FetchContent_MakeAvailable(miniexpr)
 
 # Link against miniexpr static library
 target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
+if(TARGET miniexpr_artifact)
+  target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
+  target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_PORTABLE_ARTIFACT=1)
+endif()
 if(APPLE)
   target_link_libraries(blosc2_ext PRIVATE "-framework Accelerate")
 endif()

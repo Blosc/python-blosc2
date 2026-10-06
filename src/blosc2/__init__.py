@@ -594,6 +594,7 @@ from .dsl_kernel import (
     validate_dsl_jit,
     validate_portable_dsl,
 )
+from .portable_kernel import PortableArtifactError, PortableKernel
 from .jit_config import get_jit_options, jit_options, set_jit_options
 from .lazyexpr import (
     LazyExpr,
@@ -916,6 +917,8 @@ __all__ = [  # noqa : RUF022
     "LazyArray",
     "DSLKernel",
     "validate_portable_dsl",
+    "PortableKernel",
+    "PortableArtifactError",
     "DSLSyntaxError",
     "LazyExpr",
     "LazyUDF",

@@ -890,12 +890,17 @@ class DSLKernel:
         any alias, including a bare `numpy` import, is honored).  The DSL grammar
         only accepts bare function-name calls.  No-op, returning the inputs
         unchanged, when there is nothing to rewrite (including when the alias is
-        shadowed by one of the kernel's own parameter names).
+        shadowed by a parameter, local, or closure binding).
         """
+        code = getattr(func, "__code__", None)
+        shadowed = set(input_names)
+        if code is not None:
+            shadowed.update(code.co_varnames)
+            shadowed.update(code.co_freevars)
         aliases = {
             name
             for name, value in getattr(func, "__globals__", {}).items()
-            if value is numpy and name not in input_names
+            if value is numpy and name not in shadowed
         }
         if not aliases:
             return dsl_source, dsl_tree, dsl_func
@@ -928,6 +933,29 @@ class DSLKernel:
         if args.vararg or args.kwarg or args.kwonlyargs:
             raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
         return [a.arg for a in (args.posonlyargs + args.args)]
+
+    def export(self, input_dtypes, output_dtype, *, capture_dtypes=None, constants=None, metadata=None):
+        """Export a typed portable JSON artifact without calling the Python function.
+
+        ``input_dtypes`` maps runtime parameter names to explicit logical dtypes.
+        Optional ``constants`` supplies scalar values for remaining parameters.
+        Globals/closure scalars are snapshotted at export and become explicit,
+        collision-free parameters. ``capture_dtypes`` overrides scalar type
+        inference (Python bool/int/float infer bool/int64/float64 respectively;
+        supported NumPy scalars retain their dtype). Arrays, objects, and external
+        callbacks cannot be captures. The draft requires homogeneous parameter
+        dtypes. Import via :meth:`blosc2.PortableKernel.from_json`.
+        """
+        from .portable_kernel import export_portable_kernel
+
+        return export_portable_kernel(
+            self,
+            input_dtypes,
+            output_dtype,
+            capture_dtypes=capture_dtypes,
+            constants=constants,
+            metadata=metadata,
+        )
 
     def __call__(self, inputs_tuple, output, offset=None):
         if self.func is None:

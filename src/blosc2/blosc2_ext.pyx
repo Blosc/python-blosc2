@@ -1035,6 +1035,120 @@ def validate_portable_dsl_source(source, input_dtypes, output_dtype, version):
         free(variables)
 
 
+cdef extern from "dsl_artifact_bridge.h":
+    ctypedef struct b2_artifact_input:
+        const char *name
+        me_dtype dtype
+        const void *data
+        size_t nitems
+    ctypedef struct b2_artifact_error:
+        int native_status
+        int line
+        int column
+        char message[256]
+    int b2_artifact_available()
+    int b2_artifact_load(const char *, size_t, int, void **, b2_artifact_error *) nogil
+    int b2_artifact_eval(const void *, const b2_artifact_input *, int, void *, size_t,
+                        b2_artifact_error *) nogil
+    void b2_artifact_free(void *) noexcept nogil
+    const char *b2_artifact_source(const void *)
+    const char *b2_artifact_entry(const void *)
+    int b2_artifact_ninputs(const void *)
+    const char *b2_artifact_name(const void *, int)
+    me_dtype b2_artifact_dtype(const void *, int)
+    me_dtype b2_artifact_output(const void *)
+    int b2_artifact_jit(const void *)
+
+
+def portable_artifact_available():
+    return bool(b2_artifact_available())
+
+
+cdef void raise_artifact_error(int rc, b2_artifact_error *error) except *:
+    from blosc2.portable_kernel import PortableArtifactError
+
+    if rc == -100:
+        raise NotImplementedError("Build with miniexpr portable artifact support")
+    if rc == -6:
+        raise MemoryError((<bytes>error.message).decode("utf-8", "replace"))
+    statuses = {-1: "invalid_artifact", -2: "unsupported_requirement", -3: "invalid_source",
+                -4: "binding_error", -5: "evaluation_error"}
+    raise PortableArtifactError(
+        (<bytes>error.message).decode("utf-8", "replace"),
+        status=statuses.get(rc, "native_error"), native_status=error.native_status,
+        line=error.line, column=error.column)
+
+
+cdef class PortableArtifactHandle:
+    """Owned immutable native handle; no Python artifact decoding or source execution."""
+    cdef void *_handle
+
+    def __cinit__(self, bytes artifact, int jit_mode):
+        cdef b2_artifact_error error
+        cdef int rc
+        cdef const char *json = artifact
+        cdef size_t size = len(artifact)
+        self._handle = NULL
+        with nogil:
+            rc = b2_artifact_load(json, size, jit_mode, &self._handle, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+
+    def __dealloc__(self):
+        b2_artifact_free(self._handle)
+
+    def info(self):
+        cdef int i
+        return {
+            "source": (<bytes>b2_artifact_source(self._handle)).decode("utf-8"),
+            "entry_point": (<bytes>b2_artifact_entry(self._handle)).decode("utf-8"),
+            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
+                       _numpy_dtype_from_me_dtype(b2_artifact_dtype(self._handle, i))
+                       for i in range(b2_artifact_ninputs(self._handle))},
+            "output_dtype": _numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)),
+            "jit": bool(b2_artifact_jit(self._handle)),
+        }
+
+    def evaluate(self, inputs, shape):
+        cdef Py_ssize_t n = len(inputs)
+        if n > 128:
+            raise ValueError("Too many portable artifact inputs")
+        cdef b2_artifact_input *bindings = NULL
+        cdef b2_artifact_error error
+        cdef np.ndarray array, output
+        cdef list names = [key.encode("utf-8") for key in inputs]
+        cdef list arrays = list(inputs.values())
+        cdef bytes name
+        cdef int rc
+        cdef Py_ssize_t i
+        cdef size_t count
+        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)))
+        count = output.size
+        if n:
+            bindings = <b2_artifact_input *> calloc(n, sizeof(b2_artifact_input))
+            if bindings == NULL:
+                raise MemoryError()
+        try:
+            for i in range(n):
+                array = arrays[i]
+                if not array.flags.c_contiguous or not array.flags.aligned or not array.dtype.isnative:
+                    raise ValueError("Native artifact inputs must be aligned, contiguous, and host-endian")
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names must not contain NUL")
+                bindings[i].name = name
+                bindings[i].dtype = _me_dtype_from_numpy_dtype(array.dtype)
+                bindings[i].data = np.PyArray_DATA(array)
+                bindings[i].nitems = array.size
+            with nogil:
+                rc = b2_artifact_eval(self._handle, bindings, <int>n, np.PyArray_DATA(output), count, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output
+        finally:
+            free(bindings)
+
+
 def me_output_dtype(expression, operands):
     """Ask miniexpr what dtype *expression* would produce over *operands*.
 

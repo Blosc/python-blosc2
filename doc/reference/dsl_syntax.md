@@ -66,6 +66,86 @@ than attempting Python validation. Native dependency integration for this
 experimental API is pending; development builds can use the local miniexpr source
 via CMake's `FETCHCONTENT_SOURCE_DIR_MINIEXPR` override.
 
+### Portable artifact export and import (experimental)
+
+Export with explicit input/output dtypes. Scalar globals and closure values are
+snapshotted into typed manifest constants, not inserted as Python literals:
+
+```python
+SCALE = 2.0
+
+
+@blosc2.dsl_kernel
+def scaled(x):
+    return x * SCALE
+
+
+artifact = scaled.export({"x": "float64"}, "float64")
+SCALE = 99.0  # Does not change the saved artifact.
+kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+values = kernel.evaluate({"x": np.arange(4, dtype=np.float64)})
+# values: array([0., 2., 4., 6.])
+```
+
+`export()` returns deterministic UTF-8 JSON text; save it with an ordinary file
+write. `from_json()` accepts text or bytes, not a pathname or decoded mapping.
+Import uses the same native JSON loader as C and does not need the author's module,
+function, decorators, globals, Python source reconstruction, or frontend rewrites.
+`evaluate()` returns a new NumPy array; `blosc2.asarray(values)` can materialize
+compressed storage. This first adapter is eager, not a `lazyudf` integration.
+
+Python `bool`, `int`, and `float` captures infer `bool`, `int64`, and `float64`.
+Supported NumPy scalar types retain their dtype. Use
+`capture_dtypes={"SCALE": "float32"}` to explicitly specialize a capture; finite
+float narrowing rounds to the chosen dtype, while overflow and integer precision
+loss are rejected. Arrays (including zero-dimensional arrays), objects, unsupported
+scalar types, unresolved names, and external callbacks cannot be captures.
+Export does not call the kernel or capture conversion hooks. It reuses supported
+authoring normalization, such as `np.sin(x)`, before native profile validation.
+Strings, arbitrary globals, and unsupported functions do not become portable.
+
+Native-only kernels can bind existing parameters as constants explicitly:
+
+```python
+author = blosc2.DSLKernel.from_source(
+    "# me:compiler=cc\ndef scaled(x, scale):\n    return x * scale\n"
+)
+artifact = author.export({"x": "float64"}, "float64", constants={"scale": 2.0})
+```
+
+Every source parameter requires exactly one runtime input or constant binding.
+The draft profile requires homogeneous parameter dtypes, including captures;
+output may have a different supported dtype. Manifest float constants preserve
+IEEE bit patterns, including signed zero and non-finite values; integer constants
+are range-checked decimal strings. Comments and retained native pragmas survive
+parameterization. Required strict FP semantics are independent of host defaults;
+compiler pragmas remain preferences, and `jit=False` disables JIT independently.
+
+Runtime arrays are bound by name in any mapping order and must have the exact
+declared logical dtype and common shape. The adapter converts endian order,
+alignment, and strides, but does not broadcast arrays or silently change their
+dtype. Constants broadcast in bounded native workspace. Constant-only kernels
+require `evaluate({}, shape=(...))`; empty arrays validate bindings but do not
+execute. `PortableArtifactError` provides `status`, `native_status`, `line`, and
+`column` for malformed artifacts, unsupported requirements, source, binding, and
+evaluation failures. The artifact format is not a sandbox or an arbitrary-input
+numerical-correctness guarantee.
+
+Native dependency packaging is still pending. For development builds, use both
+`FETCHCONTENT_SOURCE_DIR_MINIEXPR` and `MINIEXPR_BUILD_ARTIFACT=ON`, for example:
+
+```sh
+conda run -n blosc2 python -m pip install -e . --no-build-isolation --no-deps \
+  --config-settings=cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr \
+  --config-settings=cmake.define.MINIEXPR_BUILD_ARTIFACT=ON
+```
+
+The optional adapter links pinned yyjson only when enabled. Builds without the
+adapter remain usable and report `NotImplementedError` for artifact operations,
+without attempting Python validation/execution as a fallback. The native candidate
+format and shared fixtures live in miniexpr's `doc/dsl-spec/artifact-0.1.md` and
+`tests/portable-artifacts/`.
+
 `@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
 `if`/`for`/`while` and that compiles under this grammar is dispatched here
 automatically, so its branches and loops actually run, once per chunk, instead

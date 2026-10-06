@@ -26,7 +26,7 @@ are tested independently. Integrating the updated native dependency remains
 necessary before claiming the precedence change in distributed Python builds.
 
 This is **not yet the full v0.1 completion gate**: the wider dtype/semantic audit,
-artifact packaging/integration, Python artifact import, and captured-constant export
+artifact packaging/integration and the remaining semantic audit
 are still pending. The raw-source constructor accepts native DSL, not only the
 draft portable subset. No new dependency or persisted artifact format has been
 introduced.
@@ -60,8 +60,8 @@ binding, native evaluation, and allocation failures. Required strict FP semantic
 are made explicit on an internal source copy when no FP pragma is supplied;
 retained compiler pragmas remain preferences rather than compatibility requirements.
 The hand-authored affine artifact runs in the standalone C runner without Python.
-The schema/profile remain experimental; native adapter packaging, Python artifact
-export/import (P4), captures, and the remaining semantic audit are still pending.
+The schema/profile remain experimental; native adapter packaging and the remaining
+semantic audit are still pending. P4 integration is described below.
 
 P3 validation passed: 143 full native tests, 75 conformance/validation/artifact
 checks with bundled TCC disabled, 29 AddressSanitizer checks, and 210 focused
@@ -70,6 +70,33 @@ SLEEF, TCC, or Accelerate dependencies passed 70 conformance/validation checks;
 yyjson was not fetched. The adapter and tests also passed `-Wall -Wextra -Werror`
 syntax checks. A test-only deprecated `sprintf` warning was fixed; final native
 builds emitted no new compiler warnings.
+
+P4 now exposes `DSLKernel.export()` and `PortableKernel.from_json()` /
+`evaluate()` in Python. Export uses the unspecialized author's DSL source and
+snapshots exact supported scalar globals/closure values into collision-free
+parameters and typed constants. Explicit parameter constants and capture dtype
+overrides are supported; no user conversion hooks or kernel calls are used.
+Input/output dtypes are explicit and portable native validation plus the C loader
+validate every exported artifact. Import calls that same loader through an owned
+Cython handle, without Python source/JSON parsing or frontend preparation.
+Runtime input names/dtypes/shapes are checked, host storage is adapted, and native
+constant broadcast/evaluation is reused. NumPy-alias rewriting now excludes local
+and closure shadowing so export cannot silently reinterpret a local attribute call.
+The extension links the adapter only if the optional native target is available;
+disabled/older builds report unsupported artifact operations. Local builds use
+the source override and `MINIEXPR_BUILD_ARTIFACT=ON`; the repository dependency pin
+is unchanged because native dependency publication/integration is still pending.
+Artifact execution is currently eager NumPy output, not lazyudf/container integration.
+
+P4 validation passed: 240 focused Python tests with the adapter enabled, including
+Python export -> standalone C execution, fresh-process import without the author,
+typed scalar boundaries/NaN payloads, snapshot/collision/closure handling, storage
+adaptation, native diagnostics, and concurrent interpreter/TCC evaluations.
+An actual adapter-disabled editable build passed 212 tests with 28 artifact-only
+cases skipped and verified `NotImplementedError` without a Python fallback.
+The environment was restored to the adapter-enabled local build. The native
+conformance/profile/artifact selection passed 99 checks; Ruff, the standalone
+example, and whitespace checks also passed.
 
 The next conformance slice expands the shared corpus with explicit
 input/output dtypes and expected compile/evaluation outcomes. It covers all five
