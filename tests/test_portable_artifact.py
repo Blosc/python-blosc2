@@ -446,6 +446,141 @@ def test_float_arithmetic_constant_rounding(native_artifacts, compiler, jit, cou
 
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("count", [1, 5, 257])
+@pytest.mark.parametrize("cap", ["3", "0", "-1", "invalid"])
+def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, count, cap):
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", cap)
+    source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    for target in [0, 2, 3, 4]:
+        values = np.full(count, target, dtype="int64")
+        if cap == "3" and target == 4:
+            with pytest.raises(blosc2.PortableArtifactError) as error:
+                kernel.evaluate({"x": values})
+            assert error.value.status == "evaluation_error"
+        else:
+            np.testing.assert_array_equal(kernel.evaluate({"x": values}), values)
+    # Failed output contents are unspecified; the same prepared handle remains usable.
+    values = np.full(count, 2, dtype="int64")
+    np.testing.assert_array_equal(kernel.evaluate({"x": values}), values)
+    assert kernel.evaluate({"x": np.empty(0, dtype="int64")}).size == 0
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("compile_cap", ["0", "3"])
+def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler, jit, compile_cap):
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", compile_cap)
+    source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    values = np.array([4], dtype="int64")
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "2")
+    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        kernel.evaluate({"x": values})
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "4")
+    np.testing.assert_array_equal(kernel.evaluate({"x": values}), values)
+    # The identical source loaded under a different cap must not reuse code
+    # compiled with the old cap from the shared JIT cache.
+    new_kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert new_kernel.has_jit
+    np.testing.assert_array_equal(new_kernel.evaluate({"x": values}), values)
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
+    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        kernel.evaluate({"x": values})
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+def test_while_cap_hybrid_cleanup(native_artifacts, monkeypatch, compiler):
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
+    source = (
+        f"# me:compiler={compiler}\ndef k(x):\n    value = sin(x)\n    n = 0\n"
+        "    while n < x:\n        n = n + 1\n    return value\n"
+    )
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "float64")
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+    assert kernel.has_jit
+    for _ in range(4):
+        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+            kernel.evaluate({"x": np.full(257, 4.0)})
+        np.testing.assert_array_equal(kernel.evaluate({"x": np.zeros(257)}), np.zeros(257))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_while_chain_mixed_lane_audit(native_artifacts, monkeypatch, jit, request):
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
+    source = (CORPUS / "audit" / "while_cap_chain.dsl").read_text()
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    else:
+        # Preparation must succeed before marking this known interpreter error.
+        request.node.add_marker(
+            pytest.mark.xfail(
+                strict=True,
+                raises=blosc2.PortableArtifactError,
+                reason="Open interpreter chained-while mixed-lane condition gap",
+            )
+        )
+    values = np.array([0, 2, 3], dtype="int64")
+    try:
+        actual = kernel.evaluate({"x": values})
+    except blosc2.PortableArtifactError as error:
+        if error.status != "evaluation_error":
+            raise RuntimeError("Unexpected failure outside the chained-while audit gap") from error
+        raise
+    np.testing.assert_array_equal(actual, values)
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("    n = 0\n    while 0 <= n < 3:\n        n = n + 1\n    return n\n", 3),
+        (
+            "    n = 0\n    while x:\n        n = n + 1\n        if n == 3:\n            break\n    return n\n",
+            3,
+        ),
+        (
+            "    n = 0\n    while x:\n        n = n + 1\n        if n == 3:\n            return n\n    return n\n",
+            3,
+        ),
+        (
+            "    total = 0\n    for i in range(2):\n        n = 0\n        while n < 3:\n"
+            "            n = n + 1\n            total = total + 1\n    return total\n",
+            6,
+        ),
+        (
+            "    total = 0\n    n = 0\n    while n < 3:\n        n = n + 1\n        m = 0\n"
+            "        while m < 3:\n            m = m + 1\n            total = total + 1\n    return total\n",
+            9,
+        ),
+        ("    if x > 1:\n        while x:\n            pass\n    return x\n", 1),
+    ],
+)
+def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, body, expected):
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
+    artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
+        {"x": "int64"}, "int64"
+    )
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    np.testing.assert_array_equal(
+        kernel.evaluate({"x": np.ones(5, dtype="int64")}), np.full(5, expected, dtype="int64")
+    )
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize(
     ("body", "output_dtype", "expected"),
     [

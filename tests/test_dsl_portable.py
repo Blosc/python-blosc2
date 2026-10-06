@@ -52,6 +52,10 @@ CASES = [
     "arithmetic_scalar_sub",
     "arithmetic_local_round",
     "arithmetic_widen",
+    "while_cap_exact",
+    "while_cap_exceeded",
+    "while_cap_continue",
+    "while_cap_hybrid",
     "unknown_name",
     "invalid_index",
     "zero_step",
@@ -90,7 +94,9 @@ def assert_typed_result(actual, expected, *, exact=False):
 
 @pytest.mark.parametrize("case", CASES)
 @pytest.mark.parametrize("jit", [False, True])
-def test_native_source_corpus(case, jit):
+def test_native_source_corpus(case, jit, monkeypatch):
+    if case.startswith("while_cap_"):
+        monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     if not CORPUS.is_dir():
         pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
     source = corpus_source(case).read_text()

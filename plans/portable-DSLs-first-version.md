@@ -206,6 +206,22 @@ failures or new build warnings. Calls/casts, mixed intermediate dtypes, integral
 Boolean arithmetic, overflow, and the complete promotion contract remain audit
 work; the profile is still experimental and dependency integration is pending.
 
+The while-loop execution-policy slice fixes missing JIT cap enforcement. Scoped
+body-entry counters preserve exact-limit exits, `continue`, nested/re-entered
+loops, and condition-prefix lowering. The normalized host cap enters the IR
+fingerprint, with code-generation cache version 17; a changed policy after
+compilation bypasses both JIT evaluation paths for current-policy interpreter
+execution. Semantic cap errors propagate without interpreter retry and release
+hybrid temporaries. Four shared fixtures and expanded native/Python tests cover
+small caps, disabled/invalid policies, counts 1/5/257, repeated/empty execution,
+cache isolation, policy changes, and boundary control flow. A separate
+interpreter mixed-lane chained-while discrepancy is preserved in
+`audit/while_cap_chain` and a strict expected-failure test; it blocks freezing
+the profile alongside the remaining numeric domains and dependency integration.
+Validation passed all 344 regular native tests, 270 AddressSanitizer tests, and
+727 focused Python tests with one strict chained-while expected failure. Ruff
+and whitespace checks passed; native builds emitted no new warnings.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently
