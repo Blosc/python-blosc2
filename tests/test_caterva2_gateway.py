@@ -7,7 +7,6 @@ All upstream data is deterministic and served on loopback; no public network.
 import hashlib
 import json
 import os
-import select
 import subprocess
 import sys
 import threading
@@ -17,6 +16,7 @@ from urllib.parse import urlsplit
 
 import numpy as np
 import pytest
+from gateway_process import gateway_process
 
 import blosc2
 
@@ -33,25 +33,8 @@ def gateway(base, catalog):
         f"[remote]\ncache_dir = {json.dumps(str(base / 'server-cache'))}\n"
     )
     source_args = ["--data-dir", str(catalog)] if catalog.is_dir() else [str(catalog)]
-    process = subprocess.Popen(
-        [os.environ["CAT2LITE_SERVER"], "--config", str(config), *source_args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert select.select([process.stdout], [], [], 20)[0], "cat2lite startup timed out"
-        line = process.stdout.readline()
-        while line and not line.startswith("listening on "):
-            line = process.stdout.readline()
-        assert line.startswith("listening on "), line or process.stderr.read()
-        address = line.removeprefix("listening on ").strip()
-        yield address if address.startswith("http") else "http://" + address
-    finally:
-        process.terminate()
-        process.wait(timeout=15)
-        for stream in (process.stdout, process.stderr):
-            stream.close()
+    with gateway_process([os.environ["CAT2LITE_SERVER"], "--config", str(config), *source_args]) as address:
+        yield address
 
 
 def test_real_cat2lite_schunk_file_download(tmp_path):
