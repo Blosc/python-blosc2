@@ -114,6 +114,22 @@ def validate_roots(roots):
     return roots
 
 
+def discovery_auth_token(value, *, required=False, auth_token=None):
+    """Scope implicit automatic-discovery credentials to the configured origin."""
+    if auth_token is not None or required:
+        return auth_token
+    from blosc2.c2array import _server_data
+
+    def origin(url):
+        parsed = urlsplit(url)
+        return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    configured = _server_data["urlbase"]
+    if configured and origin(value) == origin(configured):
+        return _server_data["auth_token"]
+    return ""  # Explicitly suppress _auth_headers' ambient-token inheritance.
+
+
 def discover_service(value, *, required=False, auth_token=None):
     """Probe api/roots with bounded bytes, time, and same-origin redirects.
 
@@ -125,6 +141,7 @@ def discover_service(value, *, required=False, auth_token=None):
     from blosc2.c2array import _auth_headers, _server_url, _sync_client
 
     parsed = validate_service_url(value)
+    auth_token = discovery_auth_token(value, required=required, auth_token=auth_token)
     url = _server_url(value.rstrip("/"), "api/roots")
     client = _sync_client()
     deadline = time.monotonic() + 3

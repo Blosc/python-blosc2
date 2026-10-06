@@ -216,6 +216,10 @@ Shared caching selects lazy access for every remote source when `lazy` is
 omitted or `None`; explicit `lazy=False` is rejected.
 Authentication from `URLPath` or `c2context` remains
 in process memory. Authenticated users must use separate cache directories.
+Automatic service discovery inherits credentials only when the destination has
+the same scheme, host, and port as the configured `c2context(urlbase=...)`.
+Other origins are probed and browsed anonymously; explicitly select a Caterva2
+service or provide an authenticated `URLPath` to authorize another destination.
 All handles using a shared cache must enable sharing. For advanced attachment
 with seed carriers or authorized sources, `RemoteArray.with_sparse_cache()`
 remains available.

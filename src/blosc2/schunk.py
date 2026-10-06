@@ -2801,7 +2801,7 @@ def _validate_shared_cache_request(urlpath, shared_cache, kwargs):
             kwargs["lazy"] = True
 
 
-def _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs):
+def _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs, auth_token=None):
     """Open one visible root or a lazy repository facade, without a second probe."""
     if mode != "r" or offset != 0:
         raise ValueError("Caterva2 services require mode='r' and offset=0")
@@ -2810,7 +2810,7 @@ def _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs):
             "Repository/group access requires lazy=True; select an array for lazy=False"
         )
     if len(roots) == 1:
-        target = blosc2.URLPath(next(iter(roots)), urlbase=urlpath.rstrip("/"))
+        target = blosc2.URLPath(next(iter(roots)), urlbase=urlpath.rstrip("/"), auth_token=auth_token)
         kwargs.setdefault("lazy", True)
         _validate_shared_cache_request(target, shared_cache, kwargs)
         return _open_c2_urlpath(target, mode, offset, kwargs)
@@ -2835,7 +2835,7 @@ def _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs):
     if kwargs:
         raise NotImplementedError(f"{', '.join(sorted(kwargs))} is unsupported for repositories")
     return blosc2.RemoteRepository(
-        urlpath, roots, cache_dir=cache_dir, cache_policy=policy, max_cache_bytes=limit
+        urlpath, roots, auth_token=auth_token, cache_dir=cache_dir, cache_policy=policy, max_cache_bytes=limit
     )
 
 
@@ -3167,9 +3167,12 @@ def open(  # noqa: C901
                 raise ValueError("Remote service discovery requires mode='r' and offset=0")
             if dataset is not None or hdf5_index is not None:
                 raise ValueError("dataset/path and hdf5_index are unsupported for Caterva2 services")
-            roots = discover_service(urlpath, required=remote_service == "caterva2")
+            from blosc2.caterva2_url import discovery_auth_token
+
+            auth_token = discovery_auth_token(urlpath, required=remote_service == "caterva2")
+            roots = discover_service(urlpath, required=remote_service == "caterva2", auth_token=auth_token)
             if roots is not None:
-                return _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs)
+                return _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs, auth_token)
         elif remote_service == "fsspec" and not is_fsspec_url(urlpath):
             raise ValueError("remote_service='fsspec' requires a remote URL")
     if isinstance(urlpath, blosc2.URLPath):

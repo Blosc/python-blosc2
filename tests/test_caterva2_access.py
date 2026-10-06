@@ -274,12 +274,50 @@ def test_discovery_redirects_timeout_and_response_limits(monkeypatch):
 def test_repository_freezes_auth_context(caterva2_source):  # noqa: F811
     base, _, _, stats = caterva2_source
     stats["roots"]["@broken"] = {"name": "@broken"}
-    with blosc2.c2context(auth_token="alice=secret"):
+    with blosc2.c2context(urlbase=base, auth_token="alice=secret"):
         repo = blosc2.open(base)
     with blosc2.c2context(auth_token="bob=secret"), repo:
         with repo["@public"] as root:
             assert root.keys() == ["mount"]
     assert set(stats["cookies"]) == {"alice=secret"}
+
+
+@pytest.mark.parametrize(
+    ("destination", "expected"),
+    [
+        ("https://trusted/download", "secret"),
+        ("https://trusted:443/download", "secret"),
+        ("https://other/download", None),
+        ("http://trusted/download", None),
+        ("https://trusted:8443/download", None),
+    ],
+)
+def test_auto_discovery_scopes_ambient_credentials(destination, expected, monkeypatch):
+    import httpx
+
+    from blosc2.caterva2_url import discover_service
+
+    seen = []
+
+    def respond(request):
+        seen.append(request.headers.get("cookie"))
+        return httpx.Response(200, json={})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+        with blosc2.c2context(urlbase="https://trusted", auth_token="secret"):
+            assert discover_service(destination) == {}
+            assert discover_service(destination, auth_token="explicit") == {}
+    assert seen == [expected, "explicit"]
+
+
+def test_discovered_foreign_repository_does_not_inherit_auth(caterva2_source):  # noqa: F811
+    base, _, _, stats = caterva2_source
+    stats["roots"]["@broken"] = {"name": "@broken"}
+    with blosc2.c2context(urlbase="https://trusted", auth_token="secret"):
+        with blosc2.open(base) as repo, repo["@public"] as root:
+            assert root.keys() == ["mount"]
+    assert not any(stats["cookies"])
 
 
 def test_nonlazy_groups_and_lookup_escaping_fail_clearly(caterva2_source):  # noqa: F811
