@@ -20,8 +20,52 @@ CORPUS = Path(
     )
 )
 ARTIFACTS = CORPUS.parent / "portable-artifacts"
+EXCLUDED = (
+    set((CORPUS / "frozen-excluded.txt").read_text().split())
+    if (CORPUS / "frozen-excluded.txt").is_file()
+    else set()
+)
 SCALE = 2.0
 BIAS = -1.0
+
+
+def assert_frozen_rejection(source, inputs, output):
+    """Check both authoring and native import, without disguising setup errors."""
+    info = blosc2.validate_portable_dsl(source, inputs, output)
+    assert not info["valid"], info
+    assert info["status"] == "unsupported_feature", info
+    with pytest.raises(blosc2.PortableArtifactError) as error:
+        blosc2.DSLKernel.from_source(source).export(inputs, output)
+    assert error.value.status == "unsupported_feature"
+    # Use a valid envelope, then replace only its source. Import must independently
+    # enforce the native frozen boundary even when authoring is bypassed.
+    names = ", ".join(inputs)
+    identity = f"def k({names}):\n    return {next(iter(inputs))}\n"
+    envelope = json.loads(blosc2.DSLKernel.from_source(identity).export(inputs, output))
+    envelope["source"] = source
+    envelope["entry_point"] = ast.parse(source).body[0].name
+    with pytest.raises(blosc2.PortableArtifactError) as error:
+        blosc2.PortableKernel.from_json(json.dumps(envelope), jit=False)
+    assert error.value.status == "unsupported_requirement"
+
+
+@pytest.mark.parametrize(
+    ("expression", "input_dtype", "output_dtype"),
+    [
+        ("sin(x)", "float64", "float64"),
+        ("cos(x)", "float32", "float32"),
+        ("int(x + 0.25)", "float64", "int64"),
+        ("float(float(x))", "float32", "float32"),
+        ("bool((x + 1.0) - x)", "float32", "bool"),
+        ("(x + 1.0) > x", "float32", "bool"),
+        ("(x / 2) > 0", "float64", "bool"),
+        ("x + 0.5", "int64", "int64"),
+        ("x == 9007199254740993.0", "int64", "bool"),
+        ("float(x)", "int64", "float32"),
+    ],
+)
+def test_frozen_boundary_without_corpus(native_artifacts, expression, input_dtype, output_dtype):
+    assert_frozen_rejection(f"def k(x):\n    return {expression}\n", {"x": input_dtype}, output_dtype)
 
 
 @blosc2.dsl_kernel
@@ -66,12 +110,9 @@ def test_capture_closure_and_frontend_sugar(native_artifacts):
     def trig(x):
         return np.sin(x) * scale
 
-    artifact = trig.export({"x": "float32"}, "float32")
-    scale = np.float32(99.0)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
-    x = np.array([0.0, 0.25, 1.0], dtype=np.float32)
-    np.testing.assert_allclose(kernel.evaluate({"x": x}), np.sin(x) * 2, rtol=2e-6)
-    assert "np.sin" not in kernel.source
+    with pytest.raises(blosc2.PortableArtifactError) as error:
+        trig.export({"x": "float32"}, "float32")
+    assert error.value.status == "unsupported_feature"
 
 
 def test_capture_collision_and_comments(native_artifacts):
@@ -371,6 +412,9 @@ def test_optional_adapter_availability():
     ],
 )
 def test_bool_output_numeric_arithmetic(native_artifacts, compiler, jit, count, body, samples):
+    if "int(x +" in body:
+        assert_frozen_rejection(f"# me:compiler={compiler}\ndef k(x):\n{body}", {"x": "bool"}, "bool")
+        return
     artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
         {"x": "bool"}, "bool"
     )
@@ -445,6 +489,9 @@ def test_float_cast_arithmetic_rounding(native_artifacts, compiler, jit, count, 
         "negation": "float(-(x * 0.1))",
     }
     source = f"# me:compiler={compiler}\ndef k(x):\n    return {expressions[operation]}\n"
+    if operation != "leaf":
+        assert_frozen_rejection(source, {"x": "float32"}, output_dtype)
+        return
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     if jit:
@@ -482,22 +529,13 @@ def test_float_cast_arithmetic_rounding(native_artifacts, compiler, jit, count, 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.parametrize("count", [1, 2, 257])
-def test_float32_leaf_math(native_artifacts, case, compiler, jit, count):
-    """Leaf math rounds in float32 before widening or comparing."""
+def test_math_is_outside_frozen_profile(native_artifacts, case, compiler, jit, count):
     if not CORPUS.is_dir():
         pytest.skip("Native fixtures unavailable")
     words = (CORPUS / f"{case}.txt").read_text().split()
     input_dtype, output_dtype = words[1:3]
-    rows = np.array(words[6:]).reshape(int(words[3]), 2)
     source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit:
-        assert kernel.has_jit
-    values = np.resize(np.array(rows[:, 0], dtype=input_dtype), count)
-    expected = np.resize(np.array(rows[:, 1], dtype=output_dtype), count)
-    for _ in range(2):
-        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
+    assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
 
 
 @pytest.mark.parametrize(
@@ -540,6 +578,9 @@ def test_typed_arithmetic_artifact(native_artifacts, case, compiler, jit):
     input_dtype, output_dtype = words[1:3]
     rows = np.array(words[6:]).reshape(int(words[3]), 2)
     source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+    if case in EXCLUDED:
+        assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
+        return
     artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     assert kernel.has_jit == jit
@@ -640,13 +681,7 @@ def test_while_cap_hybrid_cleanup(native_artifacts, monkeypatch, compiler):
         f"# me:compiler={compiler}\ndef k(x):\n    value = sin(x)\n    n = 0\n"
         "    while n < x:\n        n = n + 1\n    return value\n"
     )
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "float64")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
-    assert kernel.has_jit
-    for _ in range(4):
-        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
-            kernel.evaluate({"x": np.full(257, 4.0)})
-        np.testing.assert_array_equal(kernel.evaluate({"x": np.zeros(257)}), np.zeros(257))
+    assert_frozen_rejection(source, {"x": "float64"}, "float64")
 
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
@@ -736,33 +771,18 @@ def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, bo
         ("if (int(x) / 2) > 0:\n        return 1.0\n    return 0.0", "float64", [0, 0, 0, 1, 1]),
     ],
 )
-def test_unsupported_division_lowering_uses_interpreter(
-    native_artifacts, compiler, body, output_dtype, expected
-):
+def test_unsupported_division_is_rejected(native_artifacts, compiler, body, output_dtype, expected):
     source = f"# me:compiler={compiler}\ndef k(x):\n    {body}\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
-    assert not kernel.has_jit
-    np.testing.assert_array_equal(
-        kernel.evaluate({"x": np.array([-3.75, -1.75, 0, 1.75, 3.75])}),
-        np.array(expected, dtype=output_dtype),
-    )
+    assert_frozen_rejection(source, {"x": "float64"}, output_dtype)
 
 
 @pytest.mark.parametrize("input_dtype", ["float32", "float64"])
 @pytest.mark.parametrize("output_dtype", ["float32", "float64"])
 @pytest.mark.parametrize("count", [1, 5, 257])
 @pytest.mark.parametrize("jit", [False, True])
-def test_nested_conversion_buffer_width(native_artifacts, input_dtype, output_dtype, count, jit):
+def test_nested_conversion_is_rejected(native_artifacts, input_dtype, output_dtype, count, jit):
     source = "def k(x):\n    return float(int(x) / 2)\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    # Nested casts remain intentionally outside the typed JIT arithmetic slice.
-    assert not kernel.has_jit
-    values = np.resize(np.array([-1.75, -0.25, 0.25, 1.75, 4.75], dtype=input_dtype), count)
-    expected = np.resize(np.array([-0.5, 0, 0, 0.5, 2], dtype=output_dtype), count)
-    for _ in range(2):
-        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
+    assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
 
 
 @pytest.mark.parametrize(
@@ -776,14 +796,11 @@ def test_nested_conversion_buffer_width(native_artifacts, input_dtype, output_dt
 @pytest.mark.parametrize("input_dtype", ["float32", "float64"])
 @pytest.mark.parametrize("output_dtype", ["bool", "int32", "int64", "float32", "float64"])
 @pytest.mark.parametrize("jit", [False, True])
-def test_value_cast_argument_semantics(
+def test_floating_expression_casts_are_rejected(
     native_artifacts, expression, expected, input_dtype, output_dtype, jit
 ):
     source = f"# me:compiler=tcc\ndef k(x):\n    return {expression}\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    values = np.array([-1.75, -0.25, 0.25, 1.75, 4.75], dtype=input_dtype)
-    np.testing.assert_array_equal(kernel.evaluate({"x": values}), np.array(expected, dtype=output_dtype))
+    assert_frozen_rejection(source, {"x": input_dtype}, output_dtype)
 
 
 @pytest.mark.parametrize("jit", [False, True])

@@ -1,8 +1,34 @@
 # Portable DSL v0.1: first implementation plan
 
-**Status:** Implementation plan for the `portable-dsls` branch. Proposed API names
-and wire-format details below remain experimental until the first implementation
-and conformance tests establish them.
+**Status: conservative 0.1 boundary frozen; release integration in progress.**
+The normative specifications are `../miniexpr/doc/dsl-spec/0.1.md` and
+`artifact-0.1.md`; the development history below is not the current release scope.
+
+### Closed scope and release checklist
+
+- Native source and compiled-tree gates exclude transcendental calls, nested
+  numeric casts, floating expression arguments to truth casts, mixed computation
+  intermediates, and unlowered float32/division predicate arithmetic.
+- Overflow, out-of-domain casts, zero divisors, and non-default rounding are
+  explicit runtime-domain exclusions, not promises of wraparound or trapping.
+- `frozen-excluded.txt` separates preserved full-language regressions from
+  conformance. Negative tests verify validation, export, and native import;
+  unsupported artifacts cannot enter via a bypassed authoring frontend.
+- Python package builds enable the optional native artifact adapter by default,
+  retaining an explicit OFF build option and including yyjson's MIT license.
+- Native frozen revision published: `7543a9592410bdfd72f7a7319343dfece55b09e4`.
+  Python pins that immutable revision, including platform test-harness fixes.
+- Stock wheel verification passed without a local native source override:
+  artifact support defaults ON, yyjson's license is included in wheel metadata,
+  and interpreter/JIT execution works after moving the build tree. The isolated
+  wheel passed 2171 focused Python tests; local native and sanitizer suites passed
+  431 and 340 tests respectively. Documentation builds with pre-existing warnings.
+- Host CI now enables native artifacts on Linux/macOS/Windows and ARM64 jobs.
+  Local certification is macOS arm64; other platform jobs must be green before
+  announcing cross-platform release certification.
+- Windows conformance certifies the interpreter baseline, not TCC acceleration.
+- Numeric scope is closed. Broader math/casts, overflow policy, arbitrary mixed
+  promotion, and lazy/container integration are later-profile work, not 0.1 gates.
 
 ### Implementation progress
 

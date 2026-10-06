@@ -85,6 +85,11 @@ CASES = [
     "missing_return_hybrid_ok",
 ]
 TYPES = ("bool", "int32", "int64", "float32", "float64")
+EXCLUDED = (
+    set((CORPUS / "frozen-excluded.txt").read_text().split())
+    if (CORPUS / "frozen-excluded.txt").is_file()
+    else set()
+)
 CASES += [f"convert_{input_type}_{output_type}" for input_type in TYPES for output_type in TYPES]
 
 
@@ -144,6 +149,7 @@ def test_native_source_corpus(case, jit, monkeypatch):
                 str(corpus_source(case)),
                 str(CORPUS / f"{case}.txt"),
                 "on" if jit else "off",
+                *(["native"] if case in EXCLUDED else []),
             ],
             check=True,
             capture_output=True,
@@ -220,7 +226,9 @@ def test_portable_profile_corpus(portable_validator, case):
     nvars = int(words[4])
     inputs = dict.fromkeys(words[5 : 5 + nvars], input_type)
     info = portable_validator(corpus_source(case).read_text(), inputs, output_type)
-    assert info["valid"] == (outcome != "compile_error"), info
+    assert info["valid"] == (outcome != "compile_error" and case not in EXCLUDED), info
+    if case in EXCLUDED:
+        assert info["status"] == "unsupported_feature"
 
 
 @pytest.mark.parametrize(
@@ -233,7 +241,7 @@ def test_portable_profile_corpus(portable_validator, case):
         ("return _flat_idx + x", "unsupported_feature"),
         ("return callback(x)", "unsupported_feature"),
         ("return CAPTURE + x", "invalid_source"),
-        ("return sin()", "invalid_source"),
+        ("return sin()", "unsupported_feature"),
     ],
 )
 def test_portable_profile_rejections(portable_validator, body, status):

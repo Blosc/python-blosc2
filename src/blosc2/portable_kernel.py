@@ -2,7 +2,7 @@
 # Copyright (c) 2026, Blosc Development Team <blosc@blosc.org>
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
-"""Experimental portable DSL artifact authoring and native-only execution."""
+"""Conservative portable DSL 0.1 authoring and native-only execution."""
 
 from __future__ import annotations
 
@@ -268,8 +268,8 @@ class PortableKernel:
     """An owned, typed native artifact; no originating function or Python fallback.
 
     Use ``from_json`` to import and ``evaluate`` to return NumPy values. Inputs
-    are same-shaped logical arrays, bound by name. The experimental profile and
-    native adapter must be available in the installed extension.
+    are same-shaped logical arrays, bound by name. The conservative 0.1 profile
+    is enforced by the native adapter (enabled by default in package builds).
     """
 
     @classmethod

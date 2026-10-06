@@ -943,7 +943,7 @@ class DSLKernel:
         collision-free parameters. ``capture_dtypes`` overrides scalar type
         inference (Python bool/int/float infer bool/int64/float64 respectively;
         supported NumPy scalars retain their dtype). Arrays, objects, and external
-        callbacks cannot be captures. The draft requires homogeneous parameter
+        callbacks cannot be captures. Profile 0.1 requires homogeneous parameter
         dtypes. Import via :meth:`blosc2.PortableKernel.from_json`.
         """
         from .portable_kernel import export_portable_kernel
@@ -1050,7 +1050,7 @@ def validate_dsl(func):
 
 
 def validate_portable_dsl(source, input_dtypes, output_dtype, *, language_version="0.1"):
-    """Check raw native source and a typed signature against the draft portable profile.
+    """Check raw native source and a typed signature against conservative portable profile 0.1.
 
     Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
     ``error``. Validation neither executes a kernel nor invokes a JIT compiler.

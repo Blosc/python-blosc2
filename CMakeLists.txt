@@ -118,6 +118,7 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
+option(MINIEXPR_BUILD_ARTIFACT "Build portable DSL artifact support" ON)
 # Keep miniexpr's and C-Blosc2's bundled files inside the blosc2 package.
 # Without this, their install rules use the default CMAKE_INSTALL_LIBDIR
 # ("lib"), which scikit-build places at site-packages/lib.
@@ -141,7 +142,7 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 3f4db93a628aedc662b7d27a5f35c97ffaeb0424
+    GIT_TAG 7543a9592410bdfd72f7a7319343dfece55b09e4
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
@@ -151,6 +152,9 @@ target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
 if(TARGET miniexpr_artifact)
   target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
   target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_PORTABLE_ARTIFACT=1)
+  FetchContent_GetProperties(yyjson SOURCE_DIR B2_YYJSON_SOURCE_DIR)
+  install(FILES "${B2_YYJSON_SOURCE_DIR}/LICENSE"
+    DESTINATION ${SKBUILD_METADATA_DIR}/licenses/miniexpr RENAME LICENSE-YYJSON)
 endif()
 if(APPLE)
   target_link_libraries(blosc2_ext PRIVATE "-framework Accelerate")

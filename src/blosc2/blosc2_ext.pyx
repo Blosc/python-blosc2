@@ -989,7 +989,7 @@ cdef extern from *:
 
 
 def validate_portable_dsl_source(source, input_dtypes, output_dtype, version):
-    """Native-only draft profile validation; no arrays, JIT, or Python execution."""
+    """Native-only portable 0.1 validation; no arrays, JIT, or Python execution."""
     cdef Py_ssize_t n = len(input_dtypes)
     if n > 128:
         raise ValueError("Too many portable DSL inputs (maximum 128)")
