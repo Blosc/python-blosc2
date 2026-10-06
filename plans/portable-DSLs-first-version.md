@@ -129,6 +129,25 @@ This slice passed 328 focused Python tests with 10 strict expected JIT failures,
 interpreter-only portable/profile/artifact checks. Ruff and whitespace checks
 passed, and the native builds emitted no new warnings.
 
+The next slice corrects the first division-promotion cases using C arithmetic
+rendered from the native compiled expression tree. Seven exact shared fixtures
+cover leaf casts, literal folding, locals, loop indices, float32 rounding, and
+branch conditions under interpreter/TCC/CC execution. Typed text participates in
+the IR fingerprint and code-generation cache version 14. Text-only hybrid plans
+cannot bypass the correction. Unsupported typed contexts conservatively retain
+interpreter execution; native-only artifact import and compiler precedence are
+unchanged. The six division expected failures are removed; four float32 math
+expected failures remain. Broader nested-cast probes exposed additional native
+evaluator dispatch anomalies and an unisolated abort, recorded in the numeric
+audit as separate blockers rather than promoted conformance claims.
+
+Division-slice validation passed 377 focused Python tests with four remaining
+math expected failures, all 272 native tests in the TCC-enabled build, and 61
+selected interpreter-only portable/profile/artifact/IR/codegen tests. Required-JIT
+division fixtures passed under both TCC and CC. Ruff and whitespace checks passed;
+native builds emitted no new warnings. The nested-cast reproducer is deliberately
+not part of the passing execution suite pending a native evaluator investigation.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently

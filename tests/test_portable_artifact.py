@@ -351,9 +351,7 @@ def test_optional_adapter_availability():
             blosc2.PortableKernel.from_json("{}", jit=False)
 
 
-@pytest.mark.parametrize(
-    "case", ["division_int", "division_bool", "division_literals", "math_widen", "math_condition"]
-)
+@pytest.mark.parametrize("case", ["math_widen", "math_condition"])
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
 def test_numeric_audit_gaps(native_artifacts, case, compiler, jit, request):
@@ -376,3 +374,60 @@ def test_numeric_audit_gaps(native_artifacts, case, compiler, jit, request):
         # execution, so unrelated setup/runtime failures cannot hide as xfails.
         request.node.add_marker(pytest.mark.xfail(strict=True, reason=f"Open typed JIT codegen gap: {case}"))
     np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "division_int",
+        "division_bool",
+        "division_literals",
+        "division_locals",
+        "division_loop",
+        "division_float32",
+        "division_condition",
+    ],
+)
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+def test_typed_division_artifact(native_artifacts, case, compiler, jit):
+    if not (CORPUS / f"{case}.txt").is_file():
+        pytest.skip("Native division fixtures unavailable")
+    if jit:
+        control = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n    return x\n")
+        control = blosc2.PortableKernel.from_json(control.export({"x": "float64"}, "float64"), jit=True)
+        if not control.has_jit:
+            pytest.skip(f"{compiler} backend unavailable")
+    words = (CORPUS / f"{case}.txt").read_text().split()
+    input_dtype, output_dtype = words[1:3]
+    rows = np.array(words[6:]).reshape(int(words[3]), 2)
+    source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    assert kernel.has_jit == jit
+    np.testing.assert_array_equal(
+        kernel.evaluate({"x": np.array(rows[:, 0], dtype=input_dtype)}),
+        np.array(rows[:, 1], dtype=output_dtype),
+    )
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize(
+    ("body", "output_dtype", "expected"),
+    [
+        ("return int(x / 2) / 2", "float64", [-0.5, 0, 0, 0, 0.5]),
+        ("return int(x) / 2", "int64", [-1, 0, 0, 0, 1]),
+        ("if (int(x) / 2) > 0:\n        return 1.0\n    return 0.0", "float64", [0, 0, 0, 1, 1]),
+    ],
+)
+def test_unsupported_division_lowering_uses_interpreter(
+    native_artifacts, compiler, body, output_dtype, expected
+):
+    source = f"# me:compiler={compiler}\ndef k(x):\n    {body}\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+    assert not kernel.has_jit
+    np.testing.assert_array_equal(
+        kernel.evaluate({"x": np.array([-3.75, -1.75, 0, 1.75, 3.75])}),
+        np.array(expected, dtype=output_dtype),
+    )
