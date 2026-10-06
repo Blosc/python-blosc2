@@ -513,31 +513,41 @@ def test_while_cap_hybrid_cleanup(native_artifacts, monkeypatch, compiler):
         np.testing.assert_array_equal(kernel.evaluate({"x": np.zeros(257)}), np.zeros(257))
 
 
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
-def test_while_chain_mixed_lane_audit(native_artifacts, monkeypatch, jit, request):
+@pytest.mark.parametrize("dtype", ["int32", "int64", "float32", "float64"])
+@pytest.mark.parametrize("count", [1, 3, 257])
+@pytest.mark.parametrize("samples", [[0, 2, 3, -1], [3, 2, 0, -1]])
+def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dtype, count, samples):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
-    source = (CORPUS / "audit" / "while_cap_chain.dsl").read_text()
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
+    source = (
+        (CORPUS / "while_cap_chain.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+    )
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     if jit:
         assert kernel.has_jit
-    else:
-        # Preparation must succeed before marking this known interpreter error.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                strict=True,
-                raises=blosc2.PortableArtifactError,
-                reason="Open interpreter chained-while mixed-lane condition gap",
-            )
-        )
-    values = np.array([0, 2, 3], dtype="int64")
-    try:
-        actual = kernel.evaluate({"x": values})
-    except blosc2.PortableArtifactError as error:
-        if error.status != "evaluation_error":
-            raise RuntimeError("Unexpected failure outside the chained-while audit gap") from error
-        raise
-    np.testing.assert_array_equal(actual, values)
+    values = np.resize(np.array(samples, dtype=dtype), count)
+    expected = np.maximum(values, np.array(0, dtype=dtype))
+    for _ in range(2):
+        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("dtype", ["int32", "int64", "float32", "float64"])
+@pytest.mark.parametrize("count", [4, 257])
+@pytest.mark.parametrize("case", ["masked_local_chain", "masked_bool_chain"])
+def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, count, case):
+    source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, "bool")
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    values = np.resize(np.array([0, 1, 2, -1], dtype=dtype), count)
+    expected = np.resize(np.array([False, True, True, case == "masked_bool_chain"]), count)
+    for _ in range(2):
+        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
 
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])

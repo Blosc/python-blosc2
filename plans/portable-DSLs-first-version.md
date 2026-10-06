@@ -222,6 +222,17 @@ Validation passed all 344 regular native tests, 270 AddressSanitizer tests, and
 727 focused Python tests with one strict chained-while expected failure. Ruff
 and whitespace checks passed; native builds emitted no new warnings.
 
+The subsequent masked-local correction resolves that chained-while discrepancy.
+Scalar chain operands now read the active lane of local buffers rather than
+assuming compile-time uniformity survives masked updates. Root reduction copies
+broadcast their scalar results into full-width DSL destinations, preserving
+existing nonportable reduction behavior. `while_cap_chain` is promoted to the
+passing corpus, with numeric/Boolean masked-local fixtures and expanded lane,
+dtype, count, and repeated-evaluation matrices. Validation passed 357 regular
+native tests, 280 AddressSanitizer tests, and 895 focused Python tests without
+expected failures or new native build warnings. The remaining numeric contracts
+and publication/integration gates are unchanged.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently
