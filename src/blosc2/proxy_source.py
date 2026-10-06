@@ -713,6 +713,111 @@ def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     return np.minimum(extents, cap) if header[8] else extents
 
 
+class ByteRangeSChunkSource:
+    """Bounded contiguous-frame metadata/chunks for passive document readers.
+
+    Unlike array sources, this never reconstructs objects from metalayers and
+    reads each chunk header before its payload. ``read_range`` must return exact
+    ranges and refuse unbounded transport fallbacks.
+    """
+
+    def __init__(self, read_range, size):
+        self.read_range = read_range
+        self.size = size
+        self._offsets = None
+        self._last_header = None
+        head = self._read(0, 15)
+        header_len = struct.unpack_from(">i", head, 11)[0]
+        if not 16 <= header_len <= 1 << 20:
+            raise ValueError("Document frame header exceeds metadata limits")
+        raw, header, _ = _read_frame_header(self._read, head=head)
+        if len(header) != 14 or header[2] != size or header[11]:
+            raise ValueError("Document requires a fixed-chunk contiguous SChunk frame")
+        self._header = header
+        self.nbytes, self.cbytes, self.chunksize = header[4], header[5], header[8]
+        if any(type(value) is not int or value < 0 for value in (self.nbytes, self.cbytes)):
+            raise ValueError("Invalid document frame sizes")
+        if self.nbytes and (type(self.chunksize) is not int or self.chunksize <= 0):
+            raise ValueError("Document requires fixed-size chunks")
+        self.chunksize = max(self.chunksize, 0)
+        self.nchunks = (self.nbytes + self.chunksize - 1) // self.chunksize if self.nbytes else 0
+        if self.nchunks * 8 > 8 << 20:
+            raise ValueError("Document chunk index exceeds 8 MiB metadata limit")
+        # Read only metalayer names, never interpret serialized payloads.
+        names = header[13][1]
+        self.meta = {name.decode("utf-8"): None for name in names}
+        if "b2nd" in self.meta:
+            raise ValueError("Document carrier must be an SChunk byte stream, not an array or table")
+        self._index_pos = header_len + self.cbytes
+        if self._index_pos > size:
+            raise ValueError("Invalid document frame extent")
+
+    def _read(self, offset, size):
+        if not 0 <= size <= (8 << 20) or not 0 <= offset <= self.size - size:
+            raise ValueError("Document frame metadata read exceeds bounds")
+        data = self.read_range(offset, size)
+        if len(data) != size:
+            raise ValueError("Short document frame range read")
+        return data
+
+    def _chunk_offset(self, index):
+        if self._offsets is None:
+            if self.nchunks:
+                head = self._read(self._index_pos, 16)
+                nbytes, _, cbytes = struct.unpack_from("<III", head, 4)
+                if nbytes != self.nchunks * 8 or not 16 <= cbytes <= 8 << 20:
+                    raise ValueError("Document chunk index exceeds metadata bounds")
+                chunk = self._read(self._index_pos, cbytes)
+                if chunk[:16] != head:
+                    raise ValueError("Document chunk index changed during reading")
+                decoded = blosc2.decompress2(chunk)
+                if len(decoded) != nbytes:
+                    raise ValueError("Document chunk index has an invalid decoded length")
+                offsets = np.frombuffer(decoded, dtype="<i8")
+                self._offsets = np.where(offsets >= 0, offsets + self._header[1], offsets)
+            else:
+                self._offsets = np.empty(0, dtype=np.int64)
+            if len(self._offsets) != self.nchunks:
+                raise ValueError("Document chunk index does not match frame metadata")
+        offset = int(self._offsets[index])
+        if offset >= 0 and not self._header[1] <= offset <= self._index_pos - 32:
+            raise ValueError("Document chunk offset is outside the payload")
+        return offset
+
+    def get_lazychunk(self, index):
+        offset = self._chunk_offset(index)
+        if offset < 0:
+            kind = _special_kind(offset)
+            if kind != _SPECIAL_ZERO:
+                raise ValueError("Document contains an unsupported special chunk")
+            size = min(self.chunksize, self.nbytes - index * self.chunksize)
+            header = bytearray(blosc2.compress2(bytes(128), typesize=1))
+            struct.pack_into("<III", header, 4, size, size, 32)
+            header = bytes(header)
+        else:
+            header = self._read(offset, 32)
+        self._last_header = index, offset, header
+        return header
+
+    def get_chunk(self, index):
+        if self._last_header is None or self._last_header[0] != index:
+            self.get_lazychunk(index)
+        _, offset, header = self._last_header
+        if offset < 0:
+            return header
+        cbytes = struct.unpack_from("<I", header, 12)[0]
+        from blosc2.remote_file import MAX_COMPRESSED_CHUNK, MAX_DECODED_CHUNK
+
+        if struct.unpack_from("<I", header, 4)[0] > MAX_DECODED_CHUNK:
+            raise ValueError("Document chunk exceeds decoded limit")
+        if not 32 <= cbytes <= MAX_COMPRESSED_CHUNK or offset + cbytes > self._index_pos:
+            raise ValueError("Document chunk exceeds compressed bounds")
+        data = self.read_range(offset, cbytes)
+        if len(data) != cbytes or data[:32] != header:
+            raise ValueError("Document changed or returned a short chunk")
+        return data
+
+
 class ByteRangeNDSource(ProxyNDSource):
     """A :ref:`Proxy` source that serves parts of a remote Blosc2 frame.
 

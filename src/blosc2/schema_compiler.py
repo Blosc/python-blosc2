@@ -418,6 +418,11 @@ def _default_to_json(value: Any) -> Any:
 
 def _default_from_json(value: Any) -> Any:
     """Reverse of :func:`_default_to_json`."""
+    if isinstance(value, dict) and set(value) == {"__float__"}:
+        marker = value["__float__"]
+        if marker not in ("nan", "inf", "-inf"):
+            raise ValueError("Invalid non-finite float metadata tag")
+        return float(marker)
     if isinstance(value, dict) and value.get("__complex__"):
         return complex(value["real"], value["imag"])
     if isinstance(value, dict) and value.get("__bytes__"):
@@ -429,6 +434,9 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
     """Reconstruct one SchemaSpec from serialized metadata."""
     data = dict(data)
     kind = data.pop("kind")
+    # Caterva2 services use explicit tags for values forbidden in strict JSON.
+    # Decode scalar fields here; nested specs recurse through this function.
+    data = {key: _default_from_json(value) for key, value in data.items()}
     if isinstance(data.get("null_value"), dict) and data["null_value"].get("__bytes__"):
         data["null_value"] = _json_to_bytes(data["null_value"])
     if kind == "list":

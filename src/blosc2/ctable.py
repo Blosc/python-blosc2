@@ -7810,8 +7810,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         returned table preserves the order of ``indices`` and any duplicates,
         unlike mask-based views.
         """
+        from blosc2.ctable_storage import _AllValidRows
+        from blosc2.remote_parquet import ParquetTableStorage
+
         logical_pos = self._normalize_row_take_indices(indices, self.nrows)
-        physical_pos = self._live_positions_from_valid_rows_chunks()[logical_pos]
+        parquet = isinstance(self._remote_read_storage(), ParquetTableStorage)
+        # A Parquet dictionary is discovered by reading row groups, not stored
+        # globally in its footer. Empty schema frames must not touch columns.
+        if parquet and not len(logical_pos):
+            return self._empty_copy(capacity=0)
+        if (
+            isinstance(self._valid_rows, _AllValidRows)
+            and getattr(self, "_cached_live_positions", None) is None
+        ):
+            physical_pos = logical_pos
+        else:
+            physical_pos = self._live_positions_from_valid_rows_chunks()[logical_pos]
         n = len(physical_pos)
 
         result = self._empty_copy(capacity=n)
@@ -7825,14 +7839,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 result._cols[col_name].extend(arr[int(pos)] for pos in physical_pos)
                 result._cols[col_name].flush()
             elif self._is_dictionary_column(col):
-                for v in arr.dictionary:
-                    result._cols[col_name].encode(v)
-                codes = arr.codes
-                result._cols[col_name].codes[:n] = (
-                    codes._take_numpy(physical_pos, axis=0)
-                    if hasattr(codes, "_take_numpy")
-                    else codes[physical_pos]
-                )
+                if parquet:
+                    # Re-encode selected values rather than constructing a
+                    # global dictionary by scanning every Parquet row group.
+                    target = result._cols[col_name]
+                    target.codes[:n] = target.encode_batch(arr[physical_pos])
+                else:
+                    for v in arr.dictionary:
+                        result._cols[col_name].encode(v)
+                    codes = arr.codes
+                    result._cols[col_name].codes[:n] = (
+                        codes._take_numpy(physical_pos, axis=0)
+                        if hasattr(codes, "_take_numpy")
+                        else codes[physical_pos]
+                    )
             else:
                 result._cols[col_name][:n] = (
                     arr._take_numpy(physical_pos, axis=0)

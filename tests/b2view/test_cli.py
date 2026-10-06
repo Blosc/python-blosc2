@@ -82,7 +82,9 @@ def test_remote_options_reach_browser(monkeypatch, options):
     for key, value in options.items():
         argv.extend(["--" + key.replace("_", "-"), value])
     assert main(argv) == 0
-    assert opened == [(url, {"storage_options": options or None, "cache_dir": None})]
+    assert opened == [
+        (url, {"storage_options": options or None, "cache_dir": None, "remote_service": "auto"})
+    ]
 
 
 def test_cache_dir_reaches_browser(monkeypatch, tmp_path):
@@ -106,7 +108,7 @@ def test_cache_dir_reaches_browser(monkeypatch, tmp_path):
     monkeypatch.setattr(B2ViewApp, "run", run)
     cache_path = str(tmp_path / "cache")
     assert main([url, "--cache-dir", cache_path]) == 0
-    assert opened == [(url, {"storage_options": None, "cache_dir": cache_path})]
+    assert opened == [(url, {"storage_options": None, "cache_dir": cache_path, "remote_service": "auto"})]
 
 
 def test_max_cache_bytes_reaches_browser(monkeypatch):
@@ -129,4 +131,14 @@ def test_max_cache_bytes_reaches_browser(monkeypatch):
 
     monkeypatch.setattr(B2ViewApp, "run", run)
     assert main([url, "--max-cache-bytes", "1048576"]) == 0
-    assert opened == [(url, {"storage_options": None, "cache_dir": None, "max_cache_bytes": 1048576})]
+    assert opened == [
+        (
+            url,
+            {
+                "storage_options": None,
+                "cache_dir": None,
+                "max_cache_bytes": 1048576,
+                "remote_service": "auto",
+            },
+        )
+    ]

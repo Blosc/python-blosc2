@@ -51,6 +51,8 @@ def safe(value):
 
 @pytest.fixture
 def caterva2_source(request):
+    if blosc2.IS_WASM:
+        pytest.skip("emscripten cannot run a threaded HTTP server")
     array = blosc2.asarray(np.arange(60, dtype=np.int32).reshape(6, 10), chunks=(3, 5), blocks=(1, 5))
     nrows = getattr(request, "param", 12)
     if nrows in ("rich", "rich-large"):
@@ -84,9 +86,25 @@ def caterva2_source(request):
         "limit_rows": None,
         "fail_start": None,
         "short_start": None,
+        "requests": [],
+        "roots": {"@public": {"name": "@public"}},
+        "roots_status": 200,
+        "groups": {
+            "@public": ["mount"],
+            "@public/mount": ["array", "table", "empty"],
+            "@public/mount/empty": [],
+            "@public/group": ["array", "table"],
+        },
+        "fail_list": None,
+        "aliases": {},
+        "files": {},
+        "file_chunks": [],
+        "file_metadata": {},
+        "arrays": {},
+        "array_metadata": {},
     }
 
-    def array_info():
+    def array_info(array=array):
         return {
             "kind": "ndarray",
             "shape": array.shape,
@@ -97,7 +115,7 @@ def caterva2_source(request):
             "schunk": {
                 "nbytes": array.nbytes,
                 "cbytes": array.cbytes,
-                "nchunks": 4,
+                "nchunks": array.schunk.nchunks,
                 "cparams": safe(array.cparams),
                 "vlmeta": {},
             },
@@ -130,35 +148,85 @@ def caterva2_source(request):
             stats["cookies"].append(self.headers.get("Cookie"))
             parsed = urllib.parse.urlsplit(self.path)
             path = urllib.parse.unquote(parsed.path)
+            path = path.removeprefix("/demo")
+            stats["requests"].append(path)
+            for endpoint in ("info", "list", "fetch"):
+                prefix = f"/api/{endpoint}/"
+                if path.startswith(prefix):
+                    key = path.removeprefix(prefix)
+                    path = prefix + stats["aliases"].get(key, key)
+                    break
+            if path == "/api/roots":
+                if stats["roots_status"] != 200:
+                    self.send_error(stats["roots_status"])
+                else:
+                    self.send(json.dumps(stats["roots"]).encode(), "application/json")
+                return
             if path.startswith("/api/info/"):
                 key = path.removeprefix("/api/info/")
-                if key == "@public/group":
-                    info = {"kind": "group", "attrs": {"name": "fixture"}}
-                elif key == "@public/group/array":
+                if key in stats["files"]:
+                    stream = stats["files"][key]
+                    info = {
+                        "nbytes": stream.nbytes,
+                        "cbytes": stream.cbytes,
+                        "nchunks": stream.nchunks,
+                        "chunksize": stream.chunksize,
+                        "cparams": safe(stream.cparams),
+                        "vlmeta": {"title": "ordinary file"},
+                    }
+                    info.update(stats["file_metadata"].get(key, {}))
+                elif key in stats["groups"]:
+                    info = {
+                        "kind": "group",
+                        "attrs": {"name": "fixture"},
+                        "catalog_attrs": {"note": "curated"},
+                    }
+                elif key in stats["arrays"]:
+                    info = array_info(stats["arrays"][key])
+                    info.update(stats["array_metadata"].get(key, {}))
+                elif key in {"@public/group/array", "@public/mount/array"}:
                     info = array_info()
-                elif key in {"@public/group/table", "@public/table"}:
+                elif key in {"@public/group/table", "@public/table", "@public/mount/table"}:
                     info = table_info()
                 else:
                     self.send_error(404)
                     return
                 self.send(json.dumps(info).encode(), "application/json")
                 return
-            if path == "/api/list/@public/group":
-                self.send(json.dumps(["array", "table"]).encode(), "application/json")
+            if path.startswith("/api/list/"):
+                key = path.removeprefix("/api/list/")
+                if key == stats["fail_list"]:
+                    self.send_error(503)
+                elif key in stats["groups"]:
+                    self.send(json.dumps(stats["groups"][key]).encode(), "application/json")
+                else:
+                    self.send_error(404)
                 return
+            if path.startswith("/api/chunk/"):
+                key = path.removeprefix("/api/chunk/")
+                if key in stats["arrays"]:
+                    index = int(urllib.parse.parse_qs(parsed.query)["nchunk"][0])
+                    self.send(stats["arrays"][key].schunk.get_chunk(index), "application/octet-stream")
+                    return
+                if key in stats["files"]:
+                    index = int(urllib.parse.parse_qs(parsed.query)["nchunk"][0])
+                    stats["file_chunks"].append((key, index))
+                    self.send(stats["files"][key].get_chunk(index), "application/octet-stream")
+                    return
             if path.startswith("/api/fetch/"):
                 stats["fetches"] += 1
                 key = path.removeprefix("/api/fetch/")
                 query = urllib.parse.parse_qs(parsed.query)
                 selection = query.get("slice_", [""])[0]
-                if key == "@public/group/array":
+                if key in stats["arrays"] or key in {"@public/group/array", "@public/mount/array"}:
+                    source = stats["arrays"].get(key, array)
                     axes = tuple(
                         slice(*(int(part) if part else None for part in axis.split(":")))
                         for axis in selection.split(",")
                     )
-                    self.send(array.slice(axes).to_cframe(), "application/octet-stream")
+                    self.send(source.slice(axes).to_cframe(), "application/octet-stream")
                     return
-                if key in {"@public/group/table", "@public/table"}:
+                if key in {"@public/group/table", "@public/table", "@public/mount/table"}:
                     start, stop = (int(part) for part in selection.split(":"))
                     stats["ranges"].append((start, stop))
                     if stats["fail_start"] == start:

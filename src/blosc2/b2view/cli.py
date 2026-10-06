@@ -40,7 +40,15 @@ def resolve_source(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Browse a Blosc2 bundle or array in the terminal.")
-    parser.add_argument("urlpath", nargs="?", default=None, help="Local path or remote array URL")
+    parser.add_argument(
+        "urlpath", nargs="?", default=None, help="Local path, remote data URL, or Caterva2 server/root URL"
+    )
+    parser.add_argument(
+        "--remote-service",
+        choices=["auto", "caterva2", "fsspec"],
+        default="auto",
+        help="Remote access backend (fsspec bypasses Caterva2 recognition)",
+    )
     parser.add_argument("path", nargs="?", default="/", help="Optional starting path inside the bundle")
     parser.add_argument("--profile", help="S3 credential profile")
     parser.add_argument("--endpoint-url", help="S3 endpoint URL")
@@ -58,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-dir",
         metavar="DIR",
-        help="Directory for persistent disk caching of remote stores and arrays",
+        help="Client-side disk cache directory (independent of the server cache; repository budgets are per root)",
     )
     parser.add_argument(
         "--max-cache-bytes",
@@ -130,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         info_url=info_url,
         cache_dir=args.cache_dir,
         max_cache_bytes=args.max_cache_bytes,
+        remote_service=args.remote_service,
         storage_options={
             key: value
             for key, value in {"profile": args.profile, "endpoint_url": args.endpoint_url}.items()
@@ -138,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         or None,
     )
     app.run(mouse=args.mouse)
-    return 0
+    return app.return_code or 0
 
 
 if __name__ == "__main__":

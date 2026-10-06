@@ -42,7 +42,7 @@ except ImportError:  # plotting is optional
     PlotextPlot = None
 
 try:
-    # Auto-selects the best terminal image protocol (kitty/iTerm2/sixel),
+    # Auto-selects a supported terminal image protocol (kitty/sixel),
     # degrading to colored half-cells; used by the high-res 'h' plot view.
     from textual_image.widget import Image as TextualImage
 except ImportError:  # high-res view is optional
@@ -67,6 +67,7 @@ _KIND_ICONS = {
     "c2array": "▦",
     "ctable": "▤",
     "schunk": "▣",
+    "file": "📄",
     "unknown": "?",
 }
 
@@ -253,6 +254,7 @@ class HelpScreen(ModalScreen[None]):
             [
                 ("up / down", "move between nodes"),
                 ("enter", "select node (and expand groups)"),
+                ("f / ctrl+f", "filter discovered paths; optionally search recursively"),
             ],
         ),
         (
@@ -290,6 +292,15 @@ class HelpScreen(ModalScreen[None]):
                 ("v", "lock the data grid to the current range (esc unlocks)"),
                 ("h", "high-res matplotlib image of the current range"),
                 ("escape", "close the plot (q quits b2view)"),
+            ],
+        ),
+        (
+            "Ordinary files",
+            [
+                ("D", "download original bytes to a chosen destination (no overwrite)"),
+                ("O", "download and open a document externally"),
+                ("T", "toggle raw text / Markdown or notebook rendering"),
+                ("escape", "cancel a file download or close its dialog"),
             ],
         ),
         (
@@ -1884,6 +1895,96 @@ class DownloadScreen(ModalScreen["bool | str"]):
         self.app.call_from_thread(self.dismiss, True)
 
 
+class FileTransferScreen(ModalScreen):
+    """Explicit destination and cancellable background original-byte download/open."""
+
+    CSS = """
+    FileTransferScreen { align: center middle; }
+    #file-transfer { width: 75; height: auto; border: thick $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, file, *, external=False):
+        super().__init__()
+        self.file = file
+        self.external = external
+        self.cancelled = threading.Event()
+        self.started = False
+
+    def compose(self):
+        from pathlib import Path
+
+        from blosc2.b2view.file_preview import safe_text
+
+        name = safe_text(self.file.name).replace("\\", "_").replace("/", "_")
+        action = "Download and open externally" if self.external else "Download original file"
+        with Vertical(id="file-transfer"):
+            yield Static(
+                f"{action}: {name} ({self.file.nbytes:,} bytes)\n"
+                "Choose a destination; Enter starts. Escape cancels. Existing files are not overwritten.",
+                markup=False,
+            )
+            yield Input(value=str(Path.cwd() / name), id="file-destination")
+            yield Static("", id="file-status", markup=False)
+            yield ProgressBar(id="file-progress")
+
+    def on_mount(self):
+        self.origin = (self.app._remote_session, self.app._remote_request, self.app.selected_path)
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self):
+        if self.started:
+            return
+        destination = self.query_one(Input).value
+        if not destination.strip():
+            return
+        self.started = True
+        self.query_one(Input).disabled = True
+        self._transfer(destination)
+
+    @work(thread=True, exit_on_error=False)
+    def _transfer(self, destination):
+        def progress(done, total):
+            self.app.call_from_thread(
+                self.query_one("#file-progress", ProgressBar).update, total=total, progress=done
+            )
+
+        try:
+            path = self.file.download(destination, progress=progress, cancel=self.cancelled.is_set)
+            # Navigation/refresh/shutdown must never launch an obsolete request.
+            current = (self.app._remote_session, self.app._remote_request, self.app.selected_path)
+            if (
+                not self.cancelled.is_set()
+                and self.external
+                and current == self.origin
+                and not self.app._closing
+            ):
+                from blosc2.b2view.file_preview import open_external
+
+                open_external(path)
+            if not self.cancelled.is_set():
+                self.app.call_from_thread(self._finished, f"Saved: {path}")
+        except Exception as error:
+            if not self.cancelled.is_set():
+                self.app.call_from_thread(
+                    self._finished, f"{self.app._error_message(error)}\nDestination: {destination}"
+                )
+        finally:
+            self.file.close()
+
+    def _finished(self, message):
+        self.query_one("#file-status", Static).update(message + "\nEscape closes this dialog.")
+
+    def action_cancel(self):
+        self.cancelled.set()
+        self.dismiss()
+
+    def on_unmount(self):
+        self.cancelled.set()
+        if not self.started:
+            self.file.close()
+
+
 class B2ViewHeader(Header):
     """App header that also shows the open bundle's filename, left of the title.
 
@@ -1980,6 +2081,7 @@ class B2ViewApp(App):
     #data-header { height: auto; padding: 0 1; }
     #data-table-row { height: 1fr; }
     #data-table { width: 1fr; height: 1fr; }
+    #file-image { height: auto; }
     #row-scrollbar { width: 1; height: 1fr; color: $primary; }
     #col-scrollbar { height: 1; width: 1fr; color: $primary; }
     #meta-scroll, #attrs-scroll, #data-scroll { height: 1fr; padding: 0 1; }
@@ -1999,12 +2101,13 @@ class B2ViewApp(App):
         Binding("g", "go_to_row", "Go to row", show=False),
         ("m", "maximize_panel", "Maximize"),
         ("r", "restore_or_refresh", "Restore/Refresh"),
+        ("ctrl+f", "tree_search", "Find"),
         Binding("t", "grid_row_top", "Top", show=False),
         Binding("b", "grid_row_bottom", "Bottom", show=False),
         Binding("s", "grid_col_start", "Row start", show=False),
         Binding("e", "grid_col_end", "Row end", show=False),
         Binding("c", "go_to_column", "Go to column", show=False),
-        Binding("f", "filter_rows", "Filter rows", show=False),
+        Binding("f", "find_or_filter", "Find / Filter rows", show=False),
         Binding("S", "sort_rows", "Sort by", show=False),
         Binding("R", "reverse_sort", "Reverse sort", show=False),
         Binding("G", "group_rows", "Group by", show=False),
@@ -2013,6 +2116,9 @@ class B2ViewApp(App):
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
+        Binding("D", "download_file", "Download file", show=False),
+        Binding("O", "open_file", "Open externally", show=False),
+        Binding("T", "raw_file", "Raw/Rendered", show=False),
     ]
 
     def __init__(
@@ -2029,8 +2135,11 @@ class B2ViewApp(App):
         storage_options: dict[str, Any] | None = None,
         cache_dir: str | None = None,
         max_cache_bytes: int | None = None,
+        remote_service: str = "auto",
     ):
         super().__init__()
+        self.register_theme(BLOSC2_THEME)
+        self.theme = "blosc2"
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
         if parse_container_url(urlpath)[2] in {"zarr", "hdf5"}:
             # Initialize before Textual captures stderr (fileno=-1), which
@@ -2043,6 +2152,7 @@ class B2ViewApp(App):
         self.storage_options = storage_options
         self.cache_dir = cache_dir
         self.max_cache_bytes = max_cache_bytes
+        self.remote_service = remote_service
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
         # Header label: the path as given on the CLI, or the @public-relative
@@ -2054,13 +2164,19 @@ class B2ViewApp(App):
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
+        self._source_opened = False
+        self.startup_error: str | None = None
         # Set when a remote browser is closed on its own thread (on_unmount);
         # lets teardown wait for the cache-dir lock to be released.
         self._browser_close_thread: threading.Thread | None = None
         self.loaded_paths: set[str] = set()
-        self._remote = is_fsspec_url(urlpath)
+        from blosc2.b2view.ordinary_file import ordinary_source
+
+        # Keep ordinary-file disk I/O and image decoding off the UI thread too.
+        self._remote = is_fsspec_url(urlpath) or ordinary_source(urlpath, remote_service)
         self._remote_session = 0
         self._remote_request = 0
+        self._file_raw = False
         self._remote_page_request = 0
         self._remote_page_pending = False
         self._remote_col_end = None
@@ -2079,6 +2195,9 @@ class B2ViewApp(App):
         self._active_dim = 0
         self._dim_mode = False
         self.loading_table_page = False
+        self._data_busy = False
+        self._data_busy_frame = 0
+        self._data_busy_timer = None
         # One-shot: apply the --panel start focus after the first update_panels,
         # once the data panel's display/contents have settled (see update_panels).
         self._apply_focus_on_next_update = False
@@ -2093,6 +2212,7 @@ class B2ViewApp(App):
         with Horizontal(id="main"):
             with B2ViewPanel(id="tree-pane") as tree_pane:
                 tree_pane.border_title = "tree"
+                tree_pane.border_subtitle = "?(help) | f(ind) | r(efresh)"
                 yield Tree("/", id="tree")
             with Vertical(id="right-pane"):
                 with Horizontal(id="top-row"):
@@ -2117,11 +2237,11 @@ class B2ViewApp(App):
                     yield Static("", id="col-scrollbar")
                     with VerticalScroll(id="data-scroll", can_focus=True):
                         yield Static("", id="preview")
+                        yield Vertical(id="file-image")
         yield Footer()
 
     def on_mount(self) -> None:
-        self.register_theme(BLOSC2_THEME)
-        self.theme = "blosc2"
+        self._data_busy_timer = self.set_interval(0.2, self._animate_data_busy, pause=True)
         if self.download_url:
             # Fetch the bundle first, then open it from _after_download.  The
             # message shows the @public-relative path (e.g. "large/foo.b2z"),
@@ -2153,21 +2273,28 @@ class B2ViewApp(App):
         if result is True:
             self._start_browsing()
         else:
-            self.exit(message=f"Download failed: {result}")
+            self._source_open_error(RuntimeError(f"Download failed: {result}"))
 
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
         if self._remote:
+            self._set_data_busy(True)
             self.query_one("#metadata", Static).update("Loading remote container…")
             self._open_remote(self._remote_session, self.start_path)
             return
         browser_kwargs: dict[str, Any] = {
             "storage_options": self.storage_options,
             "cache_dir": self.cache_dir,
+            "remote_service": self.remote_service,
         }
         if self.max_cache_bytes is not None:
             browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
-        self.browser = StoreBrowser(self.urlpath, **browser_kwargs)
+        try:
+            self.browser = StoreBrowser(self.urlpath, **browser_kwargs)
+        except Exception as exc:
+            self._source_open_error(exc)
+            return
+        self._source_opened = True
         self._populate_browser()
 
     def _populate_browser(self) -> None:
@@ -2217,7 +2344,7 @@ class B2ViewApp(App):
         if getter is not None:
             getter().focus()
 
-    def _navigate_to_path(self, path: str) -> None:
+    def _navigate_to_path(self, path: str, *, focus_tree: bool = False) -> None:
         """Expand the tree and select the node at *path*."""
         tree = self.query_one("#tree", Tree)
         parts = [p for p in path.split("/") if p]
@@ -2246,6 +2373,8 @@ class B2ViewApp(App):
         def _do_select():
             tree.select_node(node)
             tree.scroll_to_node(node)
+            if focus_tree:
+                tree.focus()
 
         self.call_after_refresh(_do_select)
 
@@ -2312,6 +2441,7 @@ class B2ViewApp(App):
             browser_kwargs: dict[str, Any] = {
                 "storage_options": self.storage_options,
                 "cache_dir": self.cache_dir,
+                "remote_service": self.remote_service,
             }
             if self.max_cache_bytes is not None:
                 browser_kwargs["max_cache_bytes"] = self.max_cache_bytes
@@ -2331,15 +2461,18 @@ class B2ViewApp(App):
                 browser.close()
         except Exception as exc:
             if browser is not None:
-                browser.close()
-            self._deliver_remote(session, self._remote_error, exc)
+                # Cleanup must not mask the opening failure and strand the UI.
+                with contextlib.suppress(Exception):
+                    browser.close()
+            self._deliver_remote(session, self._source_open_error, exc)
 
     def _finish_remote_open(self, browser, children):
         self.browser = browser
+        self._source_opened = True
         self._remote_children = children
         self._populate_browser()
 
-    def _remote_error(self, exc):
+    def _error_message(self, exc):
         # Transport exceptions can include signed URLs or credentials. Keep
         # source-specific limitations, but remove runtime URLs and option values.
         import re
@@ -2355,7 +2488,58 @@ class B2ViewApp(App):
                     message = message.replace(value, "<option>")
 
         redact(self.storage_options or {})
-        self.query_one("#metadata", Static).update(f"{type(exc).__name__}: {message}")
+        from blosc2.b2view.file_preview import safe_text
+
+        return safe_text(f"{type(exc).__name__}: {message}")
+
+    def _source_open_error(self, exc):
+        if self._source_opened:
+            # A failed refresh must not turn a recoverable session into a
+            # startup failure. Leaf/list/page failures remain nonfatal too.
+            self._remote_error(exc)
+            return
+        import httpx
+        from rich.text import Text
+
+        if isinstance(exc, httpx.HTTPStatusError):
+            response = exc.response
+            reason = httpx.codes.get_reason_phrase(response.status_code)
+            detail = f"HTTP {response.status_code} {reason}."
+        else:
+            detail = self._error_message(exc)
+        self.startup_error = f"b2view: Could not open source: {detail}"
+        # Textual restores the terminal before printing this to its error
+        # console. Text prevents markup in exception strings being interpreted.
+        self.exit(return_code=1, message=Text(self.startup_error))
+
+    def _remote_error(self, exc):
+        if not self._remote_page_pending:
+            self._set_data_busy(False)
+        self.query_one("#metadata", Static).update(self._error_message(exc))
+
+    def _set_data_busy(self, busy):
+        """Animate only border text: never hide data or change pane geometry."""
+        self._data_busy = busy
+        if busy:
+            self._data_busy_frame = 0
+            self._animate_data_busy()
+            if self._data_busy_timer is not None:
+                self._data_busy_timer.resume()
+        else:
+            if self._data_busy_timer is not None:
+                self._data_busy_timer.pause()
+            self.query_one("#data-pane", B2ViewPanel).border_title = "data"
+
+    def _animate_data_busy(self):
+        if not self._data_busy:
+            return
+        from rich.text import Text
+
+        dots = ("·  ", "·· ", "···", " ··", "  ·", "   ")
+        title = Text("data")
+        title.append(" · loading " + dots[self._data_busy_frame % len(dots)], style="dim")
+        self.query_one("#data-pane", B2ViewPanel).border_title = title
+        self._data_busy_frame += 1
 
     def load_children(self, node) -> None:
         path = node.data or "/"
@@ -2407,6 +2591,43 @@ class B2ViewApp(App):
         if event.node.allow_expand:
             self.load_children(event.node)
 
+    def action_tree_search(self):
+        if self.browser is None or not self.browser.is_tree:
+            self.notify("Search requires a directory or repository tree", severity="warning")
+            return
+        from blosc2.b2view.model import NodeInfo
+        from blosc2.b2view.search_screen import TreeSearchScreen
+
+        listings = dict(self._remote_children)
+        if not self._remote:
+            pending = [self.query_one("#tree", Tree).root]
+            while pending:
+                node = pending.pop()
+                pending.extend(node.children)
+                if node.data in self.loaded_paths:
+                    listings[node.data] = [
+                        NodeInfo(
+                            child.data,
+                            child.data.rsplit("/", 1)[-1],
+                            "group" if child.allow_expand else "unknown",
+                            child.allow_expand,
+                        )
+                        for child in node.children
+                    ]
+        browser, session = self.browser, self._remote_session
+        screen = TreeSearchScreen(browser, listings, session)
+
+        def reveal(selection):
+            if self.browser is not browser or self._remote_session != session:
+                return
+            # Retain discovered listings without changing the main tree's
+            # expansion/selection when the dialog is simply closed.
+            self._remote_children.update(screen.listings)
+            if selection is not None:
+                self._navigate_to_path(selection.path, focus_tree=True)
+
+        self.push_screen(screen, reveal)
+
     def update_panels(self, path: str) -> None:
         if self.browser is None:
             return
@@ -2417,6 +2638,7 @@ class B2ViewApp(App):
         self._remote_request += 1
         self._remote_page_request += 1
         if self._remote:
+            self._set_data_busy(True)
             self.table_page = self.table_buffer = None
             self.query_one("#metadata", Static).update("Loading node…")
             self.query_one("#data-table", DataTable).clear(columns=True)
@@ -2433,9 +2655,14 @@ class B2ViewApp(App):
                 info = browser.get_info(path)
                 data = None
                 if info.kind == "unsupported":
-                    data = {"message": info.metadata.get("preview", "Preview unavailable")}
+                    data = {
+                        "preview_status": "Preview unavailable",
+                        "message": info.metadata.get("preview", "Unsupported object type."),
+                    }
                 elif info.kind not in {"group", "remote_store"} and not self._uses_grid_preview(info):
-                    data = browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
+                    data = browser.preview(
+                        path, max_rows=self.preview_rows, max_cols=self.preview_cols, raw_text=self._file_raw
+                    )
             self._deliver_remote(session, self._finish_remote_info, request, path, info, data, None)
         except Exception as exc:
             self._deliver_remote(session, self._finish_remote_info, request, path, None, None, exc)
@@ -2443,6 +2670,7 @@ class B2ViewApp(App):
     def _finish_remote_info(self, request, path, info, data, error):
         if request != self._remote_request:
             return
+        self._set_data_busy(False)
         if error is not None:
             self._remote_error(error)
             return
@@ -2455,6 +2683,7 @@ class B2ViewApp(App):
         data_table_row = self.query_one("#data-table-row", Horizontal)
         data_scroll = self.query_one("#data-scroll", VerticalScroll)
         preview = self.query_one("#preview", Static)
+        self.run_worker(self._show_file_image(path, remote_data), exclusive=True, group="file-image")
         attrs_pane = self.query_one("#attrs-pane", B2ViewPanel)
         attrs_widget = self.query_one("#attrs-data", Static)
         try:
@@ -2474,7 +2703,7 @@ class B2ViewApp(App):
                 data_scroll.display = True
                 self.query_one("#col-scrollbar", Static).display = False
                 data_header.update("")
-                preview.update("Group node; select an array or table to preview.")
+                preview.update("Group node; select an array, table or file to preview.")
                 self._update_attrs(attrs_pane, attrs_widget, path)
             else:
                 if self._uses_grid_preview(info):
@@ -2502,6 +2731,8 @@ class B2ViewApp(App):
                     self._update_data_header(data)
                     self.call_after_refresh(self._ensure_viewport_consistent)
                 else:
+                    if isinstance(data, dict) and "preview_error" in data:
+                        data = {**data, "message": self._error_message(data["preview_error"])}
                     header, body = make_preview_renderables(data)
                     data_header.display = header is not None
                     data_table_row.display = False
@@ -2527,6 +2758,124 @@ class B2ViewApp(App):
         if self._apply_focus_on_next_update:
             self._apply_focus_on_next_update = False
             self.call_after_refresh(self._apply_start_focus)
+
+    async def _show_file_image(self, path, data):
+        body = self.query_one("#file-image", Vertical)
+        await body.remove_children()
+        if path != self.selected_path or not isinstance(data, dict):
+            return
+        if "notebook_cells" in data:
+            await self._show_notebook_images(body, data)
+            return
+        if "file_image" not in data:
+            return
+        if TextualImage is None:
+            self._show_image_fallback(
+                "Missing dependency", "Terminal image preview needs textual-image. Install blosc2[images]."
+            )
+            return
+        try:
+            image = TextualImage(data["file_image"])
+            # The default fractional height collapses inside an auto-height
+            # container. Let the widget derive its height from the image ratio.
+            image.styles.width = "auto"
+            image.styles.height = "auto"
+            await body.mount(image)
+        except Exception as error:
+            self._show_image_fallback("Preview failed", self._error_message(error))
+
+    async def _show_notebook_images(self, body, data):
+        if not any(cell.get("images") for cell in data["notebook_cells"]):
+            return
+        if TextualImage is None:
+            await body.mount(Static("Saved plots need textual-image. Install blosc2[images]."))
+            return
+        from blosc2.b2view.render import notebook_cell_renderable
+
+        widgets = []
+        for cell in data["notebook_cells"]:
+            widgets.append(Static(notebook_cell_renderable(cell, data["language"])))
+            for payload in cell.get("images", []):
+                try:
+                    image = TextualImage(payload)
+                    image.styles.width = "auto"
+                    image.styles.height = "auto"
+                    widgets.append(image)
+                except Exception:
+                    widgets.append(Static("Saved plot could not be displayed."))
+        await body.mount(*widgets)
+        self.query_one("#preview", Static).update("")
+
+    def _show_image_fallback(self, status, reason):
+        from blosc2.b2view.file_preview import file_fallback
+
+        header, body = make_preview_renderables(file_fallback("image.png", status, reason))
+        self.query_one("#data-header", Static).display = True
+        self.query_one("#data-header", Static).update(header)
+        self.query_one("#preview", Static).update(body)
+
+    def _file_action(self, external=False):
+        if self.browser is None or self._selected_info is None or self._selected_info.kind != "file":
+            self.notify("Select an ordinary file first", severity="warning")
+            return
+        self._prepare_file_transfer(
+            self._remote_session, self._remote_request, self.browser, self.selected_path, external
+        )
+
+    @work(thread=True, exit_on_error=False)
+    def _prepare_file_transfer(self, session, request, browser, path, external):
+        from pathlib import PurePosixPath
+
+        from blosc2.b2view.file_preview import EXTERNAL_SUFFIXES
+        from blosc2.b2view.ordinary_file import OrdinaryFile
+
+        alias = None
+        try:
+            with browser.io_lock:
+                if session != self._remote_session or request != self._remote_request:
+                    return
+                obj = browser._get_object(path)
+                if not isinstance(obj, (blosc2.RemoteFile, OrdinaryFile)):
+                    return
+                if external and PurePosixPath(obj.name).suffix.lower() not in EXTERNAL_SUFFIXES:
+                    raise ValueError(
+                        "External opening is restricted to document/image files; use D to download"
+                    )
+                alias = (
+                    obj.alias()
+                    if isinstance(obj, OrdinaryFile)
+                    else blosc2.RemoteFile._from_owner(obj._owner, obj.path)
+                )
+            delivered = self._deliver_remote(
+                session, self._finish_file_transfer, request, path, alias, external, None
+            )
+            if not delivered:
+                alias.close()
+        except Exception as error:
+            if alias is not None:
+                alias.close()
+            self._deliver_remote(session, self._finish_file_transfer, request, path, None, external, error)
+
+    def _finish_file_transfer(self, request, path, file, external, error):
+        if request != self._remote_request or path != self.selected_path:
+            if file is not None:
+                file.close()
+            return
+        if error is not None:
+            self.notify(str(error), severity="warning")
+            return
+        self.push_screen(FileTransferScreen(file, external=external))
+
+    def action_download_file(self):
+        self._file_action()
+
+    def action_open_file(self):
+        self._file_action(external=True)
+
+    def action_raw_file(self):
+        if self._selected_info is not None and self._selected_info.kind == "file":
+            self._file_raw = not self._file_raw
+            self.update_panels(self.selected_path)
 
     @staticmethod
     def _format_attr_value(value: Any) -> str:
@@ -2776,20 +3125,19 @@ class B2ViewApp(App):
             self._remote_page_request += 1
             request = self._remote_page_request
             self._remote_page_pending = True
+            self._set_data_busy(True)
             if layout is not None:
                 self._sync_layout_scroll(start, layout)
-            options = {"max_rows": page_size * 10, "max_cols": self._candidate_max_cols()}
-            if layout is not None:
-                options["layout"] = copy.deepcopy(layout)
-            else:
-                options.update(start=start, stop=start + page_size * 10, col_start=self.grid_col_start)
             column_end, self._remote_col_end = self._remote_col_end, None
-            if column_end is not None:
-                options["max_cols"] = column_end - self.grid_col_start
-            self._read_remote_page(
-                self._remote_session, request, self.browser, path, start, options, column_end
+            # Showing the grid changes its geometry. Size the request after
+            # that layout pass, rather than fetching a provisional viewport.
+            self.call_after_refresh(
+                self._start_remote_page, self._remote_session, request, path, start, column_end
             )
-            self.query_one("#metadata", Static).update("Loading array page…")
+            # Keep the last rendered page and metadata visible during paging
+            # and resize requests. Only a new node needs an empty placeholder.
+            if self.table_page is not None and self.table_page["columns"]:
+                return self.table_page
             shape = tuple(self._selected_info.metadata.get("shape", ()))
             row_dim = layout.navigable_dims[0] if layout and layout.navigable_dims else None
             nrows = layout.total_for_dim(row_dim) if row_dim is not None else (shape[0] if shape else 1)
@@ -2831,6 +3179,20 @@ class B2ViewApp(App):
             )
         return self._store_table_buffer(data, start, page_size)
 
+    def _start_remote_page(self, session, request, path, start, column_end):
+        if session != self._remote_session or request != self._remote_page_request or self.browser is None:
+            return
+        page_size = self._table_page_size()
+        options = {"max_rows": page_size * 10, "max_cols": self._candidate_max_cols()}
+        if self._data_layout is not None:
+            self._sync_layout_scroll(start, self._data_layout)
+            options["layout"] = copy.deepcopy(self._data_layout)
+        else:
+            options.update(start=start, stop=start + page_size * 10, col_start=self.grid_col_start)
+        if column_end is not None:
+            options["max_cols"] = column_end - self.grid_col_start
+        self._read_remote_page(session, request, self.browser, path, start, options, column_end)
+
     @work(thread=True, exit_on_error=False)
     def _read_remote_page(self, session, request, browser, path, start, options, column_end):
         try:
@@ -2846,6 +3208,7 @@ class B2ViewApp(App):
         if request != self._remote_page_request:
             return
         self._remote_page_pending = False
+        self._set_data_busy(False)
         if error is not None:
             self._remote_error(error)
             return
@@ -2952,6 +3315,9 @@ class B2ViewApp(App):
 
     def _update_data_table(self, data: dict, *, cursor_row: int = 0, cursor_col: int | None = None) -> None:
         """Refresh the data grid; *cursor_col* None keeps the current column."""
+        if self._remote_page_pending and data is self.table_page and data["columns"]:
+            self.loading_table_page = True
+            return
         table = self.query_one("#data-table", DataTable)
         if cursor_col is None:
             cursor_col = table.cursor_column
@@ -3466,6 +3832,13 @@ class B2ViewApp(App):
     def _enter_row_window(self, start: int, stop: int, *, backend: str) -> None:
         """Replace the grid with a locked [start:stop] window (in place)."""
         if backend == "ctable":
+            if self._remote:
+                self._remote_request += 1
+                self._prepare_remote_window(
+                    self._remote_session, self._remote_request, self.browser, self.selected_path, start, stop
+                )
+                self.query_one("#metadata", Static).update("Loading row window…")
+                return
             try:
                 self.browser.set_row_window(self.selected_path, start, stop)
             except Exception as exc:  # pragma: no cover - defensive
@@ -3475,6 +3848,32 @@ class B2ViewApp(App):
             self._data_layout.row_window = (start, stop)
             self._data_layout.row_start = 0
             self._data_layout.row_stop = 0
+        self.row_window = (start, stop)
+        self._reload_row_window(0)
+        self.notify(f"Locked to rows {start}:{stop} · esc to unlock")
+
+    @work(thread=True, exit_on_error=False)
+    def _prepare_remote_window(self, session, request, browser, path, start, stop):
+        try:
+            with browser.io_lock:
+                if session != self._remote_session or request != self._remote_request:
+                    return
+                view = browser.prepare_row_window(path, start, stop)
+            self._deliver_remote(
+                session, self._finish_remote_window, request, browser, path, start, stop, view, None
+            )
+        except Exception as exc:
+            self._deliver_remote(
+                session, self._finish_remote_window, request, browser, path, start, stop, None, exc
+            )
+
+    def _finish_remote_window(self, request, browser, path, start, stop, view, error):
+        if request != self._remote_request or path != self.selected_path or browser is not self.browser:
+            return
+        if error is not None:
+            self._remote_error(error)
+            return
+        browser.install_row_window(path, view)
         self.row_window = (start, stop)
         self._reload_row_window(0)
         self.notify(f"Locked to rows {start}:{stop} · esc to unlock")
@@ -3518,11 +3917,23 @@ class B2ViewApp(App):
             screen = GoToColumnScreen(ncols=page["ncols"], current=current, names=None)
         self.push_screen(screen, self._go_to_column)
 
+    def action_find_or_filter(self) -> None:
+        if self.query_one("#tree", Tree).has_focus:
+            self.action_tree_search()
+        else:
+            self.action_filter_rows()
+
     def action_filter_rows(self) -> None:
         if not self._in_data_grid():
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Filtering is only supported for CTable nodes", severity="warning")
+            return
+        if not self.browser.supports_table_transforms(self.selected_path):
+            self.notify(
+                "Filtering remote tables is unsupported; materialize a bounded selection first",
+                severity="warning",
+            )
             return
         if self.browser.get_group(self.selected_path):
             self.notify("Ungroup (Esc) before filtering", severity="warning")
@@ -3535,6 +3946,12 @@ class B2ViewApp(App):
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Sorting is only supported for CTable nodes", severity="warning")
+            return
+        if not self.browser.supports_table_transforms(self.selected_path):
+            self.notify(
+                "Sorting remote tables is unsupported; materialize a bounded selection first",
+                severity="warning",
+            )
             return
         if self.browser.get_group(self.selected_path):
             # Sort the (tiny) grouped result by any of its columns — key or aggregate.
@@ -3626,6 +4043,12 @@ class B2ViewApp(App):
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Grouping is only supported for CTable nodes", severity="warning")
+            return
+        if not self.browser.supports_table_transforms(self.selected_path):
+            self.notify(
+                "Grouping remote tables is unsupported; materialize a bounded selection first",
+                severity="warning",
+            )
             return
         keys = self.browser.group_key_columns(self.selected_path)
         if not keys:
@@ -3820,6 +4243,8 @@ class B2ViewApp(App):
         determine the window.  Later paging then uses the settled viewport
         sizes, so the windows would drift unless we reload once here.
         """
+        if self._remote_page_pending:
+            return
         page = self.table_page
         if self._remote and page is not None and not page["columns"]:
             return
@@ -3845,7 +4270,10 @@ class B2ViewApp(App):
         current = self.table_page["start"] + self.query_one("#data-table", DataTable).cursor_row
         page_size = self._table_page_size()
         start = (current // page_size) * page_size
-        self.table_buffer = None
+        # Height-only changes can be served from the prefetched row buffer.
+        # A width change needs new column fitting (and possibly more columns).
+        if self.table_page.get("viewport_width") != self._data_table_width():
+            self.table_buffer = None
         data = self._load_table_page(self.selected_path, start)
         self._update_data_table(data, cursor_row=current - data["start"])
         self._update_data_header(data)
@@ -3896,6 +4324,7 @@ class B2ViewApp(App):
             return
         tree = self.query_one("#tree", Tree)
         node = tree.cursor_node or tree.root
+        self._remote_children.clear()
         self.loaded_paths.discard(node.data or "/")
         node.remove_children()
         self.load_children(node)

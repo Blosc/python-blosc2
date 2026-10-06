@@ -46,6 +46,87 @@ XXX version-specific blurb XXX
   requirements, environment precedence, caching, and diagnostics. Corrected the
   generated allocation declaration that caused an Apple Clang warning.
 
+### Caterva2 repository access
+
+- Show unobtrusive animated loading dots in b2view's data-pane border while
+  background metadata/previews/pages are pending, without hiding current data.
+
+- Browse fsspec `.b2` document carriers with bounded range-based metadata and
+  chunk reads, original-name previews and streamed decoded copies. HTTP requires
+  validated byte-range responses; native dataset behavior remains unchanged.
+
+- Raise document chunk limits to 32 MiB compressed / 256 MiB decoded for
+  Caterva2 files and local `.b2` carriers. Preview and per-read limits remain
+  unchanged; even a small preview may decode a complete 256 MiB chunk.
+
+- Display saved PNG/JPEG notebook outputs beneath their cells in b2view, using
+  passive terminal-image rendering with shared image-count/byte/pixel limits.
+  Invalid images retain readable cells; HTML, SVG, scripts and widgets stay disabled.
+
+- Reduce b2view startup and remote-page flicker by sizing requests after layout,
+  retaining visible metadata/data during reloads, and reusing buffered rows for
+  height-only resizes instead of fetching them again.
+
+- Restore tagged non-finite floating-point schema values from strict-JSON
+  Caterva2 metadata, preserving NaN/infinity null sentinels and defaults.
+
+- Empty lazy Parquet table slices no longer read row data or scan dictionaries,
+  fixing slow Caterva2 schema fetches. Small slices/takes build dictionaries from
+  selected rows instead of scanning every row group; native table dictionaries
+  retain their existing copy behavior.
+
+- b2view now exits cleanly with a clear diagnostic and nonzero status when
+  its initial source cannot be opened, rather than leaving an unusable TUI.
+
+- b2view file fallback panels distinguish unavailable previews, missing optional
+  dependencies and read/display failures, with consistent capability-aware
+  action hints. Preview errors retain file metadata and redact transport URLs.
+
+- Open local and direct-fsspec ordinary files in b2view with the same bounded
+  text/image previews, PDF fallbacks and explicit copy/external-open actions.
+  Transfers are streamed, cancellable and atomic, with no overwrite by default;
+  existing container/dataset opening remains unchanged.
+
+- Open ordinary local/fsspec directories as lazy b2view tree roots. Preview
+  files and expand dataset containers in place; local symlinks are not followed.
+
+- Use Ctrl+F to filter discovered tree paths without network access, or explicitly
+  search local/Caterva2/fsspec hierarchies recursively with progress, cancellation
+  and discovery limits. Selecting a result reveals it in the existing tree.
+
+- Preview local compressed documents such as `README.md.b2` and `photo.png.b2`
+  using bounded, lazy SChunk decoding. Copies stream original bytes under the
+  original filename; oversized chunks and non-document container types are refused.
+
+- Preview nbformat-4 Jupyter notebooks passively in b2view: Markdown, highlighted
+  code and bounded saved plain-text outputs, with a raw-JSON toggle. No kernels
+  or active HTML/media rendering; supported across existing file backends.
+
+- Fix structured and subarray dtype decoding in `C2Array` and synthesized
+  RemoteStore chunks, including compound/subarray HDF5 leaves.
+
+- Ordinary Caterva2 files now open lazily as `RemoteFile`: bounded original-byte
+  reads, shared compressed-chunk caching, and atomic streaming downloads.
+- b2view previews text/Markdown and optional JPEG/PNG images (`blosc2[images]`).
+  PDF and other unrenderable content remain downloadable; supported documents
+  can open externally through the explicit `O` action and destination dialog. No PDF dependency is
+  required. `D` downloads, `O` opens externally, and `T` toggles raw Markdown.
+
+- `blosc2.open()` recognizes HTTP(S) dataset URLs such as
+  `http://localhost:8000/@public/group`, including deployment prefixes and IPv6.
+  String service URLs default to lazy access; explicit `URLPath` behavior is unchanged.
+- Bare server/base URLs discover `api/roots`. One root opens directly; empty or
+  multiple-root services return a lazy `RemoteRepository` browsing facade.
+- `remote_service="auto" | "caterva2" | "fsspec"` controls service recognition
+  independently of source format. The fsspec override preserves ordinary URLs
+  with literal `@` path components and disables service probes.
+- Caterva2 `RemoteStore` groups expand lazily, including catalog mount boundaries;
+  catalog annotations are separate from source attributes.
+- `b2view` browses these server/root URLs with the existing interface, including
+  bounded array/table previews. Remote table-wide transforms are disabled;
+  plotting requires an explicit bounded row window. Client caches are separate
+  from a shared cat2lite server cache; repository allowances are per root.
+
 ## Changes from 4.14.0 to 4.14.1
 
 Python-Blosc2 4.14.1 is a security and feature release introducing safe

@@ -17,7 +17,7 @@ def make_metadata_renderable(info, *, show_path=True):
     table.add_column("key", style="bold cyan", no_wrap=True)
     table.add_column("value")
     if show_path:
-        table.add_row("path", info.path)
+        table.add_row("path", info.display_path or info.path)
     table.add_row("kind", info.kind)
     for key, value in info.metadata.items():
         table.add_row(str(key), _format_metadata_value(value))
@@ -34,12 +34,35 @@ def make_preview_renderables(preview: Any):
     """Return ``(header, body)`` Rich renderables for a preview object.
 
     CTable previews get a separate header renderable so the UI can keep column
-    titles fixed while only the row body scrolls. Other preview kinds return
-    ``None`` for the header.
+    titles fixed while only the row body scrolls. File previews use the header
+    for notices/actions or a fallback status; other kinds may return ``None``.
     """
     from rich.pretty import Pretty
     from rich.table import Table
     from rich.text import Text
+
+    if isinstance(preview, dict) and "notebook_cells" in preview:
+        return _notebook_renderables(preview)
+
+    if isinstance(preview, dict) and "preview_status" in preview:
+        body = str(preview["message"])
+        if preview.get("actions"):
+            body += "\n\n" + preview["actions"]
+        return Text(preview["preview_status"]), Text(body)
+
+    if isinstance(preview, dict) and "file_text" in preview:
+        from rich.markdown import Markdown
+
+        body = (
+            Markdown(preview["file_text"], hyperlinks=False)
+            if preview.get("markdown")
+            else Text(preview["file_text"])
+        )
+        return Text(
+            " · ".join(part for part in (preview.get("notice"), preview.get("message")) if part)
+        ), body
+    if isinstance(preview, dict) and "file_image" in preview:
+        return None, Text(preview["message"])
 
     if isinstance(preview, np.ndarray):
         return None, Text(np.array2string(preview, threshold=200, edgeitems=5), no_wrap=False)
@@ -61,6 +84,33 @@ def make_preview_renderables(preview: Any):
         return None, Text(str(preview["message"]))
 
     return None, Pretty(preview)
+
+
+def _notebook_renderables(preview):
+    from rich.console import Group
+    from rich.text import Text
+
+    cells = [notebook_cell_renderable(cell, preview["language"]) for cell in preview["notebook_cells"]]
+    header = Text(" · ".join(part for part in (preview.get("notice"), preview["message"]) if part))
+    return header, Group(*cells) if cells else Text("Empty notebook.")
+
+
+def notebook_cell_renderable(cell, language):
+    """Render one passive cell, shared by the text and inline-image layouts."""
+    from rich.console import Group
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    from rich.text import Text
+
+    if cell["kind"] == "markdown":
+        source = Markdown(cell["source"], hyperlinks=False)
+    elif cell["kind"] == "code":
+        source = Syntax(cell["source"], language, word_wrap=True)
+    else:
+        source = Text(cell["source"])
+    body = Group(source, Text(cell["output"])) if cell["output"] else source
+    return Panel(body, title=Text(f"Cell {cell['index']} · {cell['kind']}"))
 
 
 def _make_ctable_header(preview: dict[str, Any], widths: dict[str, int]):

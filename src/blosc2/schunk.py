@@ -2159,7 +2159,12 @@ def _open_non_lazy_c2(
         raise NotImplementedError("cache_dir and cache_path for a Caterva2 array require lazy=True")
     if max_concurrency is not None:
         raise NotImplementedError("max_concurrency is only supported with lazy=True")
-    return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
+    metadata = blosc2.c2array.info(urlpath.path, urlpath.urlbase, auth_token=urlpath.auth_token)
+    if "shape" not in metadata or "dtype" not in metadata:
+        raise NotImplementedError("Caterva2 group/table access requires lazy=True")
+    return blosc2.C2Array(
+        urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token, _meta=metadata
+    )
 
 
 def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: dict):  # noqa: C901
@@ -2197,7 +2202,25 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         if remote_array_options["assume_immutable"] is not True:
             raise ValueError("shared_cache=True requires assume_immutable=True")
     metadata = blosc2.c2array.info(urlpath.path, urlpath.urlbase, auth_token=urlpath.auth_token)
-    kind = metadata.get("kind")
+    from blosc2.remote_store import RemoteDiscovery
+
+    kind = RemoteDiscovery._caterva2_kind(metadata)
+    if kind == "file":
+        if remote_array_options.get("assume_immutable") is not True:
+            raise ValueError("RemoteFile requires assume_immutable=True")
+        if cache_path is not None or shared_cache or max_concurrency is not None:
+            raise NotImplementedError(
+                "RemoteFile uses cache_dir; shared_cache and max_concurrency are unsupported"
+            )
+        options = {
+            key: remote_array_options[key]
+            for key in ("cache_policy", "max_cache_bytes")
+            if key in remote_array_options
+        }
+        with blosc2.RemoteStore(
+            urlpath, cache_dir=cache_dir, _allow_array_root=True, _root_info=metadata, **options
+        ) as store:
+            return store[""]
     if kind == "group":
         if cache_path is not None:
             raise ValueError("Caterva2 groups use cache_dir, not cache_path")
@@ -2213,6 +2236,7 @@ def _open_c2_urlpath(urlpath: blosc2.URLPath, mode: str, offset: int, kwargs: di
         return blosc2.RemoteStore(
             urlpath,
             cache_dir=cache_dir,
+            _root_info=metadata,
             **store_options,
         )
     if kind == "ctable":
@@ -2777,6 +2801,49 @@ def _validate_shared_cache_request(urlpath, shared_cache, kwargs):
             kwargs["lazy"] = True
 
 
+def _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs, auth_token=None):
+    """Open one visible root or a lazy repository facade, without a second probe."""
+    if mode != "r" or offset != 0:
+        raise ValueError("Caterva2 services require mode='r' and offset=0")
+    if kwargs.get("lazy") is False:
+        raise NotImplementedError(
+            "Repository/group access requires lazy=True; select an array for lazy=False"
+        )
+    if len(roots) == 1:
+        target = blosc2.URLPath(next(iter(roots)), urlbase=urlpath.rstrip("/"), auth_token=auth_token)
+        kwargs.setdefault("lazy", True)
+        _validate_shared_cache_request(target, shared_cache, kwargs)
+        return _open_c2_urlpath(target, mode, offset, kwargs)
+    if shared_cache:
+        raise NotImplementedError("shared_cache requires a specific repository root")
+    cache_dir, cache_path = _remote_cache_options(kwargs)
+    if cache_path is not None:
+        raise ValueError("Repositories use cache_dir, not cache_path")
+    _validate_c2_urlpath_options(kwargs)
+    lazy = kwargs.pop("lazy", None)
+    if lazy is not None and not isinstance(lazy, bool):
+        raise TypeError("lazy must be a bool")
+    if kwargs.pop("assume_immutable", True) is not True:
+        raise ValueError("Repositories currently require assume_immutable=True")
+    from blosc2.remote_array import CACHE_POLICY_DEFAULT
+
+    policy, limit = blosc2.RemoteStore._validate_cache_config(
+        kwargs.pop("cache_policy", CACHE_POLICY_DEFAULT),
+        kwargs.pop("max_cache_bytes", CACHE_POLICY_DEFAULT),
+        cache_dir,
+    )
+    if kwargs:
+        raise NotImplementedError(f"{', '.join(sorted(kwargs))} is unsupported for repositories")
+    return blosc2.RemoteRepository(
+        urlpath,
+        roots,
+        auth_token=auth_token,
+        cache_dir=cache_dir,
+        cache_policy=policy,
+        max_cache_bytes=limit,
+    )
+
+
 def open(  # noqa: C901
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
@@ -2787,6 +2854,7 @@ def open(  # noqa: C901
     path: str | None = None,
     shared_cache: bool = False,
     deserialize: str = "safe",
+    remote_service: str = "auto",
     **kwargs: dict,
 ) -> (
     blosc2.SChunk
@@ -2798,6 +2866,7 @@ def open(  # noqa: C901
     | blosc2.CTable
     | blosc2.RemoteCTable
     | blosc2.RemoteStore
+    | blosc2.RemoteFile
     | blosc2.LazyArray
     | blosc2.Proxy
     | blosc2.DictStore
@@ -2959,6 +3028,21 @@ def open(  # noqa: C901
             a ``.b2z`` path selects B2Z automatically. An explicit value supports
             suffix-free paths. Zarr, HDF5, B2Z and Parquet sources automatically enable
             ``lazy=True``.
+        remote_service: {"auto", "caterva2", "fsspec"}, optional
+            Select remote access independently of the source format. In auto mode,
+            HTTP(S) URLs with an @-prefixed root component are Caterva2 dataset
+            references and default to lazy access. Use ``"fsspec"`` to open an
+            ordinary remote source containing such a component without service
+            recognition. Explicit :ref:`URLPath` inputs retain their lazy defaults.
+            Ambiguous HTTP(S) base URLs are probed through ``api/roots`` with a
+            short timeout. One root opens directly; zero or multiple roots return
+            :class:`RemoteRepository`. ``"caterva2"`` requires service access and
+            disables ordinary-file fallback. Client cache budgets on a repository
+            are per root, independent of the server's shared cache.
+            Regular fixed-chunk Caterva2 SChunk leaves return :class:`RemoteFile`
+            with lazy access. ``read_bytes`` reads bounded original-byte ranges;
+            ``download`` streams the original file without exporting its Blosc
+            carrier. Irregular streams and oversized chunks are refused explicitly.
         parquet_options: dict, optional
             PyArrow ``ParquetFile`` reader options for a Parquet source. Conversion
             options such as ``columns`` and ``max_rows`` are passed separately.
@@ -3064,6 +3148,44 @@ def open(  # noqa: C901
     """
     deserialize = normalize_deserialize(deserialize)
     dataset = blosc2.core.resolve_dataset_path(dataset, path)
+    if remote_service not in {"auto", "caterva2", "fsspec"}:
+        raise ValueError("remote_service must be 'auto', 'caterva2', or 'fsspec'")
+    if isinstance(urlpath, blosc2.URLPath):
+        if remote_service == "fsspec":
+            raise ValueError("remote_service='fsspec' conflicts with URLPath")
+    else:
+        from blosc2.caterva2_url import caterva2_urlpath, discover_service, service_probe_candidate
+
+        service_path = None if remote_service == "fsspec" else caterva2_urlpath(urlpath)
+        if service_path is not None:
+            urlpath = service_path
+            kwargs.setdefault("lazy", True)
+        elif remote_service == "caterva2" or (
+            remote_service == "auto"
+            and service_probe_candidate(urlpath)
+            and dataset is None
+            and hdf5_index is None
+            and kwargs.get("source_format") is None
+            and kwargs.get("storage_options") is None
+        ):
+            if mode != "r" or offset:
+                raise ValueError("Remote service discovery requires mode='r' and offset=0")
+            if dataset is not None or hdf5_index is not None:
+                raise ValueError("dataset/path and hdf5_index are unsupported for Caterva2 services")
+            from blosc2.caterva2_url import discovery_auth_token
+
+            auth_token = discovery_auth_token(urlpath, required=remote_service == "caterva2")
+            roots = discover_service(urlpath, required=remote_service == "caterva2", auth_token=auth_token)
+            if roots is not None:
+                return _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs, auth_token)
+        elif remote_service == "fsspec" and not is_fsspec_url(urlpath):
+            raise ValueError("remote_service='fsspec' requires a remote URL")
+    if isinstance(urlpath, blosc2.URLPath):
+        if dataset is not None or hdf5_index is not None:
+            raise ValueError("dataset/path and hdf5_index are unsupported for Caterva2 sources")
+        _reject_table_buffer_options(kwargs)
+        _validate_shared_cache_request(urlpath, shared_cache, kwargs)
+        return _open_c2_urlpath(urlpath, mode, offset, kwargs)
     if kwargs.get("source_format") == "parquet" or (
         isinstance(urlpath, (str, pathlib.Path))
         and str(urlpath).split("?", 1)[0].lower().endswith(".parquet")

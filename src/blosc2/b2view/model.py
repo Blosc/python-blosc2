@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 
 import blosc2
+from blosc2.b2view.directory import DirectoryStore, is_directory
+from blosc2.b2view.ordinary_file import OrdinaryFile, ordinary_source
 from blosc2.core import is_fsspec_url, parse_container_url
 
 # Above this uncompressed size, plot_series does not read the whole series at
@@ -131,6 +133,7 @@ class ObjectInfo:
     kind: str
     metadata: dict[str, Any]
     user_attrs: dict[str, Any] | None = None
+    display_path: str | None = None
 
 
 @dataclass
@@ -243,6 +246,33 @@ class DataSliceLayout:
         return 0
 
 
+def _open_viewer_source(urlpath, storage_options, **options):
+    from blosc2.b2view.compressed_file import CompressedFile, compressed_document
+    from blosc2.b2view.file_preview import IMAGE_SUFFIXES, TEXT_SUFFIXES
+
+    if compressed_document(urlpath):
+        return CompressedFile(urlpath, storage_options)
+    if is_directory(urlpath, storage_options):
+        return DirectoryStore(urlpath, storage_options=storage_options, **options)
+    file = OrdinaryFile(urlpath, storage_options)
+    # Preserve native frames with nonstandard names. Known ordinary document
+    # types need no payload fetch merely to identify them.
+    suffix = PurePosixPath(file.name).suffix.lower()
+    try:
+        native = (
+            suffix not in TEXT_SUFFIXES | IMAGE_SUFFIXES | {".pdf", ".ipynb"}
+            and file.nbytes >= 10
+            and file.read_bytes(0, 10) == b"\x9e\xa8b2frame\x00"
+        )
+    except BaseException:
+        file.close()
+        raise
+    if not native:
+        return file
+    file.close()
+    return None
+
+
 class StoreBrowser:
     """Small, read-only adapter used by the b2view UI.
 
@@ -260,6 +290,7 @@ class StoreBrowser:
         storage_options: dict[str, Any] | None = None,
         cache_dir: str | None = None,
         max_cache_bytes: int | None = None,
+        remote_service: str = "auto",
     ):
         self.urlpath = urlpath
         self.cache_dir = cache_dir
@@ -269,9 +300,13 @@ class StoreBrowser:
         self._remote_child_counts = {}
         self._remote_leaf_path = None
         self.store = self._open_store(
-            urlpath, storage_options, cache_dir=cache_dir, max_cache_bytes=max_cache_bytes
+            urlpath,
+            storage_options,
+            cache_dir=cache_dir,
+            max_cache_bytes=max_cache_bytes,
+            remote_service=remote_service,
         )
-        self.is_tree = isinstance(self.store, blosc2.TreeStore) or (
+        self.is_tree = isinstance(self.store, (blosc2.TreeStore, DirectoryStore)) or (
             isinstance(self.store, blosc2.RemoteStore) and self.store.kind() == "group"
         )
         # Per-path row filters for CTable nodes (path -> expr / where() view)
@@ -304,8 +339,29 @@ class StoreBrowser:
         *,
         cache_dir: str | None = None,
         max_cache_bytes: int | None = None,
+        remote_service: str = "auto",
     ):
         options = {} if storage_options is None else {"storage_options": storage_options}
+        from blosc2.caterva2_url import caterva2_urlpath
+
+        if ordinary_source(urlpath, remote_service):
+            file = _open_viewer_source(
+                urlpath,
+                storage_options,
+                cache_dir=cache_dir,
+                max_cache_bytes=max_cache_bytes,
+                remote_service=remote_service,
+            )
+            if file is not None:
+                return file
+        if remote_service == "caterva2" or (
+            remote_service == "auto" and caterva2_urlpath(urlpath) is not None
+        ):
+            if cache_dir is not None:
+                options["cache_dir"] = cache_dir
+            if max_cache_bytes is not None:
+                options["max_cache_bytes"] = max_cache_bytes
+            return blosc2.open(urlpath, mode="r", lazy=True, remote_service=remote_service, **options)
         if is_fsspec_url(urlpath):
             _, _, source_format = parse_container_url(urlpath)
             if source_format in {"b2z", "zarr", "hdf5"}:
@@ -332,7 +388,7 @@ class StoreBrowser:
             options["max_cache_bytes"] = 64 << 20 if max_cache_bytes is None else max_cache_bytes
             if cache_dir is not None:
                 options["cache_dir"] = cache_dir
-        return blosc2.open(urlpath, mode="r", **options)
+        return blosc2.open(urlpath, mode="r", remote_service=remote_service, **options)
 
     def _release_remote_leaf(self):
         if self._remote_leaf is not None:
@@ -365,19 +421,27 @@ class StoreBrowser:
     def list_children(self, path: str = "/") -> list[NodeInfo]:
         """Return direct children for *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, DirectoryStore):
+            return self.store.list_children(path)
         if isinstance(self.store, blosc2.RemoteStore):
             if self.store.kind(path) not in {"group", "remote_store"}:
                 return []
             with self.store[path] as group:
                 children = []
                 for name in group:
-                    kind = group.kind(name)
+                    try:
+                        kind = group.kind(name)
+                    except Exception:
+                        # Metadata failure in one mounted source must not hide
+                        # its healthy siblings. Selecting it displays the error
+                        # and can retry discovery without a cached failure.
+                        kind = "unavailable"
                     children.append(
                         NodeInfo(
                             path=self.normalize_path(path.rstrip("/") + "/" + name),
                             name=name,
                             kind=kind,
-                            has_children=kind in {"group", "remote_store"},
+                            has_children=kind in {"group", "remote_store", "unavailable"},
                         )
                     )
                 self._remote_child_counts[path] = len(children)
@@ -404,6 +468,8 @@ class StoreBrowser:
     def kind(self, path: str) -> str:
         """Classify a browser path."""
         path = self.normalize_path(path)
+        if isinstance(self.store, DirectoryStore):
+            return self.store.get_info(path).kind
         if isinstance(self.store, blosc2.RemoteStore):
             return self.store.kind(path)
         if not self.is_tree:
@@ -417,6 +483,8 @@ class StoreBrowser:
     def get_info(self, path: str) -> ObjectInfo:
         """Return metadata for *path*."""
         path = self.normalize_path(path)
+        if isinstance(self.store, DirectoryStore):
+            return self.store.get_info(path)
         if isinstance(self.store, blosc2.RemoteStore):
             return self._remote_info(path)
         kind = self.kind(path)
@@ -442,23 +510,51 @@ class StoreBrowser:
         if user_attrs is None and self.is_tree:
             store_attrs = getattr(self.store, "attrs", getattr(self.store, "vlmeta", None))
             user_attrs = self._attrs_dict(store_attrs)
-        return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
+        return ObjectInfo(
+            path=path,
+            kind=kind,
+            metadata=metadata,
+            user_attrs=user_attrs,
+            display_path=self._display_path(path),
+        )
+
+    def _display_path(self, path):
+        """Keep service paths fully qualified without changing browser navigation."""
+        if isinstance(
+            self.store, (blosc2.RemoteStore, blosc2.RemoteArray, blosc2.RemoteCTable, blosc2.RemoteFile)
+        ):
+            source = self.store.source
+            if source["kind"] == "caterva2":
+                full = "/".join(part for part in (source["path"], path.strip("/")) if part)
+                return full if full.startswith("@") else "/" + full
+            if source["kind"] == "caterva2_repository" and path.startswith("/@"):
+                return path.lstrip("/")
+        elif isinstance(self.store, blosc2.C2Array):
+            full = self.store.path.strip("/")
+            return full if full.startswith("@") else "/" + full
+        return path
 
     def _remote_info(self, path):
         node = self.store.get_info(path)
         metadata = {"type": f"{self.store.source['kind'].upper()} {node.kind}"}
+        if node.catalog_attrs:
+            metadata["catalog_attrs"] = dict(node.catalog_attrs)
         attrs = node.attrs
-        if node.kind == "ndarray":
+        if node.kind in {"ndarray", "ctable", "file"}:
             obj = self._get_object(path)
             metadata.update(object_metadata(obj))
-            attrs = self._attrs_dict(obj.vlmeta)
+            if node.kind == "ctable":
+                metadata["type"] = f"{self.store.source['kind'].upper()} {node.kind}"
+            attrs = self._attrs_dict(obj.attrs)
         else:
             self._release_remote_leaf()
             if node.kind in {"group", "remote_store"} and path in self._remote_child_counts:
                 metadata["children"] = self._remote_child_counts[path]
             if node.diagnostic:
                 metadata["preview" if node.kind == "unsupported" else "notice"] = node.diagnostic
-        return ObjectInfo(path, node.kind, metadata, attrs)
+            if isinstance(self.store, blosc2.RemoteRepository) and path == "/" and not self.store.keys():
+                metadata["notice"] = "No accessible roots"
+        return ObjectInfo(path, node.kind, metadata, attrs, display_path=self._display_path(path))
 
     def preview(
         self,
@@ -473,6 +569,7 @@ class StoreBrowser:
         col_start: int = 0,
         slice_indices: list[int] | None = None,
         layout: DataSliceLayout | None = None,
+        raw_text: bool = False,
     ) -> Any:
         """Return a bounded data preview for *path*.
 
@@ -482,6 +579,10 @@ class StoreBrowser:
         path = self.normalize_path(path)
         obj = self._get_object(path)
         kind = object_kind(obj)
+        if kind == "file":
+            from blosc2.b2view.file_preview import preview_file
+
+            return preview_file(obj, raw=raw_text)
         if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
             if slices is None:
@@ -521,7 +622,10 @@ class StoreBrowser:
         if kind == "schunk":
             stop = start + max_rows if stop is None else stop
             return preview_schunk(obj, start=start, stop=stop)
-        return {"message": f"Preview is not supported for {kind!r} objects."}
+        return {
+            "preview_status": "Preview unavailable",
+            "message": f"Preview is not supported for {kind!r} objects.",
+        }
 
     def plot_series(
         self,
@@ -567,6 +671,8 @@ class StoreBrowser:
             # fast-path spans the whole column in original order, so it is only
             # valid when nothing narrows *or reorders* the series.
             view = self._ordered_object(path, obj)
+            if isinstance(view, blosc2.RemoteCTable):
+                raise NotImplementedError("Plotting remote tables requires a bounded locked row window")
             narrowed = view is not obj
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
@@ -668,6 +774,8 @@ class StoreBrowser:
             # Window > filter > sort, matching preview()/read_cell() so the
             # hi-res view tracks the visible grid (rows and order).
             view = self._ordered_object(path, obj)
+            if isinstance(view, blosc2.RemoteCTable):
+                raise NotImplementedError("Plotting remote tables requires a bounded locked row window")
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
             stride = self._series_stride(stop - start, max_points)
@@ -745,6 +853,8 @@ class StoreBrowser:
         # Window > filter > sort, matching read_series() so the scatter tracks
         # exactly the visible rows (and order).
         view = self._ordered_object(path, obj)
+        if isinstance(view, blosc2.RemoteCTable):
+            raise NotImplementedError("Scatter plotting remote tables requires a bounded locked row window")
         n = len(view)
         start, stop = self._clamp_range(row_start, row_stop, n)
         width = stop - start
@@ -930,6 +1040,10 @@ class StoreBrowser:
         names = list(getattr(self._get_object(path), "col_names", []) or [])
         return names or None
 
+    def supports_table_transforms(self, path: str) -> bool:
+        """Whether filtering/sorting/grouping can run without remote materialization."""
+        return not isinstance(self._get_object(self.normalize_path(path)), blosc2.RemoteCTable)
+
     def set_filter(self, path: str, expr: str | None) -> int:
         """Set or clear the row filter of a CTable path; return its row count.
 
@@ -937,6 +1051,10 @@ class StoreBrowser:
         propagate to the caller and leave any previous filter untouched.
         """
         path = self.normalize_path(path)
+        if expr and not self.supports_table_transforms(path):
+            raise NotImplementedError(
+                "Filtering remote tables is unsupported; materialize a bounded selection first"
+            )
         expr = (expr or "").strip()
         if not expr:
             self._filters.pop(path, None)
@@ -973,6 +1091,10 @@ class StoreBrowser:
         streams from the index, so the full table is never materialised.
         """
         path = self.normalize_path(path)
+        if not self.supports_table_transforms(path):
+            raise NotImplementedError(
+                "Sorting remote tables is unsupported; materialize a bounded selection first"
+            )
         self._window_views.pop(path, None)
         view = self._row_source(path).sort_by(column, ascending=not reverse, view=True)
         self._sorts[path] = (column, reverse)
@@ -1012,6 +1134,10 @@ class StoreBrowser:
         currently visible (so it composes over any active row filter).  Paging
         then cannot leave the range because the view reports only its own rows.
         """
+        return self.install_row_window(path, self.prepare_row_window(path, start, stop))
+
+    def prepare_row_window(self, path: str, start: int, stop: int):
+        """Read a bounded window without publishing it (may perform remote I/O)."""
         path = self.normalize_path(path)
         # The sort view already incorporates any filter, so prefer it; fall back
         # to the bare filter view, then the base table.
@@ -1021,8 +1147,11 @@ class StoreBrowser:
             base = self._filter_views[path]
         else:
             base = self._get_object(path)
-        view = base.slice(start, stop, copy=False)
-        self._window_views[path] = view
+        return base.slice(start, stop, copy=isinstance(base, blosc2.RemoteCTable))
+
+    def install_row_window(self, path: str, view) -> int:
+        """Publish an already prepared window without remote I/O."""
+        self._window_views[self.normalize_path(path)] = view
         return len(view)
 
     def clear_row_window(self, path: str) -> None:
@@ -1073,6 +1202,10 @@ class StoreBrowser:
         """
         path = self.normalize_path(path)
         # Memoize the materialized result: the store is read-only, so a given
+        if not self.supports_table_transforms(path):
+            raise NotImplementedError(
+                "Grouping remote tables is unsupported; materialize a bounded selection first"
+            )
         # (path, filter, key, op, value_col) always aggregates to the same tiny
         # CTable.  The active filter expr is part of the key so a filtered group
         # never collides with the unfiltered one.
@@ -1319,6 +1452,8 @@ def object_kind(obj: Any) -> str:
     """Return a stable b2view kind string for *obj*."""
     if isinstance(obj, blosc2.TreeStore):
         return "group"
+    if isinstance(obj, (blosc2.RemoteFile, OrdinaryFile)):
+        return "file"
     if isinstance(obj, (blosc2.NDArray, blosc2.RemoteArray, blosc2.Proxy)):
         return "ndarray"
     if isinstance(obj, blosc2.CTable):
@@ -1333,7 +1468,37 @@ def object_kind(obj: Any) -> str:
 def object_metadata(obj: Any) -> dict[str, Any]:
     """Extract lightweight metadata from a supported object."""
     kind = object_kind(obj)
+    if kind == "file":
+        from blosc2.b2view.compressed_file import CompressedFile
+        from blosc2.b2view.file_preview import file_actions
+
+        metadata = {
+            "type": "Caterva2 file"
+            if isinstance(obj, blosc2.RemoteFile)
+            else "Local file"
+            if obj.fs is None
+            else "FSSPEC file",
+            "name": obj.name,
+            "media type (hint)": obj.media_type,
+            "nbytes": obj.nbytes,
+            "actions": file_actions(obj.name, markdown=True),
+        }
+        if isinstance(obj, blosc2.RemoteFile):
+            metadata.update(cbytes=obj.cbytes, chunksize=obj.chunksize, nchunks=obj.nchunks)
+        elif isinstance(obj, CompressedFile):
+            metadata.update(
+                type="Compressed remote file" if obj.fs is not None else "Compressed local file",
+                carrier=obj.carrier,
+                cbytes=obj.cbytes,
+                chunksize=obj.chunksize,
+                nchunks=obj.nchunks,
+            )
+        return metadata
     if kind in {"ndarray", "c2array"}:
+        try:
+            cbytes = getattr(obj, "cbytes", None)
+        except NotImplementedError:
+            cbytes = None
         return {
             "shape": getattr(obj, "shape", None),
             "ndim": len(getattr(obj, "shape", ()) or ()),
@@ -1341,7 +1506,7 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             "chunks": getattr(obj, "chunks", None),
             "blocks": getattr(obj, "blocks", None),
             "nbytes": getattr(obj, "nbytes", None),
-            "cbytes": getattr(obj, "cbytes", None),
+            "cbytes": cbytes,
         }
     if kind == "ctable":
         try:
