@@ -35,6 +35,10 @@ class DirectoryStore:
         physical = self.root
         for index, part in enumerate(parts):
             physical = physical / part if self.fs is None else physical.rstrip("/") + "/" + part
+            if self.fs is None and not physical.is_relative_to(self.root):
+                # Anchors (//, Windows drives/UNC paths) can reset a path join.
+                # Reject them before any stat, symlink check or mounted opener.
+                raise ValueError("Directory navigation cannot escape the root")
             if self.fs is None and physical.is_symlink():
                 raise ValueError("Directory symlinks are not followed")
             suffix = PurePosixPath(part).suffix.lower()

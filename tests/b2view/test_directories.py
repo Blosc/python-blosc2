@@ -103,6 +103,31 @@ def test_symlinks_and_parent_paths_do_not_escape_root(tmp_path):
             browser.get_info("/../outside.txt")
 
 
+@pytest.mark.parametrize("operation", ["get_info", "list_children", "__getitem__"])
+def test_double_slash_paths_do_not_escape_root(tmp_path, operation):
+    from blosc2.b2view.directory import DirectoryStore
+
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private")
+    with pytest.raises(ValueError, match="escape"):
+        getattr(DirectoryStore(str(root)), operation)("//" + outside.as_posix().lstrip("/"))
+
+
+def test_windows_drive_join_does_not_escape_root():
+    from pathlib import PureWindowsPath
+
+    from blosc2.b2view.directory import DirectoryStore
+
+    store = object.__new__(DirectoryStore)
+    store.fs = None
+    store.root = PureWindowsPath("C:/selected")
+    # A rejection must happen before attempting filesystem inspection.
+    with pytest.raises(ValueError, match="escape"):
+        store._resolve("/D:/private.txt")
+
+
 @pytest.mark.tui
 @pytest.mark.asyncio
 async def test_directory_tui_navigation_and_refresh(tmp_path):
