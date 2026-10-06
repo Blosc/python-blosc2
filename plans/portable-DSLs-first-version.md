@@ -161,6 +161,20 @@ whitespace checks passed; builds emitted no new warnings. This fixes the confirm
 buffer overflow, not broader nested-cast promotion or float32 math semantics;
 those still block freezing 0.1. The native dependency pin remains unchanged.
 
+The next slice corrects `int()`/`bool()` argument value semantics: evaluate in the
+argument's compiled dtype before truncation/nonzero truth, instead of promoting
+variables or recomputing arithmetic in the cast result dtype. Integer casts
+preserve int64 values beyond `2**53` without a double round trip; Boolean casts
+retain non-finite and subnormal truth. Five exact shared fixtures require real
+TCC/CC execution as well as interpreter agreement; a separate division audit
+case checks conservative interpreter fallback. Native repeated-evaluation tests
+cover counts 1/5/257 and floating widths, while Python tests cover all five output
+dtypes for value casts. All 295 regular native tests, 233 AddressSanitizer tests,
+and 484 focused Python tests passed, with four existing math expected failures.
+No new build warnings were emitted. General `float()`/division promotion,
+out-of-domain integer casts, and float32 math semantics remain unfinished; the
+profile is still experimental and the dependency pin remains unchanged.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently

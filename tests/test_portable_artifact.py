@@ -417,6 +417,7 @@ def test_typed_division_artifact(native_artifacts, case, compiler, jit):
     [
         ("return int(x / 2) / 2", "float64", [-0.5, 0, 0, 0, 0.5]),
         ("return int(x) / 2", "int64", [-1, 0, 0, 0, 1]),
+        ("return int(x + 0.25) / 2", "float64", [-1.5, -0.5, 0, 1, 2]),
         ("if (int(x) / 2) > 0:\n        return 1.0\n    return 0.0", "float64", [0, 0, 0, 1, 1]),
     ],
 )
@@ -447,3 +448,44 @@ def test_nested_conversion_buffer_width(native_artifacts, input_dtype, output_dt
     expected = np.resize(np.array([-0.5, 0, 0, 0.5, 2], dtype=output_dtype), count)
     for _ in range(2):
         np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("int(x + 0.25)", [-1, 0, 0, 2, 5]),
+        ("bool(x + 0.25)", [1, 0, 1, 1, 1]),
+        ("bool(int(x + 0.25))", [1, 0, 0, 1, 1]),
+    ],
+)
+@pytest.mark.parametrize("input_dtype", ["float32", "float64"])
+@pytest.mark.parametrize("output_dtype", ["bool", "int32", "int64", "float32", "float64"])
+@pytest.mark.parametrize("jit", [False, True])
+def test_value_cast_argument_semantics(
+    native_artifacts, expression, expected, input_dtype, output_dtype, jit
+):
+    source = f"# me:compiler=tcc\ndef k(x):\n    return {expression}\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    values = np.array([-1.75, -0.25, 0.25, 1.75, 4.75], dtype=input_dtype)
+    np.testing.assert_array_equal(kernel.evaluate({"x": values}), np.array(expected, dtype=output_dtype))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("expression", ["int(x)", "bool(x)"])
+def test_value_cast_large_integer(native_artifacts, jit, expression):
+    source = f"# me:compiler=tcc\ndef k(x):\n    return {expression}\n"
+    output_dtype = "int64" if expression == "int(x)" else "bool"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    values = np.array([-(2**53 + 1), 0, 2**53 + 1, 2**63 - 1], dtype="int64")
+    np.testing.assert_array_equal(kernel.evaluate({"x": values}), values.astype(output_dtype))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_value_cast_nonfinite_truth(native_artifacts, jit):
+    source = "# me:compiler=tcc\ndef k(x):\n    return bool(x)\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "bool")
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    values = np.array([-0.0, 0.0, np.nan, np.inf, -np.inf, 5e-324])
+    np.testing.assert_array_equal(kernel.evaluate({"x": values}), values.astype("bool"))
