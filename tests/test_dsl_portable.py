@@ -148,3 +148,98 @@ def test_from_source_invalid_native_body():
     kernel = DSLKernel.from_source("def kernel(x):\n    return x[0]\n")
     with pytest.raises((NotImplementedError, RuntimeError)):
         blosc2.lazyudf(kernel, (np.arange(4, dtype=np.float64),), dtype=np.float64)[:]
+
+
+@pytest.fixture
+def portable_validator():
+    info = blosc2.validate_portable_dsl("def k(x):\n    return x\n", {"x": "float64"}, "float64")
+    if info["status"] == "runtime_unsupported":
+        pytest.skip("Rebuild with miniexpr portable validation support")
+    assert info == {"valid": True, "status": "success", "line": 0, "column": 0, "error": None}
+    return blosc2.validate_portable_dsl
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_portable_profile_corpus(portable_validator, case):
+    if not CORPUS.is_dir():
+        pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
+    words = (CORPUS / f"{case}.txt").read_text().split()
+    outcome, input_type, output_type = words[:3]
+    nvars = int(words[4])
+    inputs = dict.fromkeys(words[5 : 5 + nvars], input_type)
+    info = portable_validator((CORPUS / f"{case}.dsl").read_text(), inputs, output_type)
+    assert info["valid"] == (outcome != "compile_error"), info
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ("return sum(x)", "unsupported_feature"),
+        ("return np.sin(x)", "unsupported_feature"),
+        ("return x.lower()", "unsupported_feature"),
+        ("return x[0]", "unsupported_feature"),
+        ("return _flat_idx + x", "unsupported_feature"),
+        ("return callback(x)", "unsupported_feature"),
+        ("return CAPTURE + x", "invalid_source"),
+        ("return sin()", "invalid_source"),
+    ],
+)
+def test_portable_profile_rejections(portable_validator, body, status):
+    info = portable_validator(f"def k(x):\n    {body}\n", {"x": "float64"}, "float64")
+    assert not info["valid"]
+    assert info["status"] == status
+    assert info["error"]
+    assert info["line"] == 2
+    assert info["column"] > 0
+
+
+def test_portable_profile_signature_and_version(portable_validator):
+    source = "def k(x, y):\n    return x + y\n"
+    inputs = {"y": "float64", "x": "float64"}
+    assert portable_validator(source, inputs, "float64")["valid"]
+    assert portable_validator(source, inputs, "float64", language_version="99")["status"] == (
+        "unsupported_version"
+    )
+    assert portable_validator(source, {"x": "float64"}, "float64")["status"] == "invalid_signature"
+    assert portable_validator(source, {"x": "float64", "y": "int32"}, "float64")["status"] == (
+        "unsupported_feature"
+    )
+    assert portable_validator(source, inputs, "complex128")["status"] == "unsupported_feature"
+
+
+def test_portable_profile_never_executes_or_compiles_jit(portable_validator, monkeypatch, tmp_path):
+    cache = tmp_path / "jit-cache"
+    target = tmp_path / "executed"
+    monkeypatch.setenv("CC", "/no/compiler")
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc")
+    monkeypatch.setenv("ME_DSL_JIT", "1")
+    monkeypatch.setenv("ME_DSL_JIT_CACHE_DIR", str(cache))
+    # This would reach the iteration cap if executed. Validation must still succeed.
+    source = "# me:compiler=cc\ndef k(x):\n    while 1:\n        pass\n    return x\n"
+    assert portable_validator(source, {"x": "float64"}, "float64")["valid"]
+    source = f"def k(x):\n    return open({str(target)!r}, 'w')\n"
+    assert not portable_validator(source, {"x": "float64"}, "float64")["valid"]
+    assert not target.exists()
+    assert not cache.exists()
+
+
+def test_portable_profile_missing_native_support(monkeypatch):
+    from blosc2 import blosc2_ext
+
+    monkeypatch.delattr(blosc2_ext, "validate_portable_dsl_source", raising=False)
+    info = blosc2.validate_portable_dsl("def k(x):\n    return x\n", {"x": "float64"}, "float64")
+    assert not info["valid"]
+    assert info["status"] == "runtime_unsupported"
+
+
+@pytest.mark.parametrize(
+    ("source", "inputs", "version"),
+    [
+        ("def k(x):\n    return x\n\x00", {"x": "float64"}, "0.1"),
+        ("def k(x):\n    return x\n", {"x\x00": "float64"}, "0.1"),
+        ("def k(x):\n    return x\n", {"x": "float64"}, "0.1\x00"),
+    ],
+)
+def test_portable_profile_rejects_nul(source, inputs, version):
+    with pytest.raises(ValueError, match="NUL"):
+        blosc2.validate_portable_dsl(source, inputs, "float64", language_version=version)

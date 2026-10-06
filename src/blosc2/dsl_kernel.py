@@ -1021,6 +1021,43 @@ def validate_dsl(func):
     }
 
 
+def validate_portable_dsl(source, input_dtypes, output_dtype, *, language_version="0.1"):
+    """Check raw native source and a typed signature against the draft portable profile.
+
+    Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
+    ``error``. Validation neither executes a kernel nor invokes a JIT compiler.
+    It does not normalize frontend syntax, inspect globals, or certify runtime
+    input ranges, target compatibility, or sandbox safety. Native support is
+    required; older builds report ``runtime_unsupported`` without Python fallback.
+
+    ``input_dtypes`` maps parameter names to explicit dtype descriptions. Parameter
+    binding is by name; mapping order may differ from source order. Dtypes describe
+    logical values, not the storage layout of any actual input arrays.
+    """
+    from collections.abc import Mapping
+
+    from . import blosc2_ext
+
+    if not isinstance(source, str) or not isinstance(language_version, str):
+        raise TypeError("source and language_version must be strings")
+    if not isinstance(input_dtypes, Mapping):
+        raise TypeError("input_dtypes must map parameter names to explicit dtypes")
+    if "\x00" in source or "\x00" in language_version:
+        raise ValueError("Portable DSL source and version must not contain NUL characters")
+    if any(not isinstance(name, str) or "\x00" in name for name in input_dtypes):
+        raise ValueError("Portable DSL input names must be strings without NUL characters")
+    validator = getattr(blosc2_ext, "validate_portable_dsl_source", None)
+    if validator is None:
+        return {
+            "valid": False,
+            "status": "runtime_unsupported",
+            "line": 0,
+            "column": 0,
+            "error": "Rebuild miniexpr and the extension with portable DSL validation support",
+        }
+    return validator(source, input_dtypes, output_dtype, language_version)
+
+
 def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blocks=None):
     """Report whether a DSL kernel JIT-compiles (vs. interpreter fallback).
 

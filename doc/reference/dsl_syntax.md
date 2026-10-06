@@ -44,6 +44,28 @@ Portable artifact export/import is still under development. The full native
 language reference and experimental portable profile live in miniexpr's
 `doc/dsl-syntax.md` and `doc/dsl-spec/0.1.md`, respectively.
 
+### Experimental portable-profile validation
+
+```python
+info = blosc2.validate_portable_dsl(source, {"x": "float64"}, "float64")
+if not info["valid"]:
+    print(info["status"], info["line"], info["column"], info["error"])
+```
+
+This native-only check uses raw source and explicit logical dtypes, with no
+frontend rewriting or captured globals. It neither executes the kernel nor
+invokes a JIT compiler. It reports version, signature, source, and unsupported
+feature errors separately. Potential runtime errors, including missing returns
+on some paths, do not automatically invalidate a program.
+
+The draft profile admits five numeric/Boolean dtypes with homogeneous input types
+and a small function/operator set; it is narrower than the full language described
+below. Validation is not a sandbox, backend-support probe, or a guarantee about
+arbitrary runtime data. Older native builds report `runtime_unsupported` rather
+than attempting Python validation. Native dependency integration for this
+experimental API is pending; development builds can use the local miniexpr source
+via CMake's `FETCHCONTENT_SOURCE_DIR_MINIEXPR` override.
+
 `@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
 `if`/`for`/`while` and that compiles under this grammar is dispatched here
 automatically, so its branches and loops actually run, once per chunk, instead

@@ -26,10 +26,27 @@ are tested independently. Integrating the updated native dependency remains
 necessary before claiming the precedence change in distributed Python builds.
 
 This is **not yet the full v0.1 completion gate**: the wider dtype/semantic audit,
-portable-profile validator, artifact schema/loader, and captured-constant export
+artifact schema/loader, and captured-constant export
 are still pending. The raw-source constructor accepts native DSL, not only the
 draft portable subset. No new dependency or persisted artifact format has been
 introduced.
+
+Native profile validation is now implemented as `me_validate_portable_dsl()` in
+`../miniexpr/src/dsl_portable.c`, with a structured status and optional diagnostic.
+It filters native parsed source, checks an explicit homogeneous-input signature,
+then compiles with JIT disabled without evaluating a kernel. The corpus runner
+uses it before execution. `blosc2.validate_portable_dsl()` exposes the same check
+through the extension, with no Python parser/rewriter fallback; older native builds
+report `runtime_unsupported`. The local editable environment is rebuilt against
+the authoritative checkout via `FETCHCONTENT_SOURCE_DIR_MINIEXPR`; the repository
+dependency pin remains unchanged. The draft spec now documents the exact initial
+feature filter and distinguishes validation from runtime constraints, backend
+compatibility, numerical-accuracy certification, and trust/resource policies.
+
+Validation for this slice passed: 137 full native tests, 70 conformance/validation
+tests with bundled TCC disabled, 24 AddressSanitizer checks, and 210 focused Python
+tests with standalone native-runner comparisons enabled. Ruff and diff whitespace
+checks passed; the native builds emitted no new compiler warnings.
 
 The next conformance slice expands the shared corpus with explicit
 input/output dtypes and expected compile/evaluation outcomes. It covers all five

@@ -961,6 +961,80 @@ cdef inline object _numpy_dtype_from_me_dtype(me_dtype dt):
     return None
 
 
+cdef extern from *:
+    """
+    #include "miniexpr.h"
+    #include <stdio.h>
+    static int b2_validate_portable_dsl(const char *source, const char *version,
+        const me_variable *inputs, int ninputs, me_dtype output_dtype,
+        int *line, int *column, char *message, size_t capacity) {
+    #ifdef ME_PORTABLE_DSL_VERSION
+        me_portable_error error = {0};
+        int rc = me_validate_portable_dsl(source, version, inputs, ninputs,
+                                           output_dtype, &error);
+        *line = error.line;
+        *column = error.column;
+        snprintf(message, capacity, "%s", error.message);
+        return rc;
+    #else
+        *line = *column = 0;
+        snprintf(message, capacity, "miniexpr was built without portable DSL validation support");
+        return -100;
+    #endif
+    }
+    """
+    int b2_validate_portable_dsl(const char *source, const char *version,
+        const me_variable *inputs, int ninputs, me_dtype output_dtype,
+        int *line, int *column, char *message, size_t capacity)
+
+
+def validate_portable_dsl_source(source, input_dtypes, output_dtype, version):
+    """Native-only draft profile validation; no arrays, JIT, or Python execution."""
+    cdef Py_ssize_t n = len(input_dtypes)
+    if n > 128:
+        raise ValueError("Too many portable DSL inputs (maximum 128)")
+    cdef me_variable *variables = NULL
+    cdef list names = [name.encode("utf-8") for name in input_dtypes]
+    cdef bytes source_bytes = source.encode("utf-8")
+    cdef bytes version_bytes = version.encode("utf-8")
+    cdef bytes name_bytes
+    cdef np.dtype dtype
+    cdef me_dtype result_dtype
+    cdef int rc, line = 0, column = 0
+    cdef char message[256]
+    cdef Py_ssize_t i
+    if n:
+        variables = <me_variable *> calloc(n, sizeof(me_variable))
+        if variables == NULL:
+            raise MemoryError()
+    try:
+        for i, value in enumerate(input_dtypes.values()):
+            name_bytes = names[i]
+            variables[i].name = name_bytes
+            dtype = np.dtype(value)
+            try:
+                variables[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+            except TypeError:
+                variables[i].dtype = ME_AUTO
+        dtype = np.dtype(output_dtype)
+        try:
+            result_dtype = _me_dtype_from_numpy_dtype(dtype)
+        except TypeError:
+            result_dtype = ME_AUTO
+        rc = b2_validate_portable_dsl(source_bytes, version_bytes, variables, <int>n,
+                                      result_dtype, &line, &column, message, sizeof(message))
+        statuses = {
+            0: "success", -1: "unsupported_version", -2: "invalid_signature",
+            -3: "invalid_source", -4: "unsupported_feature", -5: "out_of_memory",
+            -100: "runtime_unsupported",
+        }
+        return {"valid": rc == 0, "status": statuses.get(rc, "native_error"),
+                "line": line, "column": column,
+                "error": None if rc == 0 else (<bytes>message).decode("utf-8", "replace")}
+    finally:
+        free(variables)
+
+
 def me_output_dtype(expression, operands):
     """Ask miniexpr what dtype *expression* would produce over *operands*.
 
