@@ -232,7 +232,7 @@ def test_shadowed_numpy_alias_is_not_rewritten(native_artifacts):
 
 
 @pytest.mark.parametrize("jit", [False, None, True])
-def test_artifact_backend_and_concurrent_calls(native_artifacts, jit):
+def test_artifact_backend_and_repeated_calls(native_artifacts, jit):
     from concurrent.futures import ThreadPoolExecutor
 
     artifact = affine.export({"x": "float64"}, "float64")
@@ -242,8 +242,13 @@ def test_artifact_backend_and_concurrent_calls(native_artifacts, jit):
     if jit is False:
         assert not kernel.has_jit
     arrays = [np.arange(600, dtype=np.float64) + i for i in range(4)]
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        results = list(executor.map(lambda array: kernel.evaluate({"x": array}), arrays))
+    if blosc2.IS_WASM:
+        # Pyodide does not provide Python threads. Keep backend selection and
+        # repeated-handle coverage without claiming concurrency on that host.
+        results = [kernel.evaluate({"x": array}) for array in arrays]
+    else:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(lambda array: kernel.evaluate({"x": array}), arrays))
     for array, result in zip(arrays, results, strict=True):
         np.testing.assert_array_equal(result, 2 * array - 1)
 
