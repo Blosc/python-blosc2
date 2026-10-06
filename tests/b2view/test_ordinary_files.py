@@ -256,6 +256,16 @@ def test_dataset_and_service_routing_unchanged(source):
     assert not ordinary_source(source)
 
 
+@pytest.mark.parametrize(
+    "source",
+    ["https://service.example.com", "https://service.example.com/", "http://service.example.com:8080"],
+)
+def test_bare_http_origins_keep_service_discovery(source):
+    assert not ordinary_source(source)
+    assert ordinary_source(source, remote_service="fsspec")
+    assert ordinary_source(source + "/README.md")
+
+
 def test_ipv6_http_and_explicit_fsspec_routing():
     assert ordinary_source("http://[::1]/README.md")
     assert ordinary_source("http://[::1]/no-extension", "fsspec")

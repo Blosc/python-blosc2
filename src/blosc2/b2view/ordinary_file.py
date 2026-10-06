@@ -37,7 +37,10 @@ def ordinary_source(urlpath, remote_service="auto"):
         return False
     member = _source_member(str(base))
     parsed = urlsplit(member)
-    suffix = PurePosixPath(parsed.path or parsed.netloc).suffix.lower()
+    # HTTP authorities are hosts, not filenames (e.g. service.example.com).
+    # Archive/member protocols may instead carry the filename in the authority.
+    name = parsed.path if parsed.scheme in {"http", "https"} else parsed.path or parsed.netloc
+    suffix = PurePosixPath(name).suffix.lower()
     if suffix in NATIVE_SUFFIXES:
         return False
     if is_fsspec_url(urlpath):
