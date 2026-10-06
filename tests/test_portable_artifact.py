@@ -21,12 +21,6 @@ import pytest
 
 import blosc2
 
-CORPUS = Path(
-    os.environ.get(
-        "MINIEXPR_PORTABLE_CORPUS", Path(__file__).resolve().parents[2] / "miniexpr/tests/portable-dsl"
-    )
-)
-ARTIFACTS = CORPUS.parent / "portable-artifacts"
 SCALE = 2.0
 BIAS = -1.0
 
@@ -321,9 +315,7 @@ def test_binding_shapes_and_storage_adaptation(native_artifacts):
 
 
 def test_import_is_native_only(native_artifacts, monkeypatch):
-    if not ARTIFACTS.is_dir():
-        pytest.skip("Native fixture checkout unavailable")
-    artifact = (ARTIFACTS / "affine.json").read_bytes()
+    artifact = affine.export({"x": "float64"}, "float64")
 
     def forbidden(*args, **kwargs):
         pytest.fail("Python source/JSON preparation was invoked")
@@ -337,11 +329,10 @@ def test_import_is_native_only(native_artifacts, monkeypatch):
 
 
 def test_export_runs_in_standalone_c(native_artifacts, tmp_path):
-    runner = Path(
-        os.environ.get(
-            "MINIEXPR_ARTIFACT_RUNNER", CORPUS.parents[1] / "build-portable/tests/portable_artifact_runner"
-        )
-    )
+    runner_path = os.environ.get("MINIEXPR_ARTIFACT_RUNNER")
+    if not runner_path:
+        pytest.skip("Set MINIEXPR_ARTIFACT_RUNNER to the standalone native runner")
+    runner = Path(runner_path)
     if not runner.is_file():
         pytest.skip("Set MINIEXPR_ARTIFACT_RUNNER to the standalone native runner")
     artifact = tmp_path / "export.json"
@@ -654,7 +645,8 @@ def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler,
 def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dtype):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     source = (
-        (CORPUS / "while_cap_chain.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+        f"# me:compiler={compiler}\ndef while_cap_chain(x):\n"
+        "    n = 0\n    while 0 <= n < x:\n        n = n + 1\n    return n\n"
     )
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, dtype)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
@@ -676,7 +668,14 @@ def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dt
 @pytest.mark.parametrize("case", ["masked_local_chain", "masked_bool_chain"])
 def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, case):
     count = 257
-    source = (CORPUS / f"{case}.dsl").read_text().replace("me:compiler=tcc", f"me:compiler={compiler}")
+    bodies = {
+        "masked_local_chain": "    n = 0\n    if x == 0:\n        n = 1\n    return 0 <= n < x\n",
+        "masked_bool_chain": (
+            "    flag = bool(0)\n    if x == 0:\n        flag = bool(1)\n"
+            "    return bool(0) <= flag < bool(x)\n"
+        ),
+    }
+    source = f"# me:compiler={compiler}\ndef {case}(x):\n{bodies[case]}"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, "bool")
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     if jit:

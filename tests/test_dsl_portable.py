@@ -10,12 +10,9 @@ import pytest
 import blosc2
 from blosc2.dsl_kernel import DSLKernel
 
-CORPUS = Path(
-    os.environ.get(
-        "MINIEXPR_PORTABLE_CORPUS",
-        Path(__file__).resolve().parents[2] / "miniexpr" / "tests" / "portable-dsl",
-    )
-)
+# External conformance is opt-in; never infer an unrelated sibling checkout.
+# This may point at tests/portable-dsl in CMake's pinned miniexpr fetch.
+CORPUS = Path(os.environ["MINIEXPR_PORTABLE_CORPUS"]) if os.environ.get("MINIEXPR_PORTABLE_CORPUS") else None
 
 
 # Native CTest runs every fixture under its supported execution engines. Python
@@ -41,7 +38,7 @@ CASES = [
 TYPES = ("bool", "int32", "int64", "float32", "float64")
 EXCLUDED = (
     set((CORPUS / "frozen-excluded.txt").read_text().split())
-    if (CORPUS / "frozen-excluded.txt").is_file()
+    if CORPUS is not None and (CORPUS / "frozen-excluded.txt").is_file()
     else set()
 )
 CASES += [f"convert_{input_type}_{output_type}" for input_type in TYPES for output_type in TYPES]
@@ -73,8 +70,10 @@ def test_native_source_corpus(case, portable_validator, monkeypatch):
     jit = True
     if case.startswith("while_cap_"):
         monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
-    if not CORPUS.is_dir():
+    if CORPUS is None:
         pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
+    # An explicit corpus is required to match the pinned profile. Do not
+    # silently skip missing files or misinterpret an older exclusion manifest.
     source = corpus_source(case).read_text()
     words = (CORPUS / f"{case}.txt").read_text().split()
     outcome, input_type, output_type = words[:3]
