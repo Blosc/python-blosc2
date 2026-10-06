@@ -351,6 +351,52 @@ def test_optional_adapter_availability():
             blosc2.PortableKernel.from_json("{}", jit=False)
 
 
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("count", [1, 10, 257])
+@pytest.mark.parametrize("output_dtype", ["float32", "float64"])
+@pytest.mark.parametrize("operation", ["leaf", "nested", "repeated", "negation"])
+def test_float_cast_arithmetic_rounding(native_artifacts, compiler, jit, count, output_dtype, operation):
+    expressions = {
+        "leaf": "(float(x) + 0.1) - float(x)",
+        "nested": "float(x + 0.1) - float(x)",
+        "repeated": "float(float(x) + 0.1) - float(float(x))",
+        "negation": "float(-(x * 0.1))",
+    }
+    source = f"# me:compiler={compiler}\ndef k(x):\n    return {expressions[operation]}\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    samples = np.array(
+        [
+            2**24,
+            -(2**24),
+            0.0,
+            -0.0,
+            np.finfo("float32").smallest_subnormal,
+            np.finfo("float32").max,
+            np.inf,
+            -np.inf,
+            np.nan,
+            0.1,
+        ],
+        dtype="float32",
+    )
+    values = np.resize(samples, count)
+    computation = values.astype(output_dtype)
+    constant = np.array(0.1, dtype=output_dtype)
+    with np.errstate(all="ignore"):
+        expected = (
+            -(computation * constant) if operation == "negation" else (computation + constant) - computation
+        )
+    for _ in range(2):
+        actual = kernel.evaluate({"x": values})
+        np.testing.assert_array_equal(actual, expected)
+        zeros = expected == 0
+        np.testing.assert_array_equal(np.signbit(actual[zeros]), np.signbit(expected[zeros]))
+
+
 @pytest.mark.parametrize("case", ["math_widen", "math_condition", "math_local_widen"])
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
@@ -388,6 +434,10 @@ def test_float32_leaf_math(native_artifacts, case, compiler, jit, count):
         "arithmetic_scalar_sub",
         "arithmetic_local_round",
         "arithmetic_widen",
+        "arithmetic_float_cast",
+        "arithmetic_float_nested",
+        "arithmetic_float_local",
+        "arithmetic_float_widen",
     ],
 )
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])

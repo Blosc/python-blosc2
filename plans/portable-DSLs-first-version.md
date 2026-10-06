@@ -233,6 +233,19 @@ native tests, 280 AddressSanitizer tests, and 895 focused Python tests without
 expected failures or new native build warnings. The remaining numeric contracts
 and publication/integration gates are unchanged.
 
+The next numeric slice fixes float32 rounding lost around same-dtype `float()`
+calls: `(float(x) + 1.0) - float(x)` and `float(x + 1.0) - float(x)` now return
+the interpreter's zero at `x = 2**24`, instead of JIT's previous one. Typed pure
+arithmetic admits only float32-result calls with float32-computed arguments,
+recursing through the already supported arithmetic. Root calls, nested/repeated
+calls, and local assignments preserve rounding; float64 output retains observed
+contextual literal semantics. Mixed/integral casts and general calls are not
+certified. Four shared fixtures and expanded scalar/vector matrices cover both
+compilers, output widths, decimal literals, signed zero, subnormals, extrema,
+infinities, and NaNs. Code-generation cache version is 18. Validation passed all
+373 regular native tests, 292 AddressSanitizer tests, and 1019 focused Python
+tests without expected failures or new native build warnings.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently
