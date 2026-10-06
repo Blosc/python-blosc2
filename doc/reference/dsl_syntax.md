@@ -18,6 +18,32 @@ def kernel(x, y):
 
 Use Python-style indentation and always return a value on the paths you execute.
 
+### Native source without a Python function
+
+`blosc2.DSLKernel.from_source(source)` constructs a native-only kernel without
+executing source as Python or inspecting Python globals:
+
+```python
+source = """# me:compiler=tcc
+def affine(x):
+    return x * 2.0 + 1.0
+"""
+kernel = blosc2.DSLKernel.from_source(source)
+result = blosc2.lazyudf(kernel, (x,), dtype="float64")[:]
+```
+
+The source and header pragmas are preserved verbatim. Input dtypes come from the
+supplied arrays; pass an explicit output dtype. The native compiler validates the
+body with these types during computation. The constructor inspects only the
+plain positional function header and does not certify portable-profile support.
+Frontend conveniences, captured globals, and Python-function fallback are not
+available on this path; use native function spellings such as `sin(x)`.
+
+This is separate from the existing Python-based persistence reconstruction path.
+Portable artifact export/import is still under development. The full native
+language reference and experimental portable profile live in miniexpr's
+`doc/dsl-syntax.md` and `doc/dsl-spec/0.1.md`, respectively.
+
 `@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
 `if`/`for`/`while` and that compiles under this grammar is dispatched here
 automatically, so its branches and loops actually run, once per chunk, instead

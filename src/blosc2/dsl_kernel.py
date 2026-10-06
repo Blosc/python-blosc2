@@ -689,7 +689,64 @@ class DSLValidator:
 
 
 class DSLKernel:
-    """Wrap a Python function and optionally extract a miniexpr DSL kernel from it."""
+    """Wrap a Python function, or construct a native-only kernel with ``from_source``."""
+
+    @classmethod
+    def from_source(cls, source: str) -> DSLKernel:
+        """Construct a native-only kernel without executing Python source.
+
+        Preserve the source, including header pragmas, verbatim. Only the function
+        header is inspected here; miniexpr validates the body when compiling with
+        the input and output dtypes supplied to :func:`blosc2.lazyudf`.
+        No frontend rewriting, captured globals, or Python fallback is provided.
+        This accepts native DSL source, not a portable-profile certification.
+        """
+        if not isinstance(source, str):
+            raise TypeError("DSL source must be a string")
+        if "\x00" in source:
+            raise ValueError("Native DSL source must not contain NUL characters")
+        try:
+            tokens = list(tokenize.generate_tokens(StringIO(source).readline))
+            first = next(t for t in tokens if t.type not in (tokenize.COMMENT, tokenize.NL))
+            if first.type != tokenize.NAME or first.string != "def":
+                raise ValueError("DSL source must start with a function definition")
+            _, _, colon = _find_def_signature_span(source)
+            if colon is None:
+                raise ValueError("DSL source requires a function header")
+            lines = source.splitlines(keepends=True)
+            header = "".join(lines[: colon.end[0] - 1]) + lines[colon.end[0] - 1][: colon.end[1]]
+            function = ast.parse(header + "\n    pass\n").body[0]
+            args = function.args
+            if (
+                args.posonlyargs
+                or args.vararg
+                or args.kwarg
+                or args.kwonlyargs
+                or args.defaults
+                or args.kw_defaults
+                or function.returns
+                or any(arg.annotation for arg in args.args)
+            ):
+                raise ValueError("Native DSL parameters must be plain positional names")
+            names = [arg.arg for arg in args.args]
+            if len(set(names)) != len(names):
+                raise ValueError("Native DSL parameter names must be unique")
+        except (SyntaxError, tokenize.TokenError, IndentationError, StopIteration) as error:
+            raise ValueError(f"Invalid native DSL function header: {error}") from error
+
+        kernel = cls.__new__(cls)
+        kernel.func = None
+        kernel.__name__ = kernel.__qualname__ = function.name
+        kernel.__doc__ = None
+        kernel._sig = None
+        kernel._sig_has_varargs = False
+        kernel._sig_npositional = len(names)
+        kernel._legacy_udf_signature = False
+        kernel.dsl_source = source
+        kernel.input_names = names
+        kernel.dsl_error = None
+        kernel.row_param = kernel.row_columns = None
+        return kernel
 
     def __init__(self, func):
         self.func = func
@@ -873,6 +930,8 @@ class DSLKernel:
         return [a.arg for a in (args.posonlyargs + args.args)]
 
     def __call__(self, inputs_tuple, output, offset=None):
+        if self.func is None:
+            raise RuntimeError("A native-source DSL kernel cannot execute as a Python function")
         if self.dsl_error is not None:
             raise self.dsl_error
         if self._legacy_udf_signature:
