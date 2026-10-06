@@ -9392,7 +9392,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     obj._ensure_null_mask(col.name)[pos : pos + m] = arrow_col.is_valid().to_numpy(
                         zero_copy_only=False
                     )
-                new_cols[col.name].extend(arrow_col.to_pylist())
+                if cls._is_utf8_column(col):
+                    new_cols[col.name].extend_arrow(arrow_col)
+                else:
+                    new_cols[col.name].extend(arrow_col.to_pylist())
             elif cls._is_dictionary_column(col):
                 import pyarrow as _pa
 

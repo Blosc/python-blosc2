@@ -678,6 +678,59 @@ class UTF8Array:
                     self._pending_chars += len(v)
             self._flush_if_needed()
 
+    def extend_arrow(self, array) -> None:
+        """Append an Arrow string array directly from offsets and UTF-8 buffers.
+
+        No Python strings are materialized. Null slots use the same physical
+        fill as ``extend``; CTable remains responsible for validity sidecars.
+        Sliced arrays are rebased, and view-based strings are cast within Arrow.
+        """
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        self._check_writable()
+        if not isinstance(array, (pa.Array, pa.ChunkedArray)):
+            raise TypeError("extend_arrow requires an Arrow string array")
+        is_view = getattr(pa.types, "is_string_view", lambda _: False)(array.type)
+        if not (pa.types.is_string(array.type) or pa.types.is_large_string(array.type) or is_view):
+            raise TypeError("extend_arrow requires an Arrow string array")
+        if isinstance(array, pa.ChunkedArray):
+            for chunk in array.chunks:
+                self.extend_arrow(chunk)
+            return
+        if is_view:
+            array = array.cast(pa.large_string())
+        array.validate(full=True)
+        if not len(array):
+            return
+        if array.null_count:
+            array = pc.fill_null(array, self._coerce(None))
+        _, offsets_buffer, data_buffer = array.buffers()
+        dtype = np.dtype("<i8" if pa.types.is_large_string(array.type) else "<i4")
+        offsets = np.frombuffer(
+            offsets_buffer, dtype=dtype, count=len(array) + 1, offset=array.offset * dtype.itemsize
+        )
+        first, last = int(offsets[0]), int(offsets[-1])
+        data = (
+            np.frombuffer(data_buffer, dtype=np.uint8, count=last - first, offset=first)
+            if last > first
+            else np.empty(0, dtype=np.uint8)
+        )
+        # Preserve the ordering of any earlier Python-string appends.
+        self.flush()
+        start = self._bytes_used
+        rows = self._persisted_rows + len(array)
+        used = start + len(data)
+        self._data.resize((max(used, 1),))
+        if len(data):
+            self._data[start:used] = data
+        self._offsets.resize((rows + 1,))
+        self._offsets[self._persisted_rows + 1 : rows + 1] = (
+            offsets[1:].astype(np.int64, copy=False) - first + start
+        )
+        self._persisted_rows = rows
+        self._bytes_used_cache = used
+
     def flush(self) -> None:
         """Write pending rows to the backing offsets/data NDArrays."""
         self._check_open()

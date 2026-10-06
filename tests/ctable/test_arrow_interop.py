@@ -19,6 +19,32 @@ from blosc2 import CTable
 pa = pytest.importorskip("pyarrow")
 
 
+@pytest.mark.parametrize("arrow_kind", ["string", "large_string", "string_view"])
+@pytest.mark.parametrize("null_storage", ["mask", "sentinel"])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_arrow_utf8_import_avoids_python_strings(
+    arrow_kind, null_storage, persistent, tmp_path, monkeypatch
+):
+    from blosc2._utf8_array import UTF8Array
+
+    if not hasattr(pa, arrow_kind):
+        pytest.skip(f"Installed PyArrow has no {arrow_kind}")
+    arrow_type = getattr(pa, arrow_kind)()
+    values = ["ignored", "café", "", None, "日本語", "emoji 🎉", "a\0b", None, "ignored"]
+    array = pa.array(values, type=arrow_type).slice(1, 7)
+    source = pa.table({"name": array})
+    monkeypatch.setattr(UTF8Array, "extend", lambda *_: pytest.fail("Python-string ingestion used"))
+    options = {"urlpath": str(tmp_path / "utf8.b2z")} if persistent else {}
+    with CTable.from_arrow(
+        source.schema, iter(source.to_batches(max_chunksize=3)), null_storage=null_storage, **options
+    ) as table:
+        assert table.to_arrow().column("name").to_pylist() == values[1:8]
+        assert table["name"].null_count() == 2
+    if persistent:
+        with CTable.open(options["urlpath"]) as table:
+            assert table.to_arrow().column("name").to_pylist() == values[1:8]
+
+
 @pytest.mark.parametrize("first_rows", [0, 1, 7])
 @pytest.mark.parametrize("producer", ["schema", "reader"])
 def test_unknown_arrow_stream_grid_is_independent_of_first_batch(first_rows, producer, monkeypatch):
