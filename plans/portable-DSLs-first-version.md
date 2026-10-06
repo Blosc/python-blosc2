@@ -175,6 +175,21 @@ No new build warnings were emitted. General `float()`/division promotion,
 out-of-domain integer casts, and float32 math semantics remain unfinished; the
 profile is still experimental and the dependency pin remains unchanged.
 
+The following float32 math slice resolves the two remaining expected-failure
+reproducers for leaf `sin` widening and `cos` branch conditions. Strict leaf
+float32 sin/cos uses scalar float math at every count, avoiding the one-ULP SIMD
+variation observed at count 257; comparison evaluation no longer pre-promotes
+variables before consuming operand values. Owned typed JIT math text preserves
+float rounding before widening/comparison and bypasses text-only hybrid plans;
+it enters the IR fingerprint, with code-generation cache version 15. The two
+audit fixtures are promoted to interpreter/TCC/CC conformance, with a local-value
+widening fixture and native/Python repeated-execution checks at counts 1/2/257.
+All 307 regular native tests, 242 AddressSanitizer tests, and 525 focused Python
+tests passed without expected failures or new build warnings. General nested
+math, other functions, inexact comparison constants, broader promotion/cast
+domains, and cross-platform math accuracy still block freezing the profile;
+dependency integration remains pending.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently
