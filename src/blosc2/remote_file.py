@@ -240,7 +240,8 @@ class RemoteFile(RemoteObject):
         """Stream original bytes, publishing only on success.
 
         ``progress(done, total)`` and ``cancel()`` run on the caller's thread.
-        A false overwrite uses an atomic hard-link publish to avoid races.
+        A false overwrite uses an atomic hard-link publish to avoid races,
+        or a checked rename on Emscripten's single-threaded virtual filesystem.
         """
         self._check_open()
         if not isinstance(overwrite, bool):
@@ -270,6 +271,12 @@ class RemoteFile(RemoteObject):
                 raise InterruptedError("File operation cancelled")
             if overwrite:
                 os.replace(temporary, destination)
+            elif blosc2.IS_WASM:
+                # No hard links on Emscripten. No callbacks/awaits can interleave
+                # a virtual-FS writer between this final check and publication.
+                if os.path.lexists(destination):
+                    raise FileExistsError(destination)
+                os.rename(temporary, destination)
             else:
                 os.link(temporary, destination)
             return str(destination)

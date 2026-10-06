@@ -56,6 +56,36 @@ def file_source(caterva2_source):  # noqa: F811
     return base, payload, stats
 
 
+@pytest.mark.parametrize("competing_writer", [False, True])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_wasm_remote_file_download_publication(tmp_path, monkeypatch, competing_writer, overwrite):
+    import threading
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    file = object.__new__(blosc2.RemoteFile)
+    file._owner = SimpleNamespace(lock=threading.RLock())
+    file._meta = {"nchunks": 2, "nbytes": 5}
+    file._check_open = lambda: None
+    file._chunk = lambda index, cancel: [b"abc", b"de"][index]
+    destination = tmp_path / "download.txt"
+
+    def progress(done, total):
+        if competing_writer:
+            destination.write_bytes(b"existing")
+
+    if competing_writer and not overwrite:
+        with pytest.raises(FileExistsError):
+            file.download(destination, progress=progress)
+        assert destination.read_bytes() == b"existing"
+    else:
+        file.download(destination, overwrite=overwrite, progress=progress)
+        assert destination.read_bytes() == b"abcde"
+    assert not list(tmp_path.glob(".b2view-download-*"))
+    with pytest.raises(FileExistsError):
+        file.download(destination)
+
+
 def test_discovery_ranges_and_download(file_source, tmp_path):
     base, payload, stats = file_source
     with blosc2.open(base + "@public") as store:
