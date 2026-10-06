@@ -10821,6 +10821,83 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # the None a None.
         return np.asarray(out, dtype=object)
 
+    def _import_pandas_arrow_strings(self, df) -> bool:  # noqa: C901
+        """Import simple typed columns, reusing Arrow-backed UTF-8 buffers.
+
+        Return False before writing anything if the schema or storage needs the
+        general pandas path. Numeric conversion deliberately remains identical
+        to that path, including its NaN-as-value semantics.
+        """
+        columns = self._schema.columns
+        arrow_strings = {}
+        for col in columns:
+            if self._is_utf8_column(col):
+                if any(getattr(col.spec, attr, None) is not None for attr in ("min_length", "max_length")):
+                    return False
+                array = df[col.name].array
+                if not hasattr(array, "__arrow_array__"):
+                    return False
+                arrow_strings[col.name] = array
+            elif (
+                self._is_list_column(col)
+                or self._is_varlen_scalar_column(col)
+                or self._is_dictionary_column(col)
+                or self._is_ndarray_column(col)
+                or isinstance(col.spec, timestamp)
+                or np.dtype(col.dtype).kind not in "biuf"
+            ):
+                return False
+        if not arrow_strings:
+            return False
+        try:
+            import pyarrow as pa
+        except ImportError:
+            return False
+        for name, array in arrow_strings.items():
+            array = array.__arrow_array__()
+            if not _is_arrow_string_type(pa, array.type):
+                return False
+            arrow_strings[name] = array
+
+        from blosc2.schema_vectorized import validate_column_values
+
+        n = len(df)
+        values_by_name = {}
+        validity = {}
+        # Validate/coerce all numeric columns before any column is written.
+        for col in columns:
+            name = col.name
+            if name in arrow_strings:
+                array = arrow_strings[name]
+                array.validate(full=True)
+                if array.null_count:
+                    # Preserve the normal backend's rejection of non-nullable
+                    # nulls and its physical fill/sentinel for nullable ones.
+                    self._cols[name]._coerce(None)
+                    if col.spec.uses_mask:
+                        validity[name] = array.is_valid().to_numpy(zero_copy_only=False)
+                continue
+            values = self._pandas_scalar_series_values(df[name], col)
+            validate_column_values(col, values)
+            values, valid = self._null_channel(name).coerce_batch(values, n)
+            values_by_name[name] = np.ascontiguousarray(values, dtype=self._cols[name].dtype)
+            if valid is not None:
+                validity[name] = valid
+        for col in columns:
+            name = col.name
+            if name in arrow_strings:
+                self._cols[name].extend_arrow(arrow_strings[name])
+            else:
+                values = values_by_name[name]
+                self._cols[name][:n] = values
+                self._feed_summary(name, 0, values)
+        for name, valid in validity.items():
+            self._null_channel(name).set_valid(slice(0, n), valid)
+        self._valid_rows[:n] = True
+        self._last_pos = self._n_rows = n
+        self._mark_all_indexes_stale()
+        return True
+
     @classmethod
     def from_pandas(cls, df, row_cls) -> CTable:  # noqa: C901
         """Build a :class:`CTable` from a pandas DataFrame.
@@ -10829,6 +10906,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Object-dtype DataFrame columns are **not** automatically inferred as
         ndarray columns; the *row_cls* must explicitly declare
         :func:`blosc2.ndarray` fields.
+
+        Compatible Arrow-backed UTF-8 columns are imported directly from their
+        buffers, without materializing Python strings. The declared schema and
+        numeric validation/null semantics are unchanged; other schemas retain
+        the general pandas import path. PyArrow remains optional.
 
         Parameters
         ----------
@@ -10940,7 +11022,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._n_rows = 0
         obj._last_pos = 0
 
-        if n > 0:
+        # For small inputs the existing path is cheaper than Arrow setup and
+        # separate offset/data writes, even when the strings are Arrow-backed.
+        if n > 0 and not (n >= 16_384 and obj._import_pandas_arrow_strings(df)):
 
             def normalize_pandas_missing(value):
                 if value is None:
