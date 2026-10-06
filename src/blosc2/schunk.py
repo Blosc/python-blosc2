@@ -2835,7 +2835,12 @@ def _open_service_base(urlpath, roots, mode, offset, shared_cache, kwargs, auth_
     if kwargs:
         raise NotImplementedError(f"{', '.join(sorted(kwargs))} is unsupported for repositories")
     return blosc2.RemoteRepository(
-        urlpath, roots, auth_token=auth_token, cache_dir=cache_dir, cache_policy=policy, max_cache_bytes=limit
+        urlpath,
+        roots,
+        auth_token=auth_token,
+        cache_dir=cache_dir,
+        cache_policy=policy,
+        max_cache_bytes=limit,
     )
 
 
