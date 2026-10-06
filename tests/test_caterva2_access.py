@@ -271,6 +271,70 @@ def test_discovery_redirects_timeout_and_response_limits(monkeypatch):
     assert seen == ["https://host/demo/api/roots", "https://host/demo/api/roots/"]
 
 
+@pytest.mark.parametrize("encoding", ["gzip", "br", "deflate"])
+def test_discovery_rejects_encoding_before_reading(encoding, monkeypatch):
+    import httpx
+
+    from blosc2.caterva2_url import discover_service
+
+    class UnreadableStream(httpx.SyncByteStream):
+        def __iter__(self):
+            pytest.fail("Encoded response was read or decompressed")
+            yield b""  # Make this a stream iterator without reading any payload.
+
+    def respond(request):
+        assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(200, headers={"content-encoding": encoding}, stream=UnreadableStream())
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+        with pytest.raises(ValueError, match="Encoded"):
+            discover_service("https://host")
+
+
+@pytest.mark.parametrize("fragmented", [False, True])
+def test_discovery_checks_size_before_copying(fragmented, monkeypatch):
+    import httpx
+
+    import blosc2.caterva2_url as discovery
+
+    class BoundedPayload(bytearray):
+        def extend(self, data):
+            assert len(self) + len(data) <= 1 << 20, "Oversized fragment copied before checking"
+            super().extend(data)
+
+    class Fragments(httpx.SyncByteStream):
+        def __iter__(self):
+            if fragmented:
+                yield b" " * (1 << 19)
+                yield b" " * ((1 << 19) + 1)
+            else:
+                yield b" " * ((1 << 20) + 1)
+
+    monkeypatch.setattr(discovery, "bytearray", BoundedPayload, raising=False)
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=Fragments()))
+    ) as client:
+        monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+        with pytest.raises(ValueError, match="exceeds 1 MiB"):
+            discovery.discover_service("https://host")
+
+
+def test_discovery_accepts_identity_at_exact_byte_limit(monkeypatch):
+    import httpx
+
+    from blosc2.caterva2_url import discover_service
+
+    payload = b"{}" + b" " * ((1 << 20) - 2)
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, headers={"content-encoding": "identity"}, content=payload)
+        )
+    ) as client:
+        monkeypatch.setattr(blosc2.c2array, "_sync_client", lambda: client)
+        assert discover_service("https://host") == {}
+
+
 def test_repository_freezes_auth_context(caterva2_source):  # noqa: F811
     base, _, _, stats = caterva2_source
     stats["roots"]["@broken"] = {"name": "@broken"}

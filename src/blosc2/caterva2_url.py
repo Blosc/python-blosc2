@@ -144,13 +144,15 @@ def discover_service(value, *, required=False, auth_token=None):
     auth_token = discovery_auth_token(value, required=required, auth_token=auth_token)
     url = _server_url(value.rstrip("/"), "api/roots")
     client = _sync_client()
+    headers = dict(_auth_headers(auth_token) or {})
+    headers["Accept-Encoding"] = "identity"
     deadline = time.monotonic() + 3
     for _ in range(4):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("Caterva2 service discovery exceeded 3 seconds")
         with client.stream(
-            "GET", url, headers=_auth_headers(auth_token), timeout=remaining, follow_redirects=False
+            "GET", url, headers=headers, timeout=remaining, follow_redirects=False
         ) as response:
             if response.status_code in {301, 302, 303, 307, 308}:
                 from urllib.parse import urljoin
@@ -176,13 +178,16 @@ def discover_service(value, *, required=False, auth_token=None):
                     response.raise_for_status()
                 return None
             response.raise_for_status()
+            # Reject before iter_bytes can decompress an untrusted response.
+            if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                raise ValueError("Encoded Caterva2 roots responses are unsupported")
             payload = bytearray()
             for chunk in response.iter_bytes():
                 if time.monotonic() > deadline:
                     raise TimeoutError("Caterva2 service discovery exceeded 3 seconds")
-                payload.extend(chunk)
-                if len(payload) > 1 << 20:
+                if len(payload) + len(chunk) > 1 << 20:
                     raise ValueError("Caterva2 roots response exceeds 1 MiB")
+                payload.extend(chunk)
             import json
 
             try:
