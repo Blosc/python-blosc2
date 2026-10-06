@@ -431,3 +431,19 @@ def test_unsupported_division_lowering_uses_interpreter(
         kernel.evaluate({"x": np.array([-3.75, -1.75, 0, 1.75, 3.75])}),
         np.array(expected, dtype=output_dtype),
     )
+
+
+@pytest.mark.parametrize("input_dtype", ["float32", "float64"])
+@pytest.mark.parametrize("output_dtype", ["float32", "float64"])
+@pytest.mark.parametrize("count", [1, 5, 257])
+@pytest.mark.parametrize("jit", [False, True])
+def test_nested_conversion_buffer_width(native_artifacts, input_dtype, output_dtype, count, jit):
+    source = "def k(x):\n    return float(int(x) / 2)\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    # Nested casts remain intentionally outside the typed JIT arithmetic slice.
+    assert not kernel.has_jit
+    values = np.resize(np.array([-1.75, -0.25, 0.25, 1.75, 4.75], dtype=input_dtype), count)
+    expected = np.resize(np.array([-0.5, 0, 0, 0.5, 2], dtype=output_dtype), count)
+    for _ in range(2):
+        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)

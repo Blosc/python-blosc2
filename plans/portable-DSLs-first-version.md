@@ -145,8 +145,21 @@ Division-slice validation passed 377 focused Python tests with four remaining
 math expected failures, all 272 native tests in the TCC-enabled build, and 61
 selected interpreter-only portable/profile/artifact/IR/codegen tests. Required-JIT
 division fixtures passed under both TCC and CC. Ruff and whitespace checks passed;
-native builds emitted no new warnings. The nested-cast reproducer is deliberately
-not part of the passing execution suite pending a native evaluator investigation.
+native builds emitted no new warnings. At that stage the nested-cast reproducer
+was excluded from execution conformance pending a native evaluator investigation.
+
+The following memory-safety slice isolated that abort with AddressSanitizer:
+nested conversion code selected a float64 writer for a float32-sized scratch
+buffer. The writer now matches the actual typed evaluator's output representation
+while retaining source-dtype evaluation. Exact interpreter fixtures and native/
+Python tests cover float32/float64 input/output pairs, counts 1/5/257, repeated
+evaluation, and requested-JIT fallback. Sanitizer validation also corrected an
+existing mixed-type test's undersized output allocation (int32 + float32 infers
+float64). All 217 sanitizer-build tests, all 274 regular native tests, and 401
+focused Python tests passed, with four existing math expected failures. Ruff and
+whitespace checks passed; builds emitted no new warnings. This fixes the confirmed
+buffer overflow, not broader nested-cast promotion or float32 math semantics;
+those still block freezing 0.1. The native dependency pin remains unchanged.
 
 ## 1. Goal and scope
 
