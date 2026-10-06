@@ -190,6 +190,22 @@ math, other functions, inexact comparison constants, broader promotion/cast
 domains, and cross-platform math accuracy still block freezing the profile;
 dependency integration remains pending.
 
+The next literal/promotion slice corrects pure float32 arithmetic: C double
+literals must not bypass native operand or intermediate rounding for `+`, `-`,
+`*`, and unary negation. Five shared exact fixtures cover exact/decimal literal
+rounding, subtraction, locals, and differing floating output context. Literal
+typing is contextual: a float64 requested output can make literal-containing
+arithmetic compute in float64, rather than just widen a float32 result. The new
+owned lowering targets float32 computation only, bypasses text-only hybrid plans,
+enters the IR fingerprint, and uses code-generation cache version 16. Ordinary
+float64 hybrid branch optimizations are preserved. Native/Python tests check
+counts 1/5/257, repeated execution, both floating output widths, and scalar
+addition/subtraction/multiplication. All 328 regular native tests, 258
+AddressSanitizer tests, and 632 focused Python tests passed without expected
+failures or new build warnings. Calls/casts, mixed intermediate dtypes, integral/
+Boolean arithmetic, overflow, and the complete promotion contract remain audit
+work; the profile is still experimental and dependency integration is pending.
+
 ## 1. Goal and scope
 
 Establish a small, versioned miniexpr kernel language that executes independently

@@ -383,13 +383,18 @@ def test_float32_leaf_math(native_artifacts, case, compiler, jit, count):
         "division_loop",
         "division_float32",
         "division_condition",
+        "arithmetic_round",
+        "arithmetic_decimal",
+        "arithmetic_scalar_sub",
+        "arithmetic_local_round",
+        "arithmetic_widen",
     ],
 )
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
-def test_typed_division_artifact(native_artifacts, case, compiler, jit):
+def test_typed_arithmetic_artifact(native_artifacts, case, compiler, jit):
     if not (CORPUS / f"{case}.txt").is_file():
-        pytest.skip("Native division fixtures unavailable")
+        pytest.skip("Native arithmetic fixtures unavailable")
     if jit:
         control = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n    return x\n")
         control = blosc2.PortableKernel.from_json(control.export({"x": "float64"}, "float64"), jit=True)
@@ -406,6 +411,38 @@ def test_typed_division_artifact(native_artifacts, case, compiler, jit):
         kernel.evaluate({"x": np.array(rows[:, 0], dtype=input_dtype)}),
         np.array(rows[:, 1], dtype=output_dtype),
     )
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("count", [1, 5, 257])
+@pytest.mark.parametrize("output_dtype", ["float32", "float64"])
+@pytest.mark.parametrize("operation", ["add", "subtract", "multiply"])
+def test_float_arithmetic_constant_rounding(native_artifacts, compiler, jit, count, output_dtype, operation):
+    expressions = {
+        "add": "(x + 0.1) - x",
+        "subtract": "x - 0.1",
+        "multiply": "(x * 0.1) - x",
+    }
+    source = f"# me:compiler={compiler}\n# me:fp=strict\ndef k(x):\n    return {expressions[operation]}\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    if jit:
+        assert kernel.has_jit
+    values = np.resize(np.array([0.1, -1, 0, 1, 16777216], dtype="float32"), count)
+    # These expressions contain a floating literal: native compilation types
+    # that constant from the requested floating output context. Each operation
+    # then rounds its operands/result in that context, not C's double literal type.
+    arithmetic_values = values.astype(output_dtype)
+    constant = np.array(0.1, dtype=output_dtype)
+    if operation == "add":
+        expected = (arithmetic_values + constant) - arithmetic_values
+    elif operation == "subtract":
+        expected = arithmetic_values - constant
+    else:
+        expected = (arithmetic_values * constant) - arithmetic_values
+    for _ in range(2):
+        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
 
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
