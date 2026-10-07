@@ -1,6 +1,8 @@
 name: Python wheels
 
 on:
+  # Certify development revisions without creating a release tag or publishing.
+  workflow_dispatch:
   # Trigger the workflow only for tags and PRs to the main branch
   push:
     tags:
@@ -168,7 +170,9 @@ jobs:
       CIBW_BUILD: ${{ matrix.cibw_build }}
       # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
-      CIBW_TEST_COMMAND: "pytest {project}/tests"
+      CIBW_TEST_COMMAND: >-
+        pytest {project}/tests &&
+        python {project}/scripts/certify_menudet_math.py
       # Pin the Pyodide version explicitly per target for reproducible builds.
       # Note: in-memory SChunk get_slice is broken on the Pyodide 0.29.x
       # Emscripten toolchain (works on 314); see gh-664. The affected test is
@@ -293,6 +297,9 @@ jobs:
           python -m pip install pytest
           python -m pytest tests/test_open.py tests/test_vlmeta.py \
                            tests/ndarray/test_evaluate.py -q -p no:cacheprovider
+
+      - name: Certify Menudet on the installed abi3 wheel
+        run: python scripts/certify_menudet_math.py
 
 
   upload_pypi:
