@@ -445,17 +445,18 @@ authoritative commands/results are in `portable-DSL-1.0-progress.md`.
    and reject persistence with a specific ambiguity diagnostic.
 9. [x] Conservative interpreter-only dispatch and pre-execution optional JIT
    fallback; required-JIT rejects unsupported acceleration explicitly.
-10. [ ] Complete release verification gates:
+10. [x] Complete release verification gates for the tested platform matrix:
     - [x] Compact local Python/native conformance and full local ASAN/UBSAN.
     - [x] Isolated native-development override wheels and artifact-disabled smoke.
     - [x] Draft/API docs build; changed portable page free of diagnostics.
     - [x] Native Windows/Linux/macOS/WASM conformance matrix (all seven jobs green).
     - [x] Independent finite math corpus and stock-pin macOS execution: 284 samples,
       40 canonical operations, both floating precisions, function-specific budgets.
-    - [ ] Execute the independent math corpus on remaining Python release platforms
+    - [x] Execute the independent math corpus on remaining Python release platforms
       (no universal ULP bound inferred from the finite corpus or host libm).
     - [x] Publish/pin the native revision and verify a stock-pin macOS ARM64 wheel.
-    - [ ] Complete the remaining stock-pin platform wheel matrix.
+    - [x] Complete the remaining stock-pin platform wheel matrix (27 successful jobs;
+      retain the existing untested macOS Intel cp315/cp315t dependency exception).
     - [x] Whole-tree docs disposition: fix parsing errors, exclude generated input
       trees, and inventory/defer existing image/reference warnings outside Menudet.
 

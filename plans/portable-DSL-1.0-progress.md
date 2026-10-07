@@ -1,5 +1,54 @@
 # Portable DSL 1.0 implementation progress
 
+## Published release certification — green platform matrix
+
+The user authorized publishing changes and monitoring/fixing CI until green.
+Native Menudet documentation was published as miniexpr
+`36770f87e10f1b92bfe0f9f92a7039eba2e976ea`; all seven native jobs passed in
+[37618199852](https://github.com/Blosc/miniexpr/actions/runs/37618199852).
+Python still pins the already-green runtime revision `3418cdce...`: the subsequent
+native changes are documentation/matrix metadata only, not runtime changes.
+
+Python release-hardening and certification fixes are published on `portable-dsls`.
+Certified implementation/workflow revision:
+`e768bc538cb096c7f5c669046ed3aed5e55d9c6b`. Successful runs:
+
+- [Tests 37622410469](https://github.com/Blosc/python-blosc2/actions/runs/37622410469)
+  — all standard platform jobs green, including independent math reports.
+- [WASM 37622410514](https://github.com/Blosc/python-blosc2/actions/runs/37622410514)
+  — Python/Pyodide suite plus the independent corpus green.
+- [Python wheels 37622420247](https://github.com/Blosc/python-blosc2/actions/runs/37622420247)
+  — **27 successful jobs**: seven native/WASM build jobs and twenty abi3 test
+  jobs across Python 3.11–3.15. Includes Linux x64/ARM64, Windows x64/ARM64,
+  macOS x64/ARM64, Pyodide 3.13/3.14 and free-threaded builds. PyPI upload is
+  intentionally skipped (no tag/publication). The pre-existing skip of testing
+  macOS Intel cp315/cp315t wheels is retained for unavailable pre-release dependency
+  wheels; do not claim those specific wheels were tested.
+
+The first two wheel runs (`37618308296`, `37620050340`) failed because importing
+the extension safely enables the GIL on free-threaded Python, emitting a
+RuntimeWarning that pytest promoted to an error. A command-line filter initially
+failed because pytest treats CLI warning messages literally, not as regexes.
+Moved the **exact extension-specific regex** into `pytest.ini`; other runtime
+warnings remain errors. A local synthetic check confirms both acceptance of the
+expected import warning and rejection of an unrelated numeric RuntimeWarning.
+No `PYTHON_GIL=0`, no no-GIL safety declaration, no tolerance changes or new
+conformance skips were introduced.
+
+Added `workflow_dispatch` to the wheel workflow to certify development revisions
+without release tags. Both wheel Pyodide versions and each abi3 matrix job now
+also run the independent corpus.
+
+Downloaded and verified all five native Python math reports: every report has
+**284 samples and zero failures**. Maximum observed ULP: Windows **2**, Linux
+**2** (including NumPy 1.26 and Python 3.14 jobs), macOS ARM64 **3**. Reports are
+under `<temp-root>/menudet-native-ci-math-reports`. Wheel/WASM corpus executions
+are additionally certified by the successful corresponding job commands.
+
+The earlier external-platform/published-branch blockers below are superseded.
+Release certification for the tested matrix is now green; final release version,
+publication, beta feedback and compatibility freeze remain separate decisions.
+
 ## Menudet / 4.15.0 release hardening — current handoff
 
 The user selected **Menudet — a little language for portable computation on
