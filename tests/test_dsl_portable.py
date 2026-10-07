@@ -16,17 +16,13 @@ CORPUS = Path(os.environ["MINIEXPR_PORTABLE_CORPUS"]) if os.environ.get("MINIEXP
 
 
 # Native CTest runs every fixture under its supported execution engines. Python
-# tests only distinct host boundaries here, plus every exact output conversion;
+# tests only distinct host boundaries here and representative output conversions;
 # numerical/JIT scenarios are covered separately by test_portable_artifact.py.
 CASES = [
     "affine",
-    "chains",
-    "loops",
     "special_floats",
-    "flow",
     "math",
     "division_bool",
-    "division_literals",
     "division_locals",
     "while_cap_exceeded",
     "unknown_name",
@@ -36,12 +32,16 @@ CASES = [
     "missing_return_loop_ok",
 ]
 TYPES = ("bool", "int32", "int64", "float32", "float64")
-EXCLUDED = (
-    set((CORPUS / "frozen-excluded.txt").read_text().split())
-    if CORPUS is not None and (CORPUS / "frozen-excluded.txt").is_file()
-    else set()
-)
-CASES += [f"convert_{input_type}_{output_type}" for input_type in TYPES for output_type in TYPES]
+CASES += [
+    f"convert_{input_type}_{output_type}"
+    for input_type, output_type in (
+        ("bool", "int64"),
+        ("int32", "bool"),
+        ("int64", "float32"),
+        ("float32", "float64"),
+        ("float64", "int32"),
+    )
+]
 
 
 def corpus_source(case):
@@ -67,34 +67,37 @@ def assert_typed_result(actual, expected, *, exact=False):
 
 @pytest.mark.parametrize("case", CASES)
 def test_native_source_corpus(case, portable_validator, monkeypatch):
-    jit = True
     if case.startswith("while_cap_"):
         monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     if CORPUS is None:
         pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
-    # An explicit corpus is required to match the pinned profile. Do not
-    # silently skip missing files or misinterpret an older exclusion manifest.
+    # An explicit corpus must match draft 1.0; never silently skip missing files.
     source = corpus_source(case).read_text()
     words = (CORPUS / f"{case}.txt").read_text().split()
     outcome, input_type, output_type = words[:3]
     count, nvars = map(int, words[3:5])
     names = words[5 : 5 + nvars]
     info = portable_validator(source, dict.fromkeys(names, input_type), output_type)
-    assert info["valid"] == (outcome != "compile_error" and case not in EXCLUDED), info
-    if case in EXCLUDED:
-        assert info["status"] == "unsupported_feature"
+    assert info["valid"] == (outcome != "compile_error"), info
     rows = np.array(words[5 + nvars :]).reshape(count, nvars + 1)
     input_dtype, output_dtype = np.dtype(input_type), np.dtype(output_type)
     expected = typed_values(rows[:, -1], output_dtype)
     kernel = DSLKernel.from_source(source)
     by_name = {name: typed_values(rows[:, index], input_dtype) for index, name in enumerate(names)}
-    inputs = [by_name[name] for name in kernel.input_names]
     if outcome in {"ok", "ok_exact"}:
-        result = blosc2.lazyudf(kernel, inputs, dtype=output_dtype, jit=jit)[:]
+        artifact = kernel.export(dict.fromkeys(names, input_type), output_type)
+        loaded = blosc2.PortableKernel.from_json(artifact, jit=True)
+        assert not loaded.has_jit
+        result = loaded.evaluate(by_name)
         assert_typed_result(result, expected, exact=outcome == "ok_exact")
+    elif outcome == "compile_error":
+        with pytest.raises(blosc2.PortableArtifactError):
+            kernel.export(dict.fromkeys(names, input_type), output_type)
     else:
-        with pytest.raises((NotImplementedError, RuntimeError)):
-            blosc2.lazyudf(kernel, inputs, dtype=output_dtype, jit=jit)[:]
+        artifact = kernel.export(dict.fromkeys(names, input_type), output_type)
+        loaded = blosc2.PortableKernel.from_json(artifact, jit=True)
+        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+            loaded.evaluate(by_name)
     assert kernel.dsl_source == source
     assert kernel.func is None
 
@@ -105,8 +108,7 @@ def test_native_source_corpus(case, portable_validator, monkeypatch):
                 runner,
                 str(corpus_source(case)),
                 str(CORPUS / f"{case}.txt"),
-                "on" if jit else "off",
-                *(["native"] if case in EXCLUDED else []),
+                "on",
             ],
             check=True,
             capture_output=True,
@@ -116,7 +118,7 @@ def test_native_source_corpus(case, portable_validator, monkeypatch):
         if outcome == "compile_error":
             assert lines == [outcome]
         else:
-            assert lines[0] == f"jit={int(jit)}"
+            assert lines[0] == "jit=0"
             if outcome == "eval_error":
                 assert lines[1:] == [outcome]
             else:
@@ -177,14 +179,14 @@ def portable_validator():
 @pytest.mark.parametrize(
     ("body", "status"),
     [
-        ("return sum(x)", "unsupported_feature"),
-        ("return np.sin(x)", "unsupported_feature"),
-        ("return x.lower()", "unsupported_feature"),
-        ("return x[0]", "unsupported_feature"),
-        ("return _flat_idx + x", "unsupported_feature"),
-        ("return callback(x)", "unsupported_feature"),
+        ("print(x); return x", "invalid_source"),
+        ("return np.sin(x)", "invalid_source"),
+        ("return x.lower()", "invalid_source"),
+        ("return x[0]", "invalid_source"),
+        ("return _flat_idx + x", "invalid_source"),
+        ("return callback(x)", "invalid_source"),
         ("return CAPTURE + x", "invalid_source"),
-        ("return sin()", "unsupported_feature"),
+        ("return sin()", "invalid_source"),
     ],
 )
 def test_portable_profile_rejections(portable_validator, body, status):
@@ -192,8 +194,12 @@ def test_portable_profile_rejections(portable_validator, body, status):
     assert not info["valid"]
     assert info["status"] == status
     assert info["error"]
-    assert info["line"] == 2
-    assert info["column"] > 0
+    if "_flat_idx" in body:
+        # Descriptor-wide missing-context diagnostic is not a source location.
+        assert info["line"] == 0
+    else:
+        assert info["line"] == 2
+        assert info["column"] > 0
 
 
 def test_portable_profile_signature_and_version(portable_validator):
@@ -204,8 +210,10 @@ def test_portable_profile_signature_and_version(portable_validator):
         "unsupported_version"
     )
     assert portable_validator(source, {"x": "float64"}, "float64")["status"] == "invalid_signature"
-    assert portable_validator(source, {"x": "float64", "y": "int32"}, "float64")["status"] == (
-        "unsupported_feature"
+    assert portable_validator(source, {"x": "float64", "y": "int32"}, "float64")["valid"]
+    assert (
+        portable_validator(source, inputs, "float64", language_version="0.1")["status"]
+        == "unsupported_version"
     )
     assert portable_validator(source, inputs, "complex128")["status"] == "unsupported_feature"
 
@@ -216,6 +224,7 @@ def test_portable_profile_never_executes_or_compiles_jit(portable_validator, mon
     monkeypatch.setenv("CC", "/no/compiler")
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc")
     monkeypatch.setenv("ME_DSL_JIT", "1")
+    monkeypatch.setenv("ME_DSL_FP_MODE", "fast")
     monkeypatch.setenv("ME_DSL_JIT_CACHE_DIR", str(cache))
     # This would reach the iteration cap if executed. Validation must still succeed.
     source = "# me:compiler=cc\ndef k(x):\n    while 1:\n        pass\n    return x\n"
@@ -238,9 +247,9 @@ def test_portable_profile_missing_native_support(monkeypatch):
 @pytest.mark.parametrize(
     ("source", "inputs", "version"),
     [
-        ("def k(x):\n    return x\n\x00", {"x": "float64"}, "0.1"),
-        ("def k(x):\n    return x\n", {"x\x00": "float64"}, "0.1"),
-        ("def k(x):\n    return x\n", {"x": "float64"}, "0.1\x00"),
+        ("def k(x):\n    return x\n\x00", {"x": "float64"}, "1.0"),
+        ("def k(x):\n    return x\n", {"x\x00": "float64"}, "1.0"),
+        ("def k(x):\n    return x\n", {"x": "float64"}, "1.0\x00"),
     ],
 )
 def test_portable_profile_rejects_nul(source, inputs, version):
@@ -251,6 +260,11 @@ def test_portable_profile_rejects_nul(source, inputs, version):
 @pytest.mark.parametrize("literal", ["9007199254740993", "9_007_199_254_740_993", "0x20000000000001"])
 def test_portable_integer_literal_bound_is_exact(portable_validator, literal):
     info = portable_validator(f"def k(x):\n    return x + {literal}\n", {"x": "int64"}, "int64")
-    assert not info["valid"]
-    assert info["status"] == "unsupported_feature"
-    assert "portable range" in info["error"]
+    assert info["valid"], info
+    author = DSLKernel.from_source(f"def k(x):\n    return x + {literal}\n")
+    kernel = blosc2.PortableKernel.from_json(author.export({"x": "int64"}, "int64"))
+    np.testing.assert_array_equal(
+        kernel.evaluate({"x": np.array([0, 1], dtype="int64")}), [2**53 + 1, 2**53 + 2]
+    )
+    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        kernel.evaluate({"x": np.array([np.iinfo("int64").max], dtype="int64")})

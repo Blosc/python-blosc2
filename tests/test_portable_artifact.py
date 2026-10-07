@@ -26,56 +26,38 @@ BIAS = -1.0
 
 
 def assert_execution_mode(kernel, jit):
-    # Portable 0.1 certifies Windows' interpreter baseline, not its optional
-    # accelerator. Still execute all semantic assertions there, including
-    # JIT-requested fallback. On certified JIT hosts fallback must not hide a
-    # code-generation regression; JIT_OFF must disable it on every platform.
-    if jit and sys.platform == "win32":
-        return
-    assert kernel.has_jit == jit
-
-
-def assert_frozen_rejection(source, inputs, output):
-    """Check both authoring and native import, without disguising setup errors."""
-    info = blosc2.validate_portable_dsl(source, inputs, output)
-    assert not info["valid"], info
-    assert info["status"] == "unsupported_feature", info
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        blosc2.DSLKernel.from_source(source).export(inputs, output)
-    assert error.value.status == "unsupported_feature"
-    # Use a valid envelope, then replace only its source. Import must independently
-    # enforce the native frozen boundary even when authoring is bypassed.
-    names = ", ".join(inputs)
-    identity = f"def k({names}):\n    return {next(iter(inputs))}\n"
-    envelope = json.loads(blosc2.DSLKernel.from_source(identity).export(inputs, output))
-    envelope["source"] = source
-    envelope["entry_point"] = ast.parse(source).body[0].name
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        blosc2.PortableKernel.from_json(json.dumps(envelope), jit=False)
-    assert error.value.status == "unsupported_requirement"
+    # Draft 1.0 is interpreter-first, including optional JIT requests.
+    assert kernel.schema_version == "1.0"
+    assert not kernel.has_jit
 
 
 @pytest.mark.parametrize(
-    ("expression", "input_dtype", "output_dtype"),
+    ("expression", "input_dtype", "output_dtype", "expected"),
     [
-        ("sin(x)", "float64", "float64"),
-        ("cos(x)", "float32", "float32"),
-        ("int(x + 0.25)", "float64", "int64"),
-        ("float(float(x))", "float32", "float32"),
-        ("bool((x + 1.0) - x)", "float32", "bool"),
-        ("(x + 1.0) > x", "float32", "bool"),
-        ("(x / 2) > 0", "float64", "bool"),
-        ("x + 0.5", "int64", "int64"),
-        ("x == 9007199254740993.0", "int64", "bool"),
-        ("float(x)", "int64", "float32"),
-        ("float(-(x * 0.1))", "float32", "float32"),
-        ("bool(int(x + 0.25))", "float64", "bool"),
-        ("float(int(x) / 2)", "float32", "float32"),
-        ("int(x) / 2", "float64", "int64"),
+        ("sin(x)", "float64", "float64", np.sin([-2.0, 0.0, 2.0])),
+        ("cos(x)", "float32", "float32", np.cos(np.array([-2, 0, 2], dtype="float32"))),
+        ("int(x + 0.25)", "float64", "int64", [-1, 0, 2]),
+        ("float(float(x))", "float32", "float32", [-2, 0, 2]),
+        ("bool((x + 1.0) - x)", "float32", "bool", [True, True, True]),
+        ("(x + 1.0) > x", "float32", "bool", [True, True, True]),
+        ("(x / 2) > 0", "float64", "bool", [False, False, True]),
+        ("x + 0.5", "int64", "int64", [-1, 0, 2]),
+        ("x == 9007199254740993.0", "int64", "bool", [False, False, False]),
+        ("float(x)", "int64", "float32", [-2, 0, 2]),
+        ("float(-(x * 0.1))", "float32", "float32", [0.2, -0.0, -0.2]),
+        ("bool(int(x + 0.25))", "float64", "bool", [True, False, True]),
+        ("float(int(x) / 2)", "float32", "float32", [-1, 0, 1]),
+        ("int(x) / 2", "float64", "int64", [-1, 0, 1]),
     ],
 )
-def test_frozen_boundary_without_corpus(native_artifacts, expression, input_dtype, output_dtype):
-    assert_frozen_rejection(f"def k(x):\n    return {expression}\n", {"x": input_dtype}, output_dtype)
+def test_typed_arithmetic_without_corpus(native_artifacts, expression, input_dtype, output_dtype, expected):
+    source = f"def k(x):\n    return {expression}\n"
+    assert blosc2.validate_portable_dsl(source, {"x": input_dtype}, output_dtype)["valid"]
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+    assert_execution_mode(kernel, True)
+    actual = kernel.evaluate({"x": np.array([-2, 0, 2], dtype=input_dtype)})
+    np.testing.assert_allclose(actual, np.array(expected, dtype=output_dtype), rtol=1e-6)
 
 
 @blosc2.dsl_kernel
@@ -120,9 +102,9 @@ def test_capture_closure_and_frontend_sugar(native_artifacts):
     def trig(x):
         return np.sin(x) * scale
 
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        trig.export({"x": "float32"}, "float32")
-    assert error.value.status == "unsupported_feature"
+    kernel = blosc2.PortableKernel.from_json(trig.export({"x": "float32"}, "float32"), jit=False)
+    values = np.array([0, 1, 2], dtype="float32")
+    np.testing.assert_allclose(kernel.evaluate({"x": values}), np.sin(values) * scale, rtol=1e-6)
 
 
 def test_capture_collision_and_comments(native_artifacts):
@@ -180,8 +162,8 @@ def test_explicit_capture_dtype(native_artifacts):
     def k(x):
         return x * integer
 
-    with pytest.raises(blosc2.PortableArtifactError, match="mixed input dtypes"):
-        k.export({"x": "float64"}, "float64")
+    inferred = json.loads(k.export({"x": "float64"}, "float64"))
+    assert inferred["constants"][0]["dtype"] == "int64"
     artifact = k.export({"x": "float64"}, "float64", capture_dtypes={"integer": "float64"})
     np.testing.assert_array_equal(
         blosc2.PortableKernel.from_json(artifact, jit=False).evaluate({"x": np.array([3.0])}), [6.0]
@@ -191,14 +173,29 @@ def test_explicit_capture_dtype(native_artifacts):
 
 
 @pytest.mark.parametrize("value", [np.array(2.0), np.arange(2), object(), "hello"])
-def test_unsupported_captures(native_artifacts, value):
+def test_capture_value_types(native_artifacts, value):
     capture = value
+
+    if type(value) is str:
+
+        @blosc2.dsl_kernel
+        def string_snapshot(x):
+            return capture
+
+        artifact = string_snapshot.export({"x": "float64"}, "U5")
+        constant = json.loads(artifact)["constants"][0]
+        assert constant["dtype"] == "unicode32"
+        assert constant["encoding"] == "unicode32be-hex"
+        np.testing.assert_array_equal(
+            blosc2.PortableKernel.from_json(artifact).evaluate({"x": np.zeros(2)}), ["hello", "hello"]
+        )
+        return
 
     @blosc2.dsl_kernel
     def k(x):
         return x + capture
 
-    with pytest.raises(blosc2.PortableArtifactError, match="Capture 'capture'"):
+    with pytest.raises(blosc2.PortableArtifactError, match="Captures"):
         k.export({"x": "float64"}, "float64")
 
 
@@ -216,7 +213,7 @@ def test_never_calls_capture_hooks_or_functions(native_artifacts):
     def k(x):
         return x + capture
 
-    with pytest.raises(blosc2.PortableArtifactError, match="Capture 'capture'"):
+    with pytest.raises(blosc2.PortableArtifactError, match="Captures"):
         k.export({"x": "float64"}, "float64", capture_dtypes={"capture": "float64"})
 
     def callback(x):
@@ -247,10 +244,7 @@ def test_artifact_backend_and_repeated_calls(native_artifacts, jit):
 
     artifact = affine.export({"x": "float64"}, "float64")
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    if jit is True and not kernel.has_jit:
-        pytest.skip("TCC backend not prepared on this host")
-    if jit is False:
-        assert not kernel.has_jit
+    assert_execution_mode(kernel, jit)
     arrays = [np.arange(600, dtype=np.float64) + i for i in range(4)]
     if blosc2.IS_WASM:
         # Pyodide does not provide Python threads. Keep backend selection and
@@ -265,9 +259,12 @@ def test_artifact_backend_and_repeated_calls(native_artifacts, jit):
 
 def test_capture_range_checks(native_artifacts):
     kernel = blosc2.DSLKernel.from_source("def k(c):\n    return c\n")
-    for value, dtype in [(2**63, "int64"), (2**31, "int32"), (2**53 + 1, "float64"), (1e100, "float32")]:
+    for value, dtype in [(2**63, "int64"), (2**31, "int32"), (1e100, "float32")]:
         with pytest.raises(blosc2.PortableArtifactError):
             kernel.export({}, dtype, constants={"c": value}, capture_dtypes={"c": dtype})
+    # Explicit float conversion rounds to nearest, rather than rejecting precision loss.
+    rounded = kernel.export({}, "float64", constants={"c": 2**53 + 1}, capture_dtypes={"c": "float64"})
+    assert blosc2.PortableKernel.from_json(rounded).evaluate({}, shape=())[()] == float(2**53)
 
 
 def test_nan_payload_and_explicit_float_narrowing(native_artifacts):
@@ -366,10 +363,24 @@ def test_export_runs_in_standalone_c(native_artifacts, tmp_path):
 
 def test_native_diagnostics_and_runtime_errors(native_artifacts):
     artifact = affine.export({"x": "float64"}, "float64")
-    changed = artifact.replace('"schema_version":"0.1"', '"schema_version":"99"')
+    changed = artifact.replace('"schema_version":"1.0"', '"schema_version":"99"')
     with pytest.raises(blosc2.PortableArtifactError) as error:
         blosc2.PortableKernel.from_json(changed, jit=False)
     assert error.value.status == "unsupported_requirement"
+    for field in ('"schema_version":"1.0"', '"version":"1.0"'):
+        with pytest.raises(blosc2.PortableArtifactError, match=r"unsupported.*version"):
+            blosc2.PortableKernel.from_json(artifact.replace(field, field.replace("1.0", "0.1")))
+    retired_manifest = json.loads(artifact)
+    retired_manifest["schema_version"] = retired_manifest["language"]["version"] = "0.1"
+    retired_manifest["requires"] = ["core-scalar"]
+    retired_manifest["output"]["contract"] = "scalar-per-element"
+    retired_manifest.pop("context")
+    # Reject the actual retired envelope before applying 1.0's required fields.
+    with pytest.raises(blosc2.PortableArtifactError, match=r"unsupported.*version"):
+        blosc2.PortableKernel.from_json(json.dumps(retired_manifest))
+    with pytest.raises(blosc2.PortableArtifactError) as retired:
+        affine.export({"x": "float64"}, "float64", version="0.1")
+    assert retired.value.status == "unsupported_version"
     changed = artifact.replace('"schema_version":', '"schema_version":"0.1","schema_version":')
     with pytest.raises(blosc2.PortableArtifactError) as error:
         blosc2.PortableKernel.from_json(changed, jit=False)
@@ -424,9 +435,12 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
             "float32",
             "    rounded = float(x) + 0.1\n    return rounded - float(x)\n",
             [2**24, -(2**24)],
-            [0.0, 0.0],
+            [
+                np.float32((float(2**24) + 0.1) - float(2**24)),
+                np.float32((float(-(2**24)) + 0.1) - float(-(2**24))),
+            ],
         ),
-        ("float64", "float64", "    truth = bool(x)\n    return -truth\n", [0.0, 1.0], [-0.0, -1.0]),
+        ("float64", "float64", "    truth = bool(x)\n    return -truth\n", [0.0, 1.0], [0.0, -1.0]),
     ]
     for input_dtype, output_dtype, body, samples, expected in cases:
         source = f"# me:compiler={compiler}\ndef k(x):\n{body}"
@@ -461,9 +475,6 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
 )
 def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
     compiler, jit, count = "tcc", False, 257
-    if "int(x +" in body:
-        assert_frozen_rejection(f"# me:compiler={compiler}\ndef k(x):\n{body}", {"x": "bool"}, "bool")
-        return
     artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
         {"x": "bool"}, "bool"
     )
@@ -522,13 +533,13 @@ def test_bool_cast_floating_arithmetic(
     elif input_dtype.startswith("float"):
         samples += [-0.0, np.finfo(input_dtype).smallest_subnormal, np.inf, -np.inf, np.nan]
     values = np.resize(np.array(samples, dtype=input_dtype), count)
-    truth = (values != 0).astype(output_dtype)
+    truth = (values != 0).astype("int64")
     expected = {
         "sum": truth + truth,
         "difference": truth - truth,
         "product": truth * truth,
         "negation": -truth,
-    }[operation]
+    }[operation].astype(output_dtype)
     for _ in range(2):
         actual = kernel.evaluate({"x": values})
         np.testing.assert_array_equal(actual, expected)
@@ -559,10 +570,10 @@ def test_float_cast_arithmetic_rounding(native_artifacts, output_dtype):
         dtype="float32",
     )
     values = np.resize(samples, count)
-    computation = values.astype(output_dtype)
-    constant = np.array(0.1, dtype=output_dtype)
+    computation = values.astype("float64")
+    constant = np.float64(0.1)
     with np.errstate(all="ignore"):
-        expected = (computation + constant) - computation
+        expected = ((computation + constant) - computation).astype(output_dtype)
     for _ in range(2):
         actual = kernel.evaluate({"x": values})
         np.testing.assert_array_equal(actual, expected)
@@ -584,11 +595,9 @@ def test_float_arithmetic_constant_rounding(native_artifacts, output_dtype, oper
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0.1, -1, 0, 1, 16777216], dtype="float32"), count)
-    # These expressions contain a floating literal: native compilation types
-    # that constant from the requested floating output context. Each operation
-    # then rounds its operands/result in that context, not C's double literal type.
-    arithmetic_values = values.astype(output_dtype)
-    constant = np.array(0.1, dtype=output_dtype)
+    # Operand-driven float32 computation precedes the output conversion.
+    arithmetic_values = values
+    constant = np.array(0.1, dtype="float32")
     if operation == "add":
         expected = (arithmetic_values + constant) - arithmetic_values
     elif operation == "subtract":
@@ -596,7 +605,7 @@ def test_float_arithmetic_constant_rounding(native_artifacts, output_dtype, oper
     else:
         expected = (arithmetic_values * constant) - arithmetic_values
     for _ in range(2):
-        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected)
+        np.testing.assert_array_equal(kernel.evaluate({"x": values}), expected.astype(output_dtype))
 
 
 @pytest.mark.parametrize(("compiler", "jit"), [("tcc", False), ("tcc", True), ("cc", True)])

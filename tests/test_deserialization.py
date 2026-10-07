@@ -180,8 +180,7 @@ def test_active_top_level_object_requires_full(tmp_path):
     path = tmp_path / "expression.b2nd"
     expression.save(path)
 
-    with pytest.raises(blosc2.UnsafeDeserializationError, match="lazyexpr"):
-        blosc2.open(path)
+    np.testing.assert_array_equal(blosc2.open(path)[:], np.arange(4) + 1)
 
     trusted = blosc2.open(path, deserialize="full")
     np.testing.assert_array_equal(trusted[:], np.arange(4) + 1)

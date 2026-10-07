@@ -483,9 +483,8 @@ def test_save_ludf():
 
     expr = blosc2.lazyudf(udf1p, (array,), np.float64, cparams=cparams)
 
-    expr.save(urlpath=urlpath)
-    del expr
-    expr = blosc2.open(urlpath, mode="r", deserialize="full")
+    with pytest.raises(TypeError, match="PortableKernel"):
+        expr.save(urlpath=urlpath)
     assert isinstance(expr, blosc2.LazyUDF)
     res_lazyexpr = expr.compute()
     np.testing.assert_array_equal(res_lazyexpr[:], npc)
@@ -493,9 +492,8 @@ def test_save_ludf():
 
     if blosc2._HAS_NUMBA:
         expr = blosc2.lazyudf(udf1p_numba, (array,), np.float64)
-        expr.save(urlpath=urlpath)
-        del expr
-        expr = blosc2.open(urlpath, mode="r", deserialize="full")
+        with pytest.raises(TypeError, match="PortableKernel"):
+            expr.save(urlpath=urlpath)
         assert isinstance(expr, blosc2.LazyUDF)
         res_lazyexpr = expr.compute()
         np.testing.assert_array_equal(res_lazyexpr[:], npc)
@@ -511,18 +509,11 @@ def test_lazyudf_vlmeta_roundtrip(tmp_path):
 
     expr.vlmeta["name"] = "increment"
     expr.vlmeta["attrs"] = {"version": 1}
-    expr.save(urlpath=str(expr_path))
-
-    restored = blosc2.open(str(expr_path), mode="r", deserialize="full")
-
-    assert isinstance(restored, blosc2.LazyUDF)
-    assert restored.vlmeta["name"] == "increment"
-    assert restored.vlmeta["attrs"] == {"version": 1}
-
-    with blosc2.open(str(expr_path), mode="r", deserialize="full") as restored_ctx:
-        assert isinstance(restored_ctx, blosc2.LazyUDF)
-        assert restored_ctx.vlmeta["name"] == "increment"
-        assert restored_ctx.vlmeta["attrs"] == {"version": 1}
+    with pytest.raises(TypeError, match="PortableKernel"):
+        expr.save(urlpath=str(expr_path))
+    assert not expr_path.exists()
+    assert expr.vlmeta["name"] == "increment"
+    assert expr.vlmeta["attrs"] == {"version": 1}
 
 
 # Test get_chunk method

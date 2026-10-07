@@ -7007,6 +7007,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if not str(urlpath).endswith(".b2z"):
             raise ValueError("urlpath must have a .b2z extension")
+        self._preflight_portable_persistence()
         if preserve_sources and self.base is not None:
             raise ValueError("preserve_sources requires an unfiltered root table")
 
@@ -7075,6 +7076,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         urlpath = os.fspath(urlpath)
         storage = getattr(self, "_storage", None)
+        self._preflight_portable_persistence()
         can_physical_unpack = (
             not compact
             and self.base is None
@@ -7122,6 +7124,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         :func:`blosc2.ctable_from_cframe`
         """
         # Materialize live rows for views/slices; for base tables use the live
+        self._preflight_portable_persistence()
         # columns directly.  copy() is the canonical materialization path.
         if self.base is not None:
             src = self.copy(compact=True)
@@ -7421,6 +7424,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if preserve_sources and self.base is not None:
             raise ValueError("preserve_sources requires an unfiltered root table")
+        self._preflight_portable_persistence()
         if self.base is not None:
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
@@ -12164,6 +12168,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ``kernel(dep0, dep1)`` call label is returned.
         """
         col_deps = cc["col_deps"]
+        if cc.get("kind") == "portable":
+            return f"portable[{cc['row_domain']}]({', '.join(col_deps)})"
         if cc.get("kind") == "dsl":
             kernel = cc.get("kernel")
             kname = getattr(kernel, "__name__", "dsl_kernel")
@@ -12258,7 +12264,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if self._computed_cols:
             computed = []
             for name, cc in self._computed_cols.items():
-                if cc.get("kind") == "dsl":
+                if cc.get("kind") == "portable":
+                    computed.append(
+                        {
+                            "name": name,
+                            "kind": "portable",
+                            "artifact": cc["artifact"],
+                            "bindings": cc["bindings"],
+                            "row_domain": cc["row_domain"],
+                            "row_shape": list(cc["row_shape"]),
+                            "col_deps": cc["col_deps"],
+                            "dtype": str(cc["dtype"]),
+                        }
+                    )
+                elif cc.get("kind") == "dsl":
                     entry = {
                         "name": name,
                         "kind": "dsl",
@@ -12294,6 +12313,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 }
                 if "transformer" in meta:
                     entry["transformer"] = meta["transformer"]
+                if meta.get("transformer_kind") == "portable":
+                    entry.update(
+                        {key: meta[key] for key in ("artifact", "bindings", "row_domain", "row_shape")}
+                    )
                 if meta.get("dsl_source") is not None:
                     entry["dsl_source"] = meta["dsl_source"]
                 if meta.get("jit_backend") is not None:
@@ -12488,11 +12511,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Called from ``__init__``, ``open``, and ``load`` after all stored
         columns have been opened into ``self._cols``.
         """
+        self._check_legacy_dsl_policy(schema_dict)
         for cc_meta in schema_dict.get("computed_columns", []):
             name = cc_meta["name"]
             col_deps = cc_meta["col_deps"]
             dtype = np.dtype(cc_meta["dtype"])
-            if cc_meta.get("kind") == "dsl":
+            if cc_meta.get("kind") == "portable":
+                self._computed_cols[name] = self._validate_portable_table_metadata(cc_meta)
+            elif cc_meta.get("kind") == "dsl":
                 from blosc2.dsl_kernel import kernel_from_source
 
                 dsl_source = cc_meta["dsl_source"]
@@ -12520,6 +12546,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _load_materialized_cols_from_schema(self, schema_dict: dict) -> None:
         """Reconstruct ``_materialized_cols`` from persisted metadata."""
+        self._check_legacy_dsl_policy(schema_dict)
         for meta in schema_dict.get("materialized_columns", []):
             loaded = {
                 "computed_column": meta.get("computed_column"),
@@ -12531,11 +12558,52 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             }
             if "transformer" in meta:
                 loaded["transformer"] = dict(meta["transformer"])
+            if meta.get("transformer_kind") == "portable":
+                desc = self._validate_portable_table_metadata(meta)
+                if self._cols[meta["name"]].dtype != desc["dtype"]:
+                    raise ValueError("Stored portable output dtype disagrees with native signature")
+                loaded.update(
+                    {key: desc[key] for key in ("artifact", "bindings", "row_domain", "row_shape", "kernel")}
+                )
             if meta.get("dsl_source") is not None:
                 loaded["dsl_source"] = meta["dsl_source"]
             if meta.get("jit_backend") is not None:
                 loaded["jit_backend"] = meta["jit_backend"]
             self._materialized_cols[meta["name"]] = loaded
+
+    def _check_legacy_dsl_policy(self, schema_dict):
+        from blosc2.deserialization import DeserializeMode, normalize_deserialize
+        from blosc2.exceptions import UnsafeDeserializationError
+
+        legacy = any(
+            cc.get("kind") == "dsl" or "dsl_source" in cc for cc in schema_dict.get("computed_columns", [])
+        ) or any(
+            meta.get("dsl_source") is not None or meta.get("transformer_kind") == "dsl"
+            for meta in schema_dict.get("materialized_columns", [])
+        )
+        storage = self._storage
+        policy = getattr(
+            storage,
+            "_deserialize_mode",
+            getattr(getattr(storage, "_store", None), "_deserialize_mode", "safe"),
+        )
+        if legacy and normalize_deserialize(policy) is not DeserializeMode.FULL:
+            raise UnsafeDeserializationError("legacy DSL table columns")
+
+    def _preflight_portable_persistence(self):
+        for meta in [*self._computed_cols.values(), *self._materialized_cols.values()]:
+            if meta.get("kind") == "portable" or meta.get("transformer_kind") == "portable":
+                self._validate_portable_table_metadata(meta)
+        if any(cc.get("kind") == "dsl" for cc in self._computed_cols.values()) or any(
+            meta.get("dsl_source") is not None or meta.get("transformer_kind") == "dsl"
+            for meta in self._materialized_cols.values()
+        ):
+            raise TypeError(
+                "Source-authored vector table columns have no explicit row-domain contract; "
+                "use add_portable_computed_column or add_portable_generated_column with "
+                "the DSLKernel, dtype=..., and row_domain='independent'. "
+                "Legacy source metadata is not automatically migrated."
+            )
 
     def _require_computed_column(self, name: str) -> dict:
         """Return metadata for computed column *name* or raise ``KeyError``."""
@@ -12560,6 +12628,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if meta.get("transformer_kind") == "row_transformer":
                 transformer = RowTransformer.from_metadata(meta["transformer"])
                 row[name] = np.asarray(transformer.evaluate_row(row), dtype=meta["dtype"])
+            elif meta.get("transformer_kind") == "portable":
+                single = {dep: [row[dep]] for dep in meta["col_deps"]}
+                row[name] = self._evaluate_portable_rows(meta, single, count=1)[0]
             elif meta.get("transformer_kind") == "dsl":
                 single = {dep: [row[dep]] for dep in meta["col_deps"]}
                 row[name] = self._evaluate_dsl_materialized_batch(meta, single)[0]
@@ -12607,6 +12678,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if meta.get("transformer_kind") == "row_transformer":
                 transformer = RowTransformer.from_metadata(meta["transformer"])
                 values = transformer.evaluate_batch(raw_columns)
+            elif meta.get("transformer_kind") == "portable":
+                values = self._evaluate_portable_rows(meta, raw_columns)
             elif meta.get("transformer_kind") == "dsl":
                 values = self._evaluate_dsl_materialized_batch(meta, raw_columns)
             else:
@@ -12785,9 +12858,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if target_name in self._computed_cols:
             raise ValueError(f"A computed column named {target_name!r} already exists.")
         target_dtype = np.dtype(dtype) if dtype is not None else np.dtype(cc["dtype"])
+        if cc.get("kind") == "portable" and target_dtype != cc["dtype"]:
+            raise ValueError("Portable materialization cannot override its native result dtype")
 
         self._create_empty_stored_column(target_name, target_dtype, cparams=cparams)
-        if cc.get("kind") == "dsl":
+        if cc.get("kind") == "portable":
+            self._materialized_cols[target_name] = {
+                **cc,
+                "computed_column": name,
+                "transformer_kind": "portable",
+                "stale": False,
+            }
+        elif cc.get("kind") == "dsl":
             self._materialized_cols[target_name] = {
                 "computed_column": name,
                 "expression": None,
@@ -12941,12 +13023,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         identity and *inputs* is ignored).
         """
         if isinstance(expr, blosc2.DSLKernel):
+            if not isinstance(self._storage, InMemoryTableStorage):
+                raise TypeError("Persisting full DSL table columns is unsupported; use portable artifacts")
             kernel, col_deps = self._resolve_dsl_kernel(expr, inputs)
             self._guard_utf8_kernel_deps(col_deps)
             return {"kind": "dsl", "kernel": kernel, "col_deps": col_deps}
         # Resolve a callable once (a lambda may return a LazyExpr or a LazyUDF).
         obj = expr(self._cols) if (callable(expr) and not isinstance(expr, blosc2.LazyExpr)) else expr
         if isinstance(obj, blosc2.LazyUDF):
+            if not isinstance(self._storage, InMemoryTableStorage):
+                raise TypeError("Persisting full DSL table columns is unsupported; use portable artifacts")
             if not isinstance(obj.func, blosc2.DSLKernel):
                 raise TypeError(
                     "Only LazyUDFs backed by a @blosc2.dsl_kernel are supported as CTable columns."
@@ -13016,6 +13102,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         (the all-NDArray miniexpr fast path).  The full column is recomputed on
         each access — acceptable for a virtual, unstored column.
         """
+        if cc.get("kind") == "portable":
+            positions = np.flatnonzero(self._valid_rows[:])
+            raw = {dep: self._cols[dep][positions] for dep in cc["col_deps"]}
+            values = self._evaluate_portable_rows(cc, raw, count=len(positions))
+            output = np.zeros(len(self._valid_rows), dtype=cc["dtype"])
+            output[positions] = values
+            return blosc2.asarray(output)
         if cc.get("kind") == "dsl":
             operands = tuple(self._cols[d] for d in cc["col_deps"])
             return blosc2.lazyudf(
@@ -13082,6 +13175,148 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     queue.append(name)
         return affected
 
+    def _portable_table_descriptor(
+        self, kernel, bindings, row_domain, *, dtype=None, cardinality="elementwise"
+    ):
+        if isinstance(kernel, blosc2.DSLKernel):
+            if row_domain != "independent":
+                raise ValueError("Authored table kernels require explicit row_domain='independent'")
+            if dtype is None:
+                raise ValueError("Authored portable table kernels require an explicit output dtype")
+            bindings = dict(bindings)
+            if any(dep not in self._cols for dep in bindings.values()):
+                raise ValueError("Portable row inputs require stored columns")
+            row_shape = (
+                np.broadcast_shapes(*(tuple(self._cols[dep].shape[1:]) or (1,) for dep in bindings.values()))
+                if bindings
+                else (1,)
+            )
+            kernel = blosc2.PortableKernel.from_json(
+                kernel.export(
+                    {name: self._cols[dep].dtype for name, dep in bindings.items()},
+                    dtype,
+                    version="1.0",
+                    ndim=len(row_shape),
+                    cardinality=cardinality,
+                ),
+                jit=False,
+            )
+        if not isinstance(kernel, blosc2.PortableKernel):
+            raise TypeError("Portable table transformers require a validated PortableKernel")
+        if row_domain != "independent":
+            raise ValueError("Only explicit independent-row portable table groups are implemented")
+        if kernel.schema_version != "1.0":
+            raise ValueError("Independent rows require portable 1.0")
+        bindings = dict(bindings)
+        if set(bindings) != set(kernel.input_dtypes):
+            raise ValueError("Portable table bindings must match the native signature")
+        row_shapes = set()
+        for name, dep in bindings.items():
+            if dep not in self._cols:
+                raise ValueError("Portable row inputs require stored columns")
+            row_shapes.add(tuple(self._cols[dep].shape[1:]) or (1,))
+            if np.dtype(self._cols[dep].dtype) != kernel.input_dtypes[name]:
+                raise ValueError("Portable table column dtype disagrees with the native signature")
+        row_shape = np.broadcast_shapes(*row_shapes) if row_shapes else (1,)
+        if kernel.context_ndim not in (0, len(row_shape)):
+            raise ValueError("Portable context rank disagrees with the fixed row domain")
+        if row_shape != (1,) and kernel.result_cardinality != "block_scalar":
+            raise ValueError("Fixed-shape row transformers currently require scalar native returns")
+        return {
+            "kind": "portable",
+            "kernel": kernel,
+            "artifact": kernel.to_json(),
+            "bindings": bindings,
+            "row_domain": row_domain,
+            "row_shape": row_shape,
+            "col_deps": list(dict.fromkeys(bindings.values())),
+            "dtype": kernel.output_dtype,
+        }
+
+    def _validate_portable_table_metadata(self, meta):
+        kernel = blosc2.PortableKernel.from_json(meta["artifact"])
+        desc = self._portable_table_descriptor(kernel, meta["bindings"], meta["row_domain"])
+        if (
+            desc["dtype"] != np.dtype(meta["dtype"])
+            or desc["col_deps"] != meta["col_deps"]
+            or desc["row_shape"] != tuple(meta.get("row_shape", (1,)))
+        ):
+            raise ValueError("Portable table metadata disagrees with native signature/bindings")
+        return desc
+
+    def _evaluate_portable_rows(self, meta, raw_columns, *, count=None):
+        kernel = meta.get("kernel")
+        if kernel is None:
+            kernel = blosc2.PortableKernel.from_json(meta["artifact"])
+        arrays = {
+            name: np.asarray(raw_columns[dep], dtype=kernel.input_dtypes[name])
+            for name, dep in meta["bindings"].items()
+        }
+        if count is None:
+            count = len(next(iter(raw_columns.values())))
+        if any(len(array) != count for array in arrays.values()):
+            raise ValueError("Portable row operands disagree on batch length")
+        result = np.empty(count, dtype=kernel.output_dtype)
+        row_shape = tuple(meta["row_shape"])
+        context = (
+            {"logical_shape": row_shape, "block_origin": (0,) * len(row_shape)}
+            if kernel.context_ndim
+            else {}
+        )
+        for row in range(count):
+            # Slice, rather than extract a scalar: NumPy scalar strings discard
+            # the declared slot width and would invalidate the native signature.
+            inputs = {
+                name: np.broadcast_to(array[row : row + 1].reshape(array.shape[1:] or (1,)), row_shape)
+                for name, array in arrays.items()
+            }
+            value = kernel.evaluate_block(inputs, block_shape=row_shape, **context)
+            result[row] = value[()] if value.shape == () else value[0]
+        return result
+
+    def add_portable_computed_column(
+        self, name, kernel, *, inputs, row_domain, dtype=None, cardinality="elementwise"
+    ):
+        """Bind a native row transformer with explicit independent grouping.
+
+        Each row's ND domain is (1,), origin (0,); append, refresh, deletion and
+        compaction do not change group membership or synthesize global row indices.
+        Fixed-shape row operands use their complete row domain for scalar native
+        reductions. Multi-row partitions/dynamic global coordinates reject explicitly.
+        A newly authored DSLKernel is normalized/validated before mutation; supply
+        dtype and, for row reductions, cardinality='block_scalar'. A PortableKernel
+        already carries that signature. The older vector-column DSL API does not
+        declare independent row grouping and is not converted implicitly.
+        """
+        if self.base is not None or self._read_only:
+            raise ValueError("Portable columns require a writable root table")
+        _validate_column_name(name)
+        if name in self._cols or name in self._computed_cols:
+            raise ValueError("Column already exists")
+        desc = self._portable_table_descriptor(
+            kernel, inputs, row_domain, dtype=dtype, cardinality=cardinality
+        )
+        self._computed_cols[name] = desc
+        self.col_names.append(name)
+        self._col_widths[name] = max(len(name), 15)
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def add_portable_generated_column(
+        self, name, kernel, *, inputs, row_domain, dtype=None, cardinality="elementwise"
+    ):
+        """Store an independent-row native transformer, retaining it for append/refresh."""
+        desc = self._portable_table_descriptor(
+            kernel, inputs, row_domain, dtype=dtype, cardinality=cardinality
+        )
+        raw = {dep: self[dep][:] for dep in desc["col_deps"]}
+        values = self._evaluate_portable_rows(desc, raw, count=len(self))
+        spec = self._coerce_generated_spec(None, values)
+        self.add_column(name, spec, values=values)
+        self._materialized_cols[name] = {**desc, "transformer_kind": "portable", "stale": False}
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
     def _mark_generated_columns_stale(self, source: str) -> None:
         affected = self._generated_dependency_closure(source)
         changed = False
@@ -13104,6 +13339,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if meta.get("transformer_kind") == "row_transformer":
             transformer = RowTransformer.from_metadata(meta["transformer"])
             values = np.asarray(transformer.evaluate_existing(self), dtype=meta["dtype"])
+        elif meta.get("transformer_kind") == "portable":
+            raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
+            values = self._evaluate_portable_rows(meta, raw_columns, count=len(self))
         elif meta.get("transformer_kind") == "dsl":
             raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
             values = self._evaluate_dsl_materialized_batch(meta, raw_columns)
@@ -14893,6 +15131,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             the source.
         """
         if urlpath is not None:
+            self._preflight_portable_persistence()
             urlpath = os.fspath(urlpath)
             if chunks is not None or blocks is not None or cparams is not None:
                 # When storage layout changes we must go through _save_to_storage
@@ -15136,18 +15375,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Rebuild computed columns with the new NDArray objects as operands
         obj._computed_cols = {}
         for cc_name, cc in self._computed_cols.items():
-            if cc.get("kind") == "dsl":
-                # DSL entries hold the live kernel; the LazyUDF is rebuilt on
-                # demand from obj._cols, so no operand rebinding is needed here.
-                dsl_entry: dict[str, Any] = {
-                    "kind": "dsl",
-                    "dsl_source": cc["dsl_source"],
-                    "kernel": cc["kernel"],
-                    "col_deps": cc["col_deps"],
-                    "dtype": cc["dtype"],
-                    **({"jit_backend": cc["jit_backend"]} if "jit_backend" in cc else {}),
-                }
-                obj._computed_cols[cc_name] = dsl_entry
+            if cc.get("kind") in {"portable", "dsl"}:
+                # Native/source descriptors resolve columns on demand. Neither
+                # retains the old table's array operands in a cached expression.
+                obj._computed_cols[cc_name] = dict(cc)
             else:
                 operands = {f"o{i}": new_cols[dep] for i, dep in enumerate(cc["col_deps"])}
                 new_lazy = blosc2.lazyexpr(cc["expression"], operands)

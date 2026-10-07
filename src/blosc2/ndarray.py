@@ -5003,6 +5003,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> print("Data type of the NDArray:", blosc_array.dtype)
         Data type of the NDArray: int32
         """
+        from blosc2.b2objects import preflight_persistence
+
+        preflight_persistence(self)
         return super().to_cframe()
 
     def copy(self, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray:
@@ -5097,6 +5100,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> # Save the array to a file
         >>> a.save("array.b2frame")
         """
+        from blosc2.b2objects import preflight_persistence
+
+        preflight_persistence(self)
         urlpath = normalize_urlpath(urlpath)
         if is_fsspec_url(urlpath):
             if not contiguous:

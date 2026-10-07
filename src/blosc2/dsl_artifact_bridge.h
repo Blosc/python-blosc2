@@ -9,10 +9,18 @@
 
 #ifdef B2_HAVE_PORTABLE_ARTIFACT
 #include "miniexpr_artifact.h"
+#endif
+#if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
 typedef me_artifact_input b2_artifact_input;
 typedef me_artifact_error b2_artifact_error;
-static int b2_artifact_available(void) { return 1; }
+static int b2_artifact_available(void) { return !strcmp(ME_ARTIFACT_SCHEMA_VERSION, "1.0"); }
 static int b2_artifact_load(const char *json, size_t size, int jit, void **out, b2_artifact_error *error) {
+    if (!b2_artifact_available()) {
+        *out = NULL;
+        memset(error, 0, sizeof(*error));
+        snprintf(error->message, sizeof(error->message), "Build with miniexpr draft 1.0 artifact support");
+        return -100;
+    }
     me_artifact *handle = NULL;
     int rc = me_artifact_load(json, size, (me_jit_mode)jit, &handle, error);
     *out = handle;
@@ -64,5 +72,52 @@ static const char *b2_artifact_name(const void *handle, int index) { (void)handl
 static me_dtype b2_artifact_dtype(const void *handle, int index) { (void)handle; (void)index; return ME_AUTO; }
 static me_dtype b2_artifact_output(const void *handle) { (void)handle; return ME_AUTO; }
 static int b2_artifact_jit(const void *handle) { (void)handle; return 0; }
+#endif
+#if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
+typedef me_artifact_buffer b2_artifact_buffer;
+typedef me_artifact_eval_descriptor b2_artifact_descriptor;
+static int b2_artifact_descriptor_available(void) { return b2_artifact_available(); }
+static int b2_artifact_cardinality(const void *handle) { return me_artifact_result_cardinality(handle); }
+static size_t b2_artifact_width(const void *handle, int index) {
+    return index < 0 ? me_artifact_output_itemsize(handle) : me_artifact_input_itemsize(handle, index);
+}
+static int b2_artifact_rank(const void *handle) { return me_artifact_context_ndim(handle); }
+static const char *b2_artifact_version(const void *handle) { return me_artifact_schema_version(handle); }
+static int b2_artifact_eval_ex(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
+                             void *output, const b2_artifact_descriptor *descriptor, b2_artifact_error *error) {
+    return me_artifact_eval_ex(handle, inputs, ninputs, output, descriptor, error);
+}
+#else
+typedef struct {
+    const char *name;
+    me_dtype dtype;
+    size_t itemsize;
+    const void *data;
+    size_t capacity;
+} b2_artifact_buffer;
+typedef struct {
+    size_t struct_size;
+    unsigned int version;
+    size_t nitems;
+    size_t output_capacity;
+    const uint8_t *valid_mask;
+    size_t valid_mask_capacity;
+    int ndim;
+    const int64_t *logical_shape;
+    const int64_t *block_origin;
+    const int64_t *block_extent;
+} b2_artifact_descriptor;
+static int b2_artifact_descriptor_available(void) { return 0; }
+static int b2_artifact_cardinality(const void *handle) { (void)handle; return 0; }
+static size_t b2_artifact_width(const void *handle, int index) { (void)handle; (void)index; return 0; }
+static int b2_artifact_rank(const void *handle) { (void)handle; return 0; }
+static const char *b2_artifact_version(const void *handle) { (void)handle; return "unsupported"; }
+static int b2_artifact_eval_ex(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
+                             void *output, const b2_artifact_descriptor *descriptor, b2_artifact_error *error) {
+    (void)handle; (void)inputs; (void)ninputs; (void)output; (void)descriptor;
+    memset(error, 0, sizeof(*error));
+    snprintf(error->message, sizeof(error->message), "Build with draft miniexpr 1.0 descriptor support");
+    return -2;
+}
 #endif
 #endif

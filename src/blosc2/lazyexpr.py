@@ -14,7 +14,6 @@ import concurrent.futures
 import contextlib
 import copy
 import enum
-import inspect
 import linecache
 import math
 import operator
@@ -22,7 +21,6 @@ import os
 import pathlib
 import re
 import sys
-import textwrap
 import threading
 from abc import ABC, abstractmethod, abstractproperty
 from collections.abc import MutableMapping
@@ -5107,6 +5105,10 @@ class LazyUDF(LazyArray):
         return self._dtype
 
     @property
+    def nbytes(self):
+        return math.prod(self.shape) * np.dtype(self.dtype).itemsize
+
+    @property
     def ndim(self) -> int:
         return len(self.shape)
 
@@ -5296,65 +5298,20 @@ class LazyUDF(LazyArray):
         -----
         * All operands must be :ref:`NDArray` or :ref:`C2Array` objects stored on
           disk or a remote server (i.e. they must have a ``urlpath``).
-        * When the :ref:`LazyUDF` wraps a :func:`blosc2.dsl_kernel`-decorated
-          function, the DSL source is preserved verbatim in the saved metadata.
-          On reload via :func:`blosc2.open`, the function is restored as a full
-          :class:`~blosc2.dsl_kernel.DSLKernel` so the miniexpr JIT fast path
-          remains available without any extra work from the caller.
+        * Newly authored DSLKernel functions normalize and validate as portable
+          1.0 before saving. Python UDFs and noncompliant kernels reject before
+          writing. Block-scalar kernels require the explicit portable API.
+          Historical source-backed files require ``deserialize='full'`` on open
+          and are not automatically migrated by saving.
         """
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        kwargs["urlpath"] = urlpath
-        kwargs["mode"] = "w"  # always overwrite the file in urlpath
-        try:
-            self._to_b2object_carrier(**kwargs)
-        except (TypeError, ValueError):
-            meta = kwargs.get("meta", {})
-            meta["LazyArray"] = LazyArrayEnum.UDF.value
-            kwargs["meta"] = meta
+        from blosc2.portable_lazy import portable_from_lazyudf
 
-            # Create an empty array; useful for providing the shape and dtype of the outcome
-            array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-            # Save the expression and operands in the metadata
-            operands = {}
-            operands_ = self.inputs_dict
-            for i, (_key, value) in enumerate(operands_.items()):
-                pos_key = f"o{i}"  # always use positional keys for consistent loading
-                if isinstance(value, blosc2.C2Array):
-                    operands[pos_key] = {
-                        "path": str(value.path),
-                        "urlbase": value.urlbase,
-                    }
-                    continue
-                if isinstance(value, blosc2.Proxy):
-                    # Take the required info from the Proxy._cache container
-                    value = value._cache
-                if not hasattr(value, "schunk"):
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                    ) from None
-                if value.schunk.urlpath is None:
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be stored on disk/network"
-                    ) from None
-                operands[pos_key] = value.schunk.urlpath
-            udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
-            udf_name = getattr(udf_func, "__name__", self.func.__name__)
-            try:
-                udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
-            except Exception:
-                udf_source = None
-            meta = {
-                "UDF": udf_source,
-                "operands": operands,
-                "name": udf_name,
-            }
-            if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
-                meta["dsl_source"] = self.func.dsl_source
-            array.schunk.vlmeta["_LazyArray"] = meta
-            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+        portable = portable_from_lazyudf(self)
+        portable.save(urlpath, **kwargs)
+        self.array, self.schunk = portable.array, portable.schunk
 
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
@@ -5381,8 +5338,12 @@ class LazyUDF(LazyArray):
                 ref_urlpath = operand_urlpath.as_posix()
             operand_payload["urlpath"] = ref_urlpath
 
+        from blosc2.msgpack_utils import msgpack_packb
+
+        msgpack_packb(payload)
+        msgpack_packb(self._get_user_vlmeta())
         array = make_b2object_carrier(
-            "lazyudf",
+            "portable",
             self.shape,
             self.dtype,
             chunks=self.chunks,
@@ -5752,6 +5713,12 @@ def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
 
 
 def open_lazyarray(array):
+    from blosc2.deserialization import DeserializeMode, get_deserialize
+    from blosc2.exceptions import UnsafeDeserializationError
+
+    policy = get_deserialize(array)
+    if policy is not DeserializeMode.FULL:
+        raise UnsafeDeserializationError("legacy LazyArray")
     value = array.schunk.meta["LazyArray"]
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     if value == LazyArrayEnum.Expr.value:
@@ -5769,7 +5736,7 @@ def open_lazyarray(array):
         if isinstance(v, str):
             v = parent_path / v
             try:
-                op = blosc2.open(v, mode="r")
+                op = blosc2.open(v, mode="r", deserialize=policy)
             except FileNotFoundError:
                 missing_ops[key] = v
             else:
@@ -5794,6 +5761,7 @@ def open_lazyarray(array):
         new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
     elif value == LazyArrayEnum.UDF.value:
         new_expr = _reconstruct_lazyudf(expr, lazyarray, operands_dict, array)
+        new_expr._legacy_source_recipe = True
 
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array

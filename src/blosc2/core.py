@@ -2392,7 +2392,7 @@ def from_cframe(
     if "b2o" in schunk.meta:
         marker = schunk.meta["b2o"]
         kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"
-        if deserialize is DeserializeMode.SAFE:
+        if deserialize is DeserializeMode.SAFE and kind not in {"portable", "lazyexpr"}:
             raise UnsafeDeserializationError(str(kind))
         return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy, deserialize=deserialize))
     if "b2nd" in schunk.meta:

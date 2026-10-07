@@ -934,7 +934,18 @@ class DSLKernel:
             raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
         return [a.arg for a in (args.posonlyargs + args.args)]
 
-    def export(self, input_dtypes, output_dtype, *, capture_dtypes=None, constants=None, metadata=None):
+    def export(
+        self,
+        input_dtypes,
+        output_dtype,
+        *,
+        capture_dtypes=None,
+        constants=None,
+        metadata=None,
+        version="1.0",
+        cardinality="elementwise",
+        ndim=0,
+    ):
         """Export a typed portable JSON artifact without calling the Python function.
 
         ``input_dtypes`` maps runtime parameter names to explicit logical dtypes.
@@ -943,8 +954,13 @@ class DSLKernel:
         collision-free parameters. ``capture_dtypes`` overrides scalar type
         inference (Python bool/int/float infer bool/int64/float64 respectively;
         supported NumPy scalars retain their dtype). Arrays, objects, and external
-        callbacks cannot be captures. Profile 0.1 requires homogeneous parameter
-        dtypes. Import via :meth:`blosc2.PortableKernel.from_json`.
+        callbacks cannot be captures. Import via :meth:`blosc2.PortableKernel.from_json`.
+
+        The default ``version="1.0"`` is an experimental implementation draft. It
+        supports mixed numeric types and fixed byte/Unicode string snapshots;
+        ``cardinality`` is ``elementwise`` or ``block_scalar``, and ``ndim``
+        declares the required logical coordinate rank. The native loader
+        validates normalized source, widths and cardinality before export succeeds.
         """
         from .portable_kernel import export_portable_kernel
 
@@ -955,6 +971,9 @@ class DSLKernel:
             capture_dtypes=capture_dtypes,
             constants=constants,
             metadata=metadata,
+            version=version,
+            cardinality=cardinality,
+            ndim=ndim,
         )
 
     def __call__(self, inputs_tuple, output, offset=None):
@@ -1049,8 +1068,10 @@ def validate_dsl(func):
     }
 
 
-def validate_portable_dsl(source, input_dtypes, output_dtype, *, language_version="0.1"):
-    """Check raw native source and a typed signature against conservative portable profile 0.1.
+def validate_portable_dsl(
+    source, input_dtypes, output_dtype, *, language_version="1.0", ndim=0, cardinality=None
+):
+    """Check raw native source and an exact typed signature against a portable profile.
 
     Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
     ``error``. Validation neither executes a kernel nor invokes a JIT compiler.
@@ -1061,6 +1082,13 @@ def validate_portable_dsl(source, input_dtypes, output_dtype, *, language_versio
     ``input_dtypes`` maps parameter names to explicit dtype descriptions. Parameter
     binding is by name; mapping order may differ from source order. Dtypes describe
     logical values, not the storage layout of any actual input arrays.
+    The default ``language_version="1.0"`` is an experimental implementation
+    draft admitting mixed numeric and fixed-width ``S``/``U``
+    signatures. ``ndim`` declares the logical rank for reserved ND symbols;
+    missing or insufficient context rejects explicitly. ``cardinality`` may be
+    ``elementwise`` or ``block_scalar`` to assert the native return contract;
+    None validates the inferred contract. Neither arrays nor an artifact JSON
+    loader are needed. Exact string output width is checked natively.
     """
     from collections.abc import Mapping
 
@@ -1072,8 +1100,21 @@ def validate_portable_dsl(source, input_dtypes, output_dtype, *, language_versio
         raise TypeError("input_dtypes must map parameter names to explicit dtypes")
     if "\x00" in source or "\x00" in language_version:
         raise ValueError("Portable DSL source and version must not contain NUL characters")
+    if language_version != "1.0":
+        return {
+            "valid": False,
+            "status": "unsupported_version",
+            "line": 0,
+            "column": 0,
+            "error": "Unsupported portable DSL version; expected draft 1.0",
+        }
     if any(not isinstance(name, str) or "\x00" in name for name in input_dtypes):
         raise ValueError("Portable DSL input names must be strings without NUL characters")
+    if type(ndim) is not int or not 0 <= ndim <= 2**31 - 1:
+        raise ValueError("ndim must be a nonnegative Python integer representable by the native API")
+    contracts = {None: 0, "elementwise": 1, "block_scalar": 2}
+    if cardinality not in contracts:
+        raise ValueError("cardinality must be None, 'elementwise' or 'block_scalar'")
     validator = getattr(blosc2_ext, "validate_portable_dsl_source", None)
     if validator is None:
         return {
@@ -1083,7 +1124,7 @@ def validate_portable_dsl(source, input_dtypes, output_dtype, *, language_versio
             "column": 0,
             "error": "Rebuild miniexpr and the extension with portable DSL validation support",
         }
-    return validator(source, input_dtypes, output_dtype, language_version)
+    return validator(source, input_dtypes, output_dtype, language_version, ndim, contracts[cardinality])
 
 
 def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blocks=None):

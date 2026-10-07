@@ -2,7 +2,7 @@
 # Copyright (c) 2026, Blosc Development Team <blosc@blosc.org>
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
-"""Conservative portable DSL 0.1 authoring and native-only execution."""
+"""Portable DSL authoring and native-only execution (draft descriptors when installed)."""
 
 from __future__ import annotations
 
@@ -17,10 +17,6 @@ from types import FunctionType, MappingProxyType
 
 import numpy as np
 
-_DTYPES = {"bool", "int32", "int64", "float32", "float64"}
-_SCALAR_TYPES = (bool, int, float, np.bool_, np.int32, np.int64, np.float32, np.float64)
-_CALLS = {"sin", "cos", "int", "float", "bool", "range"}
-
 
 class PortableArtifactError(ValueError):
     """Artifact failure with a stable category and optional native/source diagnostics."""
@@ -34,13 +30,6 @@ class PortableArtifactError(ValueError):
         super().__init__(f"{status}{location}: {message}")
 
 
-def _logical_dtype(value):
-    dtype = np.dtype(value)
-    if dtype.name not in _DTYPES or dtype.subdtype or dtype.fields:
-        raise PortableArtifactError(f"Unsupported portable dtype {dtype}", status="unsupported_requirement")
-    return dtype.newbyteorder("=")
-
-
 def _mapping(value, label):
     if not isinstance(value, Mapping):
         raise TypeError(f"{label} must be a mapping")
@@ -49,55 +38,100 @@ def _mapping(value, label):
     return dict(value)
 
 
-def _encode_scalar(name, value, dtype=None):
-    # Exact types only: no ndarray.item(), user __float__/__int__, or other hooks.
-    if type(value) not in _SCALAR_TYPES:
-        raise PortableArtifactError(
-            f"Capture {name!r} must be a supported Python/NumPy scalar, not {type(value).__name__}",
-            status="unsupported_requirement",
-        )
+def portable_dtype_descriptor(value):
+    dtype = np.dtype(value).newbyteorder("=")
+    if (
+        dtype.fields
+        or dtype.subdtype
+        or dtype.kind not in "biufSU"
+        or (dtype.kind == "f" and dtype.itemsize not in (4, 8))
+    ):
+        raise PortableArtifactError(f"Unsupported portable dtype {dtype}", status="unsupported_requirement")
+    if dtype.kind in "SU":
+        if not dtype.itemsize:
+            raise PortableArtifactError("Fixed strings require a positive width", status="binding_error")
+        return {"dtype": "bytes" if dtype.kind == "S" else "unicode32", "itemsize": dtype.itemsize}
+    return {"dtype": dtype.name}
+
+
+def portable_scalar_descriptor(name, value, dtype=None):
+    numeric = (
+        bool,
+        int,
+        float,
+        np.bool_,
+        np.int8,
+        np.int16,
+        np.int32,
+        np.int64,
+        np.uint8,
+        np.uint16,
+        np.uint32,
+        np.uint64,
+        np.float32,
+        np.float64,
+    )
+    if type(value) not in numeric + (str, bytes, np.str_, np.bytes_):
+        raise PortableArtifactError("Captures must be plain numeric/string scalars", status="binding_error")
     if dtype is None:
-        if type(value) is bool:
-            dtype = "bool"
-        elif type(value) is int:
-            dtype = "int64"
-        elif type(value) is float:
-            dtype = "float64"
-        else:
-            dtype = value.dtype
-    dtype = _logical_dtype(dtype)
-    if dtype.kind in "bi":
-        if type(value) in (float, np.float32, np.float64):
-            raise PortableArtifactError(
-                f"Capture {name!r} cannot implicitly convert a float to {dtype}", status="binding_error"
-            )
+        dtype = {bool: "bool", int: "int64", float: "float64"}.get(type(value), np.asarray(value).dtype)
+    descriptor = portable_dtype_descriptor(dtype)
+    dtype = np.dtype(dtype).newbyteorder("=")
+    if dtype.kind in "SU":
+        if (dtype.kind == "S" and type(value) not in (bytes, np.bytes_)) or (
+            dtype.kind == "U" and type(value) not in (str, np.str_)
+        ):
+            raise PortableArtifactError("String capture family mismatch", status="binding_error")
+        if len(value) > dtype.itemsize // (4 if dtype.kind == "U" else 1):
+            raise PortableArtifactError("String capture exceeds its fixed width", status="binding_error")
+        if dtype.kind == "U" and any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+            raise PortableArtifactError("Invalid Unicode scalar", status="binding_error")
+        encoded = np.asarray(value, dtype=dtype).astype(dtype.newbyteorder(">"), copy=False).tobytes().hex()
+        return {
+            "name": name,
+            **descriptor,
+            "encoding": "bytes-hex" if dtype.kind == "S" else "unicode32be-hex",
+            "value": encoded,
+        }
+    if dtype.kind in "biu":
+        if type(value) in (float, np.float32, np.float64, str, bytes, np.str_, np.bytes_):
+            raise PortableArtifactError("Integral captures require integral values", status="binding_error")
         integer = int(value)
-        if dtype.kind == "b":
-            if integer not in (0, 1):
-                raise PortableArtifactError(f"Capture {name!r} is not Boolean", status="binding_error")
-            encoding, encoded = "boolean", bool(integer)
-        else:
-            limits = np.iinfo(dtype)
-            if not limits.min <= integer <= limits.max:
-                raise PortableArtifactError(
-                    f"Capture {name!r} is out of range for {dtype}", status="binding_error"
-                )
-            encoding, encoded = "decimal", str(integer)
-    else:
-        maximum = float(np.finfo(dtype).max)
-        if type(value) in (bool, int, np.bool_, np.int32, np.int64):
-            integer = int(value)
-            # Reject precision loss, rather than standardizing Python literal rounding.
-            if abs(integer) > maximum or int(np.array(integer, dtype=dtype)) != integer:
-                raise PortableArtifactError(
-                    f"Capture {name!r} is not exactly representable as {dtype}", status="binding_error"
-                )
-        elif math.isfinite(value) and abs(float(value)) > maximum:
-            raise PortableArtifactError(f"Capture {name!r} overflows {dtype}", status="binding_error")
-        scalar = np.array(value, dtype=dtype)
-        encoding = "ieee754-hex"
-        encoded = scalar.astype(dtype.newbyteorder(">"), copy=False).tobytes().hex()
-    return {"name": name, "dtype": dtype.name, "encoding": encoding, "value": encoded}
+        lower, upper = (0, 1) if dtype.kind == "b" else (np.iinfo(dtype).min, np.iinfo(dtype).max)
+        if not lower <= integer <= upper:
+            raise PortableArtifactError("Capture is outside its dtype", status="binding_error")
+        return {
+            "name": name,
+            **descriptor,
+            "encoding": "boolean" if dtype.kind == "b" else "decimal",
+            "value": bool(integer) if dtype.kind == "b" else str(integer),
+        }
+    if type(value) in (str, bytes, np.str_, np.bytes_):
+        raise PortableArtifactError("Numeric capture family mismatch", status="binding_error")
+    integral = type(value) in (
+        bool,
+        int,
+        np.bool_,
+        np.int8,
+        np.int16,
+        np.int32,
+        np.int64,
+        np.uint8,
+        np.uint16,
+        np.uint32,
+        np.uint64,
+    )
+    # NumPy signed minima cannot be negated in their own fixed-width dtype.
+    magnitude = abs(int(value)) if integral else abs(float(value))
+    if (integral or math.isfinite(value)) and magnitude > float(np.finfo(dtype).max):
+        raise PortableArtifactError("Floating capture overflows its dtype", status="binding_error")
+    scalar = np.asarray(value, dtype=dtype)
+    return {
+        "name": name,
+        **descriptor,
+        "encoding": "ieee754-hex",
+        "value": scalar.astype(dtype.newbyteorder(">"), copy=False).tobytes().hex(),
+    }
 
 
 def _parameterize_source(source, replacements, parameters):
@@ -145,17 +179,6 @@ def _capture_scope(func):
     return scope
 
 
-def _check_capture_calls(calls, local, scope):
-    for call in sorted(calls):
-        if call not in _CALLS or call in local:
-            raise PortableArtifactError(f"Unsupported call {call!r}", status="unsupported_requirement")
-        allowed = (getattr(builtins, call, None), getattr(np, call, None), getattr(math, call, None))
-        if call in scope and not any(value is not None and scope[call] is value for value in allowed):
-            raise PortableArtifactError(
-                f"External callback {call!r} cannot be exported", status="unsupported_requirement"
-            )
-
-
 def _export_captures(func, source, names, capture_dtypes):
     scope = _capture_scope(func)
     tree = ast.parse(source)
@@ -167,12 +190,22 @@ def _export_captures(func, source, names, capture_dtypes):
     calls = {
         node.func.id for node in nodes if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    _check_capture_calls(calls, local, scope)
+    # Native compilation owns builtin membership. Never export external callbacks.
+    if any(isinstance(n, (ast.Attribute, ast.Subscript, ast.Lambda)) for n in nodes):
+        raise PortableArtifactError("Unsupported dynamic authoring syntax", status="unsupported_requirement")
+    for call in calls:
+        allowed = (getattr(builtins, call, None), getattr(np, call, None), getattr(math, call, None))
+        if call in local or (call in scope and not any(v is not None and scope[call] is v for v in allowed)):
+            raise PortableArtifactError(
+                f"External callback {call!r} cannot be exported", status="unsupported_requirement"
+            )
     loads = {node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
     occupied = local | loads | {function.name}
     replacements = {}
     encoded = []
     for name in sorted(loads - local - calls):
+        if name in {"_flat_idx", "_ndim"} or (name.startswith(("_i", "_n")) and name[2:].isdigit()):
+            continue
         if name not in scope:
             node = next(node for node in nodes if isinstance(node, ast.Name) and node.id == name)
             raise PortableArtifactError(
@@ -187,7 +220,7 @@ def _export_captures(func, source, names, capture_dtypes):
             index += 1
             candidate = f"_capture_{index}"
         occupied.add(candidate)
-        scalar = _encode_scalar(name, scope[name], capture_dtypes.get(name))
+        scalar = portable_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
         scalar["name"] = candidate
         encoded.append(scalar)
         replacements[name] = candidate
@@ -202,64 +235,66 @@ def _export_captures(func, source, names, capture_dtypes):
 
 
 def export_portable_kernel(
-    kernel, input_dtypes, output_dtype, *, capture_dtypes=None, constants=None, metadata=None
+    kernel,
+    input_dtypes,
+    output_dtype,
+    *,
+    capture_dtypes=None,
+    constants=None,
+    metadata=None,
+    version="1.0",
+    cardinality="elementwise",
+    ndim=0,
 ):
     """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
-    from .dsl_kernel import DSLKernel, validate_portable_dsl
-
+    if version != "1.0":
+        raise PortableArtifactError("Unsupported artifact version", status="unsupported_version")
     inputs = _mapping(input_dtypes, "input_dtypes")
     constants = _mapping({} if constants is None else constants, "constants")
-    capture_dtypes = _mapping({} if capture_dtypes is None else capture_dtypes, "capture_dtypes")
+    captures = _mapping({} if capture_dtypes is None else capture_dtypes, "capture_dtypes")
     source = kernel.dsl_source
     if not isinstance(source, str):
-        raise PortableArtifactError("Kernel has no exportable DSL source", status="invalid_source")
-    # This is only a header check; native validation remains authoritative for the body.
-    header = DSLKernel.from_source(source)
-    names = header.input_names
+        raise PortableArtifactError("Kernel has no normalized source", status="invalid_source")
+    names = kernel.input_names
     if set(inputs) & set(constants) or set(inputs) | set(constants) != set(names):
         raise PortableArtifactError(
             "Every parameter needs exactly one input or constant binding", status="binding_error"
         )
-    input_types = {name: _logical_dtype(inputs[name]).name for name in names if name in inputs}
-    result_type = _logical_dtype(output_dtype).name
-    encoded = [_encode_scalar(name, value, capture_dtypes.get(name)) for name, value in constants.items()]
-    used_capture_types = set(constants) & set(capture_dtypes)
-
+    encoded = [
+        portable_scalar_descriptor(name, value, captures.get(name)) for name, value in constants.items()
+    ]
+    used = set(constants) & set(captures)
     if kernel.func is not None:
-        source, captures, used_types = _export_captures(kernel.func, source, names, capture_dtypes)
-        encoded.extend(captures)
-        used_capture_types.update(used_types)
-    unused = set(capture_dtypes) - used_capture_types
-    if unused:
-        raise PortableArtifactError(f"Unused capture dtype names: {sorted(unused)}", status="binding_error")
-    signature = input_types | {item["name"]: item["dtype"] for item in encoded}
-    info = validate_portable_dsl(source, signature, result_type)
-    if not info["valid"]:
-        if info["status"] == "runtime_unsupported":
-            raise NotImplementedError(info["error"])
-        raise PortableArtifactError(
-            info["error"], status=info["status"], line=info["line"], column=info["column"]
-        )
+        source, captured, extra = _export_captures(kernel.func, source, names, captures)
+        encoded.extend(captured)
+        used |= extra
+    if set(captures) - used:
+        raise PortableArtifactError("Unused capture dtype names", status="binding_error")
+    if cardinality not in {"elementwise", "block_scalar"} or type(ndim) is not int or ndim < 0:
+        raise PortableArtifactError("Invalid return/context contract", status="binding_error")
     if metadata is not None and not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping")
+    # This finite superset grants no unsupported operations: native typed import
+    # validates the entire normalized source before this export can succeed.
     manifest = {
-        "schema_version": "0.1",
-        "language": {"name": "miniexpr", "version": "0.1"},
-        "requires": ["core-scalar"],
+        "schema_version": "1.0",
+        "language": {"name": "miniexpr", "version": "1.0"},
+        "requires": ["numeric", "control-flow", "block-reductions", "fixed-strings", "nd-context"],
         "source": source,
-        "entry_point": header.__name__,
-        "inputs": [{"name": name, "dtype": dtype} for name, dtype in input_types.items()],
+        "entry_point": kernel.__name__,
+        "inputs": [
+            {"name": name, **portable_dtype_descriptor(inputs[name])} for name in names if name in inputs
+        ],
         "constants": sorted(encoded, key=lambda item: item["name"]),
-        "output": {"dtype": result_type, "contract": "scalar-per-element"},
+        "output": {**portable_dtype_descriptor(output_dtype), "contract": cardinality},
         "semantics": {"fp": "strict"},
+        "context": {"ndim": ndim},
+        "metadata": dict(metadata or {}),
     }
-    if metadata is not None:
-        manifest["metadata"] = dict(metadata)
     artifact = (
         json.dumps(manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         + "\n"
     )
-    # Use the same loader as import/C, including bounds and metadata validation.
     PortableKernel.from_json(artifact, jit=False)
     return artifact
 
@@ -268,8 +303,9 @@ class PortableKernel:
     """An owned, typed native artifact; no originating function or Python fallback.
 
     Use ``from_json`` to import and ``evaluate`` to return NumPy values. Inputs
-    are same-shaped logical arrays, bound by name. The conservative 0.1 profile
-    is enforced by the native adapter (enabled by default in package builds).
+    are same-shaped logical arrays, bound by name. The installed native adapter
+    enforces its supported profiles. Draft 1.0 descriptor blocks are available
+    only when that runtime exposes the extended ABI; no sibling build is inferred.
     """
 
     @classmethod
@@ -294,6 +330,8 @@ class PortableKernel:
         instance._handle = handle
         instance._artifact = data
         instance._info = handle.info()
+        if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
+            instance._info.update(handle.descriptor_info())
         return instance
 
     @property
@@ -316,6 +354,18 @@ class PortableKernel:
     def has_jit(self):
         return self._info["jit"]
 
+    @property
+    def schema_version(self):
+        return self._info.get("schema_version", "1.0")
+
+    @property
+    def result_cardinality(self):
+        return self._info.get("cardinality", "elementwise")
+
+    @property
+    def context_ndim(self):
+        return self._info.get("ndim", 0)
+
     def to_json(self):
         """Return the original validated JSON text, without dropping metadata."""
         return self._artifact.decode("utf-8")
@@ -326,6 +376,8 @@ class PortableKernel:
         No implicit dtype conversion or array broadcasting is allowed. Host endian,
         alignment, and strides are normalized into temporary contiguous buffers.
         Constant-only kernels require an explicit output ``shape`` (possibly empty).
+        Draft block-scalar kernels return a scalar NumPy array. ND kernels require
+        ``evaluate_block`` with explicit logical context.
         """
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
@@ -354,4 +406,60 @@ class PortableKernel:
             arrays[name] = np.require(array, dtype=dtype, requirements=["C", "A"])
         if shape is None:
             raise ValueError("Constant-only kernels require an explicit shape")
-        return self._handle.evaluate(arrays, shape)
+        if self.context_ndim:
+            raise ValueError(
+                "Use evaluate_block with explicit logical_shape and block_origin for ND artifacts"
+            )
+        return self._handle.evaluate_block(arrays, shape)
+
+    def evaluate_block(
+        self, inputs, *, block_shape=None, logical_shape=None, block_origin=None, valid_mask=None
+    ):
+        """Evaluate one explicit draft 1.0 block, returning its declared cardinality.
+
+        This is standalone block execution, not lazy block-grid scheduling. Native
+        validation owns coordinates, participating masks and result allocation.
+        """
+        if self.schema_version != "1.0":
+            raise NotImplementedError("Explicit descriptor blocks require an installed draft 1.0 runtime")
+        inputs = _mapping(inputs, "inputs")
+        if set(inputs) != set(self.input_dtypes):
+            raise PortableArtifactError("Missing or extra runtime inputs", status="binding_error")
+        if isinstance(block_shape, int):
+            block_shape = (block_shape,)
+        elif block_shape is not None:
+            block_shape = tuple(block_shape)
+        if block_shape is not None and any(type(size) is not int or size < 0 for size in block_shape):
+            raise ValueError("block_shape must contain nonnegative Python integers")
+        arrays = {}
+        for name, value in inputs.items():
+            array = np.asarray(value)
+            dtype = self.input_dtypes[name]
+            if array.dtype.newbyteorder("=") != dtype:
+                raise PortableArtifactError(
+                    f"Input {name!r} must have dtype {dtype}, not {array.dtype}", status="binding_error"
+                )
+            if block_shape is None:
+                block_shape = array.shape
+            if array.shape != block_shape:
+                raise PortableArtifactError(
+                    "Input shape disagrees with block extent", status="binding_error"
+                )
+            arrays[name] = np.require(array, dtype=dtype, requirements=["C", "A"])
+        if block_shape is None:
+            raise ValueError("Constant-only kernels require an explicit block_shape")
+        return self._handle.evaluate_block(
+            arrays,
+            block_shape,
+            logical_shape=logical_shape,
+            block_origin=block_origin,
+            valid_mask=valid_mask,
+        )
+
+    def lazy(self, inputs, *, shape=None, partitions=None):
+        """Bind native inputs to an immutable logical block grid, not a storage grid."""
+        from .portable_lazy import PortableLazyArray
+
+        if self.schema_version != "1.0":
+            raise NotImplementedError("Logical portable partitions require the descriptor profile")
+        return PortableLazyArray(self, inputs, shape=shape, partitions=partitions)

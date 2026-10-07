@@ -152,23 +152,17 @@ def test_dsl_computed_in_where_streams_multichunk():
 def test_dsl_computed_roundtrip(tmp_path):
     path = str(tmp_path / "dsl.b2d")
     t = _make_table(urlpath=path, mode="w")
-    t.add_computed_column("r", k_loop, inputs=["a", "b"])
+    with pytest.raises(TypeError, match="portable artifacts"):
+        t.add_computed_column("r", k_loop, inputs=["a", "b"])
     t.close()
 
-    # Stored schema carries kind:dsl + dsl_source and no expression.
+    # Rejection leaves no source-backed computed recipe in the stored schema.
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    (cc,) = sd["computed_columns"]
-    assert cc["kind"] == "dsl"
-    assert "dsl_source" in cc
-    assert "expression" not in cc
+    assert "computed_columns" not in sd
 
     t2 = blosc2.open(path)
-    np.testing.assert_array_equal(np.asarray(t2["r"][:]), np.arange(20) + 20)
-    a = np.arange(20)
-    r = a + 20
-    sel = t2.where("(r > 25) & (a < 18)")[:]
-    assert len(sel) == int(((r > 25) & (a < 18)).sum())
+    assert "r" not in t2.col_names
     t2.close()
 
 
@@ -230,15 +224,14 @@ def test_dsl_generated_create_index():
 def test_dsl_generated_roundtrip(tmp_path):
     path = str(tmp_path / "gen.b2d")
     t = _make_table(n=10, urlpath=path, mode="w")
-    t.add_generated_column("g", values=k_add, inputs=["a", "b"], dtype=blosc2.int64())
+    with pytest.raises(TypeError, match="portable artifacts"):
+        t.add_generated_column("g", values=k_add, inputs=["a", "b"], dtype=blosc2.int64())
     t.close()
 
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    (m,) = sd["materialized_columns"]
-    assert m["transformer_kind"] == "dsl"
-    assert "dsl_source" in m
+    assert "materialized_columns" not in sd
 
     t2 = blosc2.open(path)
-    np.testing.assert_array_equal(np.asarray(t2["g"][:]), np.arange(10) + 10)
+    assert "g" not in t2.col_names
     t2.close()

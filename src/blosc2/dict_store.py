@@ -625,6 +625,9 @@ class DictStore:
         self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray
     ) -> None:
         """Add a node to the DictStore."""
+        from blosc2.b2objects import preflight_persistence
+
+        preflight_persistence(value)
         self._modified = True
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
