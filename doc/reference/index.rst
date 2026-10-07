@@ -13,4 +13,5 @@ API Reference
     utilities
     dsl_syntax
     portable_dsl
+    menudet_accuracy
     jit

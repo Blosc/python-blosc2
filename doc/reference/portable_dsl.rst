@@ -1,13 +1,22 @@
-Portable DSL artifacts
-======================
+Menudet: portable computation
+=============================
+
+**Menudet — a little language for portable computation on arrays and tables.**
+
+Menudet is the language; miniexpr is its native implementation, and Python-Blosc2
+provides authoring, array scheduling and table integration. The existing
+``DSLKernel``, ``PortableKernel`` and ``validate_portable_dsl`` API names remain
+unchanged. Python-like authoring syntax normalizes to a language-independent
+artifact; a Menudet artifact is not an executable Python recipe.
 
 .. warning::
 
-   Portable DSL 1.0 is experimental and its language and artifact specifications
-   are drafts. Local development integration is tested; publication, independent
-   numeric accuracy and release-platform certification remain pending.
+   Menudet 1.0 is experimental. Its language and artifact specifications are
+   drafts, not a frozen compatibility promise. Native cross-platform CI passes;
+   independent numeric accuracy and Python release-wheel certification are
+   tracked separately. Beta feedback will inform the final compatibility contract.
 
-Portable DSL artifacts use the versioned native 1.0 profile.
+Menudet artifacts use the versioned native 1.0 profile.
 Artifacts are standalone UTF-8 JSON, executable through native miniexpr in C or
 Python, without reconstructing or executing Python functions on import.
 
@@ -28,6 +37,10 @@ integer widths, ``float32``, ``float64`` and fixed-width bytes/Unicode strings;
 parameters may have different dtypes. Captured Python/NumPy scalars are snapshotted into
 typed constants, never live callbacks or arrays. Integers use range-checked
 decimal strings; floats use exact IEEE-754 hexadecimal bits.
+
+For a runnable array/table example using the same kernel, see
+``examples/menudet.py`` in the source distribution. Numeric certification and its
+finite-domain limits are described in :doc:`menudet_accuracy`.
 
 Release boundary
 ----------------
@@ -193,10 +206,10 @@ Semantic evaluation errors never retry the kernel. Artifacts
 enforce strict FP independently of host defaults. Host while-loop limits remain
 execution policy rather than artifact constants.
 
-The authoritative language and artifact specifications are maintained in the
-miniexpr development sources under ``doc/dsl-spec/1.0.md`` and
-``doc/dsl-spec/artifact-1.0.md``. The published dependency pin has not yet changed;
-the local development override is not stock-wheel or platform certification.
+The authoritative language and artifact specifications are maintained in
+miniexpr under ``doc/dsl-spec/1.0.md`` and ``doc/dsl-spec/artifact-1.0.md``.
+Python-Blosc2 pins the published native revision that passed the native platform
+matrix. Native CI is distinct from Python stock-wheel certification.
 
 API
 ---

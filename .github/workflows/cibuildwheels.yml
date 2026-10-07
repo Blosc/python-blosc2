@@ -11,6 +11,18 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
+  # Every tested wheel checks portable descriptors/persistence and independent
+  # numeric references, not only whether the extension can be imported.
+  CIBW_TEST_COMMAND: >-
+    python -m pytest
+    {project}/tests/test_portable_artifact.py
+    {project}/tests/test_portable_descriptor.py
+    {project}/tests/test_portable_descriptor_host.py
+    {project}/tests/test_portable_lazy.py
+    {project}/tests/test_portable_policy.py
+    {project}/tests/test_portable_table_export.py
+    {project}/tests/test_dsl_portable.py -q -n 0 &&
+    python {project}/scripts/certify_menudet_math.py
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long
   # Now that github provides native arm64 runners, we can enable tests again
   # CIBW_TEST_SKIP: "*linux*aarch64*"

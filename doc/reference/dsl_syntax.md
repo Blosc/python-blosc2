@@ -3,6 +3,10 @@
 This is the practical reference for the DSL used by `@blosc2.dsl_kernel`
 functions (and checked by `blosc2.validate_dsl()`).
 It focuses on what works today and the most common gotchas.
+The portable subset is named **Menudet**, a little language for portable
+computation on arrays and tables. See the [Menudet reference](portable_dsl.rst)
+for the 1.0 draft contract. This page also documents ordinary full-DSL features;
+acceptance here does not imply portability.
 For usage walkthroughs and end-to-end examples, see the
 [LazyArray UDF DSL kernels tutorial](../tutorials/03.lazyarray-udf-kernels.ipynb).
 

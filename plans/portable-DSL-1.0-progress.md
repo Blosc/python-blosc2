@@ -1,5 +1,142 @@
 # Portable DSL 1.0 implementation progress
 
+## Menudet / 4.15.0 release hardening — current handoff
+
+The user selected **Menudet — a little language for portable computation on
+arrays and tables**, and approved the release-hardening plan. Menudet is the
+portable language; miniexpr implements it. Existing API/format identifiers remain
+unchanged. Broader JIT acceleration is deliberately separate: the native guard
+still forces portable interpretation, preserving checked/ordered semantics.
+
+### Delivered in this increment
+
+- Both version fields now read `4.15.0.dev0` (development, not final publication).
+- Python reference, release notes and native spec introductions name Menudet,
+  retain the draft warning, and distinguish full DSL from portable semantics.
+- `examples/menudet.py` demonstrates the same array/table kernel plus explicit
+  logical block-scalar reductions; assertions passed against the installed wheel.
+- Added `scripts/certify_menudet_math.py` and its checked-in JSON corpus: **284
+  samples, 40 canonical functions, float32 and float64**, generated with mpmath
+  1.3.0 at 100/200 decimal digits. Regeneration equality and deliberate failure
+  detection passed. No new runtime dependency; mpmath is needed only to regenerate.
+- Function-specific finite sample budgets and coverage limitations are documented
+  in `doc/reference/menudet_accuracy.md`. These are not universal ULP guarantees
+  or certification of all possible inputs. Native exceptional/exact/alias fixtures
+  remain required.
+- Wired the corpus into native Python, WASM and installed-wheel CI. Native jobs
+  upload platform reports; tested wheels also execute the seven portable modules.
+
+### Verification
+
+All Python/build commands used conda `blosc2`. Fresh stock build fetched native
+`3418cdce4b5c11e1661c8b6453e3d31d94b0b2b4`; both source override cache entries
+are empty. Isolated imports asserted the installed target path and excluded the
+editable finder only within the test subprocess.
+
+- Working-tree stock wheel: **11160 tests passed, 53 skips** (excluding heavy,
+  network and TUI), plus **120 installed-module doctests passed, 2 skips** in a
+  clean working directory. The serial combined invocation initially encountered
+  one relative-filename save failure: installed doctest modules are outside the
+  repository root fixture's isolation. All tests passed, and all doctests passed
+  on the clean-directory rerun; no user's existing file was removed to fix it.
+- Independent corpus on that wheel: **284 passed**, maximum observed error
+  **3 ULP** (lgamma/float64); no tolerance changed after observing results.
+- Built an **8,044,023-byte clean sdist**, verified inclusion of checker, corpus
+  and example, built a wheel from the unpacked sdist, and isolated-installed it.
+  This wheel passed **183 portable tests, 17 explicit external opt-in skips**,
+  plus all **284 independent math samples**.
+- Clean-sdist wheel SHA256:
+  `c7fcc99d44fe12a7cdffc717eff4bc04450954c6d51eb98b282d09c2646b0d67`.
+- Clean snapshot copied only tracked files and the four requested new files;
+  unrelated untracked local work was neither packaged nor deleted. A direct
+  dirty-checkout sdist attempt timed out and is not a release artifact.
+- Ruff, format, workflow YAML, reference regeneration and whitespace checks pass.
+
+### Documentation disposition
+
+Fixed installation list-table indentation, stopped treating generated `doc/html`
+and autosummary stash trees as sources, and documented NumPy's finfo alias without
+reparsing its incompatible nested sections. Documented deserialization policy
+types/errors and taught the public-API tripwire to recognize manual `py:class`.
+Fresh whole-tree Sphinx now has **zero ERROR diagnostics**, and no Menudet page
+diagnostic. It still has existing non-Menudet warnings: the fresh build reported
+769 (639 autosummary stub, 100 duplicate object/label, 11 ambiguous references,
+2 image, 17 other); the final follow-up with notebook execution disabled reports
+772, with no undocumented-finfo warning. They remain visible, unsuppressed
+documentation backlog, not a claim of a warnings-as-errors clean build. Menudet
+pages and parser errors are the scope of this draft's documentation acceptance;
+broad autosummary/reference cleanup is explicitly deferred.
+
+### External gates still pending
+
+The updated Python branch/workflows are not remotely available, so no new Python
+platform job can certify these changes yet. Native miniexpr's seven-job matrix
+is already green, but it does not certify Python artifacts/wheels. Windows,
+Linux, Pyodide, free-threaded/ABI/platform wheel jobs must run the updated corpus
+and integration tests and resolve any failures before releasing. No release or
+beta publication occurred; final version metadata waits for those gates.
+
+Temporary directories under the approved temp root: `menudet-release-build`,
+`menudet-release-wheel`, `menudet-release-installed`, `menudet-release-snapshot`,
+`menudet-clean-sdist`, `menudet-sdist-unpacked`, `menudet-sdist-wheel`,
+`menudet-sdist-installed`, `menudet-release-docs-clean`, and
+`menudet-release-doctrees-clean`. Reports: `menudet-math-macos.json` and
+`menudet-sdist-math-macos.json`.
+
+## Dependency pin updated after green native CI
+
+At the user's request, `CMakeLists.txt` now pins the green native revision
+`3418cdce4b5c11e1661c8b6453e3d31d94b0b2b4` from CI run `37612064807`.
+Earlier notes saying the Python pin remains at `55c882b` are superseded.
+Stock Python wheels have not yet been rebuilt/tested against this updated pin.
+
+## Native CI green (supersedes investigation below)
+
+At the user's request, published the fixes and monitored/repaired CI until green.
+Revision `02791f338a853af517b6fedbd38c18d5a2b8da1a` fixed WASM and Windows
+builtin recognition, but run `37611459450` exposed a second Windows issue:
+identical-code folding merged the floating cast callback with real/conj identity
+callbacks, misclassifying their output type. A unique volatile read in the cast
+callback preserves its address identity without altering signed zero or NaNs.
+The anchor fixture now reports the source and dtypes on a type mismatch.
+
+Final published revision: `3418cdce4b5c11e1661c8b6453e3d31d94b0b2b4`.
+CI run [37612064807](https://github.com/Blosc/miniexpr/actions/runs/37612064807)
+completed **successfully: all seven jobs green**, including Windows x64/ARM64,
+Linux x64, Linux ARM64 interpreter/JIT, macOS, and WASM (including side-module
+helper and JIT trace checks). Targeted local portable interpreter test also passed
+after the cast-identity repair. Python's dependency pin remains at `55c882b`;
+this entry does not claim Python stock-wheel certification of the final fixes.
+
+## Native CI failure investigation (2026-10-07)
+
+CI run `37610312891` on native revision `55c882b` failed on Windows x64,
+Windows ARM64, and WASM. Both Windows failures occur while compiling the portable
+`hypot(x, 2.0)` fixture: libm address recognition fails. WASM compilation fails
+because its fenv lacks `FE_INVALID`; the new test also incorrectly assumed host
+rounding/thread facilities.
+
+Local fixes in miniexpr:
+
+- `src/functions.c`: typed builtin recognition also matches the exact builtin
+  registration address, handling CRT inline/import aliases such as Windows hypot.
+- `tests/test_dsl_portable_interp.c`: WASM retains numeric/literal/environment
+  checks under its fixed nearest rounding, without requiring unavailable exception
+  flags or pthreads. Native upward-rounding, exception and concurrency checks stay.
+
+Verification: complete native interpreter suite **325 passed**; local Emscripten
+interpreter-only suite **48 passed**; CI-style WASM with JIT enabled **50 passed**;
+targeted native portable interpreter ASAN/UBSAN **passed**. Existing duplicate
+library and warning-enabled unused-function warnings remain; no WASM build warning
+was observed. Remote Windows jobs still require revalidation with these fixes;
+the reported failed CI run is not claimed green. Published pin is unchanged.
+
+Build directories: `<temp-root>/miniexpr-portable-1-interpreter`,
+`<temp-root>/miniexpr-portable-1-wasm-fix`, and
+`<temp-root>/miniexpr-portable-1-sanitized`. WASM was configured with `emcmake`,
+Node as emulator, SLEEF OFF, then TCC JIT ON/bundled host TCC OFF/trace ON to match
+the CI configuration. All commands used `conda run -n blosc2`.
+
 ## Published dependency update — latest status
 
 The user authorized committing/pushing miniexpr and committing the Python

@@ -1,5 +1,36 @@
 # Release notes
 
+## Changes from 4.14.2 to 4.15.0 (in development)
+
+### Introducing the Menudet 1.0 draft
+
+**Menudet — a little language for portable computation on arrays and tables.**
+
+- Export normalized `DSLKernel` authoring as validated, standalone JSON artifacts
+  with typed signatures and exact captured constants. Native miniexpr executes
+  imports without reconstructing Python functions or falling back to Python.
+- Support checked integer arithmetic, operand-typed floating computation, control
+  flow, fixed-width strings, logical array coordinates and ordered block reductions.
+- Keep logical reduction groups stable through persistence, partial reads and
+  output rechunking. True block-scalar results expose the logical block-grid shape.
+- Add portable CTable computed/generated transformers with an explicit
+  `row_domain="independent"` contract, including fixed-shape row reductions.
+- New compliant DSLKernel-backed LazyUDF saves export the draft automatically;
+  unsupported saves fail validation before writing the destination.
+- Historical Python-specific recipes require explicit `deserialize="full"`.
+  MessagePack decoding is safe by default, including nested containers.
+
+Menudet 1.0 is a **draft**, not a frozen compatibility promise. The existing
+`DSLKernel` and portable API names remain unchanged. This draft uses the typed
+interpreter; optional JIT requests fall back before execution, while required JIT
+rejects unsupported acceleration. Complex computation, callbacks, arbitrary
+memory access and non-strict floating-point modes are outside the portable contract.
+
+See the [Menudet reference](https://www.blosc.org/python-blosc2/reference/portable_dsl.html)
+for array/table examples, persistence policy and current limitations. Release
+certification is tracked separately; this development entry is not an announcement
+that 4.15.0 has been published.
+
 ## Changes from 4.14.1 to 4.14.2
 
 XXX version-specific blurb XXX

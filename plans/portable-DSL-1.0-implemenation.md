@@ -449,12 +449,15 @@ authoritative commands/results are in `portable-DSL-1.0-progress.md`.
     - [x] Compact local Python/native conformance and full local ASAN/UBSAN.
     - [x] Isolated native-development override wheels and artifact-disabled smoke.
     - [x] Draft/API docs build; changed portable page free of diagnostics.
-    - [ ] Windows/Linux/WASM external execution and independent per-function
-      accuracy certification (no universal ULP bound inferred from host libm).
+    - [x] Native Windows/Linux/macOS/WASM conformance matrix (all seven jobs green).
+    - [x] Independent finite math corpus and stock-pin macOS execution: 284 samples,
+      40 canonical operations, both floating precisions, function-specific budgets.
+    - [ ] Execute the independent math corpus on remaining Python release platforms
+      (no universal ULP bound inferred from the finite corpus or host libm).
     - [x] Publish/pin the native revision and verify a stock-pin macOS ARM64 wheel.
     - [ ] Complete the remaining stock-pin platform wheel matrix.
-    - [ ] Clean whole-tree docs gate: existing installation/list-table, missing
-      image/generated-documentation/reference warnings outside portable changes.
+    - [x] Whole-tree docs disposition: fix parsing errors, exclude generated input
+      trees, and inventory/defer existing image/reference warnings outside Menudet.
 
 Each step must land as a usable tested increment; reduction and string fixtures
 can be prepared while numeric interpretation is implemented, without introducing
