@@ -1424,7 +1424,7 @@ def validate_operand(value):  # noqa: C901
         elif type(value) is blosc2.RemoteArray:
             _validate_remote_array(value)
         elif type(value) is PortableLazyArray:
-            validate_operands(value.inputs)
+            _validate_portable_array(value)
         elif type(value) is Column:
             table = value._table_ref
             if type(table) is blosc2.RemoteCTable:
@@ -1459,12 +1459,129 @@ def validate_operand(value):  # noqa: C901
                         raise ValueError(
                             "Computed-column recipe/cache mismatch; recreate the computed column"
                         )
+                else:
+                    _validate_portable_column(table, recipe)
                 for dependency in recipe["col_deps"]:
                     validate_operand(Column(table, dependency))
         if np.dtype(value.dtype).hasobject:
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _validate_portable_column(table, recipe):
+    from blosc2.ctable import Column
+
+    cached = recipe.get("kernel")
+    if cached is not None:
+        _validate_portable_kernel(cached)
+    if type(recipe["artifact"]) not in (str, bytes):
+        _reject("unapproved portable recipe artifact")
+    bindings = recipe["bindings"]
+    if type(bindings) is not dict or any(
+        type(k) is not str or type(v) is not str for k, v in bindings.items()
+    ):
+        _reject("unapproved portable column bindings")
+    dependencies = recipe["col_deps"]
+    row_shape = recipe.get("row_shape", (1,))
+    if (
+        type(dependencies) not in (list, tuple)
+        or any(type(dep) is not str for dep in dependencies)
+        or type(row_shape) not in (list, tuple)
+        or any(type(n) is not int for n in row_shape)
+        or type(recipe.get("row_domain", "independent")) is not str
+    ):
+        _reject("unapproved portable column metadata")
+    dtype = recipe["dtype"]
+    if type(dtype) is not str and type(dtype) not in {type(np.dtype(name)) for name in _DTYPES}:
+        _reject("unapproved portable column dtype")
+    for dependency in dict.fromkeys((*dependencies, *bindings.values())):
+        validate_operand(Column(table, dependency))
+    if cached is None:
+        table._validate_portable_table_metadata(recipe)
+        return
+    artifact = recipe["artifact"]
+    if cached._artifact != (artifact.encode("utf-8") if type(artifact) is str else artifact):
+        raise ValueError("Portable-column recipe/cache mismatch; recreate the computed column")
+    if recipe.get("row_domain", "independent") != "independent":
+        raise ValueError("Only independent-row portable table groups are implemented")
+    # The admitted cached handle already owns this exact validated artifact.
+    # Recheck current bindings without reparsing/recompiling it on every slice.
+    descriptor = table._portable_table_descriptor(cached, bindings)
+    if (
+        descriptor["dtype"] != np.dtype(dtype)
+        or descriptor["col_deps"] != list(dependencies)
+        or descriptor["row_shape"] != tuple(row_shape)
+    ):
+        raise ValueError("Portable table metadata disagrees with native signature/bindings")
+
+
+def _validate_portable_array(value):
+    _validate_portable_kernel(value.kernel)
+    if type(value.inputs) is not dict or any(type(name) is not str for name in value.inputs):
+        _reject("unapproved portable input mapping")
+    validate_operands(value.inputs)
+    domain, partitions = value._domain, value._partitions
+    for extents in (domain, partitions, value._shape, value._grid):
+        if type(extents) is not tuple or any(type(n) is not int for n in extents):
+            _reject("unapproved portable domain metadata")
+    if (
+        any(not 0 <= n <= np.iinfo(np.int64).max for n in domain)
+        or len(partitions) != len(domain)
+        or any(n <= 0 for n in partitions)
+        or math.prod(partitions) > 2147483647
+        or value.kernel.context_ndim not in (0, len(domain))
+    ):
+        raise ValueError("Portable domain/partition contract changed; construct a new array")
+    grid = tuple((n + p - 1) // p for n, p in zip(domain, partitions, strict=True))
+    shape = grid if value.kernel.result_cardinality == "block_scalar" else domain
+    if value._grid != grid or value._shape != shape:
+        raise ValueError("Portable cached geometry disagrees with domain/partitions; construct a new array")
+    if value.inputs.keys() != value.kernel.input_dtypes.keys():
+        raise ValueError("Portable input names disagree with native signature")
+    for name, source in value.inputs.items():
+        if (
+            np.broadcast_shapes(tuple(source.shape), domain) != domain
+            or np.dtype(source.dtype).newbyteorder("=") != value.kernel.input_dtypes[name]
+        ):
+            raise ValueError("Portable input metadata changed; construct a new array")
+
+
+def _same_native_metadata(actual, expected):
+    """Compare native-owned metadata without consulting foreign equality hooks."""
+    if type(actual) is not type(expected):
+        return False
+    if type(expected) is dict:
+        if any(type(key) is not str for key in actual) or actual.keys() != expected.keys():
+            return False
+        return all(_same_native_metadata(actual[key], value) for key, value in expected.items())
+    if type(expected) in (tuple, list):
+        return len(actual) == len(expected) and all(
+            _same_native_metadata(a, b) for a, b in zip(actual, expected, strict=True)
+        )
+    return actual == expected
+
+
+def _validate_portable_kernel(value):
+    import blosc2
+    from blosc2 import blosc2_ext
+
+    if type(value) is not blosc2.PortableKernel:
+        _reject("unapproved portable kernel dependency")
+    if type(value._handle) is not blosc2_ext.PortableArtifactHandle:
+        _reject("unapproved portable native handle")
+    if (
+        value._handle is not value._expression_handle
+        or type(value._artifact) is not bytes
+        or type(value._expression_artifact) is not bytes
+        or value._artifact != value._expression_artifact
+    ):
+        raise ValueError("Portable kernel provenance changed; construct a new kernel")
+    expected = value._handle.info()
+    if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
+        expected.update(value._handle.descriptor_info())
+    if not _same_native_metadata(value._info, expected):
+        _reject("portable kernel metadata disagrees with native handle")
 
 
 def _validate_remote_array(value):

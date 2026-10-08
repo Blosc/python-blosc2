@@ -124,6 +124,69 @@ def test_safe_computed_column_graph_tracks_append_and_delete():
     np.testing.assert_array_equal(expr[:], [5, 10, 17])
 
 
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    reason="Installed runtime has no draft descriptor ABI",
+)
+@pytest.mark.parametrize(
+    "mutation", ["hostile", "kernel_replacement", "artifact_replacement", "bindings", "dtype", "row_shape"]
+)
+def test_safe_portable_column_checks_cached_kernel_before_dtype(monkeypatch, mutation):
+    from test_portable_lazy import kernel
+
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
+    expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+
+    class Hostile:
+        @property
+        def input_dtypes(self):
+            pytest.fail("Read hostile portable column kernel")
+
+        def items(self):
+            pytest.fail("Read hostile portable column bindings")
+
+        def __index__(self):
+            pytest.fail("Coerced hostile portable row extent")
+
+    recipe = t._computed_cols["total"]
+    replacement = kernel("def k(x):\n    return x + 2\n")
+    if mutation == "hostile":
+        monkeypatch.setitem(recipe, "kernel", Hostile())
+    elif mutation == "kernel_replacement":
+        monkeypatch.setitem(recipe, "kernel", replacement)
+    elif mutation == "artifact_replacement":
+        monkeypatch.setitem(recipe, "artifact", replacement.to_json())
+    elif mutation == "bindings":
+        monkeypatch.setitem(recipe, "bindings", Hostile())
+    elif mutation == "dtype":
+        monkeypatch.setitem(recipe, "dtype", Hostile())
+    else:
+        monkeypatch.setitem(recipe, "row_shape", (Hostile(),))
+    with pytest.raises((blosc2.UnsafeDeserializationError, ValueError)):
+        expr.compute()
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    reason="Installed runtime has no draft descriptor ABI",
+)
+def test_safe_portable_column_reuses_validated_native_handle(monkeypatch):
+    from test_portable_lazy import kernel
+
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
+    monkeypatch.setattr(
+        blosc2.PortableKernel,
+        "from_json",
+        lambda *a, **k: pytest.fail("Recompiled admitted cached artifact"),
+    )
+    expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+
+
 def test_safe_column_admission_checks_cached_expression_operand_closure():
     t = _make_invoice_table()
     t.add_computed_column("total", "price * qty")

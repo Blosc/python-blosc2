@@ -329,6 +329,8 @@ class PortableKernel:
         instance = cls.__new__(cls)
         instance._handle = handle
         instance._artifact = data
+        instance._expression_handle = handle
+        instance._expression_artifact = data
         instance._info = handle.info()
         if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
             instance._info.update(handle.descriptor_info())

@@ -28,6 +28,63 @@ def kernel(source, *, scalar=False, nd=False, string=False):
     )
 
 
+@pytest.mark.parametrize("mutation", ["kernel", "handle", "metadata", "artifact", "native_rebinding"])
+def test_safe_graph_checks_portable_kernel_closure_before_hooks(monkeypatch, mutation):
+    native = kernel("def k(x):\n    return x + 1\n")
+    lazy = native.lazy({"x": blosc2.asarray(np.arange(4, dtype="int64"))})
+    expr = blosc2.lazyexpr("x + 1", {"x": lazy}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], np.arange(4) + 2)
+
+    class Hostile:
+        @property
+        def output_dtype(self):
+            pytest.fail("Read hostile portable output dtype")
+
+        def __eq__(self, other):
+            pytest.fail("Compared hostile portable metadata")
+
+    if mutation == "kernel":
+        monkeypatch.setattr(lazy, "kernel", Hostile())
+    elif mutation == "handle":
+        monkeypatch.setattr(native, "_handle", Hostile())
+    elif mutation == "metadata":
+        monkeypatch.setitem(native._info, "output_dtype", Hostile())
+    elif mutation == "artifact":
+        monkeypatch.setattr(native, "_artifact", b"{}")
+    else:
+        other = kernel("def k(x):\n    return x + 2\n")
+        monkeypatch.setattr(native, "_handle", other._handle)
+    with pytest.raises((blosc2.UnsafeDeserializationError, ValueError)):
+        expr.compute()
+
+
+@pytest.mark.parametrize("mutation", ["mapping", "domain", "partitions", "shape", "grid", "input_dtype"])
+def test_safe_graph_checks_portable_domain_and_binding_metadata(monkeypatch, mutation):
+    lazy = kernel("def k(x):\n    return x + 1\n").lazy(
+        {"x": blosc2.asarray(np.arange(4, dtype="int64"))}, partitions=(2,)
+    )
+    expr = blosc2.lazyexpr("x + 1", {"x": lazy}, evaluation="safe")
+
+    class HostileMapping:
+        def values(self):
+            pytest.fail("Read hostile portable input mapping")
+
+    if mutation == "mapping":
+        monkeypatch.setattr(lazy, "inputs", HostileMapping())
+    elif mutation == "domain":
+        monkeypatch.setattr(lazy, "_domain", (object(),))
+    elif mutation == "partitions":
+        monkeypatch.setattr(lazy, "_partitions", (0,))
+    elif mutation == "shape":
+        monkeypatch.setattr(lazy, "_shape", (5,))
+    elif mutation == "grid":
+        monkeypatch.setattr(lazy, "_grid", (5,))
+    else:
+        monkeypatch.setitem(lazy.inputs, "x", blosc2.asarray(np.arange(4, dtype="float64")))
+    with pytest.raises((blosc2.UnsafeDeserializationError, ValueError)):
+        expr.compute()
+
+
 @pytest.mark.parametrize("scalar", [False, True])
 def test_logical_groups_partial_and_rechunk(tmp_path, scalar):
     values = np.arange(35, dtype="int64").reshape(5, 7)
