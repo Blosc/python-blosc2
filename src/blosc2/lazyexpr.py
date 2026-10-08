@@ -4959,16 +4959,17 @@ class LazyExpr(LazyArray):
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
         # Validate the expression
         validate_expr(expression)
-        reduction_shape, reduction_dtype = None, None
+        graph_shape, graph_dtype = None, None
         if evaluation_mode() == "safe":
             graph = parse_expression(expression)
             operands = normalize_operands(operands)
             validate_operands(operands)
-            reduction_shape = graph.infer_shape(operands)
+            graph_shape = graph.infer_shape(operands)
+            graph_dtype = graph.infer_dtype(operands)
             binding = graph.bind_root_reduction(operands)
             if binding is not None:
-                normalized, root_shape, reduction_dtype = binding
-                reduction_shape = root_shape if root_shape is not None else reduction_shape
+                normalized, root_shape, graph_dtype = binding
+                graph_shape = root_shape if root_shape is not None else graph_shape
                 expression = normalized or expression
         expression = convert_to_slice(expression)
         chunks, blocks = None, None
@@ -4984,21 +4985,22 @@ class LazyExpr(LazyArray):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
-            _shape = reduction_shape if reduction_shape is not None else infer_shape(_expression, opshapes)
-            # have to handle slices since a[10] on a dummy variable of shape (1,1) doesn't work
-            desliced_expr, desliced_ops = extract_and_replace_slices(_expression, _operands)
+            _shape = graph_shape if graph_shape is not None else infer_shape(_expression, opshapes)
             # substitutes with dummy operands (cheap for reductions) and
             # defaults to blosc2 functions (cheap for constructors)
-            if reduction_shape is not None and reduction_dtype is not None:
-                # A data-free root reduction rule supplied metadata. Do not
+            if graph_shape is not None and graph_dtype is not None:
+                # Data-free graph rules supplied metadata. Do not
                 # execute that reduction on all-one dummies (ddof may exceed
                 # their size even when the real input is perfectly valid).
-                new_expr = np.empty((), dtype=reduction_dtype)
+                new_expr = np.empty((), dtype=graph_dtype)
             else:
+                # Handle slices before dummy evaluation: a[10] cannot index a
+                # synthetic array of shape (1, 1).
+                desliced_expr, desliced_ops = extract_and_replace_slices(_expression, _operands)
                 new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
             _dtype = (
-                reduction_dtype
-                if reduction_dtype is not None
+                graph_dtype
+                if graph_dtype is not None
                 else (new_expr.dtype if hasattr(new_expr, "dtype") else np.dtype(type(new_expr)))
             )
             if isinstance(new_expr, blosc2.LazyExpr):

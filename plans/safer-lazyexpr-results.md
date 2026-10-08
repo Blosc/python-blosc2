@@ -377,3 +377,37 @@ hostile sources. Ruff lint/format and whitespace checks passed. Caching proxies,
 table/storage/remote adapters, full persistence reachability and allocation bounds
 still require audit; this slice does not establish complete adapter lifetime safety.
 Construction overhead and cross-platform behavior were not newly measured.
+
+## Follow-up: nested unary dtypes and caching-proxy admission
+
+Added a narrow data-free dtype traversal for numeric named inputs, basic indexing,
+reviewed direct-input reductions and selected unary numerical calls. Unary output
+types use NumPy ufunc dtype resolution, not evaluation of synthetic values. With
+reviewed shape and dtype rules, construction now skips both dummy execution and
+slice-placeholder creation. Nested cases such as `sqrt(x.std(axis=0, ddof=2))`
+therefore no longer perform invalid reductions on tiny all-one dummies. Unsupported
+binary promotion, weak scalar rules, intermediate reduction receivers, casts and
+backend-specific exceptions retain existing inference. This remains a subset, not
+a complete independent graph type system.
+
+Proxy construction records the source owning its cache. Safe admission rejects
+subsequent source rebinding, including equal-metadata replacements and rebinding
+before first expression admission. Source/cache shape, dtype, chunks and blocks
+must agree; the cache must be an admitted concrete NDArray. Failures occur before
+fetching, with no cache writes, discard or automatic reconstruction. The diagnostic
+asks callers to construct a new proxy. ProxyNDField metadata now refreshes after
+rebinding to a valid proxy and rejects missing fields.
+
+These checks establish neither cached-data freshness nor transactional snapshots.
+They do not replace the proxy's existing stamp/refresh policy, certify adopted
+persistent-cache contents, or complete the remote-source refresh/lifetime audit.
+Table/storage/remote adapters and full persistence/container reachability remain
+open. Ordinary trusted-only evaluation retains its compatibility behavior.
+
+Verification: **11,660 passed, 55 skipped**. Differential unary/reduction dtype
+tests cover NumPy and Blosc2 inputs, boolean/integer/float/complex families, metadata
+rebinding and persistence. Instrumentation rejects dummy execution and slice
+placeholder creation for reviewed cases. Proxy tests cover source identity,
+resizing, incompatible partitions/dtypes, hostile caches, parent-field rebinding
+and pre-fetch rejection under ambient full mode. Ruff lint/format and whitespace
+checks passed. No new performance, allocation-bound or platform gate is claimed.

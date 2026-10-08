@@ -725,6 +725,53 @@ def _metadata_index(node, operands):
     return value if value is None or value is Ellipsis or _axis_integer(value) else _UNKNOWN_ARGUMENT
 
 
+_UNARY_DTYPE_RULES = frozenset(
+    {
+        "abs",
+        "sqrt",
+        "sin",
+        "cos",
+        "exp",
+        "log",
+        "square",
+        "negative",
+        "positive",
+        "isfinite",
+        "isnan",
+        "isinf",
+        "logical_not",
+    }
+)
+
+
+def _graph_dtype(node, operands, prefer_blosc):
+    """Resolve a narrow numerical subset without computing synthetic values."""
+    kind, *args = node
+    if kind == "name":
+        value = operands[args[0]]
+        if not hasattr(value, "dtype"):
+            return None
+        dtype = np.dtype(value.dtype)
+        return dtype if dtype.kind in "biufc" else None
+    if kind == "index" and _metadata_index(args[1], operands) is not _UNKNOWN_ARGUMENT:
+        return _graph_dtype(args[0], operands, prefer_blosc)
+    if kind not in {"call", "method"}:
+        return None
+    name, positional, keywords = args
+    name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
+    if name in _NUMPY_REDUCTION_POSITIONAL and positional[0][0] == "name":
+        receiver = operands[positional[0][1]]
+        backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
+        bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
+        if bound is not None:
+            return _root_reduction_metadata(name, receiver, bound, operands, backend)[1]
+    if kind == "call" and name in _UNARY_DTYPE_RULES and len(positional) == 1 and not keywords:
+        dtype = _graph_dtype(positional[0], operands, prefer_blosc)
+        if dtype is not None:
+            return getattr(np, name).resolve_dtypes((dtype, None))[-1]
+    return None
+
+
 def _graph_call_shape(node, operands, prefer_blosc):
     kind, name, positional, keywords = node
     name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
@@ -952,6 +999,11 @@ class ExpressionGraph:
         """Propagate reviewed shape rules without fetching operand data."""
         validate_operands(operands)
         return _graph_shape(self.root, operands, prefer_blosc)
+
+    def infer_dtype(self, operands, *, prefer_blosc=True):
+        """Return a reviewed output dtype, or None to retain existing inference."""
+        validate_operands(operands)
+        return _graph_dtype(self.root, operands, prefer_blosc)
 
     def bind_root_reduction(self, operands, *, prefer_blosc=True):
         """Make root positional arguments explicit before dummy-array inference.
@@ -1211,8 +1263,13 @@ def validate_operand(value):  # noqa: C901
             # Proxy itself is not a capability boundary: its source can be a
             # caller-defined Python protocol object.
             validate_operand(value.src)
+            _validate_proxy_cache(value)
         elif type(value) is ProxyNDField:
             validate_operand(value.proxy)
+            fields = value.proxy.dtype.fields
+            if fields is None or type(value.field) is not str or value.field not in fields:
+                raise ValueError("ProxyNDField no longer refers to an existing structured field")
+            value._dtype, value._shape = fields[value.field][0], tuple(value.proxy.shape)
         elif type(value) is blosc2.NDField:
             validate_operand(value.ndarr)
             _synchronize_ndfield(value)
@@ -1236,6 +1293,20 @@ def validate_operand(value):  # noqa: C901
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _validate_proxy_cache(value):
+    """Reject incompatible cache provenance without fetching or discarding data."""
+    import blosc2
+
+    if value.src is not getattr(value, "_cache_source", None):
+        raise ValueError("Proxy source was rebound; construct a new proxy for the new source")
+    if type(value._cache) is not blosc2.NDArray:
+        _reject("expression proxy requires an admitted NDArray cache")
+    validate_operand(value._cache)
+    for name in ("shape", "dtype", "chunks", "blocks"):
+        if getattr(value.src, name) != getattr(value._cache, name):
+            raise ValueError(f"Proxy source/cache {name} mismatch; construct a new proxy")
 
 
 def _synchronize_simple_proxy(value):

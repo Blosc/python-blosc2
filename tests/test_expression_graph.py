@@ -813,3 +813,151 @@ def test_ndfield_rejects_removed_parent_field_before_computation():
         _ = expr.dtype
     with pytest.raises(ValueError, match="existing structured field"):
         expr.compute()
+
+
+@pytest.mark.parametrize("name", ["sqrt", "sin", "exp", "isfinite"])
+@pytest.mark.parametrize("dtype", ["bool", "int8", "uint8", "float32", "float64", "complex64"])
+@pytest.mark.parametrize("backend", ["numpy", "blosc"])
+def test_nested_unary_reduction_dtype_matches_execution(name, dtype, backend):
+    data = (np.arange(12).reshape(3, 4) % 3).astype(dtype)
+    x = data if backend == "numpy" else blosc2.asarray(data)
+    expr = blosc2.lazyexpr(f"{name}(x.sum(axis=0, keepdims=True))", {"x": x})
+    expected = getattr(np, name)(data.sum(axis=0, keepdims=True))
+    assert expr.shape == expected.shape
+    assert expr.dtype == expected.dtype
+    np.testing.assert_allclose(expr[:], expected, rtol=1e-6)
+
+
+def test_nested_dtype_inference_never_executes_dummy_reduction(monkeypatch):
+    data = np.arange(12.0).reshape(4, 3)
+    module = importlib.import_module("blosc2.lazyexpr")
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy numerical inference"))
+        expr = blosc2.lazyexpr("sqrt(x.std(axis=0, ddof=2))", {"x": blosc2.asarray(data)})
+        assert expr.dtype == np.dtype("float64")
+        assert expr.shape == (3,)
+    np.testing.assert_allclose(expr[:], np.sqrt(data.std(axis=0, ddof=2)))
+
+
+def test_nested_dtype_unknown_rules_retain_existing_inference():
+    operands = {"x": blosc2.ones((2, 3), dtype="float16"), "y": np.ones(3)}
+    assert parse_expression("sqrt(x.sum(axis=0))").infer_dtype(operands) is None
+    assert parse_expression("x + y").infer_dtype(operands) is None
+
+
+def test_reviewed_index_metadata_does_not_allocate_slice_placeholders(monkeypatch):
+    data = np.arange(12.0).reshape(3, 4)
+    module = importlib.import_module("blosc2.lazyexpr")
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module, "extract_and_replace_slices", lambda *a, **k: pytest.fail("Slice placeholders")
+        )
+        patch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy numerical inference"))
+        expr = blosc2.lazyexpr("sqrt(x[:, 1:])", {"x": blosc2.asarray(data)})
+        assert expr.shape == (3, 3)
+        assert expr.dtype == np.dtype("float64")
+    np.testing.assert_allclose(expr[:], np.sqrt(data[:, 1:]))
+
+
+def test_nested_dtype_metadata_refreshes_after_operand_rebinding():
+    expr = blosc2.lazyexpr("sin(x.sum(axis=0))", {"x": blosc2.ones((3, 4), dtype="float32")})
+    assert expr.dtype == np.dtype("float32")
+    key = next(iter(expr.operands))
+    replacement = np.arange(10.0).reshape(2, 5)
+    expr.operands[key] = blosc2.asarray(replacement)
+    assert expr.dtype == np.dtype("float64")
+    assert expr.shape == (5,)
+    np.testing.assert_allclose(expr[:], np.sin(replacement.sum(axis=0)))
+
+
+def test_nested_dtype_persistence_without_dummy_ddof_failure(tmp_path):
+    data = np.arange(12.0).reshape(4, 3)
+    x = blosc2.asarray(data, urlpath=tmp_path / "x.b2nd", mode="w")
+    expr = blosc2.lazyexpr("sqrt(x.std(axis=0, ddof=2))", {"x": x})
+    expr.save(tmp_path / "expr.b2nd")
+    opened = blosc2.open(tmp_path / "expr.b2nd")
+    assert opened.dtype == np.dtype("float64")
+    assert opened.shape == (3,)
+    np.testing.assert_allclose(opened[:], np.sqrt(data.std(axis=0, ddof=2)))
+
+
+def test_proxy_rebound_source_rejects_even_with_identical_metadata(monkeypatch):
+    proxy = blosc2.Proxy(blosc2.ones((6,)))
+    expr = blosc2.lazyexpr("x + 1", {"x": proxy})
+    np.testing.assert_array_equal(expr[:], np.full(6, 2))
+    proxy.src = blosc2.full((6,), 7.0)
+    monkeypatch.setattr(blosc2.Proxy, "fetch", lambda *a, **k: pytest.fail("Fetched rebound source"))
+    with blosc2.expression_evaluation("full"):
+        with pytest.raises(ValueError, match="source was rebound"):
+            expr.compute()
+
+
+def test_proxy_rebound_before_first_admission_rejects():
+    proxy = blosc2.Proxy(blosc2.ones((6,)))
+    proxy.src = blosc2.zeros((6,))
+    with pytest.raises(ValueError, match="source was rebound"):
+        blosc2.lazyexpr("x + 1", {"x": proxy})
+
+
+def test_proxy_hostile_cache_rejects_before_metadata_hooks():
+    proxy = blosc2.Proxy(blosc2.ones((6,)))
+    expr = blosc2.lazyexpr("x + 1", {"x": proxy})
+
+    class HostileCache:
+        @property
+        def shape(self):
+            pytest.fail("Read unadmitted cache metadata")
+
+    proxy._cache = HostileCache()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="admitted NDArray cache"):
+        expr.compute()
+
+
+def test_proxy_source_resize_rejects_before_fetch(monkeypatch):
+    source = blosc2.ones((6,))
+    proxy = blosc2.Proxy(source)
+    expr = blosc2.lazyexpr("x + 1", {"x": proxy})
+    source.resize((9,))
+    monkeypatch.setattr(blosc2.Proxy, "fetch", lambda *a, **k: pytest.fail("Fetched incompatible source"))
+    with pytest.raises(ValueError, match="source/cache shape mismatch"):
+        _ = expr.shape
+    with pytest.raises(ValueError, match="source/cache shape mismatch"):
+        expr.compute()
+
+
+@pytest.mark.parametrize("attribute", ["dtype", "chunks", "blocks"])
+def test_proxy_incompatible_cache_rejects_before_fetch(attribute, monkeypatch):
+    source = blosc2.ones((6,), dtype="float64", chunks=(6,), blocks=(3,))
+    proxy = blosc2.Proxy(source)
+    expr = blosc2.lazyexpr("x + 1", {"x": proxy})
+    options = {"dtype": "float64", "chunks": (6,), "blocks": (3,)}
+    options[attribute] = {"dtype": "float32", "chunks": (3,), "blocks": (2,)}[attribute]
+    proxy._cache = blosc2.ones((6,), **options)
+    monkeypatch.setattr(blosc2.Proxy, "fetch", lambda *a, **k: pytest.fail("Fetched incompatible cache"))
+    with pytest.raises(ValueError, match=f"source/cache {attribute} mismatch"):
+        expr.compute()
+
+
+def test_proxy_field_metadata_refreshes_after_parent_rebinding():
+    from blosc2.proxy import ProxyNDField
+
+    first = blosc2.asarray(np.zeros(4, dtype=[("x", "int32")]))
+    field = ProxyNDField(blosc2.Proxy(first), "x")
+    expr = blosc2.lazyexpr("x + 1", {"x": field})
+    replacement = np.zeros(6, dtype=[("x", "float64")])
+    replacement["x"] = np.arange(6) + 0.5
+    field.proxy = blosc2.Proxy(blosc2.asarray(replacement))
+    assert expr.shape == field.shape == (6,)
+    assert expr.dtype == field.dtype == np.dtype("float64")
+    np.testing.assert_array_equal(expr[:], replacement["x"] + 1)
+
+
+def test_proxy_field_removed_after_parent_rebinding_rejects():
+    from blosc2.proxy import ProxyNDField
+
+    first = blosc2.asarray(np.zeros(4, dtype=[("x", "int32")]))
+    field = ProxyNDField(blosc2.Proxy(first), "x")
+    expr = blosc2.lazyexpr("x + 1", {"x": field})
+    field.proxy = blosc2.Proxy(blosc2.asarray(np.zeros(4, dtype=[("y", "int32")])))
+    with pytest.raises(ValueError, match="existing structured field"):
+        expr.compute()

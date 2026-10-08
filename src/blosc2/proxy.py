@@ -232,6 +232,9 @@ class Proxy(blosc2.Operand):
 
         """
         self.src = src
+        # Cached chunks belong to this source, even if a caller later rebinds
+        # the public src attribute. Safe expression admission checks provenance.
+        self._cache_source = src
         self.urlpath = urlpath
         self._cache_status = None
         if kwargs is None:
