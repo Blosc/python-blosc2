@@ -928,6 +928,9 @@ def validate_expr(expr: str) -> None:
     -------
     None
     """
+    if evaluation_mode() == "safe":
+        parse_expression(expr)
+        return
     # Remove whitespace and skip quoted strings
     no_whitespace = re.sub(r"\s+", "", expr)
     skip_quotes = re.sub(r"(\'[^\']*\')", "", no_whitespace)
@@ -4902,6 +4905,7 @@ class LazyExpr(LazyArray):
     def _expression_recipe(self):
         expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
         operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
+        validate_expr(expression)
         return expression, operands_
 
     def _to_b2object_carrier(self, **kwargs):

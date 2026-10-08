@@ -161,9 +161,10 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None, deserialize="safe"
     from blosc2.expression_graph import parse_expression, select_evaluation
     from blosc2.lazyexpr import validate_expr
 
-    validate_expr(expression)
     if normalize_deserialize(deserialize) is DeserializeMode.SAFE:
         parse_expression(expression)
+    else:
+        validate_expr(expression)
     operands, missing_ops = decode_operand_mapping(
         operands_payload, base_path=carrier_path, deserialize=deserialize
     )

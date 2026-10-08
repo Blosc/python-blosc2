@@ -354,3 +354,94 @@ def test_failed_metadata_refresh_never_returns_old_shape():
         _ = expr.shape
     with pytest.raises(ValueError):
         expr.compute()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "sum(x, axis='rows')",
+        "mean(x, axis=1.5)",
+        "sum(x, axis=(0, 0))",
+        "argmax(x, axis=(0, 1))",
+        "sum(x, keepdims='yes')",
+        "sum(x, dtype='O')",
+        "mean(x, dtype='not-a-dtype')",
+        "std(x, ddof='one')",
+        "var(x, ddof=1, correction=1)",
+        "sum(x, ddof=1)",
+        "count_nonzero(x, dtype='int64')",
+        "sum(x, 0, axis=1)",
+        "sum(x, 0, float64, dtype=float32)",
+        "x.astype()",
+        "x.astype('O')",
+        "x.astype('float32', copy='yes')",
+        "x.astype('float32', order='wrong')",
+        "x.astype('float32', casting='sometimes')",
+        "x.astype('float32', dtype=float64)",
+    ],
+)
+def test_operation_contract_rejects_literals_before_resolution(monkeypatch, text):
+    module = importlib.import_module("blosc2.b2objects")
+    monkeypatch.setattr(
+        module, "decode_operand_mapping", lambda *a, **k: pytest.fail("Resolved malformed recipe")
+    )
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        module.decode_structured_lazyexpr({"expression": text, "operands": {}})
+
+
+@pytest.mark.parametrize("axis", [None, 0, -1, (0, 2), np.int64(1)])
+def test_reduction_axis_contract_preserves_numpy_results(axis):
+    x = np.arange(24.0).reshape(2, 3, 4)
+    graph = parse_expression("sum(x, axis=axis, keepdims=True)")
+    result = graph.evaluate({"x": x, "axis": axis})
+    np.testing.assert_allclose(result, x.sum(axis=axis, keepdims=True))
+
+
+def test_runtime_contract_rejects_bound_invalid_axis_before_dispatch(monkeypatch):
+    graph = parse_expression("sum(x, axis=axis)")
+    monkeypatch.setattr(np, "sum", lambda *a, **k: pytest.fail("Dispatched invalid axis"))
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="axis"):
+        graph.evaluate({"x": np.arange(4), "axis": "rows"})
+
+
+def test_cast_contract_preserves_numpy_results():
+    x = np.arange(4.0)
+    graph = parse_expression("x.astype(float32, order='C', casting='unsafe', copy=False)")
+    result = graph.evaluate({"x": x})
+    assert result.dtype == np.dtype("float32")
+    np.testing.assert_allclose(result, x.astype("float32"))
+
+
+def test_contracted_operation_safe_roundtrip(tmp_path):
+    text = "sum(x, axis=-1, keepdims=True)"
+    data = np.arange(12.0).reshape(3, 4)
+    x = blosc2.asarray(data, urlpath=tmp_path / "x.b2nd", mode="w")
+    expr = blosc2.lazyexpr(text, {"x": x})
+    expr.save(tmp_path / "expr.b2nd")
+    reopened = blosc2.open(tmp_path / "expr.b2nd")
+    expected = data.sum(axis=-1, keepdims=True)
+    np.testing.assert_allclose(reopened[:], expected)
+
+
+def test_intermediate_cache_distinguishes_equal_typed_literals():
+    values = parse_expression("(True, 1, 1.0, 1 + 0j)").evaluate({})
+    assert tuple(type(value) for value in values) == (bool, int, float, complex)
+    result = parse_expression("1 + 1.0").evaluate({})
+    assert type(result) is float
+    result = parse_expression("where(x < 1, 1, 1.0)").evaluate({"x": np.arange(3)})
+    assert result.dtype == np.dtype("float64")
+
+
+def test_equal_reduction_nodes_still_share_one_intermediate(monkeypatch):
+    original = np.sum
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(np, "sum", counted)
+    x = np.arange(4.0)
+    result = parse_expression("sum(x) + sum(x)").evaluate({"x": x})
+    assert result == 12
+    assert len(calls) == 1

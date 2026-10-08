@@ -244,3 +244,46 @@ Three uninstrumented alternating-order historical-control rounds at 1M float64
 elements, 50 repetitions each, gave centering median ratio 1.089 (range
 0.896–1.125) and persisted-execution median 0.960 (0.836–1.029). Timing variability
 remains material; no performance improvement or complete gate pass is claimed.
+
+## Reduction/cast contracts follow-up (after `2158e7e0`)
+
+The metadata checkpoint was committed as `2158e7e0`. The next slice replaces the
+single broad reduction keyword set with explicit per-operation contracts shared
+by parsing and direct dispatch. Contracts cover axis forms, duplicate axes and
+arguments, keepdims, accumulation dtype descriptors, variance degrees of freedom,
+and mutually exclusive ddof/correction. Known malformed literals reject before
+operand/reference resolution. Bound argument values are checked before direct
+backend dispatch. Parser-time checking reads literals only; it never executes an
+expression or folds potentially expensive arithmetic to validate an argument.
+
+NumPy `astype` contracts validate dtype, order, casting and boolean flags. They
+are currently implemented only for admitted NumPy arrays; there is no registered
+streaming Blosc2 cast, and no whole-array materialization fallback was introduced.
+Safe validation now uses the graph parser rather than requiring agreement with
+the legacy broad method-name filter. Ordinary trusted validation remains unchanged.
+
+These are initial per-operation argument contracts, **not** complete type/shape
+rules or a canonicalized reduction API. Positional layouts beyond common prefixes
+remain receiver-dependent; NumPy and Blosc2 differ, so blindly normalizing them
+would change existing semantics. Remaining keyword families, backend-specific
+signatures, rank-dependent axis validation and metadata rules still need review.
+Boolean flags are admitted as concrete Python/NumPy booleans, not arbitrary
+truth-coercible objects. Object-dtype cast/accumulation targets remain excluded.
+
+### A correctness bug exposed by the new contracts
+
+Graph nodes previously keyed literal intermediates by `(literal, value)`. Python
+considers `True`, `1`, `1.0` and `1+0j` equal as dictionary keys. Consequently a
+cached integer could replace a boolean keepdims flag or a floating literal,
+changing numerical promotion or making an otherwise valid reduction fail.
+
+Literal nodes now include their concrete type in their immutable identity. Tests
+verify exact scalar types, mixed-type promotion and keepdims round trips, while
+also confirming that equivalent reduction nodes still reuse one intermediate
+within an evaluation. No cross-evaluation result cache was added.
+
+Verification: **11,377 passed, 55 skipped**. New tests cover malformed recipe
+contracts before resolution, runtime bound-axis rejection before dispatch,
+positive axes/keepdims/casts, persisted reduction round trips and typed literal
+cache identity. No performance or cross-platform gate pass is claimed for this
+slice; the remaining adapter/lifetime and operation-metadata audits remain open.

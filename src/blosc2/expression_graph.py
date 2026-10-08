@@ -475,6 +475,120 @@ _BINARY_CALLS = frozenset(
 )
 
 
+# Reviewed keyword contracts shared by parsing and direct dispatch. Positional
+# layouts still depend on NumPy versus Blosc2 receiver semantics; do not silently
+# reinterpret those layouts as one new numerical API.
+_REDUCTION_KEYWORDS = {
+    "sum": frozenset({"axis", "dtype", "out", "keepdims", "initial", "where"}),
+    "prod": frozenset({"axis", "dtype", "out", "keepdims", "initial", "where"}),
+    "mean": frozenset({"axis", "dtype", "out", "keepdims", "where"}),
+    "std": frozenset({"axis", "dtype", "out", "keepdims", "where", "ddof", "correction"}),
+    "var": frozenset({"axis", "dtype", "out", "keepdims", "where", "ddof", "correction"}),
+    "min": frozenset({"axis", "out", "keepdims", "initial", "where"}),
+    "max": frozenset({"axis", "out", "keepdims", "initial", "where"}),
+    "any": frozenset({"axis", "out", "keepdims", "where"}),
+    "all": frozenset({"axis", "out", "keepdims", "where"}),
+    "argmin": frozenset({"axis", "out", "keepdims"}),
+    "argmax": frozenset({"axis", "out", "keepdims"}),
+    "count_nonzero": frozenset({"axis", "keepdims"}),
+    "cumsum": frozenset({"axis", "dtype", "out"}),
+    "cumprod": frozenset({"axis", "dtype", "out"}),
+    "cumulative_sum": frozenset({"axis", "dtype", "out"}),
+    "cumulative_prod": frozenset({"axis", "dtype", "out"}),
+}
+_CAST_KEYWORDS = frozenset({"dtype", "order", "casting", "copy", "subok"})
+_UNKNOWN_ARGUMENT = object()
+
+
+def _literal_argument(node):
+    """Read constants only, without evaluating calls or folding arithmetic."""
+    kind, *args = node
+    if kind == "literal":
+        return args[1]
+    if kind == "dtype":
+        return np.dtype(args[0]).type
+    if kind == "sequence":
+        items = tuple(_literal_argument(item) for item in args[0])
+        return _UNKNOWN_ARGUMENT if any(item is _UNKNOWN_ARGUMENT for item in items) else items
+    if kind == "unary" and args[0] in (ast.UAdd, ast.USub):
+        value = _literal_argument(args[1])
+        if type(value) in (int, float, complex):
+            return _UNARY[args[0]](value)
+    return _UNKNOWN_ARGUMENT
+
+
+def _axis_integer(item):
+    return type(item) is int or (type(item) in _NP_SCALARS and np.dtype(type(item)).kind in "iu")
+
+
+def _validate_argument(name, key, value, node=None):
+    """Validate admitted values; never coerce arbitrary objects to metadata."""
+    if value is _UNKNOWN_ARGUMENT:
+        return
+    valid = True
+    if key == "axis":
+        valid = value is None or _axis_integer(value)
+        if type(value) is tuple and name not in {
+            "argmin",
+            "argmax",
+            "cumsum",
+            "cumprod",
+            "cumulative_sum",
+            "cumulative_prod",
+        }:
+            valid = all(_axis_integer(item) for item in value) and len(set(value)) == len(value)
+    elif key in {"keepdims", "copy", "subok"}:
+        valid = type(value) in (bool, np.bool_)
+    elif key in {"ddof", "correction"}:
+        valid = type(value) in (int, float) or (
+            type(value) in _NP_SCALARS and np.dtype(type(value)).kind in "iuf"
+        )
+    elif key == "dtype":
+        if value is not None and type(value) not in (str, tuple, type, np.str_):
+            _reject(f"invalid {key!r} argument for {name!r}", node)
+        try:
+            valid = not np.dtype(value).hasobject
+        except (TypeError, ValueError):
+            valid = False
+    elif key == "casting":
+        valid = type(value) is str and value in {"no", "equiv", "safe", "same_kind", "unsafe"}
+    elif key == "order":
+        valid = type(value) is str and value in {"C", "F", "A", "K"}
+    if not valid:
+        _reject(f"invalid {key!r} argument for {name!r}", node)
+
+
+def _check_call_contract(name, positional, keywords, node=None, *, literal=False):
+    if name not in _REDUCTION_KEYWORDS and name != "astype":
+        return
+    if name == "astype" and len(positional) < 2 and "dtype" not in keywords:
+        _reject("astype requires a dtype argument", node)
+    for key, value in keywords.items():
+        _validate_argument(name, key, _literal_argument(value) if literal else value, node)
+    # These common prefix positions agree across approved receivers.
+    positions = ((1, "dtype"),) if name == "astype" else ((1, "axis"),)
+    if name in {
+        "sum",
+        "prod",
+        "mean",
+        "std",
+        "var",
+        "cumsum",
+        "cumprod",
+        "cumulative_sum",
+        "cumulative_prod",
+    }:
+        positions += ((2, "dtype"),)
+    for index, key in positions:
+        if len(positional) > index:
+            if key in keywords:
+                _reject(f"duplicate {key!r} argument for {name!r}", node)
+            value = positional[index]
+            _validate_argument(name, key, _literal_argument(value) if literal else value, node)
+    if "ddof" in keywords and "correction" in keywords:
+        _reject(f"cannot supply both ddof and correction for {name!r}", node)
+
+
 def _check_signature(name, count, keywords, node):
     if name in _ELEMENTWISE:
         low, high = (2, 2) if name in _BINARY_CALLS else (1, 1)
@@ -487,7 +601,9 @@ def _check_signature(name, count, keywords, node):
             allowed |= {"min", "max", "a_min", "a_max", "decimals", "shape"}
     elif name in _REDUCTIONS:
         low, high = 1, 6
-        allowed = {"axis", "dtype", "out", "keepdims", "initial", "where", "ddof", "correction"}
+        allowed = _REDUCTION_KEYWORDS[name]
+    elif name == "astype":
+        low, high, allowed = 1, 6, _CAST_KEYWORDS
     elif name in _DTYPES:
         low, high, allowed = 0, 1, set()
     elif name in ("len", "slice"):
@@ -526,7 +642,7 @@ class ExpressionGraph:
                 return cache[node]
             kind, *args = node
             if kind == "literal":
-                result = args[0]
+                result = args[1]
             elif kind == "name":
                 result = operands[args[0]]
             elif kind == "dtype":
@@ -590,10 +706,10 @@ def parse_expression(text):  # noqa: C901
         if isinstance(node, ast.Constant):
             if type(node.value) not in (int, float, complex, bool, str, bytes, type(None), type(Ellipsis)):
                 _reject("unsupported literal", node)
-            return ("literal", node.value)
+            return ("literal", type(node.value), node.value)
         if isinstance(node, ast.Name):
             if node.id in ("nan", "inf"):
-                return ("literal", float(node.id))
+                return ("literal", float, float(node.id))
             if node.id in _DTYPES:
                 return ("dtype", node.id)
             if node.id in ("np", "numpy", "blosc2"):
@@ -614,7 +730,7 @@ def parse_expression(text):  # noqa: C901
             return (
                 "slice",
                 *(
-                    child(x) if x is not None else ("literal", None)
+                    child(x) if x is not None else ("literal", type(None), None)
                     for x in (node.lower, node.upper, node.step)
                 ),
             )
@@ -646,17 +762,19 @@ def parse_expression(text):  # noqa: C901
                 _reject("unapproved callable", node)
             if name not in (_METHODS if method else _CALLS):
                 _reject(f"unapproved numerical operation {name!r}", node)
-            if any(kw.arg not in _KEYWORDS for kw in node.keywords):
+            if any(kw.arg not in (_KEYWORDS | _CAST_KEYWORDS) for kw in node.keywords):
                 _reject(f"unapproved keyword for {name!r}", node)
             if len({kw.arg for kw in node.keywords}) != len(node.keywords):
                 _reject("duplicate keyword", node)
             if not (method and name == "slice"):
                 _check_signature(name, len(positional), [kw.arg for kw in node.keywords], node)
+            keywords = {kw.arg: child(kw.value) for kw in node.keywords}
+            _check_call_contract(name, positional, keywords, node, literal=True)
             return (
                 "method" if method else "call",
                 name,
                 positional,
-                tuple((kw.arg, child(kw.value)) for kw in node.keywords),
+                tuple(keywords.items()),
             )
         return _reject(f"unsupported syntax {type(node).__name__}", node)
 
@@ -785,9 +903,12 @@ def _dispatch(name, values, kwargs, prefer_blosc, *, method=False):
     import blosc2
     from blosc2.utils import _NUMPY_ALIASES
 
+    _check_call_contract(name, values, kwargs)
     if method:
         receiver, *values = values
         validate_operand(receiver)
+        if name == "astype" and type(receiver) is not np.ndarray:
+            _reject("astype requires an admitted NumPy array; no streaming Blosc2 cast is registered")
         # Receiver is admitted before accessing this explicitly registered method.
         return getattr(receiver, name)(*values, **kwargs)
     if name == "slice":
