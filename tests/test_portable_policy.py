@@ -10,13 +10,14 @@ from blosc2.b2objects import decode_b2object_payload
 
 
 @pytest.mark.parametrize("policy", ["safe", "full"])
-def test_nested_legacy_effective_policy(tmp_path, policy):
+@pytest.mark.parametrize("expression", ["x + 1", "sqrt(x)"])
+def test_nested_legacy_effective_policy(tmp_path, policy, expression):
     fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
     carrier = blosc2.empty((5,), dtype="float64", meta={"b2o": {"kind": "lazyexpr", "version": 1}})
     carrier.schunk.vlmeta["b2o"] = {
         "kind": "lazyexpr",
         "version": 1,
-        "expression": "x + 1",
+        "expression": expression,
         "operands": {"x": {"kind": "urlpath", "version": 1, "urlpath": str(fixture)}},
     }
     if policy == "safe":
@@ -97,9 +98,58 @@ def test_ctable_legacy_metadata_policy_before_reconstruction(monkeypatch):
             {"name": "bad", "col_deps": [], "dtype": "int64", "kind": "dsl", "dsl_source": "invalid"}
         ]
     }
-    with pytest.raises(blosc2.UnsafeDeserializationError):
+    with pytest.raises(
+        blosc2.UnsafeDeserializationError, match=r"block/batch-dependent.*deserialize='full'"
+    ):
         table._load_computed_cols_from_schema(schema)
     table._computed_cols = {"x": {"kind": "dsl"}}
     table._materialized_cols = {}
     with pytest.raises(TypeError, match="row-domain"):
         table._preflight_portable_persistence()
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_legacy_table_recipes_retain_full_opt_in(tmp_path, generated):
+    from dataclasses import dataclass
+
+    @dataclass
+    class Row:
+        x: float = 0.0
+
+    path = str(tmp_path / "legacy.b2d")
+    table = blosc2.CTable(
+        Row, urlpath=path, mode="w", new_data={"x": [2.0, 4.0]}, create_summary_index=False
+    )
+    if generated:
+        table.add_column("old", blosc2.float64(), values=np.array([4.0, 6.0]))
+    schema = table._schema_dict_with_computed()
+    recipe = {
+        "name": "old",
+        "dsl_source": "def old(x):\n    return x + sum(x)\n",
+        "col_deps": ["x"],
+        "dtype": "float64",
+    }
+    if generated:
+        recipe.update(transformer_kind="dsl", stale=False, computed_column=None, expression=None)
+        schema["materialized_columns"] = [recipe]
+    else:
+        recipe["kind"] = "dsl"
+        schema["computed_columns"] = [recipe]
+    table._storage.save_schema(schema)
+    table.close()
+    with pytest.raises(
+        blosc2.UnsafeDeserializationError, match=r"block/batch-dependent.*deserialize='full'"
+    ):
+        blosc2.CTable.open(path)
+    trusted = blosc2.CTable.open(path, mode="a", deserialize="full")
+    if generated:
+        expected_batch = trusted._evaluate_dsl_materialized_batch(
+            trusted._materialized_cols["old"], {"x": np.array([8.0])}
+        )
+        trusted.append({"x": 8.0})
+        # Appended batches retain their old groups rather than adopting the new API contract.
+        np.testing.assert_array_equal(trusted["old"][:], [4.0, 6.0, expected_batch[0]])
+    else:
+        # The original two-row execution block, not independent one-lane rows.
+        np.testing.assert_array_equal(trusted["old"][:], [8.0, 10.0])
+    trusted.close()

@@ -1,5 +1,40 @@
 # Portable DSL 1.0 implementation progress
 
+## Table API and LazyExpr compatibility follow-up
+
+The user approved unifying table kernel registration and restoring ordinary
+LazyExpr persistence, then explicitly requested **no `add_portable_*` aliases**.
+The final policy retains trusted legacy execution through explicit
+`deserialize="full"`; it supersedes the briefly proposed unconditional rejection.
+
+- `add_computed_column()` / `add_generated_column()` now export and validate
+  authored kernels and accept native artifacts with named bindings. Positional
+  lists and column-bound DSL LazyUDFs adopt the same independent-row contract.
+  `assign()` uses the same normalization; new registrations have no vector-column
+  fallback. String/lazy expressions and non-kernel row transformers are unchanged.
+- Removed the separate portable-column methods and public `row_domain` argument.
+  New metadata omits `row_domain`; prior draft metadata with the independent
+  marker still validates, and unknown grouping markers reject. Fixed-shape row
+  reductions use `cardinality="block_scalar"`.
+- Safe loading rejects legacy table-column recipes before source reconstruction,
+  with an explicit message naming block/batch-dependent behavior and the trusted
+  `"full"` opt-in. Full loading preserves legacy execution, not reinterpretation.
+- Removed the new arithmetic-only LazyExpr AST restriction. Existing expression
+  validation remains. Ordinary numerical-expression round-trip tests now reopen
+  with the default policy; nested legacy/proxy/other full-only payloads stay gated.
+- Added default round trips for `sqrt(x)`, `sum(x)`, `x.mean()` and `x[0]`, row-local
+  reduction tests, persisted legacy computed/generated opt-in tests, and artifact
+  registration/no-mutation checks. Updated API docs, release notes and example.
+
+Verification and final CI run links are recorded below as they complete. Earlier
+sections describe the original API and are historical where they differ here.
+
+Local verification: the full default suite (including module doctests) passed
+**11,291 cases**, with 55 existing skips. All 284 independent math samples passed, the Menudet
+example ran, and Ruff/format/whitespace checks passed. Sphinx completed with no
+ERROR diagnostics or warnings on the modified Menudet/persistence pages; the
+previous unrelated whole-tree warnings remain outside this change.
+
 ## Published release certification — green platform matrix
 
 The user authorized publishing changes and monitoring/fixing CI until green.

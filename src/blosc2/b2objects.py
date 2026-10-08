@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import ast
 import pathlib
 from typing import Any
 
@@ -161,26 +160,6 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None, deserialize="safe"
     from blosc2.lazyexpr import validate_expr
 
     validate_expr(expression)
-    if normalize_deserialize(deserialize) is DeserializeMode.SAFE:
-        allowed = (
-            ast.Expression,
-            ast.BinOp,
-            ast.UnaryOp,
-            ast.BoolOp,
-            ast.Compare,
-            ast.Name,
-            ast.Load,
-            ast.Constant,
-            ast.operator,
-            ast.unaryop,
-            ast.boolop,
-            ast.cmpop,
-        )
-        if any(
-            not isinstance(node, allowed) or (isinstance(node, ast.Name) and node.id not in operands_payload)
-            for node in ast.walk(ast.parse(expression, mode="eval"))
-        ):
-            raise UnsafeDeserializationError("non-arithmetic lazy expression")
     operands, missing_ops = decode_operand_mapping(
         operands_payload, base_path=carrier_path, deserialize=deserialize
     )

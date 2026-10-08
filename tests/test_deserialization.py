@@ -186,6 +186,17 @@ def test_active_top_level_object_requires_full(tmp_path):
     np.testing.assert_array_equal(trusted[:], np.arange(4) + 1)
 
 
+@pytest.mark.parametrize("expression", ["sqrt(x)", "sum(x)", "x.mean()", "x[0]"])
+def test_ordinary_lazyexpr_roundtrip_defaults_safe(tmp_path, expression):
+    values = np.arange(1, 5, dtype="float64")
+    operand = blosc2.asarray(values, urlpath=tmp_path / "operand.b2nd", mode="w")
+    lazy = blosc2.lazyexpr(expression, operands={"x": operand})
+    expected = lazy[()]
+    path = tmp_path / "expression.b2nd"
+    lazy.save(path)
+    np.testing.assert_allclose(blosc2.open(path)[()], expected)
+
+
 @pytest.mark.parametrize("value", [True, False, "unknown", None])
 def test_invalid_deserialize_mode(value):
     source = blosc2.SChunk()

@@ -138,10 +138,12 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     source = blosc2.DSLKernel.from_source("def rows(x):\n    return sum(x) + _flat_idx + _n0\n")
     kernel = blosc2.PortableKernel.from_json(source.export({"x": "int64"}, "int64", version="1.0", ndim=1))
     table = blosc2.CTable(Row, new_data={"x": [2, 4]}, create_summary_index=False)
-    table.add_portable_computed_column("virtual", kernel, inputs={"x": "x"}, row_domain="independent")
-    table.add_portable_generated_column(
-        "stored", source, dtype="int64", inputs={"x": "x"}, row_domain="independent"
-    )
+    table.add_computed_column("virtual", kernel, inputs={"x": "x"})
+    old_draft = {**table._computed_cols["virtual"], "row_domain": "independent"}
+    assert table._validate_portable_table_metadata(old_draft)["kind"] == "portable"
+    with pytest.raises(ValueError, match="independent"):
+        table._validate_portable_table_metadata({**old_draft, "row_domain": "dynamic"})
+    table.add_generated_column("stored", values=source, dtype="int64", inputs={"x": "x"})
     np.testing.assert_array_equal(table["virtual"][:], [3, 5])
     table.append({"x": 8})
     np.testing.assert_array_equal(table["stored"][:], [3, 5, 9])
@@ -173,7 +175,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     np.testing.assert_array_equal(copied["stored"][:], [3, 9, 11, 13, 15])
     constructor = blosc2.DSLKernel.from_source("def constant_row():\n    return _n0\n")
     constructed = blosc2.PortableKernel.from_json(constructor.export({}, "int64", version="1.0", ndim=1))
-    copied.add_portable_generated_column("constant", constructed, inputs={}, row_domain="independent")
+    copied.add_generated_column("constant", values=constructed, inputs={})
     copied.append({"x": 16})
     copied.refresh_generated_column("constant")
     np.testing.assert_array_equal(copied["constant"][:], np.ones(6, dtype="int64"))
@@ -183,8 +185,10 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     with pytest.raises(blosc2.PortableArtifactError):
         copied.save(str(sentinel))
     assert sentinel.read_bytes() == b"original destination"
-    with pytest.raises(ValueError, match="independent"):
-        table.add_portable_computed_column("invalid", kernel, inputs={"x": "x"}, row_domain="dynamic")
+    with pytest.raises(TypeError, match="row_domain"):
+        table.add_computed_column("invalid", kernel, inputs={"x": "x"}, row_domain="dynamic")
+    assert not hasattr(table, "add_portable_computed_column")
+    assert not hasattr(table, "add_portable_generated_column")
 
     @dataclass
     class TextRow:
@@ -192,9 +196,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
 
     text_table = blosc2.CTable(TextRow, new_data={"label": ["ß a", "ab"]}, create_summary_index=False)
     upper = blosc2.DSLKernel.from_source("def upper_row(x):\n    return upper(x)\n")
-    text_table.add_portable_generated_column(
-        "upper", upper, dtype="U4", inputs={"x": "label"}, row_domain="independent"
-    )
+    text_table.add_generated_column("upper", values=upper, dtype="U4", inputs={"x": "label"})
     text_table.append({"label": "z"})
     np.testing.assert_array_equal(text_table["upper"][:], ["SS A", "AB", "Z"])
 
@@ -207,15 +209,53 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
         VectorRow, new_data={"vector": [[1, 2, 3], [4, 5, 6]], "bias": [1, 2]}, create_summary_index=False
     )
     total = blosc2.DSLKernel.from_source("def total_row(x, bias):\n    return sum(x + bias) + _n0\n")
-    vector_table.add_portable_generated_column(
+    vector_table.add_generated_column(
         "total",
-        total,
+        values=total,
         dtype="int64",
         cardinality="block_scalar",
         inputs={"x": "vector", "bias": "bias"},
-        row_domain="independent",
     )
     vector_table.append({"vector": [7, 8, 9], "bias": 3})
     vector_table.refresh_generated_column("total")
     restored = blosc2.ctable_from_cframe(vector_table.to_cframe())
     np.testing.assert_array_equal(restored["total"][:], [12, 24, 36])
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_unified_table_registration_is_row_local_and_validated(tmp_path, generated):
+    @dataclass
+    class Row:
+        amount: float = 0.0
+
+    table = blosc2.CTable(
+        Row,
+        urlpath=str(tmp_path / "rows.b2d"),
+        mode="w",
+        new_data={"amount": [2.0, 4.0, 8.0]},
+        create_summary_index=False,
+    )
+    kernel = blosc2.DSLKernel.from_source("def center(x):\n    return x - mean(x)\n")
+    if generated:
+        table.add_generated_column("centered", values=kernel, inputs={"x": "amount"}, create_index=True)
+    else:
+        table.add_computed_column("centered", kernel, inputs={"x": "amount"})
+    np.testing.assert_array_equal(table["centered"][:], [0, 0, 0])
+    table.append({"amount": 16.0})
+    np.testing.assert_array_equal(table["centered"][1:3], [0, 0])
+    schema = table._schema_dict_with_computed()
+    recipe = schema["materialized_columns" if generated else "computed_columns"][0]
+    assert "row_domain" not in recipe
+    assert "dsl_source" not in recipe
+    invalid = blosc2.DSLKernel.from_source("def invalid(x):\n    return callback(x)\n")
+    if generated:
+        with pytest.raises(blosc2.PortableArtifactError):
+            table.add_generated_column("invalid", values=invalid, inputs={"x": "amount"})
+    else:
+        with pytest.raises(blosc2.PortableArtifactError):
+            table.add_computed_column("invalid", invalid, inputs={"x": "amount"})
+    assert "invalid" not in table.col_names
+    table.close()
+    restored = blosc2.CTable.open(str(tmp_path / "rows.b2d"))
+    np.testing.assert_array_equal(restored["centered"][:], [0, 0, 0, 0])
+    restored.close()

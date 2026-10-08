@@ -86,6 +86,13 @@ def test_dsl_computed_callable_lazyudf_form():
     np.testing.assert_array_equal(np.asarray(t["r"][:]), np.arange(20) + 20)
 
 
+def test_assign_dsl_lazyudf_uses_portable_rows():
+    t = _make_table()
+    view = t.assign(r=blosc2.lazyudf(k_loop, (t.a, t.b), dtype=np.int64))
+    assert view._computed_cols["r"]["kind"] == "portable"
+    np.testing.assert_array_equal(view["r"][:], np.arange(20) + 20)
+
+
 def test_dsl_computed_partial_slice():
     t = _make_table()
     t.add_computed_column("r", k_add, inputs=["a", "b"])
@@ -152,17 +159,17 @@ def test_dsl_computed_in_where_streams_multichunk():
 def test_dsl_computed_roundtrip(tmp_path):
     path = str(tmp_path / "dsl.b2d")
     t = _make_table(urlpath=path, mode="w")
-    with pytest.raises(TypeError, match="portable artifacts"):
-        t.add_computed_column("r", k_loop, inputs=["a", "b"])
+    t.add_computed_column("r", k_loop, inputs={"x": "a", "y": "b"})
     t.close()
 
-    # Rejection leaves no source-backed computed recipe in the stored schema.
+    # New registration stores an artifact rather than Python source.
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    assert "computed_columns" not in sd
+    assert sd["computed_columns"][0]["kind"] == "portable"
+    assert "dsl_source" not in sd["computed_columns"][0]
 
     t2 = blosc2.open(path)
-    assert "r" not in t2.col_names
+    np.testing.assert_array_equal(t2["r"][:], np.arange(20) + 20)
     t2.close()
 
 
@@ -224,14 +231,14 @@ def test_dsl_generated_create_index():
 def test_dsl_generated_roundtrip(tmp_path):
     path = str(tmp_path / "gen.b2d")
     t = _make_table(n=10, urlpath=path, mode="w")
-    with pytest.raises(TypeError, match="portable artifacts"):
-        t.add_generated_column("g", values=k_add, inputs=["a", "b"], dtype=blosc2.int64())
+    t.add_generated_column("g", values=k_add, inputs={"x": "a", "y": "b"}, dtype=blosc2.int64())
     t.close()
 
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    assert "materialized_columns" not in sd
+    assert sd["materialized_columns"][0]["transformer_kind"] == "portable"
+    assert "dsl_source" not in sd["materialized_columns"][0]
 
     t2 = blosc2.open(path)
-    assert "g" not in t2.col_names
+    np.testing.assert_array_equal(t2["g"][:], np.arange(10) + 10)
     t2.close()

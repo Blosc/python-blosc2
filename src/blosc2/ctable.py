@@ -12169,7 +12169,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         col_deps = cc["col_deps"]
         if cc.get("kind") == "portable":
-            return f"portable[{cc['row_domain']}]({', '.join(col_deps)})"
+            return f"portable[independent]({', '.join(col_deps)})"
         if cc.get("kind") == "dsl":
             kernel = cc.get("kernel")
             kname = getattr(kernel, "__name__", "dsl_kernel")
@@ -12271,7 +12271,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                             "kind": "portable",
                             "artifact": cc["artifact"],
                             "bindings": cc["bindings"],
-                            "row_domain": cc["row_domain"],
                             "row_shape": list(cc["row_shape"]),
                             "col_deps": cc["col_deps"],
                             "dtype": str(cc["dtype"]),
@@ -12314,9 +12313,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if "transformer" in meta:
                     entry["transformer"] = meta["transformer"]
                 if meta.get("transformer_kind") == "portable":
-                    entry.update(
-                        {key: meta[key] for key in ("artifact", "bindings", "row_domain", "row_shape")}
-                    )
+                    entry.update({key: meta[key] for key in ("artifact", "bindings", "row_shape")})
                 if meta.get("dsl_source") is not None:
                     entry["dsl_source"] = meta["dsl_source"]
                 if meta.get("jit_backend") is not None:
@@ -12562,9 +12559,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 desc = self._validate_portable_table_metadata(meta)
                 if self._cols[meta["name"]].dtype != desc["dtype"]:
                     raise ValueError("Stored portable output dtype disagrees with native signature")
-                loaded.update(
-                    {key: desc[key] for key in ("artifact", "bindings", "row_domain", "row_shape", "kernel")}
-                )
+                loaded.update({key: desc[key] for key in ("artifact", "bindings", "row_shape", "kernel")})
             if meta.get("dsl_source") is not None:
                 loaded["dsl_source"] = meta["dsl_source"]
             if meta.get("jit_backend") is not None:
@@ -12588,7 +12583,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             getattr(getattr(storage, "_store", None), "_deserialize_mode", "safe"),
         )
         if legacy and normalize_deserialize(policy) is not DeserializeMode.FULL:
-            raise UnsafeDeserializationError("legacy DSL table columns")
+            raise UnsafeDeserializationError(
+                "legacy DSL table columns with block/batch-dependent evaluation",
+                location="CTable column recipes",
+                hint="Reopen with deserialize='full' only if you trust this data and "
+                "intend to retain legacy table-kernel behavior.",
+            )
 
     def _preflight_portable_persistence(self):
         for meta in [*self._computed_cols.values(), *self._materialized_cols.values()]:
@@ -12600,8 +12600,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ):
             raise TypeError(
                 "Source-authored vector table columns have no explicit row-domain contract; "
-                "use add_portable_computed_column or add_portable_generated_column with "
-                "the DSLKernel, dtype=..., and row_domain='independent'. "
+                "use add_computed_column or add_generated_column with "
+                "the DSLKernel, named inputs, and dtype=.... "
                 "Legacy source metadata is not automatically migrated."
             )
 
@@ -12964,26 +12964,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             col_deps.append(cname)
         return col_deps
 
-    def _resolve_dsl_kernel(self, kernel, inputs) -> tuple[Any, list[str]]:
-        """Validate a bare DSL kernel + its ``inputs`` column bindings."""
-        if kernel.dsl_error is not None:
-            raise blosc2.DSLSyntaxError(f"Invalid DSL kernel: {kernel.dsl_error}")
-        if inputs is None:
-            raise TypeError(
-                "A DSL kernel passed directly requires inputs=[...] naming one source "
-                "column per kernel parameter."
-            )
-        col_deps = list(inputs)
-        expected = kernel.input_names
-        if expected is not None and len(col_deps) != len(expected):
-            raise ValueError(
-                f"DSL kernel expects {len(expected)} input(s) {expected}, "
-                f"but inputs={col_deps} provides {len(col_deps)}."
-            )
-        for d in col_deps:
-            self._validate_transformer_dep(d)
-        return kernel, col_deps
-
     def _guard_utf8_kernel_deps(self, col_deps) -> None:
         """Refuse a UDF/DSL kernel that reads a utf8 column, naming the column.
 
@@ -13009,30 +12989,39 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     )
                 )
 
-    def _normalize_transformer(self, expr, inputs=None) -> dict:
+    def _normalize_transformer(self, expr, inputs=None, *, dtype=None, cardinality="elementwise") -> dict:
         """Resolve *expr* into a transformer descriptor.
 
         Returns one of::
 
             {"kind": "expression", "lazy": <LazyExpr>, "col_deps": [...]}
-            {"kind": "dsl",        "kernel": <DSLKernel>, "col_deps": [...]}
+            {"kind": "portable", "kernel": <PortableKernel>, "bindings": {...}, ...}
 
         A ``@blosc2.dsl_kernel`` is accepted either directly (with *inputs*
         naming one source column per kernel parameter) or as a ``LazyUDF``
         returned by a callable (then operands are matched to columns by
         identity and *inputs* is ignored).
+        New kernel registrations always validate/export Menudet and evaluate
+        independent rows; only loaded legacy recipes use vector-column execution.
         """
-        if isinstance(expr, blosc2.DSLKernel):
-            if not isinstance(self._storage, InMemoryTableStorage):
-                raise TypeError("Persisting full DSL table columns is unsupported; use portable artifacts")
-            kernel, col_deps = self._resolve_dsl_kernel(expr, inputs)
-            self._guard_utf8_kernel_deps(col_deps)
-            return {"kind": "dsl", "kernel": kernel, "col_deps": col_deps}
+        if isinstance(expr, blosc2.DSLKernel | blosc2.PortableKernel):
+            names = expr.input_names if isinstance(expr, blosc2.DSLKernel) else list(expr.input_dtypes)
+            if inputs is None:
+                raise TypeError("A table kernel requires inputs= naming one source column per parameter")
+            if isinstance(inputs, Mapping):
+                bindings = dict(inputs)
+            else:
+                if len(inputs) != len(names):
+                    raise ValueError(f"Kernel expects {len(names)} inputs, but received {len(inputs)}")
+                bindings = dict(zip(names, inputs, strict=True))
+            self._guard_utf8_kernel_deps(bindings.values())
+            if isinstance(expr, blosc2.DSLKernel):
+                output_dtype = dtype if isinstance(dtype, type) else getattr(dtype, "dtype", dtype)
+                dtype = self._dsl_result_dtype(expr, list(bindings.values()), output_dtype)
+            return self._portable_table_descriptor(expr, bindings, dtype=dtype, cardinality=cardinality)
         # Resolve a callable once (a lambda may return a LazyExpr or a LazyUDF).
         obj = expr(self._cols) if (callable(expr) and not isinstance(expr, blosc2.LazyExpr)) else expr
         if isinstance(obj, blosc2.LazyUDF):
-            if not isinstance(self._storage, InMemoryTableStorage):
-                raise TypeError("Persisting full DSL table columns is unsupported; use portable artifacts")
             if not isinstance(obj.func, blosc2.DSLKernel):
                 raise TypeError(
                     "Only LazyUDFs backed by a @blosc2.dsl_kernel are supported as CTable columns."
@@ -13042,12 +13031,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 raise blosc2.DSLSyntaxError(f"Invalid DSL kernel: {kernel.dsl_error}")
             col_deps = self._dsl_deps_from_lazyudf(obj)
             self._guard_utf8_kernel_deps(col_deps)
-            return {
-                "kind": "dsl",
-                "kernel": kernel,
-                "col_deps": col_deps,
-                "jit_backend": obj.kwargs.get("jit_backend"),
-            }
+            return self._normalize_transformer(
+                kernel,
+                dict(zip(kernel.input_names, col_deps, strict=True)),
+                dtype=obj.dtype if dtype is None else dtype,
+                cardinality=cardinality,
+            )
         lazy, col_deps = self._normalize_expression_transformer(obj)
         # Guard: verify the expression string round-trips before storing.
         # An empty string means the LazyExpr was not fully constructed, and a
@@ -13175,12 +13164,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     queue.append(name)
         return affected
 
-    def _portable_table_descriptor(
-        self, kernel, bindings, row_domain, *, dtype=None, cardinality="elementwise"
-    ):
+    def _portable_table_descriptor(self, kernel, bindings, *, dtype=None, cardinality="elementwise"):
         if isinstance(kernel, blosc2.DSLKernel):
-            if row_domain != "independent":
-                raise ValueError("Authored table kernels require explicit row_domain='independent'")
             if dtype is None:
                 raise ValueError("Authored portable table kernels require an explicit output dtype")
             bindings = dict(bindings)
@@ -13203,8 +13188,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             )
         if not isinstance(kernel, blosc2.PortableKernel):
             raise TypeError("Portable table transformers require a validated PortableKernel")
-        if row_domain != "independent":
-            raise ValueError("Only explicit independent-row portable table groups are implemented")
+        output_dtype = dtype if isinstance(dtype, type) else getattr(dtype, "dtype", dtype)
+        if dtype is not None and np.dtype(output_dtype) != kernel.output_dtype:
+            raise ValueError("Output dtype disagrees with the portable kernel signature")
         if kernel.schema_version != "1.0":
             raise ValueError("Independent rows require portable 1.0")
         bindings = dict(bindings)
@@ -13227,7 +13213,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             "kernel": kernel,
             "artifact": kernel.to_json(),
             "bindings": bindings,
-            "row_domain": row_domain,
             "row_shape": row_shape,
             "col_deps": list(dict.fromkeys(bindings.values())),
             "dtype": kernel.output_dtype,
@@ -13235,7 +13220,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _validate_portable_table_metadata(self, meta):
         kernel = blosc2.PortableKernel.from_json(meta["artifact"])
-        desc = self._portable_table_descriptor(kernel, meta["bindings"], meta["row_domain"])
+        if meta.get("row_domain", "independent") != "independent":
+            raise ValueError("Only independent-row portable table groups are implemented")
+        desc = self._portable_table_descriptor(kernel, meta["bindings"])
         if (
             desc["dtype"] != np.dtype(meta["dtype"])
             or desc["col_deps"] != meta["col_deps"]
@@ -13273,49 +13260,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             value = kernel.evaluate_block(inputs, block_shape=row_shape, **context)
             result[row] = value[()] if value.shape == () else value[0]
         return result
-
-    def add_portable_computed_column(
-        self, name, kernel, *, inputs, row_domain, dtype=None, cardinality="elementwise"
-    ):
-        """Bind a native row transformer with explicit independent grouping.
-
-        Each row's ND domain is (1,), origin (0,); append, refresh, deletion and
-        compaction do not change group membership or synthesize global row indices.
-        Fixed-shape row operands use their complete row domain for scalar native
-        reductions. Multi-row partitions/dynamic global coordinates reject explicitly.
-        A newly authored DSLKernel is normalized/validated before mutation; supply
-        dtype and, for row reductions, cardinality='block_scalar'. A PortableKernel
-        already carries that signature. The older vector-column DSL API does not
-        declare independent row grouping and is not converted implicitly.
-        """
-        if self.base is not None or self._read_only:
-            raise ValueError("Portable columns require a writable root table")
-        _validate_column_name(name)
-        if name in self._cols or name in self._computed_cols:
-            raise ValueError("Column already exists")
-        desc = self._portable_table_descriptor(
-            kernel, inputs, row_domain, dtype=dtype, cardinality=cardinality
-        )
-        self._computed_cols[name] = desc
-        self.col_names.append(name)
-        self._col_widths[name] = max(len(name), 15)
-        if isinstance(self._storage, FileTableStorage):
-            self._storage.save_schema(self._schema_dict_with_computed())
-
-    def add_portable_generated_column(
-        self, name, kernel, *, inputs, row_domain, dtype=None, cardinality="elementwise"
-    ):
-        """Store an independent-row native transformer, retaining it for append/refresh."""
-        desc = self._portable_table_descriptor(
-            kernel, inputs, row_domain, dtype=dtype, cardinality=cardinality
-        )
-        raw = {dep: self[dep][:] for dep in desc["col_deps"]}
-        values = self._evaluate_portable_rows(desc, raw, count=len(self))
-        spec = self._coerce_generated_spec(None, values)
-        self.add_column(name, spec, values=values)
-        self._materialized_cols[name] = {**desc, "transformer_kind": "portable", "stale": False}
-        if isinstance(self._storage, FileTableStorage):
-            self._storage.save_schema(self._schema_dict_with_computed())
 
     def _mark_generated_columns_stale(self, source: str) -> None:
         affected = self._generated_dependency_closure(source)
@@ -13450,11 +13394,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         values: str
         | blosc2.LazyExpr
         | blosc2.DSLKernel
+        | blosc2.PortableKernel
         | Callable[[dict[str, Any]], blosc2.LazyExpr]
         | RowTransformer,
         dtype=None,
         create_index: bool = False,
-        inputs: list[str] | None = None,
+        inputs: Mapping[str, str] | list[str] | None = None,
+        cardinality: str = "elementwise",
     ) -> None:
         """Add a stored generated column maintained by the table.
 
@@ -13470,7 +13416,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             add_generated_column(name, *, values="price * qty", dtype=..., create_index=False)
             add_generated_column(name, *, values=lazy_expr, dtype=...)
-            add_generated_column(name, *, values=dsl_kernel, inputs=["price", "qty"], dtype=...)
+            add_generated_column(name, *, values=dsl_kernel,
+                                 inputs={"price": "price", "qty": "qty"}, dtype=...)
             add_generated_column(name, *, values=blosc2.lazyudf(dsl_kernel, (t.price, t.qty)))
             add_generated_column(name, *, values=lambda cols: cols["price"] * 1.21, dtype=...)
             add_generated_column(name, *, values=t.embedding.row_transformer.norm(axis=0), dtype=...)
@@ -13491,17 +13438,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               per row.
             * :class:`blosc2.LazyExpr`: scalar lazy expression over stored
               columns of this table.  It must produce a 1-D scalar stream.
-            * :func:`blosc2.dsl_kernel`-decorated kernel passed directly with
-              ``inputs=[...]`` — one stored scalar column name per kernel
-              parameter, bound positionally.  Produces one scalar per row.
-              The kernel source is persisted and recompiled on open; appended
-              rows are auto-filled and :meth:`refresh_generated_column`
-              recomputes after in-place edits.
+            * :class:`blosc2.DSLKernel` or :class:`blosc2.PortableKernel` with
+              named ``inputs={parameter: column}`` bindings (positional lists
+              are also accepted). Menudet artifacts are validated before
+              registration and persisted without Python reconstruction.
+              Each row is an independent logical group, including its complete
+              fixed-shape array inputs. Appended rows are auto-filled and
+              :meth:`refresh_generated_column` recomputes after in-place edits.
             * :class:`blosc2.LazyUDF` built from a :func:`blosc2.dsl_kernel` via
               :func:`blosc2.lazyudf` — column bindings are inferred by identity
               from the operands, so ``inputs=`` is not needed.  Accepts
               :class:`Column` accessors (``t.col1``) or raw NDArrays as
-              operands.  Same persistence and auto-fill behaviour as above.
+              operands. Same independent-row semantics and persistence as above.
             * callable: called as ``values(self._cols)`` and must return a
               :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
               :func:`blosc2.dsl_kernel`.
@@ -13512,9 +13460,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               may produce either one scalar per row or one fixed-shape ndarray
               item per row.
 
-            Expression and DSL forms currently cannot depend on computed columns
-            and cannot directly consume fixed-shape ndarray columns; use a
-            row-transformer for ndarray row projections/reductions.
+            These forms cannot depend on computed columns. Expressions cannot
+            consume fixed-shape ndarray columns; kernels support scalar row
+            reductions with ``cardinality="block_scalar"``. Row transformers
+            also support fixed-shape vector outputs.
         dtype:
             Output schema or dtype.  Scalar outputs may pass a NumPy dtype or a
             Blosc2 scalar spec such as ``blosc2.float64()``.  Fixed-shape
@@ -13529,10 +13478,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             generated columns raise :class:`ValueError` when indexing is
             requested.
         inputs:
-            Only used when *values* is a bare :func:`blosc2.dsl_kernel`: a list
-            of stored scalar column names, one per kernel parameter, bound
-            positionally.  Not needed when passing a :class:`blosc2.LazyUDF` or
-            a callable — bindings are inferred from the operands in those cases.
+            For bare kernels, a mapping from parameter names to stored columns,
+            or a positional list of column names. LazyUDF bindings are inferred
+            from their operands.
+        cardinality:
+            Result contract for authored kernels: ``"elementwise"`` by default;
+            use ``"block_scalar"`` for fixed-shape row reductions. A
+            :class:`blosc2.PortableKernel` already carries its result contract.
 
         Examples
         --------
@@ -13639,36 +13591,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 "transformer": transformer.to_metadata(),
                 "stale": False,
             }
-        elif (desc := self._normalize_transformer(values, inputs))["kind"] == "dsl":
-            kernel = desc["kernel"]
-            col_deps = desc["col_deps"]
-            compute_dtype = (
-                np.dtype(getattr(dtype, "dtype", dtype))
-                if dtype is not None
-                else self._dsl_result_dtype(kernel, col_deps, None)
-            )
-            jit_backend = desc.get("jit_backend")
-            operands = tuple(self._cols[d] for d in col_deps)
-            generated_values = np.asarray(
-                blosc2.lazyudf(kernel, operands, dtype=compute_dtype, jit_backend=jit_backend).compute()[:]
-            )
-            if generated_values.ndim != 1:
-                raise TypeError("DSL generated columns must produce a 1-D scalar result.")
-            generated_values = (
-                generated_values[self._valid_rows[:]]
-                if len(generated_values) == len(self._valid_rows)
-                else generated_values
-            )
+        elif (desc := self._normalize_transformer(values, inputs, dtype=dtype, cardinality=cardinality))[
+            "kind"
+        ] == "portable":
+            raw = {dep: self[dep][:] for dep in desc["col_deps"]}
+            generated_values = self._evaluate_portable_rows(desc, raw, count=n_live)
             spec = self._coerce_generated_spec(dtype, generated_values)
             metadata = {
+                **desc,
                 "computed_column": None,
                 "expression": None,
-                "dsl_source": kernel.dsl_source,
-                "col_deps": col_deps,
                 "dtype": np.dtype(spec.dtype),
-                "transformer_kind": "dsl",
+                "transformer_kind": "portable",
                 "stale": False,
-                "jit_backend": jit_backend,
             }
         else:
             lazy, col_deps = desc["lazy"], desc["col_deps"]
@@ -13718,10 +13653,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def add_computed_column(
         self,
         name: str,
-        expr: str | blosc2.LazyExpr | blosc2.DSLKernel | Callable[[dict[str, Any]], blosc2.LazyExpr],
+        expr: str
+        | blosc2.LazyExpr
+        | blosc2.DSLKernel
+        | blosc2.PortableKernel
+        | Callable[[dict[str, Any]], blosc2.LazyExpr],
         *,
         dtype: np.dtype | None = None,
-        inputs: list[str] | None = None,
+        inputs: Mapping[str, str] | list[str] | None = None,
+        cardinality: str = "elementwise",
     ) -> None:
         """Add a read-only virtual column computed from stored columns.
 
@@ -13737,7 +13677,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             add_computed_column(name, "price * qty")
             add_computed_column(name, lazy_expr)
-            add_computed_column(name, dsl_kernel, inputs=["price", "qty"])
+            add_computed_column(name, dsl_kernel, inputs={"price": "price", "qty": "qty"})
             add_computed_column(name, blosc2.lazyudf(dsl_kernel, (t.price, t.qty)))
             add_computed_column(name, lambda cols: cols["price"] * cols["qty"])
 
@@ -13753,11 +13693,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               ``"price * qty"``.
             * :class:`blosc2.LazyExpr`: lazy expression over stored columns of
               this table.
-            * :func:`blosc2.dsl_kernel`-decorated kernel passed directly with
-              ``inputs=[...]`` — one stored scalar column name per kernel
-              parameter, bound positionally.  The kernel may use loops,
-              ``if``/``else`` and ``where(...)``.  Its source is persisted and
-              recompiled on open; the column stays virtual/unstored.
+            * :class:`blosc2.DSLKernel` or :class:`blosc2.PortableKernel` with
+              named ``inputs={parameter: column}`` bindings (positional lists
+              are also accepted). Kernels are validated as Menudet before
+              registration and persist without Python reconstruction.
             * :class:`blosc2.LazyUDF` built from a :func:`blosc2.dsl_kernel` via
               :func:`blosc2.lazyudf` — column bindings are inferred by identity
               from the operands, so ``inputs=`` is not needed.  Accepted forms
@@ -13767,16 +13706,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
               :func:`blosc2.dsl_kernel`.
 
-            DSL columns (last three forms) are persisted — their source is stored
-            and recompiled on open — and may be referenced inside :meth:`where`
-            predicates.
+            Kernel columns use independent-row semantics: scalar inputs form
+            one-lane groups and fixed-shape inputs supply their complete row.
+            Reductions never combine different rows. The column remains virtual
+            and may be referenced inside :meth:`where` predicates. Loaded legacy
+            table recipes require ``deserialize="full"`` and retain their old
+            block/batch-dependent semantics, rather than being reinterpreted.
 
             Expressions must depend only on stored columns of this table;
             computed columns cannot depend on other computed columns in this
             version.  Fixed-shape ndarray columns are not accepted in computed
-            column expressions yet.  For row-wise ndarray projections or
-            reductions, use :meth:`add_generated_column` with
-            ``values=t.ndarray_col.row_transformer...``.
+            column expressions yet. Kernels can reduce complete ndarray rows
+            with ``cardinality="block_scalar"``; generated row transformers
+            additionally support vector-valued outputs.
         dtype:
             Optional dtype override for the computed values.  For expression
             forms it is inferred from the resulting :class:`blosc2.LazyExpr`
@@ -13787,11 +13729,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             column inputs.  This changes the dtype reported by the CTable column
             wrapper; it does not create physical storage.
         inputs:
-            Only used when *expr* is a bare :func:`blosc2.dsl_kernel`: a list of
-            stored scalar column names, one per kernel parameter, bound
-            positionally (kernel parameter ``i`` ← ``inputs[i]``).  Not needed
-            when passing a :class:`blosc2.LazyUDF` or a callable — bindings are
-            inferred from the operands in those cases.
+            For bare kernels, a mapping from parameter names to stored columns,
+            or a positional list of column names. LazyUDF bindings are inferred
+            from their operands.
+        cardinality:
+            Result contract for authored kernels: ``"elementwise"`` by default;
+            use ``"block_scalar"`` for fixed-shape row reductions. A
+            :class:`blosc2.PortableKernel` already carries its result contract.
 
         Examples
         --------
@@ -13869,18 +13813,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        desc = self._normalize_transformer(expr, inputs)
-        if desc["kind"] == "dsl":
-            kernel = desc["kernel"]
-            col_deps = desc["col_deps"]
-            self._computed_cols[name] = {
-                "kind": "dsl",
-                "dsl_source": kernel.dsl_source,
-                "kernel": kernel,
-                "col_deps": col_deps,
-                "dtype": self._dsl_result_dtype(kernel, col_deps, dtype),
-                "jit_backend": desc.get("jit_backend"),
-            }
+        desc = self._normalize_transformer(expr, inputs, dtype=dtype, cardinality=cardinality)
+        if desc["kind"] == "portable":
+            self._computed_cols[name] = desc
         else:
             lazy = desc["lazy"]
             self._computed_cols[name] = {
@@ -14015,17 +13950,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         view._col_widths = dict(self._col_widths)
         for name, value in bound.items():
             desc = view._normalize_transformer(value)
-            if desc["kind"] == "dsl":
-                kernel = desc["kernel"]
-                col_deps = desc["col_deps"]
-                view._computed_cols[name] = {
-                    "kind": "dsl",
-                    "dsl_source": kernel.dsl_source,
-                    "kernel": kernel,
-                    "col_deps": col_deps,
-                    "dtype": view._dsl_result_dtype(kernel, col_deps, None),
-                    "jit_backend": desc.get("jit_backend"),
-                }
+            if desc["kind"] == "portable":
+                view._computed_cols[name] = desc
             else:
                 lazy = desc["lazy"]
                 view._computed_cols[name] = {

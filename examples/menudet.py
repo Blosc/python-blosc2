@@ -20,7 +20,7 @@ class Row:
 
 
 table = blosc2.CTable(Row, new_data={"amount": x.tolist()}, create_summary_index=False)
-table.add_portable_computed_column("adjusted", kernel, inputs={"x": "amount"}, row_domain="independent")
+table.add_computed_column("adjusted", kernel, inputs={"x": "amount"})
 np.testing.assert_array_equal(table["adjusted"][:], values)
 print("Table:", table["adjusted"][:])
 

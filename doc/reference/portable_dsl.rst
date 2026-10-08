@@ -150,7 +150,7 @@ that policy propagates through nested references. Loaded legacy recipes are not
 automatically migrated by saving. CTable legacy computed/generated DSL metadata
 has the same explicit policy gate. The older table vector-column DSL API lacks
 an explicit row-domain contract and cannot be silently converted to independent
-rows. Use the authored row API below instead.
+rows when loading. New registrations use the independent-row contract below.
 ``msgpack_unpackb()`` also defaults to safe decoding. Active reconstruction needs
 explicit ``deserialize='full'``; container readers propagate their effective
 policy through nested values instead of relying on the helper's default.
@@ -160,26 +160,26 @@ Draft native table transformers
 
 Scalar stored columns bind to native transformers by name::
 
-    table.add_portable_computed_column("total", kernel, inputs={"x": "amount"},
-                                       row_domain="independent")
-    table.add_portable_generated_column("stored_total", kernel,
-                                        inputs={"x": "amount"},
-                                        row_domain="independent")
+    table.add_computed_column("total", kernel, inputs={"x": "amount"})
+    table.add_generated_column("stored_total", values=kernel,
+                               inputs={"x": "amount"})
 
-These APIs also accept a newly authored ``DSLKernel`` directly, with explicit
-output dtype. Normalization, capture snapshots and native validation finish
+These APIs also accept a newly authored ``DSLKernel`` directly. Specify the
+output dtype when it differs from input type promotion. Normalization, capture snapshots and native validation finish
 before column registration or destination mutation::
 
-    table.add_portable_computed_column(
+    table.add_computed_column(
         "twice", blosc2.DSLKernel.from_source("def twice(x):\n    return x * 2\n"),
-        inputs={"x": "amount"}, dtype="int64", row_domain="independent")
+        inputs={"x": "amount"}, dtype="int64")
 
 For a fixed-shape row reduction, additionally specify
-``cardinality="block_scalar"``. This row-domain declaration is required; no
-grouping is inferred from the old vector-column API, table storage tiles or
-append batches.
+``cardinality="block_scalar"``. Independent-row grouping is the contract of
+kernel registration; there is no ``row_domain`` option or separate
+``add_portable_*`` API. Positional input lists and column-bound DSL LazyUDFs
+also adopt this contract on new registration. String/lazy expressions and
+non-kernel row transformers retain their existing behavior.
 
-The explicit ``independent`` domain means **each scalar row is one original
+The independent domain means **each scalar row is one original
 one-lane group**, not a storage block or a changing table-wide reduction. Rank-one
 coordinates are row-local: shape ``(1,)``, origin ``(0,)``, ``_i0 == 0`` and
 ``_n0 == 1``. Block-scalar and elementwise kernels both yield one scalar per row.
