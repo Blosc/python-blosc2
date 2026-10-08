@@ -586,7 +586,15 @@ from .exceptions import UnsafeDeserializationError
 
 from .c2array import c2context, C2Array, C2NDSource, ChunkAlreadyWritten, URLPath
 
-from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl, validate_dsl_jit
+from .dsl_kernel import (
+    DSLSyntaxError,
+    DSLKernel,
+    dsl_kernel,
+    validate_dsl,
+    validate_dsl_jit,
+    validate_portable_dsl,
+)
+from .portable_kernel import PortableArtifactError, PortableKernel
 from .jit_config import get_jit_options, jit_options, set_jit_options
 from .lazyexpr import (
     LazyExpr,
@@ -908,6 +916,9 @@ __all__ = [  # noqa : RUF022
     "Index",
     "LazyArray",
     "DSLKernel",
+    "validate_portable_dsl",
+    "PortableKernel",
+    "PortableArtifactError",
     "DSLSyntaxError",
     "LazyExpr",
     "LazyUDF",

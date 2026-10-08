@@ -1,5 +1,49 @@
 # Release notes
 
+## Changes from 4.14.2 to 4.15.0 (in development)
+
+### Introducing the Menudet 1.0 draft
+
+**Menudet — a little language for portable computation on arrays and tables.**
+
+- Export normalized `DSLKernel` authoring as validated, standalone JSON artifacts
+  with typed signatures and exact captured constants. Native miniexpr executes
+  imports without reconstructing Python functions or falling back to Python.
+- Support checked integer arithmetic, operand-typed floating computation, control
+  flow, fixed-width strings, logical array coordinates and ordered block reductions.
+- Keep logical reduction groups stable through persistence, partial reads and
+  output rechunking. True block-scalar results expose the logical block-grid shape.
+- Validate kernel inputs to `CTable.add_computed_column()` and
+  `add_generated_column()` as Menudet artifacts with implicit independent-row
+  semantics, including fixed-shape row reductions. Named bindings are supported;
+  positional bindings and column-bound DSL LazyUDFs adopt the same semantics.
+  New cross-row computations must use array partitions or table aggregation,
+  rather than implicit execution blocks or append batches.
+- Remove the draft `add_portable_*` column methods and `row_domain` argument.
+  Fixed-shape row reductions use `cardinality="block_scalar"`.
+- New compliant DSLKernel-backed LazyUDF saves export the draft automatically;
+  unsupported saves fail validation before writing the destination.
+- Historical Python-specific recipes require explicit `deserialize="full"`.
+  MessagePack decoding is safe by default, including nested containers.
+- Saved legacy table-kernel recipes retain their old block/batch-dependent
+  behavior only with trusted, explicit `deserialize="full"`; safe-mode errors
+  explain the opt-in. Recipes are never automatically reinterpreted.
+- Ordinary LazyExpr persistence retains supported numerical calls, reductions,
+  methods and indexing under default loading, with existing expression validation.
+  Full-only nested payloads remain gated. String/lazy expressions and non-kernel
+  row transformers retain their existing table registration behavior.
+
+Menudet 1.0 is a **draft**, not a frozen compatibility promise. The existing
+`DSLKernel` and portable API names remain unchanged. This draft uses the typed
+interpreter; optional JIT requests fall back before execution, while required JIT
+rejects unsupported acceleration. Complex computation, callbacks, arbitrary
+memory access and non-strict floating-point modes are outside the portable contract.
+
+See the [Menudet reference](https://www.blosc.org/python-blosc2/reference/portable_dsl.html)
+for array/table examples, persistence policy and current limitations. Release
+certification is tracked separately; this development entry is not an announcement
+that 4.15.0 has been published.
+
 ## Changes from 4.14.1 to 4.14.2
 
 XXX version-specific blurb XXX

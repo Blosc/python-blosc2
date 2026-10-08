@@ -689,7 +689,64 @@ class DSLValidator:
 
 
 class DSLKernel:
-    """Wrap a Python function and optionally extract a miniexpr DSL kernel from it."""
+    """Wrap a Python function, or construct a native-only kernel with ``from_source``."""
+
+    @classmethod
+    def from_source(cls, source: str) -> DSLKernel:
+        """Construct a native-only kernel without executing Python source.
+
+        Preserve the source, including header pragmas, verbatim. Only the function
+        header is inspected here; miniexpr validates the body when compiling with
+        the input and output dtypes supplied to :func:`blosc2.lazyudf`.
+        No frontend rewriting, captured globals, or Python fallback is provided.
+        This accepts native DSL source, not a portable-profile certification.
+        """
+        if not isinstance(source, str):
+            raise TypeError("DSL source must be a string")
+        if "\x00" in source:
+            raise ValueError("Native DSL source must not contain NUL characters")
+        try:
+            tokens = list(tokenize.generate_tokens(StringIO(source).readline))
+            first = next(t for t in tokens if t.type not in (tokenize.COMMENT, tokenize.NL))
+            if first.type != tokenize.NAME or first.string != "def":
+                raise ValueError("DSL source must start with a function definition")
+            _, _, colon = _find_def_signature_span(source)
+            if colon is None:
+                raise ValueError("DSL source requires a function header")
+            lines = source.splitlines(keepends=True)
+            header = "".join(lines[: colon.end[0] - 1]) + lines[colon.end[0] - 1][: colon.end[1]]
+            function = ast.parse(header + "\n    pass\n").body[0]
+            args = function.args
+            if (
+                args.posonlyargs
+                or args.vararg
+                or args.kwarg
+                or args.kwonlyargs
+                or args.defaults
+                or args.kw_defaults
+                or function.returns
+                or any(arg.annotation for arg in args.args)
+            ):
+                raise ValueError("Native DSL parameters must be plain positional names")
+            names = [arg.arg for arg in args.args]
+            if len(set(names)) != len(names):
+                raise ValueError("Native DSL parameter names must be unique")
+        except (SyntaxError, tokenize.TokenError, IndentationError, StopIteration) as error:
+            raise ValueError(f"Invalid native DSL function header: {error}") from error
+
+        kernel = cls.__new__(cls)
+        kernel.func = None
+        kernel.__name__ = kernel.__qualname__ = function.name
+        kernel.__doc__ = None
+        kernel._sig = None
+        kernel._sig_has_varargs = False
+        kernel._sig_npositional = len(names)
+        kernel._legacy_udf_signature = False
+        kernel.dsl_source = source
+        kernel.input_names = names
+        kernel.dsl_error = None
+        kernel.row_param = kernel.row_columns = None
+        return kernel
 
     def __init__(self, func):
         self.func = func
@@ -833,12 +890,17 @@ class DSLKernel:
         any alias, including a bare `numpy` import, is honored).  The DSL grammar
         only accepts bare function-name calls.  No-op, returning the inputs
         unchanged, when there is nothing to rewrite (including when the alias is
-        shadowed by one of the kernel's own parameter names).
+        shadowed by a parameter, local, or closure binding).
         """
+        code = getattr(func, "__code__", None)
+        shadowed = set(input_names)
+        if code is not None:
+            shadowed.update(code.co_varnames)
+            shadowed.update(code.co_freevars)
         aliases = {
             name
             for name, value in getattr(func, "__globals__", {}).items()
-            if value is numpy and name not in input_names
+            if value is numpy and name not in shadowed
         }
         if not aliases:
             return dsl_source, dsl_tree, dsl_func
@@ -872,7 +934,51 @@ class DSLKernel:
             raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
         return [a.arg for a in (args.posonlyargs + args.args)]
 
+    def export(
+        self,
+        input_dtypes,
+        output_dtype,
+        *,
+        capture_dtypes=None,
+        constants=None,
+        metadata=None,
+        version="1.0",
+        cardinality="elementwise",
+        ndim=0,
+    ):
+        """Export a typed portable JSON artifact without calling the Python function.
+
+        ``input_dtypes`` maps runtime parameter names to explicit logical dtypes.
+        Optional ``constants`` supplies scalar values for remaining parameters.
+        Globals/closure scalars are snapshotted at export and become explicit,
+        collision-free parameters. ``capture_dtypes`` overrides scalar type
+        inference (Python bool/int/float infer bool/int64/float64 respectively;
+        supported NumPy scalars retain their dtype). Arrays, objects, and external
+        callbacks cannot be captures. Import via :meth:`blosc2.PortableKernel.from_json`.
+
+        The default ``version="1.0"`` is an experimental implementation draft. It
+        supports mixed numeric types and fixed byte/Unicode string snapshots;
+        ``cardinality`` is ``elementwise`` or ``block_scalar``, and ``ndim``
+        declares the required logical coordinate rank. The native loader
+        validates normalized source, widths and cardinality before export succeeds.
+        """
+        from .portable_kernel import export_portable_kernel
+
+        return export_portable_kernel(
+            self,
+            input_dtypes,
+            output_dtype,
+            capture_dtypes=capture_dtypes,
+            constants=constants,
+            metadata=metadata,
+            version=version,
+            cardinality=cardinality,
+            ndim=ndim,
+        )
+
     def __call__(self, inputs_tuple, output, offset=None):
+        if self.func is None:
+            raise RuntimeError("A native-source DSL kernel cannot execute as a Python function")
         if self.dsl_error is not None:
             raise self.dsl_error
         if self._legacy_udf_signature:
@@ -960,6 +1066,65 @@ def validate_dsl(func):
         "input_names": kernel.input_names,
         "error": None if err is None else str(err),
     }
+
+
+def validate_portable_dsl(
+    source, input_dtypes, output_dtype, *, language_version="1.0", ndim=0, cardinality=None
+):
+    """Check raw native source and an exact typed signature against a portable profile.
+
+    Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
+    ``error``. Validation neither executes a kernel nor invokes a JIT compiler.
+    It does not normalize frontend syntax, inspect globals, or certify runtime
+    input ranges, target compatibility, or sandbox safety. Native support is
+    required; older builds report ``runtime_unsupported`` without Python fallback.
+
+    ``input_dtypes`` maps parameter names to explicit dtype descriptions. Parameter
+    binding is by name; mapping order may differ from source order. Dtypes describe
+    logical values, not the storage layout of any actual input arrays.
+    The default ``language_version="1.0"`` is an experimental implementation
+    draft admitting mixed numeric and fixed-width ``S``/``U``
+    signatures. ``ndim`` declares the logical rank for reserved ND symbols;
+    missing or insufficient context rejects explicitly. ``cardinality`` may be
+    ``elementwise`` or ``block_scalar`` to assert the native return contract;
+    None validates the inferred contract. Neither arrays nor an artifact JSON
+    loader are needed. Exact string output width is checked natively.
+    """
+    from collections.abc import Mapping
+
+    from . import blosc2_ext
+
+    if not isinstance(source, str) or not isinstance(language_version, str):
+        raise TypeError("source and language_version must be strings")
+    if not isinstance(input_dtypes, Mapping):
+        raise TypeError("input_dtypes must map parameter names to explicit dtypes")
+    if "\x00" in source or "\x00" in language_version:
+        raise ValueError("Portable DSL source and version must not contain NUL characters")
+    if language_version != "1.0":
+        return {
+            "valid": False,
+            "status": "unsupported_version",
+            "line": 0,
+            "column": 0,
+            "error": "Unsupported portable DSL version; expected draft 1.0",
+        }
+    if any(not isinstance(name, str) or "\x00" in name for name in input_dtypes):
+        raise ValueError("Portable DSL input names must be strings without NUL characters")
+    if type(ndim) is not int or not 0 <= ndim <= 2**31 - 1:
+        raise ValueError("ndim must be a nonnegative Python integer representable by the native API")
+    contracts = {None: 0, "elementwise": 1, "block_scalar": 2}
+    if cardinality not in contracts:
+        raise ValueError("cardinality must be None, 'elementwise' or 'block_scalar'")
+    validator = getattr(blosc2_ext, "validate_portable_dsl_source", None)
+    if validator is None:
+        return {
+            "valid": False,
+            "status": "runtime_unsupported",
+            "line": 0,
+            "column": 0,
+            "error": "Rebuild miniexpr and the extension with portable DSL validation support",
+        }
+    return validator(source, input_dtypes, output_dtype, language_version, ndim, contracts[cardinality])
 
 
 def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blocks=None):

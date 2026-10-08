@@ -3,6 +3,10 @@
 This is the practical reference for the DSL used by `@blosc2.dsl_kernel`
 functions (and checked by `blosc2.validate_dsl()`).
 It focuses on what works today and the most common gotchas.
+The portable subset is named **Menudet**, a little language for portable
+computation on arrays and tables. See the [Menudet reference](portable_dsl.rst)
+for the 1.0 draft contract. This page also documents ordinary full-DSL features;
+acceptance here does not imply portability.
 For usage walkthroughs and end-to-end examples, see the
 [LazyArray UDF DSL kernels tutorial](../tutorials/03.lazyarray-udf-kernels.ipynb).
 
@@ -17,6 +21,139 @@ def kernel(x, y):
 ```
 
 Use Python-style indentation and always return a value on the paths you execute.
+
+### Native source without a Python function
+
+`blosc2.DSLKernel.from_source(source)` constructs a native-only kernel without
+executing source as Python or inspecting Python globals:
+
+```python
+source = """# me:compiler=tcc
+def affine(x):
+    return x * 2.0 + 1.0
+"""
+kernel = blosc2.DSLKernel.from_source(source)
+result = blosc2.lazyudf(kernel, (x,), dtype="float64")[:]
+```
+
+The source and header pragmas are preserved verbatim. Input dtypes come from the
+supplied arrays; pass an explicit output dtype. The native compiler validates the
+body with these types during computation. The constructor inspects only the
+plain positional function header and does not certify portable-profile support.
+Frontend conveniences, captured globals, and Python-function fallback are not
+available on this path; use native function spellings such as `sin(x)`.
+
+This is separate from the existing Python-based persistence reconstruction path.
+Portable artifact export/import is still under development. The full native
+language reference and experimental portable profile live in miniexpr's
+`doc/dsl-syntax.md` and `doc/dsl-spec/1.0.md`, respectively. The portable profile
+and artifact contract are experimental drafts; see [portable artifacts](portable_dsl.rst)
+for the release boundary and legacy Python persistence policy.
+
+### Experimental portable-profile validation
+
+```python
+info = blosc2.validate_portable_dsl(source, {"x": "float64"}, "float64")
+if not info["valid"]:
+    print(info["status"], info["line"], info["column"], info["error"])
+```
+
+This native-only check uses raw source and explicit logical dtypes, with no
+frontend rewriting or captured globals. It neither executes the kernel nor
+invokes a JIT compiler. It reports version, signature, source, and unsupported
+feature errors separately. Potential runtime errors, including missing returns
+on some paths, do not automatically invalidate a program.
+
+Draft 1.0 admits Boolean, standard integer widths, float32/float64 and fixed strings,
+mixed operand-driven numeric typing, checked arithmetic, reductions and explicit ND context.
+It is separate from the ordinary full language described below.
+Validation is not a sandbox, backend-support probe, or a guarantee about
+arbitrary runtime data. Older native builds report `runtime_unsupported` rather
+than attempting Python validation. Native dependency integration for this
+experimental API is pending; development builds can use the local miniexpr source
+via CMake's `FETCHCONTENT_SOURCE_DIR_MINIEXPR` override.
+
+### Portable artifact export and import (experimental)
+
+Export with explicit input/output dtypes. Scalar globals and closure values are
+snapshotted into typed manifest constants, not inserted as Python literals:
+
+```python
+SCALE = 2.0
+
+
+@blosc2.dsl_kernel
+def scaled(x):
+    return x * SCALE
+
+
+artifact = scaled.export({"x": "float64"}, "float64")
+SCALE = 99.0  # Does not change the saved artifact.
+kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+values = kernel.evaluate({"x": np.arange(4, dtype=np.float64)})
+# values: array([0., 2., 4., 6.])
+```
+
+`export()` returns deterministic UTF-8 JSON text; save it with an ordinary file
+write. `from_json()` accepts text or bytes, not a pathname or decoded mapping.
+Import uses the same native JSON loader as C and does not need the author's module,
+function, decorators, globals, Python source reconstruction, or frontend rewrites.
+`evaluate()` returns a new NumPy array; `blosc2.asarray(values)` can materialize
+compressed storage. `kernel.lazy()` binds explicit logical partitions for lazy
+evaluation and portable persistence. Newly authored compliant DSLKernel-backed
+LazyUDF saves also normalize and validate portable native recipes automatically.
+
+Python `bool`, `int`, and `float` captures infer `bool`, `int64`, and `float64`.
+Supported NumPy scalar types retain their dtype. Use
+`capture_dtypes={"SCALE": "float32"}` to explicitly specialize a capture; finite
+float narrowing and explicit integer-to-float conversion round to the chosen dtype;
+out-of-range values reject. Arrays (including zero-dimensional arrays), objects, unsupported
+scalar types, unresolved names, and external callbacks cannot be captures.
+Export does not call the kernel or capture conversion hooks. It reuses supported
+authoring normalization, such as `np.sin(x)`, before native profile validation.
+Fixed byte/Unicode scalar snapshots are supported; arbitrary objects and callbacks are not.
+
+Native-only kernels can bind existing parameters as constants explicitly:
+
+```python
+author = blosc2.DSLKernel.from_source(
+    "# me:compiler=cc\ndef scaled(x, scale):\n    return x * scale\n"
+)
+artifact = author.export({"x": "float64"}, "float64", constants={"scale": 2.0})
+```
+
+Every source parameter requires exactly one runtime input or constant binding.
+Parameters and captures may have different supported dtypes; computation is
+operand-driven before output conversion. Manifest float constants preserve
+IEEE bit patterns, including signed zero and non-finite values; integer constants
+are range-checked decimal strings. Comments and retained native pragmas survive
+parameterization. Required strict FP semantics are independent of host defaults;
+compiler pragmas remain preferences. Draft 1.0 currently always uses the typed interpreter.
+
+Runtime arrays are bound by name in any mapping order and must have the exact
+declared logical dtype and common shape. The adapter converts endian order,
+alignment, and strides, but does not broadcast arrays or silently change their
+dtype. Constant-only kernels require `evaluate({}, shape=(...))`; empty
+elementwise arrays validate bindings without execution, whereas scalar reductions
+obey their specified empty identities/errors. `PortableArtifactError` provides `status`, `native_status`, `line`, and
+`column` for malformed artifacts, unsupported requirements, source, binding, and
+evaluation failures. The artifact format is not a sandbox or an arbitrary-input
+numerical-correctness guarantee.
+
+Native dependency packaging is still pending. For development builds, use both
+`FETCHCONTENT_SOURCE_DIR_MINIEXPR` and `MINIEXPR_BUILD_ARTIFACT=ON`, for example:
+
+```sh
+conda run -n blosc2 python -m pip install -e . --no-build-isolation --no-deps \
+  --config-settings=cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr \
+  --config-settings=cmake.define.MINIEXPR_BUILD_ARTIFACT=ON
+```
+
+The optional adapter links pinned yyjson only when enabled. Builds without the
+adapter remain usable and report `NotImplementedError` for artifact operations,
+without attempting Python validation/execution as a fallback. The native candidate
+format and shared fixtures live in miniexpr's `doc/dsl-spec/artifact-1.0.md` and
+`tests/portable-artifacts/`.
 
 `@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
 `if`/`for`/`while` and that compiles under this grammar is dispatched here

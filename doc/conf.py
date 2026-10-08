@@ -111,7 +111,14 @@ html_theme_options = {
     ],
 }
 
-exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints", "tutorials/images/**"]
+exclude_patterns = [
+    "_build",
+    ".DS_Store",
+    "**.ipynb_checkpoints",
+    "tutorials/images/**",
+    "html/**",
+    "**/autofiles-stash/**",
+]
 
 html_show_sourcelink = False
 
@@ -306,7 +313,7 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
 # ``-W`` (as CI does) to turn that warning into a failure.
 
 _AUTODOC_DIRECTIVE = re.compile(
-    r"^\s*\.\.\s+(?:autoclass|autofunction|autodata|autoexception|autodecorator)::"
+    r"^\s*\.\.\s+(?:autoclass|autofunction|autodata|autoexception|autodecorator|py:class)::"
     r"\s*([\w.]+)"
 )
 _CURRENTMODULE = re.compile(r"^\s*\.\.\s+(?:currentmodule|module)::\s*([\w.]+)")

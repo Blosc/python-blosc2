@@ -353,6 +353,53 @@ def test_environment_overrides_and_tcc_ignores_cc_settings(tmp_path, capfd, monk
     assert capfd.readouterr() == ("", "")
 
 
+@pytest.mark.parametrize("backend", ["tcc", "cc"])
+def test_synthesized_backend_respects_environment_and_source(monkeypatch, backend):
+    from blosc2.lazyexpr import _apply_jit_backend_pragma
+
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
+    other = "cc" if backend == "tcc" else "tcc"
+    inputs = {"x": np.arange(4, dtype=np.float64)}
+    assert _apply_jit_backend_pragma("x + 1", inputs, other).startswith(f"# me:compiler={backend}\n")
+    source = f"# me:compiler={other}\ndef k(x):\n    return x + 1\n"
+    assert _apply_jit_backend_pragma(source, inputs, backend) == source
+    commented = "# me:fp=strict\ndef k(x):\n    return x\n"
+    assert _apply_jit_backend_pragma(commented, inputs, other) == f"# me:compiler={backend}\n{commented}"
+
+
+@pytest.mark.parametrize("backend", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, jit):
+    import importlib
+
+    lazyexpr = importlib.import_module("blosc2.lazyexpr")
+
+    def reject_elementwise_wrapper(*args):
+        pytest.fail("Scalar reductions must not be wrapped in elementwise DSL source")
+
+    monkeypatch.setattr(lazyexpr, "_apply_jit_backend_pragma", reject_elementwise_wrapper)
+    original = blosc2.NDArray._set_pref_expr
+    calls = []
+
+    def capture(self, expression, inputs, fp_accuracy, aux_reduc=None, **kwargs):
+        assert aux_reduc is not None
+        assert kwargs["jit"] is False  # Prevent native auto-lifting as well.
+        calls.append(expression)
+        return original(self, expression, inputs, fp_accuracy, aux_reduc, **kwargs)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", capture)
+    values = np.arange(128, dtype=np.float64)
+    expr = blosc2.asarray(values) * 2 + 1
+    assert expr.sum(jit=jit, jit_backend=backend) == (values * 2 + 1).sum()
+    if blosc2.IS_WASM:
+        # WASM currently uses the non-prefilter reduction path. It must still
+        # produce correct results without introducing an elementwise wrapper.
+        assert not calls
+    else:
+        assert calls
+    assert all(expression.startswith("sum(") for expression in calls)
+
+
 @pytest.mark.skipif(blosc2.IS_WASM or os.name == "nt", reason="POSIX compiler-output injection")
 def test_compiler_output(tmp_path, capfd):
     compiler = tmp_path / "bad cc's executable"

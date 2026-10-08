@@ -1,6 +1,8 @@
 name: Python wheels
 
 on:
+  # Certify development revisions without creating a release tag or publishing.
+  workflow_dispatch:
   # Trigger the workflow only for tags and PRs to the main branch
   push:
     tags:
@@ -11,6 +13,20 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
+  # Every tested wheel checks portable descriptors/persistence and independent
+  # numeric references, not only whether the extension can be imported.
+  # Free-threaded CPython safely enables the GIL for this extension. Allow only
+  # that expected import warning; never force PYTHON_GIL=0 or claim no-GIL safety.
+  CIBW_TEST_COMMAND: >-
+    python -m pytest
+    {project}/tests/test_portable_artifact.py
+    {project}/tests/test_portable_descriptor.py
+    {project}/tests/test_portable_descriptor_host.py
+    {project}/tests/test_portable_lazy.py
+    {project}/tests/test_portable_policy.py
+    {project}/tests/test_portable_table_export.py
+    {project}/tests/test_dsl_portable.py -q -n 0 &&
+    python {project}/scripts/certify_menudet_math.py
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long
   # Now that github provides native arm64 runners, we can enable tests again
   # CIBW_TEST_SKIP: "*linux*aarch64*"
@@ -156,7 +172,9 @@ jobs:
       CIBW_BUILD: ${{ matrix.cibw_build }}
       # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
-      CIBW_TEST_COMMAND: "pytest {project}/tests"
+      CIBW_TEST_COMMAND: >-
+        pytest {project}/tests &&
+        python {project}/scripts/certify_menudet_math.py
       # Pin the Pyodide version explicitly per target for reproducible builds.
       # Note: in-memory SChunk get_slice is broken on the Pyodide 0.29.x
       # Emscripten toolchain (works on 314); see gh-664. The affected test is
@@ -281,6 +299,9 @@ jobs:
           python -m pip install pytest
           python -m pytest tests/test_open.py tests/test_vlmeta.py \
                            tests/ndarray/test_evaluate.py -q -p no:cacheprovider
+
+      - name: Certify Menudet on the installed abi3 wheel
+        run: python scripts/certify_menudet_math.py
 
 
   upload_pypi:

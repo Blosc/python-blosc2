@@ -108,6 +108,17 @@ jobs:
         PYTEST_DEADMAN_SECONDS: "300"
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 
+    - name: Certify bounded Menudet math against independent references
+      run: python scripts/certify_menudet_math.py --report menudet-math.json
+
+    - name: Upload Menudet math certification
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: menudet-math-${{ matrix.os }}-py${{ matrix.python-version }}-np${{ matrix.numpy-version || 'default' }}
+        path: menudet-math.json
+        if-no-files-found: ignore
+
     # TUIs are timing-sensitive and only boot a headless terminal: one OS is
     # enough, and a flake here is feedback, not a release blocker.
     - name: Test TUI (non-blocking)

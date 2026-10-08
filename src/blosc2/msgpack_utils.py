@@ -48,7 +48,7 @@ def _encode_structured_reference(obj):
     return None
 
 
-def _decode_structured_reference(data):
+def _decode_structured_reference(data, *, deserialize="safe"):
     payload = unpackb(data)
     if not isinstance(payload, dict):
         raise TypeError("Structured Blosc2 msgpack payload must decode to a mapping")
@@ -61,8 +61,8 @@ def _decode_structured_reference(data):
     if kind == "ref":
         ref_payload = payload.get("ref")
         return Ref.from_dict(ref_payload)
-    if kind in {"c2array", "lazyexpr", "lazyudf"}:
-        return decode_b2object_payload(payload)
+    if kind in {"c2array", "lazyexpr", "lazyudf", "portable"}:
+        return decode_b2object_payload(payload, deserialize=deserialize)
     raise ValueError(f"Unsupported structured Blosc2 msgpack payload kind: {kind!r}")
 
 
@@ -80,7 +80,7 @@ def _encode_ndarray(value):
     return ExtType(_BLOSC2_NDARRAY_EXT_CODE, msgpack_packb(payload))
 
 
-def _decode_ndarray(data, *, deserialize=DeserializeMode.FULL):
+def _decode_ndarray(data, *, deserialize=DeserializeMode.SAFE):
     from blosc2.hdf5_source import dtype_from_value
 
     payload = msgpack_unpackb(data, deserialize=deserialize)
@@ -139,34 +139,38 @@ def decode_tuple_list_hook(obj):
     return obj
 
 
-def _decode_msgpack_ext(code, data):
+def _decode_msgpack_ext(code, data, *, deserialize=DeserializeMode.SAFE):
     import blosc2
 
     if code == _BLOSC2_EXT_CODE:
-        return blosc2.from_cframe(data, copy=True, deserialize="full")
+        return blosc2.from_cframe(data, copy=True, deserialize=deserialize)
     if code == _BLOSC2_STRUCTURED_EXT_CODE:
-        return _decode_structured_reference(data)
+        return _decode_structured_reference(data, deserialize=deserialize)
     if code == _BLOSC2_COMPLEX_EXT_CODE:
         real, imag = struct.unpack(">dd", data)
         return complex(real, imag)
     if code == _BLOSC2_NDARRAY_EXT_CODE:
-        return _decode_ndarray(data, deserialize=DeserializeMode.FULL)
+        return _decode_ndarray(data, deserialize=deserialize)
     if code == _BLOSC2_SET_EXT_CODE:
-        return set(msgpack_unpackb(data))
+        return set(msgpack_unpackb(data, deserialize=deserialize))
     return ExtType(code, data)
 
 
-def msgpack_unpackb(payload, *, deserialize=DeserializeMode.FULL):
+def msgpack_unpackb(payload, *, deserialize=DeserializeMode.SAFE):
     """Decode a Blosc2 MessagePack value under the selected policy.
 
-    This low-level helper retains ``"full"`` as its default for compatibility.
-    APIs accepting persisted input pass their safe-by-default policy explicitly.
+    Active reconstruction requires explicit ``deserialize="full"``. Container
+    readers pass their effective policy through recursive values unchanged.
     """
 
     mode = normalize_deserialize(deserialize)
     if mode is DeserializeMode.SAFE:
         return _safe_msgpack_unpackb(payload)
-    return unpackb(payload, list_hook=decode_tuple_list_hook, ext_hook=_decode_msgpack_ext)
+    return unpackb(
+        payload,
+        list_hook=decode_tuple_list_hook,
+        ext_hook=lambda code, data: _decode_msgpack_ext(code, data, deserialize=mode),
+    )
 
 
 def _safe_msgpack_unpackb(payload):
@@ -205,12 +209,15 @@ def _safe_msgpack_unpackb(payload):
         if code == _BLOSC2_EXT_CODE:
             kind = "embedded cframe"
         elif code == _BLOSC2_STRUCTURED_EXT_CODE:
+            candidate = None
             try:
                 envelope = unpackb(data)
                 candidate = envelope.get("kind") if isinstance(envelope, dict) else None
                 kind = candidate if isinstance(candidate, str) else "structured reference"
             except Exception:
                 kind = "structured reference"
+            if candidate in {"portable", "lazyexpr"}:
+                return decode_b2object_payload(envelope, deserialize="safe")
         else:
             kind = f"MessagePack extension code {code}"
         raise UnsafeDeserializationError(str(kind))

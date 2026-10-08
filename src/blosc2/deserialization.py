@@ -37,6 +37,8 @@ def get_deserialize(obj: Any, default: str | DeserializeMode = DeserializeMode.F
     """Return the policy attached to *obj* or its physical SChunk carrier."""
 
     carrier = getattr(obj, "schunk", obj)
+    if carrier is None:
+        carrier = obj
     return normalize_deserialize(getattr(carrier, "_deserialize_mode", default))
 
 
@@ -45,6 +47,8 @@ def set_deserialize(obj: Any, value: str | DeserializeMode) -> Any:
 
     mode = normalize_deserialize(value)
     carrier = getattr(obj, "schunk", obj)
+    if carrier is None:
+        carrier = obj
     current = getattr(carrier, "_deserialize_mode", None)
     if current is not None and normalize_deserialize(current) is not mode:
         raise ValueError(

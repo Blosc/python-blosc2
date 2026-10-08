@@ -876,16 +876,13 @@ def test_dsl_computed_column_no_storage():
 
 
 def test_dsl_computed_column_persistence(tmp_path):
-    """DSL kernel source is persisted and the column is available after open."""
+    """Authored computed columns persist with an explicit row-domain contract."""
     t = _make_invoice_table(5)
-    t.add_computed_column("total", total, inputs=["price", "qty"])
+    t.add_computed_column("total", total, inputs={"price": "price", "qty": "qty"}, dtype="float64")
     path = str(tmp_path / "tbl")
     t.save(path)
-
-    t2 = blosc2.open(path)
-    assert "total" in t2._computed_cols
-    assert t2._computed_cols["total"]["kind"] == "dsl"
-    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+    restored = blosc2.CTable.open(path)
+    np.testing.assert_allclose(restored["total"][:], [1, 4, 9, 16, 25])
 
 
 def test_dsl_computed_column_inputs_mismatch_raises():
@@ -982,17 +979,14 @@ def test_dsl_generated_column_autofill_append():
 
 
 def test_dsl_generated_column_persistence_and_append(tmp_path):
-    """DSL generated column survives save/open and auto-fills after reload."""
+    """Authored row transformers persist and refill appended rows natively."""
     t = _make_invoice_table(3)
-    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    t.add_generated_column("total", values=total, inputs={"price": "price", "qty": "qty"}, dtype="float64")
     path = str(tmp_path / "tbl")
     t.save(path)
-
-    t2 = blosc2.open(path, mode="a")
-    assert "total" in t2._materialized_cols
-    assert t2._materialized_cols["total"]["transformer_kind"] == "dsl"
-    t2.append((4.0, 4, 0.1))
-    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0])
+    restored = blosc2.CTable.open(path, mode="a")
+    restored.append((4.0, 4, 0.1))
+    np.testing.assert_allclose(restored["total"][:], [1.0, 4.0, 9.0, 16.0])
 
 
 def test_dsl_generated_column_refresh(tmp_path):
@@ -1011,8 +1005,8 @@ def test_dsl_generated_column_refresh(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
-def test_dsl_jit_backend_persisted_in_schema():
-    """jit_backend set via lazyudf() is stored in the column schema."""
+def test_dsl_jit_backend_not_persisted_in_portable_schema():
+    """A local JIT preference does not become a portable execution requirement."""
     t = _make_invoice_table(3)
     t.add_generated_column(
         "total",
@@ -1020,12 +1014,14 @@ def test_dsl_jit_backend_persisted_in_schema():
     )
     schema = t._schema_dict_with_computed()
     mat = {m["name"]: m for m in schema["materialized_columns"]}
-    assert mat["total"]["jit_backend"] == "cc"
+    assert mat["total"]["transformer_kind"] == "portable"
+    assert "jit_backend" not in mat["total"]
+    assert "dsl_source" not in mat["total"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
-def test_dsl_jit_backend_restored_after_open(tmp_path):
-    """jit_backend is restored from schema on open and used for auto-fill."""
+def test_dsl_jit_backend_falls_back_after_portable_open(tmp_path):
+    """A local backend preference allows native portable persistence/fallback."""
     t = _make_invoice_table(3)
     t.add_generated_column(
         "total",
@@ -1033,11 +1029,10 @@ def test_dsl_jit_backend_restored_after_open(tmp_path):
     )
     path = str(tmp_path / "tbl")
     t.save(path)
-
-    t2 = blosc2.open(path, mode="a")
-    assert t2._materialized_cols["total"].get("jit_backend") == "cc"
-    t2.append((4.0, 4, 0.1))
-    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0])
+    restored = blosc2.CTable.open(path, mode="a")
+    restored.append({"price": 4.0, "qty": 4})
+    np.testing.assert_allclose(restored["total"][:], [1.0, 4.0, 9.0, 16.0])
+    restored.close()
 
 
 def test_dsl_no_jit_backend_not_in_schema():

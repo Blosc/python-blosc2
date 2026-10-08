@@ -961,6 +961,340 @@ cdef inline object _numpy_dtype_from_me_dtype(me_dtype dt):
     return None
 
 
+cdef extern from *:
+    """
+    #include "miniexpr.h"
+    #include <stdio.h>
+    #include <string.h>
+    static int b2_validate_portable_dsl(const char *source, const char *version,
+        const me_variable *inputs, int ninputs, me_dtype output_dtype,
+        size_t output_itemsize, int ndim, int cardinality,
+        int *line, int *column, char *message, size_t capacity) {
+    #ifdef ME_PORTABLE_DSL_VALIDATION_DESCRIPTOR_VERSION
+        if (strcmp(ME_PORTABLE_DSL_VERSION, "1.0")) {
+            *line = *column = 0;
+            snprintf(message, capacity, "installed miniexpr lacks draft 1.0 source validation");
+            return -100;
+        }
+        me_portable_error error = {0};
+        int rc;
+        me_portable_validation_descriptor descriptor = {
+            .struct_size = sizeof(descriptor),
+            .version = ME_PORTABLE_DSL_VALIDATION_DESCRIPTOR_VERSION,
+            .output_itemsize = output_itemsize, .ndim = ndim,
+            .cardinality = (me_portable_cardinality)cardinality};
+        rc = me_validate_portable_dsl_ex(source, version, inputs, ninputs,
+                                        output_dtype, &descriptor, &error);
+        *line = error.line;
+        *column = error.column;
+        snprintf(message, capacity, "%s", error.message);
+        return rc;
+    #else
+        *line = *column = 0;
+        snprintf(message, capacity, "miniexpr was built without draft 1.0 source validation support");
+        return -100;
+    #endif
+    }
+    """
+    int b2_validate_portable_dsl(const char *source, const char *version,
+        const me_variable *inputs, int ninputs, me_dtype output_dtype,
+        size_t output_itemsize, int ndim, int cardinality,
+        int *line, int *column, char *message, size_t capacity)
+
+
+def validate_portable_dsl_source(source, input_dtypes, output_dtype, version, int ndim=0, int cardinality=0):
+    """Native-only versioned source validation; no arrays, JIT or Python execution."""
+    cdef Py_ssize_t n = len(input_dtypes)
+    if n > 128:
+        raise ValueError("Too many portable DSL inputs (maximum 128)")
+    cdef me_variable *variables = NULL
+    cdef list names = [name.encode("utf-8") for name in input_dtypes]
+    cdef bytes source_bytes = source.encode("utf-8")
+    cdef bytes version_bytes = version.encode("utf-8")
+    cdef bytes name_bytes
+    cdef np.dtype dtype
+    cdef me_dtype result_dtype
+    cdef size_t output_itemsize = 0
+    cdef int rc, line = 0, column = 0
+    cdef char message[256]
+    cdef Py_ssize_t i
+    if n:
+        variables = <me_variable *> calloc(n, sizeof(me_variable))
+        if variables == NULL:
+            raise MemoryError()
+    try:
+        for i, value in enumerate(input_dtypes.values()):
+            name_bytes = names[i]
+            variables[i].name = name_bytes
+            dtype = np.dtype(value)
+            try:
+                variables[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+            except TypeError:
+                variables[i].dtype = ME_AUTO
+            if version == "1.0" and variables[i].dtype in (ME_STRING, ME_BYTES):
+                variables[i].itemsize = dtype.itemsize
+        dtype = np.dtype(output_dtype)
+        try:
+            result_dtype = _me_dtype_from_numpy_dtype(dtype)
+        except TypeError:
+            result_dtype = ME_AUTO
+        if version == "1.0" and result_dtype in (ME_STRING, ME_BYTES):
+            output_itemsize = dtype.itemsize
+        rc = b2_validate_portable_dsl(source_bytes, version_bytes, variables, <int>n,
+                                      result_dtype, output_itemsize, ndim, cardinality,
+                                      &line, &column, message, sizeof(message))
+        statuses = {
+            0: "success", -1: "unsupported_version", -2: "invalid_signature",
+            -3: "invalid_source", -4: "unsupported_feature", -5: "out_of_memory",
+            -100: "runtime_unsupported",
+        }
+        return {"valid": rc == 0, "status": statuses.get(rc, "native_error"),
+                "line": line, "column": column,
+                "error": None if rc == 0 else (<bytes>message).decode("utf-8", "replace")}
+    finally:
+        free(variables)
+
+
+cdef extern from "dsl_artifact_bridge.h":
+    ctypedef struct b2_artifact_input:
+        const char *name
+        me_dtype dtype
+        const void *data
+        size_t nitems
+    ctypedef struct b2_artifact_error:
+        int native_status
+        int line
+        int column
+        char message[256]
+    int b2_artifact_available()
+    int b2_artifact_load(const char *, size_t, int, void **, b2_artifact_error *) nogil
+    int b2_artifact_eval(const void *, const b2_artifact_input *, int, void *, size_t,
+                        b2_artifact_error *) nogil
+    void b2_artifact_free(void *) noexcept nogil
+    const char *b2_artifact_source(const void *)
+    const char *b2_artifact_entry(const void *)
+    int b2_artifact_ninputs(const void *)
+    const char *b2_artifact_name(const void *, int)
+    me_dtype b2_artifact_dtype(const void *, int)
+    me_dtype b2_artifact_output(const void *)
+    int b2_artifact_jit(const void *)
+    ctypedef struct b2_artifact_buffer:
+        const char *name
+        me_dtype dtype
+        size_t itemsize
+        const void *data
+        size_t capacity
+    ctypedef struct b2_artifact_descriptor:
+        size_t struct_size
+        unsigned int version
+        size_t nitems
+        size_t output_capacity
+        const uint8_t *valid_mask
+        size_t valid_mask_capacity
+        int ndim
+        const int64_t *logical_shape
+        const int64_t *block_origin
+        const int64_t *block_extent
+    int b2_artifact_descriptor_available()
+    int b2_artifact_cardinality(const void *)
+    size_t b2_artifact_width(const void *, int)
+    int b2_artifact_rank(const void *)
+    const char *b2_artifact_version(const void *)
+    int b2_artifact_eval_ex(const void *, const b2_artifact_buffer *, int, void *,
+                           const b2_artifact_descriptor *, b2_artifact_error *) nogil
+
+
+def portable_artifact_available():
+    return bool(b2_artifact_available())
+
+
+def portable_descriptor_available():
+    return bool(b2_artifact_descriptor_available())
+
+
+cdef void raise_artifact_error(int rc, b2_artifact_error *error) except *:
+    from blosc2.portable_kernel import PortableArtifactError
+
+    if rc == -100:
+        raise NotImplementedError("Build with miniexpr portable artifact support")
+    if rc == -6:
+        raise MemoryError((<bytes>error.message).decode("utf-8", "replace"))
+    statuses = {-1: "invalid_artifact", -2: "unsupported_requirement", -3: "invalid_source",
+                -4: "binding_error", -5: "evaluation_error"}
+    raise PortableArtifactError(
+        (<bytes>error.message).decode("utf-8", "replace"),
+        status=statuses.get(rc, "native_error"), native_status=error.native_status,
+        line=error.line, column=error.column)
+
+
+cdef class PortableArtifactHandle:
+    """Owned immutable native handle; no Python artifact decoding or source execution."""
+    cdef void *_handle
+
+    def __cinit__(self, bytes artifact, int jit_mode):
+        cdef b2_artifact_error error
+        cdef int rc
+        cdef const char *json = artifact
+        cdef size_t size = len(artifact)
+        self._handle = NULL
+        with nogil:
+            rc = b2_artifact_load(json, size, jit_mode, &self._handle, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+
+    def __dealloc__(self):
+        b2_artifact_free(self._handle)
+
+    def info(self):
+        cdef int i
+        return {
+            "source": (<bytes>b2_artifact_source(self._handle)).decode("utf-8"),
+            "entry_point": (<bytes>b2_artifact_entry(self._handle)).decode("utf-8"),
+            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
+                       _numpy_dtype_from_me_dtype(b2_artifact_dtype(self._handle, i))
+                       for i in range(b2_artifact_ninputs(self._handle))},
+            "output_dtype": _numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)),
+            "jit": bool(b2_artifact_jit(self._handle)),
+        }
+
+    cdef object signature_dtype(self, int index):
+        cdef me_dtype dtype = b2_artifact_output(self._handle) if index < 0 else b2_artifact_dtype(self._handle, index)
+        cdef size_t width = b2_artifact_width(self._handle, index)
+        if dtype == ME_STRING:
+            return np.dtype(f"U{width // 4}")
+        if dtype == ME_BYTES:
+            return np.dtype(f"S{width}")
+        return _numpy_dtype_from_me_dtype(dtype)
+
+    def descriptor_info(self):
+        """Authoritative draft native signature; unavailable on older pinned builds."""
+        if not b2_artifact_descriptor_available():
+            raise NotImplementedError("Build with draft miniexpr descriptor support")
+        return {
+            "schema_version": (<bytes>b2_artifact_version(self._handle)).decode("ascii"),
+            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
+                       self.signature_dtype(i) for i in range(b2_artifact_ninputs(self._handle))},
+            "output_dtype": self.signature_dtype(-1),
+            "cardinality": "block_scalar" if b2_artifact_cardinality(self._handle) == 1 else "elementwise",
+            "ndim": b2_artifact_rank(self._handle),
+        }
+
+    def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None):
+        """Evaluate one explicit logical block; never infer ND coordinates from a physical tile."""
+        from math import prod
+
+        if not b2_artifact_descriptor_available():
+            raise NotImplementedError("Build with draft miniexpr descriptor support")
+        cdef Py_ssize_t n = len(inputs), i
+        if n > 128:
+            raise ValueError("Too many portable artifact inputs")
+        block_shape = tuple(block_shape)
+        if any(type(size) is not int or size < 0 for size in block_shape):
+            raise ValueError("Block shape must contain nonnegative Python integers")
+        count = prod(block_shape)
+        if count > 2147483647:
+            raise ValueError("Native block exceeds the supported lane count")
+        cdef b2_artifact_buffer *bindings = NULL
+        cdef b2_artifact_descriptor descriptor
+        cdef b2_artifact_error error
+        cdef np.ndarray array, output, mask, shape_array, origin_array, extent_array
+        cdef list names = [key.encode("utf-8") for key in inputs]
+        cdef list arrays = list(inputs.values())
+        cdef bytes name
+        cdef int rc
+        memset(&descriptor, 0, sizeof(descriptor))
+        descriptor.struct_size = sizeof(descriptor)
+        descriptor.version = 1
+        descriptor.nitems = count
+        descriptor.ndim = b2_artifact_rank(self._handle)
+        if descriptor.ndim:
+            if logical_shape is None or block_origin is None or len(block_shape) != descriptor.ndim:
+                raise ValueError("Explicit logical shape, block origin and matching block rank are required")
+            shape_array = np.ascontiguousarray(logical_shape, dtype=np.int64)
+            origin_array = np.ascontiguousarray(block_origin, dtype=np.int64)
+            extent_array = np.ascontiguousarray(block_shape, dtype=np.int64)
+            if shape_array.ndim != 1 or origin_array.ndim != 1 or shape_array.shape[0] != descriptor.ndim or origin_array.shape[0] != descriptor.ndim:
+                raise ValueError("Logical context rank mismatch")
+            descriptor.logical_shape = <const int64_t *>np.PyArray_DATA(shape_array)
+            descriptor.block_origin = <const int64_t *>np.PyArray_DATA(origin_array)
+            descriptor.block_extent = <const int64_t *>np.PyArray_DATA(extent_array)
+        elif logical_shape is not None or block_origin is not None:
+            raise ValueError("This artifact does not declare ND context")
+        if valid_mask is not None:
+            mask = np.asarray(valid_mask)
+            if mask.dtype not in (np.dtype(np.bool_), np.dtype(np.uint8)) or mask.size != count:
+                raise ValueError("Valid mask must have one Boolean/uint8 slot per block lane")
+            mask = np.ascontiguousarray(mask, dtype=np.uint8)
+            descriptor.valid_mask = <const uint8_t *>np.PyArray_DATA(mask)
+            descriptor.valid_mask_capacity = mask.nbytes
+        output = np.empty(() if b2_artifact_cardinality(self._handle) == 1 else block_shape,
+                          dtype=self.signature_dtype(-1))
+        descriptor.output_capacity = output.nbytes
+        if n:
+            bindings = <b2_artifact_buffer *>calloc(n, sizeof(b2_artifact_buffer))
+            if bindings == NULL:
+                raise MemoryError()
+        try:
+            for i in range(n):
+                array = arrays[i]
+                if not array.flags.c_contiguous or not array.flags.aligned or not array.dtype.isnative or array.size != count:
+                    raise ValueError("Block inputs must be aligned, contiguous, host-endian and match the block extent")
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names must not contain NUL")
+                bindings[i].name = name
+                bindings[i].dtype = _me_dtype_from_numpy_dtype(array.dtype)
+                bindings[i].itemsize = array.dtype.itemsize
+                bindings[i].data = np.PyArray_DATA(array)
+                bindings[i].capacity = array.nbytes
+            with nogil:
+                rc = b2_artifact_eval_ex(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output
+        finally:
+            free(bindings)
+
+    def evaluate(self, inputs, shape):
+        cdef Py_ssize_t n = len(inputs)
+        if n > 128:
+            raise ValueError("Too many portable artifact inputs")
+        cdef b2_artifact_input *bindings = NULL
+        cdef b2_artifact_error error
+        cdef np.ndarray array, output
+        cdef list names = [key.encode("utf-8") for key in inputs]
+        cdef list arrays = list(inputs.values())
+        cdef bytes name
+        cdef int rc
+        cdef Py_ssize_t i
+        cdef size_t count
+        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)))
+        count = output.size
+        if n:
+            bindings = <b2_artifact_input *> calloc(n, sizeof(b2_artifact_input))
+            if bindings == NULL:
+                raise MemoryError()
+        try:
+            for i in range(n):
+                array = arrays[i]
+                if not array.flags.c_contiguous or not array.flags.aligned or not array.dtype.isnative:
+                    raise ValueError("Native artifact inputs must be aligned, contiguous, and host-endian")
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names must not contain NUL")
+                bindings[i].name = name
+                bindings[i].dtype = _me_dtype_from_numpy_dtype(array.dtype)
+                bindings[i].data = np.PyArray_DATA(array)
+                bindings[i].nitems = array.size
+            with nogil:
+                rc = b2_artifact_eval(self._handle, bindings, <int>n, np.PyArray_DATA(output), count, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output
+        finally:
+            free(bindings)
+
+
 def me_output_dtype(expression, operands):
     """Ask miniexpr what dtype *expression* would produce over *operands*.
 

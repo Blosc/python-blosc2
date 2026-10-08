@@ -14,7 +14,6 @@ import concurrent.futures
 import contextlib
 import copy
 import enum
-import inspect
 import linecache
 import math
 import operator
@@ -22,7 +21,6 @@ import os
 import pathlib
 import re
 import sys
-import textwrap
 import threading
 from abc import ABC, abstractmethod, abstractproperty
 from collections.abc import MutableMapping
@@ -1530,6 +1528,10 @@ def fill_chunk_operands(
 
 
 def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | None) -> str:
+    # Author-written pragmas are authoritative. Python's synthesized pragma is
+    # only a local default and must not override the native environment policy.
+    if "# me:compiler=" in expression:
+        return expression
     if jit_backend is None:
         return expression
     if jit_backend == "js":
@@ -1538,11 +1540,15 @@ def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | 
     if jit_backend not in ("tcc", "cc"):
         raise ValueError("jit_backend must be one of: None, 'tcc', 'cc', 'js'")
 
+    env_backend = os.environ.get("ME_DSL_JIT_COMPILER", "").strip().lower()
+    if env_backend in ("tcc", "cc"):
+        jit_backend = env_backend
+
     pragma = f"# me:compiler={jit_backend}\n"
-    stripped = expression.lstrip()
+    stripped = "\n".join(
+        line for line in expression.splitlines() if not line.lstrip().startswith("#")
+    ).lstrip()
     if stripped.startswith("def "):
-        if "# me:compiler=" in expression:
-            return expression
         return pragma + expression
     params = ", ".join(k for k, v in inputs.items() if hasattr(v, "dtype"))
     return f"{pragma}def __me_auto({params}):\n    return {expression}"
@@ -2733,8 +2739,9 @@ def reduce_slices(  # noqa: C901
     if ne_args is None:
         ne_args = {}
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
-    jit = kwargs.pop("jit", None)
-    jit_backend = kwargs.pop("jit_backend", None)
+    # Scalar native reductions cannot use elementwise DSL JIT output buffers.
+    kwargs.pop("jit", None)
+    kwargs.pop("jit_backend", None)
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
     reduce_op_str = reduce_args.pop("op_str", None)
@@ -2912,8 +2919,13 @@ def reduce_slices(  # noqa: C901
                 expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
             else:
                 expression_miniexpr = f"{reduce_op_str}({expression})"
-            expression_miniexpr = _apply_jit_backend_pragma(expression_miniexpr, operands, jit_backend)
-            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=jit)
+            # Keep reductions as native scalar expressions. A DSL return
+            # broadcasts a reduced value across the output block, whereas this
+            # prefilter supplies only one accumulator slot per block. Explicit
+            # JIT_ON also auto-lifts plain expressions in the native compiler,
+            # so use the scalar interpreter until reduction JIT has a separate
+            # output-cardinality contract.
+            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=False)
             prefilter_set = True
             # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
@@ -5093,6 +5105,10 @@ class LazyUDF(LazyArray):
         return self._dtype
 
     @property
+    def nbytes(self):
+        return math.prod(self.shape) * np.dtype(self.dtype).itemsize
+
+    @property
     def ndim(self) -> int:
         return len(self.shape)
 
@@ -5282,65 +5298,20 @@ class LazyUDF(LazyArray):
         -----
         * All operands must be :ref:`NDArray` or :ref:`C2Array` objects stored on
           disk or a remote server (i.e. they must have a ``urlpath``).
-        * When the :ref:`LazyUDF` wraps a :func:`blosc2.dsl_kernel`-decorated
-          function, the DSL source is preserved verbatim in the saved metadata.
-          On reload via :func:`blosc2.open`, the function is restored as a full
-          :class:`~blosc2.dsl_kernel.DSLKernel` so the miniexpr JIT fast path
-          remains available without any extra work from the caller.
+        * Newly authored DSLKernel functions normalize and validate as portable
+          1.0 before saving. Python UDFs and noncompliant kernels reject before
+          writing. Block-scalar kernels require the explicit portable API.
+          Historical source-backed files require ``deserialize='full'`` on open
+          and are not automatically migrated by saving.
         """
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        kwargs["urlpath"] = urlpath
-        kwargs["mode"] = "w"  # always overwrite the file in urlpath
-        try:
-            self._to_b2object_carrier(**kwargs)
-        except (TypeError, ValueError):
-            meta = kwargs.get("meta", {})
-            meta["LazyArray"] = LazyArrayEnum.UDF.value
-            kwargs["meta"] = meta
+        from blosc2.portable_lazy import portable_from_lazyudf
 
-            # Create an empty array; useful for providing the shape and dtype of the outcome
-            array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-            # Save the expression and operands in the metadata
-            operands = {}
-            operands_ = self.inputs_dict
-            for i, (_key, value) in enumerate(operands_.items()):
-                pos_key = f"o{i}"  # always use positional keys for consistent loading
-                if isinstance(value, blosc2.C2Array):
-                    operands[pos_key] = {
-                        "path": str(value.path),
-                        "urlbase": value.urlbase,
-                    }
-                    continue
-                if isinstance(value, blosc2.Proxy):
-                    # Take the required info from the Proxy._cache container
-                    value = value._cache
-                if not hasattr(value, "schunk"):
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                    ) from None
-                if value.schunk.urlpath is None:
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be stored on disk/network"
-                    ) from None
-                operands[pos_key] = value.schunk.urlpath
-            udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
-            udf_name = getattr(udf_func, "__name__", self.func.__name__)
-            try:
-                udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
-            except Exception:
-                udf_source = None
-            meta = {
-                "UDF": udf_source,
-                "operands": operands,
-                "name": udf_name,
-            }
-            if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
-                meta["dsl_source"] = self.func.dsl_source
-            array.schunk.vlmeta["_LazyArray"] = meta
-            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+        portable = portable_from_lazyudf(self)
+        portable.save(urlpath, **kwargs)
+        self.array, self.schunk = portable.array, portable.schunk
 
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
@@ -5367,8 +5338,12 @@ class LazyUDF(LazyArray):
                 ref_urlpath = operand_urlpath.as_posix()
             operand_payload["urlpath"] = ref_urlpath
 
+        from blosc2.msgpack_utils import msgpack_packb
+
+        msgpack_packb(payload)
+        msgpack_packb(self._get_user_vlmeta())
         array = make_b2object_carrier(
-            "lazyudf",
+            "portable",
             self.shape,
             self.dtype,
             chunks=self.chunks,
@@ -5738,6 +5713,12 @@ def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
 
 
 def open_lazyarray(array):
+    from blosc2.deserialization import DeserializeMode, get_deserialize
+    from blosc2.exceptions import UnsafeDeserializationError
+
+    policy = get_deserialize(array)
+    if policy is not DeserializeMode.FULL:
+        raise UnsafeDeserializationError("legacy LazyArray")
     value = array.schunk.meta["LazyArray"]
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     if value == LazyArrayEnum.Expr.value:
@@ -5755,7 +5736,7 @@ def open_lazyarray(array):
         if isinstance(v, str):
             v = parent_path / v
             try:
-                op = blosc2.open(v, mode="r")
+                op = blosc2.open(v, mode="r", deserialize=policy)
             except FileNotFoundError:
                 missing_ops[key] = v
             else:
@@ -5780,6 +5761,7 @@ def open_lazyarray(array):
         new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
     elif value == LazyArrayEnum.UDF.value:
         new_expr = _reconstruct_lazyudf(expr, lazyarray, operands_dict, array)
+        new_expr._legacy_source_recipe = True
 
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array
