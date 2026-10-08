@@ -695,3 +695,121 @@ def test_cumulative_shape_refreshes_after_operand_rebinding():
     expr.operands[key] = blosc2.ones((3, 5))
     assert expr.shape == (3, 6)
     assert expr[:].shape == (3, 6)
+
+
+@pytest.mark.parametrize(
+    ("text", "shape"),
+    [
+        ("sqrt(x.sum(0, None, True)) + y", (1, 4)),
+        ("sqrt(np.sum(x, 0, None, None, True)) + y", (1, 4)),
+        ("x - mean(x, axis=0)", (3, 4)),
+        ("sum(x[:, 1:] * z, axis=0, keepdims=True)", (1, 3)),
+        ("sqrt(x.cumulative_sum(1, None, True))", (3, 5)),
+        ("x[None, 1, 1:] + z", (1, 3)),
+    ],
+)
+def test_graph_shape_propagation_is_data_free(text, shape, monkeypatch):
+    operands = {"x": blosc2.ones((3, 4)), "y": np.ones(4), "z": np.ones(3)}
+    monkeypatch.setattr(blosc2.NDArray, "__getitem__", lambda *a, **k: pytest.fail("Read data for shape"))
+    assert parse_expression(text).infer_shape(operands) == shape
+
+
+@pytest.mark.parametrize("backend", ["numpy", "blosc"])
+def test_nested_reduction_shape_matches_execution(backend):
+    data = np.arange(12.0).reshape(3, 4) + 1
+    x = data if backend == "numpy" else blosc2.asarray(data)
+    args = "0, None, None, True" if backend == "numpy" else "0, None, True"
+    expr = blosc2.lazyexpr(f"sqrt(x.sum({args})) + y", {"x": x, "y": np.arange(4.0)})
+    expected = np.sqrt(data.sum(axis=0, keepdims=True)) + np.arange(4.0)
+    assert expr.shape == expected.shape
+    np.testing.assert_allclose(expr[:], expected)
+
+
+def test_graph_shape_unknown_for_data_dependent_index():
+    x = np.arange(6)
+    assert parse_expression("x[mask]").infer_shape({"x": x, "mask": x > 2}) is None
+
+
+def test_graph_shape_does_not_treat_matmul_as_elementwise_broadcast():
+    assert parse_expression("x @ y").infer_shape({"x": np.ones((2, 3)), "y": np.ones((3, 4))}) is None
+
+
+@pytest.mark.parametrize("backend", ["numpy", "blosc"])
+def test_nested_indexed_reduction_matches_numpy(backend):
+    data = np.arange(12.0).reshape(3, 4)
+    z = np.arange(3.0) + 1
+    x = data if backend == "numpy" else blosc2.asarray(data)
+    expr = blosc2.lazyexpr("sum(x[:, 1:] * z, axis=0, keepdims=True)", {"x": x, "z": z})
+    expected = (data[:, 1:] * z).sum(axis=0, keepdims=True)
+    assert expr.shape == expected.shape
+    np.testing.assert_allclose(expr[:], expected)
+
+
+def test_nested_shape_rejects_incompatible_broadcast_before_dummy_execution(monkeypatch):
+    module = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy inference"))
+    with pytest.raises(ValueError):
+        blosc2.lazyexpr("sqrt(sum(x, axis=0)) + y", {"x": blosc2.ones((3, 4)), "y": np.ones(3)})
+
+
+def test_simpleproxy_refreshes_after_source_resize_and_rebinding():
+    source = np.arange(6, dtype="int32")
+    wrapper = blosc2.SimpleProxy(source)
+    expr = blosc2.lazyexpr("x + 1", {"x": wrapper})
+    source.resize((2, 3), refcheck=False)
+    assert expr.shape == wrapper.shape == (2, 3)
+    assert len(wrapper.chunks) == len(wrapper.blocks) == 2
+    np.testing.assert_array_equal(expr[:], source + 1)
+    replacement = np.arange(12.0).reshape(3, 4)
+    wrapper._src = replacement
+    assert expr.shape == wrapper.shape == (3, 4)
+    assert expr.dtype == wrapper.dtype == np.dtype("float64")
+    np.testing.assert_array_equal(expr[:], replacement + 1)
+
+
+def test_simpleproxy_rejects_rebound_source_before_metadata_hooks():
+    wrapper = blosc2.SimpleProxy(np.ones(4))
+    expr = blosc2.lazyexpr("x + 1", {"x": wrapper})
+
+    class HostileSource:
+        @property
+        def shape(self):
+            pytest.fail("Read unadmitted source metadata")
+
+    wrapper._src = HostileSource()
+    with blosc2.expression_evaluation("full"):
+        with pytest.raises(blosc2.UnsafeDeserializationError):
+            _ = expr.shape
+        with pytest.raises(blosc2.UnsafeDeserializationError):
+            expr.compute()
+
+
+def test_simpleproxy_rejects_source_cycle_after_construction():
+    wrapper = blosc2.SimpleProxy(np.ones(4))
+    expr = blosc2.lazyexpr("x + 1", {"x": wrapper})
+    wrapper._src = wrapper
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="cyclic"):
+        expr.compute()
+
+
+def test_ndfield_refreshes_rebound_parent_layout():
+    first = np.zeros(4, dtype=[("x", "int32"), ("y", "int32")])
+    field = blosc2.NDField(blosc2.asarray(first), "x")
+    expr = blosc2.lazyexpr("x + 1", {"x": field})
+    replacement = np.zeros(6, dtype=[("y", "int64"), ("x", "float64")])
+    replacement["x"] = np.arange(6) + 0.5
+    field.ndarr = blosc2.asarray(replacement)
+    assert expr.shape == (6,)
+    assert expr.dtype == field.dtype == np.dtype("float64")
+    assert field.offset == replacement.dtype.fields["x"][1]
+    np.testing.assert_array_equal(expr[:], replacement["x"] + 1)
+
+
+def test_ndfield_rejects_removed_parent_field_before_computation():
+    field = blosc2.NDField(blosc2.asarray(np.zeros(4, dtype=[("x", "int32")])), "x")
+    expr = blosc2.lazyexpr("x + 1", {"x": field})
+    field.ndarr = blosc2.asarray(np.zeros(4, dtype=[("y", "int32")]))
+    with pytest.raises(ValueError, match="existing structured field"):
+        _ = expr.dtype
+    with pytest.raises(ValueError, match="existing structured field"):
+        expr.compute()

@@ -344,3 +344,36 @@ tests, flattening and output-position checks, include-initial persistence, inval
 contract rejection, data-free inference instrumentation and operand-rebinding
 metadata coverage. Ruff lint/format and whitespace checks passed. No new benchmark
 or cross-platform completion claim is made.
+
+## Follow-up: nested shape propagation and wrapper/source synchronization
+
+Added data-free graph shape propagation for scalar/array inputs, elementwise
+broadcasting, unary operations, comparisons and basic indexing. Reviewed
+reductions now contribute shapes inside enclosing arithmetic/functions; function
+reductions can also consume reviewed intermediate shapes. Positional binding
+uses the selected backend rather than the old shape inferencer's universal slots.
+Incompatible broadcasting rejects before dummy execution. Data-dependent indexing,
+matrix multiplication, unreviewed receiver layouts and other unsupported rules
+explicitly return unknown and retain existing inference. This is not graph-wide
+dtype inference: nested dtype promotion and dummy-reduction removal remain open.
+
+The initial adapter audit found stale source metadata in SimpleProxy and NDField.
+After recursively admitting the source, safe validation refreshes SimpleProxy's
+shape/dtype and rank-dependent partitions. NDField validation refreshes field
+dtype, offset and partitions after parent rebinding, or rejects a removed field.
+Hostile rebound sources and cycles reject before metadata or compute hooks,
+including under an ambient full evaluation context. Ordinary trusted-only
+construction has not acquired this synchronization policy.
+
+The scheduler's indexing-to-`.slice` rewrite also exposed a NumPy adapter mismatch:
+NumPy has no NDArray-style slice method. Safe dispatch now uses direct indexing
+for exact admitted NumPy arrays, with one index and no constructor keywords.
+This introduces no whole-array conversion or streaming Blosc2 cast fallback.
+
+Verification: **11,598 passed, 55 skipped**. Tests instrument shape inference
+against data reads, compare nested reductions/indexing against NumPy and exercise
+wrapper resizing, rebinding, changed field layouts, removed fields and cyclic or
+hostile sources. Ruff lint/format and whitespace checks passed. Caching proxies,
+table/storage/remote adapters, full persistence reachability and allocation bounds
+still require audit; this slice does not establish complete adapter lifetime safety.
+Construction overhead and cross-platform behavior were not newly measured.

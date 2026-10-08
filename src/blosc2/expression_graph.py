@@ -643,10 +643,14 @@ def _root_reduction_metadata(name, receiver, bound, operands, backend):
     for key, value in arguments.items():
         _validate_argument(name, key, value)
     input_shape = tuple(getattr(receiver, "shape", ()))
+    return _reduced_shape(name, input_shape, arguments), _root_reduction_dtype(
+        name, receiver, arguments, backend
+    )
+
+
+def _reduced_shape(name, input_shape, arguments):
     if name in _CUMULATIVE_OPERATIONS:
-        return _cumulative_shape(name, input_shape, arguments), _root_reduction_dtype(
-            name, receiver, arguments, backend
-        )
+        return _cumulative_shape(name, input_shape, arguments)
     axis, keepdims = arguments.get("axis"), arguments.get("keepdims", False)
     shape = None
     if axis is not _UNKNOWN_ARGUMENT and keepdims is not _UNKNOWN_ARGUMENT:
@@ -657,7 +661,7 @@ def _root_reduction_metadata(name, receiver, bound, operands, backend):
                 if keepdims
                 else tuple(size for index, size in enumerate(input_shape) if index not in normalized)
             )
-    return shape, _root_reduction_dtype(name, receiver, arguments, backend)
+    return shape
 
 
 def _cumulative_shape(name, shape, arguments):
@@ -677,6 +681,77 @@ def _cumulative_shape(name, shape, arguments):
     return tuple(
         size + int(include_initial) if index in normalized else size for index, size in enumerate(shape)
     )
+
+
+def _graph_shape(node, operands, prefer_blosc):
+    """Data-free shape propagation; None means the rule is not reviewed yet."""
+    kind, *args = node
+    if kind == "name":
+        value = operands[args[0]]
+        return tuple(value.shape) if hasattr(value, "shape") else () if np.isscalar(value) else None
+    if kind in {"literal", "dtype"}:
+        return ()
+    if kind == "unary":
+        return () if args[0] is ast.Not else _graph_shape(args[1], operands, prefer_blosc)
+    if kind in {"binary", "compare"}:
+        if args[0] is ast.MatMult:
+            return None
+        shapes = [_graph_shape(item, operands, prefer_blosc) for item in args[1:]]
+        return None if any(shape is None for shape in shapes) else np.broadcast_shapes(*shapes)
+    if kind == "index":
+        shape = _graph_shape(args[0], operands, prefer_blosc)
+        index = _metadata_index(args[1], operands)
+        if shape is None or index is _UNKNOWN_ARGUMENT:
+            return None
+        import ndindex
+
+        return ndindex.ndindex(index).newshape(shape)
+    if kind in {"call", "method"}:
+        return _graph_call_shape(node, operands, prefer_blosc)
+    return None
+
+
+def _metadata_index(node, operands):
+    if node[0] == "slice":
+        values = [_resolved_metadata_argument(item, operands) for item in node[1:]]
+        if any(value is _UNKNOWN_ARGUMENT for value in values):
+            return _UNKNOWN_ARGUMENT
+        return slice(*values)
+    if node[0] == "sequence":
+        values = tuple(_metadata_index(item, operands) for item in node[1])
+        return _UNKNOWN_ARGUMENT if any(value is _UNKNOWN_ARGUMENT for value in values) else values
+    value = _resolved_metadata_argument(node, operands)
+    # Boolean/fancy indexing is data-dependent. Do not read index arrays here.
+    return value if value is None or value is Ellipsis or _axis_integer(value) else _UNKNOWN_ARGUMENT
+
+
+def _graph_call_shape(node, operands, prefer_blosc):
+    kind, name, positional, keywords = node
+    name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
+    if name in _NUMPY_REDUCTION_POSITIONAL and positional[0][0] == "name":
+        receiver = operands[positional[0][1]]
+        backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
+        bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
+        if bound is not None:
+            return _root_reduction_metadata(name, receiver, bound, operands, backend)[0]
+    if kind == "call" and name in _NUMPY_REDUCTION_POSITIONAL:
+        shape = _graph_shape(positional[0], operands, prefer_blosc)
+        if shape is None:
+            return None
+        backend = "blosc_function" if prefer_blosc and name not in {"cumsum", "cumprod"} else "numpy"
+        bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
+        arguments = {key: _resolved_metadata_argument(value, operands) for key, value in bound.items()}
+        for key, value in arguments.items():
+            _validate_argument(name, key, value)
+        return _reduced_shape(name, shape, arguments)
+    if kind == "call" and name in _ELEMENTWISE - {"broadcast_to", "where"}:
+        if (name == "clip" and keywords) or any(key in {"out", "where"} for key, _ in keywords):
+            return None
+        # The optional decimals argument of round is metadata, not an array.
+        values = positional[:1] if name == "round" else positional
+        shapes = [_graph_shape(item, operands, prefer_blosc) for item in values]
+        return None if any(shape is None for shape in shapes) else np.broadcast_shapes(*shapes)
+    return None
 
 
 def _statistical_reduction_dtype(input_dtype, requested, numpy_receiver):
@@ -872,6 +947,11 @@ class ExpressionGraph:
     root: tuple
     names: frozenset[str]
     text: str
+
+    def infer_shape(self, operands, *, prefer_blosc=True):
+        """Propagate reviewed shape rules without fetching operand data."""
+        validate_operands(operands)
+        return _graph_shape(self.root, operands, prefer_blosc)
 
     def bind_root_reduction(self, operands, *, prefer_blosc=True):
         """Make root positional arguments explicit before dummy-array inference.
@@ -1126,6 +1206,7 @@ def validate_operand(value):  # noqa: C901
             validate_operands(getattr(value, "_where_args", {}))
         if type(value) is blosc2.SimpleProxy:
             validate_operand(value._src)
+            _synchronize_simple_proxy(value)
         elif type(value) is blosc2.Proxy:
             # Proxy itself is not a capability boundary: its source can be a
             # caller-defined Python protocol object.
@@ -1134,6 +1215,7 @@ def validate_operand(value):  # noqa: C901
             validate_operand(value.proxy)
         elif type(value) is blosc2.NDField:
             validate_operand(value.ndarr)
+            _synchronize_ndfield(value)
         elif type(value) is PortableLazyArray:
             validate_operands(value.inputs)
         elif type(value) is Column:
@@ -1154,6 +1236,32 @@ def validate_operand(value):  # noqa: C901
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _synchronize_simple_proxy(value):
+    """Refresh wrapper metadata only after its source closure is admitted."""
+    import blosc2
+
+    source = value._src
+    shape, dtype = tuple(source.shape), np.dtype(source.dtype)
+    if shape == value._shape and dtype == value._dtype:
+        return
+    chunks, blocks = value.chunks, value.blocks
+    if len(shape) != len(value._shape):
+        chunks, blocks = None, None
+    chunks, blocks = blosc2.compute_chunks_blocks(shape, chunks, blocks, dtype)
+    value._shape, value._dtype = shape, dtype
+    value.chunks, value.blocks = chunks, blocks
+
+
+def _synchronize_ndfield(value):
+    """An admitted parent may have been rebound to a different field layout."""
+    fields = value.ndarr.dtype.fields
+    if fields is None or type(value.field) is not str or value.field not in fields:
+        raise ValueError("NDField no longer refers to an existing structured field")
+    dtype, offset = fields[value.field][:2]
+    value._dtype, value.offset = dtype, offset
+    value.chunks, value.blocks = value.ndarr.chunks, value.ndarr.blocks
 
 
 def validate_operands(operands):
@@ -1194,6 +1302,12 @@ def _dispatch(name, values, kwargs, prefer_blosc, *, method=False):
     if method:
         receiver, *values = values
         validate_operand(receiver)
+        if name == "slice" and type(receiver) is np.ndarray:
+            # The scheduler rewrites indexing to NDArray.slice syntax. NumPy
+            # operands already reside in memory and use direct indexing instead.
+            if len(values) != 1 or kwargs:
+                _reject("NumPy slice requires exactly one index and no keywords")
+            return receiver[values[0]]
         if name == "astype" and type(receiver) is not np.ndarray:
             _reject("astype requires an admitted NumPy array; no streaming Blosc2 cast is registered")
         # Receiver is admitted before accessing this explicitly registered method.

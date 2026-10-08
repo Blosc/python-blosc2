@@ -4964,9 +4964,11 @@ class LazyExpr(LazyArray):
             graph = parse_expression(expression)
             operands = normalize_operands(operands)
             validate_operands(operands)
+            reduction_shape = graph.infer_shape(operands)
             binding = graph.bind_root_reduction(operands)
             if binding is not None:
-                normalized, reduction_shape, reduction_dtype = binding
+                normalized, root_shape, reduction_dtype = binding
+                reduction_shape = root_shape if root_shape is not None else reduction_shape
                 expression = normalized or expression
         expression = convert_to_slice(expression)
         chunks, blocks = None, None
