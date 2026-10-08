@@ -583,3 +583,111 @@ No default switch or Menudet lowering is justified by these measurements.
 Finishing those gates requires additional implementation, audit and measurements;
 passing the local suite cannot substitute for them. Keep this branch experimental
 and phase 2 deferred. Menudet publication and compatibility freeze remain separate.
+
+## Follow-up assessment: release cycles, mixed contracts and native-kernel closures
+
+Checkpoint `e84afd70` resolves a concrete evaluation lifetime defect: the recursive
+`ExpressionGraph.evaluate` visitor closed over itself, its operands and its local
+array cache. Repeated evaluations therefore retained arrays until cyclic GC ran.
+The evaluator now clears the cache and breaks the recursive closure in `finally`,
+on both success and failure. Weak-reference regressions with cyclic GC disabled
+verify that operands are released while a successful independent result remains
+usable. Existing once-per-evaluation common-subexpression/reduction reuse is kept.
+This is deterministic release of graph-owned references, not a general guarantee
+about allocator high-water RSS or caller-retained exception tracebacks/views.
+
+Computed expression columns now compare descriptor and cached graph roots, operand
+names and actual stored-column identities after admitting the cached dependency.
+Unilateral expression/dependency/cache replacement rejects with a recipe/cache
+mismatch instead of using stale numerical semantics. Supported append/delete
+operations keep an existing safe graph live with current values and shape. Explicit
+computed-column dtype overrides remain permitted; no universal dtype normalization
+or automatic materializing rebuild was introduced.
+
+Added differential contracts cover 72 combinations of six nested/reduction
+expressions, int32/float32/float64 and all NumPy/Blosc2 receiver pairs, plus 40
+weak-scalar cases over five dtypes and four literals. Safe/trusted values, shape,
+dtype and integer-overflow outcomes agree in these cases. This extends empirical
+coverage; it does not complete the mixed-intermediate static metadata rule set.
+Exploratory probes also confirm existing unsupported shape-changing methods on
+computed LazyExpr receivers and the trusted NumPy `.slice` rewrite limitation.
+Those are not repaired by whole-array materialization or treated as parity successes.
+
+### Updated memory and throughput measurements
+
+Same historical source control, one thread, five alternating-order rounds and 31
+repeated evaluations per process. Artifacts in the approved OpenCode temporary
+directory: `safer-cycle-index.json`, `safer-cycle-f32.json`, `safer-cycle-f64.json`.
+No other suite/benchmark was run concurrently with the measurement workers.
+
+The dedicated float64 indexing scaling sweep now has median paired RSS ratios
+**1.007, 1.015, 1.017 and 1.015** at 1K, 100K, 1M and 4M elements. Median execution
+ratios are **1.025, 0.996, 1.008 and 1.001** respectively. The previous reproducible
+indexing excess is no longer present in this matrix after the closure cleanup.
+These are medians of paired ratios, not ratios of unpaired median RSS values.
+
+| 1M-element family | float64 execution | float32 execution | float64 RSS | float32 RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Arithmetic | 1.064 | 1.054 | 1.142 | 0.938 |
+| Math | 1.033 | 1.004 | 0.991 | 0.960 |
+| Reduction | 1.015 | 1.034 | 0.992 | 1.064 |
+| Centering | 1.082 | 0.976 | 1.101 | 1.065 |
+| Axis reduction | 1.008 | 1.054 | 0.949 | 0.964 |
+| Indexing | 0.993 | 0.992 | 0.883 | 0.978 |
+| Persisted expression | 1.013 | 0.982 | 0.976 | 1.012 |
+
+The geometric mean over all paired 1M-element execution ratios is **1.037 float64**
+and **1.018 float32**, still within the provisional 5% budget for this matrix.
+Tiny-array median added latency is roughly **15–79 us float64**, **12–66 us float32**;
+indexing overhead fell, but the other small-expression costs remain. No statistically
+significant speedup is claimed. Whole-process RSS is still variable: the float64
+arithmetic/centering families are higher in this run, despite lower or near-equal
+float32 figures. The indexing defect is explained and addressed, but a complete
+native-allocation/resource-bound gate is still not passed.
+
+### Portable operand audit
+
+Checkpoint `a144fc6f` implements the following native-operand checks.
+
+Safe graph admission previously checked PortableLazyArray inputs without checking
+its actual kernel dependency; portable computed-column caches had the same gap.
+Admission now checks exact PortableKernel/native-handle types, original artifact
+and handle provenance, and cached metadata against fresh native-handle metadata.
+Metadata comparison rejects foreign types before equality hooks. Portable table
+cached kernels must also agree with their recipe artifact. Tests cover hostile
+kernel/handle/metadata objects, same-type native-handle rebinding, artifact mutation
+and cached table kernel/artifact disagreement, before hooks or evaluation.
+
+PortableLazyArray admission also checks concrete input mappings, numeric
+domain/partition extents, lane limits, context rank, cached output/grid geometry,
+native input names/dtypes and broadcasting against the declared domain. Portable
+column bindings/row metadata are checked before native descriptor helpers; current
+stored-column dependencies and scalar row contracts are revalidated. Validated
+cached artifacts reuse their owned native handle instead of recompiling during
+admission. Instrumentation rejects accidental native artifact reconstruction on
+first/repeated cached-column evaluations.
+
+Final verification: **11,973 passed, 55 skipped**, default suite in the `blosc2`
+conda environment. Ruff lint/format, pre-commit checks and whitespace validation
+passed. The performance workers above measured the cycle/cache checkpoint; their
+ordinary numerical workloads do not exercise the subsequent portable-wrapper
+checks. Native-wrapper admission overhead has not been benchmarked separately.
+
+This adds no Python-source reconstruction, native lowering, execution fallback or
+persisted-format change. Native artifacts remain native-only. Basic portable
+domain/partition/binding consistency is now covered; full wrapper/container
+reachability, broader table-cache consistency, allocation bounds and concurrent
+mutation guarantees remain unverified.
+
+### Revised verdict
+
+**The bounded experiment continues to work, with a materially stronger memory and
+dependency-lifetime result. It remains incomplete against the full phase-1 exit
+criteria.** Keep the experimental opt-in and safe/full permission distinction.
+Remaining work is now: complete backend/weak-scalar/cast rule coverage and explicit
+capability review; finish wrapper/container and broader table-cache audits;
+profile small-expression overhead and native allocations; verify refresh/lifetime
+races under the documented non-transactional contract; and certify additional
+platforms, free-threaded Python, WASM and the wider benchmark matrix. Local green
+tests cannot stand in for those unverified gates. No default switch, merge or
+Menudet publication decision follows from this checkpoint.
