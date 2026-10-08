@@ -89,6 +89,7 @@ def expression_method(func):
                 self.operands = normalize_operands(self.operands)
                 validate_operands(self.operands)
                 validate_operands(getattr(self, "_where_args", {}))
+                refresh_expression_metadata(self)
             return func(self, *args, **kwargs)
 
     return wrapped
@@ -111,9 +112,89 @@ def expression_constructor(func):
             if safe:
                 validate_operands(dict(enumerate(values)))
             self._evaluation = mode
-            return func(self, new_op)
+            result = func(self, new_op)
+            if safe and self.expression:
+                record_expression_metadata(self)
+            return result
 
     return wrapped
+
+
+def _operand_metadata(value):
+    """Fingerprint admitted metadata, not array data or computed results."""
+    import blosc2
+
+    if type(value) in (tuple, list):
+        return (type(value), tuple(_operand_metadata(item) for item in value))
+    if type(value) is type:
+        return (type, value)
+    if type(value) is blosc2.LazyExpr:
+        return (id(value), _expression_metadata(value))
+    if type(value) is blosc2.SimpleProxy:
+        return (id(value), _operand_metadata(value._src))
+    if hasattr(value, "dtype") and hasattr(value, "shape"):
+        return (
+            id(value),
+            np.dtype(value.dtype),
+            tuple(value.shape),
+            getattr(value, "chunks", None),
+            getattr(value, "blocks", None),
+        )
+    return (type(value), repr(value))
+
+
+def _expression_metadata(expr):
+    return (
+        expr.expression,
+        tuple((name, _operand_metadata(value)) for name, value in expr.operands.items()),
+        tuple((name, _operand_metadata(value)) for name, value in getattr(expr, "_where_args", {}).items()),
+    )
+
+
+def record_expression_metadata(expr):
+    """Record the inputs for which constructor-provided metadata is valid."""
+    expr._graph_metadata = _expression_metadata(expr)
+
+
+def refresh_expression_metadata(expr):
+    """Re-infer safe metadata after changes using the existing validated constructor.
+
+    No operand values are cached. Ordinary trusted expressions keep their existing
+    mutation behavior. This is cache invalidation, not a new inference engine.
+    """
+    state = _expression_metadata(expr)
+    previous = getattr(expr, "_graph_metadata", None)
+    if previous is None and getattr(expr, "_evaluation", "full") == "safe":
+        expr._graph_metadata = state
+        return
+    if previous == state:
+        return
+    import blosc2
+
+    rebuilt = blosc2.LazyExpr._new_expr(expr.expression, expr.operands, guess=True)
+    where = getattr(expr, "_where_args", {})
+    if where:
+        rebuilt = rebuilt.where(where["_where_x"], where.get("_where_y"))
+    # Commit caches only after complete replacement metadata has been inferred.
+    # On failure the changed signature prevents reuse of the old caches.
+    dtype, shape = rebuilt.dtype, rebuilt.shape
+    for name in (
+        "_dtype",
+        "_dtype_",
+        "_shape",
+        "_shape_",
+        "_expression_",
+        "_chunks",
+        "_blocks",
+        "_me_str_dtype_",
+        "_me_str_key_",
+        "cons_cache",
+        "expression_tosave",
+        "operands_tosave",
+    ):
+        expr.__dict__.pop(name, None)
+    expr._dtype, expr._shape = dtype, shape
+    expr._graph_metadata = state
 
 
 _ELEMENTWISE = frozenset(

@@ -204,3 +204,43 @@ contracts and the remaining adapter/lifetime audit. No Menudet lowering yet.
 Profiling follow-up verification: **11,339 passed, 55 skipped**; Ruff lint/format
 and whitespace checks passed. Profiling artifacts remain in the approved temporary
 directory; the runtime itself is unchanged from the committed checkpoint.
+
+## Metadata validity follow-up (after `0c92a0d5`)
+
+The profiling checkpoint was committed as `0c92a0d5`. The next implementation
+step addresses cache correctness, not performance shortcuts or Menudet lowering.
+
+Previously, safe construction could cache `_shape`/`_dtype`, then return those
+values after rebinding a public operand, resizing an admitted NumPy operand, or
+editing expression text. Persistence could also select `expression_tosave` and
+`operands_tosave` from the original construction instead of the current recipe.
+
+Safe graphs now record an input-metadata signature at construction and check it
+at deferred entry points, including chunks/blocks and recipe export. The signature
+includes expression text, bindings, admitted shape/dtype/partition metadata,
+nested expression metadata and selection dependencies. It contains no array data
+or computed results. Data-only changes therefore reevaluate without metadata
+reconstruction. Changed signatures trigger inference through the existing validated
+constructor before replacement caches become visible. Failed inference cannot
+return old metadata. Trusted numerical dependencies entering a safe graph also
+refresh potentially stale constructor caches.
+
+After a metadata change, derived caches and the original persistence recipe are
+invalidated. Disk, frame and nested structured encoding select the current recipe.
+The ordinary trusted path's existing mutation behavior is unchanged.
+
+New regressions cover rebinding before first computation, shape/text changes,
+selection dtype changes, data-only updates, disk/frame/structured round trips,
+trusted dependency metadata and incompatible rebinding. This is **not** a new
+typed inference engine: precise per-operation rules and complete synchronization
+of wrapper/source metadata are still outstanding. In particular, wrapper-owned
+cached metadata and graph-dependent constructor caches need further audit. No
+transactional snapshot or concurrency guarantee was introduced.
+
+Verification: **11,348 passed, 55 skipped**. A repeated-execution centering profile
+spent approximately 0.007 seconds in metadata refresh across 101 evaluations
+(0.747 seconds total profiled execution). This is diagnostic, not a timing gate.
+Three uninstrumented alternating-order historical-control rounds at 1M float64
+elements, 50 repetitions each, gave centering median ratio 1.089 (range
+0.896–1.125) and persisted-execution median 0.960 (0.836–1.029). Timing variability
+remains material; no performance improvement or complete gate pass is claimed.

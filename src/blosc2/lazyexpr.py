@@ -60,6 +60,7 @@ from .expression_graph import (
     expression_method,
     normalize_operands,
     parse_expression,
+    record_expression_metadata,
     validate_operands,
 )
 from .proxy_source import convert_dtype
@@ -3983,6 +3984,7 @@ class LazyExpr(LazyArray):
         return _shape
 
     @property
+    @expression_method
     def chunks(self):
         if hasattr(self, "_chunks"):
             return self._chunks
@@ -3999,6 +4001,7 @@ class LazyExpr(LazyArray):
         return self._chunks
 
     @property
+    @expression_method
     def blocks(self):
         if hasattr(self, "_blocks"):
             return self._blocks
@@ -4058,6 +4061,8 @@ class LazyExpr(LazyArray):
         new_expr.operands = self.operands
         new_expr._where_args = args
         new_expr._dtype = dtype
+        if evaluation_mode() == "safe":
+            record_expression_metadata(new_expr)
         return new_expr
 
     @staticmethod
@@ -4893,9 +4898,14 @@ class LazyExpr(LazyArray):
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
 
-    def _to_b2object_carrier(self, **kwargs):
+    @expression_method
+    def _expression_recipe(self):
         expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
         operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
+        return expression, operands_
+
+    def _to_b2object_carrier(self, **kwargs):
+        expression, operands_ = self._expression_recipe()
         validate_expr(expression)
 
         payload = {"kind": "lazyexpr", "version": 1, "expression": expression, "operands": {}}
@@ -5011,6 +5021,8 @@ class LazyExpr(LazyArray):
             new_expr._where_args = where
         new_expr._ne_args = ne_args
         new_expr._evaluation = evaluation_mode()
+        if evaluation_mode() == "safe":
+            record_expression_metadata(new_expr)
         return new_expr
 
 

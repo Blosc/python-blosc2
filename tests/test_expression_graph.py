@@ -263,3 +263,94 @@ def test_centering_reduces_once_per_evaluation_across_chunks(monkeypatch):
     x[:] = data * 2
     np.testing.assert_allclose(expr[:], 2 * (data - data.mean()))
     assert calls == ["sum"]
+
+
+def test_metadata_refreshes_after_rebinding_before_first_compute():
+    expr = blosc2.lazyexpr("x + 1", {"x": np.arange(6, dtype="int32")})
+    key = next(iter(expr.operands))
+    replacement = np.arange(12, dtype="float64").reshape(3, 4)
+    expr.operands[key] = replacement
+    assert expr.shape == (3, 4)
+    assert expr.dtype == np.dtype("float64")
+    np.testing.assert_allclose(expr[:], replacement + 1)
+
+
+def test_metadata_refreshes_after_shape_mutation_and_text_change():
+    source = np.arange(12.0)
+    expr = blosc2.lazyexpr("x + 1", {"x": source})
+    assert expr.shape == (12,)
+    source.resize((3, 4), refcheck=False)
+    assert expr.shape == (3, 4)
+    np.testing.assert_allclose(expr[:], source + 1)
+    key = next(iter(expr.operands))
+    expr.expression = f"sum({key}, axis=0)"
+    assert expr.shape == (4,)
+    np.testing.assert_allclose(expr[:], source.sum(axis=0))
+
+
+def test_metadata_refreshes_selection_dtype():
+    expr = blosc2.lazyexpr("x > 0", {"x": np.arange(4)}).where(1, 0)
+    assert expr.dtype == np.dtype("int64")
+    expr._where_args["_where_x"] = np.float64(1.5)
+    assert expr.dtype == np.dtype("float64")
+    np.testing.assert_allclose(expr[:], [0, 1.5, 1.5, 1.5])
+
+
+def test_data_changes_do_not_rebuild_metadata_or_cache_results(monkeypatch):
+    module = importlib.import_module("blosc2.expression_graph")
+    source = np.arange(4.0)
+    expr = blosc2.lazyexpr("x + 1", {"x": source})
+    state = expr._graph_metadata
+    original = module.record_expression_metadata
+
+    def unexpected_rebuild(value):
+        if value is not expr:
+            pytest.fail("Rebuilt expression metadata after a data-only change")
+        return original(value)
+
+    monkeypatch.setattr(module, "record_expression_metadata", unexpected_rebuild)
+    source[:] = 10
+    np.testing.assert_allclose(expr[:], [11, 11, 11, 11])
+    assert expr._graph_metadata == state
+
+
+@pytest.mark.parametrize("route", ["disk", "frame", "structured"])
+def test_mutated_recipe_roundtrip_uses_current_metadata(tmp_path, route):
+    source = blosc2.asarray(np.arange(6, dtype="int32"), urlpath=tmp_path / "old.b2nd", mode="w")
+    expr = blosc2.lazyexpr("x + 1", {"x": source})
+    key = next(iter(expr.operands))
+    data = np.arange(12.0).reshape(3, 4)
+    expr.operands[key] = blosc2.asarray(data, urlpath=tmp_path / "new.b2nd", mode="w")
+    expr.expression = f"sqrt({key})"
+    if route == "disk":
+        expr.save(tmp_path / "expr.b2nd")
+        reopened = blosc2.open(tmp_path / "expr.b2nd")
+    elif route == "frame":
+        reopened = blosc2.from_cframe(expr.to_cframe())
+    else:
+        module = importlib.import_module("blosc2.b2objects")
+        reopened = module.decode_b2object_payload(module.encode_b2object_payload(expr))
+    assert reopened.shape == (3, 4)
+    assert reopened.dtype == np.dtype("float64")
+    np.testing.assert_allclose(reopened[:], np.sqrt(data))
+
+
+def test_trusted_numerical_dependency_does_not_import_stale_metadata():
+    source = np.arange(6.0)
+    with blosc2.expression_evaluation("full"):
+        trusted = blosc2.lazyexpr("x + 1", {"x": source})
+    source.resize((2, 3), refcheck=False)
+    combined = blosc2.lazyexpr("x + 1", {"x": trusted})
+    assert trusted.shape == (2, 3)
+    assert combined.shape == (2, 3)
+    np.testing.assert_allclose(combined[:], source + 2)
+
+
+def test_failed_metadata_refresh_never_returns_old_shape():
+    expr = blosc2.lazyexpr("x + y", {"x": np.ones(4), "y": np.ones(4)})
+    key = next(iter(expr.operands))
+    expr.operands[key] = np.ones(3)
+    with pytest.raises(ValueError):
+        _ = expr.shape
+    with pytest.raises(ValueError):
+        expr.compute()

@@ -106,8 +106,7 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
     if isinstance(obj, blosc2.C2Array):
         return blosc2.Ref.c2array_ref(obj.path, obj.urlbase).to_dict()
     if isinstance(obj, blosc2.LazyExpr):
-        expression = obj.expression_tosave if hasattr(obj, "expression_tosave") else obj.expression
-        operands = obj.operands_tosave if hasattr(obj, "operands_tosave") else obj.operands
+        expression, operands = obj._expression_recipe()
         return {
             "kind": "lazyexpr",
             "version": _B2OBJECT_VERSION,
