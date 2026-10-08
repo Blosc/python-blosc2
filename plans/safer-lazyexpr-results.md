@@ -691,3 +691,90 @@ races under the documented non-transactional contract; and certify additional
 platforms, free-threaded Python, WASM and the wider benchmark matrix. Local green
 tests cannot stand in for those unverified gates. No default switch, merge or
 Menudet publication decision follows from this checkpoint.
+
+## Follow-up: intermediate reductions, containers and concurrency/platform evidence
+
+Implementation checkpoint: `e0c36357`. Final default-suite verification:
+**12,017 passed, 55 skipped** in the `blosc2` conda environment. Ruff lint/format,
+workflow YAML parsing, pre-commit checks and whitespace validation passed.
+
+Reviewed NumPy binary/index/cast intermediates now provide a metadata-only receiver
+for reductions. This preserves NumPy-method versus Blosc2-function positional
+layouts and accumulator dtype rules without constructing an array or executing a
+dummy numerical operation. Direct named receivers retain their existing path.
+Mixed/Blosc2-changing intermediates still defer to the existing reviewed execution
+and inference where their static rule is unknown, rather than adopting NumPy's
+semantics. Tests cover nested sum/mean, explicit NumPy std with ddof and cast-then-sum.
+The latter two forms are checked against NumPy directly: the trusted validator or
+dummy inference does not support them, so they are not called parity successes.
+
+The platform review identified NumPy 1.x's value-dependent scalar/0-D promotion.
+Static binary dtype rules now defer those cases to backend inference on NumPy 1.x,
+instead of applying NumPy 2.x's NEP 50 rules or raising an incorrect early integer
+overflow. The guard branch is tested locally; actual NumPy 1.26 verification is
+pending its existing CI matrix entry. Array/array dtype rules are retained.
+
+### Container reachability
+
+DictStore/TreeStore assignment of a LazyExpr failed in the size estimator because
+LazyExpr has no `nbytes` property. Logical shape and normalized dtype now estimate
+the storage tier without evaluating the expression. Dtype normalization also
+preserves existing LazyUDF recipes that specify dtype as a string or scalar type.
+No generic array conversion, operand materialization or UDF loading-policy bypass
+was introduced.
+
+Disk/ZIP DictStore and TreeStore, plus EmbedStore, now have explicit graph-lifetime
+tests under both safe/full loading permissions, including embedded and threshold-
+externalized leaves. Writer instrumentation rejects expression reads/materialization;
+reader instrumentation rejects the Python text bridge. Safe graphs remain safe
+through partial reads and ufunc composition under ambient full mode. Malformed
+expression carriers in all five container configurations reject before operand
+reference resolution. This covers those leaf routes, not every heterogeneous,
+recursive container/reference arrangement or crash-recovery behavior.
+
+### Concurrency contract and probes
+
+RemoteArray admission now uses the existing owner-lock then operation-lock order
+to check its transport/cache closure coherently with supported refresh. Concrete
+native RLocks are checked before context hooks; replaced locks reject. Refresh
+already preserves its operation-lock identity while swapping source state, so no
+new global lock or transactional snapshot mechanism was added.
+
+Controlled Event-based tests block an active safe read and overlap standalone
+refresh for NONE/MEMORY/DISK caching, then verify read completion and subsequent
+safe evaluation. A shared, safe-loaded expression also runs on four threads under
+mixed ambient policies; composition remains safe and thread-local policy is restored.
+These are deterministic ordinary-thread probes on GIL-enabled CPython, not an
+exhaustive race proof or permission to mutate expression mappings/table recipes
+concurrently. An evaluation may observe permitted operand changes between reads;
+there is still no transactional snapshot guarantee. Native thread tests explicitly
+skip on single-threaded WASM runtimes; the skip is reported, not counted as evidence.
+
+### Platform verification harness
+
+`scripts/verify_safe_lazyexpr.py` runs the bounded graph/property/container/portable
+corpus without xdist and emits Python/NumPy/native versions, actual package path,
+free-threaded-build and effective GIL state, test counts and skip/failure reasons.
+It neither forces `PYTHON_GIL=0` nor equates a free-threaded build with no-GIL safety.
+The native Linux/Windows/macOS/NumPy-1.26 workflow uploads its JSON report; wheel and
+WASM/Pyodide workflows also run the harness. Those jobs are prepared, not executed
+for this unpublished checkpoint.
+
+Local harness evidence: **710 passed, no skips**, macOS ARM64, CPython 3.14.4,
+NumPy 2.5.3, C-Blosc2 3.3.5; ordinary build, GIL enabled. Artifact:
+`safer-platform-local.json` in the approved OpenCode temporary directory.
+
+| Requested verification | Current status |
+| --- | --- |
+| Local numerical/metadata and container corpus | Tested; static compatibility coverage remains partial |
+| Shared readonly graphs and RemoteArray read/refresh overlap | Tested with ordinary threads and three cache policies |
+| Concurrent table/Parquet refresh, expression mutation and arbitrary adapter races | Not certified |
+| Linux/Windows/macOS and NumPy 1.26 | CI harness wired; only local macOS/NumPy 2.x executed here |
+| Free-threaded interpreter builds | Wheel harness records actual GIL fallback; external results pending |
+| Actual no-GIL execution | Unsupported certification claim; never forced or inferred |
+| WASM/Pyodide | Harness wired; external results pending; unavailable thread probes reported as skips |
+
+This advances all four requested areas but does not close the full experiment gate.
+The remaining static/backend rules, complete heterogeneous reachability review,
+native resource bounds and external platform/race evidence must still be reviewed.
+Defaults and the existing safe/full distinction remain unchanged.
