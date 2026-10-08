@@ -108,6 +108,17 @@ jobs:
         PYTEST_DEADMAN_SECONDS: "300"
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 
+    - name: Verify experimental safe-graph corpus
+      run: python scripts/verify_safe_lazyexpr.py --report safe-lazyexpr.json
+
+    - name: Upload safe-graph platform evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: safe-lazyexpr-${{ matrix.os }}-py${{ matrix.python-version }}-np${{ matrix.numpy-version || 'default' }}
+        path: safe-lazyexpr.json
+        if-no-files-found: ignore
+
     - name: Certify bounded Menudet math against independent references
       run: python scripts/certify_menudet_math.py --report menudet-math.json
 

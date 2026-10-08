@@ -1,6 +1,9 @@
 """Safe graph lifetime, syntax, operands and trusted compatibility checks."""
 
 import importlib
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import numpy as np
 import pytest
@@ -1272,10 +1275,60 @@ def test_remote_array_same_type_source_rebinding_rejects(remote_graph_operand, m
     other.close()
 
 
+def test_remote_array_hostile_lock_rejects_before_context_hook(remote_graph_operand, monkeypatch):
+    remote, _ = remote_graph_operand
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+
+    class HostileLock:
+        def __enter__(self):
+            pytest.fail("Entered hostile remote operation lock")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, "_operation_lock", HostileLock())
+        with pytest.raises(blosc2.UnsafeDeserializationError, match="operation lock"):
+            expr.compute()
+
+
 def test_remote_array_refresh_keeps_safe_expression_live(remote_graph_operand):
     remote, data = remote_graph_operand
     expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
     remote.refresh()
+    np.testing.assert_allclose(expr[:], np.sqrt(data))
+
+
+@pytest.mark.skipif(sys.platform in {"emscripten", "wasi"}, reason="Runtime does not provide Python threads")
+def test_remote_refresh_serializes_with_active_safe_read(remote_graph_operand, monkeypatch):
+    remote, data = remote_graph_operand
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+    reading, release, refreshing = Event(), Event(), Event()
+    original = type(remote.src).get_chunk
+
+    def blocked_read(source, *args, **kwargs):
+        reading.set()
+        if not release.wait(timeout=10):
+            raise RuntimeError("Timed out waiting to release the controlled read")
+        return original(source, *args, **kwargs)
+
+    def refresh():
+        refreshing.set()
+        remote.refresh()
+
+    monkeypatch.setattr(type(remote.src), "get_chunk", blocked_read)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reader = pool.submit(lambda: expr[:])
+        try:
+            assert reading.wait(timeout=10)
+            acquired = remote._operation_lock.acquire(blocking=False)
+            if acquired:
+                remote._operation_lock.release()
+            assert not acquired  # The active reader owns the serialization lock.
+            refresher = pool.submit(refresh)
+            assert refreshing.wait(timeout=10)
+            assert not refresher.done()
+        finally:
+            release.set()
+        np.testing.assert_allclose(reader.result(timeout=10), np.sqrt(data))
+        refresher.result(timeout=10)
     np.testing.assert_allclose(expr[:], np.sqrt(data))
 
 

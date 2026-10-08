@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import shutil
 import tempfile
@@ -603,6 +604,10 @@ class DictStore:
     def _value_nbytes(value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray) -> int:
         if isinstance(value, blosc2.ObjectArray | blosc2.BatchArray):
             return value.schunk.nbytes
+        if isinstance(value, blosc2.LazyArray):
+            # Choose a storage tier from logical metadata, without evaluating
+            # a deferred expression merely to estimate its result size.
+            return math.prod(value.shape) * np.dtype(value.dtype).itemsize
         return value.nbytes
 
     @staticmethod

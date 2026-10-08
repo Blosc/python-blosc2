@@ -10,6 +10,55 @@ import pytest
 import blosc2
 
 
+def test_value_dependent_numpy_promotion_defers_scalar_metadata(monkeypatch):
+    module = importlib.import_module("blosc2.expression_graph")
+    monkeypatch.setattr(module, "_NUMPY_VALUE_PROMOTION", True)
+    x = np.arange(4, dtype="uint8")
+    graph = module.parse_expression("x + scalar")
+    assert graph.infer_dtype({"x": x, "scalar": 256}) is None
+    assert graph.infer_dtype({"x": x, "scalar": np.array(256)}) is None
+    assert graph.infer_dtype({"x": x, "scalar": x}) == np.dtype("uint8")
+
+
+@pytest.mark.parametrize("dtype", ["int32", "float32", "float64"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "(x + y).sum(axis=0, keepdims=True)",
+        "(x / y).mean(axis=1)",
+        "sum(x + y, axis=1)",
+    ],
+)
+def test_numpy_intermediate_reduction_metadata_without_execution(monkeypatch, dtype, text):
+    module = importlib.import_module("blosc2.lazyexpr")
+    operands = {"x": np.arange(1, 33, dtype=dtype).reshape(4, 8), "y": np.full((4, 8), 2, dtype=dtype)}
+    trusted = blosc2.lazyexpr(text, operands, evaluation="full")
+    expected = trusted[:]
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy numerical inference"))
+        safe = blosc2.lazyexpr(text, operands, evaluation="safe")
+        assert safe.shape == trusted.shape
+        assert safe.dtype == trusted.dtype
+    np.testing.assert_allclose(safe[:], expected, rtol=2e-6, atol=2e-6)
+
+
+@pytest.mark.parametrize("cast", [False, True])
+def test_numpy_intermediate_extended_contracts_without_dummies(monkeypatch, cast):
+    module = importlib.import_module("blosc2.lazyexpr")
+    x = np.arange(1, 33, dtype="float32").reshape(4, 8)
+    y = np.full_like(x, 2)
+    # The trusted validator/inference does not support these forms. Compare
+    # the explicit NumPy contract rather than calling that a parity success.
+    text = "(x + y).astype('float64').sum(axis=0)" if cast else "np.std(x + y, axis=0, ddof=1)"
+    expected = (x + y).astype("float64").sum(axis=0) if cast else np.std(x + y, axis=0, ddof=1)
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy numerical inference"))
+        safe = blosc2.lazyexpr(text, {"x": x, "y": y}, evaluation="safe")
+        assert safe.shape == expected.shape
+        assert safe.dtype == expected.dtype
+    np.testing.assert_allclose(safe[:], expected, rtol=2e-6, atol=2e-6)
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_graph_evaluation_releases_operands_without_cyclic_gc(fails):
     from blosc2.expression_graph import parse_expression

@@ -26,7 +26,8 @@ env:
     {project}/tests/test_portable_policy.py
     {project}/tests/test_portable_table_export.py
     {project}/tests/test_dsl_portable.py -q -n 0 &&
-    python {project}/scripts/certify_menudet_math.py
+    python {project}/scripts/certify_menudet_math.py &&
+    python {project}/scripts/verify_safe_lazyexpr.py
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long
   # Now that github provides native arm64 runners, we can enable tests again
   # CIBW_TEST_SKIP: "*linux*aarch64*"
@@ -174,7 +175,8 @@ jobs:
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
       CIBW_TEST_COMMAND: >-
         pytest {project}/tests &&
-        python {project}/scripts/certify_menudet_math.py
+        python {project}/scripts/certify_menudet_math.py &&
+        python {project}/scripts/verify_safe_lazyexpr.py
       # Pin the Pyodide version explicitly per target for reproducible builds.
       # Note: in-memory SChunk get_slice is broken on the Pyodide 0.29.x
       # Emscripten toolchain (works on 314); see gh-664. The affected test is

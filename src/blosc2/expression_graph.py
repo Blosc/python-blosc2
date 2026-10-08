@@ -6,6 +6,7 @@ Graph parsing is cached, while evaluation results never survive an execution.
 
 from __future__ import annotations
 
+import _thread
 import abc
 import ast
 import contextlib
@@ -23,6 +24,7 @@ from blosc2.exceptions import UnsafeDeserializationError
 _mode = contextvars.ContextVar("expression_evaluation", default="full")
 _active_operands = contextvars.ContextVar("expression_operand_validation", default=frozenset())
 _active_recipes = contextvars.ContextVar("expression_recipe_resolution", default=())
+_NUMPY_VALUE_PROMOTION = np.lib.NumpyVersion(np.__version__) < "2.0.0"
 
 
 def bounded_recipe(func):
@@ -794,6 +796,10 @@ def _numpy_value_graph(node, operands):
 def _numpy_binary_dtype(node, operands, prefer_blosc):
     if not _numpy_value_graph(node, operands):
         return None
+    if _NUMPY_VALUE_PROMOTION and any(_graph_shape(item, operands, prefer_blosc) == () for item in node[2:]):
+        # NumPy 1.x promotion can depend on scalar/0-D values, not just their
+        # declared dtype. Preserve backend inference instead of applying NEP 50.
+        return None
     inputs = []
     values = []
     for item in node[2:]:
@@ -863,6 +869,34 @@ def _numpy_cast_dtype(node, operands, prefer_blosc):
     return target
 
 
+@dataclass(frozen=True)
+class _ArrayMetadata:
+    shape: tuple
+    dtype: np.dtype
+
+
+def _graph_reduction_metadata(kind, name, positional, keywords, operands, prefer_blosc):
+    receiver_node = positional[0]
+    if receiver_node[0] == "name":
+        receiver = operands[receiver_node[1]]
+        backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
+    elif _numpy_value_graph(receiver_node, operands):
+        shape = _graph_shape(receiver_node, operands, prefer_blosc)
+        dtype = _graph_dtype(receiver_node, operands, prefer_blosc)
+        if shape is None or dtype is None:
+            return None
+        receiver = _ArrayMetadata(shape, dtype)
+        backend = (
+            "numpy"
+            if kind == "method" or not prefer_blosc or name in {"cumsum", "cumprod"}
+            else "blosc_numpy_function"
+        )
+    else:
+        return None
+    bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
+    return None if bound is None else _root_reduction_metadata(name, receiver, bound, operands, backend)
+
+
 def _graph_dtype(node, operands, prefer_blosc):
     """Resolve a narrow numerical subset without computing synthetic values."""
     kind, *args = node
@@ -882,12 +916,10 @@ def _graph_dtype(node, operands, prefer_blosc):
         return None
     name, positional, keywords = args
     name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
-    if name in _NUMPY_REDUCTION_POSITIONAL and positional[0][0] == "name":
-        receiver = operands[positional[0][1]]
-        backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
-        bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
-        if bound is not None:
-            return _root_reduction_metadata(name, receiver, bound, operands, backend)[1]
+    if name in _NUMPY_REDUCTION_POSITIONAL:
+        metadata = _graph_reduction_metadata(kind, name, positional, keywords, operands, prefer_blosc)
+        if metadata is not None:
+            return metadata[1]
     if kind == "call" and name in _UNARY_DTYPE_RULES and len(positional) == 1 and not keywords:
         dtype = _graph_dtype(positional[0], operands, prefer_blosc)
         if dtype is not None:
@@ -911,12 +943,10 @@ def _graph_call_shape(node, operands, prefer_blosc):
         if requested is _UNKNOWN_ARGUMENT or np.dtype(requested).subdtype is not None:
             return None
         return _graph_shape(positional[0], operands, prefer_blosc)
-    if name in _NUMPY_REDUCTION_POSITIONAL and positional[0][0] == "name":
-        receiver = operands[positional[0][1]]
-        backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
-        bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
-        if bound is not None:
-            return _root_reduction_metadata(name, receiver, bound, operands, backend)[0]
+    if name in _NUMPY_REDUCTION_POSITIONAL:
+        metadata = _graph_reduction_metadata(kind, name, positional, keywords, operands, prefer_blosc)
+        if metadata is not None:
+            return metadata[0]
     if kind == "call" and name in _NUMPY_REDUCTION_POSITIONAL:
         shape = _graph_shape(positional[0], operands, prefer_blosc)
         if shape is None:
@@ -960,7 +990,9 @@ def _root_reduction_dtype(name, receiver, arguments, backend):
     input_dtype = np.dtype(getattr(receiver, "dtype", type(receiver)))
     if input_dtype.kind not in "biufc":
         return None
-    numpy_receiver = backend == "numpy" or (type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS)
+    numpy_receiver = backend in {"numpy", "blosc_numpy_function"} or (
+        type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS
+    )
     if name in _CUMULATIVE_OPERATIONS and backend != "numpy" and requested is not None:
         # The current Blosc2 cumulative implementation does not consistently
         # apply dtype overrides. Preserve its inference rather than claiming
@@ -1586,9 +1618,27 @@ def _validate_portable_kernel(value):
 
 def _validate_remote_array(value):
     """Check the concrete transport/cache closure without opening or fetching it."""
+    from blosc2.remote_store import RemoteDiscovery
+
+    owner = value._store_owner
+    if owner is not None and type(owner) is not RemoteDiscovery:
+        _reject("unapproved RemoteArray store owner")
+    operation_lock = value._operation_lock
+    owner_lock = owner.lock if owner is not None else None
+    if type(operation_lock) is not _thread.RLock or (
+        owner_lock is not None and type(owner_lock) is not _thread.RLock
+    ):
+        _reject("unapproved RemoteArray operation lock")
+    with owner_lock if owner_lock is not None else contextlib.nullcontext(), operation_lock:
+        if value._store_owner is not owner or value._operation_lock is not operation_lock:
+            raise ValueError("RemoteArray ownership changed during admission; retrieve a new handle")
+        _validate_remote_array_locked(value)
+
+
+def _validate_remote_array_locked(value):
     import blosc2
     from blosc2.c2array import C2NDSource
-    from blosc2.remote_store import RemoteDiscovery, _Caterva2ArraySource
+    from blosc2.remote_store import _Caterva2ArraySource
 
     sources = {
         blosc2.C2Array,
@@ -1603,8 +1653,6 @@ def _validate_remote_array(value):
         _reject("unapproved RemoteArray transport source")
     if value.src is not value._expression_source:
         raise ValueError("RemoteArray source was rebound; use refresh() or construct a new array")
-    if value._store_owner is not None and type(value._store_owner) is not RemoteDiscovery:
-        _reject("unapproved RemoteArray store owner")
     value._check_open()
     if value._geometry(value.src) != value._expected_geometry:
         raise ValueError("RemoteArray source geometry changed; use refresh() or retrieve a new array")
