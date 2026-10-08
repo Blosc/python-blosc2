@@ -961,3 +961,150 @@ def test_proxy_field_removed_after_parent_rebinding_rejects():
     field.proxy = blosc2.Proxy(blosc2.asarray(np.zeros(4, dtype=[("y", "int32")])))
     with pytest.raises(ValueError, match="existing structured field"):
         expr.compute()
+
+
+@pytest.mark.parametrize("operation", ["+", "-", "*", "/", "**", "=="])
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("int8", "uint8"),
+        ("int32", "int32"),
+        ("int32", "float32"),
+        ("float32", "float64"),
+        ("complex64", "float32"),
+    ],
+)
+def test_numpy_binary_dtype_rules_match_execution(operation, left, right):
+    x = np.arange(1, 7, dtype=left).reshape(2, 3)
+    y = np.full(3, 2, dtype=right)
+    operations = {
+        "+": np.add,
+        "-": np.subtract,
+        "*": np.multiply,
+        "/": np.divide,
+        "**": np.power,
+        "==": np.equal,
+    }
+    expected = operations[operation](x, y)
+    expr = blosc2.lazyexpr(f"x {operation} y", {"x": x, "y": y})
+    assert expr.dtype == expected.dtype
+    assert expr.shape == expected.shape
+    np.testing.assert_allclose(expr[:], expected, rtol=1e-6)
+
+
+@pytest.mark.parametrize("scalar", [1, 1.5, 1 + 2j, np.float64(1.5)])
+def test_numpy_weak_vs_concrete_scalar_promotion(scalar):
+    x = np.arange(6, dtype="float32")
+    expr = blosc2.lazyexpr("x + y", {"x": x, "y": scalar})
+    expected = x + scalar
+    assert expr.dtype == expected.dtype
+    np.testing.assert_allclose(expr[:], expected, rtol=1e-6)
+
+
+def test_binary_dtype_inference_is_data_free_and_retains_backend_difference(monkeypatch):
+    module = importlib.import_module("blosc2.lazyexpr")
+    data = np.arange(1, 7, dtype="int32")
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy inference"))
+        expr = blosc2.lazyexpr("x / y", {"x": data, "y": data})
+        assert expr.dtype == np.dtype("float64")
+    x = blosc2.asarray(data)
+    graph = parse_expression("x / y")
+    assert graph.infer_dtype({"x": x, "y": x}) is None
+    expr = blosc2.lazyexpr("x / y", {"x": x, "y": x})
+    assert expr.dtype == np.dtype("float32")
+
+
+def test_numpy_weak_integer_range_contract_rejects_before_compute():
+    with pytest.raises(OverflowError):
+        blosc2.lazyexpr("x + 1000", {"x": np.ones(3, dtype="int8")})
+
+
+def test_numpy_scalar_overflow_retains_existing_fallback():
+    assert parse_expression("x + 1e100").infer_dtype({"x": np.ones(3, dtype="float32")}) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "x.astype('float32')",
+        "x.astype('float32', 'F', 'safe', True, False)",
+        "x.astype(dtype='float32', order='C', casting='safe', copy=False)",
+        "(x + y).astype('float32')",
+    ],
+)
+def test_numpy_cast_metadata_matches_execution_without_dummies(text, monkeypatch):
+    x = np.arange(6, dtype="int8").reshape(2, 3)
+    module = importlib.import_module("blosc2.lazyexpr")
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_numpy_eval_expr", lambda *a, **k: pytest.fail("Dummy cast"))
+        expr = blosc2.lazyexpr(text, {"x": x, "y": np.ones(3, dtype="int8")})
+        assert expr.shape == x.shape
+        assert expr.dtype == np.dtype("float32")
+    expected = (x + 1).astype("float32") if "x + y" in text else x.astype("float32")
+    np.testing.assert_array_equal(expr[:], expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "x.astype('float32', 'F', order='C')",
+        "x.astype('float32', 'Z')",
+        "x.astype('float32', 'C', 'safe', 1)",
+        "x.astype('float32', 'C', 'safe', True, 0)",
+    ],
+)
+def test_numpy_cast_positional_contract_rejects(text):
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        blosc2.lazyexpr(text, {"x": np.arange(6)})
+
+
+def test_numpy_cast_unsafe_narrowing_rejects_during_metadata():
+    with pytest.raises(TypeError, match="Cannot cast"):
+        blosc2.lazyexpr("x.astype('int8', casting='safe')", {"x": np.arange(6, dtype="float64")})
+
+
+def test_flexible_string_cast_does_not_claim_descriptor_width_is_output_width():
+    x = np.arange(6, dtype="int64")
+    assert parse_expression("x.astype('U')").infer_dtype({"x": x}) is None
+    expr = blosc2.lazyexpr("x.astype('U')", {"x": x})
+    assert expr.dtype == x.astype("U").dtype
+    np.testing.assert_array_equal(expr[:], x.astype("U"))
+
+
+def test_remote_field_closure_rejects_hostile_rebound_records():
+    from blosc2.ctable_storage import _RemoteHDF5Field
+
+    field = _RemoteHDF5Field(blosc2.asarray(np.zeros(4, dtype=[("x", "int32")])), "x")
+    expr = blosc2.lazyexpr("x + 1", {"x": field})
+
+    class HostileRecords:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted remote records metadata")
+
+    field.records = HostileRecords()
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        expr.compute()
+
+
+def test_remote_field_refresh_preserves_explicit_logical_dtype():
+    from blosc2.ctable_storage import _RemoteHDF5Field
+
+    first = blosc2.asarray(np.zeros(4, dtype=[("x", "int32")]))
+    inherited = _RemoteHDF5Field(first, "x")
+    overridden = _RemoteHDF5Field(first, "x", dtype="float64")
+    equal_override = _RemoteHDF5Field(first, "x", dtype="int32")
+    expr = blosc2.lazyexpr("x + 1", {"x": inherited})
+    expr_override = blosc2.lazyexpr("x + 1", {"x": overridden})
+    expr_equal_override = blosc2.lazyexpr("x + 1", {"x": equal_override})
+    data = np.zeros(6, dtype=[("x", "float32")])
+    data["x"] = np.arange(6) + 0.5
+    inherited.records = overridden.records = equal_override.records = blosc2.asarray(data)
+    assert expr.shape == expr_override.shape == (6,)
+    assert expr.dtype == np.dtype("float32")
+    assert expr_override.dtype == np.dtype("float64")
+    assert expr_equal_override.dtype == np.dtype("int32")
+    np.testing.assert_array_equal(expr[:], data["x"] + 1)
+    np.testing.assert_array_equal(expr_override[:], data["x"].astype("float64") + 1)
+    np.testing.assert_array_equal(expr_equal_override[:], data["x"].astype("int32") + 1)

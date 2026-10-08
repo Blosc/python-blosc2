@@ -72,6 +72,55 @@ def test_computed_column_dtype_override():
     assert t._computed_cols["total"]["dtype"] == np.dtype(np.float32)
 
 
+def test_safe_column_admission_checks_cached_expression_before_dtype():
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+
+    class HostileCachedExpression:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted computed-column metadata")
+
+    t._computed_cols["total"]["lazy"] = HostileCachedExpression()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="cached computed-column"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+def test_safe_column_admission_checks_cached_expression_operand_closure():
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+
+    class HostileInput:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted computed-column input metadata")
+
+    cached = t._computed_cols["total"]["lazy"]
+    cached.operands[next(iter(cached.operands))] = HostileInput()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="HostileInput"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+@pytest.mark.parametrize("dependency", ["validity", "mask"])
+def test_safe_column_admission_checks_visibility_dependencies(dependency):
+    from blosc2.ctable import Column
+
+    t = _make_invoice_table()
+
+    class HostileVisibility:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted visibility metadata")
+
+    column = Column(t, "price")
+    if dependency == "validity":
+        t._valid_rows = HostileVisibility()
+    else:
+        column._mask = HostileVisibility()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="HostileVisibility"):
+        blosc2.lazyexpr("x + 1", {"x": column}, evaluation="safe")
+
+
 def test_computed_column_expression_string():
     t = _make_invoice_table()
     t.add_computed_column("total", "price * qty")

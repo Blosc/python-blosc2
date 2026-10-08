@@ -743,6 +743,125 @@ _UNARY_DTYPE_RULES = frozenset(
     }
 )
 
+_BINARY_DTYPE_RULES = {
+    ast.Add: np.add,
+    ast.Sub: np.subtract,
+    ast.Mult: np.multiply,
+    ast.Div: np.true_divide,
+    ast.FloorDiv: np.floor_divide,
+    ast.Mod: np.remainder,
+    ast.Pow: np.power,
+    ast.BitAnd: np.bitwise_and,
+    ast.BitOr: np.bitwise_or,
+    ast.BitXor: np.bitwise_xor,
+    ast.LShift: np.left_shift,
+    ast.RShift: np.right_shift,
+    ast.Eq: np.equal,
+    ast.NotEq: np.not_equal,
+    ast.Lt: np.less,
+    ast.LtE: np.less_equal,
+    ast.Gt: np.greater,
+    ast.GtE: np.greater_equal,
+}
+
+
+def _numpy_value_graph(node, operands):
+    """Only trees whose reviewed operations retain NumPy receiver semantics."""
+    kind, *args = node
+    if kind == "name":
+        value = operands[args[0]]
+        return (
+            type(value) is np.ndarray
+            or type(value) in _NP_SCALARS
+            or type(value) in (int, float, complex, bool)
+        )
+    if kind == "literal":
+        return args[0] in (int, float, complex, bool)
+    if kind in {"binary", "compare"}:
+        return args[0] in _BINARY_DTYPE_RULES and all(
+            _numpy_value_graph(item, operands) for item in args[1:]
+        )
+    if kind == "index":
+        return (
+            _numpy_value_graph(args[0], operands)
+            and _metadata_index(args[1], operands) is not _UNKNOWN_ARGUMENT
+        )
+    if kind == "method" and args[0] == "astype":
+        return _numpy_value_graph(args[1][0], operands)
+    return False
+
+
+def _numpy_binary_dtype(node, operands, prefer_blosc):
+    if not _numpy_value_graph(node, operands):
+        return None
+    inputs = []
+    values = []
+    for item in node[2:]:
+        value = _resolved_metadata_argument(item, operands)
+        dtype = (
+            type(value)
+            if type(value) in (int, float, complex)
+            else _graph_dtype(item, operands, prefer_blosc)
+        )
+        if dtype is None:
+            return None
+        inputs.append(dtype)
+        values.append(value)
+    if all(type(dtype) is type for dtype in inputs):
+        return None  # Preserve Python scalar evaluation, not ufunc scalar semantics.
+    resolved = _BINARY_DTYPE_RULES[node[1]].resolve_dtypes((*inputs, None))
+    for value, dtype in zip(values, resolved[:2], strict=True):
+        if type(value) is int and dtype.kind in "iu":
+            limits = np.iinfo(dtype)
+            if not limits.min <= value <= limits.max:
+                raise OverflowError(f"Python integer {value} out of bounds for {dtype}")
+        elif type(value) in (float, complex) and dtype.kind in "fc":
+            # Existing warning/fallback behavior for scalar overflow is not yet
+            # specified independently; do not replace it with silent promotion.
+            limit = np.finfo(dtype).max.item()
+            components = (value.real, value.imag) if type(value) is complex else (value,)
+            if any(np.isfinite(component) and abs(component) > limit for component in components):
+                return None
+    return resolved[-1]
+
+
+def _bind_numpy_cast(positional, keywords, *, literal=False):
+    layout = ("dtype", "order", "casting", "subok", "copy")
+    if len(positional) - 1 > len(layout) or not set(keywords) <= _CAST_KEYWORDS:
+        _reject("unsupported NumPy astype signature")
+    bound = dict(keywords)
+    for key, value in zip(layout, positional[1:], strict=False):
+        if key in bound:
+            _reject(f"duplicate {key!r} argument for astype")
+        bound[key] = value
+    if "dtype" not in bound:
+        _reject("astype requires a dtype argument")
+    for key, value in bound.items():
+        _validate_argument("astype", key, _literal_argument(value) if literal else value)
+    return bound
+
+
+def _numpy_cast_dtype(node, operands, prefer_blosc):
+    _, _, positional, keywords = node
+    if not _numpy_value_graph(positional[0], operands):
+        return None
+    bound = _bind_numpy_cast(positional, dict(keywords), literal=True)
+    arguments = {key: _resolved_metadata_argument(value, operands) for key, value in bound.items()}
+    for key, value in arguments.items():
+        _validate_argument("astype", key, value)
+    requested, casting = arguments["dtype"], arguments.get("casting", "unsafe")
+    source = _graph_dtype(positional[0], operands, prefer_blosc)
+    if source is None or requested is _UNKNOWN_ARGUMENT or casting is _UNKNOWN_ARGUMENT:
+        return None
+    target = np.dtype(requested)
+    if target.subdtype is not None or target.kind not in "biufc":
+        # Flexible string widths and structured/subarray casts need their own
+        # output rules; a dtype descriptor alone does not describe the result.
+        return None
+    if not np.can_cast(source, target, casting=casting):
+        raise TypeError(f"Cannot cast array data from {source} to {target} according to {casting!r}")
+    return target
+
 
 def _graph_dtype(node, operands, prefer_blosc):
     """Resolve a narrow numerical subset without computing synthetic values."""
@@ -755,6 +874,10 @@ def _graph_dtype(node, operands, prefer_blosc):
         return dtype if dtype.kind in "biufc" else None
     if kind == "index" and _metadata_index(args[1], operands) is not _UNKNOWN_ARGUMENT:
         return _graph_dtype(args[0], operands, prefer_blosc)
+    if kind in {"binary", "compare"} and args[0] in _BINARY_DTYPE_RULES:
+        return _numpy_binary_dtype(node, operands, prefer_blosc)
+    if kind == "method" and args[0] == "astype":
+        return _numpy_cast_dtype(node, operands, prefer_blosc)
     if kind not in {"call", "method"}:
         return None
     name, positional, keywords = args
@@ -775,6 +898,12 @@ def _graph_dtype(node, operands, prefer_blosc):
 def _graph_call_shape(node, operands, prefer_blosc):
     kind, name, positional, keywords = node
     name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
+    if kind == "method" and name == "astype" and _numpy_value_graph(positional[0], operands):
+        bound = _bind_numpy_cast(positional, dict(keywords), literal=True)
+        requested = _resolved_metadata_argument(bound["dtype"], operands)
+        if requested is _UNKNOWN_ARGUMENT or np.dtype(requested).subdtype is not None:
+            return None
+        return _graph_shape(positional[0], operands, prefer_blosc)
     if name in _NUMPY_REDUCTION_POSITIONAL and positional[0][0] == "name":
         receiver = operands[positional[0][1]]
         backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
@@ -1273,12 +1402,17 @@ def validate_operand(value):  # noqa: C901
         elif type(value) is blosc2.NDField:
             validate_operand(value.ndarr)
             _synchronize_ndfield(value)
+        elif type(value) is _RemoteHDF5Field:
+            validate_operand(value.records)
+            _synchronize_remote_field(value)
         elif type(value) is PortableLazyArray:
             validate_operands(value.inputs)
         elif type(value) is Column:
             table = value._table_ref
             if type(table) is not blosc2.CTable:
                 _reject("unapproved column owner")
+            validate_operand(table._valid_rows)
+            validate_operand(value._mask)
             recipe = table._computed_cols.get(value._col_name)
             if recipe is None:
                 validate_operand(table._cols[value._col_name])
@@ -1287,12 +1421,27 @@ def validate_operand(value):  # noqa: C901
             else:
                 if recipe.get("kind") == "expression":
                     parse_expression(recipe["expression"])
+                    if type(recipe.get("lazy")) is not blosc2.LazyExpr:
+                        _reject("unapproved cached computed-column expression")
+                    validate_operand(recipe["lazy"])
                 for dependency in recipe["col_deps"]:
                     validate_operand(Column(table, dependency))
         if np.dtype(value.dtype).hasobject:
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _synchronize_remote_field(value):
+    fields = value.records.dtype.fields
+    if fields is None or type(value.field) is not str or value.field not in fields:
+        raise ValueError("Remote HDF5 field no longer refers to an existing structured field")
+    storage_dtype = fields[value.field][0]
+    if not value._logical_dtype_override:
+        value._dtype = storage_dtype
+    value._storage_dtype = storage_dtype
+    value._shape = tuple(value.records.shape)
+    value.chunks, value.blocks = value.records.chunks, value.records.blocks
 
 
 def _validate_proxy_cache(value):
@@ -1373,6 +1522,9 @@ def _dispatch(name, values, kwargs, prefer_blosc, *, method=False):
     if method:
         receiver, *values = values
         validate_operand(receiver)
+        if name == "astype" and type(receiver) is np.ndarray:
+            kwargs = _bind_numpy_cast([receiver, *values], kwargs)
+            values = []
         if name == "slice" and type(receiver) is np.ndarray:
             # The scheduler rewrites indexing to NDArray.slice syntax. NumPy
             # operands already reside in memory and use direct indexing instead.

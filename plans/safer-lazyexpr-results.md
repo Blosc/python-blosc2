@@ -411,3 +411,43 @@ placeholder creation for reviewed cases. Proxy tests cover source identity,
 resizing, incompatible partitions/dtypes, hostile caches, parent-field rebinding
 and pre-fetch rejection under ambient full mode. Ruff lint/format and whitespace
 checks passed. No new performance, allocation-bound or platform gate is claimed.
+
+## Follow-up: NumPy binary promotion, numeric casts and deferred column closure
+
+Added data-free binary dtype resolution for reviewed NumPy-only arithmetic and
+comparison trees, including basic indexed inputs and numeric casts. Python int,
+float and complex operands retain weak scalar promotion, while concrete NumPy
+scalars retain their dtype. Weak integers are checked against resolved input
+ranges; finite float/complex scalar overflow retains existing warning/fallback
+inference rather than silently changing promotion. Blosc2 binary trees still use
+existing inference: notably int32 division remains float32 there versus NumPy's
+float64. Mixed/backend-changing call trees remain unreviewed, not normalized to
+one universal promotion API.
+
+NumPy astype now binds its exact dtype/order/casting/subok/copy layout, rejects
+duplicate positional/keyword options, and validates numeric output dtype and
+can-cast rules without synthetic execution. Fixed-shape numeric casts preserve
+shape. Flexible strings, structured/subarray casts and other incomplete output
+rules retain existing inference. No streaming Blosc2 cast was registered, and
+whole-array conversion is not a fallback for unsupported Blosc2 receivers.
+
+Column admission now checks validity and selection-mask dependencies plus the
+actual cached computed LazyExpr and its input closure, not only the descriptor's
+expression text and named column dependencies. Hostile cached objects reject
+before dtype hooks. Remote HDF5 field admission recursively validates the records
+source before synchronization; rebinding updates inherited metadata while
+preserving explicitly supplied logical dtype overrides, including overrides that
+initially equal the physical storage dtype.
+
+Verification: **11,713 passed, 55 skipped**. Differential tests cover binary dtype
+pairs, broadcasting, weak/concrete scalars, division backend differences, casts
+and invalid options. Instrumentation verifies reviewed metadata needs no dummy
+execution. Adversarial tests cover cached column expressions, their inputs,
+visibility dependencies and remote-field source rebinding. Ruff lint/format and
+whitespace checks passed.
+
+This is not completion of binary/cast contracts or table/storage/remote audits.
+Backend-changing intermediate types, remaining casts, persisted operand-type
+semantics, table recipe/cache consistency, Parquet owner/dependency lifetime,
+remote refresh behavior and bounded-memory execution still need review. No new
+performance or cross-platform gate is claimed.
