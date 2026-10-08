@@ -1130,7 +1130,7 @@ def conserve_functions(  # noqa: C901
                 return self.operandmap[k]
 
         def visit_Name(self, node):
-            if node.id == "np":  # Skip NumPy namespace (e.g. np.int8, which will be treated separately)
+            if node.id in {"np", "numpy", "blosc2"}:  # Registered namespaces are not operands
                 return
             if node.id in self.function_names:  # Skip function names
                 return
@@ -4959,10 +4959,15 @@ class LazyExpr(LazyArray):
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
         # Validate the expression
         validate_expr(expression)
+        reduction_shape, reduction_dtype = None, None
         if evaluation_mode() == "safe":
-            parse_expression(expression)
+            graph = parse_expression(expression)
             operands = normalize_operands(operands)
             validate_operands(operands)
+            binding = graph.bind_root_reduction(operands)
+            if binding is not None:
+                normalized, reduction_shape, reduction_dtype = binding
+                expression = normalized or expression
         expression = convert_to_slice(expression)
         chunks, blocks = None, None
         if guess:
@@ -4977,13 +4982,23 @@ class LazyExpr(LazyArray):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
-            _shape = infer_shape(_expression, opshapes)  # infer shape, includes constructors
+            _shape = reduction_shape if reduction_shape is not None else infer_shape(_expression, opshapes)
             # have to handle slices since a[10] on a dummy variable of shape (1,1) doesn't work
             desliced_expr, desliced_ops = extract_and_replace_slices(_expression, _operands)
             # substitutes with dummy operands (cheap for reductions) and
             # defaults to blosc2 functions (cheap for constructors)
-            new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
-            _dtype = new_expr.dtype if hasattr(new_expr, "dtype") else np.dtype(type(new_expr))
+            if reduction_shape is not None and reduction_dtype is not None:
+                # A data-free root reduction rule supplied metadata. Do not
+                # execute that reduction on all-one dummies (ddof may exceed
+                # their size even when the real input is perfectly valid).
+                new_expr = np.empty((), dtype=reduction_dtype)
+            else:
+                new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
+            _dtype = (
+                reduction_dtype
+                if reduction_dtype is not None
+                else (new_expr.dtype if hasattr(new_expr, "dtype") else np.dtype(type(new_expr)))
+            )
             if isinstance(new_expr, blosc2.LazyExpr):
                 # DO NOT restore the original expression and operands
                 # Instead rebase operands and restore only constructors

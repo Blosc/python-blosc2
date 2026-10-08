@@ -70,8 +70,11 @@ def select_evaluation(text, operands, permission):
     if permission == "safe":
         return "safe"
     try:
-        parse_expression(text)
-        validate_operands(normalize_operands(operands))
+        graph = parse_expression(text)
+        admitted = normalize_operands(operands)
+        with expression_evaluation("safe"):
+            validate_operands(admitted)
+            graph.bind_root_reduction(admitted)
     except (UnsafeDeserializationError, ValueError):
         return "full"
     return "safe"
@@ -499,6 +502,196 @@ _REDUCTION_KEYWORDS = {
 _CAST_KEYWORDS = frozenset({"dtype", "order", "casting", "copy", "subok"})
 _UNKNOWN_ARGUMENT = object()
 
+_NUMPY_REDUCTION_POSITIONAL = {
+    "sum": ("axis", "dtype", "out", "keepdims"),
+    "prod": ("axis", "dtype", "out", "keepdims"),
+    "mean": ("axis", "dtype", "out", "keepdims"),
+    "std": ("axis", "dtype", "out", "ddof", "keepdims"),
+    "var": ("axis", "dtype", "out", "ddof", "keepdims"),
+    "min": ("axis", "out", "keepdims"),
+    "max": ("axis", "out", "keepdims"),
+    "any": ("axis", "out", "keepdims"),
+    "all": ("axis", "out", "keepdims"),
+    "argmin": ("axis", "out"),
+    "argmax": ("axis", "out"),
+}
+_BLOSC_REDUCTION_POSITIONAL = {
+    "sum": ("axis", "dtype", "keepdims"),
+    "prod": ("axis", "dtype", "keepdims"),
+    "mean": ("axis", "dtype", "keepdims"),
+    "std": ("axis", "dtype", "ddof", "keepdims"),
+    "var": ("axis", "dtype", "ddof", "keepdims"),
+    "min": ("axis", "keepdims"),
+    "max": ("axis", "keepdims"),
+    "any": ("axis", "keepdims"),
+    "all": ("axis", "keepdims"),
+    "argmin": ("axis", "keepdims"),
+    "argmax": ("axis", "keepdims"),
+}
+
+
+def _reduction_backend(name, receiver, *, method, prefer_blosc):
+    import blosc2
+
+    if name not in _NUMPY_REDUCTION_POSITIONAL:
+        return None
+    if not method:
+        if not prefer_blosc:
+            return "numpy"
+        return (
+            "blosc_numpy_function"
+            if type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS
+            else "blosc_function"
+        )
+    if type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS:
+        return "numpy"
+    if type(receiver) is blosc2.LazyExpr:
+        return "blosc_lazy"
+    if isinstance(receiver, blosc2.Operand):
+        return "blosc_array"
+    # Column methods have their own table-specific API, not Operand's layout.
+    return None
+
+
+def _qualified_reduction(name, prefer_blosc):
+    if name.startswith("numpy:"):
+        return name.split(":", 1)[1], False
+    if name.startswith("blosc2:"):
+        return name.split(":", 1)[1], True
+    return name, prefer_blosc
+
+
+def _bind_reduction(name, positional, keywords, backend, *, literal=False):
+    """Bind only reviewed layouts; do not reflect arbitrary callable signatures."""
+    if backend is None:
+        return None
+    allowed = _REDUCTION_KEYWORDS[name]
+    if backend == "numpy":
+        layout = _NUMPY_REDUCTION_POSITIONAL[name]
+    else:
+        layout = _BLOSC_REDUCTION_POSITIONAL[name]
+        if backend != "blosc_numpy_function":
+            allowed -= {"initial", "correction"}
+            if name in {"any", "all"}:
+                allowed -= {"where"}
+        if backend == "blosc_lazy" and name in {"std", "var"}:
+            layout = ("axis", "dtype", "keepdims", "ddof")
+        if backend in {"blosc_function", "blosc_numpy_function", "blosc_lazy"} and "where" in allowed:
+            layout += ("where",)
+    if len(positional) - 1 > len(layout) or not set(keywords) <= allowed:
+        _reject(f"unsupported {backend} signature for {name!r}")
+    bound = dict(keywords)
+    for key, value in zip(layout, positional[1:], strict=False):
+        if key in bound:
+            _reject(f"duplicate {key!r} argument for {name!r}")
+        bound[key] = value
+    for key, value in bound.items():
+        _validate_argument(name, key, _literal_argument(value) if literal else value)
+    axis = bound.get("axis", _UNKNOWN_ARGUMENT)
+    if not literal and axis is not _UNKNOWN_ARGUMENT and axis is not None:
+        _reduction_axes(getattr(positional[0], "shape", ()), axis)
+    return bound
+
+
+def _reduction_axes(shape, axis):
+    rank = len(shape)
+    if not rank and axis is not None:
+        # NumPy's scalar-axis exceptions differ between operations; leave those
+        # to the selected implementation rather than inventing new semantics.
+        return None
+    axes = tuple(range(rank)) if axis is None else axis if type(axis) is tuple else (axis,)
+    if any(not -rank <= value < rank for value in axes):
+        raise ValueError(f"axis {axis!r} is out of bounds for an array of dimension {rank}")
+    normalized = {int(value) % rank for value in axes}
+    if len(normalized) != len(axes):
+        raise ValueError("duplicate reduction axes after normalization")
+    return normalized
+
+
+def _resolved_metadata_argument(node, operands):
+    value = _literal_argument(node)
+    if value is _UNKNOWN_ARGUMENT and node[0] == "name":
+        value = operands.get(node[1], _UNKNOWN_ARGUMENT)
+    return value
+
+
+def _root_reduction_metadata(name, receiver, bound, operands):
+    """Data-free shape rules and a narrow, shared dtype-rule subset."""
+    if not hasattr(receiver, "dtype") or not hasattr(receiver, "shape"):
+        return None, None
+    arguments = {key: _resolved_metadata_argument(value, operands) for key, value in bound.items()}
+    for key, value in arguments.items():
+        _validate_argument(name, key, value)
+    input_shape = tuple(getattr(receiver, "shape", ()))
+    axis, keepdims = arguments.get("axis"), arguments.get("keepdims", False)
+    shape = None
+    if axis is not _UNKNOWN_ARGUMENT and keepdims is not _UNKNOWN_ARGUMENT:
+        normalized = _reduction_axes(input_shape, axis)
+        if normalized is not None:
+            shape = (
+                tuple(1 if index in normalized else size for index, size in enumerate(input_shape))
+                if keepdims
+                else tuple(size for index, size in enumerate(input_shape) if index not in normalized)
+            )
+    return shape, _root_reduction_dtype(name, receiver, arguments)
+
+
+def _statistical_reduction_dtype(input_dtype, requested, numpy_receiver):
+    # Complex variance and integer accumulator overrides still use the
+    # existing inference path: NumPy and Blosc2 do not share their rules.
+    if input_dtype.kind not in "biuf":
+        return None
+    if requested is not None:
+        return np.dtype(requested) if np.dtype(requested).kind == "f" else None
+    if numpy_receiver:
+        return np.dtype("float64") if input_dtype.kind in "biu" else input_dtype
+    from blosc2.lazyexpr import ReduceOp, infer_reduction_dtype
+
+    accumulation = np.dtype(infer_reduction_dtype(input_dtype, ReduceOp.SUM))
+    return np.dtype("float64") if accumulation.kind in "biu" else accumulation
+
+
+def _root_reduction_dtype(name, receiver, arguments):
+    dtype = None
+    requested, output = arguments.get("dtype"), arguments.get("out")
+    if output is _UNKNOWN_ARGUMENT or requested is _UNKNOWN_ARGUMENT:
+        return None
+    input_dtype = np.dtype(getattr(receiver, "dtype", type(receiver)))
+    if input_dtype.kind not in "biufc":
+        return None
+    numpy_receiver = type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS
+    if output is not None:
+        dtype = np.dtype(output.dtype)
+    elif not numpy_receiver and input_dtype == np.dtype("float16") and requested is None:
+        # Half precision currently follows fallback-specific promotion paths,
+        # not infer_reduction_dtype's generic promotion. Keep existing inference.
+        return None
+    elif name in {"mean", "std", "var"}:
+        dtype = _statistical_reduction_dtype(input_dtype, requested, numpy_receiver)
+    else:
+        if requested is not None:
+            dtype = np.dtype(requested)
+        else:
+            if not numpy_receiver:
+                from blosc2.lazyexpr import ReduceOp, infer_reduction_dtype
+
+                if name not in {"min", "max"} or input_dtype.kind != "b":
+                    dtype = np.dtype(infer_reduction_dtype(input_dtype, getattr(ReduceOp, name.upper())))
+            elif name in {"any", "all"}:
+                dtype = np.dtype(bool)
+            elif name in {"argmin", "argmax"}:
+                dtype = np.dtype(np.intp)
+            elif name in {"sum", "prod"} and input_dtype.kind in "biu":
+                platform_dtype = np.dtype(np.uintp if input_dtype.kind == "u" else np.intp)
+                dtype = (
+                    platform_dtype
+                    if input_dtype.itemsize < platform_dtype.itemsize or input_dtype.kind == "b"
+                    else input_dtype
+                )
+            else:
+                dtype = input_dtype
+    return dtype
+
 
 def _literal_argument(node):
     """Read constants only, without evaluating calls or folding arithmetic."""
@@ -539,6 +732,10 @@ def _validate_argument(name, key, value, node=None):
             valid = all(_axis_integer(item) for item in value) and len(set(value)) == len(value)
     elif key in {"keepdims", "copy", "subok"}:
         valid = type(value) in (bool, np.bool_)
+    elif key == "out":
+        import blosc2
+
+        valid = value is None or type(value) in (np.ndarray, blosc2.NDArray, blosc2.NDField)
     elif key in {"ddof", "correction"}:
         valid = type(value) in (int, float) or (
             type(value) in _NP_SCALARS and np.dtype(type(value)).kind in "iuf"
@@ -629,6 +826,37 @@ class ExpressionGraph:
     root: tuple
     names: frozenset[str]
     text: str
+
+    def bind_root_reduction(self, operands, *, prefer_blosc=True):
+        """Make root positional arguments explicit before dummy-array inference.
+
+        Only direct named inputs are covered here. Nested-expression metadata and
+        table-specific receivers retain the existing inference path.
+        """
+        if self.root[0] not in {"call", "method"}:
+            return None
+        kind, name, positional, keywords = self.root
+        name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
+        if not positional or positional[0][0] != "name":
+            return None
+        receiver = operands.get(positional[0][1])
+        backend = _reduction_backend(name, receiver, method=kind == "method", prefer_blosc=prefer_blosc)
+        bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
+        if bound is None:
+            return None
+        shape, dtype = _root_reduction_metadata(name, receiver, bound, operands)
+        if len(positional) == 1:
+            return None, shape, dtype
+        tree = ast.parse(self.text, mode="eval")
+        call = tree.body
+        # Associate immutable graph argument nodes with their original AST nodes.
+        arguments = ([call.func.value] if kind == "method" else []) + call.args
+        nodes = {keyword.arg: keyword.value for keyword in call.keywords}
+        positional_keys = [key for key in bound if key not in nodes]
+        nodes.update(zip(positional_keys, arguments[1:], strict=True))
+        call.args = [] if kind == "method" else [call.args[0]]
+        call.keywords = [ast.keyword(arg=key, value=nodes[key]) for key in bound]
+        return ast.unparse(tree.body), shape, dtype
 
     def evaluate(self, operands, *, prefer_blosc=False):  # noqa: C901
         validate_operands(operands)
@@ -745,6 +973,7 @@ def parse_expression(text):  # noqa: C901
                 return ("attribute", node.attr, child(node.value))
         if isinstance(node, ast.Call):
             method = False
+            namespace_name = None
             positional = tuple(child(x) for x in node.args)
             if isinstance(node.func, ast.Name):
                 name = node.func.id
@@ -758,6 +987,8 @@ def parse_expression(text):  # noqa: C901
                 if not namespace:
                     method = True
                     positional = (child(node.func.value), *positional)
+                else:
+                    namespace_name = node.func.value.id
             else:
                 _reject("unapproved callable", node)
             if name not in (_METHODS if method else _CALLS):
@@ -770,6 +1001,9 @@ def parse_expression(text):  # noqa: C901
                 _check_signature(name, len(positional), [kw.arg for kw in node.keywords], node)
             keywords = {kw.arg: child(kw.value) for kw in node.keywords}
             _check_call_contract(name, positional, keywords, node, literal=True)
+            if namespace_name is not None and name in _NUMPY_REDUCTION_POSITIONAL:
+                prefix = "blosc2" if namespace_name == "blosc2" else "numpy"
+                name = f"{prefix}:{name}"
             return (
                 "method" if method else "call",
                 name,
@@ -903,7 +1137,14 @@ def _dispatch(name, values, kwargs, prefer_blosc, *, method=False):
     import blosc2
     from blosc2.utils import _NUMPY_ALIASES
 
+    name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
     _check_call_contract(name, values, kwargs)
+    backend = _reduction_backend(
+        name, values[0] if values else None, method=method, prefer_blosc=prefer_blosc
+    )
+    bound = _bind_reduction(name, values, kwargs, backend)
+    if bound is not None:
+        values, kwargs = values[:1], bound
     if method:
         receiver, *values = values
         validate_operand(receiver)

@@ -445,3 +445,148 @@ def test_equal_reduction_nodes_still_share_one_intermediate(monkeypatch):
     result = parse_expression("sum(x) + sum(x)").evaluate({"x": x})
     assert result == 12
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("backend", ["numpy", "blosc_array", "blosc_lazy"])
+@pytest.mark.parametrize(
+    "name", ["sum", "mean", "std", "var", "min", "max", "any", "all", "argmin", "argmax"]
+)
+def test_backend_positional_reduction_binding(backend, name):
+    data = np.arange(12.0).reshape(3, 4)
+    x = data if backend == "numpy" else blosc2.asarray(data)
+    if backend == "blosc_lazy":
+        x = blosc2.LazyExpr((x, None, None))
+    if name in {"sum", "mean"}:
+        arguments = "0, None, None, True" if backend == "numpy" else "0, None, True"
+    elif name in {"std", "var"}:
+        arguments = {
+            "numpy": "0, None, None, 1, True",
+            "blosc_array": "0, None, 1, True",
+            "blosc_lazy": "0, None, True, 1",
+        }[backend]
+    elif name in {"argmin", "argmax"}:
+        arguments = "0, None, keepdims=True" if backend == "numpy" else "0, True"
+    else:
+        arguments = "0, None, True" if backend == "numpy" else "0, True"
+    expr = blosc2.lazyexpr(f"x.{name}({arguments})", {"x": x})
+    options = {"axis": 0, "keepdims": True}
+    if name in {"std", "var"}:
+        options["ddof"] = 1
+    expected = getattr(data, name)(**options)
+    assert expr.shape == expected.shape
+    assert expr.dtype == expected.dtype
+    np.testing.assert_allclose(expr[:], expected)
+
+
+@pytest.mark.parametrize("dtype", ["bool", "int8", "uint8", "float16", "float32", "float64", "complex64"])
+@pytest.mark.parametrize(
+    "name", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmin", "argmax"]
+)
+def test_root_reduction_metadata_matches_execution(dtype, name):
+    data = (np.arange(24).reshape(2, 3, 4) % 5).astype(dtype)
+    x = blosc2.asarray(data)
+    axis = -1 if name in {"argmin", "argmax"} else (0, -1)
+    expr = blosc2.lazyexpr(f"x.{name}(axis={axis!r}, keepdims=True)", {"x": x})
+    if dtype == "complex64" and name in {"min", "max"}:
+        # The current Blosc2 backend warns while constructing complex extrema
+        # identities. Preserve that failure rather than silently using NumPy.
+        with pytest.raises(RuntimeWarning):
+            getattr(x, name)(axis=axis, keepdims=True)
+        with pytest.raises(RuntimeWarning):
+            expr.compute()
+        return
+    expected = getattr(x, name)(axis=axis, keepdims=True)
+    values = np.asarray(expected)
+    assert expr.shape == values.shape
+    assert expr.dtype == values.dtype
+    np.testing.assert_allclose(expr[:], values, rtol=1e-6)
+
+
+def test_data_free_metadata_does_not_execute_reduction(monkeypatch):
+    module = importlib.import_module("blosc2.lazyexpr")
+    x = blosc2.asarray(np.arange(24.0).reshape(2, 3, 4))
+    monkeypatch.setattr(
+        module, "reduce_slices", lambda *a, **k: pytest.fail("Executed a reduction to infer metadata")
+    )
+    expr = blosc2.lazyexpr("x.std(axis=(0, 2), ddof=2, keepdims=True)", {"x": x})
+    assert expr.shape == (1, 3, 1)
+    assert expr.dtype == np.dtype("float64")
+
+
+@pytest.mark.parametrize("text", ["sum(x, axis=3)", "sum(x, axis=(0, -2))"])
+def test_root_reduction_axis_bounds_reject_during_inference(text):
+    with pytest.raises(ValueError):
+        blosc2.lazyexpr(text, {"x": blosc2.ones((2, 3))})
+
+
+def test_binding_preserves_grouping_in_non_reduction_composition():
+    x = np.arange(4.0)
+    expr = blosc2.lazyexpr("(x - 1)", {"x": x})
+    np.testing.assert_allclose((expr**2)[:], (x - 1) ** 2)
+
+
+def test_backend_rejects_duplicate_non_prefix_positional_argument():
+    graph = parse_expression("x.sum(0, None, True, keepdims=False)")
+    with pytest.raises(blosc2.UnsafeDeserializationError, match=r"duplicate.*keepdims"):
+        graph.evaluate({"x": blosc2.ones((2, 3))})
+
+
+def test_numpy_out_position_is_not_blosc_keepdims():
+    x = np.arange(6.0).reshape(2, 3)
+    target = np.empty(3)
+    result = parse_expression("x.sum(0, None, out)").evaluate({"x": x, "out": target})
+    assert result is target
+    np.testing.assert_allclose(result, x.sum(axis=0))
+
+
+def test_root_binding_preserves_equal_differently_typed_arguments():
+    data = np.arange(6.0).reshape(2, 3)
+    expr = blosc2.lazyexpr("x.sum(1, None, True)", {"x": blosc2.asarray(data)})
+    assert expr.shape == (2, 1)
+    np.testing.assert_allclose(expr[:], data.sum(axis=1, keepdims=True))
+
+
+@pytest.mark.parametrize("text", ["x.std(0, None, 1, True)", "var(x, 0, None, 1, True)"])
+def test_bound_reduction_persistence_keeps_axis_dtype_and_ddof(tmp_path, text):
+    data = np.arange(12.0).reshape(3, 4)
+    x = blosc2.asarray(data, urlpath=tmp_path / "x.b2nd", mode="w")
+    expr = blosc2.lazyexpr(text, {"x": x})
+    expr.save(tmp_path / "expr.b2nd")
+    reopened = blosc2.open(tmp_path / "expr.b2nd")
+    expected = (
+        data.std(axis=0, ddof=1, keepdims=True)
+        if text.startswith("x.std")
+        else data.var(axis=0, ddof=1, keepdims=True)
+    )
+    assert reopened.shape == expected.shape
+    assert reopened.dtype == expected.dtype
+    np.testing.assert_allclose(reopened[:], expected)
+
+
+def test_numpy_forwarding_function_keeps_supported_initial_keyword():
+    data = np.arange(6.0).reshape(2, 3)
+    expr = blosc2.lazyexpr("sum(x, axis=0, initial=5)", {"x": data})
+    np.testing.assert_allclose(expr[:], data.sum(axis=0, initial=5))
+
+
+def test_unsupported_blosc_keyword_rejects_before_reduction_dispatch(monkeypatch):
+    x = blosc2.ones((2, 3))
+    monkeypatch.setattr(blosc2, "sum", lambda *a, **k: pytest.fail("Dispatched unsupported initial"))
+    with pytest.raises(blosc2.UnsafeDeserializationError, match=r"unsupported.*signature"):
+        parse_expression("sum(x, initial=5)").evaluate({"x": x}, prefer_blosc=True)
+
+
+@pytest.mark.parametrize("namespace", ["np", "numpy"])
+def test_numpy_qualified_reduction_preserves_numpy_position_layout(namespace):
+    data = np.arange(6.0).reshape(2, 3)
+    x = blosc2.asarray(data)
+    expr = blosc2.lazyexpr(f"{namespace}.sum(x, 0, None, None, True)", {"x": x})
+    assert expr.shape == (1, 3)
+    np.testing.assert_allclose(expr[:], data.sum(axis=0, keepdims=True))
+
+
+def test_blosc_qualified_reduction_preserves_blosc_position_layout():
+    data = np.arange(6.0).reshape(2, 3)
+    expr = blosc2.lazyexpr("blosc2.sum(x, 0, None, True)", {"x": data})
+    assert expr.shape == (1, 3)
+    np.testing.assert_allclose(expr[:], data.sum(axis=0, keepdims=True))

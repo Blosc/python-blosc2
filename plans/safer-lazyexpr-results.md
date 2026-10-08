@@ -287,3 +287,32 @@ contracts before resolution, runtime bound-axis rejection before dispatch,
 positive axes/keepdims/casts, persisted reduction round trips and typed literal
 cache identity. No performance or cross-platform gate pass is claimed for this
 slice; the remaining adapter/lifetime and operation-metadata audits remain open.
+
+## Follow-up: backend-specific reduction binding and root metadata
+
+Reviewed reduction layouts now distinguish NumPy, Blosc2 functions, array
+methods and LazyExpr methods. In particular, NumPy's positional `out` is not
+Blosc2's `keepdims`, and array versus LazyExpr `std`/`var` methods have different
+`ddof` positions. Duplicate arguments, unsupported reviewed backend keywords and
+rank-dependent axis bounds reject before dispatch. Explicit `np`/`numpy` and
+`blosc2` reduction namespaces retain their selected backend rather than becoming
+interchangeable aliases.
+
+Safe construction normalizes positional arguments for root reductions on direct
+named operands. Data-free shape and a limited dtype-rule subset bypass executing
+reductions on tiny inference dummies, including otherwise valid `ddof` cases.
+Normalization preserves typed arguments and leaves non-reduction grouping alone.
+Full-permission safe-eligibility checks also consider reviewed root binding.
+
+This is not complete graph-wide type inference: nested expressions, table-specific
+receivers, cumulative operations, casts and other operation signatures still need
+review. Half-precision fallback promotion, boolean extrema, complex statistical
+reductions and integer statistical dtype overrides retain existing inference where
+the independently specified rules are incomplete. Existing complex-extrema warning
+failures are preserved, not silently redirected to NumPy.
+
+Verification: **11,498 passed, 55 skipped**. Differential tests cover receiver
+layouts, reduction dtype/shape families, namespace selection, axis validation,
+output positions, persistence and data-free inference instrumentation. Ruff lint,
+format and whitespace checks passed. No new benchmark or platform gate is claimed;
+the experiment remains incomplete and is not ready to merge.
