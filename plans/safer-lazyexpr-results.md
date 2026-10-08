@@ -489,3 +489,97 @@ wrapper persistence, table recipe/cache synchronization, remaining remote adapte
 closures, refresh races and allocation/streaming proofs. This slice does not certify
 Parquet cache contents, resource bounds, external-reference authorization or
 concurrent snapshots. No new performance or cross-platform gate is claimed.
+
+## Local experiment assessment: remote closures, cache lifetime and differential probes
+
+The field/Parquet checkpoint is committed as `aa2f3372`. Checkpoint `b96cc2be` checks
+RemoteArray's concrete transport, store owner, cache proxy and carrier closure
+before metadata or data access. Equal-metadata source rebinding rejects; supported
+standalone refresh replaces the source provenance together with its cache, and an
+existing safe expression remains usable. Closed/stale handles keep their existing
+diagnostics. Admission tests cover NONE/MEMORY/DISK caching, repeated evaluation,
+blocked transport chunk reads and hostile metadata hooks.
+These checks do not authorize external references or guarantee atomic refresh.
+
+Constructor review uncovered operand-dependent results retained in `cons_cache`
+across evaluations. Safe evaluation now reconstructs those values each time while
+retaining constant-only constructor caching. Cached constant results are admitted
+again before use. A NumPy operand mutation regression covers explicit `asarray`
+conversion; its simple shape rule now avoids the legacy constructor shape parser's
+unsupported case. This is explicit conversion requested by the expression, not a
+materializing fallback for an unsupported cast. Trusted constructor caching is
+unchanged. Unregistered computed-column recipe kinds now reject explicitly.
+
+The deterministic differential corpus adds 48 combinations of seeded nested
+expressions, float32/float64 and disk/frame/structured reconstruction. It exercises
+shape/dtype, values, partial slices, NumPy ufunc composition, source value mutation
+and ambient full mode with the Python text bridge disabled. Dtype comparisons use
+the existing trusted backend contract, not NumPy's potentially different reduction
+accumulation dtype. Another 24 forbidden-syntax variations reject before operand
+resolution. Three allocation probes reject whole-source NumPy coercion and bound
+Python-visible chunk reads for partial arithmetic, reductions and centering. They
+are not a proof of native peak memory, every schedule or every expression family.
+
+Final local verification for `b96cc2be`: **11,837 passed, 55 skipped** in the
+`blosc2` conda environment. Ruff lint/format and whitespace checks passed. This
+is the default suite, not heavy/network or cross-platform certification.
+
+### Historical-control performance assessment
+
+Five alternating-order rounds per workload, 31 repeated evaluations per process,
+one thread, 1,000 and 1,000,000 elements, float32 and float64, macOS ARM64. Control:
+the same immutable pre-experiment source snapshot and matching compiled extension
+used in earlier measurements. Raw artifacts are `safer-final-f64.json` and
+`safer-final-f32.json` in the approved OpenCode temporary directory. These runs
+precede the final RemoteArray/constructor changes; measured workloads do not use
+those routes. Ratios are safe/historical; lower is faster. Family figures below
+are medians of five paired process ratios, not confidence intervals.
+
+| 1M-element family | float64 execution ratio | float32 execution ratio |
+| --- | ---: | ---: |
+| Arithmetic | 0.987 | 0.996 |
+| Math | 1.037 | 1.037 |
+| Reduction | 1.022 | 1.027 |
+| Centering | 0.922 | 1.037 |
+| Axis reduction | 1.018 | 1.067 |
+| Indexing | 0.986 | 0.961 |
+| Persisted expression | 1.008 | 0.961 |
+
+The geometric mean of all paired large-array ratios is **1.003 for float64** and
+**1.026 for float32**, within the provisional 5% budget for this limited matrix.
+Individual rounds remain noisy (some exceed 10%); no statistical speedup or
+complete family/platform gate is claimed. Tiny-array median execution ratios are
+1.048–1.330 for float64 and 1.053–1.338 for float32, adding roughly **26–77 us**
+and **27–71 us** respectively. Construction is generally slower, except reviewed
+axis metadata; it is not hidden in execution timings.
+
+Peak RSS remains a failed/unresolved review gate: median paired indexing ratios
+are **1.285 float64** and **1.272 float32** at 1M elements, and about **1.21** at
+1,000 elements. Float32 arithmetic is **1.153**. Whole-process high-water RSS does
+not locate the allocation or establish asymptotic growth, but these differences
+cannot be dismissed from the small Python-visible allocation probes.
+
+### Verdict and remaining gates
+
+**The experiment works as a bounded proof of concept, not as a completed phase-1
+security certification or a production-default replacement.** It demonstrates
+eval-free reconstruction/execution for admitted numerical graphs, boundary
+retention across deferred work and composition, useful rejection diagnostics,
+backend-specific numerical compatibility and promising large-array throughput.
+Ordinary construction remains trusted; `deserialize='safe'|'full'` is retained.
+No default switch or Menudet lowering is justified by these measurements.
+
+| Gate | Local outcome |
+| --- | --- |
+| Supported graph lifetime and numerical regressions | Covered by targeted and seeded tests; not exhaustive |
+| Safe text bridge isolation | Instrumented on supported routes, not whole-project sandboxing |
+| Metadata/signature coverage | Partial; mixed/backend-changing intermediates, weak scalars and casts remain |
+| Persistence/adapters | Field/Parquet/RemoteArray slices covered; remaining wrappers and container reachability need audit |
+| Table consistency | Unknown recipes reject; broader recipe/cache synchronization remains |
+| Throughput | Limited large-array matrix meets geometric-mean target; tiny-expression overhead remains |
+| Memory | Not passed; indexing RSS requires explanation and broader native allocation instrumentation |
+| Concurrency and platforms | Refresh races, free-threaded, WASM and cross-platform safe-graph verification remain unverified |
+
+Finishing those gates requires additional implementation, audit and measurements;
+passing the local suite cannot substitute for them. Keep this branch experimental
+and phase 2 deferred. Menudet publication and compatibility freeze remain separate.
