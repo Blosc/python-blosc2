@@ -1222,7 +1222,14 @@ class ExpressionGraph:
             cache[node] = result
             return result
 
-        return visit(self.root)
+        try:
+            return visit(self.root)
+        finally:
+            # The recursive closure references itself. Break that cycle and
+            # drop evaluation-local arrays immediately, including on failure,
+            # rather than retaining operands/results until cyclic GC runs.
+            cache.clear()
+            visit = None
 
 
 @functools.lru_cache(maxsize=512)
@@ -1438,10 +1445,20 @@ def validate_operand(value):  # noqa: C901
                 if recipe.get("kind") not in {"expression", "portable"}:
                     _reject("unapproved computed-column recipe kind")
                 if recipe.get("kind") == "expression":
-                    parse_expression(recipe["expression"])
+                    descriptor_graph = parse_expression(recipe["expression"])
                     if type(recipe.get("lazy")) is not blosc2.LazyExpr:
                         _reject("unapproved cached computed-column expression")
-                    validate_operand(recipe["lazy"])
+                    cached = recipe["lazy"]
+                    validate_operand(cached)
+                    expected = {f"o{i}": table._cols[dep] for i, dep in enumerate(recipe["col_deps"])}
+                    if (
+                        parse_expression(cached.expression).root != descriptor_graph.root
+                        or cached.operands.keys() != expected.keys()
+                        or any(cached.operands[name] is not source for name, source in expected.items())
+                    ):
+                        raise ValueError(
+                            "Computed-column recipe/cache mismatch; recreate the computed column"
+                        )
                 for dependency in recipe["col_deps"]:
                     validate_operand(Column(table, dependency))
         if np.dtype(value.dtype).hasobject:

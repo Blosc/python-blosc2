@@ -94,6 +94,36 @@ def test_safe_column_admission_rejects_unknown_recipe_kind():
         blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
 
 
+@pytest.mark.parametrize("mutation", ["expression", "dependencies", "cached_operand"])
+def test_safe_column_admission_rejects_recipe_cache_mismatch(mutation):
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+    recipe = t._computed_cols["total"]
+    if mutation == "expression":
+        recipe["expression"] = "o0 + o1"
+    elif mutation == "dependencies":
+        recipe["col_deps"] = list(reversed(recipe["col_deps"]))
+    else:
+        cached = recipe["lazy"]
+        name = next(iter(cached.operands))
+        cached.operands[name] = blosc2.asarray(cached.operands[name][:])
+    with pytest.raises(ValueError, match="recipe/cache mismatch"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+def test_safe_computed_column_graph_tracks_append_and_delete():
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", "price * qty")
+    expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], [2, 5, 10])
+    t.append((4.0, 4, 0.1))
+    assert expr.shape == (4,)
+    np.testing.assert_array_equal(expr[:], [2, 5, 10, 17])
+    t.delete(0)
+    assert expr.shape == (3,)
+    np.testing.assert_array_equal(expr[:], [5, 10, 17])
+
+
 def test_safe_column_admission_checks_cached_expression_operand_closure():
     t = _make_invoice_table()
     t.add_computed_column("total", "price * qty")

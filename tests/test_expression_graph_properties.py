@@ -1,11 +1,88 @@
 """Deterministic differential and lifetime probes for the experimental boundary."""
 
+import gc
 import importlib
+import weakref
 
 import numpy as np
 import pytest
 
 import blosc2
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_graph_evaluation_releases_operands_without_cyclic_gc(fails):
+    from blosc2.expression_graph import parse_expression
+
+    graph = parse_expression("reshape(x, (3,))" if fails else "sqrt(x) + 1")
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        source = np.arange(4, dtype="float64")
+        reference = weakref.ref(source)
+        if fails:
+            with pytest.raises(ValueError):
+                graph.evaluate({"x": source})
+        else:
+            result = graph.evaluate({"x": source})
+            np.testing.assert_allclose(result, np.sqrt(source) + 1)
+        del source
+        assert reference() is None
+    finally:
+        if enabled:
+            gc.enable()
+
+
+@pytest.mark.parametrize(
+    ("left_backend", "right_backend"),
+    [("numpy", "numpy"), ("numpy", "blosc2"), ("blosc2", "numpy"), ("blosc2", "blosc2")],
+)
+@pytest.mark.parametrize("dtype", ["int32", "float32", "float64"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "(x + y).sum(axis=0)",
+        "(x / y).mean(axis=1)",
+        "sum(sqrt(x) + y, axis=0)",
+        "sqrt(x + y) - mean(y)",
+        "(x + y).std(axis=1)",
+        "(x + y).var(axis=1)",
+    ],
+)
+def test_mixed_backend_intermediates_match_trusted_contract(left_backend, right_backend, dtype, text):
+    data = np.arange(1, 33, dtype=dtype).reshape(4, 8)
+    other = np.full((4, 8), 2, dtype=dtype)
+    operands = {
+        "x": data if left_backend == "numpy" else blosc2.asarray(data),
+        "y": other if right_backend == "numpy" else blosc2.asarray(other),
+    }
+    trusted = blosc2.lazyexpr(text, operands, evaluation="full")
+    safe = blosc2.lazyexpr(text, operands, evaluation="safe")
+    assert safe.shape == trusted.shape
+    assert safe.dtype == trusted.dtype
+    np.testing.assert_allclose(safe[:], trusted[:], rtol=2e-6, atol=2e-6)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "blosc2"])
+@pytest.mark.parametrize("dtype", ["int8", "uint8", "int32", "float32", "float64"])
+@pytest.mark.parametrize("literal", ["1", "0.5", "128", "256"])
+def test_weak_scalar_value_and_error_contract_matches_trusted(backend, dtype, literal):
+    data = np.arange(1, 5, dtype=dtype)
+    operands = {"x": data if backend == "numpy" else blosc2.asarray(data)}
+
+    def evaluate(mode):
+        try:
+            expr = blosc2.lazyexpr(f"x + {literal}", operands, evaluation=mode)
+            return expr.dtype, expr[:], None
+        except OverflowError as error:
+            return None, None, type(error)
+
+    trusted_dtype, trusted_values, trusted_error = evaluate("full")
+    safe_dtype, safe_values, safe_error = evaluate("safe")
+    assert safe_error == trusted_error
+    if trusted_error is None:
+        assert safe_dtype == trusted_dtype
+        np.testing.assert_array_equal(safe_values, trusted_values)
 
 
 def numerical_case(seed, x, y):
