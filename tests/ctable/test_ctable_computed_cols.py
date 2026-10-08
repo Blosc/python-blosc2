@@ -719,6 +719,23 @@ def test_computed_column_open(tmp_path):
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0, 25.0])
 
 
+def test_loaded_expression_recipes_keep_safe_boundary(tmp_path, monkeypatch):
+    import importlib
+
+    path = str(tmp_path / "safe_recipes")
+    t = CTable(Invoice, [(2.0, 3, 0.1), (4.0, 5, 0.1)], urlpath=path, mode="w")
+    t.add_computed_column("total", "price * qty")
+    t.materialize_computed_column("total", new_name="stored")
+    module = importlib.import_module("blosc2.expression_graph")
+    monkeypatch.setattr(module, "eval", lambda *a: pytest.fail("Loaded recipe used eval"), raising=False)
+    loaded = CTable.open(path, mode="a")
+    assert loaded._computed_cols["total"]["lazy"]._evaluation == "safe"
+    assert loaded._materialized_cols["stored"]["_evaluation"] == "safe"
+    np.testing.assert_allclose(loaded["total"][:], [6.0, 20.0])
+    loaded.append((6.0, 7, 0.1))
+    np.testing.assert_allclose(loaded["stored"][:], [6.0, 20.0, 42.0])
+
+
 def test_computed_column_open_append(tmp_path):
     path = str(tmp_path / "tbl")
     t = CTable(Invoice, [(float(i + 1), i + 1, 0.1) for i in range(3)], urlpath=path, mode="w")

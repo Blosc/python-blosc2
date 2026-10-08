@@ -12529,8 +12529,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 }
             else:
                 expression = cc_meta["expression"]
+                from blosc2.expression_graph import select_evaluation
+
                 operands = {f"o{i}": self._cols[dep] for i, dep in enumerate(col_deps)}
-                lazy = blosc2.lazyexpr(expression, operands)
+                policy = self._expression_recipe_policy()
+                lazy = blosc2.lazyexpr(
+                    expression, operands, evaluation=select_evaluation(expression, operands, policy)
+                )
                 self._computed_cols[name] = {
                     "kind": "expression",
                     "expression": expression,
@@ -12546,6 +12551,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self._check_legacy_dsl_policy(schema_dict)
         for meta in schema_dict.get("materialized_columns", []):
             loaded = {
+                "_evaluation": self._expression_recipe_policy(),
                 "computed_column": meta.get("computed_column"),
                 "expression": meta.get("expression"),
                 "col_deps": list(meta["col_deps"]),
@@ -12566,9 +12572,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 loaded["jit_backend"] = meta["jit_backend"]
             self._materialized_cols[meta["name"]] = loaded
 
+    def _expression_recipe_policy(self):
+        """Effective loading permission, never a policy supplied by recipe text."""
+        storage = self._storage
+        return str(
+            getattr(
+                storage,
+                "_deserialize_mode",
+                getattr(getattr(storage, "_store", None), "_deserialize_mode", "safe"),
+            )
+        )
+
     def _check_legacy_dsl_policy(self, schema_dict):
         from blosc2.deserialization import DeserializeMode, normalize_deserialize
         from blosc2.exceptions import UnsafeDeserializationError
+        from blosc2.expression_graph import parse_expression
+
+        if normalize_deserialize(self._expression_recipe_policy()) is DeserializeMode.SAFE:
+            recipes = [
+                *schema_dict.get("computed_columns", []),
+                *schema_dict.get("materialized_columns", []),
+            ]
+            for recipe in recipes:
+                if recipe.get("expression") is not None:
+                    parse_expression(recipe["expression"])
 
         legacy = any(
             cc.get("kind") == "dsl" or "dsl_source" in cc for cc in schema_dict.get("computed_columns", [])
@@ -12636,7 +12663,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 row[name] = self._evaluate_dsl_materialized_batch(meta, single)[0]
             else:
                 operands = {f"o{i}": np.asarray([row[dep]]) for i, dep in enumerate(meta["col_deps"])}
-                values = blosc2.lazyexpr(meta["expression"], operands)[:]
+                values = blosc2.lazyexpr(
+                    meta["expression"], operands, evaluation=meta.get("_evaluation", "full")
+                )[:]
                 row[name] = np.asarray(values, dtype=meta["dtype"])[0]
         return row
 
@@ -12687,7 +12716,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
                     for i, dep in enumerate(meta["col_deps"])
                 }
-                values = blosc2.lazyexpr(meta["expression"], operands)[:]
+                values = blosc2.lazyexpr(
+                    meta["expression"], operands, evaluation=meta.get("_evaluation", "full")
+                )[:]
             values = np.asarray(values, dtype=meta["dtype"])
             if len(values) != row_count:
                 raise ValueError(
@@ -13115,7 +13146,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
             for i, dep in enumerate(meta["col_deps"])
         }
-        values = blosc2.lazyexpr(meta["expression"], operands)[:]
+        values = blosc2.lazyexpr(meta["expression"], operands, evaluation=meta.get("_evaluation", "full"))[:]
         return np.asarray(values, dtype=meta["dtype"])
 
     def _materialized_dsl_kernel(self, meta: dict):
@@ -15307,7 +15338,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 obj._computed_cols[cc_name] = dict(cc)
             else:
                 operands = {f"o{i}": new_cols[dep] for i, dep in enumerate(cc["col_deps"])}
-                new_lazy = blosc2.lazyexpr(cc["expression"], operands)
+                new_lazy = blosc2.lazyexpr(cc["expression"], operands, evaluation=cc["lazy"]._evaluation)
                 obj._computed_cols[cc_name] = {
                     "kind": "expression",
                     "expression": cc["expression"],

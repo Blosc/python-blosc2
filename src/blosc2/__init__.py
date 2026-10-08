@@ -596,6 +596,7 @@ from .dsl_kernel import (
 )
 from .portable_kernel import PortableArtifactError, PortableKernel
 from .jit_config import get_jit_options, jit_options, set_jit_options
+from .expression_graph import expression_evaluation
 from .lazyexpr import (
     LazyExpr,
     lazyudf,

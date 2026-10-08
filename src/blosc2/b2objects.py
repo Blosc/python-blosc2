@@ -16,6 +16,7 @@ import blosc2
 from blosc2.deserialization import DeserializeMode, get_deserialize, normalize_deserialize
 from blosc2.dsl_kernel import kernel_from_source
 from blosc2.exceptions import UnsafeDeserializationError
+from blosc2.expression_graph import bounded_recipe
 
 _B2OBJECT_META_KEY = "b2o"
 _B2OBJECT_VERSION = 1
@@ -120,6 +121,7 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
     return None
 
 
+@bounded_recipe
 def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carrier=None, deserialize="safe"):
     deserialize = normalize_deserialize(deserialize)
     kind = payload.get("kind")
@@ -157,9 +159,12 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None, deserialize="safe"
     operands_payload = payload.get("operands")
     if not isinstance(operands_payload, dict):
         raise TypeError("Structured LazyExpr payload requires a mapping 'operands'")
+    from blosc2.expression_graph import parse_expression, select_evaluation
     from blosc2.lazyexpr import validate_expr
 
     validate_expr(expression)
+    if normalize_deserialize(deserialize) is DeserializeMode.SAFE:
+        parse_expression(expression)
     operands, missing_ops = decode_operand_mapping(
         operands_payload, base_path=carrier_path, deserialize=deserialize
     )
@@ -168,7 +173,8 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None, deserialize="safe"
         exc.expr = expression
         exc.missing_ops = missing_ops
         raise exc
-    return blosc2.lazyexpr(expression, operands=operands)
+    mode = select_evaluation(expression, operands, str(deserialize))
+    return blosc2.lazyexpr(expression, operands=operands, evaluation=mode)
 
 
 def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="safe"):

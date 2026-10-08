@@ -52,6 +52,16 @@ from .b2objects import (
     write_b2object_user_vlmeta,
 )
 from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
+from .expression_graph import (
+    evaluate_expression,
+    evaluation_mode,
+    expression_constructor,
+    expression_evaluation,
+    expression_method,
+    normalize_operands,
+    parse_expression,
+    validate_operands,
+)
 from .proxy_source import convert_dtype
 from .utils import (
     check_smaller_shape,
@@ -124,21 +134,47 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
     else keeps NumPy's error.
     """
     try:
-        return eval(expression, _globals, local_dict)
+        return evaluate_expression(expression, _globals, local_dict)
     except TypeError:
         int_dict = _int64_datetime_operands(local_dict)
         if int_dict is None:
             raise
-        res = eval(expression, _globals, int_dict)
+        res = evaluate_expression(expression, _globals, int_dict)
         if getattr(res, "dtype", None) != np.bool_:
             raise
         return res
 
 
-def ne_evaluate(expression, local_dict=None, **kwargs):
+def ne_evaluate(expression, local_dict=None, **kwargs):  # noqa: C901
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
+    global safe_numpy_globals
     if local_dict is None:
         local_dict = {}
+    if evaluation_mode() == "safe":
+        graph = parse_expression(expression)
+        # Only explicit operand names may be discovered; no callable namespace.
+        missing = graph.names - local_dict.keys()
+        if missing:
+            _depth = kwargs.get("_frame_depth", 1)
+            frame = sys._getframe(_depth)
+            local_dict = dict(local_dict)
+            for name in missing:
+                if name in frame.f_locals:
+                    local_dict[name] = frame.f_locals[name]
+                elif name in frame.f_globals:
+                    local_dict[name] = frame.f_globals[name]
+        validate_operands(local_dict)
+        expression = graph.text
+        kwargs.pop("_frame_depth", None)
+        if not blosc2.IS_WASM:
+            error = numexpr.validate(expression, local_dict=local_dict, global_dict={})
+            if error is None:
+                return numexpr.evaluate(expression, local_dict=local_dict, global_dict={}, **kwargs)
+        result = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
+        if "out" in kwargs:
+            kwargs["out"][...] = result
+            return kwargs["out"]
+        return result
     # Get local vars dict from the stack frame
     _frame_depth = kwargs.pop("_frame_depth", 1)
     local_dict |= {
@@ -152,7 +188,6 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         )
     }
     if blosc2.IS_WASM:
-        global safe_numpy_globals
         populate_safe_numpy_globals(expression)
         if "out" in kwargs:
             out = kwargs.pop("out")
@@ -199,7 +234,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         # "inf" — the repr of such scalars, or typed by the user); numexpr
         # has no such constants, so this python-eval fallback must.
         safe_blosc2_globals.update({"nan": math.nan, "inf": math.inf})
-    res = eval(expression, safe_blosc2_globals, local_dict)
+    res = evaluate_expression(expression, safe_blosc2_globals, local_dict)
     if "out" in kwargs:
         out = kwargs.pop("out")
         out[:] = res  # will handle calc/decomp if res is lazyarray
@@ -351,6 +386,9 @@ funcs_2args = (
 
 def get_expr_globals(expression):
     """Build a dictionary of functions needed for evaluating the expression."""
+    if evaluation_mode() == "safe":
+        parse_expression(expression)
+        return {"blosc2": blosc2}
     _globals = {"np": np, "blosc2": blosc2, "nan": math.nan, "inf": math.inf}
     # Only check for functions that actually appear in the expression.
     for func in functions:
@@ -1149,7 +1187,11 @@ def convert_to_slice(expression):
             k = expression[i:].find("]")  # start checking from after [
             slice_convert = expression[i : i + k + 1]  # include [ and ]
             try:
-                slicer = eval(f"np.s_{slice_convert}")
+                slicer = parse_expression(f"a{slice_convert}").root[2]
+                # Build the slice tuple directly without indexing an actual array.
+                from .expression_graph import evaluate_index
+
+                slicer = evaluate_index(slicer)
                 slicer = (slicer,) if not isinstance(slicer, tuple) else slicer  # standardise to tuple
                 if any(isinstance(el, str) for el in slicer):  # handle fields
                     raise ValueError("Cannot handle fields for slicing lazy expressions.")
@@ -3604,6 +3646,7 @@ class LazyExpr(LazyArray):
     Once the lazy expression is created, it can be evaluated via :func:`LazyExpr.compute`.
     """
 
+    @expression_constructor
     def __init__(self, new_op):  # noqa: C901
         if new_op is None:
             self.expression = ""
@@ -3739,6 +3782,7 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
 
+    @expression_method
     def update_expr(self, new_op):
         prev_flag = blosc2._disable_overloaded_equal
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
@@ -3873,6 +3917,7 @@ class LazyExpr(LazyArray):
         return out
 
     @property
+    @expression_method
     def dtype(self):
         # miniexpr owns string widths; see _miniexpr_string_dtype.
         string_dtype = self._miniexpr_string_dtype()
@@ -3904,6 +3949,7 @@ class LazyExpr(LazyArray):
         return len(self.shape)
 
     @property
+    @expression_method
     def shape(self):
         # Honor self._shape; it can be set during the building of the expression
         if hasattr(self, "_shape"):
@@ -3968,6 +4014,7 @@ class LazyExpr(LazyArray):
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
         return self._blocks
 
+    @expression_method
     def where(self, value1=None, value2=None):
         """
         Select value1 or value2 values based on the condition of the current expression.
@@ -3984,6 +4031,8 @@ class LazyExpr(LazyArray):
         out: LazyExpr
             A new expression with the where condition applied.
         """
+        if evaluation_mode() == "safe":
+            validate_operands({"value1": value1, "value2": value2})
         if not np.issubdtype(self.dtype, np.bool_):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
@@ -4015,6 +4064,8 @@ class LazyExpr(LazyArray):
     def _normalize_where(where):
         if where is None:
             return None
+        if evaluation_mode() == "safe":
+            validate_operands({"where": where})
         raw_col = getattr(where, "_raw_col", None)
         if raw_col is not None:
             where = raw_col
@@ -4046,6 +4097,7 @@ class LazyExpr(LazyArray):
             return np.inf if op == "min" else -np.inf
         raise TypeError(f"where= for {op} is not supported for dtype {dtype!r}")
 
+    @expression_method
     def sum(
         self,
         axis=None,
@@ -4068,6 +4120,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def prod(
         self,
         axis=None,
@@ -4114,6 +4167,7 @@ class LazyExpr(LazyArray):
         axis = tuple(a if a >= 0 else a + len(shape) for a in axis)  # handle negative indexing
         return math.prod([shape[i] for i in axis])
 
+    @expression_method
     def mean(
         self,
         axis=None,
@@ -4153,6 +4207,7 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    @expression_method
     def std(
         self,
         axis=None,
@@ -4216,6 +4271,7 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    @expression_method
     def var(
         self,
         axis=None,
@@ -4277,6 +4333,7 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    @expression_method
     def min(
         self,
         axis=None,
@@ -4298,6 +4355,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def max(
         self,
         axis=None,
@@ -4319,6 +4377,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def any(
         self,
         axis=None,
@@ -4334,6 +4393,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def all(
         self,
         axis=None,
@@ -4349,6 +4409,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def argmax(
         self,
         axis=None,
@@ -4363,6 +4424,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def argmin(
         self,
         axis=None,
@@ -4458,7 +4520,8 @@ class LazyExpr(LazyArray):
             self.cons_cache = {}
         if evalcons in self.cons_cache:
             return self.cons_cache[evalcons], expression[idx:idx2]
-        value = eval(evalcons, _globals, operands)
+        _globals["blosc2"] = blosc2
+        value = evaluate_expression(evalcons, _globals, operands)
         self.cons_cache[evalcons] = value
 
         return value, expression[idx:idx2]
@@ -4596,7 +4659,7 @@ class LazyExpr(LazyArray):
                 # lazyexpr("mean(a + b)")[:10] means mean((a + b)[:10]).
                 operands = _slice_operands_for_eager(operands, item)
                 item = ()
-            lazy_expr = eval(self.expression, _globals, operands)
+            lazy_expr = evaluate_expression(self.expression, _globals, operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
                 key, mask = process_key(item, lazy_expr.shape)
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
@@ -4645,7 +4708,7 @@ class LazyExpr(LazyArray):
                     newexpr = newexpr.replace(constexpr, newop)
 
             _globals = get_expr_globals(newexpr)
-            lazy_expr = eval(newexpr, _globals, newops)
+            lazy_expr = evaluate_expression(newexpr, _globals, newops)
             if isinstance(lazy_expr, blosc2.NDArray):
                 # Almost done (probably the expression is made of only constructors)
                 # We only have to define the trivial expression ("o0")
@@ -4722,6 +4785,7 @@ class LazyExpr(LazyArray):
 
         return indexing.explain_query(self)
 
+    @expression_method
     def compute(
         self,
         item=(),
@@ -4881,6 +4945,10 @@ class LazyExpr(LazyArray):
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
         # Validate the expression
         validate_expr(expression)
+        if evaluation_mode() == "safe":
+            parse_expression(expression)
+            operands = normalize_operands(operands)
+            validate_operands(operands)
         expression = convert_to_slice(expression)
         chunks, blocks = None, None
         if guess:
@@ -4922,6 +4990,7 @@ class LazyExpr(LazyArray):
                     chunks = new_expr.chunks
                     blocks = new_expr.blocks
             new_expr = cls(None)
+            new_expr._evaluation = evaluation_mode()
             new_expr.expression = f"({expression_})"  # force parenthesis
             new_expr.operands = operands_
             new_expr.expression_tosave = expression
@@ -4941,6 +5010,7 @@ class LazyExpr(LazyArray):
         if where is not None:
             new_expr._where_args = where
         new_expr._ne_args = ne_args
+        new_expr._evaluation = evaluation_mode()
         return new_expr
 
 
@@ -5564,6 +5634,8 @@ def lazyexpr(
     global_dict: dict | None = None,
     ne_args: dict | None = None,
     _frame_depth: int = 2,
+    *,
+    evaluation: str | None = None,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
@@ -5626,6 +5698,20 @@ def lazyexpr(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    if evaluation is not None:
+        with expression_evaluation(evaluation):
+            return lazyexpr(
+                expression,
+                operands,
+                out,
+                where,
+                local_dict,
+                global_dict,
+                ne_args,
+                _frame_depth=_frame_depth + 1,
+            )
+    if isinstance(expression, str) and evaluation_mode() == "safe":
+        parse_expression(expression)
     if operands is not None and isinstance(expression, str):
         # A UTF8Array is variable-width, so it cannot be an expression operand.
         # It only duck-types as one: LazyExpr would wrap it in a SimpleProxy,

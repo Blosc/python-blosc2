@@ -1,0 +1,735 @@
+"""Validated numerical expression graphs; no Python-source execution.
+
+The registry is deliberately independent of the public NumPy/Blosc2 namespaces.
+Graph parsing is cached, while evaluation results never survive an execution.
+"""
+
+from __future__ import annotations
+
+import abc
+import ast
+import contextlib
+import contextvars
+import functools
+import operator
+import sys
+from dataclasses import dataclass
+
+import numpy as np
+
+from blosc2.exceptions import UnsafeDeserializationError
+
+_mode = contextvars.ContextVar("expression_evaluation", default="full")
+_active_operands = contextvars.ContextVar("expression_operand_validation", default=frozenset())
+_active_recipes = contextvars.ContextVar("expression_recipe_resolution", default=())
+
+
+def bounded_recipe(func):
+    """Bound nested recipes, including reference cycles spanning multiple files."""
+
+    @functools.wraps(func)
+    def wrapped(payload, *args, **kwargs):
+        carrier = kwargs.get("carrier")
+        schunk = getattr(carrier, "schunk", carrier)
+        path = getattr(schunk, "urlpath", None)
+        key = ("path", str(path)) if path is not None else ("inline", id(payload))
+        active = _active_recipes.get()
+        if key in active or len(active) >= 64:
+            _reject("cyclic or excessively deep saved expression recipes")
+        token = _active_recipes.set((*active, key))
+        try:
+            return func(payload, *args, **kwargs)
+        finally:
+            _active_recipes.reset(token)
+
+    return wrapped
+
+
+@contextlib.contextmanager
+def expression_evaluation(mode="safe"):
+    """Select safe graph or trusted legacy expression evaluation in this context.
+
+    ``full`` permits Python text evaluation and must only be used with trusted
+    expressions and operands. It is not a process sandbox.
+    """
+    if mode not in ("safe", "full"):
+        raise ValueError("Expression evaluation must be 'safe' or 'full'")
+    token = _mode.set(mode)
+    try:
+        yield
+    finally:
+        _mode.reset(token)
+
+
+def evaluation_mode():
+    return _mode.get()
+
+
+def select_evaluation(text, operands, permission):
+    """Full permission does not make an approved graph require legacy execution."""
+    if permission == "safe":
+        return "safe"
+    try:
+        parse_expression(text)
+        validate_operands(normalize_operands(operands))
+    except (UnsafeDeserializationError, ValueError):
+        return "full"
+    return "safe"
+
+
+def expression_method(func):
+    """Restore a constructed expression's execution policy for deferred work."""
+
+    @functools.wraps(func)
+    def wrapped(self, *args, **kwargs):
+        mode = "safe" if evaluation_mode() == "safe" else getattr(self, "_evaluation", "full")
+        with expression_evaluation(mode):
+            if evaluation_mode() == "safe":
+                self._graph = parse_expression(self.expression)
+                self.operands = normalize_operands(self.operands)
+                validate_operands(self.operands)
+                validate_operands(getattr(self, "_where_args", {}))
+            return func(self, *args, **kwargs)
+
+    return wrapped
+
+
+def expression_constructor(func):
+    """Carry a safe dependency's boundary through programmatic composition."""
+
+    @functools.wraps(func)
+    def wrapped(self, new_op):
+        import blosc2
+
+        values = () if new_op is None else (new_op[0], new_op[2])
+        safe = evaluation_mode() == "safe" or any(
+            type(value) is blosc2.LazyExpr and getattr(value, "_evaluation", "full") == "safe"
+            for value in values
+        )
+        mode = "safe" if safe else "full"
+        with expression_evaluation(mode):
+            if safe:
+                validate_operands(dict(enumerate(values)))
+            self._evaluation = mode
+            return func(self, new_op)
+
+    return wrapped
+
+
+_ELEMENTWISE = frozenset(
+    [
+        "abs",
+        "acos",
+        "acosh",
+        "add",
+        "arccos",
+        "arccosh",
+        "arcsin",
+        "arcsinh",
+        "arctan",
+        "arctan2",
+        "arctanh",
+        "asin",
+        "asinh",
+        "atan",
+        "atan2",
+        "atanh",
+        "bitwise_and",
+        "bitwise_invert",
+        "bitwise_left_shift",
+        "bitwise_or",
+        "bitwise_right_shift",
+        "bitwise_xor",
+        "broadcast_to",
+        "ceil",
+        "clip",
+        "conj",
+        "contains",
+        "copysign",
+        "cos",
+        "cosh",
+        "divide",
+        "endswith",
+        "equal",
+        "exp",
+        "expm1",
+        "floor",
+        "floor_divide",
+        "greater",
+        "greater_equal",
+        "hypot",
+        "imag",
+        "isfinite",
+        "isinf",
+        "isnan",
+        "less_equal",
+        "less",
+        "log",
+        "log1p",
+        "log2",
+        "log10",
+        "logaddexp",
+        "logical_and",
+        "logical_not",
+        "logical_or",
+        "logical_xor",
+        "lower",
+        "maximum",
+        "minimum",
+        "multiply",
+        "negative",
+        "nextafter",
+        "not_equal",
+        "positive",
+        "pow",
+        "real",
+        "reciprocal",
+        "remainder",
+        "round",
+        "sign",
+        "signbit",
+        "sin",
+        "sinh",
+        "sqrt",
+        "square",
+        "startswith",
+        "subtract",
+        "tan",
+        "tanh",
+        "trunc",
+        "upper",
+        "where",
+    ]
+)
+_REDUCTIONS = frozenset(
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "std",
+        "mean",
+        "var",
+        "any",
+        "all",
+        "count_nonzero",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+        "cumsum",
+        "cumprod",
+    ]
+)
+_SHAPES = frozenset(
+    [
+        "concat",
+        "diagonal",
+        "expand_dims",
+        "matmul",
+        "matrix_transpose",
+        "outer",
+        "permute_dims",
+        "squeeze",
+        "stack",
+        "tensordot",
+        "transpose",
+        "vecdot",
+        "reshape",
+        "copy",
+        "flatten",
+        "ravel",
+    ]
+)
+_CONSTRUCTORS = frozenset(
+    [
+        "asarray",
+        "arange",
+        "linspace",
+        "zeros",
+        "ones",
+        "empty",
+        "full",
+        "frombuffer",
+        "full_like",
+        "zeros_like",
+        "ones_like",
+        "empty_like",
+        "eye",
+        "nans",
+        "uninit",
+        "meshgrid",
+    ]
+)
+_DTYPES = frozenset(
+    [
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float16",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+        "bool",
+        "str",
+        "bytes",
+    ]
+)
+_CALLS = _ELEMENTWISE | _REDUCTIONS | _SHAPES | _CONSTRUCTORS | _DTYPES | {"slice", "len"}
+_METHODS = _REDUCTIONS | _SHAPES | {"astype", "slice", "where"}
+_ATTRIBUTES = {"T", "mT", "shape", "size", "ndim", "itemsize", "real", "imag"}
+_KEYWORDS = frozenset(
+    [
+        "axis",
+        "axes",
+        "keepdims",
+        "dtype",
+        "ddof",
+        "correction",
+        "initial",
+        "where",
+        "ord",
+        "offset",
+        "axis1",
+        "axis2",
+        "shape",
+        "newshape",
+        "order",
+        "casting",
+        "copy",
+        "start",
+        "stop",
+        "step",
+        "num",
+        "endpoint",
+        "retstep",
+        "count",
+        "N",
+        "M",
+        "k",
+        "indexing",
+        "chunks",
+        "blocks",
+        "decimals",
+        "min",
+        "max",
+        "a_min",
+        "a_max",
+        "out",
+    ]
+)
+_BINARY = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.BitAnd: operator.and_,
+    ast.BitOr: operator.or_,
+    ast.BitXor: operator.xor,
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+    ast.MatMult: operator.matmul,
+}
+_UNARY = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+    ast.Invert: operator.invert,
+    ast.Not: operator.not_,
+}
+_COMPARE = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+}
+_NP_SCALARS = frozenset(np.sctypeDict.values())
+_DTYPE_TYPES = frozenset(np.dtype(name).type for name in _DTYPES)
+_BINARY_CALLS = frozenset(
+    [
+        "add",
+        "arctan2",
+        "atan2",
+        "bitwise_and",
+        "bitwise_left_shift",
+        "bitwise_or",
+        "bitwise_right_shift",
+        "bitwise_xor",
+        "copysign",
+        "divide",
+        "endswith",
+        "equal",
+        "floor_divide",
+        "greater",
+        "greater_equal",
+        "hypot",
+        "less_equal",
+        "less",
+        "logaddexp",
+        "logical_and",
+        "logical_or",
+        "logical_xor",
+        "maximum",
+        "minimum",
+        "multiply",
+        "nextafter",
+        "not_equal",
+        "pow",
+        "remainder",
+        "startswith",
+        "subtract",
+        "contains",
+        "broadcast_to",
+    ]
+)
+
+
+def _check_signature(name, count, keywords, node):
+    if name in _ELEMENTWISE:
+        low, high = (2, 2) if name in _BINARY_CALLS else (1, 1)
+        if name == "where" or name == "clip":
+            low, high = 1, 3
+        elif name == "round":
+            low, high = 1, 2
+        allowed = {"out", "where", "casting", "dtype"}
+        if name in ("clip", "round", "broadcast_to"):
+            allowed |= {"min", "max", "a_min", "a_max", "decimals", "shape"}
+    elif name in _REDUCTIONS:
+        low, high = 1, 6
+        allowed = {"axis", "dtype", "out", "keepdims", "initial", "where", "ddof", "correction"}
+    elif name in _DTYPES:
+        low, high, allowed = 0, 1, set()
+    elif name in ("len", "slice"):
+        low, high, allowed = (1, 1, set()) if name == "len" else (1, 3, set())
+    else:
+        low, high, allowed = 1, 7, _KEYWORDS
+    if not low <= count <= high or not set(keywords) <= allowed:
+        _reject(f"invalid signature for {name!r}", node)
+
+
+def _reject(message, node=None):
+    location = f"expression line {node.lineno}, column {node.col_offset + 1}" if node is not None else None
+    raise UnsafeDeserializationError(
+        message,
+        location=location,
+        hint="Use deserialize='full' when loading, or expression_evaluation('full') "
+        "when constructing, only if you trust the expression and its operands.",
+    )
+
+
+@dataclass(frozen=True)
+class ExpressionGraph:
+    root: tuple
+    names: frozenset[str]
+    text: str
+
+    def evaluate(self, operands, *, prefer_blosc=False):  # noqa: C901
+        validate_operands(operands)
+        missing = self.names - operands.keys()
+        if missing:
+            raise ValueError(f"Missing expression operands: {sorted(missing)}")
+        cache = {}
+
+        def visit(node):  # noqa: C901
+            if node in cache:
+                return cache[node]
+            kind, *args = node
+            if kind == "literal":
+                result = args[0]
+            elif kind == "name":
+                result = operands[args[0]]
+            elif kind == "dtype":
+                result = np.dtype(args[0]).type
+            elif kind == "sequence":
+                result = tuple(visit(x) for x in args[0])
+            elif kind == "binary":
+                result = _BINARY[args[0]](visit(args[1]), visit(args[2]))
+            elif kind == "unary":
+                result = _UNARY[args[0]](visit(args[1]))
+            elif kind == "boolean":
+                result = visit(args[1][0])
+                for item in args[1][1:]:
+                    if (args[0] is ast.And and not result) or (args[0] is ast.Or and result):
+                        break
+                    result = visit(item)
+            elif kind == "compare":
+                result = _COMPARE[args[0]](visit(args[1]), visit(args[2]))
+            elif kind == "slice":
+                result = slice(*(visit(x) for x in args))
+            elif kind == "index":
+                result = visit(args[0])[visit(args[1])]
+            elif kind == "attribute":
+                value = visit(args[1])
+                validate_operand(value)
+                result = getattr(value, args[0])
+            elif kind in ("call", "method"):
+                name, positional, keywords = args
+                values = [visit(x) for x in positional]
+                kwargs = {key: visit(value) for key, value in keywords}
+                result = _dispatch(name, values, kwargs, prefer_blosc, method=kind == "method")
+            else:
+                raise AssertionError(kind)
+            validate_operand(result)
+            cache[node] = result
+            return result
+
+        return visit(self.root)
+
+
+@functools.lru_cache(maxsize=512)
+def parse_expression(text):  # noqa: C901
+    """Compile a bounded expression to an immutable, explicitly registered graph."""
+    if type(text) is not str or len(text) > 65536:
+        _reject("expression must be text of at most 65536 characters")
+    try:
+        tree = ast.parse(text, mode="eval")
+    except (SyntaxError, RecursionError) as exc:
+        raise ValueError(f"Invalid numerical expression: {text!r}") from exc
+    if sum(1 for _ in ast.walk(tree)) > 4096:
+        _reject("expression exceeds 4096 AST nodes")
+    names = set()
+
+    def lower(node, depth=0):  # noqa: C901
+        if depth > 64:
+            _reject("expression exceeds 64 levels", node)
+
+        def child(x):
+            return lower(x, depth + 1)
+
+        if isinstance(node, ast.Constant):
+            if type(node.value) not in (int, float, complex, bool, str, bytes, type(None), type(Ellipsis)):
+                _reject("unsupported literal", node)
+            return ("literal", node.value)
+        if isinstance(node, ast.Name):
+            if node.id in ("nan", "inf"):
+                return ("literal", float(node.id))
+            if node.id in _DTYPES:
+                return ("dtype", node.id)
+            if node.id in ("np", "numpy", "blosc2"):
+                _reject("unapproved symbol", node)
+            names.add(node.id)
+            return ("name", node.id)
+        if isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
+            return ("binary", type(node.op), child(node.left), child(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY:
+            return ("unary", type(node.op), child(node.operand))
+        if isinstance(node, ast.BoolOp):
+            return ("boolean", type(node.op), tuple(child(x) for x in node.values))
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and type(node.ops[0]) in _COMPARE:
+            return ("compare", type(node.ops[0]), child(node.left), child(node.comparators[0]))
+        if isinstance(node, ast.Tuple | ast.List):
+            return ("sequence", tuple(child(x) for x in node.elts))
+        if isinstance(node, ast.Slice):
+            return (
+                "slice",
+                *(
+                    child(x) if x is not None else ("literal", None)
+                    for x in (node.lower, node.upper, node.step)
+                ),
+            )
+        if isinstance(node, ast.Subscript):
+            return ("index", child(node.value), child(node.slice))
+        if isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id in ("np", "numpy", "blosc2"):
+                if node.attr in _DTYPES:
+                    return ("dtype", node.attr)
+                _reject(f"unapproved namespace attribute {node.attr!r}", node)
+            if node.attr in _ATTRIBUTES:
+                return ("attribute", node.attr, child(node.value))
+        if isinstance(node, ast.Call):
+            method = False
+            positional = tuple(child(x) for x in node.args)
+            if isinstance(node.func, ast.Name):
+                name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+                namespace = isinstance(node.func.value, ast.Name) and node.func.value.id in (
+                    "np",
+                    "numpy",
+                    "blosc2",
+                )
+                if not namespace:
+                    method = True
+                    positional = (child(node.func.value), *positional)
+            else:
+                _reject("unapproved callable", node)
+            if name not in (_METHODS if method else _CALLS):
+                _reject(f"unapproved numerical operation {name!r}", node)
+            if any(kw.arg not in _KEYWORDS for kw in node.keywords):
+                _reject(f"unapproved keyword for {name!r}", node)
+            if len({kw.arg for kw in node.keywords}) != len(node.keywords):
+                _reject("duplicate keyword", node)
+            if not (method and name == "slice"):
+                _check_signature(name, len(positional), [kw.arg for kw in node.keywords], node)
+            return (
+                "method" if method else "call",
+                name,
+                positional,
+                tuple((kw.arg, child(kw.value)) for kw in node.keywords),
+            )
+        return _reject(f"unsupported syntax {type(node).__name__}", node)
+
+    root = lower(tree.body)
+    return ExpressionGraph(root, frozenset(names), ast.unparse(tree.body))
+
+
+def validate_operand(value):  # noqa: C901
+    """Admit concrete trusted operand types before reading their metadata/hooks."""
+    import blosc2
+
+    metaclass = type(type(value))
+    if metaclass is not type and metaclass is not abc.ABCMeta:
+        _reject("custom operand metaclass")
+    if type(value) in (int, float, complex, bool, str, bytes, type(None), slice, type(Ellipsis)):
+        return
+    if type(value) is type and value in _DTYPE_TYPES:
+        return
+    if type(value) in (tuple, list):
+        active = _active_operands.get()
+        if id(value) in active or len(active) >= 64:
+            _reject("cyclic or excessively deep expression operands")
+        token = _active_operands.set(active | {id(value)})
+        try:
+            for item in value:
+                validate_operand(item)
+        finally:
+            _active_operands.reset(token)
+        return
+    if type(value) is np.ndarray or type(value) in _NP_SCALARS:
+        if np.dtype(value.dtype).hasobject:
+            _reject("object-dtype expression operand")
+        return
+    trusted = {
+        blosc2.NDArray,
+        blosc2.LazyExpr,
+        blosc2.NDField,
+        blosc2.C2Array,
+        blosc2.RemoteArray,
+        blosc2.Proxy,
+        blosc2.SimpleProxy,
+        blosc2.LazyUDF,
+    }
+    from blosc2.ctable import Column
+    from blosc2.ctable_storage import _AllValidRows, _RemoteHDF5Field
+    from blosc2.portable_lazy import PortableLazyArray
+    from blosc2.proxy import ProxyNDField
+    from blosc2.remote_parquet import _ParquetColumn
+
+    trusted.add(Column)
+    trusted.add(ProxyNDField)
+    trusted.update({_AllValidRows, _RemoteHDF5Field, _ParquetColumn, PortableLazyArray})
+    if type(value) not in trusted:
+        _reject(f"unapproved operand type {type(value).__name__!r}")
+    active = _active_operands.get()
+    if id(value) in active or len(active) >= 64:
+        _reject("cyclic or excessively deep expression operands")
+    token = _active_operands.set(active | {id(value)})
+    try:
+        if type(value) is blosc2.LazyUDF:
+            if getattr(value, "_legacy_source_recipe", False):
+                _reject("legacy UDF expression dependency")
+            # Caller-authored UDFs are explicit capabilities, not functions
+            # constructible by saved graph text. Still check their input closure.
+            validate_operands(value.inputs_dict)
+        if type(value) is blosc2.LazyExpr:
+            parse_expression(value.expression)
+            validate_operands(value.operands)
+            validate_operands(getattr(value, "_where_args", {}))
+        if type(value) is blosc2.SimpleProxy:
+            validate_operand(value._src)
+        elif type(value) is blosc2.Proxy:
+            # Proxy itself is not a capability boundary: its source can be a
+            # caller-defined Python protocol object.
+            validate_operand(value.src)
+        elif type(value) is ProxyNDField:
+            validate_operand(value.proxy)
+        elif type(value) is blosc2.NDField:
+            validate_operand(value.ndarr)
+        elif type(value) is PortableLazyArray:
+            validate_operands(value.inputs)
+        elif type(value) is Column:
+            table = value._table_ref
+            if type(table) is not blosc2.CTable:
+                _reject("unapproved column owner")
+            recipe = table._computed_cols.get(value._col_name)
+            if recipe is None:
+                validate_operand(table._cols[value._col_name])
+            elif recipe.get("kind") == "dsl":
+                _reject("legacy table-kernel expression dependency")
+            else:
+                if recipe.get("kind") == "expression":
+                    parse_expression(recipe["expression"])
+                for dependency in recipe["col_deps"]:
+                    validate_operand(Column(table, dependency))
+        if np.dtype(value.dtype).hasobject:
+            _reject("object-dtype expression operand")
+    finally:
+        _active_operands.reset(token)
+
+
+def validate_operands(operands):
+    for value in operands.values():
+        validate_operand(value)
+
+
+def normalize_operands(operands):
+    """Adapt a concrete numeric pandas Series without admitting arbitrary protocols."""
+    pandas = sys.modules.get("pandas")
+    import blosc2
+
+    result = dict(operands)
+    if pandas is not None:
+        for name, value in result.items():
+            source = value._src if type(value) is blosc2.SimpleProxy else value
+            if type(source) is pandas.Series:
+                array = source._values
+                if type(array) is not np.ndarray:
+                    _reject("pandas extension-array operand")
+                validate_operand(array)
+                result[name] = blosc2.SimpleProxy(array) if type(value) is blosc2.SimpleProxy else array
+    return result
+
+
+def _dispatch(name, values, kwargs, prefer_blosc, *, method=False):
+    import blosc2
+    from blosc2.utils import _NUMPY_ALIASES
+
+    if method:
+        receiver, *values = values
+        validate_operand(receiver)
+        # Receiver is admitted before accessing this explicitly registered method.
+        return getattr(receiver, name)(*values, **kwargs)
+    if name == "slice":
+        return slice(*values)
+    if name == "len":
+        return len(values[0])
+    if name in _DTYPES:
+        return np.dtype(name).type(*values, **kwargs)
+    if prefer_blosc and hasattr(blosc2, name):
+        return getattr(blosc2, name)(*values, **kwargs)
+    func = _NUMPY_ALIASES.get(name) or getattr(np, name, None)
+    if func is None:
+        _reject(f"no approved implementation for {name!r}")
+    return func(*values, **kwargs)
+
+
+def evaluate_expression(text, globals_, operands):
+    """Evaluate a graph, or use the explicitly permitted legacy evaluator."""
+    if evaluation_mode() == "full":
+        return eval(text, globals_, operands)
+    prefer_blosc = any(value is __import__("blosc2") for value in globals_.values())
+    return parse_expression(text).evaluate(operands, prefer_blosc=prefer_blosc)
+
+
+def evaluate_index(node):
+    return ExpressionGraph(node, frozenset(), "").evaluate({})
