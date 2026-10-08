@@ -316,3 +316,31 @@ layouts, reduction dtype/shape families, namespace selection, axis validation,
 output positions, persistence and data-free inference instrumentation. Ruff lint,
 format and whitespace checks passed. No new benchmark or platform gate is claimed;
 the experiment remains incomplete and is not ready to merge.
+
+## Follow-up: cumulative-operation contracts and metadata
+
+Reviewed `cumsum`/`cumprod` and `cumulative_sum`/`cumulative_prod` separately.
+NumPy's newer cumulative functions accept keyword-only options; Blosc2 functions
+and array methods accept positional dtype/include-initial, while LazyExpr methods
+use positional include-initial without a dtype slot. The safe binder now preserves
+those layouts and validates concrete boolean `include_initial` values, duplicate
+arguments and scalar axes. Blosc2 cumulative `out` is not registered; NumPy's
+supported output slot remains available.
+
+Direct named-input root metadata now describes legacy flattening for `axis=None`,
+the newer APIs' one-dimensional requirement when axis is omitted, and the
+one-element shape extension for `include_initial`. Supported dtype/shape inference
+does not execute cumulative work on dummy arrays. NumPy-qualified operations also
+use NumPy dtype rules even when their input is a Blosc2 operand.
+
+The current Blosc2 cumulative backend does not consistently honor explicit dtype
+overrides. Those cases retain existing inference and execution semantics, covered
+by differential tests; this change does not fix or silently reinterpret that
+backend behavior. Nested graph metadata, other signatures, half-precision fallback
+rules and complete streaming/allocation audits remain outstanding.
+
+Verification: **11,580 passed, 55 skipped**. Added differential receiver/layout
+tests, flattening and output-position checks, include-initial persistence, invalid
+contract rejection, data-free inference instrumentation and operand-rebinding
+metadata coverage. Ruff lint/format and whitespace checks passed. No new benchmark
+or cross-platform completion claim is made.

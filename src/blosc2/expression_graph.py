@@ -11,6 +11,7 @@ import ast
 import contextlib
 import contextvars
 import functools
+import math
 import operator
 import sys
 from dataclasses import dataclass
@@ -377,6 +378,7 @@ _KEYWORDS = frozenset(
         "ddof",
         "correction",
         "initial",
+        "include_initial",
         "where",
         "ord",
         "offset",
@@ -496,8 +498,8 @@ _REDUCTION_KEYWORDS = {
     "count_nonzero": frozenset({"axis", "keepdims"}),
     "cumsum": frozenset({"axis", "dtype", "out"}),
     "cumprod": frozenset({"axis", "dtype", "out"}),
-    "cumulative_sum": frozenset({"axis", "dtype", "out"}),
-    "cumulative_prod": frozenset({"axis", "dtype", "out"}),
+    "cumulative_sum": frozenset({"axis", "dtype", "out", "include_initial"}),
+    "cumulative_prod": frozenset({"axis", "dtype", "out", "include_initial"}),
 }
 _CAST_KEYWORDS = frozenset({"dtype", "order", "casting", "copy", "subok"})
 _UNKNOWN_ARGUMENT = object()
@@ -514,6 +516,10 @@ _NUMPY_REDUCTION_POSITIONAL = {
     "all": ("axis", "out", "keepdims"),
     "argmin": ("axis", "out"),
     "argmax": ("axis", "out"),
+    "cumsum": ("axis", "dtype", "out"),
+    "cumprod": ("axis", "dtype", "out"),
+    "cumulative_sum": (),
+    "cumulative_prod": (),
 }
 _BLOSC_REDUCTION_POSITIONAL = {
     "sum": ("axis", "dtype", "keepdims"),
@@ -527,7 +533,10 @@ _BLOSC_REDUCTION_POSITIONAL = {
     "all": ("axis", "keepdims"),
     "argmin": ("axis", "keepdims"),
     "argmax": ("axis", "keepdims"),
+    "cumulative_sum": ("axis", "dtype", "include_initial"),
+    "cumulative_prod": ("axis", "dtype", "include_initial"),
 }
+_CUMULATIVE_OPERATIONS = frozenset({"cumsum", "cumprod", "cumulative_sum", "cumulative_prod"})
 
 
 def _reduction_backend(name, receiver, *, method, prefer_blosc):
@@ -536,7 +545,7 @@ def _reduction_backend(name, receiver, *, method, prefer_blosc):
     if name not in _NUMPY_REDUCTION_POSITIONAL:
         return None
     if not method:
-        if not prefer_blosc:
+        if not prefer_blosc or name in {"cumsum", "cumprod"}:
             return "numpy"
         return (
             "blosc_numpy_function"
@@ -565,19 +574,7 @@ def _bind_reduction(name, positional, keywords, backend, *, literal=False):
     """Bind only reviewed layouts; do not reflect arbitrary callable signatures."""
     if backend is None:
         return None
-    allowed = _REDUCTION_KEYWORDS[name]
-    if backend == "numpy":
-        layout = _NUMPY_REDUCTION_POSITIONAL[name]
-    else:
-        layout = _BLOSC_REDUCTION_POSITIONAL[name]
-        if backend != "blosc_numpy_function":
-            allowed -= {"initial", "correction"}
-            if name in {"any", "all"}:
-                allowed -= {"where"}
-        if backend == "blosc_lazy" and name in {"std", "var"}:
-            layout = ("axis", "dtype", "keepdims", "ddof")
-        if backend in {"blosc_function", "blosc_numpy_function", "blosc_lazy"} and "where" in allowed:
-            layout += ("where",)
+    layout, allowed = _reduction_layout(name, backend)
     if len(positional) - 1 > len(layout) or not set(keywords) <= allowed:
         _reject(f"unsupported {backend} signature for {name!r}")
     bound = dict(keywords)
@@ -591,6 +588,29 @@ def _bind_reduction(name, positional, keywords, backend, *, literal=False):
     if not literal and axis is not _UNKNOWN_ARGUMENT and axis is not None:
         _reduction_axes(getattr(positional[0], "shape", ()), axis)
     return bound
+
+
+def _reduction_layout(name, backend):
+    allowed = _REDUCTION_KEYWORDS[name]
+    if backend == "numpy":
+        return _NUMPY_REDUCTION_POSITIONAL[name], allowed
+    if name not in _BLOSC_REDUCTION_POSITIONAL:
+        _reject(f"no approved {backend} method for {name!r}")
+    layout = _BLOSC_REDUCTION_POSITIONAL[name]
+    if name in _CUMULATIVE_OPERATIONS:
+        allowed -= {"out"}
+        if backend == "blosc_lazy":
+            layout = ("axis", "include_initial")
+        return layout, allowed
+    if backend != "blosc_numpy_function":
+        allowed -= {"initial", "correction"}
+        if name in {"any", "all"}:
+            allowed -= {"where"}
+    if backend == "blosc_lazy" and name in {"std", "var"}:
+        layout = ("axis", "dtype", "keepdims", "ddof")
+    if backend in {"blosc_function", "blosc_numpy_function", "blosc_lazy"} and "where" in allowed:
+        layout += ("where",)
+    return layout, allowed
 
 
 def _reduction_axes(shape, axis):
@@ -615,7 +635,7 @@ def _resolved_metadata_argument(node, operands):
     return value
 
 
-def _root_reduction_metadata(name, receiver, bound, operands):
+def _root_reduction_metadata(name, receiver, bound, operands, backend):
     """Data-free shape rules and a narrow, shared dtype-rule subset."""
     if not hasattr(receiver, "dtype") or not hasattr(receiver, "shape"):
         return None, None
@@ -623,6 +643,10 @@ def _root_reduction_metadata(name, receiver, bound, operands):
     for key, value in arguments.items():
         _validate_argument(name, key, value)
     input_shape = tuple(getattr(receiver, "shape", ()))
+    if name in _CUMULATIVE_OPERATIONS:
+        return _cumulative_shape(name, input_shape, arguments), _root_reduction_dtype(
+            name, receiver, arguments, backend
+        )
     axis, keepdims = arguments.get("axis"), arguments.get("keepdims", False)
     shape = None
     if axis is not _UNKNOWN_ARGUMENT and keepdims is not _UNKNOWN_ARGUMENT:
@@ -633,7 +657,26 @@ def _root_reduction_metadata(name, receiver, bound, operands):
                 if keepdims
                 else tuple(size for index, size in enumerate(input_shape) if index not in normalized)
             )
-    return shape, _root_reduction_dtype(name, receiver, arguments)
+    return shape, _root_reduction_dtype(name, receiver, arguments, backend)
+
+
+def _cumulative_shape(name, shape, arguments):
+    axis = arguments.get("axis")
+    include_initial = arguments.get("include_initial", False)
+    if axis is _UNKNOWN_ARGUMENT or include_initial is _UNKNOWN_ARGUMENT:
+        return None
+    if name in {"cumsum", "cumprod"} and axis is None:
+        return (math.prod(shape),)
+    if axis is None:
+        if len(shape) != 1:
+            raise ValueError(f"axis must be specified for {name} of non-1D array")
+        axis = 0
+    normalized = _reduction_axes(shape, axis)
+    if normalized is None:
+        return None
+    return tuple(
+        size + int(include_initial) if index in normalized else size for index, size in enumerate(shape)
+    )
 
 
 def _statistical_reduction_dtype(input_dtype, requested, numpy_receiver):
@@ -651,7 +694,7 @@ def _statistical_reduction_dtype(input_dtype, requested, numpy_receiver):
     return np.dtype("float64") if accumulation.kind in "biu" else accumulation
 
 
-def _root_reduction_dtype(name, receiver, arguments):
+def _root_reduction_dtype(name, receiver, arguments, backend):
     dtype = None
     requested, output = arguments.get("dtype"), arguments.get("out")
     if output is _UNKNOWN_ARGUMENT or requested is _UNKNOWN_ARGUMENT:
@@ -659,7 +702,12 @@ def _root_reduction_dtype(name, receiver, arguments):
     input_dtype = np.dtype(getattr(receiver, "dtype", type(receiver)))
     if input_dtype.kind not in "biufc":
         return None
-    numpy_receiver = type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS
+    numpy_receiver = backend == "numpy" or (type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS)
+    if name in _CUMULATIVE_OPERATIONS and backend != "numpy" and requested is not None:
+        # The current Blosc2 cumulative implementation does not consistently
+        # apply dtype overrides. Preserve its inference rather than claiming
+        # the requested accumulator dtype is the output dtype.
+        return None
     if output is not None:
         dtype = np.dtype(output.dtype)
     elif not numpy_receiver and input_dtype == np.dtype("float16") and requested is None:
@@ -681,7 +729,7 @@ def _root_reduction_dtype(name, receiver, arguments):
                 dtype = np.dtype(bool)
             elif name in {"argmin", "argmax"}:
                 dtype = np.dtype(np.intp)
-            elif name in {"sum", "prod"} and input_dtype.kind in "biu":
+            elif name in {"sum", "prod"} | _CUMULATIVE_OPERATIONS and input_dtype.kind in "biu":
                 platform_dtype = np.dtype(np.uintp if input_dtype.kind == "u" else np.intp)
                 dtype = (
                     platform_dtype
@@ -730,7 +778,7 @@ def _validate_argument(name, key, value, node=None):
             "cumulative_prod",
         }:
             valid = all(_axis_integer(item) for item in value) and len(set(value)) == len(value)
-    elif key in {"keepdims", "copy", "subok"}:
+    elif key in {"keepdims", "copy", "subok", "include_initial"}:
         valid = type(value) in (bool, np.bool_)
     elif key == "out":
         import blosc2
@@ -772,8 +820,6 @@ def _check_call_contract(name, positional, keywords, node=None, *, literal=False
         "var",
         "cumsum",
         "cumprod",
-        "cumulative_sum",
-        "cumulative_prod",
     }:
         positions += ((2, "dtype"),)
     for index, key in positions:
@@ -844,7 +890,7 @@ class ExpressionGraph:
         bound = _bind_reduction(name, positional, dict(keywords), backend, literal=True)
         if bound is None:
             return None
-        shape, dtype = _root_reduction_metadata(name, receiver, bound, operands)
+        shape, dtype = _root_reduction_metadata(name, receiver, bound, operands, backend)
         if len(positional) == 1:
             return None, shape, dtype
         tree = ast.parse(self.text, mode="eval")

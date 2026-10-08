@@ -590,3 +590,108 @@ def test_blosc_qualified_reduction_preserves_blosc_position_layout():
     expr = blosc2.lazyexpr("blosc2.sum(x, 0, None, True)", {"x": data})
     assert expr.shape == (1, 3)
     np.testing.assert_allclose(expr[:], data.sum(axis=0, keepdims=True))
+
+
+@pytest.mark.parametrize("name", ["cumulative_sum", "cumulative_prod"])
+@pytest.mark.parametrize("backend", ["numpy", "blosc_function", "blosc_array", "blosc_lazy"])
+@pytest.mark.parametrize("include_initial", [False, True])
+@pytest.mark.parametrize("dtype", ["int8", "uint8", "float32", "float64"])
+def test_cumulative_backend_layout_and_metadata(name, backend, include_initial, dtype):
+    data = (np.arange(6).reshape(2, 3) % 3 + 1).astype(dtype)
+    x = data if backend == "numpy" else blosc2.asarray(data)
+    if backend == "blosc_lazy":
+        x = blosc2.LazyExpr((x, None, None))
+    text = {
+        "numpy": f"np.{name}(x, axis=-1, include_initial={include_initial})",
+        "blosc_function": f"blosc2.{name}(x, -1, None, {include_initial})",
+        "blosc_array": f"x.{name}(-1, None, {include_initial})",
+        "blosc_lazy": f"x.{name}(-1, {include_initial})",
+    }[backend]
+    expr = blosc2.lazyexpr(text, {"x": x})
+    expected = getattr(np, name)(data, axis=-1, include_initial=include_initial)
+    assert expr.shape == expected.shape
+    assert expr.dtype == expected.dtype
+    np.testing.assert_allclose(expr[:], expected, rtol=1e-6)
+
+
+@pytest.mark.parametrize("name", ["cumsum", "cumprod"])
+@pytest.mark.parametrize("axis", [None, 0, -1])
+def test_numpy_cumulative_legacy_flattening_and_out(name, axis):
+    data = np.arange(1, 7, dtype="int8").reshape(2, 3)
+    expected = getattr(data, name)(axis=axis, dtype="float64")
+    expr = blosc2.lazyexpr(f"x.{name}({axis}, 'float64')", {"x": data})
+    assert expr.shape == expected.shape
+    assert expr.dtype == expected.dtype
+    np.testing.assert_allclose(expr[:], expected)
+    out = np.empty(expected.shape)
+    result = parse_expression(f"x.{name}({axis}, 'float64', out)").evaluate({"x": data, "out": out})
+    assert result is out
+    np.testing.assert_allclose(out, expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "np.cumulative_sum(x, 0)",
+        "x.cumulative_sum(0, True, include_initial=False)",
+        "x.cumulative_sum(axis=0, include_initial=1)",
+        "x.cumulative_sum(axis=(0,))",
+        "x.cumulative_sum(axis=2)",
+    ],
+)
+def test_cumulative_invalid_contract_rejects_before_dispatch(text, monkeypatch):
+    data = blosc2.ones((2, 3))
+    x = blosc2.LazyExpr((data, None, None))
+    monkeypatch.setattr(blosc2.LazyExpr, "cumulative_sum", lambda *a, **k: pytest.fail("Invalid dispatch"))
+    with pytest.raises((blosc2.UnsafeDeserializationError, ValueError)):
+        parse_expression(text).evaluate({"x": x})
+
+
+@pytest.mark.parametrize("name", ["cumulative_sum", "cumulative_prod"])
+def test_cumulative_axis_none_requires_one_dimension(name):
+    with pytest.raises(ValueError, match="axis must be specified"):
+        blosc2.lazyexpr(f"x.{name}()", {"x": blosc2.ones((2, 3))})
+    data = np.arange(1, 4)
+    expr = blosc2.lazyexpr(f"x.{name}(include_initial=True)", {"x": blosc2.asarray(data)})
+    assert expr.shape == (4,)
+    np.testing.assert_array_equal(expr[:], getattr(np, name)(data, include_initial=True))
+
+
+def test_cumulative_root_metadata_is_data_free(monkeypatch):
+    x = blosc2.ones((2, 3))
+    monkeypatch.setattr(blosc2.NDArray, "cumulative_sum", lambda *a, **k: pytest.fail("Dummy execution"))
+    expr = blosc2.lazyexpr("x.cumulative_sum(1, None, True)", {"x": x})
+    assert expr.shape == (2, 4)
+    assert expr.dtype == np.dtype("float64")
+
+
+def test_cumulative_persistence_preserves_include_initial(tmp_path):
+    data = np.arange(1, 7, dtype="int8").reshape(2, 3)
+    x = blosc2.asarray(data, urlpath=tmp_path / "input.b2nd", mode="w")
+    expr = blosc2.lazyexpr("x.cumulative_sum(1, None, True)", {"x": x})
+    expr.save(tmp_path / "expr.b2nd")
+    opened = blosc2.open(tmp_path / "expr.b2nd")
+    expected = np.cumulative_sum(data, axis=1, include_initial=True)
+    assert opened.shape == expected.shape
+    assert opened.dtype == expected.dtype
+    np.testing.assert_array_equal(opened[:], expected)
+
+
+@pytest.mark.parametrize("backend", ["array", "lazy"])
+def test_cumulative_dtype_override_preserves_current_backend_behavior(backend):
+    x = blosc2.asarray(np.arange(6, dtype="int8").reshape(2, 3))
+    if backend == "lazy":
+        x = blosc2.LazyExpr((x, None, None))
+    expected = np.asarray(x.cumulative_sum(axis=1, dtype="float32"))
+    expr = blosc2.lazyexpr("x.cumulative_sum(axis=1, dtype='float32')", {"x": x})
+    assert expr.dtype == expected.dtype
+    np.testing.assert_array_equal(expr[:], expected)
+
+
+def test_cumulative_shape_refreshes_after_operand_rebinding():
+    expr = blosc2.lazyexpr("x.cumulative_sum(1, None, True)", {"x": blosc2.ones((2, 3))})
+    assert expr.shape == (2, 4)
+    key = next(iter(expr.operands))
+    expr.operands[key] = blosc2.ones((3, 5))
+    assert expr.shape == (3, 6)
+    assert expr[:].shape == (3, 6)
