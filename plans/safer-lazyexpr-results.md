@@ -451,3 +451,41 @@ Backend-changing intermediate types, remaining casts, persisted operand-type
 semantics, table recipe/cache consistency, Parquet owner/dependency lifetime,
 remote refresh behavior and bounded-memory execution still need review. No new
 performance or cross-platform gate is claimed.
+
+## Follow-up: field-reference persistence and Parquet lifetime admission
+
+Persistence review found that NDField operands were previously written as references
+to their entire structured parent, losing the field selector. The experimental
+operand recipe now has an explicit `ndfield` version-1 record containing the field
+name and the ordinary parent reference. Disk, frame and structured reconstruction
+restore an NDField rather than an NDArray. Relative parent references support
+relocation and relative source/carrier paths; missing parents retain the standard
+MissingOperands diagnostic. Invalid selectors reject before resolving their parent,
+reference decoding is bounded, and nested field parents reject.
+
+This is a new experimental operand-recipe spelling: older readers will not know
+it. It does not migrate historical files that already lost their selector, alter
+the parent reference's safe/full policy, or bypass legacy proxy loading gates.
+NumPy-only operand persistence is already unsupported and rejects before writing
+the destination; there was no silent NumPy-to-Blosc2 promotion conversion to fix.
+
+Parquet column admission now verifies concrete storage/discovery/cache ownership,
+original storage identity, generation/closed-state checks and schema metadata
+agreement before reads. Scalar Parquet-backed public Column views are also admitted
+through their checked RemoteCTable storage dependency. Rebound storage, hostile
+owners/caches and closed or stale handles reject before row-group reads. Variable-
+length and ndarray-row columns explicitly reject until their numerical expression
+adapter and row-shape semantics are reviewed; they are not treated as scalar rows.
+
+Verification: **11,735 passed, 55 skipped**. Added field round trips under safe and
+full permission, receiver/dtype preservation, relative-path relocation, malformed
+selectors, missing parents and legacy parent-policy tests. Parquet tests cover
+data-free admission of raw/public scalar columns, closed/stale/changed metadata,
+hostile ownership, equal-metadata storage rebinding and unsupported ndarray rows.
+Ruff lint/format and whitespace checks passed.
+
+Remaining gates include intermediate/mixed-backend type rules, other casts and
+wrapper persistence, table recipe/cache synchronization, remaining remote adapter
+closures, refresh races and allocation/streaming proofs. This slice does not certify
+Parquet cache contents, resource bounds, external-reference authorization or
+concurrent snapshots. No new performance or cross-platform gate is claimed.

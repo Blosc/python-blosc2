@@ -46,6 +46,7 @@ from blosc2.info import InfoReporter
 
 from .b2objects import (
     encode_b2object_payload,
+    encode_operand_reference,
     make_b2object_carrier,
     read_b2object_user_vlmeta,
     write_b2object_payload,
@@ -4916,6 +4917,9 @@ class LazyExpr(LazyArray):
         carrier_urlpath = kwargs.get("urlpath")
         carrier_parent = Path(carrier_urlpath).parent if carrier_urlpath is not None else None
         for key, value in operands_.items():
+            if type(value) is blosc2.NDField:
+                payload["operands"][key] = encode_operand_reference(value, base_path=carrier_parent)
+                continue
             if isinstance(value, blosc2.C2Array):
                 payload["operands"][key] = encode_b2object_payload(value)
                 continue

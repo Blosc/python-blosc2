@@ -716,6 +716,7 @@ class _ParquetColumn:
 
     def __init__(self, storage, name, mask=False):
         self.storage = storage
+        self._source_storage = storage
         self.name = name
         self.mask = mask
         self.shape = (storage.length,)

@@ -28,6 +28,88 @@ def test_windows_cache_directory_uses_source_basename():
     assert cache_directory_name(r"C:\data\source.parquet", b"cache").startswith("source.parquet--")
 
 
+@pytest.mark.parametrize("view", ["raw", "public"])
+def test_safe_parquet_operand_checks_metadata_without_row_group_reads(tmp_path, monkeypatch, view):
+    path = tmp_path / "numeric.parquet"
+    pq.write_table(pa.table({"x": [1.0, 2.0, 3.0]}), path, row_group_size=1)
+    with blosc2.open(path, lazy=True) as remote:
+        column = remote._cols["x"] if view == "raw" else remote["x"]
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                remote_parquet._ParquetColumn,
+                "__getitem__",
+                lambda *a, **k: pytest.fail("Read during admission"),
+            )
+            expr = blosc2.lazyexpr("sqrt(x)", {"x": column}, evaluation="safe")
+            assert expr.shape == (3,)
+            assert expr.dtype == np.dtype("float64")
+        np.testing.assert_allclose(expr[:], np.sqrt([1.0, 2.0, 3.0]))
+
+
+@pytest.mark.parametrize("state", ["closed", "stale", "metadata"])
+def test_safe_parquet_operand_rejects_invalid_lifetime_before_reads(tmp_path, monkeypatch, state):
+    path = tmp_path / "numeric.parquet"
+    pq.write_table(pa.table({"x": [1.0, 2.0, 3.0]}), path)
+    with blosc2.open(path, lazy=True) as remote:
+        column = remote._cols["x"]
+        expr = blosc2.lazyexpr("sqrt(x)", {"x": column}, evaluation="safe")
+        monkeypatch.setattr(
+            remote_parquet._ParquetColumn, "__getitem__", lambda *a, **k: pytest.fail("Read invalid column")
+        )
+        if state == "closed":
+            column.storage.close()
+        elif state == "stale":
+            column.storage._generation += "-stale"
+        else:
+            column.shape = (4,)
+        with pytest.raises((RuntimeError, ValueError)):
+            expr.compute()
+
+
+@pytest.mark.parametrize("dependency", ["storage", "owner", "cache"])
+def test_safe_parquet_operand_rejects_hostile_dependencies_before_hooks(tmp_path, monkeypatch, dependency):
+    path = tmp_path / "numeric.parquet"
+    pq.write_table(pa.table({"x": [1.0, 2.0, 3.0]}), path)
+    with blosc2.open(path, lazy=True) as remote:
+        column = remote._cols["x"]
+        expr = blosc2.lazyexpr("sqrt(x)", {"x": column}, evaluation="safe")
+
+        class HostileDependency:
+            @property
+            def generation(self):
+                pytest.fail("Read unadmitted owner metadata")
+
+        with monkeypatch.context() as patch:
+            if dependency == "storage":
+                patch.setattr(column, "storage", HostileDependency())
+            elif dependency == "owner":
+                patch.setattr(column.storage, "_owner", HostileDependency())
+            else:
+                patch.setattr(column.storage._owner, "parquet_cache", HostileDependency())
+            with pytest.raises(blosc2.UnsafeDeserializationError):
+                expr.compute()
+
+
+def test_safe_parquet_operand_rejects_same_metadata_storage_rebinding(tmp_path, monkeypatch):
+    first, second = tmp_path / "first.parquet", tmp_path / "second.parquet"
+    pq.write_table(pa.table({"x": [1.0, 2.0, 3.0]}), first)
+    pq.write_table(pa.table({"x": [4.0, 5.0, 6.0]}), second)
+    with blosc2.open(first, lazy=True) as left, blosc2.open(second, lazy=True) as right:
+        column = left._cols["x"]
+        expr = blosc2.lazyexpr("sqrt(x)", {"x": column}, evaluation="safe")
+        monkeypatch.setattr(column, "storage", right._cols["x"].storage)
+        with pytest.raises(ValueError, match="storage was rebound"):
+            expr.compute()
+
+
+def test_safe_parquet_ndarray_operand_rejects_unreviewed_row_shape(tmp_path):
+    path = tmp_path / "cells.parquet"
+    pq.write_table(pa.table({"x": pa.array([[1, 2], [3, 4]], type=pa.list_(pa.int32(), 2))}), path)
+    with blosc2.open(path, lazy=True) as remote:
+        with pytest.raises(blosc2.UnsafeDeserializationError, match="registered expression adapter"):
+            blosc2.lazyexpr("sqrt(x)", {"x": remote._cols["x"]}, evaluation="safe")
+
+
 def test_source_url_preserves_non_sensitive_query():
     from blosc2.remote_store import public_source_url
 

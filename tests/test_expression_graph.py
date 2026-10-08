@@ -1108,3 +1108,107 @@ def test_remote_field_refresh_preserves_explicit_logical_dtype():
     np.testing.assert_array_equal(expr[:], data["x"] + 1)
     np.testing.assert_array_equal(expr_override[:], data["x"].astype("float64") + 1)
     np.testing.assert_array_equal(expr_equal_override[:], data["x"].astype("int32") + 1)
+
+
+@pytest.mark.parametrize("route", ["disk", "frame", "structured"])
+@pytest.mark.parametrize("permission", ["safe", "full"])
+def test_field_persistence_preserves_receiver_and_division_dtype(tmp_path, route, permission):
+    records = np.zeros(6, dtype=[("x", "int32"), ("y", "int32")])
+    records["x"] = np.arange(6) + 1
+    records["y"] = 2
+    parent = blosc2.asarray(records, urlpath=tmp_path / "records.b2nd", mode="w")
+    expr = blosc2.lazyexpr("x / y", {"x": blosc2.NDField(parent, "x"), "y": blosc2.NDField(parent, "y")})
+    expected = expr[:]
+    if route == "disk":
+        expr.save(tmp_path / "expr.b2nd")
+        reopened = blosc2.open(tmp_path / "expr.b2nd", deserialize=permission)
+    elif route == "frame":
+        reopened = blosc2.from_cframe(expr.to_cframe(), deserialize=permission)
+    else:
+        module = importlib.import_module("blosc2.b2objects")
+        reopened = module.decode_b2object_payload(
+            module.encode_b2object_payload(expr), deserialize=permission
+        )
+    assert reopened.dtype == expr.dtype == np.dtype("float32")
+    assert all(type(value) is blosc2.NDField for value in reopened.operands.values())
+    np.testing.assert_array_equal(reopened[:], expected)
+
+
+def test_field_persistence_uses_relocated_relative_parent_reference(tmp_path):
+    data = np.zeros(4, dtype=[("x", "float64")])
+    data["x"] = np.arange(4)
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    parent = blosc2.asarray(data, urlpath=source / "records.b2nd", mode="w")
+    blosc2.lazyexpr("x + 1", {"x": blosc2.NDField(parent, "x")}).save(source / "expr.b2nd")
+    source.rename(destination)
+    reopened = blosc2.open(destination / "expr.b2nd")
+    np.testing.assert_array_equal(reopened[:], data["x"] + 1)
+
+
+def test_field_persistence_accepts_relative_source_and_carrier_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "data"
+    directory.mkdir()
+    data = np.zeros(4, dtype=[("x", "float64")])
+    data["x"] = np.arange(4)
+    parent = blosc2.asarray(data, urlpath="data/records.b2nd", mode="w")
+    blosc2.lazyexpr("x + 1", {"x": blosc2.NDField(parent, "x")}).save("data/expr.b2nd")
+    reopened = blosc2.open("data/expr.b2nd")
+    np.testing.assert_array_equal(reopened[:], data["x"] + 1)
+
+
+def test_invalid_field_selector_rejects_before_reference_resolution(monkeypatch):
+    module = importlib.import_module("blosc2.b2objects")
+    monkeypatch.setattr(blosc2.Ref, "open", lambda *a, **k: pytest.fail("Resolved invalid field recipe"))
+    payload = {
+        "kind": "ndfield",
+        "version": 1,
+        "field": 1,
+        "parent": {"kind": "urlpath", "version": 1, "urlpath": "unused"},
+    }
+    with pytest.raises(ValueError, match="selector"):
+        module.decode_operand_reference(payload)
+
+
+def test_missing_field_parent_keeps_missing_operands_diagnostic(tmp_path):
+    module = importlib.import_module("blosc2.b2objects")
+    payload = {
+        "kind": "lazyexpr",
+        "version": 1,
+        "expression": "x + 1",
+        "operands": {
+            "x": {
+                "kind": "ndfield",
+                "version": 1,
+                "field": "x",
+                "parent": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "missing.b2nd")},
+            }
+        },
+    }
+    with pytest.raises(blosc2.exceptions.MissingOperands):
+        module.decode_b2object_payload(payload)
+
+
+def test_numpy_operand_save_rejects_before_destination_write(tmp_path):
+    path = tmp_path / "existing"
+    path.write_bytes(b"unchanged")
+    x = np.arange(1, 7, dtype="int32")
+    expr = blosc2.lazyexpr("x / y", {"x": x, "y": x})
+    with pytest.raises(ValueError, match="persistent Blosc2"):
+        expr.save(path)
+    assert path.read_bytes() == b"unchanged"
+
+
+def test_field_parent_reference_keeps_legacy_proxy_loading_gate(tmp_path, monkeypatch):
+    records = np.zeros(4, dtype=[("x", "float64")])
+    parent = blosc2.asarray(records, urlpath=tmp_path / "records.b2nd", mode="w", meta={"proxy-source": {}})
+    expr = blosc2.lazyexpr("x + 1", {"x": blosc2.NDField(parent, "x")})
+    expr.save(tmp_path / "expr.b2nd")
+    module = importlib.import_module("blosc2.schunk")
+    monkeypatch.setattr(
+        module, "_reconstruct_legacy_proxy", lambda *a, **k: pytest.fail("Reconstructed legacy proxy")
+    )
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="proxy"):
+        blosc2.open(tmp_path / "expr.b2nd")

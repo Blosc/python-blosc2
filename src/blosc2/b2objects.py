@@ -71,15 +71,42 @@ def read_b2object_user_vlmeta(obj) -> dict[str, Any]:
     return schunk.vlmeta[_B2OBJECT_USER_VLMETA_KEY]
 
 
-def encode_operand_reference(obj):
+def encode_operand_reference(obj, *, base_path=None):
     from blosc2.portable_lazy import PortableLazyArray
 
     if isinstance(obj, PortableLazyArray | blosc2.LazyExpr | blosc2.LazyUDF):
         return encode_b2object_payload(obj)
+    if type(obj) is blosc2.NDField:
+        parent = blosc2.Ref.from_object(obj.ndarr).to_dict()
+        if parent["kind"] == "urlpath" and base_path is not None:
+            path = pathlib.Path(parent["urlpath"]).absolute()
+            try:
+                parent["urlpath"] = path.relative_to(pathlib.Path(base_path).absolute()).as_posix()
+            except ValueError:
+                parent["urlpath"] = path.as_posix()
+        return {
+            "kind": "ndfield",
+            "version": 1,
+            "field": obj.field,
+            "parent": parent,
+        }
     return blosc2.Ref.from_object(obj).to_dict()
 
 
+@bounded_recipe
 def decode_operand_reference(payload, *, base_path=None, deserialize="safe"):
+    if payload.get("kind") == "ndfield":
+        if payload.get("version") != 1 or type(payload.get("field")) is not str:
+            raise ValueError("Invalid persisted NDField selector")
+        parent_payload = payload.get("parent")
+        if type(parent_payload) is not dict:
+            raise ValueError("Persisted NDField requires a parent reference")
+        if parent_payload.get("kind") == "ndfield":
+            raise ValueError("Persisted NDField parent cannot be another field")
+        parent = decode_operand_reference(parent_payload, base_path=base_path, deserialize=deserialize)
+        if type(parent) is not blosc2.NDArray:
+            raise ValueError("Persisted NDField parent must resolve to an NDArray")
+        return blosc2.NDField(parent, payload["field"])
     if (
         payload.get("kind") in {"urlpath", "dictstore_key"}
         and base_path is not None
@@ -189,7 +216,8 @@ def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="saf
             else:
                 operands[key] = decode_operand_reference(value, base_path=base_path, deserialize=deserialize)
         except FileNotFoundError:
-            ref = blosc2.Ref.from_dict(value)
+            reference = value["parent"] if value.get("kind") == "ndfield" else value
+            ref = blosc2.Ref.from_dict(reference)
             if ref.kind in {"urlpath", "dictstore_key"}:
                 missing_ops[key] = pathlib.Path(ref.urlpath)
             else:

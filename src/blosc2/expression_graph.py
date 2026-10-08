@@ -1405,11 +1405,18 @@ def validate_operand(value):  # noqa: C901
         elif type(value) is _RemoteHDF5Field:
             validate_operand(value.records)
             _synchronize_remote_field(value)
+        elif type(value) is _ParquetColumn:
+            _validate_parquet_column(value)
         elif type(value) is PortableLazyArray:
             validate_operands(value.inputs)
         elif type(value) is Column:
             table = value._table_ref
-            if type(table) is not blosc2.CTable:
+            if type(table) is blosc2.RemoteCTable:
+                storage = value._remote_storage_ref
+                _validate_parquet_storage(storage)
+                if storage is not table._remote_read_storage():
+                    raise ValueError("Remote column storage no longer matches its table")
+            elif type(table) is not blosc2.CTable:
                 _reject("unapproved column owner")
             validate_operand(table._valid_rows)
             validate_operand(value._mask)
@@ -1430,6 +1437,41 @@ def validate_operand(value):  # noqa: C901
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _validate_parquet_column(value):
+    from blosc2.schema import NDArraySpec
+
+    storage = value.storage
+    _validate_parquet_storage(storage)
+    if storage is not value._source_storage:
+        raise ValueError("Parquet column storage was rebound; open a new column")
+    if type(value.name) is not str or value.name not in storage.schema.columns_by_name:
+        raise ValueError("Parquet column no longer exists in its schema")
+    column = storage.schema.columns_by_name[value.name]
+    if type(value.mask) is not bool:
+        _reject("unapproved Parquet mask flag")
+    if not value.mask and (column.dtype is None or isinstance(column.spec, NDArraySpec)):
+        _reject("Parquet variable-length and ndarray columns need a registered expression adapter")
+    dtype = np.dtype(bool) if value.mask else column.dtype
+    if tuple(value.shape) != (storage.length,) or value.dtype != dtype:
+        raise ValueError("Parquet column metadata no longer matches its storage")
+
+
+def _validate_parquet_storage(storage):
+    from blosc2.remote_parquet import ParquetCache, ParquetTableStorage
+    from blosc2.remote_store import RemoteDiscovery
+
+    if type(storage) is not ParquetTableStorage:
+        _reject("unapproved Parquet column storage")
+    owner = storage._owner
+    if type(owner) is not RemoteDiscovery:
+        _reject("unapproved Parquet storage owner")
+    if owner.parquet_cache is not None and (
+        type(owner.parquet_cache) is not ParquetCache or owner.parquet_cache.owner is not owner
+    ):
+        _reject("unapproved Parquet cache owner")
+    storage._check_open()
 
 
 def _synchronize_remote_field(value):
