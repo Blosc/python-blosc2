@@ -149,3 +149,58 @@ Peak RSS remains variable; no claim of a memory improvement is justified.
 The repeated >10% regressions are an outstanding performance gate, not excused by
 the geometric mean. Further profiling should separate recursive closure validation,
 graph/dummy inference and scheduler reconstruction before adding another backend.
+
+## Profiling checkpoint (after `5b582dfb`)
+
+The phase-1 checkpoint was committed as `5b582dfb`. The subsequent profiling work
+does not alter the runtime or weaken any validation.
+
+The benchmark now supports `--families`, independent `--rounds` with alternating
+baseline/safe process order, and worker-only `--profile-output`. Profiling is
+enabled only around repeated evaluation, excluding construction, opening, output
+checking and imports. Profiled timing results must not be used as uninstrumented
+performance evidence.
+
+### Isolated repeated-execution profiles
+
+101 evaluations of each million-element workload, historical source control with
+matching extensions:
+
+| Profile | Total profiled seconds | Native reduction seconds | Compressed-output update seconds | Operand validation cumulative seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Centering, safe | 0.699 | 0.263 | 0.263 | 0.010 |
+| Centering, historical | 0.775 | 0.300 | 0.316 | n/a |
+| Persisted expression, safe | 0.489 | n/a | 0.387 | 0.004 |
+| Persisted expression, historical | 0.433 | n/a | 0.339 | n/a |
+
+These profiles do not explain the previous large ratios as validation overhead:
+native work dominates, and its timings vary between processes. Cumulative decorator
+and dispatcher times include numerical execution; they are not boundary overhead.
+The centering profile contains exactly 101 whole-array reductions for 101 repeated
+evaluations, in both implementations. A new multi-chunk regression also asserts
+one reduction per evaluation and recomputation after operand data changes.
+
+### Longer, uninstrumented repeated-process measurements
+
+Five sequential rounds, alternating process order, 50 repetitions per worker,
+float64, 1M elements, the same historical control:
+
+| Family | Median of per-round execution ratios | Per-round range |
+| --- | ---: | ---: |
+| Centering | 0.955 | 0.859–1.000 |
+| Persisted expression execution | 0.948 | 0.811–1.007 |
+
+The earlier >20% regressions did not reproduce under this longer protocol. This
+does not prove an improvement: native timing variation, allocator/compression state
+and process order remain confounders. Construction is still slower: round ratios
+are 1.018–1.153 for centering and 1.176–1.273 for the persisted workload. The
+small-expression overhead and RSS question remain open.
+
+Conclusion: there is not enough evidence to justify a more complex validation
+cache or a new engine as a performance fix. Retain the boundary, use the improved
+measurement protocol for future changes, and prioritize precise operation/metadata
+contracts and the remaining adapter/lifetime audit. No Menudet lowering yet.
+
+Profiling follow-up verification: **11,339 passed, 55 skipped**; Ruff lint/format
+and whitespace checks passed. Profiling artifacts remain in the approved temporary
+directory; the runtime itself is unchanged from the committed checkpoint.

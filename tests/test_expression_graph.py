@@ -242,3 +242,24 @@ def test_proxy_wrapper_does_not_hide_custom_source():
     wrapper = blosc2.SimpleProxy(Source())
     with pytest.raises(blosc2.UnsafeDeserializationError, match="Source"):
         blosc2.lazyexpr("sqrt(x)", {"x": wrapper})
+
+
+def test_centering_reduces_once_per_evaluation_across_chunks(monkeypatch):
+    module = importlib.import_module("blosc2.lazyexpr")
+    data = np.arange(1000.0)
+    x = blosc2.asarray(data, chunks=(100,), blocks=(20,))
+    expr = blosc2.lazyexpr("x - mean(x)", {"x": x})
+    original = module.reduce_slices
+    calls = []
+
+    def counted(expression, operands, reduce_args, *args, **kwargs):
+        calls.append(reduce_args["op_str"])
+        return original(expression, operands, reduce_args, *args, **kwargs)
+
+    monkeypatch.setattr(module, "reduce_slices", counted)
+    np.testing.assert_allclose(expr[:], data - data.mean())
+    assert calls == ["sum"]
+    calls.clear()
+    x[:] = data * 2
+    np.testing.assert_allclose(expr[:], 2 * (data - data.mean()))
+    assert calls == ["sum"]
