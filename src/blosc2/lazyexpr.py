@@ -4524,14 +4524,23 @@ class LazyExpr(LazyArray):
         _globals |= dtype_symbols
         evalcons = f"{constructor}({args})"
 
+        # Constructor results that read operands are values, not immutable
+        # plans. Rebuild them on each safe evaluation, even if metadata did not
+        # change. Constant-only constructors may keep their existing cache.
+        cacheable = evaluation_mode() == "full" or not parse_expression(evalcons).names
+
         # Internal constructors will be cached for avoiding multiple computations
         if not hasattr(self, "cons_cache"):
             self.cons_cache = {}
-        if evalcons in self.cons_cache:
-            return self.cons_cache[evalcons], expression[idx:idx2]
+        if cacheable and evalcons in self.cons_cache:
+            value = self.cons_cache[evalcons]
+            if evaluation_mode() == "safe":
+                validate_operands({"constructor": value})
+            return value, expression[idx:idx2]
         _globals["blosc2"] = blosc2
         value = evaluate_expression(evalcons, _globals, operands)
-        self.cons_cache[evalcons] = value
+        if cacheable:
+            self.cons_cache[evalcons] = value
 
         return value, expression[idx:idx2]
 

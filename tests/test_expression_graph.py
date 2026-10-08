@@ -1212,3 +1212,102 @@ def test_field_parent_reference_keeps_legacy_proxy_loading_gate(tmp_path, monkey
     )
     with pytest.raises(blosc2.UnsafeDeserializationError, match="proxy"):
         blosc2.open(tmp_path / "expr.b2nd")
+
+
+@pytest.fixture(params=[blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK])
+def remote_graph_operand(tmp_path, request):
+    fsspec = pytest.importorskip("fsspec")
+    data = np.arange(1, 13, dtype="float64")
+    url = f"memory:///{tmp_path.name}/array.b2nd"
+    with fsspec.open(url, "wb") as handle:
+        handle.write(blosc2.asarray(data).to_cframe())
+    options = {"cache_path": tmp_path / "cache.b2nd"} if request.param is blosc2.CachePolicy.DISK else {}
+    remote = blosc2.RemoteArray(url, cache_policy=request.param, **options)
+    yield remote, data
+    remote.close()
+
+
+def test_remote_array_admission_does_not_fetch_data(remote_graph_operand, monkeypatch):
+    remote, data = remote_graph_operand
+    with monkeypatch.context() as patch:
+        patch.setattr(type(remote.src), "get_chunk", lambda *a, **k: pytest.fail("Read during admission"))
+        expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+        assert expr.shape == data.shape
+        assert expr.dtype == data.dtype
+    np.testing.assert_allclose(expr[:], np.sqrt(data))
+    np.testing.assert_allclose(expr[:], np.sqrt(data))
+
+
+@pytest.mark.parametrize("dependency", ["source", "owner", "proxy", "carrier"])
+def test_remote_array_hostile_dependency_rejects_before_hooks(remote_graph_operand, monkeypatch, dependency):
+    remote, _ = remote_graph_operand
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+
+    class HostileDependency:
+        @property
+        def dtype(self):
+            pytest.fail("Read hostile remote dependency metadata")
+
+        @property
+        def generation(self):
+            pytest.fail("Read hostile owner generation")
+
+    attribute = {"source": "src", "owner": "_store_owner", "proxy": "_proxy", "carrier": "_carrier"}[
+        dependency
+    ]
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, attribute, HostileDependency())
+        with pytest.raises(blosc2.UnsafeDeserializationError):
+            expr.compute()
+
+
+def test_remote_array_same_type_source_rebinding_rejects(remote_graph_operand, monkeypatch):
+    remote, _ = remote_graph_operand
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+    other = blosc2.RemoteArray(remote.urlpath, cache_policy=blosc2.CachePolicy.NONE)
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, "src", other.src)
+        with pytest.raises(ValueError, match="source was rebound"):
+            expr.compute()
+    other.close()
+
+
+def test_remote_array_refresh_keeps_safe_expression_live(remote_graph_operand):
+    remote, data = remote_graph_operand
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+    remote.refresh()
+    np.testing.assert_allclose(expr[:], np.sqrt(data))
+
+
+def test_remote_array_closed_handle_rejects_before_data(remote_graph_operand, monkeypatch):
+    remote, _ = remote_graph_operand
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": remote})
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, "_closed", True)
+        patch.setattr(type(remote.src), "get_chunk", lambda *a, **k: pytest.fail("Read closed remote"))
+        with pytest.raises(RuntimeError, match="closed"):
+            expr.compute()
+
+
+def test_operand_dependent_constructor_does_not_cache_values_between_evaluations():
+    source = np.arange(6, dtype="float64")
+    expr = blosc2.lazyexpr("asarray(x, dtype='float32') + 1", {"x": source})
+    np.testing.assert_array_equal(expr[:], source.astype("float32") + 1)
+    source[:] = np.arange(6) + 10
+    np.testing.assert_array_equal(expr[:], source.astype("float32") + 1)
+    assert expr.cons_cache == {}
+
+
+def test_constant_constructor_cache_rejects_hostile_cached_value():
+    expr = blosc2.lazyexpr("ones((6,)) + 1", {})
+    np.testing.assert_array_equal(expr[:], np.full(6, 2.0))
+    assert expr.cons_cache
+
+    class HostileCache:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted constructor cache metadata")
+
+    expr.cons_cache[next(iter(expr.cons_cache))] = HostileCache()
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        expr.compute()

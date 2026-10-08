@@ -898,6 +898,13 @@ def _graph_dtype(node, operands, prefer_blosc):
 def _graph_call_shape(node, operands, prefer_blosc):
     kind, name, positional, keywords = node
     name, prefer_blosc = _qualified_reduction(name, prefer_blosc)
+    if (
+        kind == "call"
+        and name == "asarray"
+        and len(positional) in (1, 2)
+        and set(dict(keywords)) <= {"dtype"}
+    ):
+        return _graph_shape(positional[0], operands, prefer_blosc)
     if kind == "method" and name == "astype" and _numpy_value_graph(positional[0], operands):
         bound = _bind_numpy_cast(positional, dict(keywords), literal=True)
         requested = _resolved_metadata_argument(bound["dtype"], operands)
@@ -1055,14 +1062,14 @@ def _validate_argument(name, key, value, node=None):
 
 
 def _check_call_contract(name, positional, keywords, node=None, *, literal=False):
-    if name not in _REDUCTION_KEYWORDS and name != "astype":
+    if name not in _REDUCTION_KEYWORDS and name not in {"astype", "asarray"}:
         return
     if name == "astype" and len(positional) < 2 and "dtype" not in keywords:
         _reject("astype requires a dtype argument", node)
     for key, value in keywords.items():
         _validate_argument(name, key, _literal_argument(value) if literal else value, node)
     # These common prefix positions agree across approved receivers.
-    positions = ((1, "dtype"),) if name == "astype" else ((1, "axis"),)
+    positions = ((1, "dtype"),) if name in {"astype", "asarray"} else ((1, "axis"),)
     if name in {
         "sum",
         "prod",
@@ -1407,6 +1414,8 @@ def validate_operand(value):  # noqa: C901
             _synchronize_remote_field(value)
         elif type(value) is _ParquetColumn:
             _validate_parquet_column(value)
+        elif type(value) is blosc2.RemoteArray:
+            _validate_remote_array(value)
         elif type(value) is PortableLazyArray:
             validate_operands(value.inputs)
         elif type(value) is Column:
@@ -1426,6 +1435,8 @@ def validate_operand(value):  # noqa: C901
             elif recipe.get("kind") == "dsl":
                 _reject("legacy table-kernel expression dependency")
             else:
+                if recipe.get("kind") not in {"expression", "portable"}:
+                    _reject("unapproved computed-column recipe kind")
                 if recipe.get("kind") == "expression":
                     parse_expression(recipe["expression"])
                     if type(recipe.get("lazy")) is not blosc2.LazyExpr:
@@ -1437,6 +1448,41 @@ def validate_operand(value):  # noqa: C901
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _validate_remote_array(value):
+    """Check the concrete transport/cache closure without opening or fetching it."""
+    import blosc2
+    from blosc2.c2array import C2NDSource
+    from blosc2.remote_store import RemoteDiscovery, _Caterva2ArraySource
+
+    sources = {
+        blosc2.C2Array,
+        C2NDSource,
+        _Caterva2ArraySource,
+        blosc2.FsspecNDSource,
+        blosc2.ZarrNDSource,
+        blosc2.HDF5NDSource,
+        blosc2.B2ZNDSource,
+    }
+    if type(value.src) not in sources:
+        _reject("unapproved RemoteArray transport source")
+    if value.src is not value._expression_source:
+        raise ValueError("RemoteArray source was rebound; use refresh() or construct a new array")
+    if value._store_owner is not None and type(value._store_owner) is not RemoteDiscovery:
+        _reject("unapproved RemoteArray store owner")
+    value._check_open()
+    if value._geometry(value.src) != value._expected_geometry:
+        raise ValueError("RemoteArray source geometry changed; use refresh() or retrieve a new array")
+    if value._proxy is not None:
+        if type(value._proxy) is not blosc2.Proxy or value._proxy.src is not value.src:
+            _reject("unapproved RemoteArray cache proxy")
+        _validate_proxy_cache(value._proxy)
+    for cache in (value._carrier, value._runtime_cache):
+        if cache is not None:
+            if type(cache) is not blosc2.NDArray:
+                _reject("unapproved RemoteArray cache carrier")
+            validate_operand(cache)
 
 
 def _validate_parquet_column(value):

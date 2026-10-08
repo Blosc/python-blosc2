@@ -86,6 +86,14 @@ def test_safe_column_admission_checks_cached_expression_before_dtype():
         blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
 
 
+def test_safe_column_admission_rejects_unknown_recipe_kind():
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+    t._computed_cols["total"]["kind"] = "unregistered"
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="recipe kind"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
 def test_safe_column_admission_checks_cached_expression_operand_closure():
     t = _make_invoice_table()
     t.add_computed_column("total", "price * qty")
