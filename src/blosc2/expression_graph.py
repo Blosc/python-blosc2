@@ -1008,7 +1008,7 @@ def _root_reduction_dtype(name, receiver, arguments, backend):
         and input_dtype.itemsize < 8
     ):
         # Single-threaded WASM uses the existing NumPy reduction fallback,
-        # whose default integer accumulator/index width is platform-sized.
+        # whose default integer accumulator width is platform-sized.
         # Index reductions instead retain Blosc2's DEFAULT_INDEX contract.
         return np.dtype(np.uintp if input_dtype.kind == "u" else np.intp)
     if name in _CUMULATIVE_OPERATIONS and backend != "numpy" and requested is not None:

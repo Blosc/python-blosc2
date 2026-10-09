@@ -935,3 +935,102 @@ C-Blosc2 3.3.5, ordinary build with GIL enabled. Report:
 lint/format and whitespace checks passed. Changes remain local. Corrected WASM and
 actual NumPy 1.26 runs, free-threaded/no-GIL evidence, complete heterogeneous
 reachability and native allocation/resource certification remain outstanding.
+
+## Verified native / NumPy 1.26 / WASM checkpoint (2026-10-09)
+
+The pending-platform statements above describe earlier checkpoints. Runtime code
+and compatibility tests at **`78ae44f9530e3b00d878956de7d0524899385424`** now pass
+both workflows:
+
+- [Native Tests, run 37881295354](https://github.com/Blosc/python-blosc2/actions/runs/37881295354):
+  **success**, all five matrix jobs green, including the actual NumPy 1.26 job.
+- [Tests (WASM), run 37881295353](https://github.com/Blosc/python-blosc2/actions/runs/37881295353):
+  **success**, built wheel tested in the Node/Pyodide runtime.
+
+The uploaded `safe-lazyexpr-…` JSON artifacts were downloaded and read; these are
+actual runtime versions, not versions inferred from matrix labels. All report
+`blosc2=4.15.0.dev0`, C-Blosc2 **3.3.5**, and `free_threaded_build=false`.
+
+| Runtime | Python | NumPy | Configured full CI test step (passed / skipped) | Bounded safe-graph corpus (passed / skipped) |
+| --- | --- | --- | --- | --- |
+| Linux x86_64, glibc 2.39 | 3.12.15 | **1.26.4** | **11,419 / 410** | **885 / 16** |
+| Linux x86_64, glibc 2.39 | 3.12.15 | 2.5.3 | **12,091 / 155** | **901 / 0** |
+| Linux x86_64, glibc 2.39 | 3.14.8 | 2.5.3 | **12,091 / 155** | **901 / 0** |
+| macOS 26.6.2 ARM64 | 3.12.10 | 2.5.3 | **12,091 / 155** | **901 / 0** |
+| Windows Server 2025 AMD64 | 3.12.10 | 2.5.3 | **12,057 / 189** | **901 / 0** |
+| Emscripten 5.0.3 wasm32, Pyodide 314.0.0 | 3.14.2 | 2.4.3 | **10,078 / 782**, plus **1 XPASS** | **850 / 34** |
+
+“Full CI” means the workflow's configured project test selection, not every
+possible marker/capability. Native main steps exclude heavy/network/TUI tests;
+Linux 3.12 additionally passed the network step (**241 / 12**) and non-blocking
+TUI step (**61 / 12**). WASM reported **11,923 deselected** alongside its totals.
+Its existing XPASS is not a failure and is not extra safety certification.
+
+The NumPy 1.26 corpus's **16 skips** are exactly the unavailable NumPy
+`cumulative_sum`/`cumulative_prod` API cases. Blosc2 cumulative operations still
+run against equivalent legacy NumPy references. Full-suite UTF-8 feature cases
+requiring NumPy >=2.0 are explicitly capability-skipped, while supported numeric
+remote tests remain collected. A new NumPy 1.26 test verifies that `blosc2.utf8()`
+still rejects that unsupported runtime; there is no product UTF-8 fallback.
+
+WASM corpus skip categories, read from `safe-lazyexpr-wasm.json`:
+
+- **27 individual missing-fsspec adapter tests**, plus **one Parquet module
+  collection skip** for missing fsspec (**28 adapter entries** total). Module-level
+  skip accounting does not stand in for running every selected Parquet case.
+- **6 tests requiring unavailable Python threads**: three remote-refresh tests,
+  one shared-policy test, and two controlled table-read-boundary tests.
+- **0 native-descriptor capability skips** in this selected corpus; the selected
+  portable kernel/native-buffer tests ran. This does not certify unselected native
+  capabilities or all native scratch allocations.
+
+Python 3.14 native/WASM JSON reports `gil_enabled_after_tests=true`. Python 3.12
+reports `null` because that runtime lacks the inspection hook; it is an ordinary,
+non-free-threaded build. **No actual no-GIL run is established**, and no GIL setting
+was forced to manufacture one.
+
+### Verification fixes and failed checkpoints
+
+Published scoped changes: `232d7476` (reviewed follow-ups, runtime pinning and WASM
+artifact capture), `d62b4b97` (collection-skip JSON accounting), `5f3ad6be` (retain
+bounded evidence after wider failures and disable matrix fail-fast), `61714ca0`
+(NumPy capability-aware tests), `f98a8d16` (compatibility boundaries), and `78ae44f9`
+(preserve Blosc2 index dtype). Parent checkpoint `a8449aef`'s caller-serialized
+table-threading probes is also included in the final verified revision.
+
+- The old “NumPy 1.26” checkpoint actually used NumPy 2.5.3. Runtime pinning now
+  happens **after** editable build/test dependency installation and is asserted;
+  NumPy 1.26 uses compatible Zarr **3.1.5** rather than the older 3.0 API.
+- [Run 37877855457](https://github.com/Blosc/python-blosc2/actions/runs/37877855457)
+  proved NumPy 1.26.4 but failed unsupported UTF-8 collection and other runtime
+  assumptions. Lazy rich-schema construction and per-feature skips corrected
+  collection without dropping numeric modules; arithmetic promotion now compares
+  against the installed NumPy's real contract rather than imposing NumPy 2 rules.
+- WASM's original 38 failures narrowed to four positional index cases. Returning
+  `None` for index metadata did **not** establish the assumed NumPy index contract;
+  an overly broad platform-index rule then produced 14 real-backend mismatches in
+  [run 37879891856](https://github.com/Blosc/python-blosc2/actions/runs/37879891856).
+  Final tests compare the actual receiver backend: Blosc2 retains `DEFAULT_INDEX`
+  (int64), while NumPy indices are platform-sized. Only the small-integer WASM
+  sum/product/cumulative accumulator rule uses signed/unsigned NumPy platform
+  widths. Numerical backend semantics were not changed to satisfy test references.
+- Zarr's older `WrapperStore` lacked read-only cloning; the traffic wrapper now
+  explicitly delegates cloning while retaining accounting. A Windows internal
+  null-predicate comparison could become a bool during identity-equality mode;
+  it now constructs the lazy comparison directly, with both flag states tested.
+
+Local scoped checks during these fixes passed **1,593 tests / 1 capability skip**,
+then **1,057 tests**, then **814 expression-graph tests**; all Python/test commands
+used the `blosc2` conda environment. Scoped pre-commit lint/format/YAML checks passed.
+Raw downloaded artifacts and CI logs are retained under the approved OpenCode
+temporary directory in `safer-artifacts-78ae44f9` and
+`safer-wasm-artifacts-78ae44f9`.
+
+These green runs close the corrected native/NumPy 1.26/WASM checkpoint gate only.
+They **do not finish the experiment or make it merge-ready**. Complete heterogeneous
+container/adapter reachability, remaining backend/signature rules, actual no-GIL
+behavior, and native allocation/resource certification remain open. Unprotected
+native table read/write overlap remains unsupported; caller serialization is
+required. Ordinary defaults, safe/full loading distinctions, and Menudet semantics
+remain unchanged. No universal allocation bound or constant-space guarantee is
+claimed.
