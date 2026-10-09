@@ -18,10 +18,10 @@ Runs launched at these exact revisions:
 
 | Workflow | Run | Revision / selection | Status |
 | --- | --- | --- | --- |
-| Native CI | [37952303800](https://github.com/Blosc/miniexpr/actions/runs/37952303800) | native `7fa177713112561c363206c97f7faf1223ab4230` | Awaiting blocking `gh run watch` |
-| Explicit paired qualification | [37952373294](https://github.com/Blosc/python-blosc2/actions/runs/37952373294) | Python `6c863eba`; dispatch `native_ref=7fa177713112561c363206c97f7faf1223ab4230` | Awaiting blocking `gh run watch` |
-| Python Tests | [37952354685](https://github.com/Blosc/python-blosc2/actions/runs/37952354685) | Python `6c863eba`, unchanged release dependency | Awaiting blocking `gh run watch` |
-| Python Tests (WASM) | [37952354689](https://github.com/Blosc/python-blosc2/actions/runs/37952354689) | Python `6c863eba`, unchanged release dependency | Awaiting blocking `gh run watch` |
+| Native CI | [37952303800](https://github.com/Blosc/miniexpr/actions/runs/37952303800) | native `7fa177713112561c363206c97f7faf1223ab4230` | Success, seven jobs |
+| Explicit paired qualification | [37952373294](https://github.com/Blosc/python-blosc2/actions/runs/37952373294) | Python `6c863eba`; dispatch `native_ref=7fa177713112561c363206c97f7faf1223ab4230` | Failed; findings below |
+| Python Tests | [37952354685](https://github.com/Blosc/python-blosc2/actions/runs/37952354685) | Python `6c863eba`, unchanged release dependency | Failed; draft 1.0 dependency lacks 1.1 |
+| Python Tests (WASM) | [37952354689](https://github.com/Blosc/python-blosc2/actions/runs/37952354689) | Python `6c863eba`, unchanged release dependency | Failed; draft 1.0 dependency lacks 1.1 |
 
 The push-triggered paired run `37952354858` selects a branch, not an explicit SHA;
 the dispatched run above is the authoritative exact-selection qualification.
@@ -90,6 +90,68 @@ five-module explicit pair **487 passed / zero skipped** (66.98 s), actual-JIT
 **207 passed / zero skipped** (142.34 s), Ruff lint/format and `git diff --check`
 passed. No compilation source changed in the follow-up native commit; no new
 compiler warnings were emitted by the incremental native build.
+
+### Second remote iteration, isolation and remaining failures
+
+Python `65a25b8a5036134057ce79477e7db070d0d54bae` was published with the initial
+workflow/reference/JIT-test fixes. Run
+[37955282982](https://github.com/Blosc/python-blosc2/actions/runs/37955282982)
+passed macOS but exposed Windows temporary-file sharing and Linux TCC headers.
+Python `36023f571c6f2c4d59fb68415840b72b35aefdc6` closes the corpus input before
+launching the native subprocess (new regression also checks cleanup), adds JIT
+trace evidence, and fixes CI-only Pandas/Arrow test runtime requirements.
+The release dependency pins remain unchanged. The NumPy 1.26 job alone uses
+PyArrow 21.0.0: PyArrow 26 rejected NumPy 1.26 at import without expressing that
+requirement in its PyPI `Requires-Dist` metadata. Pandas is an existing dev
+dependency needed by Arrow's dictionary conversions; it is installed in CI rather
+than adding a new shipping dependency.
+
+At Python `36023f57` / native `216c603`, explicit-pair run
+[37957000054](https://github.com/Blosc/python-blosc2/actions/runs/37957000054)
+passed Windows and macOS. Linux's **required** TCC test failed (not skipped):
+`/usr/include/stdint.h:26: error: include file 'bits/libc-header-start.h' not found`.
+Native follow-up `b2c88e9a22e8121024c28991763cfcf22687fbeb` discovers existing
+architecture-specific Linux system include directories through libtcc's optional
+system-include API, complementing the existing multiarch library discovery.
+No dependency was added. New native `numpy_compat_portable_tcc` requires actual
+compilation on supported bundled Linux/macOS TCC builds. It passed locally in a
+fresh static native build; Linux needs its own remote result.
+
+The parent independently committed alias cleanup at native `b0541bb` and Python
+`cf9cf359` **without publishing it**. Continued CI fixes use separate worktrees
+rooted at native `216c603` / Python `36023f57`, with task branch
+`menudet-ci-qualification`. Only task descendants are pushed explicitly as
+`HEAD:refs/heads/numpy-compat`. Parent alias commits/files, M7 plans and
+`graph-preparation.md` are not staged, changed, reset or pushed by this task.
+The final pair does **not** qualify the parent's alias-removal corpus or adapters.
+
+Concrete broader release gates still open (not removed from CI):
+
+- [Tests 37957000018](https://github.com/Blosc/python-blosc2/actions/runs/37957000018),
+  Python `36023f57` / native `216c603`: Linux Python 3.12/3.14, macOS and Windows
+  passed. Linux NumPy 1.26 failed **14 tests** in
+  `tests/ctable/test_pandas_arrow_import.py`: those fixtures request NumPy 2
+  `StringDType` UTF-8 storage, which the package correctly rejects on 1.26.
+  Other results: 12,116 passed / 423 skips. No unrelated CTable implementation or
+  test was changed to conceal these errors.
+- [Pyodide 37955282922](https://github.com/Blosc/python-blosc2/actions/runs/37955282922),
+  Python `65a25b8a` / native `216c603`: **80 failed, 10,479 passed, 1,011 skipped**
+  (758.40 s). Failures are 70 reduction tests assuming host `intp` rather than
+  the documented portable int64/uint64 accumulator defaults, nine tests demanding
+  unavailable WASM FP flags/threading, and one subprocess test on a runtime without
+  processes. These failures remain visible; no WASM job/test was hidden or numerical
+  policy weakened. Standalone native WASM success is not paired Python WASM success.
+- GitHub core API quota temporarily exhausted at 16:11 UTC; reset header was
+  16:17:53 UTC. Work waited for reset and resumed. Watches now use a 60-second
+  interval to avoid unnecessary quota consumption; no result is inferred from a
+  watch interrupted by API errors.
+
+Native `216c603` run `37954150929` counts: Linux x64 430, Linux ARM64 TCC 430,
+Linux ARM64 TCC-disabled 338, macOS ARM64 430, Windows x64 335, Windows ARM64 244,
+WASM 63. All passed, including the WASM side-module trace assertion. Native logs
+also contain pre-existing SLEEF macro/always-inline/posix_memalign warnings and
+`dsl_jit_backend_libtcc.c` diagnostic format-truncation warnings; green CI is not
+claimed to be warning-free.
 
 Remaining release gates include experimental-pair NumPy 1.26 and other interpreter
 versions, paired Python ARM64 Windows/Linux and WASM integration, release wheel/
