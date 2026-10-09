@@ -112,9 +112,16 @@ def test_lazy_mask_raise_recovery_and_threads(backend):
 
 
 def test_fail_closed_and_casts(backend, monkeypatch):
-    assert not make("x + y", "int64", jit=True).has_jit
-    assert not make("sin(x)", "float64", jit=True).has_jit
+    assert not make("x // y", "int64", jit=True).has_jit
+    assert not make("x << y", "int64", jit=True).has_jit
     assert not make("x // y", "float64", jit=True).has_jit
+    for expression in ("x == -1", "x < -1"):
+        k = make(expression, "uint64", jit=True, output="bool")
+        assert not k.has_jit  # signed weak literal must not undergo C's unsigned promotion
+        np.testing.assert_array_equal(
+            k.evaluate({"x": np.array([0, 2**64 - 1], dtype="uint64"), "y": np.ones(2, dtype="uint64")}),
+            [False, False],
+        )
     k = make("x + y", "float32", jit=True, output="float64")
     assert k.has_jit
     x = np.array([1.0, 2.0**24], dtype="float32")
@@ -217,3 +224,86 @@ def test_inline_comparison_nan_in_unselected_branch(backend, dtype):
     values, status = k.evaluate({"x": x, "y": np.zeros(1, dtype=dtype)}, return_status=True)
     np.testing.assert_array_equal(values, [False])
     assert status["flags"] == 0
+
+
+@pytest.mark.parametrize("dtype", ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"])
+def test_modular_integer_lowering(backend, dtype):
+    info = np.iinfo(dtype)
+    x = np.array([info.min, info.max, 0, 1, info.max, info.min], dtype=dtype)
+    y = np.array([1, 1, info.max, info.max, info.max, info.min], dtype=dtype)
+    bindings = {"x": x, "y": y}
+    for expression in ("x + y", "x - y", "x * y", "-x", "where(x > y, x + y, x * y)", "x + 1"):
+        compiled = make(expression, dtype, jit=True)
+        reference = make(expression, dtype, jit=False)
+        assert compiled.has_jit, expression
+        actual, status = compiled.evaluate(bindings, return_status=True)
+        expected, expected_status = reference.evaluate(bindings, return_status=True)
+        assert actual.tobytes() == expected.tobytes()
+        assert status == expected_status
+        np.testing.assert_array_equal(
+            compiled.evaluate_array({"x": x[::-1], "y": y[::-1]}, tile_items=2), expected[::-1]
+        )
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_unary_math_lowering(backend, dtype):
+    x = np.array([-np.inf, -2, -0.0, 0.0, 0.25, 1.0, 2.0, np.inf, np.nan], dtype=dtype)
+    uint = "uint32" if dtype == "float32" else "uint64"
+    snan = np.array([0x7F800001 if dtype == "float32" else 0x7FF0000000000001], dtype=uint).view(dtype)
+    x = np.concatenate([x, snan])
+    bindings = {"x": x, "y": np.ones_like(x)}
+    for expression in (
+        "sin(x) + cos(x)",
+        "tan(x)",
+        "exp(x)",
+        "log(x)",
+        "sqrt(x)",
+        "floor(x)",
+        "ceil(x)",
+        "where(x > 0, log(x), y)",
+    ):
+        compiled = make(expression, dtype, jit=True)
+        reference = make(expression, dtype, jit=False)
+        assert compiled.has_jit, expression
+        actual, status = compiled.evaluate(bindings, return_status=True)
+        expected, expected_status = reference.evaluate(bindings, return_status=True)
+        np.testing.assert_array_equal(actual, expected)
+        finite = ~np.isnan(expected)
+        assert actual[finite].tobytes() == expected[finite].tobytes()
+        assert status == expected_status
+        _, report = compiled.evaluate_array(
+            bindings, reduction="sum", where=np.zeros(x.size, dtype=bool), return_report=True
+        )
+        assert report["fp_flags"] == 0
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    z = x * 2\n    return z + 1\n",
+        "    z = x + y\n    z = z * 2\n    return z\n",
+        "    z = y / x\n    return x\n",  # unused assignment still raises
+        "    if x > 0:\n        return y / x\n    else:\n        return -x\n",
+        "    if x > 0:\n        z = y / x\n    elif x < 0:\n        z = x * 2\n    else:\n        z = y\n    return z + 1\n",
+        "    z = y\n    if x != 0:\n        z = y / x\n    return z\n",
+    ],
+)
+def test_local_and_branch_lowering(backend, dtype, body):
+    artifact = blosc2.DSLKernel.from_source("def k(x, y):\n" + body).export(
+        {"x": dtype, "y": dtype}, dtype, version="1.1"
+    )
+    compiled = blosc2.PortableKernel.from_json(artifact, jit=True)
+    reference = blosc2.PortableKernel.from_json(artifact, jit=False)
+    assert compiled.has_jit
+    bindings = {
+        "x": np.array([0.0, -0.0, -2.0, 3.0, np.inf, np.nan, 2**24], dtype=dtype),
+        "y": np.array([1.0, 2.0, 3.0, 4.0, np.inf, 5.0, 1.0], dtype=dtype),
+    }
+    actual, status = compiled.evaluate(bindings, return_status=True)
+    expected, expected_status = reference.evaluate(bindings, return_status=True)
+    np.testing.assert_array_equal(actual, expected)
+    assert status == expected_status
+    finite = ~np.isnan(expected)
+    assert actual[finite].tobytes() == expected[finite].tobytes()
+    np.testing.assert_array_equal(compiled.evaluate_array(bindings, tile_items=2), expected)

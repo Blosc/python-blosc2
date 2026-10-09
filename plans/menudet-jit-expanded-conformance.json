@@ -1,0 +1,24 @@
+{
+  "backend": "tcc",
+  "requested_jit": true,
+  "corpora": {
+    "arithmetic-v1.1.json": {
+      "cases": 3193,
+      "routes": {
+        "interpreter": 1572,
+        "jit": 1249,
+        "none": 372
+      },
+      "all_reference_match": true
+    },
+    "functions-v1.1.json": {
+      "cases": 1154,
+      "routes": {
+        "none": 227,
+        "jit": 135,
+        "interpreter": 792
+      },
+      "all_reference_match": true
+    }
+  }
+}

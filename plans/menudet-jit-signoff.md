@@ -1,5 +1,10 @@
 # Menudet portable host JIT — first slice
 
+This records the original slice and its historical measurements. The expanded
+locals/branches/integer/unary-math boundary and new coverage benchmarks are recorded
+in `menudet-jit-expanded-lowering.md`; current API coverage is documented in
+`doc/reference/portable_dsl.rst`.
+
 ## Implemented boundary
 
 - Explicit 1.1 `jit=True` / `ME_JIT_ON`; checked 1.0 and default routes unchanged.

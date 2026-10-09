@@ -1,0 +1,93 @@
+{
+  "method": "Fresh cache; all corpus rows compared exactly against serial TCC",
+  "results": [
+    {
+      "corpus": "arithmetic-v1.1.json",
+      "backend": "tcc",
+      "cold_seconds": 26.11020554229617,
+      "cases": 3193,
+      "routes": {
+        "interpreter": 1572,
+        "jit": 1249,
+        "none": 372
+      },
+      "all_rows_identical_to_serial_tcc": true,
+      "external_compiler_invocations": 0,
+      "stdout_sha256": "9cce75d605164098987b9e1720e7a097222452eedd28eca115888796602e3946"
+    },
+    {
+      "corpus": "arithmetic-v1.1.json",
+      "backend": "gcc",
+      "cold_seconds": 26.55135566694662,
+      "cases": 3193,
+      "routes": {
+        "interpreter": 1572,
+        "jit": 1249,
+        "none": 372
+      },
+      "all_rows_identical_to_serial_tcc": true,
+      "external_compiler_invocations": 1,
+      "stdout_sha256": "9cce75d605164098987b9e1720e7a097222452eedd28eca115888796602e3946"
+    },
+    {
+      "corpus": "arithmetic-v1.1.json",
+      "backend": "clang",
+      "cold_seconds": 25.985748291946948,
+      "cases": 3193,
+      "routes": {
+        "interpreter": 1572,
+        "jit": 1249,
+        "none": 372
+      },
+      "all_rows_identical_to_serial_tcc": true,
+      "external_compiler_invocations": 1,
+      "stdout_sha256": "9cce75d605164098987b9e1720e7a097222452eedd28eca115888796602e3946"
+    },
+    {
+      "corpus": "functions-v1.1.json",
+      "backend": "tcc",
+      "cold_seconds": 1.047117707785219,
+      "cases": 1154,
+      "routes": {
+        "none": 227,
+        "jit": 135,
+        "interpreter": 792
+      },
+      "all_rows_identical_to_serial_tcc": true,
+      "external_compiler_invocations": 0,
+      "stdout_sha256": "a3bba03ea302bf8fc973bbedceeec850446309e4ed02086802f5a21165cda885"
+    },
+    {
+      "corpus": "functions-v1.1.json",
+      "backend": "gcc",
+      "cold_seconds": 1.6251765843480825,
+      "cases": 1154,
+      "routes": {
+        "none": 227,
+        "jit": 135,
+        "interpreter": 792
+      },
+      "all_rows_identical_to_serial_tcc": true,
+      "external_compiler_invocations": 1,
+      "stdout_sha256": "a3bba03ea302bf8fc973bbedceeec850446309e4ed02086802f5a21165cda885"
+    },
+    {
+      "corpus": "functions-v1.1.json",
+      "backend": "clang",
+      "cold_seconds": 1.1084123328328133,
+      "cases": 1154,
+      "routes": {
+        "none": 227,
+        "jit": 135,
+        "interpreter": 792
+      },
+      "all_rows_identical_to_serial_tcc": true,
+      "external_compiler_invocations": 1,
+      "stdout_sha256": "a3bba03ea302bf8fc973bbedceeec850446309e4ed02086802f5a21165cda885"
+    }
+  ],
+  "compiler_versions": {
+    "gcc": "gcc-16 (Homebrew GCC 16.2.0) 16.2.0\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+    "clang": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+  }
+}
