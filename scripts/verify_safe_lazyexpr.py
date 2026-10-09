@@ -23,6 +23,14 @@ class Outcomes:
     def __init__(self):
         self.cases = {}
 
+    def pytest_collectreport(self, report):
+        if report.failed or report.skipped:
+            self.cases[report.nodeid] = {
+                "outcome": report.outcome,
+                "reason": str(report.longrepr),
+                "phase": "collection",
+            }
+
     def pytest_runtest_logreport(self, report):
         if (report.when == "call" or report.failed or report.skipped) and self.cases.get(
             report.nodeid, {}
