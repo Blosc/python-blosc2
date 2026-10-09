@@ -6,6 +6,48 @@ edited or staged here. The initial local diagnosis below is retained as historic
 evidence; the publication/remote qualification continuation supersedes its earlier
 authorization and unpublished-revision statements.
 
+## Green native and explicit-pair checkpoint
+
+**Native and explicit paired qualification passed. Release qualification remains
+incomplete**: NumPy 1.26 CTable UTF-8 fixtures, Python/Pyodide contract-test failures
+and distribution gates below are still open. Parent alias-removal commits are not
+part of this pair.
+
+- Native: `d12ca6427782a21a959255c6c2546031a75fd9bb`;
+  [green native/WASM run 37963314217](https://github.com/Blosc/miniexpr/actions/runs/37963314217).
+- Python code checkpoint: `6f8a45f8f258c4606e8cbf6999c850845c24c259`;
+  [green explicit-pair run 37963360530](https://github.com/Blosc/python-blosc2/actions/runs/37963360530),
+  dispatched with the **full exact native SHA** above. Downloaded revision artifacts
+  from all three platforms independently contain this exact pair.
+- The source-selector/report follow-up selects that same native SHA and changes
+  no Python execution code. Its resulting Python SHA is independently dispatched
+  again before completion; the final response/local evidence addendum records that
+  exact result, not an assumption that a documentation change inherits CI.
+
+| Native job | CTest passed | Configuration / retained gate |
+| --- | ---: | --- |
+| Linux x64 | 431 | TCC enabled; required portable TCC plus required CC corpora |
+| Linux ARM64 | 431 | TCC enabled; required portable TCC plus required CC corpora |
+| Linux ARM64 TCC-disabled | 338 | CC remains available and required; existing full-DSL TCC-cache exclusion |
+| macOS ARM64 | 431 | Required portable TCC plus required CC corpora |
+| Windows x64 | 335 | ClangCL Release, builtin-identity regression retained |
+| Windows ARM64 | 244 | Existing unsupported bundled-TCC/TCC-JIT configuration disabled |
+| Standalone wasm32 | 63 | Side-module helper trace explicitly confirms `compiler=tcc` |
+
+| Explicit Python pair job | Native CTest | Python required modules | Required actual portable JIT |
+| --- | ---: | ---: | ---: |
+| Linux x64 / Python 3.12.15 / NumPy 2.5.3 | 431 | 488 passed, **zero skips** (66.84 s) | 207 passed, **zero skips** (25.59 s) |
+| macOS ARM64 / Python 3.12.15 / NumPy 2.5.3 | 431 | 488 passed, **zero skips** (128.44 s) | 207 passed, **zero skips** (48.49 s) |
+| Windows x64 / Python 3.12.15 / NumPy 2.5.3 | 335 | 488 passed, **zero skips** (63.31 s) | Not a supported portable host-pointer JIT target in this qualification |
+
+All four authoritative corpora and required native logical-array capabilities were
+selected explicitly. The v2 corpus's two deliberate unsupported-capability negative
+cases are checked as such in both runners; they are not missing required numerical
+capabilities or pytest skips. Optional acceleration requests are not mislabeled as
+compiled execution: separate required-TCC, required-CC and actual-JIT gates establish
+the supported routes. No value assertion, ULP/accuracy tolerance or failed platform
+job was weakened or removed.
+
 ## Authorized publication and remote qualification continuation
 
 The user explicitly authorized task-scoped commits, pushes and workflow dispatch.
@@ -178,6 +220,17 @@ pointing at that installed runtime (0.41 s), rather than the staged build copy.
 Local static linkage emitted duplicate `-lm` linker warnings, recorded separately
 from the prior shared-build no-warning result. Remote Linux/ARM64 must confirm
 the runtime fix; local Apple results alone are not Linux evidence.
+
+The now-working runtime exposed a genuine Linux x64 floor-division floating-status
+mismatch in native `aefe19d`
+[37961318269](https://github.com/Blosc/miniexpr/actions/runs/37961318269) and its paired
+run [37961376270](https://github.com/Blosc/python-blosc2/actions/runs/37961376270).
+Native `d12ca6427782a21a959255c6c2546031a75fd9bb` keeps a single non-inlined scalar
+floor-division implementation for interpreter and bridge calls, preventing GCC
+from specializing two inlined copies with different floating flags. The exact
+status/value assertions stay intact; diagnostic output now names source, mask and
+both statuses on failure. The green Linux x64/ARM64 native and Linux/macOS actual
+JIT results above qualify this fix without a fallback or tolerance concession.
 
 Remaining release gates include experimental-pair NumPy 1.26 and other interpreter
 versions, paired Python ARM64 Windows/Linux and WASM integration, release wheel/
