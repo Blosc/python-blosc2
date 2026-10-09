@@ -60,7 +60,6 @@ UNARY.update(
         "atanh": "arctanh",
     }
 )
-UNARY.update({name: name for name in ("arccos", "arcsin", "arctan", "arccosh", "arcsinh", "arctanh")})
 BINARY = {
     name: name
     for name in (
@@ -78,7 +77,9 @@ BINARY = {
         "ldexp",
     )
 }
-BINARY.update({"atan2": "arctan2", "arctan2": "arctan2", "pow": "power"})
+BINARY.update({"atan2": "arctan2", "pow": "power"})
+
+REMOVED_ALIASES = ("arccos", "arccosh", "arcsin", "arcsinh", "arctan", "arctan2", "arctanh")
 EXTRA = (
     "erf",
     "erfc",
@@ -470,16 +471,15 @@ def generate():  # noqa: C901 -- enumerated signatures, domains, exceptions and 
         artifact["source"] = f"def k(x):\n    return {name}({', '.join(['x'] * (arity + 1))})\n"
         case["artifact"] = json.dumps(artifact, sort_keys=True)
         cases.append(case)
-    for name in ("float_power", "logaddexp2", "heaviside", "spacing", "frexp", "modf"):
-        cases.append(
-            make_case(f"spelling-reject-{name}", name, [np.array([1.0])], diagnostic="invalid_source")
-        )
+    for name in ("float_power", "logaddexp2", "heaviside", "spacing", "frexp", "modf", *REMOVED_ALIASES):
+        arrays = [np.array([1.0])] * (2 if name == "arctan2" else 1)
+        cases.append(make_case(f"spelling-reject-{name}", name, arrays, diagnostic="invalid_source"))
     certified = certified_cases()
     cases.extend(certified)
     metadata = arithmetic.generate()
     return {
         **{k: v for k, v in metadata.items() if k not in {"cases", "promotions", "cast_matrix"}},
-        "generator_revision": "m4-1",
+        "generator_revision": "m4-2-canonical-inverse-trig",
         "signatures": signatures,
         "cases": cases,
         "certification": {
@@ -491,6 +491,7 @@ def generate():  # noqa: C901 -- enumerated signatures, domains, exceptions and 
             "max_ulp": 8,
         },
         "unsupported_spellings": [
+            *REMOVED_ALIASES,
             "fmin.reduce",
             "maximum.reduce",
             "float_power",

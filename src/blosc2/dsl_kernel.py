@@ -229,7 +229,11 @@ class _NumpyAttrCallRewriter(ast.NodeTransformer):
             and isinstance(func.value, ast.Name)
             and func.value.id in self._aliases
         ):
-            dsl_name = _NUMPY_TO_DSL_FUNC_ALIASES.get(func.attr, func.attr)
+            from .utils import MINIEXPR_FUNCTION_ALIASES
+
+            dsl_name = _NUMPY_TO_DSL_FUNC_ALIASES.get(
+                func.attr, MINIEXPR_FUNCTION_ALIASES.get(func.attr, func.attr)
+            )
             node.func = ast.copy_location(ast.Name(id=dsl_name, ctx=ast.Load()), func)
             self.rewrote_any = True
         return node
@@ -742,7 +746,9 @@ class DSLKernel:
         kernel._sig_has_varargs = False
         kernel._sig_npositional = len(names)
         kernel._legacy_udf_signature = False
-        kernel.dsl_source = source
+        from .utils import canonicalize_miniexpr_functions
+
+        kernel.dsl_source = canonicalize_miniexpr_functions(source)
         kernel.input_names = names
         kernel.dsl_error = None
         kernel.row_param = kernel.row_columns = None
@@ -791,7 +797,9 @@ class DSLKernel:
             dsl_source = None
             input_names = None
             self.dsl_error = e
-        self.dsl_source = dsl_source
+        from .utils import canonicalize_miniexpr_functions
+
+        self.dsl_source = canonicalize_miniexpr_functions(dsl_source) if dsl_source is not None else None
         self.input_names = input_names
 
     def _extract_dsl(self, func, validate: bool = True):

@@ -9,8 +9,10 @@ import ast
 import builtins
 import contextlib
 import inspect
+import io
 import math
 import sys
+import tokenize
 import warnings
 from itertools import product
 
@@ -20,6 +22,58 @@ from ndindex.subindex_helpers import ceiling
 from numpy import broadcast_shapes
 
 import blosc2
+
+# NumPy frontend spellings; native miniexpr uses the Array API/C names only.
+MINIEXPR_FUNCTION_ALIASES = {
+    "arccos": "acos",
+    "arccosh": "acosh",
+    "arcsin": "asin",
+    "arcsinh": "asinh",
+    "arctan": "atan",
+    "arctan2": "atan2",
+    "arctanh": "atanh",
+}
+
+
+def canonicalize_miniexpr_functions(source):
+    """Normalize bare frontend calls without changing strings, comments or names.
+
+    This is authoring adaptation, never artifact-import migration. Native syntax
+    errors are left to the compiler rather than repaired here.
+    """
+    if not isinstance(source, str | bytes):
+        return source
+    binary = isinstance(source, bytes)
+    try:
+        text = source.decode("utf-8") if binary else source
+    except UnicodeDecodeError:
+        return source
+    if not any(name in text for name in MINIEXPR_FUNCTION_ALIASES):
+        return source
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, IndentationError):
+        return source
+    lines = text.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    replacements = []
+    for i, token in enumerate(tokens[:-1]):
+        if token.type != tokenize.NAME or token.string not in MINIEXPR_FUNCTION_ALIASES:
+            continue
+        if i and tokens[i - 1].string in {".", "def"}:
+            continue
+        following = next((t for t in tokens[i + 1 :] if t.type not in {tokenize.NL, tokenize.COMMENT}), None)
+        if following is None or following.string != "(":
+            continue
+        start = offsets[token.start[0] - 1] + token.start[1]
+        end = offsets[token.end[0] - 1] + token.end[1]
+        replacements.append((start, end, MINIEXPR_FUNCTION_ALIASES[token.string]))
+    for start, end, name in reversed(replacements):
+        text = text[:start] + name + text[end:]
+    return text.encode("utf-8") if binary else text
+
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)

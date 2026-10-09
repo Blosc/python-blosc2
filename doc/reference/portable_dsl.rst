@@ -28,6 +28,13 @@ language/artifact pair. It does **not** reinterpret saved 1.0 artifacts: those
 retain checked arithmetic, and export still defaults to 1.0. Older native
 dependencies reject 1.1 explicitly.
 
+Inverse functions use canonical Array API/C names: ``asin``, ``acos``, ``atan``,
+``atan2``, ``asinh``, ``acosh`` and ``atanh``. Python authoring accepts NumPy's
+``arc*`` spellings and normalizes calls before native compilation/export. Native
+source and raw saved artifacts containing these removed aliases reject in both
+profiles; update the source or re-export from authoring. Artifact import does not
+silently migrate saved source.
+
 .. code-block:: python
 
     import blosc2

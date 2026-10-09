@@ -1504,6 +1504,8 @@ def me_output_dtype(expression, operands):
             var.itemsize = operand_dtype.itemsize if operand_dtype.num in (18, 19) else 0
             built += 1
 
+        from blosc2.utils import canonicalize_miniexpr_functions
+        expression = canonicalize_miniexpr_functions(expression)
         expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
         )
@@ -4903,6 +4905,8 @@ cdef class NDArray:
         cdef int error = 0
         cdef bytes expression_bytes
         cdef str expression_display
+        from blosc2.utils import canonicalize_miniexpr_functions
+        expression = canonicalize_miniexpr_functions(expression)
         if isinstance(expression, str):
             expression_display = expression
             expression_bytes = (<str>expression).encode("utf-8")
@@ -5004,6 +5008,8 @@ cdef class NDArray:
         if backend in ("tcc", "cc"):
             from blosc2.lazyexpr import _apply_jit_backend_pragma
             expression = _apply_jit_backend_pragma(expression, inputs, backend)
+        from blosc2.utils import canonicalize_miniexpr_functions
+        expression = canonicalize_miniexpr_functions(expression)
         cdef bytes expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
         )

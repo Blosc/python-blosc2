@@ -29,7 +29,11 @@ def accelerated_plan(artifact, configuration):
 class NativeSyntax(ast.NodeTransformer):
     def visit_Attribute(self, node):
         if isinstance(node.value, ast.Name) and node.value.id in {"np", "numpy"}:
-            return ast.copy_location(ast.Name(id=node.attr, ctx=ast.Load()), node)
+            from .utils import MINIEXPR_FUNCTION_ALIASES
+
+            return ast.copy_location(
+                ast.Name(id=MINIEXPR_FUNCTION_ALIASES.get(node.attr, node.attr), ctx=ast.Load()), node
+            )
         raise ValueError("Native graphs do not support arbitrary attributes or method calls")
 
 
