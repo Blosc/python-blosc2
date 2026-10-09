@@ -24,13 +24,14 @@ jobs:
         shell: bash -el {0}
     env:
       MENUDET_REQUIRE_ARRAY_RUNTIME: '1'
+      MENUDET_REQUIRE_GRAPH_RUNTIME: '1'
       CMAKE_GENERATOR: Ninja
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
         with:
           repository: Blosc/miniexpr
-          ref: ${{ inputs.native_ref || 'numpy-compat' }}
+          ref: ${{ inputs.native_ref || 'graph-preparation' }}
           path: native
       - uses: conda-incubator/setup-miniconda@v3
         with:
@@ -69,7 +70,17 @@ jobs:
             export PATH="$PWD/native-build:$PATH"
           fi
           ctest --test-dir native-build --output-on-failure
-          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py -q -n 0
+          python -c 'import blosc2; assert blosc2.NativeGraph.from_expression("x - sum(x)", {"x": "float32"}).info()["stages"] == 2'
+          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_portable.py tests/test_portable_artifact.py tests/test_portable_lazy.py tests/test_portable_table_export.py tests/test_portable_policy.py tests/test_portable_descriptor.py -q -n 0
+      - name: Build exact-pair distribution wheel
+        run: |
+          native_source="$PWD/native"
+          if [ "$RUNNER_OS" = Windows ]; then
+            native_source=$(cygpath -m "$native_source")
+          fi
+          python -m pip wheel . --no-deps --wheel-dir graph-wheels --config-settings="cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=$native_source"
+          python -m pip install --force-reinstall --no-deps graph-wheels/*.whl
+          python -m pytest tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_native_graph.py -q -n 0
       - name: Require actual supported portable JIT backends
         if: runner.os != 'Windows'
         env:
@@ -83,6 +94,9 @@ jobs:
         run: |
           git rev-parse HEAD > paired-revisions.txt
           git -C native rev-parse HEAD >> paired-revisions.txt
+          python --version >> paired-revisions.txt
+          python -m pip freeze >> paired-revisions.txt
+          cmake --version >> paired-revisions.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -91,3 +105,4 @@ jobs:
             paired-revisions.txt
             native-build/Testing/Temporary/LastTest.log
             menudet-jit.log
+            graph-wheels/*.whl

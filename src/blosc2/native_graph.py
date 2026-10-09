@@ -221,7 +221,9 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     document = {
         "format": "menudet-graph-1",
         "semantics": "menudet-numpy-1.1",
-        "requires": ["numeric"],
+        "requires": ["numeric", "staged"]
+        if any(node["op"] in REDUCERS and node["id"] != root for node in adapter.nodes)
+        else ["numeric"],
         "nodes": adapter.nodes,
         "root": root,
         "output": {"dtype": "auto", "casting": "unsafe"},
@@ -283,6 +285,8 @@ def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, **kwargs)
     shape = schedule.info()["map_shape"]
     selection = item if isinstance(item, tuple) else (item,)
     if selection:
+        if plan.info()["stages"] > 1:
+            raise ValueError("Staged native graphs do not accept partial logical-domain reads")
         if not inputs:
             raise ValueError("Partial constant-only native graphs are not eligible")
         if any(type(s) is not int and not isinstance(s, (slice, type(Ellipsis))) for s in selection):
@@ -317,7 +321,11 @@ def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, **kwargs)
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-1.1",
-        "backend": "portable-jit" if plan.info()["has_jit"] else "portable-interpreter",
+        "backend": "portable-mixed"
+        if report["jit_stages"] and report["interpreter_stages"]
+        else "portable-jit"
+        if report["jit_stages"]
+        else "portable-interpreter",
         "plan_cache": compile_plan.cache_info()._asdict(),
         "input_materialization_bytes": sum(
             v.nbytes for k, v in arrays.items() if not isinstance(inputs[k], np.ndarray)

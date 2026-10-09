@@ -163,8 +163,25 @@ Input shapes/dtypes must match the schedule; re-specialize changed shapes, not
 changed values. Schedules retain their immutable plans and permit independent
 concurrent invocations. Actual JIT selection is reported by ``plan.has_jit``.
 
-Intermediate reductions, shared computed nodes, computed participation masks,
-callbacks, storage IO and general staged DAGs are not yet admitted. Older native
+Intermediate reductions and shared array computations use the separately declared
+materialized staged subset. Native text and Python adapters declare the staged
+capability when they contain intermediate reductions; miniexpr alone determines
+the stage boundaries and inferred dependency types. For example:
+
+.. code-block:: python
+
+    plan = blosc2.NativeGraph.from_expression("x - sum(x, axis=0)", {"x": "float32"})
+    schedule = plan.specialize({"x": ("float32", (3, 4))}, intermediate_budget=16)
+    stage = schedule.stage_info(0)  # Output shape/dtype/bytes and last consumer.
+
+All intermediate buffers are budgeted/preallocated before any stage executes and
+released after their last consumer. Reports separate iterator scratch, reserved
+intermediate bytes and actual interpreted/JIT stage counts. Explicit staged JSON
+may also compose trusted, validated portable 1.1 elementwise/context-free regions
+with an ordered-lazy, unmasked contract; arbitrary full-DSL recipes still reject.
+Implicit conditional/masked staging, scalar-only weak stage sharing, computed
+participation masks, callbacks, storage IO and partial staged reads remain excluded.
+Older native
 dependencies reject graph preparation explicitly, without retaining a duplicate
 Python planner. For exact-pair local builds, pass
 ``-Ccmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr`` to pip.

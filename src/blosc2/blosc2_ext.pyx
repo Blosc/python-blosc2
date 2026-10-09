@@ -1179,10 +1179,15 @@ cdef extern from "dsl_graph_bridge.h":
         int node
         int stage
         b2_artifact_error native
+    ctypedef struct b2_graph_report:
+        b2_array_report array
+        size_t stages
+        size_t jit_stages
+        size_t interpreter_stages
     int b2_graph_prepare(const char *, size_t, int, int, void **, b2_graph_error *) nogil
     int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, void **, b2_graph_error *) nogil
     int b2_graph_specialize(const void *, const b2_graph_metadata *, int, size_t, size_t, void **, b2_graph_error *) nogil
-    int b2_graph_execute(const void *, const b2_array_view *, int, void *, size_t, unsigned, b2_array_report *, b2_graph_error *) nogil
+    int b2_graph_execute(const void *, const b2_array_view *, int, void *, size_t, unsigned, b2_graph_report *, b2_graph_error *) nogil
     void b2_graph_free(void *)
     void b2_graph_schedule_free(void *)
     int b2_graph_ninputs(const void *)
@@ -1192,6 +1197,12 @@ cdef extern from "dsl_graph_bridge.h":
     int b2_graph_jit(const void *)
     const char *b2_graph_json(const void *)
     const char *b2_graph_map_json(const void *)
+    size_t b2_graph_stages(const void *)
+    size_t b2_graph_intermediate(const void *)
+    size_t b2_graph_plan_bytes(const void *)
+    size_t b2_graph_schedule_bytes(const void *)
+    size_t b2_graph_scratch(const void *)
+    int b2_graph_stage_info(const void *, int, int64_t *, me_dtype *, size_t *, int *)
     int b2_graph_shape(const void *, int64_t *, me_dtype *)
     int b2_graph_map_shape(const void *, int64_t *)
 
@@ -1246,7 +1257,8 @@ cdef class NativeGraphHandle:
                            _numpy_dtype_from_me_dtype(b2_graph_dtype(self._handle, i))
                            for i in range(b2_graph_ninputs(self._handle))},
                 "inferred_dtype": _numpy_dtype_from_me_dtype(b2_graph_inferred(self._handle)),
-                "has_jit": bool(b2_graph_jit(self._handle))}
+                "has_jit": bool(b2_graph_jit(self._handle)), "stages": b2_graph_stages(self._handle),
+                "plan_metadata_bytes": b2_graph_plan_bytes(self._handle)}
 
     def to_json(self):
         if self._handle == NULL:
@@ -1333,11 +1345,25 @@ cdef class NativeGraphSchedule:
             raise ValueError("Uninitialized graph schedule")
         return {"shape": tuple(shape[i] for i in range(rank)),
                 "map_shape": tuple(domain[i] for i in range(domain_rank)),
-                "dtype": _numpy_dtype_from_me_dtype(dtype)}
+                "dtype": _numpy_dtype_from_me_dtype(dtype),
+                "intermediate_bytes": b2_graph_intermediate(self._handle),
+                "schedule_metadata_bytes": b2_graph_schedule_bytes(self._handle),
+                "iterator_scratch_bound": b2_graph_scratch(self._handle)}
+
+    def stage_info(self, int stage):
+        cdef int64_t shape[16]
+        cdef me_dtype dtype
+        cdef size_t capacity
+        cdef int last
+        cdef int rank = b2_graph_stage_info(self._handle, stage, shape, &dtype, &capacity, &last)
+        if rank < 0:
+            raise ValueError("Invalid stage or unavailable stage descriptions")
+        return {"shape": tuple(shape[i] for i in range(rank)), "dtype": _numpy_dtype_from_me_dtype(dtype),
+                "bytes": capacity, "last_consumer": last}
 
     def execute(self, inputs, unsigned raise_mask=0):
         cdef b2_array_view views[128]
-        cdef b2_array_report report
+        cdef b2_graph_report report
         cdef b2_graph_error error
         cdef int n = len(inputs), i, rc
         cdef list names = [key.encode('utf-8') for key in inputs]
@@ -1367,11 +1393,13 @@ cdef class NativeGraphSchedule:
             rc = b2_graph_execute(self._handle, views, n, np.PyArray_DATA(output), capacity,
                                   raise_mask, &report, &error)
         if rc:
-            raise_graph_error(rc, &error, &report)
-        return output, {"temporary_bytes": report.temporary_bytes, "gathered_bytes": report.gathered_bytes,
-                        "normalization_bytes": normalized, "zero_copy_tiles": report.zero_copy_tiles,
-                        "evaluated_tiles": report.evaluated_tiles, "fp_flags": report.fp_flags,
-                        "fp_supported": bool(report.fp_supported)}
+            raise_graph_error(rc, &error, &report.array)
+        return output, {"temporary_bytes": report.array.temporary_bytes, "gathered_bytes": report.array.gathered_bytes,
+                        "normalization_bytes": normalized, "zero_copy_tiles": report.array.zero_copy_tiles,
+                        "evaluated_tiles": report.array.evaluated_tiles, "fp_flags": report.array.fp_flags,
+                        "fp_supported": bool(report.array.fp_supported), "stages": report.stages,
+                        "jit_stages": report.jit_stages, "interpreter_stages": report.interpreter_stages,
+                        "intermediate_bytes": b2_graph_intermediate(self._handle)}
 
 
 def portable_artifact_available():
