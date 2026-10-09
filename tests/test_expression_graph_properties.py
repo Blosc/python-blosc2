@@ -2,12 +2,39 @@
 
 import gc
 import importlib
+import warnings
 import weakref
 
 import numpy as np
 import pytest
 
 import blosc2
+
+
+@pytest.mark.parametrize(
+    "source_dtype",
+    ["bool", "int8", "uint8", "int32", "float16", "float32", "float64", "complex64", "complex128"],
+)
+@pytest.mark.parametrize("target_dtype", ["int32", "float32", "float64", "complex64"])
+@pytest.mark.parametrize("casting", ["unsafe", "same_kind", "safe"])
+def test_numpy_cast_corner_values_errors_and_warnings(source_dtype, target_dtype, casting):
+    source = np.arange(1, 5).astype(source_dtype)
+    text = f"x.astype('{target_dtype}', casting='{casting}')"
+    with warnings.catch_warnings(record=True) as expected_warnings:
+        warnings.simplefilter("always")
+        try:
+            expected = source.astype(target_dtype, casting=casting)
+        except TypeError:
+            with pytest.raises(TypeError):
+                blosc2.lazyexpr(text, {"x": source}, evaluation="safe")
+            return
+    with warnings.catch_warnings(record=True) as actual_warnings:
+        warnings.simplefilter("always")
+        expr = blosc2.lazyexpr(text, {"x": source}, evaluation="safe")
+        result = expr[:]
+    assert expr.dtype == expected.dtype
+    np.testing.assert_array_equal(result, expected)
+    assert {item.category for item in actual_warnings} == {item.category for item in expected_warnings}
 
 
 def test_value_dependent_numpy_promotion_defers_scalar_metadata(monkeypatch):
@@ -18,6 +45,38 @@ def test_value_dependent_numpy_promotion_defers_scalar_metadata(monkeypatch):
     assert graph.infer_dtype({"x": x, "scalar": 256}) is None
     assert graph.infer_dtype({"x": x, "scalar": np.array(256)}) is None
     assert graph.infer_dtype({"x": x, "scalar": x}) == np.dtype("uint8")
+
+
+@pytest.mark.parametrize("name", ["sum", "prod", "argmin", "argmax", "cumulative_sum", "cumulative_prod"])
+def test_platform_accumulator_fallback_does_not_claim_native_integer_width(monkeypatch, name):
+    module = importlib.import_module("blosc2.expression_graph")
+    monkeypatch.setattr(module, "_BLOSC_PLATFORM_ACCUMULATOR_FALLBACK", True)
+    source = blosc2.asarray(np.arange(1, 5, dtype="int8"))
+    graph = module.parse_expression(f"x.{name}(axis=0)")
+    assert graph.infer_dtype({"x": source}) is None
+    numpy_graph = module.parse_expression("np.sum(x)")
+    assert numpy_graph.infer_dtype({"x": np.arange(4, dtype="int8")}) == np.dtype(np.intp)
+
+
+@pytest.mark.parametrize("order", ["C", "F", "A", "K"])
+@pytest.mark.parametrize("copy", [False, True])
+@pytest.mark.parametrize("subok", [False, True])
+@pytest.mark.parametrize("positional", [False, True])
+def test_numpy_cast_layout_signature_and_nested_reduction(order, copy, subok, positional):
+    source = np.asfortranarray(np.arange(1, 13, dtype="int16").reshape(3, 4))
+    source = source[:, ::-1]
+    arguments = (
+        f"'float32', {order!r}, 'safe', {subok}, {copy}"
+        if positional
+        else f"dtype='float32', order={order!r}, casting='safe', subok={subok}, copy={copy}"
+    )
+    expected = source.astype("float32", order=order, casting="safe", subok=subok, copy=copy)
+    expr = blosc2.lazyexpr(f"x.astype({arguments}).sum(axis=0)", {"x": source}, evaluation="safe")
+    assert expr.shape == (4,)
+    assert expr.dtype == expected.sum(axis=0).dtype
+    np.testing.assert_array_equal(expr[:], expected.sum(axis=0))
+    # Scheduling may return independent storage; no aliasing/order guarantee is
+    # added to LazyExpr merely because an intermediate NumPy cast uses copy=False.
 
 
 @pytest.mark.parametrize("dtype", ["int32", "float32", "float64"])
@@ -207,6 +266,9 @@ def test_partial_result_does_not_coerce_whole_source_to_numpy(monkeypatch, text)
     source = blosc2.asarray(data, chunks=(256,), blocks=(64,))
     original_array = getattr(blosc2.NDArray, "__array__", None)
     original_getitem = blosc2.NDArray.__getitem__
+    original_slice = blosc2.NDArray.get_slice_numpy
+    original_decompress = blosc2.SChunk.decompress_chunk
+    source_schunk = source.schunk
     reads = []
 
     def array(self, *args, **kwargs):
@@ -223,8 +285,24 @@ def test_partial_result_does_not_coerce_whole_source_to_numpy(monkeypatch, text)
             assert result.size <= source.chunks[0]
         return result
 
+    def get_slice_numpy(self, buffer, key):
+        if self is source:
+            reads.append(buffer.size)
+            assert buffer.size <= source.chunks[0]
+        return original_slice(self, buffer, key)
+
+    def decompress_chunk(self, nchunk, dst=None):
+        result = original_decompress(self, nchunk, dst)
+        if self is source_schunk:
+            nbytes = len(result) if dst is None else memoryview(dst).nbytes
+            assert nbytes <= source.chunks[0] * source.dtype.itemsize
+            reads.append(nbytes // source.dtype.itemsize)
+        return result
+
     monkeypatch.setattr(blosc2.NDArray, "__array__", array, raising=False)
     monkeypatch.setattr(blosc2.NDArray, "__getitem__", getitem)
+    monkeypatch.setattr(blosc2.NDArray, "get_slice_numpy", get_slice_numpy)
+    monkeypatch.setattr(blosc2.SChunk, "decompress_chunk", decompress_chunk)
     expr = blosc2.lazyexpr(text, {"x": source}, evaluation="safe")
     if text == "sum(sqrt(x))":
         np.testing.assert_allclose(expr[()], np.sqrt(data).sum())

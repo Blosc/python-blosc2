@@ -33,4 +33,31 @@ jobs:
       - name: Install cibuildwheel
         run: pip install "cibuildwheel==4.1.*"
       - name: Build and test wheel
-        run: cibuildwheel --platform pyodide   # platform=pyodide is CLI-only
+        run: |
+          set -o pipefail
+          cibuildwheel --platform pyodide 2>&1 | tee wasm-ci.log
+      - name: Extract safe-graph runtime evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          log = Path("wasm-ci.log")
+          if log.exists():
+              text = log.read_text()
+              marker = '{\n  "scope": "bounded experimental safe-graph corpus;'
+              start = text.rfind(marker)
+              if start >= 0:
+                  report, _ = json.JSONDecoder().raw_decode(text[start:])
+                  Path("safe-lazyexpr-wasm.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
+      - name: Upload WASM platform evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-lazyexpr-wasm
+          path: |
+            safe-lazyexpr-wasm.json
+            wasm-ci.log
+          if-no-files-found: ignore

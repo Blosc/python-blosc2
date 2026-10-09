@@ -293,7 +293,7 @@ def test_metadata_refreshes_after_shape_mutation_and_text_change():
 
 def test_metadata_refreshes_selection_dtype():
     expr = blosc2.lazyexpr("x > 0", {"x": np.arange(4)}).where(1, 0)
-    assert expr.dtype == np.dtype("int64")
+    assert expr.dtype == np.asarray(1).dtype
     expr._where_args["_where_x"] = np.float64(1.5)
     assert expr.dtype == np.dtype("float64")
     np.testing.assert_allclose(expr[:], [0, 1.5, 1.5, 1.5])
@@ -490,15 +490,16 @@ def test_root_reduction_metadata_matches_execution(dtype, name):
     x = blosc2.asarray(data)
     axis = -1 if name in {"argmin", "argmax"} else (0, -1)
     expr = blosc2.lazyexpr(f"x.{name}(axis={axis!r}, keepdims=True)", {"x": x})
-    if dtype == "complex64" and name in {"min", "max"}:
-        # The current Blosc2 backend warns while constructing complex extrema
-        # identities. Preserve that failure rather than silently using NumPy.
-        with pytest.raises(RuntimeWarning):
-            getattr(x, name)(axis=axis, keepdims=True)
+    try:
+        expected = getattr(x, name)(axis=axis, keepdims=True)
+    except RuntimeWarning:
+        if dtype != "complex64" or name not in {"min", "max"}:
+            raise
+        # Native complex extrema may warn when constructing identities; WASM's
+        # NumPy fallback need not. Preserve the actual backend's behavior.
         with pytest.raises(RuntimeWarning):
             expr.compute()
         return
-    expected = getattr(x, name)(axis=axis, keepdims=True)
     values = np.asarray(expected)
     assert expr.shape == values.shape
     assert expr.dtype == values.dtype
@@ -1362,5 +1363,41 @@ def test_constant_constructor_cache_rejects_hostile_cached_value():
             pytest.fail("Read unadmitted constructor cache metadata")
 
     expr.cons_cache[next(iter(expr.cons_cache))] = HostileCache()
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        expr.compute()
+
+
+@pytest.mark.parametrize("attribute", ["operands", "_where_args"])
+def test_nested_graph_rejects_hostile_operand_mapping_before_protocols(attribute):
+    source = blosc2.asarray(np.arange(6, dtype="float64"))
+    inner = blosc2.lazyexpr("x + 1", {"x": source})
+    outer = blosc2.lazyexpr("sqrt(x)", {"x": source})
+    outer.operands["x"] = inner
+
+    class HostileMapping:
+        def __iter__(self):
+            pytest.fail("Iterated hostile expression mapping")
+
+        def values(self):
+            pytest.fail("Read hostile expression mapping")
+
+    setattr(inner, attribute, HostileMapping())
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="operand mapping"):
+        outer.compute()
+
+
+@pytest.mark.parametrize("attribute", ["_shape", "_dtype", "chunks", "blocks"])
+def test_simple_proxy_hostile_cached_metadata_rejects_before_hooks(attribute):
+    proxy = blosc2.SimpleProxy(np.arange(6, dtype="float64"))
+    expr = blosc2.lazyexpr("sqrt(x)", {"x": proxy})
+
+    class Hostile:
+        def __eq__(self, other):
+            pytest.fail("Compared hostile cached metadata")
+
+        def __iter__(self):
+            pytest.fail("Iterated hostile cached metadata")
+
+    setattr(proxy, attribute, Hostile())
     with pytest.raises(blosc2.UnsafeDeserializationError):
         expr.compute()

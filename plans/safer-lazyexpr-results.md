@@ -778,3 +778,160 @@ This advances all four requested areas but does not close the full experiment ga
 The remaining static/backend rules, complete heterogeneous reachability review,
 native resource bounds and external platform/race evidence must still be reviewed.
 Defaults and the existing safe/full distinction remain unchanged.
+
+## Follow-up: published CI, Parquet refresh and adapter/cast/resource probes
+
+The user pushed `85c6a077`. Native run [37831405999](https://github.com/Blosc/python-blosc2/actions/runs/37831405999)
+completed successfully across Linux, Windows and macOS. The downloaded Windows
+report records CPython 3.12.10, NumPy 2.5.3, C-Blosc2 3.3.5, the checkout package
+path, **710 passed, no skips**, and an ordinary (not free-threaded) build.
+The job labelled NumPy 1.26 actually reports **NumPy 2.5.3**: installing optional
+test dependencies upgraded its runtime. That success is not NumPy 1.26 evidence.
+The workflow now installs NumPy 1.26 and a compatible Zarr 3.0.x after the editable
+build, then asserts the requested runtime version. Build isolation still uses
+NumPy 2 headers for the dual-ABI extension.
+
+WASM run [37831405833](https://github.com/Blosc/python-blosc2/actions/runs/37831405833)
+failed 38 tests: fixed-width accumulator/index metadata conflicted with its
+32-bit NumPy fallback, one test assumed Python integers always infer int64, and
+two tests assumed native complex-extrema warnings. Safe metadata now defers the
+affected default integer/index rules on 32-bit WASM to existing backend inference;
+explicit overrides and unaffected rules are retained. Warning tests compare the
+actual backend behavior rather than requiring the native warning on every platform.
+These fixes are locally tested, including a simulated guard branch, **not yet
+verified by another WASM run**. Real NumPy 1.26, wheel/free-threaded and actual
+no-GIL evidence remain outstanding.
+
+### Admission and metadata
+
+- Expression operand/where mappings reject unknown mapping classes and keys before
+  iteration/value protocols. Tests mutate a retained nested graph, rather than a
+  source expression that construction has already flattened.
+- Concrete dtype metadata is checked before NumPy coercion. Existing string,
+  scalar-type and Blosc2 schema-type dtype spellings remain supported; structured
+  dtype keys/subdtypes are recursively checked. SimpleProxy cached shape, dtype,
+  chunks and blocks reject hostile replacements before comparison/iteration hooks.
+- Column admission checks recipe/mapping/name and cached-live-position dependencies.
+  The registered persistent lazy-column mapping retains lazy loading, with explicit
+  owner/storage/name/source-map admission and cycle/depth bounds. This is additional
+  reachability coverage, not an exhaustive heterogeneous-container certification.
+- Portable computed-column dtype reads use the recipe's fixed dtype rather than
+  evaluating all rows. A fail-on-row-evaluation probe covers both public dtype and
+  safe expression metadata; numerical reads still use the admitted native artifact.
+- Parquet admission holds its existing concrete owner RLock while checking lifetime,
+  schema, coordinator/cache provenance and column geometry/dtype/spec consistency.
+  Replaced locks, schemas, coordinators and metadata reject before hostile hooks.
+
+### Supported refresh overlap
+
+Deterministic safe Parquet read/refresh tests now cover NONE/MEMORY/DISK caching.
+They verify that refresh waits for a locked row-group read, an old graph rejects
+after refresh, and a new graph evaluates correctly. The probe exposed a real race:
+`LazyExpr.__getitem__` reread operand shape after a completed read, so refresh could
+invalidate the handle while an independent result was being reshaped. Safe indexing
+now captures admitted geometry before computation and uses it for axis removal.
+If refresh interrupts another dependency read, lifetime errors remain legitimate;
+this does not provide a transaction-wide snapshot or certify arbitrary concurrent
+table writes, recipe/mapping mutation, Parquet source replacement or adapter races.
+Thread probes explicitly skip on runtimes without Python threads.
+
+### Cast and resource evidence
+
+Added 108 NumPy cast combinations across bool, signed/unsigned integers, half/single/
+double floats and complex inputs; four destinations; and safe/same_kind/unsafe
+casting. Values, metadata, TypeError behavior and warning categories match NumPy.
+These are NumPy contracts, not claims of trusted-validator support or a registered
+streaming Blosc2 cast implementation.
+
+Chunk-resource tests now instrument NDArray slicing and the exposed
+`get_slice_numpy`/`decompress_chunk` bridges and assert chunk-sized source buffers.
+This checks those Python-visible buffers, not all C/native temporary allocations.
+The benchmark adds a 24-element partial-read family, output/input size and chunk
+geometry reporting, optional fixed chunks, and constructs only the selected NumPy
+reference instead of retaining all reference families.
+
+Three alternating-order rounds of float64 historical-control probes, 15 repetitions
+per worker, produced the following median safe/control ratios with fixed 4,096-element
+chunks (blocks 256):
+
+| Logical size | Family | Execution ratio | Whole-process peak RSS ratio | Safe peak MiB |
+| --- | --- | --- | --- | --- |
+| 1M | Partial (192-byte output) | 1.307 | 1.011 | 92.8 |
+| 4M | Partial (192-byte output) | 1.328 | 0.995 | 152.5 |
+| 1M | Reduction (8-byte output) | 1.017 | 0.988 | 98.6 |
+| 4M | Reduction (8-byte output) | 0.992 | 1.000 | 183.7 |
+| 1M | Center (8MB output) | 1.012 | 0.925 | 279.9 |
+| 4M | Center (32MB output) | 1.002 | 0.998 | 577.5 |
+
+Auto-chunk probes also completed at 1K/1M/4M. These process peaks include reference
+arrays, operands, outputs and backend scheduling; fixed chunks alone do not prove
+constant-space native execution. Centering retains substantial whole-process RSS
+in both implementations. Partial-read overhead remains measurable. No statistically
+significant speedup, universal 5% budget compliance or native allocation bound is
+claimed. Raw artifacts: `safer-resource-followup.json` and
+`safer-resource-fixed-chunks.json` in the approved OpenCode temporary directory.
+
+Local default suite: **12,146 passed, 55 skipped**. Local follow-up harness:
+**830 passed, no skips**, macOS ARM64, CPython 3.14.4, NumPy 2.5.3, ordinary build
+with the GIL enabled. Evidence is recorded in `safer-followup-platform.json`;
+Ruff lint/format, workflow YAML parsing and whitespace checks passed.
+The current changes have not been pushed
+or remotely verified. The experiment remains bounded and not merge-ready: remaining
+backend/signature rules, exhaustive container/adapter reachability, concurrent table
+mutation, native allocation bounds and actual corrected platform runs remain gates.
+
+## Follow-up: inline-closure preflight, nested references and table read boundaries
+
+Safe structured loading now checks all inline expression/portable operand recipe
+closures before resolving a sibling reference. Previously, a valid outer expression
+could open its first operand before discovering forbidden expression text or a
+legacy UDF in another inline dependency. The preflight checks concrete mappings,
+keys and recipe kinds, parses nested LazyExpr text, rejects legacy UDF dependencies,
+and bounds cycles/depth. Shared acyclic recipes remain valid. Full loading permission
+retains its existing behavior. This is inline **text/dependency preflight**, not
+authorization of references or a claim to validate unopened external files/native
+artifacts before any I/O.
+
+Added fail-before-reference probes for forbidden nested text, nested legacy UDFs,
+cycles and excessive depth. Cross-carrier cycles are bounded for pairs of files
+and DictStore members in both directory and ZIP stores. Additional mixed TreeStore
+tests traverse two subtree levels, resolve shared inline graphs through same-store
+member references, exercise embedded/externalized carriers and safe/full permissions,
+and compose/read them under ambient full mode with the Python text bridge disabled.
+These close the reviewed nested/reference routes, not every possible container
+combination, concurrent archive edit, reference authorization or crash-recovery case.
+
+Physical and expression-computed table columns now have deterministic ordinary-thread
+tests that pause before a dependency read, complete a supported public column update
+in another thread, then resume the safe graph. Results observe the updated values
+both in that read and subsequent evaluations; computed-expression caches do not
+retain operand-dependent results. Native reads and writes deliberately do not overlap
+in these probes. No synchronization/snapshot guarantee is added for simultaneous
+native table mutation, append/drop operations or mutable recipe/mapping replacement.
+
+Another 32 NumPy cast-signature cases cover C/F/A/K order, copy/subok flags, positional
+and keyword binding on negative-stride, originally Fortran-order two-dimensional
+inputs, followed by a nested reduction. Shape, dtype and values follow NumPy.
+LazyExpr scheduling does not acquire NumPy's aliasing/storage-order guarantees just
+because an intermediate requests `copy=False`.
+
+Portable native-boundary probes cover elementwise and block-scalar kernels within
+safe graph partial reads. Every dispatched source buffer is bounded by its unchanged
+128-lane logical partition (1,024 bytes for the int64 input); temporary input/output
+NumPy wrappers are released after each of four evaluations with cyclic GC disabled.
+This establishes those native-call buffer sizes and Python ownership cleanup, **not
+all native scratch allocations, a global RSS bound, or constant-space scheduling**.
+The broader native resource gate remains open.
+
+The platform harness now includes the selected safe table/Parquet admission,
+metadata and concurrent-read probes. Missing Parquet dependencies are collected as
+a module skip rather than erroneous node-qualified selection; unavailable threads
+and native descriptor support remain explicit skips, not successes.
+
+Local verification: **12,198 passed, 55 skipped** in the default suite; expanded
+harness **901 passed, no skips**, macOS ARM64, CPython 3.14.4, NumPy 2.5.3,
+C-Blosc2 3.3.5, ordinary build with GIL enabled. Report:
+`safer-nested-platform.json` in the approved OpenCode temporary directory. Ruff
+lint/format and whitespace checks passed. Changes remain local. Corrected WASM and
+actual NumPy 1.26 runs, free-threaded/no-GIL evidence, complete heterogeneous
+reachability and native allocation/resource certification remain outstanding.

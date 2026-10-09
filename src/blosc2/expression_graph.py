@@ -15,6 +15,7 @@ import functools
 import math
 import operator
 import sys
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -25,6 +26,9 @@ _mode = contextvars.ContextVar("expression_evaluation", default="full")
 _active_operands = contextvars.ContextVar("expression_operand_validation", default=frozenset())
 _active_recipes = contextvars.ContextVar("expression_recipe_resolution", default=())
 _NUMPY_VALUE_PROMOTION = np.lib.NumpyVersion(np.__version__) < "2.0.0"
+_BLOSC_PLATFORM_ACCUMULATOR_FALLBACK = (
+    sys.platform in {"emscripten", "wasi"} and np.dtype(np.intp).itemsize < 8
+)
 
 
 def bounded_recipe(func):
@@ -443,6 +447,7 @@ _COMPARE = {
 }
 _NP_SCALARS = frozenset(np.sctypeDict.values())
 _DTYPE_TYPES = frozenset(np.dtype(name).type for name in _DTYPES)
+_DTYPE_METADATA_TYPES = frozenset(type(np.dtype(scalar)) for scalar in _NP_SCALARS)
 _BINARY_CALLS = frozenset(
     [
         "add",
@@ -993,6 +998,18 @@ def _root_reduction_dtype(name, receiver, arguments, backend):
     numpy_receiver = backend in {"numpy", "blosc_numpy_function"} or (
         type(receiver) is np.ndarray or type(receiver) in _NP_SCALARS
     )
+    if (
+        _BLOSC_PLATFORM_ACCUMULATOR_FALLBACK
+        and not numpy_receiver
+        and requested is None
+        and output is None
+        and name in {"sum", "prod", "argmin", "argmax"} | _CUMULATIVE_OPERATIONS
+        and (name in {"argmin", "argmax"} or (input_dtype.kind in "biu" and input_dtype.itemsize < 8))
+    ):
+        # Single-threaded WASM uses the existing NumPy reduction fallback,
+        # whose default integer accumulator/index width is platform-sized.
+        # Do not replace that numerical contract with native Blosc2's int64.
+        return None
     if name in _CUMULATIVE_OPERATIONS and backend != "numpy" and requested is not None:
         # The current Blosc2 cumulative implementation does not consistently
         # apply dtype overrides. Preserve its inference rather than claiming
@@ -1392,7 +1409,7 @@ def validate_operand(value):  # noqa: C901
             _active_operands.reset(token)
         return
     if type(value) is np.ndarray or type(value) in _NP_SCALARS:
-        if np.dtype(value.dtype).hasobject:
+        if _validated_dtype(value.dtype).hasobject:
             _reject("object-dtype expression operand")
         return
     trusted = {
@@ -1466,9 +1483,16 @@ def validate_operand(value):  # noqa: C901
                     raise ValueError("Remote column storage no longer matches its table")
             elif type(table) is not blosc2.CTable:
                 _reject("unapproved column owner")
+            if type(value._col_name) is not str:
+                _reject("unapproved column name")
+            _validate_operand_mapping(table._computed_cols)
+            _validate_column_mapping(table._cols, table)
             validate_operand(table._valid_rows)
             validate_operand(value._mask)
+            validate_operand(getattr(table, "_cached_live_positions", None))
             recipe = table._computed_cols.get(value._col_name)
+            if recipe is not None and (type(recipe) is not dict or type(recipe.get("kind")) is not str):
+                _reject("unapproved computed-column recipe mapping or kind")
             if recipe is None:
                 validate_operand(table._cols[value._col_name])
             elif recipe.get("kind") == "dsl":
@@ -1495,10 +1519,76 @@ def validate_operand(value):  # noqa: C901
                     _validate_portable_column(table, recipe)
                 for dependency in recipe["col_deps"]:
                     validate_operand(Column(table, dependency))
-        if np.dtype(value.dtype).hasobject:
+        if _validated_dtype(value.dtype).hasobject:
             _reject("object-dtype expression operand")
     finally:
         _active_operands.reset(token)
+
+
+def _validate_column_mapping(mapping, table, active=()):
+    import blosc2
+    from blosc2.ctable import _LazyColumnDict
+    from blosc2.ctable_storage import (
+        EmbedStoreTableStorage,
+        FileTableStorage,
+        InMemoryTableStorage,
+        RemoteTableStorage,
+        TreeStoreTableStorage,
+    )
+    from blosc2.remote_parquet import ParquetTableStorage
+
+    if type(mapping) is not _LazyColumnDict:
+        _validate_operand_mapping(mapping)
+        return
+    if id(mapping) in active or len(active) >= 64:
+        _reject("cyclic or excessively deep lazy column mappings")
+    if type(table) not in (blosc2.CTable, blosc2.RemoteCTable) or mapping._table is not table:
+        _reject("unapproved lazy column mapping owner")
+    if (
+        type(mapping._storage)
+        not in {
+            EmbedStoreTableStorage,
+            FileTableStorage,
+            InMemoryTableStorage,
+            RemoteTableStorage,
+            TreeStoreTableStorage,
+            ParquetTableStorage,
+        }
+        or mapping._storage is not table._storage
+    ):
+        _reject("unapproved lazy column mapping storage")
+    if type(mapping._available) is not set or any(type(name) is not str for name in mapping._available):
+        _reject("unapproved lazy column mapping names")
+    source = mapping._source_cols
+    if source is not None:
+        owner = source._table if type(source) is _LazyColumnDict else table
+        _validate_column_mapping(source, owner, (*active, id(mapping)))
+
+
+def _validated_dtype(value):
+    if value is None or type(value) is str:
+        value = np.dtype(value)
+    elif type(value) is type:
+        if value not in _NP_SCALARS and value not in (int, float, complex, bool, str, bytes):
+            from blosc2 import schema
+
+            if not any(value is getattr(schema, name, None) for name in _DTYPES):
+                _reject("unapproved dtype type")
+        value = np.dtype(value)
+    _validate_dtype_metadata(value)
+    return value
+
+
+def _validate_dtype_metadata(dtype, depth=0):
+    if type(dtype) not in _DTYPE_METADATA_TYPES or depth >= 64:
+        _reject("unapproved or excessively deep dtype metadata")
+    if dtype.fields is not None:
+        if any(type(name) is not str for name in dtype.fields):
+            _reject("unapproved structured dtype field key")
+        for field in dtype.fields.values():
+            _validate_dtype_metadata(field[0], depth + 1)
+    if dtype.subdtype is not None:
+        _validate_dtype_metadata(dtype.subdtype[0], depth + 1)
 
 
 def _validate_portable_column(table, recipe):
@@ -1669,37 +1759,68 @@ def _validate_remote_array_locked(value):
 
 def _validate_parquet_column(value):
     from blosc2.schema import NDArraySpec
+    from blosc2.schema_compiler import CompiledColumn
 
     storage = value.storage
-    _validate_parquet_storage(storage)
-    if storage is not value._source_storage:
-        raise ValueError("Parquet column storage was rebound; open a new column")
-    if type(value.name) is not str or value.name not in storage.schema.columns_by_name:
-        raise ValueError("Parquet column no longer exists in its schema")
-    column = storage.schema.columns_by_name[value.name]
-    if type(value.mask) is not bool:
-        _reject("unapproved Parquet mask flag")
-    if not value.mask and (column.dtype is None or isinstance(column.spec, NDArraySpec)):
-        _reject("Parquet variable-length and ndarray columns need a registered expression adapter")
-    dtype = np.dtype(bool) if value.mask else column.dtype
-    if tuple(value.shape) != (storage.length,) or value.dtype != dtype:
-        raise ValueError("Parquet column metadata no longer matches its storage")
+    with _parquet_storage_scope(storage):
+        if storage is not value._source_storage:
+            raise ValueError("Parquet column storage was rebound; open a new column")
+        if type(value.name) is not str or value.name not in storage.schema.columns_by_name:
+            raise ValueError("Parquet column no longer exists in its schema")
+        column = storage.schema.columns_by_name[value.name]
+        if type(column) is not CompiledColumn:
+            _reject("unapproved Parquet column schema")
+        if type(value.mask) is not bool:
+            _reject("unapproved Parquet mask flag")
+        if not value.mask and (column.dtype is None or isinstance(column.spec, NDArraySpec)):
+            _reject("Parquet variable-length and ndarray columns need a registered expression adapter")
+        dtype = np.dtype(bool) if value.mask else column.dtype
+        if type(dtype) not in {type(np.dtype(name)) for name in _DTYPES} or type(value.dtype) is not type(
+            dtype
+        ):
+            _reject("unapproved Parquet column dtype metadata")
+        for extents in (value.shape, value.chunks, value.blocks):
+            if type(extents) is not tuple or any(type(n) is not int for n in extents):
+                _reject("unapproved Parquet column geometry metadata")
+        if value.shape != (storage.length,) or value.dtype != dtype or value.spec is not column.spec:
+            raise ValueError("Parquet column metadata no longer matches its storage")
 
 
 def _validate_parquet_storage(storage):
+    with _parquet_storage_scope(storage):
+        pass
+
+
+@contextlib.contextmanager
+def _parquet_storage_scope(storage):
+    from blosc2.proxy import CacheCoordinator
     from blosc2.remote_parquet import ParquetCache, ParquetTableStorage
     from blosc2.remote_store import RemoteDiscovery
+    from blosc2.schema_compiler import CompiledSchema
 
     if type(storage) is not ParquetTableStorage:
         _reject("unapproved Parquet column storage")
     owner = storage._owner
     if type(owner) is not RemoteDiscovery:
         _reject("unapproved Parquet storage owner")
-    if owner.parquet_cache is not None and (
-        type(owner.parquet_cache) is not ParquetCache or owner.parquet_cache.owner is not owner
-    ):
-        _reject("unapproved Parquet cache owner")
-    storage._check_open()
+    lock = owner.lock
+    if type(lock) is not _thread.RLock:
+        _reject("unapproved Parquet owner lock")
+    with lock:
+        if storage._owner is not owner or owner.lock is not lock:
+            raise ValueError("Parquet ownership changed during admission; retrieve a new handle")
+        if owner.parquet_cache is not None and (
+            type(owner.parquet_cache) is not ParquetCache or owner.parquet_cache.owner is not owner
+        ):
+            _reject("unapproved Parquet cache owner")
+        if type(owner.cache_coordinator) is not CacheCoordinator:
+            _reject("unapproved Parquet cache coordinator")
+        if type(storage.schema) is not CompiledSchema or type(storage.schema.columns_by_name) is not dict:
+            _reject("unapproved Parquet schema metadata")
+        if type(storage.length) is not int or storage.length < 0:
+            _reject("unapproved Parquet row-count metadata")
+        storage._check_open()
+        yield
 
 
 def _synchronize_remote_field(value):
@@ -1734,6 +1855,14 @@ def _synchronize_simple_proxy(value):
 
     source = value._src
     shape, dtype = tuple(source.shape), np.dtype(source.dtype)
+    if type(value._shape) is not tuple or any(type(n) is not int for n in value._shape):
+        _reject("unapproved SimpleProxy cached geometry")
+    _validated_dtype(value._dtype)
+    for extents in (value.chunks, value.blocks):
+        if extents is not None and (
+            type(extents) is not tuple or any(not _axis_integer(n) or n <= 0 for n in extents)
+        ):
+            _reject("unapproved SimpleProxy cached chunk geometry")
     if shape == value._shape and dtype == value._dtype:
         return
     chunks, blocks = value.chunks, value.blocks
@@ -1755,8 +1884,16 @@ def _synchronize_ndfield(value):
 
 
 def validate_operands(operands):
+    _validate_operand_mapping(operands)
     for value in operands.values():
         validate_operand(value)
+
+
+def _validate_operand_mapping(operands):
+    if type(operands) not in (dict, OrderedDict):
+        _reject("unapproved expression operand mapping")
+    if any(type(name) not in (str, int) for name in operands):
+        _reject("unapproved expression operand key")
 
 
 def normalize_operands(operands):
@@ -1764,6 +1901,7 @@ def normalize_operands(operands):
     pandas = sys.modules.get("pandas")
     import blosc2
 
+    _validate_operand_mapping(operands)
     result = dict(operands)
     if pandas is not None:
         for name, value in result.items():

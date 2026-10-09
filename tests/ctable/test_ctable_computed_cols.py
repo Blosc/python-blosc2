@@ -10,13 +10,52 @@
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from threading import Event
 
 import numpy as np
 import pytest
 
 import blosc2
 from blosc2 import CTable
+
+
+@pytest.mark.skipif(sys.platform in {"emscripten", "wasi"}, reason="Runtime does not provide Python threads")
+@pytest.mark.parametrize("computed", [False, True])
+def test_safe_column_graph_observes_update_at_controlled_read_boundary(monkeypatch, computed):
+    from blosc2.ctable import Column
+
+    table = _make_invoice_table(8)
+    if computed:
+        with blosc2.expression_evaluation("safe"):
+            table.add_computed_column("adjusted", lambda cols: cols["qty"] + 1)
+    name = "adjusted" if computed else "qty"
+    expr = blosc2.lazyexpr("x * 2", {"x": table[name]}, evaluation="safe")
+    entered, resume = Event(), Event()
+    original = Column._values_from_key
+
+    def paused_read(self, key):
+        if self._table_ref is table and self._col_name == name and not resume.is_set():
+            entered.set()
+            assert resume.wait(10)
+        return original(self, key)
+
+    monkeypatch.setattr(Column, "_values_from_key", paused_read)
+    # The read pauses BEFORE any native access. This exercises a permitted
+    # between-read change, not simultaneous native writes or snapshot isolation.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        read = pool.submit(lambda: expr[:])
+        try:
+            assert entered.wait(10)
+            update = pool.submit(lambda: table["qty"].__setitem__(slice(None), np.arange(11, 19)))
+            update.result(timeout=10)
+        finally:
+            resume.set()
+        expected = (np.arange(11, 19) + int(computed)) * 2
+        np.testing.assert_array_equal(read.result(timeout=10), expected)
+    np.testing.assert_array_equal(expr[:], expected)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures / row types
@@ -184,6 +223,24 @@ def test_safe_portable_column_reuses_validated_native_handle(monkeypatch):
     )
     expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
     np.testing.assert_array_equal(expr[:], [3, 4, 5])
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    reason="Installed runtime has no draft descriptor ABI",
+)
+def test_safe_portable_column_metadata_does_not_evaluate_rows(monkeypatch):
+    from test_portable_lazy import kernel
+
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
+    with monkeypatch.context() as patch:
+        patch.setattr(type(t), "_evaluate_portable_rows", lambda *a, **k: pytest.fail("Evaluated metadata"))
+        assert t["total"].dtype == np.dtype("int64")
+        expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+        assert expr.shape == (3,)
+        assert expr.dtype == np.dtype("int64")
     np.testing.assert_array_equal(expr[:], [3, 4, 5])
 
 

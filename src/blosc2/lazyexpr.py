@@ -4863,9 +4863,14 @@ class LazyExpr(LazyArray):
         return result
 
     def __getitem__(self, item):
+        safe = evaluation_mode() == "safe" or getattr(self, "_evaluation", "full") == "safe"
+        # Use admitted pre-read geometry for axis removal. A remote refresh may
+        # invalidate the handle after its read completed; do not re-enter that
+        # dependency merely to reshape the already independent result.
+        shape = self.shape if safe else None
         kwargs = {"_getitem": True}
         result = self.compute(item, **kwargs)
-        return _drop_indexed_axes(result, self.shape, item)
+        return _drop_indexed_axes(result, shape if safe else self.shape, item)
 
     def slice(self, item):
         return self.compute(item)  # should do a slice since _getitem = False

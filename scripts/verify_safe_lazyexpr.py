@@ -5,6 +5,7 @@ It never disables the GIL or interprets free-threaded builds as no-GIL success.
 """
 
 import argparse
+import importlib.util
 import json
 import platform
 import sys
@@ -42,7 +43,26 @@ def main():
         "test_expression_graph_properties.py",
         "test_expression_graph_lifetime.py",
         "test_portable_lazy.py",
+        "ctable/test_ctable_computed_cols.py::test_safe_column_graph_observes_update_at_controlled_read_boundary",
+        "ctable/test_ctable_computed_cols.py::test_safe_portable_column_metadata_does_not_evaluate_rows",
     ]
+    parquet = "ctable/test_remote_parquet.py"
+    if all(importlib.util.find_spec(name) is not None for name in ("pyarrow", "fsspec")):
+        selected += [
+            f"{parquet}::{name}"
+            for name in (
+                "test_safe_parquet_operand_checks_metadata_without_row_group_reads",
+                "test_safe_parquet_operand_rejects_invalid_lifetime_before_reads",
+                "test_safe_parquet_operand_rejects_same_metadata_storage_rebinding",
+                "test_safe_parquet_ndarray_operand_rejects_unreviewed_row_shape",
+                "test_safe_parquet_operand_rejects_hostile_dependencies_before_hooks",
+                "test_safe_parquet_graph_refresh_waits_for_read_and_invalidates_old_graph",
+            )
+        ]
+    else:
+        # Collect the module itself so importorskip records absent adapters;
+        # node-qualified selectors for an uncollectable module can exit with 4.
+        selected.append(parquet)
     outcomes = Outcomes()
     code = pytest.main(
         ["-q", "--override-ini", "addopts=", *[str(root / "tests" / name) for name in selected]],

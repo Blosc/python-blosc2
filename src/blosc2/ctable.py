@@ -3036,6 +3036,11 @@ class Column:
         :func:`~blosc2.list`).  :func:`~blosc2.utf8` columns report
         ``numpy.dtypes.StringDType()``, the dtype of their materialized reads.
         """
+        recipe = self._table._computed_cols.get(self._col_name)
+        if recipe is not None and recipe.get("kind") == "portable":
+            # The native artifact fixes this dtype. Building the virtual column
+            # here would evaluate every row just to answer a metadata question.
+            return recipe["dtype"]
         return getattr(self._raw_col, "dtype", None)
 
     def iter_chunks(self, size: int = 65536):

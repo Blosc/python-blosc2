@@ -64,10 +64,6 @@ jobs:
       if: runner.os == 'Windows'
       run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
 
-    - name: Install specific numpy version
-      if: matrix.numpy-version
-      run: pip install "numpy==${{ matrix.numpy-version }}.*"
-
     - name: Build (Windows)
       if: runner.os == 'Windows'
       id: build_windows
@@ -85,6 +81,16 @@ jobs:
       if: runner.os != 'Windows'
       id: build_non_windows
       run: pip install -e . --group test
+
+    # Build isolation uses NumPy 2 headers for the dual-ABI extension. Optional
+    # test dependencies may upgrade the runtime too, so pin it AFTER installing.
+    - name: Install NumPy 1.26-compatible test runtime
+      if: matrix.numpy-version == '1.26'
+      run: pip install "numpy==1.26.*" "zarr>=3.0.9,<3.1"
+
+    - name: Verify requested NumPy runtime
+      if: matrix.numpy-version
+      run: python -c "import numpy as np; assert np.__version__.startswith('${{ matrix.numpy-version }}.'), np.__version__"
 
     - name: Test (Windows)
       if: runner.os == 'Windows'

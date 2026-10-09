@@ -1,3 +1,6 @@
+import gc
+import weakref
+
 import numpy as np
 import pytest
 from test_portable_descriptor import manifest
@@ -26,6 +29,43 @@ def kernel(source, *, scalar=False, nd=False, string=False):
     return blosc2.PortableKernel.from_json(
         manifest(source, inputs, output, requires=requires, ndim=2 if nd else 0), jit=False
     )
+
+
+@pytest.mark.parametrize("scalar", [False, True])
+def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypatch, scalar):
+    native = kernel(
+        "def k(x):\n    return sum(x)\n" if scalar else "def k(x):\n    return x + 1\n", scalar=scalar
+    )
+    data = np.arange(4096, dtype="int64")
+    source = blosc2.asarray(data, chunks=(128,), blocks=(32,))
+    lazy = native.lazy({"x": source}, partitions=(128,))
+    refs, extents = [], []
+    original = blosc2.PortableKernel.evaluate_block
+
+    def evaluate(self, operands, **kwargs):
+        if self is native:
+            assert kwargs["block_shape"] == (128,)
+            assert operands["x"].nbytes <= 128 * data.dtype.itemsize
+            refs.append(weakref.ref(operands["x"]))
+            extents.append(kwargs["block_shape"])
+        result = original(self, operands, **kwargs)
+        if self is native:
+            refs.append(weakref.ref(result))
+        return result
+
+    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", evaluate)
+    expr = blosc2.lazyexpr("x + 2", {"x": lazy}, evaluation="safe")
+    expected = data.reshape(-1, 128).sum(axis=1) + 2 if scalar else data + 3
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(4):
+            np.testing.assert_array_equal(expr[2:5], expected[2:5])
+            assert extents
+            assert all(ref() is None for ref in refs)
+    finally:
+        if enabled:
+            gc.enable()
 
 
 @pytest.mark.parametrize("mutation", ["kernel", "handle", "metadata", "artifact", "native_rebinding"])

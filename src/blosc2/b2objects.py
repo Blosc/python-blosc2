@@ -205,6 +205,8 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None, deserialize="safe"
 
 
 def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="safe"):
+    if normalize_deserialize(deserialize) is DeserializeMode.SAFE:
+        _preflight_operand_recipes(operands_payload)
     operands = {}
     missing_ops = {}
     for key, value in operands_payload.items():
@@ -223,6 +225,32 @@ def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="saf
             else:
                 raise
     return operands, missing_ops
+
+
+def _preflight_operand_recipes(mapping, active=()):
+    """Check the entire inline recipe closure before resolving any sibling refs."""
+    from blosc2.expression_graph import parse_expression
+
+    if type(mapping) is not dict:
+        raise TypeError("Structured operands require a concrete mapping")
+    if id(mapping) in active or len(active) >= 64:
+        raise UnsafeDeserializationError("cyclic or excessively deep saved expression recipes")
+    active = (*active, id(mapping))
+    for key, payload in mapping.items():
+        if type(key) is not str or type(payload) is not dict:
+            raise TypeError("Structured operands require string keys and concrete recipe mappings")
+        kind = payload.get("kind")
+        if type(kind) is not str:
+            raise TypeError("Structured operand recipe requires a string kind")
+        if kind == "lazyudf":
+            raise UnsafeDeserializationError("legacy DSL LazyUDF")
+        if kind == "lazyexpr":
+            expression = payload.get("expression")
+            if type(expression) is not str:
+                raise TypeError("Structured LazyExpr payload requires a string 'expression'")
+            parse_expression(expression)
+        if kind in {"lazyexpr", "portable"}:
+            _preflight_operand_recipes(payload.get("operands"), active)
 
 
 def decode_structured_lazyudf(payload, *, carrier_path=None, deserialize="safe"):

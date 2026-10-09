@@ -37,25 +37,33 @@ def worker(args):
     blosc2.set_nthreads(1)
     n = args.size
     shape = (max(1, n // 128), 128) if args.family == "axis" else (n,)
+    geometry = {}
+    if args.chunk_size:
+        if len(shape) != 1:
+            raise ValueError("--chunk-size currently requires one-dimensional workloads")
+        geometry = {"chunks": (min(n, args.chunk_size),), "blocks": (min(n, args.chunk_size, 256),)}
     x = np.linspace(1, 4, math.prod(shape), dtype=args.dtype).reshape(shape)
     y = np.ones_like(x)
     expressions = {
-        "arithmetic": ("x * 2 + y", x * 2 + y),
-        "math": ("sqrt(x) + sin(x) + y", np.sqrt(x) + np.sin(x) + y),
-        "reduction": ("sum(sqrt(x))", np.sqrt(x).sum()),
-        "center": ("x - mean(x)", x - x.mean()),
-        "axis": ("x.mean(axis=0)", x.mean(axis=0)),
-        "index": ("x[::2] + y[::2]", x[::2] + y[::2]),
-        "open": ("sqrt(x) + y", np.sqrt(x) + y),
+        "arithmetic": ("x * 2 + y", lambda: x * 2 + y),
+        "math": ("sqrt(x) + sin(x) + y", lambda: np.sqrt(x) + np.sin(x) + y),
+        "reduction": ("sum(sqrt(x))", lambda: np.sqrt(x).sum()),
+        "center": ("x - mean(x)", lambda: x - x.mean()),
+        "axis": ("x.mean(axis=0)", lambda: x.mean(axis=0)),
+        "index": ("x[::2] + y[::2]", lambda: x[::2] + y[::2]),
+        "open": ("sqrt(x) + y", lambda: np.sqrt(x) + y),
+        "partial": ("sqrt(x) + 1", lambda: np.sqrt(x[17:41]) + 1),
     }
-    text, expected = expressions[args.family]
+    text, reference = expressions[args.family]
+    expected = reference()
+    item = slice(17, 41) if args.family == "partial" else ()
     with tempfile.TemporaryDirectory(dir=args.tempdir) as directory:
         operands = {
             "x": blosc2.asarray(
-                x, urlpath=str(Path(directory) / "x.b2nd") if args.family == "open" else None
+                x, urlpath=str(Path(directory) / "x.b2nd") if args.family == "open" else None, **geometry
             ),
             "y": blosc2.asarray(
-                y, urlpath=str(Path(directory) / "y.b2nd") if args.family == "open" else None
+                y, urlpath=str(Path(directory) / "y.b2nd") if args.family == "open" else None, **geometry
             ),
         }
         timings = []
@@ -80,13 +88,13 @@ def worker(args):
                 if trial:
                     open_times.append(opened)
             start = time.perf_counter()
-            result = expr[()]
+            result = expr[item]
             first = time.perf_counter() - start
             np.testing.assert_allclose(result, expected, rtol=1e-5 if args.dtype == "float32" else 1e-12)
             start = time.perf_counter()
             if profiler is not None:
                 profiler.enable()
-            result = expr[()]
+            result = expr[item]
             if profiler is not None:
                 profiler.disable()
             elapsed = time.perf_counter() - start
@@ -111,6 +119,9 @@ def worker(args):
                     "execution_max_seconds": max(timings),
                     "open_seconds": statistics.median(open_times) if open_times else None,
                     "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+                    "output_nbytes": np.asarray(result).nbytes,
+                    "logical_input_nbytes": sum(value.nbytes for value in operands.values()),
+                    "operand_chunks": {name: list(value.chunks) for name, value in operands.items()},
                     "version": blosc2.__version__,
                     "platform": platform.platform(),
                     "package": blosc2.__file__,
@@ -127,6 +138,9 @@ def main():
     parser.add_argument("--family", default="math")
     parser.add_argument("--families", default="arithmetic,math,reduction,center,axis,index,open")
     parser.add_argument("--size", type=int, default=100000)
+    parser.add_argument(
+        "--chunk-size", type=int, help="Fixed chunk extent for one-dimensional resource probes"
+    )
     parser.add_argument("--sizes", default="1000,100000,1000000")
     parser.add_argument("--dtype", choices=["float32", "float64"], default="float64")
     parser.add_argument("--repeats", type=int, default=5)
@@ -148,6 +162,8 @@ def main():
     args = parser.parse_args()
     if args.repeats < 1 or args.rounds < 1:
         parser.error("--repeats and --rounds must be positive")
+    if args.chunk_size is not None and args.chunk_size < 1:
+        parser.error("--chunk-size must be positive")
     if args.profile_output and not args.worker:
         parser.error("--profile-output requires --worker")
     if args.worker:
@@ -178,6 +194,8 @@ def main():
                     ]
                     if args.tempdir:
                         command += ["--tempdir", args.tempdir]
+                    if args.chunk_size:
+                        command += ["--chunk-size", str(args.chunk_size)]
                     if mode == "full" and args.baseline_root:
                         command += ["--package-root", args.baseline_root]
                     completed = subprocess.run(command, env=env, check=True, text=True, capture_output=True)
