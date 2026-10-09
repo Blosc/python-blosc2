@@ -90,13 +90,18 @@ jobs:
       if: runner.os == 'Windows'
       run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
 
+    - name: Resolve compiler cache launcher (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        $launcher = (Get-Command sccache -CommandType Application -ErrorAction Stop).Source.Replace('\', '/')
+        "CMAKE_C_COMPILER_LAUNCHER=$launcher" >> $env:GITHUB_ENV
+        "CMAKE_CXX_COMPILER_LAUNCHER=$launcher" >> $env:GITHUB_ENV
+
     - name: Build (Windows)
       if: runner.os == 'Windows'
       id: build_windows
       run: pip install -e . --group test
       env:
-        CMAKE_C_COMPILER_LAUNCHER: sccache
-        CMAKE_CXX_COMPILER_LAUNCHER: sccache
         SCCACHE_DIR: C:\Users\runneradmin\AppData\Local\sccache
         CC: clang-cl
         CXX: clang-cl
