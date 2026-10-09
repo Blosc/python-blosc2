@@ -1,0 +1,688 @@
+{
+  "numpy": "2.5.3",
+  "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+  "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so",
+  "extension_sha256": "18870621a7c477f86af2223a0358046a75fe9829e7d07f7270301f91a9229a1f",
+  "results": [
+    {
+      "id": "int8-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int16-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int32-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int64-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "uint8-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "uint16-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "uint32-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "uint64-add-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int64-exact-subtract",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "00000000000000000000000000000001"
+      },
+      "compile_ns": 10500,
+      "evaluation_ns": 6306
+    },
+    {
+      "id": "int8-multiply-boundary",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int8-negate-min",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int64-absolute-min",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "float32-weak-literal",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "float32",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "000000003f800000"
+      },
+      "compile_ns": 13375,
+      "evaluation_ns": 7431
+    },
+    {
+      "id": "float32-typed-float64-capture",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "float64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "41700000100000004008000000000000"
+      },
+      "compile_ns": 12958,
+      "evaluation_ns": 5487
+    },
+    {
+      "id": "int8-typed-int64-capture",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int64",
+        "shape": [
+          1
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "0000000000000080"
+      },
+      "compile_ns": 10958,
+      "evaluation_ns": 4243
+    },
+    {
+      "id": "float32-zero-dimensional",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "float32",
+        "shape": [],
+        "encoding": "raw-be-hex",
+        "hex": "4b800000"
+      },
+      "compile_ns": 9791,
+      "evaluation_ns": 4343
+    },
+    {
+      "id": "int8-float-literal",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int8-uint8-promote",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int16",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "00fe0080"
+      },
+      "compile_ns": 10417,
+      "evaluation_ns": 6695
+    },
+    {
+      "id": "int64-uint64-promote",
+      "status": -3,
+      "category": "invalid_source",
+      "native_status": 0,
+      "message": "invalid_source: unsupported implicit numeric promotion; use an explicit cast",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int64-uint64-compare",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "bool",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "0101"
+      },
+      "compile_ns": 11000,
+      "evaluation_ns": 6583
+    },
+    {
+      "id": "int64-uint64-compare-rounding",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "bool",
+        "shape": [
+          1
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "01"
+      },
+      "compile_ns": 9833,
+      "evaluation_ns": 5479
+    },
+    {
+      "id": "bool-add",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "00000000000000020000000000000001"
+      },
+      "compile_ns": 10000,
+      "evaluation_ns": 6518
+    },
+    {
+      "id": "int64-true-divide",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "float64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "c002aaaaaaaaaaab4002aaaaaaaaaaab"
+      },
+      "compile_ns": 9875,
+      "evaluation_ns": 5360
+    },
+    {
+      "id": "int64-floor-divide",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "0000000000000002fffffffffffffffd"
+      },
+      "compile_ns": 11541,
+      "evaluation_ns": 5258
+    },
+    {
+      "id": "int64-remainder",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "fffffffffffffffffffffffffffffffe"
+      },
+      "compile_ns": 11500,
+      "evaluation_ns": 5241
+    },
+    {
+      "id": "int64-zero-divide",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int64-min-divide",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int8-large-shift",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "float64-cast-int",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "int64",
+        "shape": [
+          3
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "0000000000000001ffffffffffffffff0000000000000000"
+      },
+      "compile_ns": 9666,
+      "evaluation_ns": 3247
+    },
+    {
+      "id": "float64-cast-infinity",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "int64-narrow-output",
+      "status": -5,
+      "category": "evaluation_error",
+      "native_status": -5,
+      "message": "evaluation_error: portable interpreter evaluation failed",
+      "backend": "interpreter"
+    },
+    {
+      "id": "float32-cast-float",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "float64",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "3ff40000000000008000000000000000"
+      },
+      "compile_ns": 9125,
+      "evaluation_ns": 3250
+    },
+    {
+      "id": "float32-sin",
+      "status": 0,
+      "backend": "interpreter",
+      "output": {
+        "dtype": "float32",
+        "shape": [
+          2
+        ],
+        "encoding": "raw-be-hex",
+        "hex": "0000000080000000"
+      },
+      "compile_ns": 7250,
+      "evaluation_ns": 3375
+    }
+  ],
+  "provenance": {
+    "python_revision": "063fd8b9a4c65ae75d76080f3497086a8e5a3e9d",
+    "native_revision": "4e45081889e20e6a3820822a808f92de00fff7e6",
+    "installed_native_revision": "3418cdce4b5c11e1661c8b6453e3d31d94b0b2b4",
+    "local_changes": [
+      "tools/menudet_numpy_compat.py",
+      "tests/test_menudet_numpy_compat.py",
+      "checkpoint reports"
+    ]
+  },
+  "reference_drift": {
+    "version_changed": false,
+    "differences": []
+  },
+  "native": [
+    {
+      "id": "int8-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 54000,
+      "evaluation_cpu_ns": 2455
+    },
+    {
+      "id": "int16-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 10000,
+      "evaluation_cpu_ns": 2327
+    },
+    {
+      "id": "int32-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2347
+    },
+    {
+      "id": "int64-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 6000,
+      "evaluation_cpu_ns": 2386
+    },
+    {
+      "id": "uint8-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2495
+    },
+    {
+      "id": "uint16-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 19000,
+      "evaluation_cpu_ns": 2406
+    },
+    {
+      "id": "uint32-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 12000,
+      "evaluation_cpu_ns": 2406
+    },
+    {
+      "id": "uint64-add-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2386
+    },
+    {
+      "id": "int64-exact-subtract",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "00000000000000000000000000000001",
+      "compile_cpu_ns": 13000,
+      "evaluation_cpu_ns": 2505
+    },
+    {
+      "id": "int8-multiply-boundary",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 10000,
+      "evaluation_cpu_ns": 2465
+    },
+    {
+      "id": "int8-negate-min",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 10000,
+      "evaluation_cpu_ns": 1337
+    },
+    {
+      "id": "int64-absolute-min",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 7000,
+      "evaluation_cpu_ns": 327
+    },
+    {
+      "id": "float32-weak-literal",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "000000003f800000",
+      "compile_cpu_ns": 12000,
+      "evaluation_cpu_ns": 4386
+    },
+    {
+      "id": "float32-typed-float64-capture",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "41700000100000004008000000000000",
+      "compile_cpu_ns": 9000,
+      "evaluation_cpu_ns": 2406
+    },
+    {
+      "id": "int8-typed-int64-capture",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "0000000000000080",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 1356
+    },
+    {
+      "id": "float32-zero-dimensional",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "4b800000",
+      "compile_cpu_ns": 9000,
+      "evaluation_cpu_ns": 1337
+    },
+    {
+      "id": "int8-float-literal",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 1337
+    },
+    {
+      "id": "int8-uint8-promote",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "00fe0080",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2426
+    },
+    {
+      "id": "int64-uint64-promote",
+      "status": -3,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 6000,
+      "evaluation_cpu_ns": 0
+    },
+    {
+      "id": "int64-uint64-compare",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "0101",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2376
+    },
+    {
+      "id": "int64-uint64-compare-rounding",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "01",
+      "compile_cpu_ns": 7000,
+      "evaluation_cpu_ns": 1337
+    },
+    {
+      "id": "bool-add",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "00000000000000020000000000000001",
+      "compile_cpu_ns": 11000,
+      "evaluation_cpu_ns": 2406
+    },
+    {
+      "id": "int64-true-divide",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "c002aaaaaaaaaaab4002aaaaaaaaaaab",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2406
+    },
+    {
+      "id": "int64-floor-divide",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "0000000000000002fffffffffffffffd",
+      "compile_cpu_ns": 9000,
+      "evaluation_cpu_ns": 2386
+    },
+    {
+      "id": "int64-remainder",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "fffffffffffffffffffffffffffffffe",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 2376
+    },
+    {
+      "id": "int64-zero-divide",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 7000,
+      "evaluation_cpu_ns": 1356
+    },
+    {
+      "id": "int64-min-divide",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 1257
+    },
+    {
+      "id": "int8-large-shift",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 6000,
+      "evaluation_cpu_ns": 1337
+    },
+    {
+      "id": "float64-cast-int",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "0000000000000001ffffffffffffffff0000000000000000",
+      "compile_cpu_ns": 8000,
+      "evaluation_cpu_ns": 347
+    },
+    {
+      "id": "float64-cast-infinity",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 6000,
+      "evaluation_cpu_ns": 297
+    },
+    {
+      "id": "int64-narrow-output",
+      "status": -5,
+      "native_status": -5,
+      "backend": "interpreter",
+      "hex": "",
+      "compile_cpu_ns": 4000,
+      "evaluation_cpu_ns": 327
+    },
+    {
+      "id": "float32-cast-float",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "3ff40000000000008000000000000000",
+      "compile_cpu_ns": 7000,
+      "evaluation_cpu_ns": 327
+    },
+    {
+      "id": "float32-sin",
+      "status": 0,
+      "native_status": 0,
+      "backend": "interpreter",
+      "hex": "0000000080000000",
+      "compile_cpu_ns": 5000,
+      "evaluation_cpu_ns": 446
+    }
+  ]
+}
