@@ -573,10 +573,12 @@ def integrate(corpus, jit=False):  # noqa: C901 -- paired execution, diagnostics
 
 def native(corpus, runner, work_dir, jit=False, observe=False):
     validate(corpus)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=work_dir) as file:
-        json.dump(corpus, file)
-        file.flush()
-        command = [str(runner.resolve()), file.name, "on" if jit else "off"] + (
+    # Close the input before launching the native reader. Windows cannot reopen
+    # a live NamedTemporaryFile with its default delete/share mode.
+    with tempfile.TemporaryDirectory(dir=work_dir) as directory:
+        path = Path(directory) / "corpus.json"
+        path.write_text(json.dumps(corpus))
+        command = [str(runner.resolve()), str(path), "on" if jit else "off"] + (
             ["observe"] if observe else []
         )
         proc = subprocess.run(command, capture_output=True, text=True, check=False)

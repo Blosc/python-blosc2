@@ -108,11 +108,18 @@ jobs:
       id: build_non_windows
       run: pip install -e . --group test
 
+    - name: Install Arrow dictionary test dependency
+      # Pandas is already a dev dependency; Arrow's dictionary conversions now
+      # import it even when the test does not construct a pandas object.
+      run: python -m pip install pandas
+
     # Build isolation uses NumPy 2 headers for the dual-ABI extension. Optional
     # test dependencies may upgrade the runtime too, so pin it AFTER installing.
     - name: Install NumPy 1.26-compatible test runtime
       if: matrix.numpy-version == '1.26'
-      run: pip install "numpy==1.26.*" "zarr>=3.1.5,<3.2"
+      # PyArrow 26 dropped the NumPy 1 ABI without encoding it in Requires-Dist.
+      # Keep this host-compatibility job on a known dual-ABI Arrow release.
+      run: pip install "numpy==1.26.*" "zarr>=3.1.5,<3.2" "pyarrow==21.0.0" pandas
 
     - name: Verify requested NumPy runtime
       if: matrix.numpy-version

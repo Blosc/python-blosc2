@@ -74,7 +74,10 @@ jobs:
         if: runner.os != 'Windows'
         env:
           MENUDET_REQUIRE_JIT: '1'
-        run: python -m pytest tests/test_menudet_jit.py -q -n 0
+          ME_DSL_TRACE: '1'
+        run: |
+          set -o pipefail
+          python -m pytest tests/test_menudet_jit.py -q -n 0 2>&1 | tee menudet-jit.log
       - name: Record exact paired revisions
         if: always()
         run: |
@@ -87,3 +90,4 @@ jobs:
           path: |
             paired-revisions.txt
             native-build/Testing/Temporary/LastTest.log
+            menudet-jit.log

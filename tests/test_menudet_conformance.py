@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -86,6 +87,25 @@ def test_platform_qualified_reference_is_exact(machine, key, monkeypatch):
     del case["platform_qualification"]
     with pytest.raises(ValueError, match="platform qualification"):
         compat.reference_expected(case)
+
+
+def test_native_input_is_closed_before_subprocess(monkeypatch, tmp_path):
+    case = compat.make_case("closed-input", "identity", "x", [np.array([1.0])])
+    corpus = {"schema_version": compat.VERSION, "cases": [case]}
+    row = {"id": case["id"], "outcome": "matching"}
+    paths = []
+
+    def run(command, **kwargs):
+        path = Path(command[1])
+        assert json.loads(path.read_text()) == corpus
+        # Windows permits this only after the writer closes its handle.
+        path.unlink()
+        paths.append(path)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(row), stderr="")
+
+    monkeypatch.setattr(compat.subprocess, "run", run)
+    assert compat.native(corpus, tmp_path / "runner", tmp_path) == [row]
+    assert not paths[0].parent.exists()
 
 
 def test_seeded_generator_and_minimization():
