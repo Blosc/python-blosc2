@@ -25,6 +25,21 @@ jobs:
         python {project}/scripts/verify_safe_lazyexpr.py
     steps:
       - uses: actions/checkout@v7
+      # Qualify the experimental pair without changing the shipping native pin.
+      - name: Select experimental native revision
+        if: github.ref == 'refs/heads/numpy-compat'
+        id: native_ref
+        run: echo "sha=$(cat .github/menudet-native-ref)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: github.ref == 'refs/heads/numpy-compat'
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ steps.native_ref.outputs.sha }}
+          path: ci-native
+      - name: Override experimental native source
+        if: github.ref == 'refs/heads/numpy-compat'
+        run: |
+          echo "CMAKE_ARGS=$CMAKE_ARGS -DFETCHCONTENT_SOURCE_DIR_MINIEXPR=$PWD/ci-native" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'

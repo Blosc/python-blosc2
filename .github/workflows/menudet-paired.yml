@@ -47,9 +47,15 @@ jobs:
       - name: Build explicit native and Python pair
         run: |
           python -m pip install ninja cmake
-          cmake -S native -B native-build -DMINIEXPR_BUILD_ARTIFACT=ON -DCMAKE_BUILD_TYPE=Release
+          # Match Python's static linkage; Windows Ninja cannot emit both the
+          # shared import library and static library as miniexpr.lib.
+          cmake -S native -B native-build -DMINIEXPR_BUILD_ARTIFACT=ON -DMINIEXPR_BUILD_SHARED=OFF -DCMAKE_BUILD_TYPE=Release
           cmake --build native-build --parallel 4
-          python -m pip install -e . --group test --config-settings="cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=$PWD/native"
+          native_source="$PWD/native"
+          if [ "$RUNNER_OS" = Windows ]; then
+            native_source=$(cygpath -m "$native_source")
+          fi
+          python -m pip install -e . --group test --config-settings="cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=$native_source"
           python -m pip install 'numpy==2.5.3'
       - name: Require corpus and native array capabilities
         run: |
@@ -64,6 +70,11 @@ jobs:
           fi
           ctest --test-dir native-build --output-on-failure
           python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py -q -n 0
+      - name: Require actual supported portable JIT backends
+        if: runner.os != 'Windows'
+        env:
+          MENUDET_REQUIRE_JIT: '1'
+        run: python -m pytest tests/test_menudet_jit.py -q -n 0
       - name: Record exact paired revisions
         if: always()
         run: |

@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 import math
+import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -207,6 +208,22 @@ def reference(case):
     return describe(actual)
 
 
+def reference_expected(case):
+    """Select a reviewed, exact host observation, never the native baseline.
+
+    NumPy's nonfinite-to-integer sentinel is explicitly platform-qualified in
+    the corpus. Native execution still must reject it with the recorded status;
+    only the independent NumPy drift check uses this host-specific observation.
+    Unlisted machines retain the original reference and therefore fail on drift.
+    """
+    variants = case.get("reference_expected_by_machine", {})
+    if variants and not case.get("platform_qualification"):
+        raise ValueError("Host reference variants require a platform qualification")
+    machine = platform.machine().lower()
+    machine = {"amd64": "x86_64", "aarch64": "arm64"}.get(machine, machine)
+    return variants.get(machine, case["expected"])
+
+
 def make_case(
     identifier, operation, expression, arrays, output=None, literal=None, policy=None, layout=None
 ):
@@ -255,6 +272,13 @@ def generate(checkpoint_path):
         case.update(reference_kind="numpy", seed=None, comparison=copy.deepcopy(BITWISE))
         case["inputs"] = [describe(checkpoint.decode(item), item["name"]) for item in original["inputs"]]
         case["expected"] = describe(checkpoint.decode(original["expected"]))
+        if case["id"] == "float64-cast-infinity":
+            # Exact observations from the pinned NumPy ARM64 and x64 builds;
+            # keep the native diagnostic/divergence baseline unchanged.
+            case["reference_expected_by_machine"] = {
+                machine: {**case["expected"], "hex": bits}
+                for machine, bits in {"x86_64": "8000000000000000", "arm64": "7fffffffffffffff"}.items()
+            }
         case["scalar_operands"] = copy.deepcopy(original.get("scalar_operands", []))
         old = case["baseline"]
         case["baseline"] = {"status": old["status"], "category": STATUS[old["status"]]}
@@ -594,7 +618,7 @@ def paired(corpus, runner, work_dir, observe=False):
     drift = []
     for case in corpus["cases"]:
         actual = reference(case)
-        expected = case["expected"]
+        expected = reference_expected(case)
         mismatch = (
             actual != expected
             if "diagnostic" in expected
@@ -635,6 +659,7 @@ def paired(corpus, runner, work_dir, observe=False):
         },
         "reference_numpy": corpus["reference"]["numpy"],
         "installed_numpy": np.__version__,
+        "installed_machine": platform.machine(),
         "reference_drift": drift,
         "eligible_jit_cases": sum(bool(row.get("jit_eligible")) for row in reports["on"]["native"]),
         "requests": reports,

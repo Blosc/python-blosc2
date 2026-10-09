@@ -31,6 +31,31 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
+    # Experimental tests require the explicit native pair, not the unchanged
+    # release dependency. Keep this source override local to numpy-compat CI.
+    - name: Select experimental native revision
+      if: github.ref == 'refs/heads/numpy-compat'
+      id: native_ref
+      shell: bash
+      run: echo "sha=$(cat .github/menudet-native-ref)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/checkout@v7
+      if: github.ref == 'refs/heads/numpy-compat'
+      with:
+        repository: Blosc/miniexpr
+        ref: ${{ steps.native_ref.outputs.sha }}
+        path: ci-native
+
+    - name: Override experimental native source
+      if: github.ref == 'refs/heads/numpy-compat'
+      shell: bash
+      run: |
+        source_path="$PWD/ci-native"
+        if [ "$RUNNER_OS" = Windows ]; then
+          source_path=$(cygpath -m "$source_path")
+        fi
+        echo "CMAKE_ARGS=-DFETCHCONTENT_SOURCE_DIR_MINIEXPR=$source_path" >> "$GITHUB_ENV"
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v7
       with:

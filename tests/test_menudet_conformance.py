@@ -63,6 +63,31 @@ def test_layout_recipes(order, byteorder):
     assert not actual.flags.c_contiguous
 
 
+@pytest.mark.parametrize(
+    ("machine", "key"),
+    [("AMD64", "x86_64"), ("x86_64", "x86_64"), ("aarch64", "arm64"), ("arm64", "arm64")],
+)
+def test_platform_qualified_reference_is_exact(machine, key, monkeypatch):
+    arm = compat.describe(np.array([2**63 - 1], dtype="int64"))
+    x64 = compat.describe(np.array([-(2**63)], dtype="int64"))
+    case = {
+        "expected": arm,
+        "platform_qualification": "Host-specific nonfinite cast sentinel",
+        "reference_expected_by_machine": {"arm64": arm, "x86_64": x64},
+        "baseline": {"status": -5, "category": "evaluation_error"},
+    }
+    monkeypatch.setattr(compat.platform, "machine", lambda: machine)
+    expected = compat.reference_expected(case)
+    assert expected == case["reference_expected_by_machine"][key]
+    assert compat.compare(x64 if key == "arm64" else arm, expected, compat.BITWISE)
+    assert case["baseline"] == {"status": -5, "category": "evaluation_error"}
+    monkeypatch.setattr(compat.platform, "machine", lambda: "unlisted")
+    assert compat.reference_expected(case) == arm
+    del case["platform_qualification"]
+    with pytest.raises(ValueError, match="platform qualification"):
+        compat.reference_expected(case)
+
+
 def test_seeded_generator_and_minimization():
     assert compat.property_cases(1729) == compat.property_cases(1729)
     failure = compat.property_cases(1729)[-1]

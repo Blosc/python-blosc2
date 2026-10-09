@@ -112,9 +112,6 @@ def test_lazy_mask_raise_recovery_and_threads(backend):
 
 
 def test_fail_closed_and_casts(backend, monkeypatch):
-    assert not make("x // y", "int64", jit=True).has_jit
-    assert not make("x << y", "int64", jit=True).has_jit
-    assert not make("x // y", "float64", jit=True).has_jit
     for expression in ("x == -1", "x < -1"):
         k = make(expression, "uint64", jit=True, output="bool")
         assert not k.has_jit  # signed weak literal must not undergo C's unsigned promotion
@@ -131,6 +128,31 @@ def test_fail_closed_and_casts(backend, monkeypatch):
     )
     monkeypatch.setenv("CFLAGS", "-ffast-math")
     assert not make("x + y", "float64", jit=True).has_jit
+
+
+@pytest.mark.parametrize(
+    ("expression", "dtype", "x", "y"),
+    [
+        ("x // y", "int64", [-7, 7, -(2**63), 7, 0], [3, -3, -1, 0, 0]),
+        ("x << y", "int64", [-1, 7, -(2**63), 7, 7], [1, -1, 1, 64, 65]),
+        ("x // y", "float64", [-7, 7, -0.0, np.inf, -np.inf, np.nan, 1], [3, -3, 2, 1, np.inf, 3, 0]),
+    ],
+)
+def test_lowered_division_and_shift_guards(backend, expression, dtype, x, y):
+    # These routes are now lowered, not fail-closed fallbacks. Require actual
+    # compilation and retain exact values, signed zeros and status parity at
+    # zero divisors, signed overflow, nonfinite inputs and invalid shift counts.
+    compiled = make(expression, dtype, jit=True)
+    reference = make(expression, dtype, jit=False)
+    assert compiled.has_jit
+    assert not reference.has_jit
+    bindings = {"x": np.array(x, dtype=dtype), "y": np.array(y, dtype=dtype)}
+    actual, status = compiled.evaluate(bindings, return_status=True)
+    expected, expected_status = reference.evaluate(bindings, return_status=True)
+    assert status == expected_status
+    np.testing.assert_array_equal(actual, expected)
+    finite = ~np.isnan(expected) if dtype == "float64" else np.ones(expected.shape, dtype=bool)
+    assert actual[finite].tobytes() == expected[finite].tobytes()
 
 
 def test_native_graph_acceleration_and_reuse(backend):
