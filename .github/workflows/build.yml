@@ -15,6 +15,7 @@ jobs:
     env:
       CMAKE_GENERATOR: Ninja
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12"]
@@ -115,6 +116,7 @@ jobs:
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 
     - name: Verify experimental safe-graph corpus
+      if: always() && (steps.build_windows.outcome == 'success' || steps.build_non_windows.outcome == 'success')
       run: python scripts/verify_safe_lazyexpr.py --report safe-lazyexpr.json
 
     - name: Upload safe-graph platform evidence
