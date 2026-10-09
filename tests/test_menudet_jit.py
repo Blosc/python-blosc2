@@ -275,6 +275,23 @@ def test_modular_integer_lowering(backend, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_floor_division_quiet_nan_status(backend, dtype):
+    bindings = {
+        "x": np.array([np.nan, 3, -2, 0], dtype=dtype),
+        "y": np.array([2, np.nan, 4, 1], dtype=dtype),
+    }
+    with np.errstate(all="raise"):
+        expected = bindings["x"] // bindings["y"]
+    for jit in (False, True):
+        kernel = make("x // y", dtype, jit=jit)
+        if jit:
+            assert kernel.has_jit
+        actual, status = kernel.evaluate(bindings, return_status=True)
+        np.testing.assert_array_equal(actual, expected)
+        assert status["flags"] == 0
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_unary_math_lowering(backend, dtype):
     x = np.array([-np.inf, -2, -0.0, 0.0, 0.25, 1.0, 2.0, np.inf, np.nan], dtype=dtype)
     uint = "uint32" if dtype == "float32" else "uint64"
