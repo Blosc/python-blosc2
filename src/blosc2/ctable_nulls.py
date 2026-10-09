@@ -958,7 +958,9 @@ class NullChannel:
             return None
         if _is_nan(sentinel):
             return blosc2.isnan(col._raw_col)
-        return col._raw_col == sentinel
+        # This internal predicate must remain lazy even while expression fusion
+        # temporarily disables user-facing overloaded equality for identity checks.
+        return blosc2.LazyExpr(new_op=(col._raw_col, "==", sentinel))
 
     def valid_pred(self):
         """Lazy predicate over the raw physical array, True where the value is *not* null.

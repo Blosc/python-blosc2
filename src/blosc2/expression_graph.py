@@ -1008,8 +1008,11 @@ def _root_reduction_dtype(name, receiver, arguments, backend):
     ):
         # Single-threaded WASM uses the existing NumPy reduction fallback,
         # whose default integer accumulator/index width is platform-sized.
-        # Do not replace that numerical contract with native Blosc2's int64.
-        return None
+        # Dummy-array inference can still return native int64 for positional
+        # argmin/argmax. State the NumPy fallback's width explicitly instead.
+        return np.dtype(
+            np.uintp if input_dtype.kind == "u" and name not in {"argmin", "argmax"} else np.intp
+        )
     if name in _CUMULATIVE_OPERATIONS and backend != "numpy" and requested is not None:
         # The current Blosc2 cumulative implementation does not consistently
         # apply dtype overrides. Preserve its inference rather than claiming

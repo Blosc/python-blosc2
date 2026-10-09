@@ -269,7 +269,8 @@ def test_null_pred_is_none_for_ndarray_column():
     np.testing.assert_array_equal(col.is_null(), [False, True])
 
 
-def test_null_pred_matches_is_null_for_sentinel_column():
+@pytest.mark.parametrize("identity_equal", [False, True])
+def test_null_pred_matches_is_null_for_sentinel_column(monkeypatch, identity_equal):
     @dataclass
     class Row:
         v: int = blosc2.field(blosc2.int64(null_value=-1))
@@ -277,6 +278,7 @@ def test_null_pred_matches_is_null_for_sentinel_column():
     t = CTable(Row)
     t.extend({"v": [1, -1, 3]})
     col = t["v"]
+    monkeypatch.setattr(blosc2, "_disable_overloaded_equal", identity_equal)
     pred = np.asarray(col._nulls.null_pred().compute()[:])
     np.testing.assert_array_equal(pred[: t.nrows], col.is_null())
     valid = np.asarray(col._nulls.valid_pred().compute()[:])

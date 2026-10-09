@@ -48,12 +48,12 @@ def test_value_dependent_numpy_promotion_defers_scalar_metadata(monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["sum", "prod", "argmin", "argmax", "cumulative_sum", "cumulative_prod"])
-def test_platform_accumulator_fallback_does_not_claim_native_integer_width(monkeypatch, name):
+def test_platform_accumulator_fallback_uses_numpy_integer_width(monkeypatch, name):
     module = importlib.import_module("blosc2.expression_graph")
     monkeypatch.setattr(module, "_BLOSC_PLATFORM_ACCUMULATOR_FALLBACK", True)
     source = blosc2.asarray(np.arange(1, 5, dtype="int8"))
     graph = module.parse_expression(f"x.{name}(axis=0)")
-    assert graph.infer_dtype({"x": source}) is None
+    assert graph.infer_dtype({"x": source}) == np.dtype(np.intp)
     numpy_graph = module.parse_expression("np.sum(x)")
     assert numpy_graph.infer_dtype({"x": np.arange(4, dtype="int8")}) == np.dtype(np.intp)
 
