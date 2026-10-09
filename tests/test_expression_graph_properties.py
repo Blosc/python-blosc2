@@ -53,7 +53,8 @@ def test_platform_accumulator_fallback_uses_numpy_integer_width(monkeypatch, nam
     monkeypatch.setattr(module, "_BLOSC_PLATFORM_ACCUMULATOR_FALLBACK", True)
     source = blosc2.asarray(np.arange(1, 5, dtype="int8"))
     graph = module.parse_expression(f"x.{name}(axis=0)")
-    assert graph.infer_dtype({"x": source}) == np.dtype(np.intp)
+    expected = blosc2.DEFAULT_INDEX if name in {"argmin", "argmax"} else np.intp
+    assert graph.infer_dtype({"x": source}) == np.dtype(expected)
     numpy_graph = module.parse_expression("np.sum(x)")
     assert numpy_graph.infer_dtype({"x": np.arange(4, dtype="int8")}) == np.dtype(np.intp)
 

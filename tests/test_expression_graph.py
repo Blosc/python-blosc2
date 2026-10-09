@@ -487,7 +487,7 @@ def test_backend_positional_reduction_binding(backend, name):
     options = {"axis": 0, "keepdims": True}
     if name in {"std", "var"}:
         options["ddof"] = 1
-    expected = getattr(data, name)(**options)
+    expected = getattr(x, name)(**options)
     assert expr.shape == expected.shape
     assert expr.dtype == expected.dtype
     np.testing.assert_allclose(expr[:], expected)

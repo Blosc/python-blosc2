@@ -1003,16 +1003,14 @@ def _root_reduction_dtype(name, receiver, arguments, backend):
         and not numpy_receiver
         and requested is None
         and output is None
-        and name in {"sum", "prod", "argmin", "argmax"} | _CUMULATIVE_OPERATIONS
-        and (name in {"argmin", "argmax"} or (input_dtype.kind in "biu" and input_dtype.itemsize < 8))
+        and name in {"sum", "prod"} | _CUMULATIVE_OPERATIONS
+        and input_dtype.kind in "biu"
+        and input_dtype.itemsize < 8
     ):
         # Single-threaded WASM uses the existing NumPy reduction fallback,
         # whose default integer accumulator/index width is platform-sized.
-        # Dummy-array inference can still return native int64 for positional
-        # argmin/argmax. State the NumPy fallback's width explicitly instead.
-        return np.dtype(
-            np.uintp if input_dtype.kind == "u" and name not in {"argmin", "argmax"} else np.intp
-        )
+        # Index reductions instead retain Blosc2's DEFAULT_INDEX contract.
+        return np.dtype(np.uintp if input_dtype.kind == "u" else np.intp)
     if name in _CUMULATIVE_OPERATIONS and backend != "numpy" and requested is not None:
         # The current Blosc2 cumulative implementation does not consistently
         # apply dtype overrides. Preserve its inference rather than claiming
