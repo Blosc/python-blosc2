@@ -1077,6 +1077,12 @@ cdef extern from "dsl_artifact_bridge.h":
     const char *b2_artifact_name(const void *, int)
     me_dtype b2_artifact_dtype(const void *, int)
     me_dtype b2_artifact_output(const void *)
+    me_dtype b2_artifact_inferred(const void *)
+    ctypedef struct b2_artifact_fp_status:
+        unsigned flags
+        unsigned supported
+    int b2_artifact_eval_status(const void *, const b2_artifact_buffer *, int, void *,
+                               const b2_artifact_descriptor *, unsigned, b2_artifact_fp_status *, b2_artifact_error *) nogil
     int b2_artifact_jit(const void *)
     ctypedef struct b2_artifact_buffer:
         const char *name
@@ -1101,7 +1107,66 @@ cdef extern from "dsl_artifact_bridge.h":
     int b2_artifact_rank(const void *)
     const char *b2_artifact_version(const void *)
     int b2_artifact_eval_ex(const void *, const b2_artifact_buffer *, int, void *,
-                           const b2_artifact_descriptor *, b2_artifact_error *) nogil
+                          const b2_artifact_descriptor *, b2_artifact_error *) nogil
+
+cdef extern from "dsl_array_bridge.h":
+    ctypedef struct b2_array_view:
+        const char *name
+        me_dtype dtype
+        const void *base
+        size_t capacity
+        size_t offset
+        int rank
+        int64_t shape[16]
+        int64_t strides[16]
+        unsigned byte_order
+    ctypedef struct b2_array_options:
+        unsigned version
+        int reduction
+        int naxes
+        int axes[16]
+        bint keepdims
+        me_dtype accumulator
+        const void *initial
+        size_t tile_items
+        const b2_array_view *where
+    ctypedef struct b2_array_report:
+        size_t temporary_bytes
+        size_t gathered_bytes
+        size_t zero_copy_tiles
+        size_t evaluated_tiles
+        unsigned fp_flags
+        unsigned fp_supported
+    int b2_array_shape(const void *, int, const int64_t *, const b2_array_options *, int *, int64_t *, me_dtype *, b2_artifact_error *) nogil
+    int b2_array_eval(const void *, const b2_array_view *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
+
+cdef object array_view_binding(np.ndarray array, b2_array_view *view):
+    cdef np.ndarray root
+    cdef object owner = array
+    cdef object base
+    cdef int i
+    # Follow ndarray/DummyArray owners; bounds are the allocation, never an
+    # as_strided view's possibly fictitious logical byte extent.
+    while getattr(owner, "base", None) is not None:
+        owner = owner.base
+    if not isinstance(owner, np.ndarray) or not owner.flags.owndata or not (owner.flags.c_contiguous or owner.flags.f_contiguous):
+        array = np.array(array, copy=True, order="K")
+        owner = array
+    root = owner
+    if array.ndim > 16:
+        raise ValueError("Native logical arrays support at most 16 axes")
+    view.dtype = _me_dtype_from_numpy_dtype(array.dtype.newbyteorder('='))
+    view.base = np.PyArray_DATA(root)
+    view.capacity = root.nbytes
+    if <uintptr_t>np.PyArray_DATA(array) < <uintptr_t>view.base:
+        raise ValueError("Array offset precedes owning allocation")
+    view.offset = <uintptr_t>np.PyArray_DATA(array) - <uintptr_t>view.base
+    view.rank = array.ndim
+    for i in range(view.rank):
+        view.shape[i] = array.shape[i]
+        view.strides[i] = array.strides[i]
+    view.byte_order = 1 if array.dtype.byteorder == '<' else 2 if array.dtype.byteorder == '>' else 0
+    return array
 
 
 def portable_artifact_available():
@@ -1175,12 +1240,16 @@ cdef class PortableArtifactHandle:
             "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
                        self.signature_dtype(i) for i in range(b2_artifact_ninputs(self._handle))},
             "output_dtype": self.signature_dtype(-1),
+            "inferred_dtype": (None if b2_artifact_inferred(self._handle) == ME_AUTO else
+                               _numpy_dtype_from_me_dtype(b2_artifact_inferred(self._handle))),
             "cardinality": "block_scalar" if b2_artifact_cardinality(self._handle) == 1 else "elementwise",
             "ndim": b2_artifact_rank(self._handle),
         }
 
-    def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None):
+    def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None,
+                       bint return_status=False, unsigned fp_raise=0):
         """Evaluate one explicit logical block; never infer ND coordinates from a physical tile."""
+        cdef b2_artifact_fp_status fp_status
         from math import prod
 
         if not b2_artifact_descriptor_available():
@@ -1248,12 +1317,102 @@ cdef class PortableArtifactHandle:
                 bindings[i].data = np.PyArray_DATA(array)
                 bindings[i].capacity = array.nbytes
             with nogil:
-                rc = b2_artifact_eval_ex(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, &error)
+                if return_status or fp_raise:
+                    rc = b2_artifact_eval_status(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, fp_raise, &fp_status, &error)
+                else:
+                    rc = b2_artifact_eval_ex(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, &error)
             if rc:
-                raise_artifact_error(rc, &error)
-            return output
+                try:
+                    raise_artifact_error(rc, &error)
+                except Exception as exc:
+                    if return_status or fp_raise:
+                        exc.fp_status = {"flags": fp_status.flags, "supported": bool(fp_status.supported)}
+                    raise
+            return (output, {"flags": fp_status.flags, "supported": bool(fp_status.supported)}) if return_status else output
         finally:
             free(bindings)
+
+    def evaluate_array(self, inputs, shape, reduction=None, axes=None, bint keepdims=False,
+                       accumulator=None, initial=None, where=None, size_t tile_items=1024):
+        cdef b2_array_view *views = NULL
+        cdef b2_array_view mask_view
+        cdef b2_array_options options
+        cdef b2_array_report report
+        cdef b2_artifact_error error
+        cdef int64_t domain[16]
+        cdef int64_t result_shape[16]
+        cdef int rank = len(shape), result_rank, rc, n = len(inputs), i, j
+        cdef me_dtype result_dtype
+        cdef size_t output_bytes
+        cdef np.ndarray array, output, initial_array
+        cdef bytes name
+        cdef list names = [value.encode('utf-8') for value in inputs]
+        cdef list owned = []
+        cdef size_t normalization_bytes = 0
+        cdef np.ndarray bound
+        memset(&options, 0, sizeof(options))
+        memset(&error, 0, sizeof(error))
+        if rank > 16 or n > 128:
+            raise ValueError("Native array rank/input limit exceeded")
+        for i in range(rank):
+            domain[i] = shape[i]
+        options.version = 1
+        options.reduction = {None: 0, 'sum': 1, 'prod': 2, 'min': 3, 'max': 4, 'any': 5, 'all': 6}[reduction]
+        options.naxes = 0 if reduction is None else -1 if axes is None else len(axes)
+        if options.naxes > 16:
+            raise ValueError("Too many reduction axes")
+        if axes is not None:
+            for i in range(options.naxes):
+                options.axes[i] = axes[i]
+        options.keepdims = keepdims
+        options.accumulator = ME_AUTO if accumulator is None else _me_dtype_from_numpy_dtype(np.dtype(accumulator))
+        options.tile_items = tile_items
+        with nogil:
+            rc = b2_array_shape(self._handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+        output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
+        output_bytes = output.nbytes
+        if initial is not None:
+            initial_array = np.asarray(initial, dtype=output.dtype)
+            if initial_array.ndim != 0:
+                raise ValueError("initial must be a scalar")
+            options.initial = np.PyArray_DATA(initial_array)
+        if where is not None:
+            array = np.asarray(where)
+            if array.dtype != np.dtype('bool'):
+                raise TypeError("Participating mask must have bool dtype")
+            bound = array_view_binding(array, &mask_view)
+            if bound is not array:
+                normalization_bytes += bound.nbytes
+            owned.append(bound)
+            options.where = &mask_view
+        if n:
+            views = <b2_array_view *>calloc(n, sizeof(b2_array_view))
+            if views == NULL:
+                raise MemoryError()
+        try:
+            for i, value in enumerate(inputs.values()):
+                array = np.asarray(value)
+                bound = array_view_binding(array, &views[i])
+                if bound is not array:
+                    normalization_bytes += bound.nbytes
+                owned.append(bound)
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names cannot contain NUL")
+                views[i].name = name
+            with nogil:
+                rc = b2_array_eval(self._handle, views, n, rank, domain, &options,
+                                   np.PyArray_DATA(output), output_bytes, &report, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output, {"temporary_bytes": report.temporary_bytes, "gathered_bytes": report.gathered_bytes,
+                            "normalization_bytes": normalization_bytes,
+                            "zero_copy_tiles": report.zero_copy_tiles, "evaluated_tiles": report.evaluated_tiles,
+                            "fp_flags": report.fp_flags, "fp_supported": bool(report.fp_supported)}
+        finally:
+            free(views)
 
     def evaluate(self, inputs, shape):
         cdef Py_ssize_t n = len(inputs)

@@ -943,6 +943,7 @@ class DSLKernel:
         constants=None,
         metadata=None,
         version="1.0",
+        casting="unsafe",
         cardinality="elementwise",
         ndim=0,
     ):
@@ -957,7 +958,12 @@ class DSLKernel:
         callbacks cannot be captures. Import via :meth:`blosc2.PortableKernel.from_json`.
 
         The default ``version="1.0"`` is an experimental implementation draft. It
-        supports mixed numeric types and fixed byte/Unicode string snapshots;
+        retains checked integer semantics. Opt in to ``version="1.1"`` for the
+        NumPy arithmetic profile (requires an updated native runtime), with final
+        output ``casting="safe"``, ``"same_kind"`` or ``"unsafe"``. In 1.1,
+        ordinary numeric captures are weak scalars; NumPy scalars and explicit
+        ``capture_dtypes`` are strong typed scalars.
+        Both profiles support mixed numeric types and fixed byte/Unicode snapshots;
         ``cardinality`` is ``elementwise`` or ``block_scalar``, and ``ndim``
         declares the required logical coordinate rank. The native loader
         validates normalized source, widths and cardinality before export succeeds.
@@ -972,6 +978,7 @@ class DSLKernel:
             constants=constants,
             metadata=metadata,
             version=version,
+            casting=casting,
             cardinality=cardinality,
             ndim=ndim,
         )

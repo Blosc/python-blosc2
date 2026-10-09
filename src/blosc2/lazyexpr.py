@@ -87,8 +87,7 @@ from .utils import (
     try_miniexpr,
 )
 
-if not blosc2.IS_WASM:
-    import numexpr
+numexpr = blosc2.numexpr
 
 global safe_blosc2_globals
 safe_blosc2_globals = {}
@@ -168,7 +167,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):  # noqa: C901
         validate_operands(local_dict)
         expression = graph.text
         kwargs.pop("_frame_depth", None)
-        if not blosc2.IS_WASM:
+        if not blosc2.IS_WASM and numexpr is not None:
             error = numexpr.validate(expression, local_dict=local_dict, global_dict={})
             if error is None:
                 return numexpr.evaluate(expression, local_dict=local_dict, global_dict={}, **kwargs)
@@ -189,7 +188,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):  # noqa: C901
             not (k in local_dict or k in ("_where_x", "_where_y"))
         )
     }
-    if blosc2.IS_WASM:
+    if blosc2.IS_WASM or numexpr is None:
         populate_safe_numpy_globals(expression)
         if "out" in kwargs:
             out = kwargs.pop("out")
@@ -4810,8 +4809,18 @@ class LazyExpr(LazyArray):
         fp_accuracy: blosc2.FPAccuracy | None = None,
         jit=None,
         jit_backend: str | None = None,
+        _require_native=False,
+        _native_tile_items=1024,
         **kwargs,
     ) -> blosc2.NDArray:
+        if _require_native:
+            from .native_graph import compute_native_graph
+
+            if jit_backend is not None or fp_accuracy is not None:
+                raise ValueError(
+                    "Native-required portable execution does not accept acceleration/accuracy overrides"
+                )
+            return compute_native_graph(self, item, tile_items=_native_tile_items, jit=jit is True, **kwargs)
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")
@@ -4861,6 +4870,19 @@ class LazyExpr(LazyArray):
             kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
             result = blosc2.asarray(result, **kwargs)
         return result
+
+    def native_kernel(self):
+        """Export the eligible elementwise safe graph as an immutable native 1.1 plan.
+
+        Unsupported syntax/signatures reject; no Python numerical fallback. Root
+        logical reduction options are separate from this elementwise artifact.
+        """
+        from .native_graph import lower_native_graph
+
+        plan, _, reduction = lower_native_graph(self)
+        if reduction:
+            raise ValueError("Root logical reductions require native compute, not an elementwise export")
+        return plan
 
     def __getitem__(self, item):
         safe = evaluation_mode() == "safe" or getattr(self, "_evaluation", "full") == "safe"

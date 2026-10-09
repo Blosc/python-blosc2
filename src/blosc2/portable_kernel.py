@@ -179,7 +179,7 @@ def _capture_scope(func):
     return scope
 
 
-def _export_captures(func, source, names, capture_dtypes):
+def _export_captures(func, source, names, capture_dtypes, version="1.0"):
     scope = _capture_scope(func)
     tree = ast.parse(source)
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
@@ -221,6 +221,12 @@ def _export_captures(func, source, names, capture_dtypes):
             candidate = f"_capture_{index}"
         occupied.add(candidate)
         scalar = portable_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
+        if version == "1.1" and scalar["dtype"] not in {"bytes", "unicode32"}:
+            scalar["category"] = (
+                "weak"
+                if type(scope[name]) in (bool, int, float) and name not in capture_dtypes
+                else "typed_scalar"
+            )
         scalar["name"] = candidate
         encoded.append(scalar)
         replacements[name] = candidate
@@ -243,12 +249,15 @@ def export_portable_kernel(
     constants=None,
     metadata=None,
     version="1.0",
+    casting="unsafe",
     cardinality="elementwise",
     ndim=0,
 ):
     """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
-    if version != "1.0":
+    if version not in {"1.0", "1.1"}:
         raise PortableArtifactError("Unsupported artifact version", status="unsupported_version")
+    if casting not in {"safe", "same_kind", "unsafe"} or (version == "1.0" and casting != "unsafe"):
+        raise PortableArtifactError("Cast policies require version 1.1", status="unsupported_requirement")
     inputs = _mapping(input_dtypes, "input_dtypes")
     constants = _mapping({} if constants is None else constants, "constants")
     captures = _mapping({} if capture_dtypes is None else capture_dtypes, "capture_dtypes")
@@ -263,9 +272,15 @@ def export_portable_kernel(
     encoded = [
         portable_scalar_descriptor(name, value, captures.get(name)) for name, value in constants.items()
     ]
+    if version == "1.1":
+        for scalar, (name, value) in zip(encoded, constants.items(), strict=True):
+            if scalar["dtype"] not in {"bytes", "unicode32"}:
+                scalar["category"] = (
+                    "weak" if type(value) in (bool, int, float) and name not in captures else "typed_scalar"
+                )
     used = set(constants) & set(captures)
     if kernel.func is not None:
-        source, captured, extra = _export_captures(kernel.func, source, names, captures)
+        source, captured, extra = _export_captures(kernel.func, source, names, captures, version)
         encoded.extend(captured)
         used |= extra
     if set(captures) - used:
@@ -277,8 +292,8 @@ def export_portable_kernel(
     # This finite superset grants no unsupported operations: native typed import
     # validates the entire normalized source before this export can succeed.
     manifest = {
-        "schema_version": "1.0",
-        "language": {"name": "miniexpr", "version": "1.0"},
+        "schema_version": version,
+        "language": {"name": "miniexpr", "version": version},
         "requires": ["numeric", "control-flow", "block-reductions", "fixed-strings", "nd-context"],
         "source": source,
         "entry_point": kernel.__name__,
@@ -287,7 +302,10 @@ def export_portable_kernel(
         ],
         "constants": sorted(encoded, key=lambda item: item["name"]),
         "output": {**portable_dtype_descriptor(output_dtype), "contract": cardinality},
-        "semantics": {"fp": "strict"},
+        "semantics": {
+            "fp": "strict",
+            **({"numeric": "numpy-2.5", "casting": casting} if version == "1.1" else {}),
+        },
         "context": {"ndim": ndim},
         "metadata": dict(metadata or {}),
     }
@@ -353,6 +371,11 @@ class PortableKernel:
         return self._info["output_dtype"]
 
     @property
+    def inferred_dtype(self):
+        """Metadata-only result dtype before final conversion (1.1 runtime required)."""
+        return self._info.get("inferred_dtype")
+
+    @property
     def has_jit(self):
         return self._info["jit"]
 
@@ -372,7 +395,7 @@ class PortableKernel:
         """Return the original validated JSON text, without dropping metadata."""
         return self._artifact.decode("utf-8")
 
-    def evaluate(self, inputs, *, shape=None):
+    def evaluate(self, inputs, *, shape=None, return_status=False, fp_errors="ignore"):
         """Evaluate named arrays into a new NumPy array, preserving their common shape.
 
         No implicit dtype conversion or array broadcasting is allowed. Host endian,
@@ -380,6 +403,10 @@ class PortableKernel:
         Constant-only kernels require an explicit output ``shape`` (possibly empty).
         Draft block-scalar kernels return a scalar NumPy array. ND kernels require
         ``evaluate_block`` with explicit logical context.
+        Profile 1.1 can return ``(values, status)`` with ``return_status=True``.
+        Status has stable ``flags`` bits (invalid=1, divide=2, overflow=4,
+        underflow=8) and a ``supported`` capability. ``fp_errors='raise'`` raises
+        for any of these flags; the default ``'ignore'`` emits no warnings.
         """
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
@@ -412,17 +439,30 @@ class PortableKernel:
             raise ValueError(
                 "Use evaluate_block with explicit logical_shape and block_origin for ND artifacts"
             )
-        return self._handle.evaluate_block(arrays, shape)
+        return self.evaluate_block(
+            arrays, block_shape=shape, return_status=return_status, fp_errors=fp_errors
+        )
 
     def evaluate_block(
-        self, inputs, *, block_shape=None, logical_shape=None, block_origin=None, valid_mask=None
+        self,
+        inputs,
+        *,
+        block_shape=None,
+        logical_shape=None,
+        block_origin=None,
+        valid_mask=None,
+        return_status=False,
+        fp_errors="ignore",
     ):
         """Evaluate one explicit draft 1.0 block, returning its declared cardinality.
 
         This is standalone block execution, not lazy block-grid scheduling. Native
         validation owns coordinates, participating masks and result allocation.
+        Floating status is per call, includes only evaluated active operations,
+        and must be aggregated explicitly by callers across blocks. This is not
+        full ``numpy.seterr`` emulation.
         """
-        if self.schema_version != "1.0":
+        if self.schema_version not in {"1.0", "1.1"}:
             raise NotImplementedError("Explicit descriptor blocks require an installed draft 1.0 runtime")
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
@@ -450,18 +490,73 @@ class PortableKernel:
             arrays[name] = np.require(array, dtype=dtype, requirements=["C", "A"])
         if block_shape is None:
             raise ValueError("Constant-only kernels require an explicit block_shape")
+        if fp_errors not in {"ignore", "raise"}:
+            raise ValueError("fp_errors must be 'ignore' or 'raise'")
         return self._handle.evaluate_block(
             arrays,
             block_shape,
             logical_shape=logical_shape,
             block_origin=block_origin,
             valid_mask=valid_mask,
+            return_status=return_status,
+            fp_raise=15 if fp_errors == "raise" else 0,
         )
+
+    def evaluate_array(
+        self,
+        inputs,
+        *,
+        shape=None,
+        reduction=None,
+        axis=None,
+        keepdims=False,
+        dtype=None,
+        initial=None,
+        where=None,
+        tile_items=1024,
+        return_report=False,
+    ):
+        """Native 1.1 logical broadcasting/axis reductions with bounded iterator scratch.
+
+        Supports C/F, negative-stride and nonnative-endian numeric arrays. Results
+        own C-order storage; no mutable-view or in-place guarantees. Grouping is
+        serial logical C order, independent of tile size/storage chunks. This API
+        is separate from explicit block-scalar evaluation.
+        """
+        inputs = _mapping(inputs, "inputs")
+        if set(inputs) != set(self.input_dtypes):
+            raise PortableArtifactError("Missing or extra runtime inputs", status="binding_error")
+        arrays = {name: np.asarray(value) for name, value in inputs.items()}
+        for name, array in arrays.items():
+            if array.dtype.newbyteorder("=") != self.input_dtypes[name]:
+                raise PortableArtifactError(f"Input {name!r} has incorrect dtype", status="binding_error")
+        if shape is None:
+            if not arrays:
+                raise ValueError("Constant-only kernels require shape")
+            shape = np.broadcast_shapes(*(a.shape for a in arrays.values()))
+        shape = (shape,) if isinstance(shape, int) else tuple(shape)
+        if any(type(n) is not int or n < 0 for n in shape):
+            raise ValueError("shape must contain nonnegative Python integers")
+        if reduction not in {None, "sum", "prod", "min", "max", "any", "all"}:
+            raise ValueError("Unsupported logical reduction")
+        if reduction is None and (
+            axis is not None or dtype is not None or initial is not None or where is not None
+        ):
+            raise ValueError("Reduction options require a reduction")
+        axes = None if axis is None else (axis,) if isinstance(axis, int) else tuple(axis)
+        if axes is not None and any(type(a) is not int for a in axes):
+            raise TypeError("axis entries must be integers")
+        if type(tile_items) is not int or tile_items <= 0:
+            raise ValueError("tile_items must be a positive integer")
+        values, report = self._handle.evaluate_array(
+            arrays, shape, reduction, axes, keepdims, dtype, initial, where, tile_items
+        )
+        return (values, report) if return_report else values
 
     def lazy(self, inputs, *, shape=None, partitions=None):
         """Bind native inputs to an immutable logical block grid, not a storage grid."""
         from .portable_lazy import PortableLazyArray
 
-        if self.schema_version != "1.0":
+        if self.schema_version not in {"1.0", "1.1"}:
             raise NotImplementedError("Logical portable partitions require the descriptor profile")
         return PortableLazyArray(self, inputs, shape=shape, partitions=partitions)

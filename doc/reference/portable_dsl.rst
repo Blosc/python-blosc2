@@ -20,6 +20,129 @@ Menudet artifacts use the versioned native 1.0 profile.
 Artifacts are standalone UTF-8 JSON, executable through native miniexpr in C or
 Python, without reconstructing or executing Python functions on import.
 
+Opt-in NumPy arithmetic profile 1.1
+----------------------------------
+
+An updated miniexpr runtime additionally supports an experimental ``1.1``
+language/artifact pair. It does **not** reinterpret saved 1.0 artifacts: those
+retain checked arithmetic, and export still defaults to 1.0. Older native
+dependencies reject 1.1 explicitly.
+
+.. code-block:: python
+
+    import blosc2
+    import numpy as np
+
+    author = blosc2.DSLKernel.from_source("def increment(x):\n    return x + 1\n")
+    artifact = author.export({"x": "int8"}, "int64", version="1.1", casting="safe")
+    kernel = blosc2.PortableKernel.from_json(artifact)
+    kernel.inferred_dtype  # dtype('int8'), before final int64 conversion
+    kernel.evaluate({"x": np.array([127, -128, 0], dtype="int8")})
+    # array([-128, -127, 1], dtype=int64): arithmetic wraps at int8, not int64
+
+Profile 1.1 implements fixed-width wrapping arithmetic, NumPy strong dtype
+promotion, Boolean arithmetic restrictions, floor division/remainder, bitwise
+operators and shifts. Weak source literals and plain Python numeric captures
+preserve NumPy 2.x scalar strength; NumPy scalar captures and explicit
+``capture_dtypes`` are strong. Typed runtime inputs, including 0-D arrays,
+remain strong. Scalar categories and numerical policy are stored in the artifact.
+
+Fixed-width casts such as ``int8(x)`` and ``float32(x)`` are native 1.1 syntax.
+Final output conversion declares ``casting="safe"``, ``"same_kind"`` or
+``"unsafe"``; inference and policy validation inspect metadata, not input values.
+Weak scalar construction is checked; unsafe array integer narrowing wraps.
+Floating-to-integer conversion truncates but deliberately rejects nonfinite or
+out-of-range values instead of codifying NumPy's platform-dependent sentinels.
+Function signatures and exceptional values are covered by the native M4 matrix.
+``minimum``/``maximum`` propagate NaNs while ``fmin``/``fmax`` select a non-NaN
+operand. Signed-zero ties follow deterministic IEEE minimum/maximum rules;
+NumPy's tie bits can vary between loops. ``where`` evaluates only selected lanes,
+unlike eager NumPy argument evaluation. Float16-result signatures reject explicitly.
+
+Profile 1.1 also provides per-call IEEE floating status:
+
+.. code-block:: python
+
+    inputs = {"x": np.array([127, 0], dtype="int8")}
+    values, status = kernel.evaluate(inputs, return_status=True)
+    # status = {"flags": integer_bits, "supported": bool}
+    values = kernel.evaluate(inputs, fp_errors="raise")
+
+Bits are invalid=1, divide-by-zero=2, overflow=4 and underflow=8. Each call clears
+its status; standalone block users explicitly OR status across blocks or threads.
+Only evaluated active operations participate, and native calls restore the caller's
+rounding mode and flags. ``fp_errors="ignore"`` is default; ``"raise"`` attaches
+``.fp_status`` to ``PortableArtifactError``. No NumPy warning/callback emulation
+is promised. On WASM, status reports ``supported=False`` and raising is unsupported;
+zero flags there do not imply exception-free computation.
+
+Logical arrays and native-required graphs
+----------------------------------------
+
+The experimental native array ABI adds logical broadcasting and axis reductions
+without changing explicit block-reduction recipes:
+
+.. code-block:: python
+
+    # A numeric, elementwise 1.1 kernel, with rank-zero logical context:
+    values, report = kernel.evaluate_array(inputs, return_report=True)
+    totals = kernel.evaluate_array(inputs, reduction="sum", axis=-1, keepdims=True)
+
+Inputs may be C/F-order, transposed, negative-stride, unaligned or byte-swapped
+views, and singleton/0-D inputs broadcast to the logical domain. Output owns
+C-order storage. Native iterator scratch is bounded by ``tile_items`` and reported
+separately from cumulative gathers and host normalization copies. In-place/aliased
+output is unsupported. Scalar initial values and broadcast Boolean participating
+masks are supported by the six reductions: sum/prod/min/max/any/all.
+
+Reduction grouping is serial logical C order, independent of iterator tiles and
+storage chunks; floating sums need not match NumPy's pairwise bits. Narrow integer
+accumulators wrap modularly. Floating-to-integer accumulator overrides, cumulative
+and arg reductions, general gathers/scatters and mutable views are unsupported.
+
+An explicit experimental graph execution mode rejects rather than falling back:
+
+.. code-block:: python
+
+    expr = blosc2.lazyexpr("x * 2 + 1", {"x": array})
+    result = expr.compute(_require_native=True)
+    accelerated = expr.compute(_require_native=True, jit=True)
+    totals = expr.sum(axis=0, _require_native=True)
+    artifact = expr.native_kernel().to_json()
+
+Eligible arithmetic/functions fuse into an immutable portable 1.1 plan. The Python
+frontend owns graph metadata and compressed storage reads; native code owns
+numerical execution and logical scheduling. Plans cache signatures/captures, never
+operand results. NumExpr is not needed for this subset, but its packaging dependency
+has not been relaxed. Backend defaults are unchanged. Nested lazy/proxy/table
+operands, row filtering/ordering, output aliases, reduction partial reads and
+acceleration overrides reject. Basic elementwise slicing is supported.
+
+Native iterator scratch is not an end-to-end memory bound: compressed operands
+can still require full frontend materialization. The execution report records those
+bytes separately. Exported elementwise portable artifacts can use existing safe
+portable persistence; logical reduction descriptors are not persisted as though
+they were block-scalar recipes.
+
+An explicit ``PortableKernel.from_json(artifact, jit=True)`` request can accelerate
+the first certified 1.1 subset with TCC or the system C compiler: single-return,
+rank-zero elementwise float32/float64 arithmetic, comparisons and lazy ``where``.
+Check ``kernel.has_jit`` to distinguish compiled execution from fallback. Select
+the backend before importing the artifact with ``ME_DSL_JIT_COMPILER=tcc`` or
+``ME_DSL_JIT_COMPILER=cc``; ``CC`` selects the latter compiler (e.g. GCC).
+
+Participating masks and floating diagnostics retain portable semantics. Comparisons
+use a host bridge to preserve NaN exception behavior across compilers; ordinary
+arithmetic and selected branches execute in generated code. Integer signatures,
+libm functions, locals, loops, block-scalar returns and ND context currently fall
+back. Arbitrary ``CFLAGS``/TCC option overrides make this subset ineligible rather
+than weakening strict floating semantics. No explicit SIMD qualification is claimed.
+Checked 1.0 and default backend selection remain unchanged; profile and scalar
+categories survive export/import and lazy recipe persistence.
+
+Default checked profile 1.0
+---------------------------
+
 .. code-block:: python
 
     import blosc2

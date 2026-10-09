@@ -1,0 +1,5717 @@
+{
+  "schema_version": "menudet-conformance-report-2",
+  "provenance": {
+    "python_revision": "cf6f25c1020c13864413e97b39e466c893b77a7b",
+    "runner_sha256": "0d80f9ba4d2cd7412f2b03e6c4a58fc262e9f47c4667bd809ff0e95b29b64066",
+    "extension_sha256": "18870621a7c477f86af2223a0358046a75fe9829e7d07f7270301f91a9229a1f",
+    "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+    "generator_revision": "m2-1",
+    "local_changes": "M1/M2 test tooling, native runners, schemas, corpus, reports; numerical runtime unchanged"
+  },
+  "reference_numpy": "2.5.3",
+  "installed_numpy": "2.5.3",
+  "reference_drift": [],
+  "eligible_jit_cases": 0,
+  "requests": {
+    "off": {
+      "native": [
+        {
+          "id": "int8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-exact-subtract",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000000000000000000001"
+          }
+        },
+        {
+          "id": "int8-multiply-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int8-negate-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 3,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-absolute-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "float32-weak-literal",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f800000"
+          }
+        },
+        {
+          "id": "float32-typed-float64-capture",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "41700000100000004008000000000000"
+          }
+        },
+        {
+          "id": "int8-typed-int64-capture",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 1,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000080"
+          }
+        },
+        {
+          "id": "float32-zero-dimensional",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "4b800000"
+          }
+        },
+        {
+          "id": "int8-float-literal",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int8-uint8-promote",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int16",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00fe0080"
+          }
+        },
+        {
+          "id": "int64-uint64-promote",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-uint64-compare",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 32,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0101"
+          }
+        },
+        {
+          "id": "int64-uint64-compare-rounding",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "01"
+          }
+        },
+        {
+          "id": "bool-add",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "dtype-shape-or-values"
+          ],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000020000000000000001"
+          }
+        },
+        {
+          "id": "int64-true-divide",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c002aaaaaaaaaaab4002aaaaaaaaaaab"
+          }
+        },
+        {
+          "id": "int64-floor-divide",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000002fffffffffffffffd"
+          }
+        },
+        {
+          "id": "int64-remainder",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "fffffffffffffffffffffffffffffffe"
+          }
+        },
+        {
+          "id": "int64-zero-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-min-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int8-large-shift",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "float64-cast-int",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000001ffffffffffffffff0000000000000000"
+          }
+        },
+        {
+          "id": "float64-cast-infinity",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-narrow-output",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "float32-cast-float",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff40000000000008000000000000000"
+          }
+        },
+        {
+          "id": "float32-sin",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000080000000"
+          }
+        },
+        {
+          "id": "float32-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3dff55773ef577443f576aa43f68c7b73f7d4695"
+          }
+        },
+        {
+          "id": "float32-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f7e00ab3f60a9403f0a5140bed51133be14fdf6"
+          }
+        },
+        {
+          "id": "float32-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c0051592bf317218000000003f31721840051592"
+          }
+        },
+        {
+          "id": "float32-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3eb504f33f3504f33f8000003fb504f3403504f3"
+          }
+        },
+        {
+          "id": "float32-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f910b023fd3094c402df85440ec7326453a4f54"
+          }
+        },
+        {
+          "id": "float32-identity-special",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000800000007f800000ff8000007fc0000000000001"
+          }
+        },
+        {
+          "id": "float32-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc0000080000000400000007f8000007fc00000"
+          }
+        },
+        {
+          "id": "float32-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc01234ffc05678"
+          }
+        },
+        {
+          "id": "float64-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fbfeaaeee86ee363fdeaee8744b05f03feaed548f090cee3fed18f6ead1b4463fefa8d2a028cf7b"
+          }
+        },
+        {
+          "id": "float64-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fefc015527d5bd33fec1528065b7d503fe14a280fb5068cbfdaa22657537205bfc29fbebf632f94"
+          }
+        },
+        {
+          "id": "float64-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c000a2b23f3bab73bfe62e42fefa39ef00000000000000003fe62e42fefa39ef4000a2b23f3bab73"
+          }
+        },
+        {
+          "id": "float64-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd6a09e667f3bcd3fe6a09e667f3bcd3ff00000000000003ff6a09e667f3bcd4006a09e667f3bcd"
+          }
+        },
+        {
+          "id": "float64-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff2216045b6f5cd3ffa61298e1e069c4005bf0a8b145769401d8e64b8d4ddae40a749ea7d470c6e"
+          }
+        },
+        {
+          "id": "float64-identity-special",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 48,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000080000000000000007ff0000000000000fff00000000000007ff80000000000000000000000000001"
+          }
+        },
+        {
+          "id": "float64-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000000000800000000000000040000000000000007ff00000000000007ff8000000000000"
+          }
+        },
+        {
+          "id": "float64-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000001234fff8000000005678"
+          }
+        },
+        {
+          "id": "float64-exp-tolerance",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd78b56362cef383ff00000000000004005bf0a8b145769"
+          }
+        },
+        {
+          "id": "layout-fortran",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "layout-negative-stride",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "layout-stepped-big-endian",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "layout-little-endian",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "empty-elementwise",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2,
+              0
+            ],
+            "encoding": "raw-be-hex",
+            "hex": ""
+          }
+        },
+        {
+          "id": "weak-scalar-out-of-range",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "diagnostic-future-artifact",
+          "status": -2,
+          "category": "unsupported_requirement",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "diagnostic-invalid-source",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "diagnostic-wrong-binding",
+          "status": -4,
+          "category": "binding_error",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "failure-then-success-same-handle",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "block-sum-explicit-int64",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 48,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000f"
+          }
+        },
+        {
+          "id": "capability-complex-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skip_reason": "unsupported required capability",
+          "skipped_capabilities": [
+            "numpy-complex"
+          ]
+        },
+        {
+          "id": "capability-broadcast-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skip_reason": "unsupported required capability",
+          "skipped_capabilities": [
+            "array-broadcasting"
+          ]
+        },
+        {
+          "id": "seed-1729-minimized-int8-overflow",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        }
+      ],
+      "python": [
+        {
+          "id": "int8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-exact-subtract",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000000000000000000001"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int8-multiply-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int8-negate-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-absolute-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "float32-weak-literal",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f800000",
+            "classes": [
+              "positive_zero",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-typed-float64-capture",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "41700000100000004008000000000000",
+            "classes": [
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int8-typed-int64-capture",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000080"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-zero-dimensional",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "4b800000",
+            "classes": [
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int8-float-literal",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int8-uint8-promote",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int16",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00fe0080"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-uint64-promote",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-uint64-compare",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0101"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-uint64-compare-rounding",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "01"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "bool-add",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000020000000000000001"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "dtype"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-true-divide",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c002aaaaaaaaaaab4002aaaaaaaaaaab",
+            "classes": [
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-floor-divide",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000002fffffffffffffffd"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-remainder",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "fffffffffffffffffffffffffffffffe"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-zero-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-min-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int8-large-shift",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "float64-cast-int",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000001ffffffffffffffff0000000000000000"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-cast-infinity",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-narrow-output",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "float32-cast-float",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff40000000000008000000000000000",
+            "classes": [
+              "finite",
+              "negative_zero"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sin",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000080000000",
+            "classes": [
+              "positive_zero",
+              "negative_zero"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3dff55773ef577443f576aa43f68c7b73f7d4695",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f7e00ab3f60a9403f0a5140bed51133be14fdf6",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c0051592bf317218000000003f31721840051592",
+            "classes": [
+              "finite",
+              "finite",
+              "positive_zero",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3eb504f33f3504f33f8000003fb504f3403504f3",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f910b023fd3094c402df85440ec7326453a4f54",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-identity-special",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000800000007f800000ff8000007fc0000000000001",
+            "classes": [
+              "positive_zero",
+              "negative_zero",
+              "positive_inf",
+              "negative_inf",
+              "nan",
+              "subnormal"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc0000080000000400000007f8000007fc00000",
+            "classes": [
+              "nan",
+              "negative_zero",
+              "finite",
+              "positive_inf",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc01234ffc05678",
+            "classes": [
+              "nan",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fbfeaaeee86ee363fdeaee8744b05f03feaed548f090cee3fed18f6ead1b4463fefa8d2a028cf7b",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fefc015527d5bd33fec1528065b7d503fe14a280fb5068cbfdaa22657537205bfc29fbebf632f94",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c000a2b23f3bab73bfe62e42fefa39ef00000000000000003fe62e42fefa39ef4000a2b23f3bab73",
+            "classes": [
+              "finite",
+              "finite",
+              "positive_zero",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd6a09e667f3bcd3fe6a09e667f3bcd3ff00000000000003ff6a09e667f3bcd4006a09e667f3bcd",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff2216045b6f5cd3ffa61298e1e069c4005bf0a8b145769401d8e64b8d4ddae40a749ea7d470c6e",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-identity-special",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000080000000000000007ff0000000000000fff00000000000007ff80000000000000000000000000001",
+            "classes": [
+              "positive_zero",
+              "negative_zero",
+              "positive_inf",
+              "negative_inf",
+              "nan",
+              "subnormal"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000000000800000000000000040000000000000007ff00000000000007ff8000000000000",
+            "classes": [
+              "nan",
+              "negative_zero",
+              "finite",
+              "positive_inf",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000001234fff8000000005678",
+            "classes": [
+              "nan",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-exp-tolerance",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd78b56362cef383ff00000000000004005bf0a8b145769",
+            "classes": [
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-fortran",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-negative-stride",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-stepped-big-endian",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-little-endian",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "empty-elementwise",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2,
+              0
+            ],
+            "encoding": "raw-be-hex",
+            "hex": ""
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "weak-scalar-out-of-range",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "diagnostic-future-artifact",
+          "status": -2,
+          "category": "unsupported_requirement",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "diagnostic-invalid-source",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "diagnostic-wrong-binding",
+          "status": -4,
+          "category": "binding_error",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "failure-then-success-same-handle",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "block-sum-explicit-int64",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000f"
+          },
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "capability-complex-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skipped_capabilities": [
+            "numpy-complex"
+          ],
+          "skip_reason": "Complex numerical semantics are explicitly outside the current native capability set"
+        },
+        {
+          "id": "capability-broadcast-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skipped_capabilities": [
+            "array-broadcasting"
+          ],
+          "skip_reason": "Native array broadcasting is milestone 5, not an implemented kernel capability"
+        },
+        {
+          "id": "seed-1729-minimized-int8-overflow",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "interpreter",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        }
+      ]
+    },
+    "on": {
+      "native": [
+        {
+          "id": "int8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "uint64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-exact-subtract",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000000000000000000001"
+          }
+        },
+        {
+          "id": "int8-multiply-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int8-negate-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 3,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-absolute-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "float32-weak-literal",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f800000"
+          }
+        },
+        {
+          "id": "float32-typed-float64-capture",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "41700000100000004008000000000000"
+          }
+        },
+        {
+          "id": "int8-typed-int64-capture",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 1,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000080"
+          }
+        },
+        {
+          "id": "float32-zero-dimensional",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "4b800000"
+          }
+        },
+        {
+          "id": "int8-float-literal",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int8-uint8-promote",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int16",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00fe0080"
+          }
+        },
+        {
+          "id": "int64-uint64-promote",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-uint64-compare",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 32,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0101"
+          }
+        },
+        {
+          "id": "int64-uint64-compare-rounding",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "01"
+          }
+        },
+        {
+          "id": "bool-add",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 4,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "dtype-shape-or-values"
+          ],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000020000000000000001"
+          }
+        },
+        {
+          "id": "int64-true-divide",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c002aaaaaaaaaaab4002aaaaaaaaaaab"
+          }
+        },
+        {
+          "id": "int64-floor-divide",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000002fffffffffffffffd"
+          }
+        },
+        {
+          "id": "int64-remainder",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "fffffffffffffffffffffffffffffffe"
+          }
+        },
+        {
+          "id": "int64-zero-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-min-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int8-large-shift",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "float64-cast-int",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000001ffffffffffffffff0000000000000000"
+          }
+        },
+        {
+          "id": "float64-cast-infinity",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "int64-narrow-output",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "float32-cast-float",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff40000000000008000000000000000"
+          }
+        },
+        {
+          "id": "float32-sin",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000080000000"
+          }
+        },
+        {
+          "id": "float32-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3dff55773ef577443f576aa43f68c7b73f7d4695"
+          }
+        },
+        {
+          "id": "float32-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f7e00ab3f60a9403f0a5140bed51133be14fdf6"
+          }
+        },
+        {
+          "id": "float32-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c0051592bf317218000000003f31721840051592"
+          }
+        },
+        {
+          "id": "float32-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3eb504f33f3504f33f8000003fb504f3403504f3"
+          }
+        },
+        {
+          "id": "float32-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f910b023fd3094c402df85440ec7326453a4f54"
+          }
+        },
+        {
+          "id": "float32-identity-special",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000800000007f800000ff8000007fc0000000000001"
+          }
+        },
+        {
+          "id": "float32-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 20,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc0000080000000400000007f8000007fc00000"
+          }
+        },
+        {
+          "id": "float32-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc01234ffc05678"
+          }
+        },
+        {
+          "id": "float64-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fbfeaaeee86ee363fdeaee8744b05f03feaed548f090cee3fed18f6ead1b4463fefa8d2a028cf7b"
+          }
+        },
+        {
+          "id": "float64-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fefc015527d5bd33fec1528065b7d503fe14a280fb5068cbfdaa22657537205bfc29fbebf632f94"
+          }
+        },
+        {
+          "id": "float64-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c000a2b23f3bab73bfe62e42fefa39ef00000000000000003fe62e42fefa39ef4000a2b23f3bab73"
+          }
+        },
+        {
+          "id": "float64-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd6a09e667f3bcd3fe6a09e667f3bcd3ff00000000000003ff6a09e667f3bcd4006a09e667f3bcd"
+          }
+        },
+        {
+          "id": "float64-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff2216045b6f5cd3ffa61298e1e069c4005bf0a8b145769401d8e64b8d4ddae40a749ea7d470c6e"
+          }
+        },
+        {
+          "id": "float64-identity-special",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 48,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000080000000000000007ff0000000000000fff00000000000007ff80000000000000000000000000001"
+          }
+        },
+        {
+          "id": "float64-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 40,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000000000800000000000000040000000000000007ff00000000000007ff8000000000000"
+          }
+        },
+        {
+          "id": "float64-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 16,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000001234fff8000000005678"
+          }
+        },
+        {
+          "id": "float64-exp-tolerance",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd78b56362cef383ff00000000000004005bf0a8b145769"
+          }
+        },
+        {
+          "id": "layout-fortran",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "layout-negative-stride",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "layout-stepped-big-endian",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "layout-little-endian",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 24,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000"
+          }
+        },
+        {
+          "id": "empty-elementwise",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2,
+              0
+            ],
+            "encoding": "raw-be-hex",
+            "hex": ""
+          }
+        },
+        {
+          "id": "weak-scalar-out-of-range",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "diagnostic-future-artifact",
+          "status": -2,
+          "category": "unsupported_requirement",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "diagnostic-invalid-source",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 0,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "diagnostic-wrong-binding",
+          "status": -4,
+          "category": "binding_error",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 8,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": []
+        },
+        {
+          "id": "failure-then-success-same-handle",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        },
+        {
+          "id": "block-sum-explicit-int64",
+          "status": 0,
+          "category": "success",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": true,
+          "baseline_regression": false,
+          "outcome": "matching",
+          "normalization_bytes": 48,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [],
+          "output": {
+            "dtype": "int64",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000f"
+          }
+        },
+        {
+          "id": "capability-complex-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skip_reason": "unsupported required capability",
+          "skipped_capabilities": [
+            "numpy-complex"
+          ]
+        },
+        {
+          "id": "capability-broadcast-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skip_reason": "unsupported required capability",
+          "skipped_capabilities": [
+            "array-broadcasting"
+          ]
+        },
+        {
+          "id": "seed-1729-minimized-int8-overflow",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "reference_match": false,
+          "baseline_regression": false,
+          "outcome": "known_divergence",
+          "normalization_bytes": 2,
+          "environment_restored": true,
+          "recovery_ok": true,
+          "mismatches": [
+            "diagnostic"
+          ]
+        }
+      ],
+      "python": [
+        {
+          "id": "int8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint8-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint16-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint32-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "uint64-add-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-exact-subtract",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000000000000000000001"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int8-multiply-boundary",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int8-negate-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-absolute-min",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "float32-weak-literal",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f800000",
+            "classes": [
+              "positive_zero",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-typed-float64-capture",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "41700000100000004008000000000000",
+            "classes": [
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int8-typed-int64-capture",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000080"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-zero-dimensional",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "4b800000",
+            "classes": [
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int8-float-literal",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int8-uint8-promote",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int16",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00fe0080"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-uint64-promote",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-uint64-compare",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0101"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-uint64-compare-rounding",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "bool",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "01"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "bool-add",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000000000020000000000000001"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "dtype"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-true-divide",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c002aaaaaaaaaaab4002aaaaaaaaaaab",
+            "classes": [
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-floor-divide",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000002fffffffffffffffd"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-remainder",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "fffffffffffffffffffffffffffffffe"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "int64-zero-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-min-divide",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int8-large-shift",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "float64-cast-int",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000000000001ffffffffffffffff0000000000000000"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-cast-infinity",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "int64-narrow-output",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "float32-cast-float",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff40000000000008000000000000000",
+            "classes": [
+              "finite",
+              "negative_zero"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sin",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "0000000080000000",
+            "classes": [
+              "positive_zero",
+              "negative_zero"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3dff55773ef577443f576aa43f68c7b73f7d4695",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f7e00ab3f60a9403f0a5140bed51133be14fdf6",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c0051592bf317218000000003f31721840051592",
+            "classes": [
+              "finite",
+              "finite",
+              "positive_zero",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3eb504f33f3504f33f8000003fb504f3403504f3",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3f910b023fd3094c402df85440ec7326453a4f54",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-identity-special",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "00000000800000007f800000ff8000007fc0000000000001",
+            "classes": [
+              "positive_zero",
+              "negative_zero",
+              "positive_inf",
+              "negative_inf",
+              "nan",
+              "subnormal"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc0000080000000400000007f8000007fc00000",
+            "classes": [
+              "nan",
+              "negative_zero",
+              "finite",
+              "positive_inf",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float32-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7fc01234ffc05678",
+            "classes": [
+              "nan",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-sin-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fbfeaaeee86ee363fdeaee8744b05f03feaed548f090cee3fed18f6ead1b4463fefa8d2a028cf7b",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-cos-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fefc015527d5bd33fec1528065b7d503fe14a280fb5068cbfdaa22657537205bfc29fbebf632f94",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-log-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "c000a2b23f3bab73bfe62e42fefa39ef00000000000000003fe62e42fefa39ef4000a2b23f3bab73",
+            "classes": [
+              "finite",
+              "finite",
+              "positive_zero",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-sqrt-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd6a09e667f3bcd3fe6a09e667f3bcd3ff00000000000003ff6a09e667f3bcd4006a09e667f3bcd",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-exp-finite-ulp",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3ff2216045b6f5cd3ffa61298e1e069c4005bf0a8b145769401d8e64b8d4ddae40a749ea7d470c6e",
+            "classes": [
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-identity-special",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              6
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000080000000000000007ff0000000000000fff00000000000007ff80000000000000000000000000001",
+            "classes": [
+              "positive_zero",
+              "negative_zero",
+              "positive_inf",
+              "negative_inf",
+              "nan",
+              "subnormal"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-sqrt-domain",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              5
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000000000800000000000000040000000000000007ff00000000000007ff8000000000000",
+            "classes": [
+              "nan",
+              "negative_zero",
+              "finite",
+              "positive_inf",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-nan-payload-identity",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              2
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7ff8000000001234fff8000000005678",
+            "classes": [
+              "nan",
+              "nan"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "float64-exp-tolerance",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float64",
+            "shape": [
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "3fd78b56362cef383ff00000000000004005bf0a8b145769",
+            "classes": [
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-fortran",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-negative-stride",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-stepped-big-endian",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "layout-little-endian",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "float32",
+            "shape": [
+              2,
+              3
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "000000003f80000040000000404000004080000040a00000",
+            "classes": [
+              "positive_zero",
+              "finite",
+              "finite",
+              "finite",
+              "finite",
+              "finite"
+            ]
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "empty-elementwise",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [
+              2,
+              0
+            ],
+            "encoding": "raw-be-hex",
+            "hex": ""
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "weak-scalar-out-of-range",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "diagnostic-future-artifact",
+          "status": -2,
+          "category": "unsupported_requirement",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "diagnostic-invalid-source",
+          "status": -3,
+          "category": "invalid_source",
+          "native_status": 0,
+          "backend": "none",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "diagnostic-wrong-binding",
+          "status": -4,
+          "category": "binding_error",
+          "native_status": 0,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "failure-then-success-same-handle",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        },
+        {
+          "id": "block-sum-explicit-int64",
+          "status": 0,
+          "category": "success",
+          "output": {
+            "dtype": "int64",
+            "shape": [],
+            "encoding": "raw-be-hex",
+            "hex": "000000000000000f"
+          },
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": true,
+          "mismatches": [],
+          "baseline_regression": false,
+          "outcome": "matching"
+        },
+        {
+          "id": "capability-complex-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skipped_capabilities": [
+            "numpy-complex"
+          ],
+          "skip_reason": "Complex numerical semantics are explicitly outside the current native capability set"
+        },
+        {
+          "id": "capability-broadcast-skipped",
+          "outcome": "skipped",
+          "backend": "none",
+          "skipped_capabilities": [
+            "array-broadcasting"
+          ],
+          "skip_reason": "Native array broadcasting is milestone 5, not an implemented kernel capability"
+        },
+        {
+          "id": "seed-1729-minimized-int8-overflow",
+          "status": -5,
+          "category": "evaluation_error",
+          "native_status": -5,
+          "backend": "interpreter",
+          "requested_backend": "jit",
+          "jit_eligible": false,
+          "jit_skip_reason": "portable draft has no eligible JIT route",
+          "recovery_ok": true,
+          "reference_match": false,
+          "mismatches": [
+            "diagnostic"
+          ],
+          "baseline_regression": false,
+          "outcome": "known_divergence"
+        }
+      ]
+    }
+  }
+}

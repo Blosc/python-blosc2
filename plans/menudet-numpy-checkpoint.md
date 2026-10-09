@@ -2,7 +2,8 @@
 
 2026-10-09. Implements section 13 of `menudet-numpy-compat.md`: inventory,
 baseline evidence and a small shared conformance slice, **without arithmetic or
-default-backend changes**. Milestone 2 is intentionally not claimed complete.
+default-backend changes**. This records the original checkpoint; subsequent M1
+sign-off and M2 completion are in `menudet-m1-m2-signoff.md`.
 
 ## Paired revisions and reference
 

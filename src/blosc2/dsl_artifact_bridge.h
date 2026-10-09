@@ -120,4 +120,28 @@ static int b2_artifact_eval_ex(const void *handle, const b2_artifact_buffer *inp
     return -2;
 }
 #endif
+#ifdef ME_ARTIFACT_NUMPY_SCHEMA_VERSION
+static me_dtype b2_artifact_inferred(const void *handle) { return me_artifact_inferred_dtype(handle); }
+#else
+static me_dtype b2_artifact_inferred(const void *handle) { (void)handle; return ME_AUTO; }
+#endif
+#ifdef ME_ARTIFACT_FP_STATUS_VERSION
+typedef me_artifact_fp_status b2_artifact_fp_status;
+static int b2_artifact_eval_status(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
+    void *output, const b2_artifact_descriptor *descriptor, unsigned mask,
+    b2_artifact_fp_status *status, b2_artifact_error *error) {
+    return me_artifact_eval_status(handle, inputs, ninputs, output, descriptor, mask, status, error);
+}
+#else
+typedef struct { unsigned flags; unsigned supported; } b2_artifact_fp_status;
+static int b2_artifact_eval_status(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
+    void *output, const b2_artifact_descriptor *descriptor, unsigned mask,
+    b2_artifact_fp_status *status, b2_artifact_error *error) {
+    (void)handle; (void)inputs; (void)ninputs; (void)output; (void)descriptor; (void)mask;
+    status->flags = status->supported = 0;
+    memset(error, 0, sizeof(*error));
+    snprintf(error->message, sizeof(error->message), "Native runtime does not support floating status");
+    return -2;
+}
+#endif
 #endif

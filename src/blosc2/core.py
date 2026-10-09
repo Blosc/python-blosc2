@@ -1511,9 +1511,9 @@ def print_versions():
         print(f"  {clib}: {clib_versions[clib]}")
     print(f"NumPy version: {np.__version__}")
     if not blosc2.IS_WASM:
-        import numexpr
-
-        print(f"numexpr version: {numexpr.__version__}")
+        print(
+            f"numexpr version: {blosc2.numexpr.__version__ if blosc2.numexpr is not None else 'unavailable'}"
+        )
     import httpx
 
     print(f"httpx version: {httpx.__version__}")

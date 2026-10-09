@@ -26,8 +26,13 @@ IS_WASM = platform.machine() == "wasm32"
 Flag for WebAssembly platform.
 """
 
+numexpr = None
 if not IS_WASM:
-    import numexpr
+    try:
+        import numexpr
+    except ModuleNotFoundError as error:
+        if error.name != "numexpr":
+            raise
 
 from .version import __array_api_version__, __version__
 
@@ -521,7 +526,7 @@ else:
     if numexpr_max_env is not None:
         with contextlib.suppress(ValueError):
             numexpr_max = int(numexpr_max_env)
-    if numexpr_max is None or nthreads <= numexpr_max:
+    if numexpr is not None and (numexpr_max is None or nthreads <= numexpr_max):
         numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
