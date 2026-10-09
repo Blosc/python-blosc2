@@ -12,6 +12,7 @@ import zipfile
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 
@@ -41,7 +42,7 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
-@pytest.mark.parametrize("text_spec", [blosc2.utf8(), blosc2.vlstring()])
+@pytest.mark.parametrize("text_spec", [pytest.param(utf8_spec(), marks=needs_utf8), blosc2.vlstring()])
 def test_preview_opens_only_visible_columns(tmp_path, monkeypatch, text_spec):
     @dataclasses.dataclass
     class WideRow:

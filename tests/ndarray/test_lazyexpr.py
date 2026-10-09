@@ -2406,6 +2406,6 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     out = blosc2.empty(data.shape, dtype=data.dtype, chunks=chunks, blocks=blocks)
     expression = a + 0
     result = expression.cumulative_sum(axis=0, out=out)
-    expected = np.cumulative_sum(data, axis=0)
+    expected = np.cumsum(data, axis=0)
     np.testing.assert_array_equal(result[:], expected)
     np.testing.assert_array_equal(out[:], expected)

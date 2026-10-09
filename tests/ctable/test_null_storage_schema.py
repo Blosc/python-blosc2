@@ -28,6 +28,13 @@ from blosc2 import CTable
 from blosc2.schema import fill_value_for
 from blosc2.schema_compiler import schema_from_dict, schema_to_dict
 
+
+@pytest.mark.skipif(HAVE_UTF8, reason="Runtime supports UTF-8 StringDType columns")
+def test_utf8_rejects_runtime_without_string_dtype():
+    with pytest.raises(TypeError, match=r"utf8 columns require NumPy >= 2\.0"):
+        blosc2.utf8()
+
+
 # ---------------------------------------------------------------------------
 # Spec-level declaration
 # ---------------------------------------------------------------------------

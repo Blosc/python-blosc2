@@ -12,6 +12,18 @@ import blosc2
 from blosc2.expression_graph import parse_expression
 
 
+def _numpy_cumulative_reference(data, name, *, axis, include_initial):
+    if hasattr(np, name):
+        return getattr(np, name)(data, axis=axis, include_initial=include_initial)
+    legacy = "cumsum" if name == "cumulative_sum" else "cumprod"
+    if include_initial:
+        shape = list(data.shape)
+        shape[axis] = 1
+        identity = np.full(shape, 0 if legacy == "cumsum" else 1, dtype=data.dtype)
+        data = np.concatenate((identity, data), axis=axis)
+    return getattr(np, legacy)(data, axis=axis)
+
+
 @pytest.fixture(autouse=True)
 def safe_graph_context():
     # Phase 1 protects loaded expressions; explicit context exercises the same
@@ -601,6 +613,8 @@ def test_blosc_qualified_reduction_preserves_blosc_position_layout():
 @pytest.mark.parametrize("include_initial", [False, True])
 @pytest.mark.parametrize("dtype", ["int8", "uint8", "float32", "float64"])
 def test_cumulative_backend_layout_and_metadata(name, backend, include_initial, dtype):
+    if backend == "numpy" and not hasattr(np, name):
+        pytest.skip(f"NumPy version has no {name} function")
     data = (np.arange(6).reshape(2, 3) % 3 + 1).astype(dtype)
     x = data if backend == "numpy" else blosc2.asarray(data)
     if backend == "blosc_lazy":
@@ -612,7 +626,7 @@ def test_cumulative_backend_layout_and_metadata(name, backend, include_initial, 
         "blosc_lazy": f"x.{name}(-1, {include_initial})",
     }[backend]
     expr = blosc2.lazyexpr(text, {"x": x})
-    expected = getattr(np, name)(data, axis=-1, include_initial=include_initial)
+    expected = _numpy_cumulative_reference(data, name, axis=-1, include_initial=include_initial)
     assert expr.shape == expected.shape
     assert expr.dtype == expected.dtype
     np.testing.assert_allclose(expr[:], expected, rtol=1e-6)
@@ -658,7 +672,9 @@ def test_cumulative_axis_none_requires_one_dimension(name):
     data = np.arange(1, 4)
     expr = blosc2.lazyexpr(f"x.{name}(include_initial=True)", {"x": blosc2.asarray(data)})
     assert expr.shape == (4,)
-    np.testing.assert_array_equal(expr[:], getattr(np, name)(data, include_initial=True))
+    np.testing.assert_array_equal(
+        expr[:], _numpy_cumulative_reference(data, name, axis=0, include_initial=True)
+    )
 
 
 def test_cumulative_root_metadata_is_data_free(monkeypatch):
@@ -675,7 +691,7 @@ def test_cumulative_persistence_preserves_include_initial(tmp_path):
     expr = blosc2.lazyexpr("x.cumulative_sum(1, None, True)", {"x": x})
     expr.save(tmp_path / "expr.b2nd")
     opened = blosc2.open(tmp_path / "expr.b2nd")
-    expected = np.cumulative_sum(data, axis=1, include_initial=True)
+    expected = _numpy_cumulative_reference(data, "cumulative_sum", axis=1, include_initial=True)
     assert opened.shape == expected.shape
     assert opened.dtype == expected.dtype
     np.testing.assert_array_equal(opened[:], expected)
@@ -1019,9 +1035,17 @@ def test_binary_dtype_inference_is_data_free_and_retains_backend_difference(monk
     assert expr.dtype == np.dtype("float32")
 
 
-def test_numpy_weak_integer_range_contract_rejects_before_compute():
-    with pytest.raises(OverflowError):
-        blosc2.lazyexpr("x + 1000", {"x": np.ones(3, dtype="int8")})
+def test_numpy_weak_integer_range_contract_matches_runtime():
+    source = np.ones(3, dtype="int8")
+    try:
+        expected = source + 1000
+    except OverflowError:
+        with pytest.raises(OverflowError):
+            blosc2.lazyexpr("x + 1000", {"x": source})
+    else:
+        expr = blosc2.lazyexpr("x + 1000", {"x": source})
+        assert expr.dtype == expected.dtype
+        np.testing.assert_array_equal(expr[:], expected)
 
 
 def test_numpy_scalar_overflow_retains_existing_fallback():

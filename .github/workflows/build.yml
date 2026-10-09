@@ -87,7 +87,7 @@ jobs:
     # test dependencies may upgrade the runtime too, so pin it AFTER installing.
     - name: Install NumPy 1.26-compatible test runtime
       if: matrix.numpy-version == '1.26'
-      run: pip install "numpy==1.26.*" "zarr>=3.0.9,<3.1"
+      run: pip install "numpy==1.26.*" "zarr>=3.1.5,<3.2"
 
     - name: Verify requested NumPy runtime
       if: matrix.numpy-version
