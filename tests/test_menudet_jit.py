@@ -32,7 +32,14 @@ def backend(request, monkeypatch, tmp_path):
         if not compiler:
             pytest.skip("Clang is not installed")
         monkeypatch.setenv("CC", compiler)
-    probe = make("x + y", "float64", jit=True)
+    try:
+        probe = make("x + y", "float64", jit=True)
+    except blosc2.PortableArtifactError as error:
+        if "unsupported portable artifact version" not in str(error):
+            raise
+        if os.environ.get("MENUDET_REQUIRE_JIT") or os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME"):
+            pytest.fail(str(error))
+        pytest.skip("Installed miniexpr dependency does not implement portable 1.1")
     if not probe.has_jit:
         if os.environ.get("MENUDET_REQUIRE_JIT"):
             pytest.fail(f"{request.param} did not produce actual portable JIT")

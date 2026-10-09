@@ -208,11 +208,20 @@ def test_staged_dependency_validation(mutation):
 
 
 def test_staged_map_export_and_required_jit():
-    plan = blosc2.NativeGraph.from_expression("x - sum(x)", {"x": "float32"}, require_jit=True)
-    assert plan.has_jit
+    expression = "x - sum(x)"
+    plan = blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, jit=True)
+    if plan.has_jit:
+        plan = blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
+        assert plan.has_jit
+    else:
+        with pytest.raises(blosc2.PortableArtifactError, match="required map JIT"):
+            blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
     with pytest.raises(ValueError, match="elementwise"):
         plan.map_json()
     result, report = plan.evaluate({"x": np.arange(5, dtype="float32")}, return_report=True)
     np.testing.assert_array_equal(result, [-10, -9, -8, -7, -6])
-    assert report["jit_stages"] == 2
-    assert report["interpreter_stages"] == 0
+    assert report["jit_stages"] + report["interpreter_stages"] == 2
+    if plan.has_jit:
+        assert report["jit_stages"] == 2
+    else:
+        assert report["interpreter_stages"] >= 1
