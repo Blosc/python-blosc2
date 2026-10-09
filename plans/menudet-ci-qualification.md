@@ -153,6 +153,32 @@ also contain pre-existing SLEEF macro/always-inline/posix_memalign warnings and
 `dsl_jit_backend_libtcc.c` diagnostic format-truncation warnings; green CI is not
 claimed to be warning-free.
 
+### Required TCC runtime asset qualification
+
+Python `e44c0044f904bdc0ebee16ea4737e273d63949b9` selected native `b2c88e9`.
+[Paired 37958957787](https://github.com/Blosc/python-blosc2/actions/runs/37958957787)
+passed Windows/macOS but the new **required native TCC** test failed on Linux.
+Native `b2c88e9` [37958780104](https://github.com/Blosc/miniexpr/actions/runs/37958780104)
+also failed Linux x64/ARM64 TCC while the other five jobs passed. The gate was
+not removed or converted back to optional fallback.
+
+Native diagnostic commit `4aabfe873d044e64583247c7322d53c6b06ff9de` enabled trace
+on that test. [37960125294](https://github.com/Blosc/miniexpr/actions/runs/37960125294)
+identified the second missing asset exactly:
+`/usr/include/string.h:33: error: include file 'stddef.h' not found`.
+The multiarch glibc header fix was working; compiler-provided TinyCC headers were
+not staged or installed beside the relocated runtime library.
+
+Native `aefe19dfc893877eb76818d0d4c57adb78fbacdf` stages/installs the existing
+bundled TinyCC `include/` tree beside `libtcc`. No new dependency, native pin,
+numeric assertion or tolerance is involved. A fresh static local native build
+passed **431/431** (103.08 s), including required TCC. Installation to a private
+prefix succeeded, and required TCC also passed with `ME_DSL_JIT_LIBTCC_PATH`
+pointing at that installed runtime (0.41 s), rather than the staged build copy.
+Local static linkage emitted duplicate `-lm` linker warnings, recorded separately
+from the prior shared-build no-warning result. Remote Linux/ARM64 must confirm
+the runtime fix; local Apple results alone are not Linux evidence.
+
 Remaining release gates include experimental-pair NumPy 1.26 and other interpreter
 versions, paired Python ARM64 Windows/Linux and WASM integration, release wheel/
 sdist qualification against the selected native revision, clean-install optional
