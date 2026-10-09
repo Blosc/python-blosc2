@@ -117,9 +117,11 @@ An explicit experimental graph execution mode rejects rather than falling back:
     totals = expr.sum(axis=0, _require_native=True)
     artifact = expr.native_kernel().to_json()
 
-Eligible arithmetic/functions fuse into an immutable portable 1.1 plan. The Python
-frontend owns graph metadata and compressed storage reads; native code owns
-numerical execution and logical scheduling. Plans cache signatures/captures, never
+Eligible arithmetic/functions fuse into an immutable native graph plan. Python
+adapts syntax, explicit captures and storage owners; miniexpr owns numerical
+validation, type inference, broadcasting, reduction planning and execution.
+Python does not generate DSL/export twice or plan broadcasting on this route.
+Plans cache signatures/captures, never
 operand results. NumExpr is not needed for this subset, but its packaging dependency
 has not been relaxed. Backend defaults are unchanged. Nested lazy/proxy/table
 operands, row filtering/ordering, output aliases, reduction partial reads and
@@ -130,6 +132,42 @@ can still require full frontend materialization. The execution report records th
 bytes separately. Exported elementwise portable artifacts can use existing safe
 portable persistence; logical reduction descriptors are not persisted as though
 they were block-scalar recipes.
+
+Native declarative preparation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Graph-enabled miniexpr builds additionally expose ``blosc2.NativeGraph``. This
+experimental format (``menudet-graph-1``) is separate from artifact versions and
+portable recipe persistence. Preparation never requires numerical input buffers:
+
+.. code-block:: python
+
+    plan = blosc2.NativeGraph.from_expression(
+        "where(x != 0, y / x, y)", {"x": "float32", "y": "float32"}
+    )
+    schedule = plan.specialize({"x": ("float32", (3,)), "y": ("float32", ())})
+    metadata = schedule.info()  # Native map/output shapes and result dtype.
+    values, report = schedule.execute(
+        {
+            "x": np.array([0, 2, 4], dtype="float32"),
+            "y": np.array(8, dtype="float32"),
+        }
+    )
+    imported = blosc2.NativeGraph.from_json(plan.to_json())
+
+The restricted native text grammar is not general Python. Declarative JSON stores
+explicit weak/typed categories, lossless scalar encodings and optional root
+sum/prod/min/max/any/all options. Native final conversion is distinct from map
+precision/reduction accumulation and has an explicit intermediate memory budget.
+Input shapes/dtypes must match the schedule; re-specialize changed shapes, not
+changed values. Schedules retain their immutable plans and permit independent
+concurrent invocations. Actual JIT selection is reported by ``plan.has_jit``.
+
+Intermediate reductions, shared computed nodes, computed participation masks,
+callbacks, storage IO and general staged DAGs are not yet admitted. Older native
+dependencies reject graph preparation explicitly, without retaining a duplicate
+Python planner. For exact-pair local builds, pass
+``-Ccmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr`` to pip.
 
 An explicit ``PortableKernel.from_json(artifact, jit=True)`` request can accelerate
 the supported 1.1 subset with TCC or the system C compiler: rank-zero elementwise

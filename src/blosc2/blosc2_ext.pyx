@@ -1169,6 +1169,211 @@ cdef object array_view_binding(np.ndarray array, b2_array_view *view):
     return array
 
 
+cdef extern from "dsl_graph_bridge.h":
+    ctypedef struct b2_graph_metadata:
+        const char *name
+        me_dtype dtype
+        int rank
+        int64_t shape[16]
+    ctypedef struct b2_graph_error:
+        int node
+        int stage
+        b2_artifact_error native
+    int b2_graph_prepare(const char *, size_t, int, int, void **, b2_graph_error *) nogil
+    int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, void **, b2_graph_error *) nogil
+    int b2_graph_specialize(const void *, const b2_graph_metadata *, int, size_t, size_t, void **, b2_graph_error *) nogil
+    int b2_graph_execute(const void *, const b2_array_view *, int, void *, size_t, unsigned, b2_array_report *, b2_graph_error *) nogil
+    void b2_graph_free(void *)
+    void b2_graph_schedule_free(void *)
+    int b2_graph_ninputs(const void *)
+    const char *b2_graph_name(const void *, int)
+    me_dtype b2_graph_dtype(const void *, int)
+    me_dtype b2_graph_inferred(const void *)
+    int b2_graph_jit(const void *)
+    const char *b2_graph_json(const void *)
+    const char *b2_graph_map_json(const void *)
+    int b2_graph_shape(const void *, int64_t *, me_dtype *)
+    int b2_graph_map_shape(const void *, int64_t *)
+
+
+cdef void raise_graph_error(int rc, b2_graph_error *error, b2_array_report *report=NULL) except *:
+    if rc == -100:
+        raise NotImplementedError("Build with miniexpr native graph preparation support")
+    if rc == -7:
+        raise MemoryError((<bytes>error.native.message).decode("utf-8", "replace"))
+    from blosc2.portable_kernel import PortableArtifactError
+    statuses = {-1: "invalid_graph", -2: "unsupported_requirement", -3: "invalid_signature",
+                -4: "shape_error", -5: "binding_error", -6: "evaluation_error", -8: "unavailable_capability"}
+    exception = PortableArtifactError(
+        f"{(<bytes>error.native.message).decode('utf-8', 'replace')} (node={error.node}, stage={error.stage})",
+        status=statuses.get(rc, "native_error"), native_status=error.native.native_status,
+        line=error.native.line, column=error.native.column)
+    exception.node = error.node
+    exception.stage = error.stage
+    if report != NULL:
+        exception.fp_status = {"flags": report.fp_flags, "supported": bool(report.fp_supported)}
+    raise exception
+
+
+cdef class NativeGraphHandle:
+    cdef void *_handle
+
+    def __cinit__(self, graph=None, int jit_mode=2, bint require_jit=False):
+        cdef b2_graph_error error
+        cdef bytes encoded
+        cdef const char *json
+        cdef size_t size
+        cdef int rc
+        self._handle = NULL
+        if graph is None:
+            return
+        encoded = graph
+        json = encoded
+        size = len(encoded)
+        with nogil:
+            rc = b2_graph_prepare(json, size, jit_mode, require_jit, &self._handle, &error)
+        if rc:
+            raise_graph_error(rc, &error)
+
+    def __dealloc__(self):
+        b2_graph_free(self._handle)
+
+    def info(self):
+        cdef int i
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        return {"inputs": {(<bytes>b2_graph_name(self._handle, i)).decode('utf-8'):
+                           _numpy_dtype_from_me_dtype(b2_graph_dtype(self._handle, i))
+                           for i in range(b2_graph_ninputs(self._handle))},
+                "inferred_dtype": _numpy_dtype_from_me_dtype(b2_graph_inferred(self._handle)),
+                "has_jit": bool(b2_graph_jit(self._handle))}
+
+    def to_json(self):
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        return (<bytes>b2_graph_json(self._handle)).decode('utf-8')
+
+    def map_json(self):
+        cdef const char *json = b2_graph_map_json(self._handle)
+        if json == NULL:
+            raise ValueError("Root reductions/final conversions cannot be exported as elementwise artifacts")
+        return (<bytes>json).decode('utf-8')
+
+    @staticmethod
+    def from_expression(bytes expression, input_dtypes, int jit_mode=2, bint require_jit=False):
+        cdef b2_graph_metadata metadata[128]
+        cdef b2_graph_error error
+        cdef int n = len(input_dtypes), i, rc
+        cdef bytes name
+        cdef list names = [key.encode('utf-8') for key in input_dtypes]
+        cdef const char *text = expression
+        cdef size_t length = len(expression)
+        cdef NativeGraphHandle result = NativeGraphHandle()
+        if n > 128:
+            raise ValueError("Native graph binding limit exceeded")
+        memset(metadata, 0, sizeof(metadata))
+        for i, dtype in enumerate(input_dtypes.values()):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            metadata[i].name = name
+            metadata[i].dtype = _me_dtype_from_numpy_dtype(np.dtype(dtype).newbyteorder('='))
+        with nogil:
+            rc = b2_graph_prepare_text(text, length, metadata, n, jit_mode, require_jit, &result._handle, &error)
+        if rc:
+            raise_graph_error(rc, &error)
+        return result
+
+    def specialize(self, inputs, size_t tile_items=1024, size_t intermediate_budget=0):
+        """inputs maps names to (dtype, shape); no buffers or array reads."""
+        cdef b2_graph_metadata metadata[128]
+        cdef b2_graph_error error
+        cdef int n = len(inputs), i, j, rc
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef bytes name
+        cdef NativeGraphSchedule result = NativeGraphSchedule()
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        memset(metadata, 0, sizeof(metadata))
+        if n > 128:
+            raise ValueError("Native graph binding limit exceeded")
+        for i, (dtype, shape) in enumerate(inputs.values()):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            metadata[i].name = name
+            metadata[i].dtype = _me_dtype_from_numpy_dtype(np.dtype(dtype).newbyteorder('='))
+            metadata[i].rank = len(shape)
+            if len(shape) > 16:
+                raise ValueError("Native graph rank limit exceeded")
+            for j in range(len(shape)):
+                metadata[i].shape[j] = shape[j]
+        with nogil:
+            rc = b2_graph_specialize(self._handle, metadata, n, tile_items, intermediate_budget, &result._handle, &error)
+        if rc:
+            raise_graph_error(rc, &error)
+        return result
+
+
+cdef class NativeGraphSchedule:
+    cdef void *_handle
+
+    def __cinit__(self):
+        self._handle = NULL
+
+    def __dealloc__(self):
+        b2_graph_schedule_free(self._handle)
+
+    def info(self):
+        cdef int64_t shape[16], domain[16]
+        cdef me_dtype dtype
+        cdef int rank = b2_graph_shape(self._handle, shape, &dtype)
+        cdef int domain_rank = b2_graph_map_shape(self._handle, domain)
+        if rank < 0:
+            raise ValueError("Uninitialized graph schedule")
+        return {"shape": tuple(shape[i] for i in range(rank)),
+                "map_shape": tuple(domain[i] for i in range(domain_rank)),
+                "dtype": _numpy_dtype_from_me_dtype(dtype)}
+
+    def execute(self, inputs, unsigned raise_mask=0):
+        cdef b2_array_view views[128]
+        cdef b2_array_report report
+        cdef b2_graph_error error
+        cdef int n = len(inputs), i, rc
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef list owned = []
+        cdef bytes name
+        cdef np.ndarray array, bound, output
+        cdef size_t normalized = 0, capacity
+        if n > 128:
+            raise ValueError("Native graph binding limit exceeded")
+        memset(views, 0, sizeof(views))
+        info = self.info()
+        output = np.empty(info['shape'], dtype=info['dtype'])
+        capacity = output.nbytes
+        for i, value in enumerate(inputs.values()):
+            if not isinstance(value, np.ndarray):
+                raise TypeError("Graph execution requires explicit NumPy buffers")
+            array = value
+            bound = array_view_binding(array, &views[i])
+            if bound is not array:
+                normalized += bound.nbytes
+            owned.append(bound)
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            views[i].name = name
+        with nogil:
+            rc = b2_graph_execute(self._handle, views, n, np.PyArray_DATA(output), capacity,
+                                  raise_mask, &report, &error)
+        if rc:
+            raise_graph_error(rc, &error, &report)
+        return output, {"temporary_bytes": report.temporary_bytes, "gathered_bytes": report.gathered_bytes,
+                        "normalization_bytes": normalized, "zero_copy_tiles": report.zero_copy_tiles,
+                        "evaluated_tiles": report.evaluated_tiles, "fp_flags": report.fp_flags,
+                        "fp_supported": bool(report.fp_supported)}
+
+
 def portable_artifact_available():
     return bool(b2_artifact_available())
 

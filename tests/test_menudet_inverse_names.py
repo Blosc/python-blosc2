@@ -52,7 +52,7 @@ def test_authoring_normalizes_but_artifact_import_rejects_alias(native_runtime, 
 
 
 @pytest.mark.parametrize(("alias", "canonical"), MINIEXPR_FUNCTION_ALIASES.items())
-def test_native_graph_numpy_spelling(native_runtime, alias, canonical):
+def test_native_graph_numpy_spelling(native_runtime, native_graph_runtime, alias, canonical):
     values = np.array([1.0, 1.5]) if canonical == "acosh" else np.array([-0.25, 0.0, 0.25])
     arguments = "x, 1.0" if canonical == "atan2" else "x"
     with blosc2.expression_evaluation("safe"):

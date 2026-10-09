@@ -600,6 +600,7 @@ from .dsl_kernel import (
     validate_portable_dsl,
 )
 from .portable_kernel import PortableArtifactError, PortableKernel
+from .graph_plan import NativeGraph
 from .jit_config import get_jit_options, jit_options, set_jit_options
 from .expression_graph import expression_evaluation
 from .lazyexpr import (
@@ -924,6 +925,7 @@ __all__ = [  # noqa : RUF022
     "DSLKernel",
     "validate_portable_dsl",
     "PortableKernel",
+    "NativeGraph",
     "PortableArtifactError",
     "DSLSyntaxError",
     "LazyExpr",

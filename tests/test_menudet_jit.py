@@ -155,8 +155,8 @@ def test_lowered_division_and_shift_guards(backend, expression, dtype, x, y):
     assert actual[finite].tobytes() == expected[finite].tobytes()
 
 
-def test_native_graph_acceleration_and_reuse(backend):
-    from blosc2.native_graph import accelerated_plan
+def test_native_graph_acceleration_and_reuse(backend, native_graph_runtime):
+    from blosc2.native_graph import compile_plan
 
     x = np.arange(32, dtype="float64")
     with blosc2.expression_evaluation("safe"):
@@ -164,10 +164,10 @@ def test_native_graph_acceleration_and_reuse(backend):
     result = expr.compute(_require_native=True, jit=True)
     assert expr._native_execution_report["backend"] == "portable-jit"
     np.testing.assert_array_equal(result[:], x * 2 + 1)
-    hits = accelerated_plan.cache_info().hits
+    hits = compile_plan.cache_info().hits
     x[:] = 4
     np.testing.assert_array_equal(expr.compute(_require_native=True, jit=True)[:], x * 2 + 1)
-    assert accelerated_plan.cache_info().hits > hits
+    assert compile_plan.cache_info().hits > hits
 
 
 def test_inactive_union_bits_do_not_raise(backend):

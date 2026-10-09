@@ -38,6 +38,19 @@ def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
 
 
+@pytest.fixture(scope="session")
+def native_graph_runtime():
+    """Optional dependency feature; qualification jobs must require its presence."""
+    try:
+        blosc2.NativeGraph.from_expression("x", {"x": "float32"})
+    except NotImplementedError as error:
+        if os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME") or os.environ.get(
+            "MENUDET_REQUIRE_ARRAY_RUNTIME"
+        ):
+            pytest.fail(str(error))
+        pytest.skip("Installed miniexpr dependency does not implement native graph preparation")
+
+
 @pytest.fixture
 def b2z_range_reads(monkeypatch):
     """Exercise the large-archive range path using small, inexpensive fixtures."""

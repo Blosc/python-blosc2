@@ -66,6 +66,7 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx" --output-file blosc2_ext.c
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
   VERBATIM)
 
 add_custom_command(
@@ -152,6 +153,9 @@ target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
 if(TARGET miniexpr_artifact)
   target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
   target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_PORTABLE_ARTIFACT=1)
+  if(EXISTS "${miniexpr_SOURCE_DIR}/src/miniexpr_graph.h")
+    target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_NATIVE_GRAPH=1)
+  endif()
   FetchContent_GetProperties(yyjson SOURCE_DIR B2_YYJSON_SOURCE_DIR)
   install(FILES "${B2_YYJSON_SOURCE_DIR}/LICENSE"
     DESTINATION ${SKBUILD_METADATA_DIR}/licenses/miniexpr RENAME LICENSE-YYJSON)

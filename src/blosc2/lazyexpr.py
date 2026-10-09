@@ -4882,7 +4882,7 @@ class LazyExpr(LazyArray):
         plan, _, reduction = lower_native_graph(self)
         if reduction:
             raise ValueError("Root logical reductions require native compute, not an elementwise export")
-        return plan
+        return blosc2.PortableKernel.from_json(plan.map_json())
 
     def __getitem__(self, item):
         safe = evaluation_mode() == "safe" or getattr(self, "_evaluation", "full") == "safe"

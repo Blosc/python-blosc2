@@ -13,7 +13,7 @@ from blosc2.native_graph import compile_plan
 
 
 @pytest.fixture(autouse=True)
-def array_runtime():
+def array_runtime(native_graph_runtime):
     from blosc2.dsl_kernel import DSLKernel
 
     try:
