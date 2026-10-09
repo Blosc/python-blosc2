@@ -18,14 +18,19 @@ def make(expression, dtype, *, jit, output=None, inputs=None):
     return blosc2.PortableKernel.from_json(artifact, jit=jit)
 
 
-@pytest.fixture(params=["tcc", "cc"])
+@pytest.fixture(params=["tcc", "cc", "clang"])
 def backend(request, monkeypatch, tmp_path):
-    monkeypatch.setenv("ME_DSL_JIT_COMPILER", request.param)
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc" if request.param == "clang" else request.param)
     monkeypatch.setenv("ME_DSL_JIT_CACHE_DIR", str(tmp_path))
     monkeypatch.delenv("CFLAGS", raising=False)
     monkeypatch.delenv("ME_DSL_JIT_TCC_OPTIONS", raising=False)
     if request.param == "cc":
         compiler = os.environ.get("MENUDET_GCC", shutil.which("gcc-16") or shutil.which("gcc") or "cc")
+        monkeypatch.setenv("CC", compiler)
+    elif request.param == "clang":
+        compiler = os.environ.get("MENUDET_CLANG", shutil.which("clang"))
+        if not compiler:
+            pytest.skip("Clang is not installed")
         monkeypatch.setenv("CC", compiler)
     probe = make("x + y", "float64", jit=True)
     if not probe.has_jit:
@@ -48,6 +53,7 @@ def backend(request, monkeypatch, tmp_path):
         ("x >= y", True),
         ("x == y", True),
         ("x != y", True),
+        ("x / y > 0", True),
         ("where(x > 0, y / x, x * 2 + y)", False),
         ("where(x != 0, where(y > 0, x / y, -x), y)", False),
     ],
@@ -169,3 +175,45 @@ def test_boolean_short_circuit_and_mixed_float_inputs(backend):
         assert k.has_jit
         _, status = k.evaluate({"x": np.array([0.0]), "y": np.array([1.0])}, return_status=True)
         assert status["flags"] == 0
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("op", ["==", "!=", "<", "<=", ">", ">="])
+def test_inline_comparison_nan_payloads_and_status(backend, dtype, op):
+    # Construct payloads without floating arithmetic that could quiet sNaNs.
+    if dtype == "float32":
+        bits = [0x7FC00001, 0xFFC01234, 0x7F800001, 0xFF800123]
+        uint = "uint32"
+    else:
+        bits = [0x7FF8000000000001, 0xFFF8000000001234, 0x7FF0000000000001, 0xFFF0000000000123]
+        uint = "uint64"
+    nan = np.array(bits, dtype=uint).view(dtype)
+    compiled = make(f"x {op} y", dtype, jit=True, output="bool")
+    reference = make(f"x {op} y", dtype, jit=False, output="bool")
+    assert compiled.has_jit
+    for i in range(len(nan)):
+        value = nan[i : i + 1]
+        ordinary = np.array([0.0], dtype=dtype)
+        for x, y in ((value, ordinary), (ordinary, value), (value, value)):
+            bindings = {"x": x, "y": y}
+            actual, status = compiled.evaluate(bindings, return_status=True)
+            expected, expected_status = reference.evaluate(bindings, return_status=True)
+            np.testing.assert_array_equal(actual, expected)
+            assert status == expected_status
+            # Caller recovery and selected-lane masks must not leak NaN flags.
+            _, report = compiled.evaluate_array(
+                bindings, reduction="any", where=np.array([False]), return_report=True
+            )
+            assert report["fp_flags"] == 0
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_inline_comparison_nan_in_unselected_branch(backend, dtype):
+    uint = "uint32" if dtype == "float32" else "uint64"
+    bits = 0x7F800001 if dtype == "float32" else 0x7FF0000000000001
+    x = np.array([bits], dtype=uint).view(dtype)
+    k = make("where(y != 0, x > 0, y > 0)", dtype, jit=True, output="bool")
+    assert k.has_jit
+    values, status = k.evaluate({"x": x, "y": np.zeros(1, dtype=dtype)}, return_status=True)
+    np.testing.assert_array_equal(values, [False])
+    assert status["flags"] == 0
