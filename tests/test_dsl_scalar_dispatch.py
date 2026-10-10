@@ -1,5 +1,6 @@
 """Single-return scalar execution preserves the general DSL interpreter contract."""
 
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -93,11 +94,20 @@ def test_simple_scalar_fp_errors_and_inactive_lanes():
     x = np.array([np.inf, 0, 2], dtype="float64")
     actual, status = kernel.evaluate_block({"x": x}, return_status=True)
     assert np.isnan(actual)
-    assert status["flags"] & 1
-    with pytest.raises(blosc2.PortableArtifactError):
+    if sys.platform == "emscripten":
+        assert status == {"supported": False, "flags": 0}
+        error = "unsupported"
+    else:
+        assert status["supported"]
+        assert status["flags"] & 1
+        error = "floating"
+    with pytest.raises(blosc2.PortableArtifactError, match=error):
         kernel.evaluate_block({"x": x}, fp_errors="raise")
     actual, status = kernel.evaluate_block(
-        {"x": x}, valid_mask=np.array([False, False, True]), return_status=True, fp_errors="raise"
+        {"x": x},
+        valid_mask=np.array([False, False, True]),
+        return_status=True,
+        fp_errors="ignore" if sys.platform == "emscripten" else "raise",
     )
     assert actual == 2
     assert status["flags"] == 0
@@ -138,6 +148,10 @@ def test_simple_scalar_concurrent_reuse():
     def evaluate(value):
         return kernel.evaluate_block({"x": np.full(1024, value, dtype="float64")})
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(evaluate, range(16)))
+    if sys.platform == "emscripten":
+        # Single-threaded Pyodide still checks repeated immutable-handle reuse.
+        results = list(map(evaluate, range(16)))
+    else:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(evaluate, range(16)))
     np.testing.assert_array_equal(results, np.arange(16) * 2048)

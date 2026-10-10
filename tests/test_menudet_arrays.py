@@ -71,7 +71,12 @@ def test_broadcast_and_layout(layout, dtype):
 def test_logical_reductions(dtype, op, axis):
     x = (np.arange(24).reshape(2, 3, 4) % 3).astype(dtype)
     k = kernel(output=dtype)
-    reference = getattr(np, op)(x, axis=axis, keepdims=True)
+    # Menudet's portable accumulator widths are fixed, unlike NumPy's native
+    # integer defaults (32 bits on WASM). Specify the contract in the oracle.
+    options = {}
+    if op in ("sum", "prod") and x.dtype.kind in "biu":
+        options["dtype"] = "uint64" if x.dtype.kind == "u" else "int64"
+    reference = getattr(np, op)(x, axis=axis, keepdims=True, **options)
     previous = None
     for tile in (1, 5, 32):
         result = k.evaluate_array({"x": x}, reduction=op, axis=axis, keepdims=True, tile_items=tile)
