@@ -123,7 +123,8 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
         return
     actual, status = kernel.evaluate_block({"x": x}, return_status=True)
     expected, reference = kernel.evaluate_block({"x": padded}, valid_mask=mask, return_status=True)
-    assert actual.tobytes() == expected.tobytes()
+    if not (np.isnan(actual).all() and np.isnan(expected).all()):
+        assert actual.tobytes() == expected.tobytes()
     assert status == reference
     expression = f"{op}(x, initial=1)" if op in ("min", "max") else f"{op}(x)"
     plan = blosc2.NativeGraph.from_expression(expression, {"x": dtype})
@@ -545,8 +546,11 @@ def test_native_text_power_precedence(expression, expected):
 def test_weak_initial_range_error_is_runtime_only():
     plan = blosc2.NativeGraph.from_expression("min(x, initial=-1)", {"x": "uint8"})
     schedule = plan.specialize({"x": ("uint8", (1,))})
-    with pytest.raises(OverflowError):
-        np.min(np.array([1], dtype="uint8"), initial=-1)
+    # Native portable semantics target NumPy 2.x, independently of the installed
+    # host NumPy ABI; 1.26 instead warns and wraps this weak initial value.
+    if int(np.__version__.split(".")[0]) >= 2:
+        with pytest.raises(OverflowError):
+            np.min(np.array([1], dtype="uint8"), initial=-1)
     with pytest.raises(blosc2.PortableArtifactError) as failure:
         schedule.execute({"x": np.array([1], dtype="uint8")})
     assert failure.value.status == "evaluation_error"

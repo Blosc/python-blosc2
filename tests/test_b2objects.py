@@ -185,7 +185,7 @@ def test_lazyudf_open_roundtrip(tmp_path):
     for body, expected in (
         ("print(x)\n    return x", "print"),
         ("return callback(x)", "invalid_source"),
-        ("return sum(x)", "block scalar"),
+        ("return block_sum(x)", "block scalar"),
     ):
         invalid = blosc2.DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
         bad = blosc2.lazyudf(invalid, (a,), dtype="float64")
