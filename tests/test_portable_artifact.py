@@ -25,6 +25,43 @@ SCALE = 2.0
 BIAS = -1.0
 
 
+@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("operation", ["sum", "prod", "min", "max", "mean", "any", "all"])
+def test_explicit_block_reduction_names(version, operation):
+    output = "bool" if operation in {"any", "all"} else "float64"
+    source = f"def k(x):\n    return block_{operation}(x)\n"
+    artifact = blosc2.DSLKernel.from_source(source).export(
+        {"x": "float64"}, output, version=version, cardinality="block_scalar"
+    )
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    x = np.array([1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(kernel.evaluate({"x": x}), getattr(np, operation)(x))
+    with pytest.raises(blosc2.PortableArtifactError):
+        blosc2.DSLKernel.from_source(f"def k(x):\n    return {operation}(x)\n").export(
+            {"x": "float64"}, output, version=version, cardinality="block_scalar"
+        )
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("dtype", ["bool", "int64", "uint64", "float32", "float64"])
+def test_block_mean_dtype_and_participation(version, dtype):
+    output = dtype if dtype.startswith("float") else "float64"
+    artifact = blosc2.DSLKernel.from_source("def k(x):\n    return block_mean(x)\n").export(
+        {"x": dtype}, output, version=version, cardinality="block_scalar"
+    )
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    x = np.array([1, 0, 3], dtype=dtype)
+    mask = np.array([False, True, True])
+    actual = kernel.evaluate_block({"x": x}, valid_mask=mask)
+    assert actual.dtype == np.dtype(output)
+    np.testing.assert_array_equal(actual, np.mean(x[mask]))
+    assert np.isnan(kernel.evaluate_block({"x": x}, valid_mask=np.zeros(3, dtype=bool)))
+    assert np.isnan(kernel.evaluate_block({"x": x[:0]}))
+    if dtype in {"int64", "uint64"}:
+        with pytest.raises(blosc2.PortableArtifactError):
+            kernel.evaluate_block({"x": np.array([np.iinfo(dtype).max, 1], dtype=dtype)})
+
+
 def assert_execution_mode(kernel, jit):
     # Draft 1.0 is interpreter-first, including optional JIT requests.
     assert kernel.schema_version == "1.0"

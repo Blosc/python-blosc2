@@ -236,11 +236,25 @@ finite-domain limits are described in :doc:`menudet_accuracy`.
 Release boundary
 ----------------
 
+Portable DSL 1.0 and 1.1 reductions are named ``block_sum``, ``block_prod``,
+``block_min``, ``block_max``, ``block_mean``, ``block_any`` and ``block_all``. Each takes one
+operand and reduces only the supplied evaluation block's valid, participating
+lanes. There is no ``axis`` or ``keepdims`` argument and no automatic combination
+of results across blocks. Changing evaluation partitions can change results.
+Bare reduction calls, including ``mean``, are rejected; existing draft artifacts
+must be updated or re-exported. General lazy expressions and native array/graph
+plans retain whole-array and axis reductions with their existing names.
+
+``block_mean`` divides the ordered sum by the number of participating lanes.
+Float32/float64 inputs retain their dtype; integer/Boolean inputs use a checked
+integer sum and return float64. Integer accumulation overflow raises an error.
+An empty or entirely masked block returns NaN.
+
 ``DSLKernel.export`` and ``validate_portable_dsl`` default to draft 1.0.
 Native validation of normalized source, typed captures,
 fixed widths and cardinality completes before export returns JSON::
 
-    author = blosc2.DSLKernel.from_source("def total(x):\n    return sum(x)\n")
+    author = blosc2.DSLKernel.from_source("def total(x):\n    return block_sum(x)\n")
     record = author.export({"x": "int64"}, "int64",
                            cardinality="block_scalar")
     kernel = blosc2.PortableKernel.from_json(record)

@@ -53,7 +53,7 @@ def test_initial_array_inventory():
     with pytest.raises(blosc2.PortableArtifactError, match="binding_error"):
         add.evaluate({"x": x, "y": y})
     block_sum = blosc2.PortableKernel.from_json(
-        blosc2.DSLKernel.from_source("def k(x):\n    return sum(x)\n").export(
+        blosc2.DSLKernel.from_source("def k(x):\n    return block_sum(x)\n").export(
             {"x": "int8"}, "int64", cardinality="block_scalar"
         ),
         jit=False,

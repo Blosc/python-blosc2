@@ -389,7 +389,7 @@ def generate(checkpoint_path):
     }
     cases.append(recovery)
     reduced = make_case(
-        "block-sum-explicit-int64", "sum", "sum(x)", [np.arange(6, dtype="int64").reshape(2, 3)]
+        "block-sum-explicit-int64", "sum", "block_sum(x)", [np.arange(6, dtype="int64").reshape(2, 3)]
     )
     artifact = json.loads(reduced["artifact"])
     artifact["requires"].append("block-reductions")

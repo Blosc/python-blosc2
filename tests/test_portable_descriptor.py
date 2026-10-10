@@ -34,7 +34,7 @@ def manifest(source, inputs, output, *, requires, ndim=0):
 def test_descriptor_scalar_mask_empty():
     artifact = blosc2_ext.PortableArtifactHandle(
         manifest(
-            "def k(x):\n    return sum(x)\n",
+            "def k(x):\n    return block_sum(x)\n",
             [{"name": "x", "dtype": "int64"}],
             {"dtype": "int64", "contract": "block_scalar"},
             requires=["numeric", "block-reductions"],
@@ -60,7 +60,7 @@ def test_descriptor_scalar_mask_empty():
     )
     record = json.loads(
         manifest(
-            "def k(x):\n    s = sum(x)\n    return s\n",
+            "def k(x):\n    s = block_sum(x)\n    return s\n",
             [{"name": "x", "dtype": "int64"}],
             {"dtype": "int64", "contract": "block_scalar"},
             requires=["numeric", "block-reductions"],
@@ -83,19 +83,19 @@ def test_descriptor_scalar_mask_empty():
         "    for i in range(x):\n        return s\n    return s + 1\n",
         "    for i in range(3):\n        if x < 0:\n            break\n        return s + 1\n    return s\n",
         "    for i in range(3):\n        if x < 0:\n            continue\n        return s + 1\n    return s\n",
-        "    while all(x != 0):\n        if x < 0:\n            break\n        return s + 1\n    return s\n",
+        "    while block_all(x != 0):\n        if x < 0:\n            break\n        return s + 1\n    return s\n",
         "    if s < 0:\n        return s\n    elif x < 0:\n        return s + 1\n    return s\n",
     ):
-        record["source"] = "def k(x):\n    s = sum(x)\n" + body
+        record["source"] = "def k(x):\n    s = block_sum(x)\n" + body
         with pytest.raises(ValueError, match="ambiguous block-scalar"):
             blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
     for body in (
-        "    if all(x > 0):\n        return s + 1\n    return s\n",
+        "    if block_all(x > 0):\n        return s + 1\n    return s\n",
         "    for i in range(3):\n        if s > 0:\n            return s + i\n    return s\n",
         "    for i in range(3):\n        if x < 0:\n            break\n    return s\n",
-        "    while all(x > 0):\n        return s + 1\n    return s\n",
+        "    while block_all(x > 0):\n        return s + 1\n    return s\n",
     ):
-        record["source"] = "def k(x):\n    s = sum(x)\n" + body
+        record["source"] = "def k(x):\n    s = block_sum(x)\n" + body
         coherent = blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
         assert coherent.evaluate_block({"x": np.array([-1, 2], dtype="int64")}, (2,)) == 1
 

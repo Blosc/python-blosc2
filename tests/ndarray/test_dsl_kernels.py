@@ -1014,7 +1014,7 @@ def test_dsl_save_input_names_match(tmp_path):
     grouped = blosc2.asarray(
         np.arange(8, dtype="int64"), chunks=(8,), blocks=(2,), urlpath=tmp_path / "grouped.b2nd", mode="w"
     )
-    kernel = blosc2.DSLKernel.from_source("def grouped(x):\n    return x + sum(x) + _i0\n")
+    kernel = blosc2.DSLKernel.from_source("def grouped(x):\n    return x + block_sum(x) + _i0\n")
     authored = blosc2.lazyudf(kernel, (grouped,), dtype="int64")
     frame = authored.to_cframe()
     restored = blosc2.from_cframe(frame)

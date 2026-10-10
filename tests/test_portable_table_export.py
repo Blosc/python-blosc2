@@ -43,7 +43,7 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
         assert not validate("def k(x):\n    return upper(x)\n", {"x": "U4"}, "U3", language_version="1.0")[
             "valid"
         ]
-        scalar = "def k(x):\n    return sum(x)\n"
+        scalar = "def k(x):\n    return block_sum(x)\n"
         assert validate(scalar, {"x": "int16"}, "int64", language_version="1.0", cardinality="block_scalar")[
             "valid"
         ]
@@ -97,7 +97,7 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
     np.testing.assert_array_equal(
         blosc2.PortableKernel.from_json(record).evaluate({"x": np.array(["a"], dtype="U2")}), ["aß"]
     )
-    static = blosc2.DSLKernel.from_source("def rows(x):\n    return sum(x) + _n0\n")
+    static = blosc2.DSLKernel.from_source("def rows(x):\n    return block_sum(x) + _n0\n")
     record = static.export({"x": "int64"}, "int64", version="1.0", cardinality="block_scalar", ndim=1)
     assert blosc2.PortableKernel.from_json(record).result_cardinality == "block_scalar"
 
@@ -135,7 +135,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     class Row:
         x: int = 0
 
-    source = blosc2.DSLKernel.from_source("def rows(x):\n    return sum(x) + _flat_idx + _n0\n")
+    source = blosc2.DSLKernel.from_source("def rows(x):\n    return block_sum(x) + _flat_idx + _n0\n")
     kernel = blosc2.PortableKernel.from_json(source.export({"x": "int64"}, "int64", version="1.0", ndim=1))
     table = blosc2.CTable(Row, new_data={"x": [2, 4]}, create_summary_index=False)
     table.add_computed_column("virtual", kernel, inputs={"x": "x"})
@@ -208,7 +208,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     vector_table = blosc2.CTable(
         VectorRow, new_data={"vector": [[1, 2, 3], [4, 5, 6]], "bias": [1, 2]}, create_summary_index=False
     )
-    total = blosc2.DSLKernel.from_source("def total_row(x, bias):\n    return sum(x + bias) + _n0\n")
+    total = blosc2.DSLKernel.from_source("def total_row(x, bias):\n    return block_sum(x + bias) + _n0\n")
     vector_table.add_generated_column(
         "total",
         values=total,
@@ -235,7 +235,7 @@ def test_unified_table_registration_is_row_local_and_validated(tmp_path, generat
         new_data={"amount": [2.0, 4.0, 8.0]},
         create_summary_index=False,
     )
-    kernel = blosc2.DSLKernel.from_source("def center(x):\n    return x - mean(x)\n")
+    kernel = blosc2.DSLKernel.from_source("def center(x):\n    return x - block_mean(x)\n")
     if generated:
         table.add_generated_column("centered", values=kernel, inputs={"x": "amount"}, create_index=True)
     else:

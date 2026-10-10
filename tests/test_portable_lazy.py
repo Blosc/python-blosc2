@@ -34,7 +34,7 @@ def kernel(source, *, scalar=False, nd=False, string=False):
 @pytest.mark.parametrize("scalar", [False, True])
 def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypatch, scalar):
     native = kernel(
-        "def k(x):\n    return sum(x)\n" if scalar else "def k(x):\n    return x + 1\n", scalar=scalar
+        "def k(x):\n    return block_sum(x)\n" if scalar else "def k(x):\n    return x + 1\n", scalar=scalar
     )
     data = np.arange(4096, dtype="int64")
     source = blosc2.asarray(data, chunks=(128,), blocks=(32,))
@@ -130,7 +130,7 @@ def test_logical_groups_partial_and_rechunk(tmp_path, scalar):
     values = np.arange(35, dtype="int64").reshape(5, 7)
     stored = blosc2.asarray(values, chunks=(3, 4), blocks=(1, 2), urlpath=tmp_path / "input.b2nd")
     k = kernel(
-        "def k(x):\n    return sum(x)\n" if scalar else "def k(x):\n    return x + _flat_idx\n",
+        "def k(x):\n    return block_sum(x)\n" if scalar else "def k(x):\n    return x + _flat_idx\n",
         scalar=scalar,
         nd=not scalar,
     )
@@ -190,7 +190,7 @@ def test_container_routes(tmp_path, route):
     from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
     source = blosc2.asarray(np.arange(9, dtype="int64"), urlpath=tmp_path / "source.b2nd")
-    lazy = kernel("def k(x):\n    return sum(x)\n", scalar=True).lazy({"x": source}, partitions=(4,))
+    lazy = kernel("def k(x):\n    return block_sum(x)\n", scalar=True).lazy({"x": source}, partitions=(4,))
     expected = np.array([6, 22, 8])
     if route == "frame":
         reopened = blosc2.from_cframe(lazy.to_cframe())
@@ -222,12 +222,12 @@ def test_partial_reads_only_original_groups():
             return np.arange(12, dtype="int64")[item]
 
     operand = Operand()
-    lazy = kernel("def k(x):\n    return sum(x)\n", scalar=True).lazy({"x": operand}, partitions=(4,))
+    lazy = kernel("def k(x):\n    return block_sum(x)\n", scalar=True).lazy({"x": operand}, partitions=(4,))
     np.testing.assert_array_equal(lazy[1:2], [22])
     assert operand.reads == [(slice(4, 8),)]
     assert lazy[1] == 22
     np.testing.assert_array_equal(lazy[::-1], [38, 22, 6])
-    author = blosc2.DSLKernel.from_source("def k(x):\n    return x + sum(x)\n")
+    author = blosc2.DSLKernel.from_source("def k(x):\n    return x + block_sum(x)\n")
     elementwise = blosc2.PortableKernel.from_json(author.export({"x": "int64"}, "int64", version="1.0"))
     grouped = elementwise.lazy({"x": operand}, partitions=(4,))
     operand.reads.clear()

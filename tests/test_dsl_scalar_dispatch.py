@@ -22,14 +22,21 @@ def scalar_kernel(body, inputs, output="float64", *, jit=False, ndim=0, cardinal
 @pytest.mark.parametrize("dtype", ["float32", "float64", "int64"])
 @pytest.mark.parametrize(
     "expression",
-    ["sum(x + y)", "sum(x) + sum(y)", "sum(x) + sum(x)", "sum(x) / 2", "mean(x)", "sum(x) > sum(y)"],
+    [
+        "block_sum(x + y)",
+        "block_sum(x) + block_sum(y)",
+        "block_sum(x) + block_sum(x)",
+        "block_sum(x) / 2",
+        "block_mean(x)",
+        "block_sum(x) > block_sum(y)",
+    ],
 )
 def test_simple_scalar_expression_matches_statement_path(dtype, expression, jit):
     output = (
         "bool"
         if ">" in expression
         else "float64"
-        if dtype == "int64" and ("/" in expression or expression.startswith("mean"))
+        if dtype == "int64" and ("/" in expression or expression.startswith("block_mean"))
         else dtype
     )
     signature = {"x": dtype, "y": dtype}
@@ -59,8 +66,8 @@ def test_simple_scalar_expression_matches_statement_path(dtype, expression, jit)
 @pytest.mark.parametrize("output", ["float32", "float64", "int64"])
 def test_simple_scalar_output_conversion(output):
     signature = {"x": "int64"}
-    direct = scalar_kernel("return sum(x)", signature, output)
-    general = scalar_kernel("s = sum(x)\n    return s", signature, output)
+    direct = scalar_kernel("return block_sum(x)", signature, output)
+    general = scalar_kernel("s = block_sum(x)\n    return s", signature, output)
     inputs = {"x": np.array([1, 2, 3], dtype="int64")}
     actual = direct.evaluate_block(inputs)
     assert actual.dtype == np.dtype(output)
@@ -68,7 +75,7 @@ def test_simple_scalar_output_conversion(output):
 
 
 def test_simple_scalar_errors_are_not_retried_or_cached():
-    kernel = scalar_kernel("return sum(x)", {"x": "int64"}, "int64")
+    kernel = scalar_kernel("return block_sum(x)", {"x": "int64"}, "int64")
     with pytest.raises(blosc2.PortableArtifactError):
         kernel.evaluate_block({"x": np.array([2**63 - 1, 1], dtype="int64")})
     assert kernel.evaluate_block({"x": np.array([1, 2], dtype="int64")}) == 3
@@ -82,7 +89,7 @@ def test_simple_scalar_errors_are_not_retried_or_cached():
 
 
 def test_simple_scalar_fp_errors_and_inactive_lanes():
-    kernel = scalar_kernel("return prod(x)", {"x": "float64"})
+    kernel = scalar_kernel("return block_prod(x)", {"x": "float64"})
     x = np.array([np.inf, 0, 2], dtype="float64")
     actual, status = kernel.evaluate_block({"x": x}, return_status=True)
     assert np.isnan(actual)
@@ -97,7 +104,7 @@ def test_simple_scalar_fp_errors_and_inactive_lanes():
 
 
 def test_simple_scalar_context_and_elementwise_fallback():
-    context = scalar_kernel("return sum(_flat_idx)", {}, "int64", ndim=1)
+    context = scalar_kernel("return block_sum(_flat_idx)", {}, "int64", ndim=1)
     assert context.evaluate_block({}, block_shape=(3,), logical_shape=(8,), block_origin=(2,)) == 9
     with pytest.raises((ValueError, blosc2.PortableArtifactError)):
         context.evaluate_block({}, block_shape=(3,))
@@ -108,12 +115,15 @@ def test_simple_scalar_context_and_elementwise_fallback():
 
 def test_simple_scalar_statement_control_flow_fallback():
     kernel = scalar_kernel(
-        "s = sum(x)\n    if s > 0:\n        return s + 1\n    return s - 1", {"x": "int64"}, "int64"
+        "s = block_sum(x)\n    if s > 0:\n        return s + 1\n    return s - 1", {"x": "int64"}, "int64"
     )
     assert kernel.evaluate_block({"x": np.array([1, 2], dtype="int64")}) == 4
     assert kernel.evaluate_block({"x": np.array([-1, -2], dtype="int64")}) == -4
     uninitialized = scalar_kernel(
-        "if all(x > 0):\n        s = 3\n    return s", {"x": "int64"}, "int64", cardinality="elementwise"
+        "if block_all(x > 0):\n        s = 3\n    return s",
+        {"x": "int64"},
+        "int64",
+        cardinality="elementwise",
     )
     np.testing.assert_array_equal(
         uninitialized.evaluate_block({"x": np.array([1, 2], dtype="int64")}), [3, 3]
@@ -123,7 +133,7 @@ def test_simple_scalar_statement_control_flow_fallback():
 
 
 def test_simple_scalar_concurrent_reuse():
-    kernel = scalar_kernel("return sum(x) + sum(x)", {"x": "float64"})
+    kernel = scalar_kernel("return block_sum(x) + block_sum(x)", {"x": "float64"})
 
     def evaluate(value):
         return kernel.evaluate_block({"x": np.full(1024, value, dtype="float64")})
