@@ -107,6 +107,12 @@ storage chunks; floating sums need not match NumPy's pairwise bits. Narrow integ
 accumulators wrap modularly. Floating-to-integer accumulator overrides, cumulative
 and arg reductions, general gathers/scatters and mutable views are unsupported.
 
+Integer sum/product reductions default to fixed 64-bit accumulators: ``int64``
+for Boolean and signed integer inputs, and ``uint64`` for unsigned inputs.
+This preserves artifact semantics across platforms and matches NumPy's defaults
+on 64-bit hosts, but not its platform-dependent defaults on 32-bit hosts such as
+WASM32. On those hosts, result dtypes and overflow behavior can differ from NumPy.
+
 An explicit experimental graph execution mode rejects rather than falling back:
 
 .. code-block:: python
