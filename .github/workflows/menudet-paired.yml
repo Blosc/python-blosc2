@@ -71,7 +71,7 @@ jobs:
           fi
           ctest --test-dir native-build --output-on-failure
           python -c 'import blosc2; assert blosc2.NativeGraph.from_expression("x - sum(x)", {"x": "float32"}).info()["stages"] == 2'
-          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_portable.py tests/test_portable_artifact.py tests/test_portable_lazy.py tests/test_portable_table_export.py tests/test_portable_policy.py tests/test_portable_descriptor.py -q -n 0
+          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_portable.py tests/test_portable_artifact.py tests/test_portable_lazy.py tests/test_portable_table_export.py tests/test_portable_policy.py tests/test_portable_descriptor.py tests/test_portable_jit_parity.py tests/test_native_graph_weak_captures.py tests/test_dsl_scalar_dispatch.py -q -n 0
       - name: Build exact-pair distribution wheel
         run: |
           native_source="$PWD/native"
@@ -80,7 +80,7 @@ jobs:
           fi
           python -m pip wheel . --no-deps --wheel-dir graph-wheels --config-settings="cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=$native_source"
           python -m pip install --force-reinstall --no-deps graph-wheels/*.whl
-          python -m pytest tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_native_graph.py -q -n 0
+          python -m pytest tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_native_graph.py tests/test_portable_jit_parity.py -q -n 0
       - name: Require actual supported portable JIT backends
         if: runner.os != 'Windows'
         env:
@@ -88,7 +88,7 @@ jobs:
           ME_DSL_TRACE: '1'
         run: |
           set -o pipefail
-          python -m pytest tests/test_menudet_jit.py -q -n 0 2>&1 | tee menudet-jit.log
+          python -m pytest tests/test_menudet_jit.py tests/test_portable_jit_parity.py -q -n 0 2>&1 | tee menudet-jit.log
       - name: Record exact paired revisions
         if: always()
         run: |

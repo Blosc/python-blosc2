@@ -1,5 +1,6 @@
 """Portable JIT parity regressions use the production artifact and graph APIs."""
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -16,6 +17,8 @@ def portable_kernel(source, inputs, output, *, jit=True, constants=None):
     )
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     oracle = blosc2.NativeGraph.from_expression("x + x", {"x": next(iter(inputs.values()))}, jit=jit)
+    if jit and os.environ.get("MENUDET_REQUIRE_JIT") == "1":
+        assert oracle.has_jit, "Requested backend must compile the eligibility oracle"
     if oracle.has_jit:
         assert kernel.has_jit
     return kernel
@@ -243,3 +246,34 @@ def test_computed_capture_cache_reuse():
         np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), x + value + 1)
         restored = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
         np.testing.assert_array_equal(restored.evaluate_block({"x": x}), x + value + 1)
+
+
+@pytest.mark.parametrize("expression", ["c + d", "c - d", "c * d", "-c"])
+@pytest.mark.parametrize(
+    ("c", "d"),
+    [
+        (2**63 - 1, 1),
+        (-(2**63), -1),
+        (2**63 - 1, 2),
+        (-(2**63), 0),
+        (0, -(2**63)),
+        (2**63 - 1, -1),
+        (-(2**63), 1),
+        (7, -3),
+        (0, 0),
+    ],
+)
+def test_inline_weak_arithmetic_boundaries(expression, c, d):
+    source = f"def k(x, c, d):\n    if x == 0:\n        return x\n    return x + ({expression})\n"
+    constants = {"c": c, "d": d}
+    kernel = portable_kernel(source, {"x": "int64"}, "int64", constants=constants)
+    reference = portable_kernel(source, {"x": "int64"}, "int64", constants=constants, jit=False)
+    inputs = {"x": np.array([0, 1], dtype="int64")}
+    try:
+        expected = reference.evaluate_block(inputs)
+    except blosc2.PortableArtifactError:
+        with pytest.raises(blosc2.PortableArtifactError):
+            kernel.evaluate_block(inputs)
+    else:
+        assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
+    kernel.evaluate_block(inputs, valid_mask=np.array([True, False]))

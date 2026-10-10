@@ -5533,7 +5533,10 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     else:
         _globals = safe_numpy_globals
     try:
-        _out = _numpy_eval_datetime_aware(expression, _globals, ops)
+        # Dummy values are only for shape/dtype inference. Their artificial
+        # domain boundaries must not emit diagnostics for the actual operands.
+        with np.errstate(all="ignore"):
+            _out = _numpy_eval_datetime_aware(expression, _globals, ops)
     except RuntimeWarning:
         # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
         # with synthetic operands (1's). Let's try with numexpr, which is not so picky

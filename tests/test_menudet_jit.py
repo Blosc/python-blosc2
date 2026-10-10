@@ -121,7 +121,7 @@ def test_lazy_mask_raise_recovery_and_threads(backend):
 def test_fail_closed_and_casts(backend, monkeypatch):
     for expression in ("x == -1", "x < -1"):
         k = make(expression, "uint64", jit=True, output="bool")
-        assert not k.has_jit  # signed weak literal must not undergo C's unsigned promotion
+        assert k.has_jit  # exact mixed-domain comparison, without C's unsigned promotion
         np.testing.assert_array_equal(
             k.evaluate({"x": np.array([0, 2**64 - 1], dtype="uint64"), "y": np.ones(2, dtype="uint64")}),
             [False, False],

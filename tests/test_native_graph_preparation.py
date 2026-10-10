@@ -53,7 +53,7 @@ def test_direct_sum_order_status_initial_and_fallback(dtype):
     assert report["gathered_bytes"] > 0
 
 
-def make_portable_sum(dtype, body="return sum(x)", cardinality="block_scalar", *, output_dtype=None):
+def make_portable_sum(dtype, body="return block_sum(x)", cardinality="block_scalar", *, output_dtype=None):
     artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
         {"x": dtype}, output_dtype or dtype, version="1.1", cardinality=cardinality
     )
@@ -74,7 +74,7 @@ def test_typed_reductions_match_generic(dtype, op):
         if op == "prod" and dtype not in ("float32", "float64")
         else dtype
     )
-    kernel = make_portable_sum(dtype, f"return {op}(x)", output_dtype=output_dtype)
+    kernel = make_portable_sum(dtype, f"return block_{op}(x)", output_dtype=output_dtype)
     actual, status = kernel.evaluate_block({"x": x}, return_status=True)
     # A partial mask forces the original reducer, without altering input values.
     padded = np.append(x, np.array([0], dtype=dtype))
@@ -113,7 +113,7 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
             0x7F800001 if dtype == "float32" else 0x7FF0000000000001
         )
     kernel = make_portable_sum(
-        dtype, f"return {op}(x)", output_dtype="bool" if op in ("any", "all") else dtype
+        dtype, f"return block_{op}(x)", output_dtype="bool" if op in ("any", "all") else dtype
     )
     padded = np.append(x, np.array([0], dtype=dtype))
     mask = np.arange(padded.size) < x.size
@@ -144,7 +144,7 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
 )
 def test_typed_product_prefix_overflow(dtype, values):
     x = np.array(values, dtype=dtype)
-    kernel = make_portable_sum(dtype, "return prod(x)")
+    kernel = make_portable_sum(dtype, "return block_prod(x)")
     for data, mask in (
         (x, None),
         (np.append(x, np.array([1], dtype=dtype)), np.array([True, True, True, False])),
@@ -162,7 +162,7 @@ def test_typed_product_prefix_overflow(dtype, values):
 def test_typed_integer_extrema_bounds(dtype, op):
     limits = np.iinfo(dtype)
     x = np.array([limits.max, 0, limits.min, 1], dtype=dtype)
-    kernel = make_portable_sum(dtype, f"return {op}(x)")
+    kernel = make_portable_sum(dtype, f"return block_{op}(x)")
     assert kernel.evaluate_block({"x": x}) == getattr(np, op)(x)
     plan = blosc2.NativeGraph.from_expression(f"{op}(x, initial=1)", {"x": dtype})
     for tile in (1, 64):
@@ -174,7 +174,7 @@ def test_typed_integer_extrema_bounds(dtype, op):
 def test_typed_reductions_initialized_locals_and_masks(dtype, op):
     output_dtype = "bool" if op in ("any", "all") else dtype
     x = np.array([-2, 0, 3, 4], dtype=dtype)
-    local = make_portable_sum(dtype, f"y = x\n    return {op}(y)", output_dtype=output_dtype)
+    local = make_portable_sum(dtype, f"y = x\n    return block_{op}(y)", output_dtype=output_dtype)
     assert local.evaluate_block({"x": x}) == getattr(np, op)(x)
     mask = np.array([False, False, True, True])
     assert local.evaluate_block({"x": x}, valid_mask=mask) == getattr(np, op)(x[mask])
@@ -206,7 +206,7 @@ def test_integer_bool_direct_sums(dtype, tile):
         values[3] = -7
     x = np.array(values, dtype=dtype)
     direct = make_portable_sum(dtype, output_dtype=output_dtype)
-    generic = make_portable_sum(dtype, "return sum(x + 0)", output_dtype=output_dtype)
+    generic = make_portable_sum(dtype, "return block_sum(x + 0)", output_dtype=output_dtype)
     graph_plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
     expected = np.sum(x)
     for kernel in (direct, generic):
@@ -234,7 +234,7 @@ def test_integer_bool_direct_sums(dtype, tile):
 )
 def test_direct_integer_sum_preserves_route_overflow(dtype, values, expected):
     x = np.array(values, dtype=dtype)
-    for body in ("return sum(x)", "return sum(x + 0)"):
+    for body in ("return block_sum(x)", "return block_sum(x + 0)"):
         kernel = make_portable_sum(dtype, body)
         with pytest.raises(blosc2.PortableArtifactError):
             kernel.evaluate_block({"x": x})
@@ -271,7 +271,7 @@ def test_dsl_direct_sum_matches_generic(dtype, case):
     x = np.array(cases[case], dtype=dtype)
     direct = make_portable_sum(dtype)
     # Computed operands still execute the generic expression reduction loop.
-    generic = make_portable_sum(dtype, "return sum(x * 1)")
+    generic = make_portable_sum(dtype, "return block_sum(x * 1)")
     actual, status = direct.evaluate_block({"x": x}, return_status=True)
     expected, reference = generic.evaluate_block({"x": x}, return_status=True)
     np.testing.assert_array_equal(actual, expected)
@@ -288,10 +288,10 @@ def test_dsl_direct_sum_masks_and_initialized_locals(dtype):
     )
     assert actual == 5
     assert status["flags"] == 0
-    local = make_portable_sum(dtype, "y = x\n    return sum(y)")
+    local = make_portable_sum(dtype, "y = x\n    return block_sum(y)")
     actual = local.evaluate_block({"x": np.array([1, 2, 3], dtype=dtype)})
     assert actual == 6
-    branch = make_portable_sum(dtype, "return where(x > 0, sum(x), 0)", "elementwise")
+    branch = make_portable_sum(dtype, "return where(x > 0, block_sum(x), 0)", "elementwise")
     actual = branch.evaluate_block({"x": np.array([-1, 2, 3, -4], dtype=dtype)})
     np.testing.assert_array_equal(actual, [0, 5, 5, 0])
 
