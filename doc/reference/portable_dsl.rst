@@ -187,22 +187,41 @@ Python planner. For exact-pair local builds, pass
 ``-Ccmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr`` to pip.
 
 An explicit ``PortableKernel.from_json(artifact, jit=True)`` request can accelerate
-the supported 1.1 subset with TCC or the system C compiler: rank-zero elementwise
-float32/float64 arithmetic, comparisons, lazy ``where``, straight-line local
-assignments and simple ``if``/``elif``/``else`` branches and returns. Same-dtype
-integer addition, subtraction, multiplication and negation use modular arithmetic.
-Selected unary floating functions (``sin``, ``cos``, ``tan``, ``exp``, ``log``,
-``sqrt``, ``floor``, ``ceil``) call the authoritative native math evaluator.
+the supported 1.1 subset with TCC or the system C compiler: numeric elementwise
+expressions, exact integral comparisons, lazy ``where`` and Boolean expressions,
+locals, conditional returns, logical ND context, and lane-local ``for``/``while``
+loops with nested ``break``/``continue`` and returns. Range conversion and while
+limits retain their checked semantics. Strong typed integer arithmetic remains
+modular; weak integer arithmetic remains checked.
+
+Checked numeric casts and numeric builtins, including integer-preserving math,
+combinatorial functions, ``ldexp`` and ``fma``, use exact-bit scalar bridges where
+direct lowering is unavailable. These bridges execute individual operations on
+already computed operands, not entire expression subtrees. Computed weak operands
+and floating captures can use runtime checks; validated immutable integer/Boolean
+capture leaves retain their value-specialized fast path.
+
+A single block-scalar return of float32/float64 ``block_sum`` or ``block_prod`` can
+also compile, including an eligible mapped operand such as ``block_sum(x * 2)``.
+Its loop fuses the map with serial accumulation, preserving per-operation rounding,
+participating masks, empty-group identities and original logical partitions.
+This is not parallel reduction or streaming of staged graph intermediates.
 Check ``kernel.has_jit`` to distinguish compiled execution from fallback. Select
 the backend before importing the artifact with ``ME_DSL_JIT_COMPILER=tcc`` or
 ``ME_DSL_JIT_COMPILER=cc``; ``CC`` selects the latter compiler (e.g. GCC).
 
-Participating masks and floating diagnostics retain portable semantics. Comparisons
-use inline ordinary comparisons with a host bridge for NaN exception behavior;
-arithmetic and selected branches execute in generated code. Local stores retain
-assignment precision and diagnostics even if their values are unused. Integer
-division, shifts, mixed-width integer conversions, other math functions, floating
-floor division, loops, block-scalar returns and ND context currently fall back.
+Participating masks and floating diagnostics retain portable semantics. Integral
+comparisons never pass through floating-point transport; floating comparisons use
+a host bridge for NaN exception behavior. Ordered temporaries and immediate error
+checks prevent failed operands from evaluating later operands. Local stores retain
+assignment precision and diagnostics even if their values are unused.
+
+Checked integer reductions, mean/extrema/truth reductions, multiple reductions and
+scalar statement programs retain interpreter/native-helper routes. Unsupported
+definite-assignment patterns, fixed strings, and backend limitations also fall back.
+Portable WASM JIT is not enabled: the legacy WASM source adapter does not preserve
+the exact 64-bit typed-bridge ABI. Passing WASM interpretation tests is not JIT
+qualification.
 Arbitrary ``CFLAGS``/TCC option overrides make this subset ineligible rather
 than weakening strict floating semantics. No explicit SIMD qualification is claimed.
 Checked 1.0 and default backend selection remain unchanged; profile and scalar

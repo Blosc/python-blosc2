@@ -11,9 +11,9 @@ import blosc2
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
-def portable_kernel(source, inputs, output, *, jit=True, constants=None):
+def portable_kernel(source, inputs, output, *, jit=True, constants=None, cardinality="elementwise"):
     artifact = blosc2.DSLKernel.from_source(source).export(
-        inputs, output, constants=constants, version="1.1"
+        inputs, output, constants=constants, version="1.1", cardinality=cardinality
     )
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     oracle = blosc2.NativeGraph.from_expression("x + x", {"x": next(iter(inputs.values()))}, jit=jit)
@@ -277,3 +277,50 @@ def test_inline_weak_arithmetic_boundaries(expression, c, d):
     else:
         assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
     kernel.evaluate_block(inputs, valid_mask=np.array([True, False]))
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("output", ["float32", "float64"])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "block_sum(x)",
+        "block_prod(x)",
+        "block_sum(x * 2)",
+        "block_prod(x + y)",
+        "block_sum(where(x >= 0, x, 0))",
+        "block_sum(sqrt(x))",
+    ],
+)
+def test_serial_floating_reduction_jit(dtype, output, expression):
+    source = f"def k(x, y):\n    return {expression}\n"
+    signature = {"x": dtype, "y": dtype}
+    kernel = portable_kernel(source, signature, output, cardinality="block_scalar")
+    reference = portable_kernel(source, signature, output, jit=False, cardinality="block_scalar")
+    for values in ([1e16, 1, -1e16, 3], [np.inf, 1, -np.inf, 3], [1, np.nan, 2, 3], [-0.0, 1, 0, 3], []):
+        x = np.array(values, dtype=dtype)
+        inputs = {"x": x, "y": x}
+        for mask in (None, np.arange(x.size) % 2 == 0, np.zeros(x.size, dtype=bool)):
+            actual, status = kernel.evaluate_block(inputs, valid_mask=mask, return_status=True)
+            expected, reference_status = reference.evaluate_block(
+                inputs, valid_mask=mask, return_status=True
+            )
+            assert actual.tobytes() == expected.tobytes()
+            assert status == reference_status
+    # The artifact's original partitions remain the reduction boundaries.
+    x = np.array([1, 2, 3, 4, 5, 6], dtype=dtype)
+    actual = kernel.lazy({"x": x, "y": x}, partitions=(4,))[:]
+    expected = reference.lazy({"x": x, "y": x}, partitions=(4,))[:]
+    np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("expression", ["block_sum(x)", "block_prod(x)"])
+def test_checked_integer_reductions_keep_fallback(expression):
+    source = f"def k(x):\n    return {expression}\n"
+    artifact = blosc2.DSLKernel.from_source(source).export(
+        {"x": "int64"}, "int64", version="1.1", cardinality="block_scalar"
+    )
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+    assert not kernel.has_jit
+    with pytest.raises(blosc2.PortableArtifactError):
+        kernel.evaluate_block({"x": np.array([2**63 - 1, 2], dtype="int64")})
