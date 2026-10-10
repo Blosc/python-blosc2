@@ -1,6 +1,7 @@
 """Portable JIT parity regressions use the production artifact and graph APIs."""
 
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -93,9 +94,11 @@ def test_mandelbrot_portable_jit(max_iter):
     np.testing.assert_array_equal(actual.reshape(cr.shape), n)
     restored = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
     np.testing.assert_array_equal(restored.evaluate_block(inputs), expected)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        for result in pool.map(lambda _: kernel.evaluate_block(inputs), range(8)):
-            np.testing.assert_array_equal(result, expected)
+    # Pyodide's single-threaded runtime still qualifies values and round trips.
+    if sys.platform != "emscripten":
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for result in pool.map(lambda _: kernel.evaluate_block(inputs), range(8)):
+                np.testing.assert_array_equal(result, expected)
 
 
 def test_while_limit_is_invocation_local(monkeypatch):
