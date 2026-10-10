@@ -49,6 +49,13 @@ adds `--doctest-modules`, so keep doctest examples in `blosc2/core.py`,
 `network` for slow or network-dependent tests.
 
 ## Commit & Pull Request Guidelines
+### GitHub CI Monitoring
+- Use `gh run watch <run-id> --interval 60 --exit-status` (or a longer interval),
+  never the three-second default. Avoid duplicate watchers across agents.
+- On rate limits, stop requests until `Retry-After` or `X-RateLimit-Reset` allows
+  resuming. Watcher/API errors do not imply CI test failures.
+
+### Commits and Pull Requests
 Recent commit messages are short, imperative sentences (e.g., “Add …”, “Fix …”)
 without ticket prefixes. For pull requests: branch from `main`, add tests for
 behavior changes, update docs for API changes, ensure the test suite passes,
