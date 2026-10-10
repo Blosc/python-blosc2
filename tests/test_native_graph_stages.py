@@ -222,6 +222,8 @@ def test_staged_map_export_and_required_jit():
     np.testing.assert_array_equal(result, [-10, -9, -8, -7, -6])
     assert report["jit_stages"] + report["interpreter_stages"] == 2
     if plan.has_jit:
-        assert report["jit_stages"] == 2
+        # The direct-input sum bypasses its identity map; only subtraction
+        # executes JIT code, even if both prepared maps are JIT-capable.
+        assert report["jit_stages"] == 1
     else:
         assert report["interpreter_stages"] >= 1
