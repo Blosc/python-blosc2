@@ -110,3 +110,73 @@ def test_while_limit_is_invocation_local(monkeypatch):
     kernel.evaluate_block({"x": values}, valid_mask=np.array([True, False]))
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     np.testing.assert_array_equal(kernel.evaluate_block({"x": values}), values)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("cast", ["int", "int8", "uint8", "int32", "uint32", "int64", "uint64"])
+def test_checked_cast_boundaries(dtype, cast):
+    output = "int64" if cast == "int" else cast
+    source = f"def k(x, enabled):\n    if enabled:\n        return {cast}(x)\n    return 0\n"
+    signature = {"x": dtype, "enabled": "bool"}
+    kernel = portable_kernel(source, signature, output)
+    reference = portable_kernel(source, signature, output, jit=False)
+    limits = np.iinfo(output)
+    edges = [0, -0.0, 1.75, -1.75, float(limits.min), float(limits.max), np.inf, -np.inf, np.nan]
+    for value in edges:
+        x = np.array([1, value], dtype=dtype)
+        inputs = {"x": x, "enabled": np.ones(2, dtype=bool)}
+        try:
+            expected, expected_status = reference.evaluate_block(inputs, return_status=True)
+        except blosc2.PortableArtifactError:
+            with pytest.raises(blosc2.PortableArtifactError):
+                kernel.evaluate_block(inputs)
+        else:
+            actual, status = kernel.evaluate_block(inputs, return_status=True)
+            assert actual.tobytes() == expected.tobytes()
+            assert status == expected_status
+        kernel.evaluate_block(inputs, valid_mask=np.array([True, False]))
+        inputs["enabled"][1] = False
+        assert kernel.evaluate_block(inputs)[1] == 0
+
+
+@pytest.mark.parametrize("dtype", ["int8", "int32", "int64", "uint64"])
+@pytest.mark.parametrize(
+    "function", ["abs", "sign", "square", "floor", "ceil", "trunc", "round", "real", "imag", "conj"]
+)
+def test_integer_builtins(dtype, function):
+    source = f"def k(x):\n    return {function}(x)\n"
+    kernel = portable_kernel(source, {"x": dtype}, dtype)
+    reference = portable_kernel(source, {"x": dtype}, dtype, jit=False)
+    limits = np.iinfo(dtype)
+    inputs = {"x": np.array([limits.min, 0, 1, limits.max], dtype=dtype)}
+    actual, status = kernel.evaluate_block(inputs, return_status=True)
+    expected, reference_status = reference.evaluate_block(inputs, return_status=True)
+    assert actual.tobytes() == expected.tobytes()
+    assert status == reference_status
+
+
+@pytest.mark.parametrize("expression", ["fac(x)", "ncr(x, y)", "npr(x, y)", "pow(x, y)", "x ** y"])
+def test_integer_combinatorial_math(expression):
+    signature = {"x": "int32", "y": "int32"}
+    source = f"def k(x, y):\n    return {expression}\n"
+    kernel = portable_kernel(source, signature, "int32")
+    reference = portable_kernel(source, signature, "int32", jit=False)
+    inputs = {"x": np.array([0, 3, 5], dtype="int32"), "y": np.array([0, 1, 2], dtype="int32")}
+    assert kernel.evaluate_block(inputs).tobytes() == reference.evaluate_block(inputs).tobytes()
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("expression", ["ldexp(x, 2)", "fma(x, y, -1.0)"])
+def test_multi_operand_math(dtype, expression):
+    signature = {"x": dtype, "y": dtype}
+    source = f"def k(x, y):\n    return {expression}\n"
+    kernel = portable_kernel(source, signature, dtype)
+    reference = portable_kernel(source, signature, dtype, jit=False)
+    inputs = {
+        "x": np.array([0, -0.0, 1 + 2**-23, np.inf, np.nan], dtype=dtype),
+        "y": np.array([1, -1, 1 - 2**-23, 0, 1], dtype=dtype),
+    }
+    actual, status = kernel.evaluate_block(inputs, return_status=True)
+    expected, reference_status = reference.evaluate_block(inputs, return_status=True)
+    assert actual.tobytes() == expected.tobytes()
+    assert status == reference_status
