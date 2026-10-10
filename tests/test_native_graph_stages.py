@@ -1,6 +1,7 @@
 """Separately declared staged subset: materialization, lifetime and budgets."""
 
 import json
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -22,12 +23,12 @@ def test_automatic_native_stages(expression, dtype):
     imported = blosc2.NativeGraph.from_json(plan.to_json())
     assert json.loads(imported.to_json())["format"] == "menudet-staged-graph-1"
     expected = (
-        x - np.sum(x, axis=0)
+        x - np.sum(x, axis=0, dtype="int64" if dtype == "int8" else dtype)
         if expression.startswith("x -")
         else (
-            np.sum(np.sum(x, axis=0))
+            np.sum(np.sum(x, axis=0, dtype="int64" if dtype == "int8" else dtype))
             if expression.startswith("sum(sum")
-            else np.sum(x, axis=0) + np.max(x, axis=0)
+            else np.sum(x, axis=0, dtype="int64" if dtype == "int8" else dtype) + np.max(x, axis=0)
         )
     )
     for tile in [1, 5]:
@@ -78,6 +79,11 @@ def test_shared_stage_value_and_budget():
     np.testing.assert_array_equal(result, [2, 4, 6])
     assert report["evaluated_tiles"] == 2
     del plan
+    if sys.platform == "emscripten":
+        for value in range(1, 9):
+            result, _ = schedule.execute({"x": np.full(3, value, dtype="float32")})
+            np.testing.assert_array_equal(result, np.full(3, 2 * np.sqrt(np.float32(value))))
+        return
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(
             executor.map(
@@ -148,8 +154,16 @@ def test_late_stage_status_recovery():
     schedule = plan.specialize({"x": ("float64", (3,)), "y": ("float64", (3,))})
     with pytest.raises(blosc2.PortableArtifactError) as failure:
         schedule.execute({"x": np.array([-1.0, 1.0, 4.0]), "y": np.ones(3)}, 1)
-    assert failure.value.fp_status["flags"] & 1
-    result, report = schedule.execute({"x": np.array([0.0, 1.0, 4.0]), "y": np.ones(3)}, 1)
+    if sys.platform == "emscripten":
+        assert "floating status unavailable" in str(failure.value)
+        result, _ = schedule.execute({"x": np.array([-1.0, 1.0, 4.0]), "y": np.ones(3)})
+        np.testing.assert_array_equal(result, [np.nan, 4, 5])
+    else:
+        assert failure.value.fp_status["flags"] & 1
+    result, report = schedule.execute(
+        {"x": np.array([0.0, 1.0, 4.0]), "y": np.ones(3)},
+        0 if sys.platform == "emscripten" else 1,
+    )
     np.testing.assert_array_equal(result, [3, 4, 5])
     assert not report["fp_flags"]
 

@@ -93,6 +93,7 @@ def test_unsupported_rejects_before_destination_write(tmp_path):
     assert not target.exists()
 
 
+@pytest.mark.skipif(sys.platform == "emscripten", reason="Pyodide does not support subprocesses")
 def test_numexpr_unavailable_subprocess(tmp_path):
     script = r"""
 import importlib.abc, sys

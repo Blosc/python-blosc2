@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -40,12 +41,21 @@ def status_runtime():
 )
 def test_status_and_raise_recovery(expression, values, flags):
     k = kernel(expression)
-    _values, status = k.evaluate({"x": np.array(values)}, return_status=True)
-    assert status == {"supported": True, "flags": flags}
-    if flags:
+    result, status = k.evaluate({"x": np.array(values)}, return_status=True)
+    with np.errstate(all="ignore"):
+        expected = eval(expression, {"sqrt": np.sqrt, "log": np.log, "exp": np.exp, "x": np.array(values)})
+    np.testing.assert_array_equal(result, expected)
+    if sys.platform == "emscripten":
+        assert status == {"supported": False, "flags": 0}
+        with pytest.raises(blosc2.PortableArtifactError, match="unsupported"):
+            k.evaluate({"x": np.array(values)}, fp_errors="raise")
+    elif flags:
+        assert status == {"supported": True, "flags": flags}
         with pytest.raises(blosc2.PortableArtifactError, match="floating exception") as error:
             k.evaluate({"x": np.array(values)}, fp_errors="raise")
         assert error.value.fp_status == status
+    else:
+        assert status == {"supported": True, "flags": 0}
     _result, clean = k.evaluate({"x": np.array([1.0])}, return_status=True)
     assert clean["flags"] == 0
 
@@ -58,7 +68,11 @@ def test_mask_and_unselected_where_do_not_report():
     assert result[1] == 2
     assert status["flags"] == 0
     lazy = kernel("where(x > 0, sqrt(x), 0)")
-    result, status = lazy.evaluate({"x": np.array([-1.0, 4.0])}, return_status=True, fp_errors="raise")
+    result, status = lazy.evaluate(
+        {"x": np.array([-1.0, 4.0])},
+        return_status=True,
+        fp_errors="ignore" if sys.platform == "emscripten" else "raise",
+    )
     np.testing.assert_array_equal(result, [0, 2])
     assert status["flags"] == 0
 
@@ -68,9 +82,12 @@ def test_clear_and_explicit_block_aggregation():
     flags = 0
     for values, expected in [([-1.0], 1), ([0.0], 2), ([1.0], 0), ([], 0)]:
         _result, status = k.evaluate({"x": np.array(values)}, return_status=True)
-        assert status["flags"] == expected
+        assert status == {
+            "supported": sys.platform != "emscripten",
+            "flags": 0 if sys.platform == "emscripten" else expected,
+        }
         flags |= status["flags"]
-    assert flags == 3
+    assert flags == (0 if sys.platform == "emscripten" else 3)
 
 
 def test_same_handle_thread_status_isolation():
@@ -80,6 +97,9 @@ def test_same_handle_thread_status_isolation():
         return k.evaluate({"x": np.array([value])}, return_status=True)[1]["flags"]
 
     values = [-1.0, 0.0, 1.0] * 64
+    if sys.platform == "emscripten":
+        assert list(map(run, values)) == [0] * len(values)
+        return
     with ThreadPoolExecutor(max_workers=8) as pool:
         assert list(pool.map(run, values)) == [1, 2, 0] * 64
 

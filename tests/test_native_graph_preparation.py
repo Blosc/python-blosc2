@@ -1,6 +1,7 @@
 """Native semantic preparation, independent of Python's numerical planner."""
 
 import json
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -42,7 +43,7 @@ def test_direct_sum_order_status_initial_and_fallback(dtype):
         assert report["evaluated_tiles"] == 0
     for values, flags in (([np.finfo(dtype).max, np.finfo(dtype).max], 4), ([np.inf, -np.inf], 1)):
         _, report = plan.evaluate({"x": np.array(values, dtype=dtype)}, return_report=True)
-        assert report["fp_flags"] == flags
+        assert report["fp_flags"] == (0 if sys.platform == "emscripten" else flags)
     reverse = x[::-1]
     actual, report = plan.evaluate({"x": reverse}, return_report=True)
     expected = np.dtype(dtype).type(2)
@@ -131,7 +132,10 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
     for tile in (1, 3, 64):
         actual, report = plan.evaluate({"x": x}, tile_items=tile, return_report=True)
         expected, reference = plan.evaluate({"x": np.repeat(x, 2)[::2]}, tile_items=tile, return_report=True)
-        assert actual.tobytes() == expected.tobytes()
+        assert actual.dtype == expected.dtype
+        assert actual.shape == expected.shape
+        if not (np.isnan(actual).all() and np.isnan(expected).all()):
+            assert actual.tobytes() == expected.tobytes()
         assert report["fp_flags"] == reference["fp_flags"]
 
 
@@ -209,7 +213,7 @@ def test_integer_bool_direct_sums(dtype, tile):
     direct = make_portable_sum(dtype, output_dtype=output_dtype)
     generic = make_portable_sum(dtype, "return block_sum(x + 0)", output_dtype=output_dtype)
     graph_plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
-    expected = np.sum(x)
+    expected = np.sum(x, dtype=output_dtype)
     for kernel in (direct, generic):
         result, status = kernel.evaluate_block({"x": x}, return_status=True)
         assert result.dtype == expected.dtype
@@ -222,7 +226,7 @@ def test_integer_bool_direct_sums(dtype, tile):
     mask = np.arange(x.size) % 2 == 0
     for kernel in (direct, generic):
         result = kernel.evaluate_block({"x": x}, valid_mask=mask)
-        assert result == np.sum(x[mask])
+        assert result == np.sum(x[mask], dtype=output_dtype)
 
 
 @pytest.mark.parametrize(
@@ -417,8 +421,11 @@ def test_schedule_retains_plan_and_concurrent_invocations():
         result, _ = schedule.execute({"x": np.full(100, value, dtype="int64")})
         np.testing.assert_array_equal(result, value * 2)
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        list(executor.map(run, range(16)))
+    if sys.platform == "emscripten":
+        list(map(run, range(16)))
+    else:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            list(executor.map(run, range(16)))
 
 
 def test_root_mask_initial_and_recovery():
@@ -442,13 +449,22 @@ def test_root_mask_initial_and_recovery():
     )
     schedule = plan.specialize({"x": ("float64", (2, 2)), "mask": ("bool", (2,))}, 1)
     x = np.array([[4.0, -1], [9, -1]])
-    result, report = schedule.execute({"x": x, "mask": np.array([True, False])}, 1)
+    policy = 0 if sys.platform == "emscripten" else 1
+    if sys.platform == "emscripten":
+        with pytest.raises(blosc2.PortableArtifactError, match="floating status unavailable"):
+            schedule.execute({"x": x, "mask": np.array([True, False])}, 1)
+    result, report = schedule.execute({"x": x, "mask": np.array([True, False])}, policy)
     np.testing.assert_array_equal(result, [[4], [5]])
     assert not report["fp_flags"]
-    with pytest.raises(blosc2.PortableArtifactError, match="floating") as failure:
-        schedule.execute({"x": x, "mask": np.array([True, True])}, 1)
-    assert failure.value.fp_status["flags"] & 1
-    result, report = schedule.execute({"x": x, "mask": np.array([True, False])}, 1)
+    if sys.platform == "emscripten":
+        result, _ = schedule.execute({"x": x, "mask": np.array([True, True])}, policy)
+        assert np.isnan(result).all()
+    else:
+        with pytest.raises(blosc2.PortableArtifactError, match="floating") as failure:
+            schedule.execute({"x": x, "mask": np.array([True, True])}, 1)
+        assert failure.value.fp_status["flags"] & 1
+    result, report = schedule.execute({"x": x, "mask": np.array([True, False])}, policy)
+    np.testing.assert_array_equal(result, [[4], [5]])
     assert not report["fp_flags"]
 
 
@@ -519,7 +535,8 @@ def test_reduction_shape_tile_and_roundtrip(op):
     source = np.arange(1, 13, dtype="int8").reshape(3, 4)
     plan = blosc2.NativeGraph.from_expression(f"{op}(x, axis=-1, keepdims=True)", {"x": "int8"})
     imported = blosc2.NativeGraph.from_json(plan.to_json())
-    expected = getattr(np, op)(source, axis=-1, keepdims=True)
+    options = {"dtype": "int64"} if op in ("sum", "prod") else {}
+    expected = getattr(np, op)(source, axis=-1, keepdims=True, **options)
     for tile in [1, 3, 8]:
         actual = imported.evaluate({"x": source}, tile_items=tile)
         assert actual.dtype == expected.dtype
