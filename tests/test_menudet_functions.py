@@ -12,7 +12,7 @@ import blosc2
 from tools import menudet_conformance as compat
 
 
-def kernel(expression, dtype="float64", output=None, version="1.1"):
+def kernel(expression, dtype="float64", output=None, version="1.0"):
     author = blosc2.DSLKernel.from_source(f"def k(x):\n    return {expression}\n")
     return blosc2.PortableKernel.from_json(author.export({"x": dtype}, output or dtype, version=version))
 
@@ -84,14 +84,14 @@ def test_same_handle_thread_status_isolation():
         assert list(pool.map(run, values)) == [1, 2, 0] * 64
 
 
-def test_policy_validation_and_legacy_profile():
+def test_policy_validation_and_default_profile():
     k = kernel("sqrt(x)")
     with pytest.raises(ValueError, match="fp_errors"):
         k.evaluate({"x": np.array([1.0])}, fp_errors="warn")
-    old = kernel("round(x)", version="1.0")
-    assert old.evaluate({"x": np.array([0.5])})[0] == 1
-    with pytest.raises(blosc2.PortableArtifactError, match="unsupported"):
-        old.evaluate({"x": np.array([0.5])}, return_status=True)
+    explicit = kernel("round(x)", version="1.0")
+    values, status = explicit.evaluate({"x": np.array([0.5])}, return_status=True)
+    assert values[0] == 0
+    assert status["flags"] == 0
     new = kernel("round(x)")
     assert new.evaluate({"x": np.array([0.5])})[0] == 0
 
@@ -102,14 +102,13 @@ def test_policy_validation_and_legacy_profile():
 def test_new_spellings_do_not_change_legacy_routing(name):
     expression = f"{name}(x, x)" if name in {"minimum", "maximum"} else f"{name}(x)"
     assert blosc2.blosc2_ext.me_output_dtype(expression, {"x": np.dtype("float64")}) is None
-    with pytest.raises(blosc2.PortableArtifactError, match="invalid_source"):
-        kernel(expression, version="1.0")
+    assert kernel(expression, version="1.0").schema_version == "1.0"
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_extrema_zero_contract_and_nan_policy(dtype):
     author = blosc2.DSLKernel.from_source("def k(x, y):\n    return minimum(x, y)\n")
-    k = blosc2.PortableKernel.from_json(author.export({"x": dtype, "y": dtype}, dtype, version="1.1"))
+    k = blosc2.PortableKernel.from_json(author.export({"x": dtype, "y": dtype}, dtype, version="1.0"))
     result = k.evaluate(
         {
             "x": np.array([0.0, -0.0, np.nan, 1], dtype=dtype),

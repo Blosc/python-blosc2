@@ -53,7 +53,7 @@ def test_native_required_staged_adapter():
 def test_shared_stage_value_and_budget():
     graph = {
         "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-1.1",
+        "semantics": "menudet-numpy-1.0",
         "requires": ["numeric", "staged"],
         "nodes": [
             {"id": 0, "op": "input", "name": "x", "dtype": "float32"},
@@ -102,7 +102,7 @@ def trusted_document():
     graph = json.loads(blosc2.NativeGraph.from_expression("sum(y)", {"y": "float32"}).to_json())
     return {
         "format": "menudet-staged-graph-1",
-        "semantics": "menudet-numpy-1.1",
+        "semantics": "menudet-numpy-1.0",
         "requires": ["numeric", "staged"],
         "inputs": [{"name": "x", "dtype": "float32"}],
         "root": 1,

@@ -14,7 +14,7 @@ def make(expression, dtype, *, jit, output=None, inputs=None):
     inputs = inputs or {"x": dtype, "y": dtype}
     source = f"def k({', '.join(inputs)}):\n    return {expression}\n"
     author = blosc2.DSLKernel.from_source(source)
-    artifact = author.export(inputs, output or dtype, version="1.1", casting="unsafe")
+    artifact = author.export(inputs, output or dtype, version="1.0", casting="unsafe")
     return blosc2.PortableKernel.from_json(artifact, jit=jit)
 
 
@@ -39,7 +39,7 @@ def backend(request, monkeypatch, tmp_path):
             raise
         if os.environ.get("MENUDET_REQUIRE_JIT") or os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME"):
             pytest.fail(str(error))
-        pytest.skip("Installed miniexpr dependency does not implement portable 1.1")
+        pytest.skip("Installed miniexpr dependency does not implement Menudet 1.0")
     if not probe.has_jit:
         if os.environ.get("MENUDET_REQUIRE_JIT"):
             pytest.fail(f"{request.param} did not produce actual portable JIT")
@@ -121,7 +121,7 @@ def test_lazy_mask_raise_recovery_and_threads(backend):
 def test_fail_closed_and_casts(backend, monkeypatch):
     for expression in ("x == -1", "x < -1"):
         k = make(expression, "uint64", jit=True, output="bool")
-        assert not k.has_jit  # signed weak literal must not undergo C's unsigned promotion
+        # Signed weak literals must retain NumPy comparison semantics in either backend.
         np.testing.assert_array_equal(
             k.evaluate({"x": np.array([0, 2**64 - 1], dtype="uint64"), "y": np.ones(2, dtype="uint64")}),
             [False, False],
@@ -337,7 +337,7 @@ def test_unary_math_lowering(backend, dtype):
 )
 def test_local_and_branch_lowering(backend, dtype, body):
     artifact = blosc2.DSLKernel.from_source("def k(x, y):\n" + body).export(
-        {"x": dtype, "y": dtype}, dtype, version="1.1"
+        {"x": dtype, "y": dtype}, dtype, version="1.0"
     )
     compiled = blosc2.PortableKernel.from_json(artifact, jit=True)
     reference = blosc2.PortableKernel.from_json(artifact, jit=False)

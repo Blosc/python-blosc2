@@ -132,8 +132,8 @@ def make_case(
     artifact = json.loads(case["artifact"])
     names = [item["name"] for item in case["inputs"]]
     artifact.update(
-        schema_version="1.1",
-        language={"name": "miniexpr", "version": "1.1"},
+        schema_version="1.0",
+        language={"name": "miniexpr", "version": "1.0"},
         source=f"def k({', '.join(names)}):\n    return {expression}\n",
         semantics={"fp": "strict", "numeric": "numpy-2.5", "casting": casting},
     )
@@ -141,7 +141,7 @@ def make_case(
         artifact["output"]["dtype"] = output or expected.dtype.name
     case.update(
         artifact=json.dumps(artifact, sort_keys=True),
-        semantic_revision="menudet-numpy-1.1",
+        semantic_revision="menudet-numpy-1.0",
         operation=operation,
         reference_kind="native-contract",
         expected={"diagnostic": {"category": diagnostic}} if diagnostic else compat.describe(expected),

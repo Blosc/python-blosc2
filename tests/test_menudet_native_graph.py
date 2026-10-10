@@ -18,7 +18,7 @@ def array_runtime(native_graph_runtime):
 
     try:
         source = DSLKernel.from_source("def k(x):\n    return x\n")
-        plan = blosc2.PortableKernel.from_json(source.export({"x": "float64"}, "float64", version="1.1"))
+        plan = blosc2.PortableKernel.from_json(source.export({"x": "float64"}, "float64", version="1.0"))
         plan.evaluate_array({"x": np.ones(1)})
     except blosc2.PortableArtifactError as error:
         if os.environ.get("MENUDET_REQUIRE_ARRAY_RUNTIME"):

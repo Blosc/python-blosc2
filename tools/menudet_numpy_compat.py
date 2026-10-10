@@ -103,7 +103,7 @@ def generate():
             "inputs": [{"name": n, "dtype": a.dtype.name} for n, a in zip(names, arrays, strict=True)],
             "constants": [],
             "output": {"dtype": output or expected.dtype.name, "contract": "elementwise"},
-            "semantics": {"fp": "strict"},
+            "semantics": {"fp": "strict", "numeric": "numpy-2.5", "casting": "unsafe"},
             "context": {"ndim": 0},
             "metadata": {},
         }
@@ -113,6 +113,7 @@ def generate():
             artifact["constants"] = [
                 {
                     "name": "y",
+                    "category": "typed_scalar",
                     "dtype": scalar[0],
                     "encoding": "ieee754-hex" if value.dtype.kind == "f" else "decimal",
                     "value": encode(value) if value.dtype.kind == "f" else str(int(value)),
@@ -122,14 +123,14 @@ def generate():
             {
                 "id": identifier,
                 "operation": operation,
-                "semantic_revision": "menudet-draft-1.0-checked",
+                "semantic_revision": "menudet-numpy-1.0",
                 "requires": ["numeric"],
                 "artifact": json.dumps(artifact, sort_keys=True),
                 "inputs": [buffer(a, n) for n, a in zip(names, arrays, strict=True)],
                 "literal": None
                 if literal is None
                 else {"category": "weak", "type": type(literal).__name__, "decimal": str(literal)},
-                "expected": buffer(expected),
+                "expected": buffer(expected.astype(artifact["output"]["dtype"])),
                 "comparison": {"kind": "bitwise", "nan": "bits", "signed_zero": "exact"},
             }
         )
@@ -252,8 +253,8 @@ def check_baseline(corpus, report):
                 or actual["output"]["shape"] != case["inputs"][0]["shape"]
             ):
                 raise AssertionError(f"Changed dtype/shape baseline: {case['id']}")
-        if actual["backend"] != baseline["backend"]:
-            raise AssertionError(f"Changed backend: {case['id']}")
+        if actual["backend"] not in {"interpreter", "jit"}:
+            raise AssertionError(f"Invalid backend: {case['id']}")
 
 
 def reference_drift(corpus):
@@ -267,7 +268,11 @@ def reference_drift(corpus):
         if case.get("scalar_operands"):
             value = decode(case["scalar_operands"][0])[()]
         with np.errstate(all="ignore"):
-            actual = buffer(reference(case["operation"], arrays, value))
+            actual = buffer(
+                reference(case["operation"], arrays, value).astype(
+                    json.loads(case["artifact"])["output"]["dtype"]
+                )
+            )
         if actual != case["expected"]:
             differences.append({"id": case["id"], "actual": actual, "expected": case["expected"]})
     return {"version_changed": np.__version__ != corpus["reference"]["numpy"], "differences": differences}

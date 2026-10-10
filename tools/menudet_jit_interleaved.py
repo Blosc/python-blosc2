@@ -35,7 +35,7 @@ def worker():  # noqa: C901 -- independent compile, warm-up, validation and samp
     compile_rows = []
     for workload, expression in EXPRESSIONS.items():
         artifact = blosc2.DSLKernel.from_source(f"def k(x, y):\n    return {expression}\n").export(
-            {"x": "float64", "y": "float64"}, "float64", version="1.1"
+            {"x": "float64", "y": "float64"}, "float64", version="1.0"
         )
         compiled[workload] = {}
         for backend in ("interpreter", "tcc", "gcc", "clang"):

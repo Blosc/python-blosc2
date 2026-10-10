@@ -16,17 +16,29 @@ artifact; a Menudet artifact is not an executable Python recipe.
    independent numeric accuracy and Python release-wheel certification are
    tracked separately. Beta feedback will inform the final compatibility contract.
 
-Menudet artifacts use the versioned native 1.0 profile.
+Menudet 1.0 is the single public language and artifact version. It uses
+NumPy-style numerical rules; the interpreter defines behavior, and eligible
+kernels may use JIT. The legacy/full DSL is a separate semantic profile.
+Earlier unreleased checked-arithmetic and 1.1 drafts are development predecessors,
+not supported public versions. Re-export their artifacts with the current runtime.
+
+The names ``PortableKernel``, ``PortableArtifactError``, ``validate_portable_dsl``
+and the JSON language identifier ``"miniexpr"`` remain unchanged implementation
+and API identifiers. They do not name another language.
+
 Artifacts are standalone UTF-8 JSON, executable through native miniexpr in C or
 Python, without reconstructing or executing Python functions on import.
 
-Opt-in NumPy arithmetic profile 1.1
-----------------------------------
+Menudet 1.0 numerical semantics
+------------------------------
 
-An updated miniexpr runtime additionally supports an experimental ``1.1``
-language/artifact pair. It does **not** reinterpret saved 1.0 artifacts: those
-retain checked arithmetic, and export still defaults to 1.0. Older native
-dependencies reject 1.1 explicitly.
+Export defaults to ``version="1.0"``. Numeric manifests declare
+``numeric="numpy-2.5"`` and a final output casting policy (``unsafe`` by default,
+or ``same_kind``/``safe``). Source literals and ordinary Python captures are weak
+scalars; NumPy scalars and explicit capture dtypes are strong typed scalars.
+Array integer arithmetic wraps at its computation width; weak scalar construction
+and integer block reduction accumulation retain their checked rules.
+Floating-to-integer conversion rejects nonfinite/out-of-range values.
 
 Inverse functions use canonical Array API/C names: ``asin``, ``acos``, ``atan``,
 ``atan2``, ``asinh``, ``acosh`` and ``atanh``. Python authoring accepts NumPy's
@@ -41,20 +53,20 @@ silently migrate saved source.
     import numpy as np
 
     author = blosc2.DSLKernel.from_source("def increment(x):\n    return x + 1\n")
-    artifact = author.export({"x": "int8"}, "int64", version="1.1", casting="safe")
+    artifact = author.export({"x": "int8"}, "int64", version="1.0", casting="safe")
     kernel = blosc2.PortableKernel.from_json(artifact)
     kernel.inferred_dtype  # dtype('int8'), before final int64 conversion
     kernel.evaluate({"x": np.array([127, -128, 0], dtype="int8")})
     # array([-128, -127, 1], dtype=int64): arithmetic wraps at int8, not int64
 
-Profile 1.1 implements fixed-width wrapping arithmetic, NumPy strong dtype
+Menudet 1.0 implements fixed-width wrapping arithmetic, NumPy strong dtype
 promotion, Boolean arithmetic restrictions, floor division/remainder, bitwise
 operators and shifts. Weak source literals and plain Python numeric captures
 preserve NumPy 2.x scalar strength; NumPy scalar captures and explicit
 ``capture_dtypes`` are strong. Typed runtime inputs, including 0-D arrays,
 remain strong. Scalar categories and numerical policy are stored in the artifact.
 
-Fixed-width casts such as ``int8(x)`` and ``float32(x)`` are native 1.1 syntax.
+Fixed-width casts such as ``int8(x)`` and ``float32(x)`` are Menudet 1.0 syntax.
 Final output conversion declares ``casting="safe"``, ``"same_kind"`` or
 ``"unsafe"``; inference and policy validation inspect metadata, not input values.
 Weak scalar construction is checked; unsafe array integer narrowing wraps.
@@ -66,7 +78,7 @@ operand. Signed-zero ties follow deterministic IEEE minimum/maximum rules;
 NumPy's tie bits can vary between loops. ``where`` evaluates only selected lanes,
 unlike eager NumPy argument evaluation. Float16-result signatures reject explicitly.
 
-Profile 1.1 also provides per-call IEEE floating status:
+Menudet 1.0 also provides per-call IEEE floating status:
 
 .. code-block:: python
 
@@ -91,7 +103,7 @@ without changing explicit block-reduction recipes:
 
 .. code-block:: python
 
-    # A numeric, elementwise 1.1 kernel, with rank-zero logical context:
+    # A numeric, elementwise Menudet 1.0 kernel, with rank-zero logical context:
     values, report = kernel.evaluate_array(inputs, return_report=True)
     totals = kernel.evaluate_array(inputs, reduction="sum", axis=-1, keepdims=True)
 
@@ -129,7 +141,7 @@ acceleration overrides reject. Basic elementwise slicing is supported.
 
 Native iterator scratch is not an end-to-end memory bound: compressed operands
 can still require full frontend materialization. The execution report records those
-bytes separately. Exported elementwise portable artifacts can use existing safe
+bytes separately. Exported elementwise Menudet artifacts can use existing safe
 portable persistence; logical reduction descriptors are not persisted as though
 they were block-scalar recipes.
 
@@ -177,7 +189,7 @@ the stage boundaries and inferred dependency types. For example:
 All intermediate buffers are budgeted/preallocated before any stage executes and
 released after their last consumer. Reports separate iterator scratch, reserved
 intermediate bytes and actual interpreted/JIT stage counts. Explicit staged JSON
-may also compose trusted, validated portable 1.1 elementwise/context-free regions
+may also compose trusted, validated Menudet 1.0 elementwise/context-free regions
 with an ordered-lazy, unmasked contract; arbitrary full-DSL recipes still reject.
 Implicit conditional/masked staging, scalar-only weak stage sharing, computed
 participation masks, callbacks, storage IO and partial staged reads remain excluded.
@@ -187,9 +199,9 @@ Python planner. For exact-pair local builds, pass
 ``-Ccmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr`` to pip.
 
 An explicit ``PortableKernel.from_json(artifact, jit=True)`` request can accelerate
-the supported 1.1 subset with TCC or the system C compiler: rank-zero elementwise
+the supported Menudet 1.0 subset with TCC or the system C compiler: numeric elementwise programs, including ND context:
 float32/float64 arithmetic, comparisons, lazy ``where``, straight-line local
-assignments and simple ``if``/``elif``/``else`` branches and returns. Same-dtype
+assignments, ``if``/``elif``/``else`` branches, loops and returns. Same-dtype
 integer addition, subtraction, multiplication and negation use modular arithmetic.
 Selected unary floating functions (``sin``, ``cos``, ``tan``, ``exp``, ``log``,
 ``sqrt``, ``floor``, ``ceil``) call the authoritative native math evaluator.
@@ -197,12 +209,12 @@ Check ``kernel.has_jit`` to distinguish compiled execution from fallback. Select
 the backend before importing the artifact with ``ME_DSL_JIT_COMPILER=tcc`` or
 ``ME_DSL_JIT_COMPILER=cc``; ``CC`` selects the latter compiler (e.g. GCC).
 
-Participating masks and floating diagnostics retain portable semantics. Comparisons
+Participating masks and floating diagnostics retain Menudet semantics. Comparisons
 use inline ordinary comparisons with a host bridge for NaN exception behavior;
 arithmetic and selected branches execute in generated code. Local stores retain
 assignment precision and diagnostics even if their values are unused. Integer
-division, shifts, mixed-width integer conversions, other math functions, floating
-floor division, loops, block-scalar returns and ND context currently fall back.
+operators and selected math functions use the same native evaluation rules.
+Fixed strings, block-scalar returns and unsupported signatures fall back.
 Arbitrary ``CFLAGS``/TCC option overrides make this subset ineligible rather
 than weakening strict floating semantics. No explicit SIMD qualification is claimed.
 Checked 1.0 and default backend selection remain unchanged; profile and scalar
@@ -236,7 +248,7 @@ finite-domain limits are described in :doc:`menudet_accuracy`.
 Release boundary
 ----------------
 
-Portable DSL 1.0 and 1.1 reductions are named ``block_sum``, ``block_prod``,
+Menudet 1.0 reductions are named ``block_sum``, ``block_prod``,
 ``block_min``, ``block_max``, ``block_mean``, ``block_any`` and ``block_all``. Each takes one
 operand and reduces only the supplied evaluation block's valid, participating
 lanes. There is no ``axis`` or ``keepdims`` argument and no automatic combination
@@ -261,8 +273,8 @@ fixed widths and cardinality completes before export returns JSON::
     values = kernel.lazy({"x": np.arange(6, dtype="int64")}, partitions=(3,))[:]
     # array([3, 12])
 
-The draft admits all standard Boolean/integer widths, float32/float64, fixed byte
-and Unicode strings, mixed operand-driven numeric promotion, checked arithmetic,
+Menudet 1.0 admits all standard Boolean/integer widths, float32/float64, fixed byte
+and Unicode strings, NumPy-style numeric promotion and arithmetic,
 native math/string operations, masked ordered block reductions and logical ND
 coordinates. Specify ``ndim`` for coordinate-bearing sources. Existing static
 ``row["column"]``, NumPy calls and string syntax reuse the full-DSL authoring

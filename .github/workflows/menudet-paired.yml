@@ -60,8 +60,8 @@ jobs:
           python -m pip install 'numpy==2.5.3'
       - name: Require corpus and native array capabilities
         run: |
-          export MENUDET_NUMPY_FUNCTION_CORPUS="$PWD/native/tests/numpy-compat/functions-v1.1.json"
-          export MENUDET_NUMPY_ARITHMETIC_CORPUS="$PWD/native/tests/numpy-compat/arithmetic-v1.1.json"
+          export MENUDET_NUMPY_FUNCTION_CORPUS="$PWD/native/tests/numpy-compat/functions-v1.0.json"
+          export MENUDET_NUMPY_ARITHMETIC_CORPUS="$PWD/native/tests/numpy-compat/arithmetic-v1.0.json"
           export MENUDET_NUMPY_CORPUS="$PWD/native/tests/numpy-compat/vectors.json"
           export MENUDET_NUMPY_CORPUS_V2="$PWD/native/tests/numpy-compat/vectors-v2.json"
           export MENUDET_NUMPY_RUNNER="$PWD/native-build/tests/numpy_compat_runner"

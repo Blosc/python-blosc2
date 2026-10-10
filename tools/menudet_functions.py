@@ -225,15 +225,15 @@ def make_case(identifier, name, arrays, expected=None, diagnostic=None):
     )
     artifact = json.loads(case["artifact"])
     artifact.update(
-        schema_version="1.1",
-        language={"name": "miniexpr", "version": "1.1"},
+        schema_version="1.0",
+        language={"name": "miniexpr", "version": "1.0"},
         source=f"def k({', '.join(x['name'] for x in case['inputs'])}):\n    return {expression}\n",
         semantics={"fp": "strict", "numeric": "numpy-2.5", "casting": "unsafe"},
     )
     case.update(
         artifact=json.dumps(artifact, sort_keys=True),
         operation=name,
-        semantic_revision="menudet-numpy-1.1",
+        semantic_revision="menudet-numpy-1.0",
         reference_kind="numpy" if diagnostic is None and name not in EXTRA else "native-contract",
     )
     if diagnostic:

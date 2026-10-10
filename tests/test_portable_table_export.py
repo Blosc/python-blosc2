@@ -60,9 +60,7 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
         assert validate(nd, {"x": "int64"}, "int64", language_version="1.0", ndim=2)["valid"]
         pair = {"x": "int64", "y": "uint64"}
         assert validate("def k(x, y):\n    return x < y\n", pair, "bool", language_version="1.0")["valid"]
-        assert not validate("def k(x, y):\n    return x + y\n", pair, "float64", language_version="1.0")[
-            "valid"
-        ]
+        assert validate("def k(x, y):\n    return x + y\n", pair, "float64", language_version="1.0")["valid"]
         for body in ("print(x)\n    return x", "return callback(x)", "return x & 1"):
             rejected = validate(
                 f"def k(x):\n    {body}\n", {"x": "float32"}, "float32", language_version="1.0"
