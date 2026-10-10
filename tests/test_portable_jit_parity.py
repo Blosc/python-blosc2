@@ -180,3 +180,66 @@ def test_multi_operand_math(dtype, expression):
     expected, reference_status = reference.evaluate_block(inputs, return_status=True)
     assert actual.tobytes() == expected.tobytes()
     assert status == reference_status
+
+
+@pytest.mark.parametrize("capture", [-130, -129, -1, 0, 126, 127, 2**63 - 1])
+def test_computed_weak_capture_checks(capture):
+    source = "def k(x, c):\n    if x == 0:\n        return x\n    return x + (c + 1)\n"
+    constants = {"c": capture}
+    kernel = portable_kernel(source, {"x": "int8"}, "int8", constants=constants)
+    reference = portable_kernel(source, {"x": "int8"}, "int8", constants=constants, jit=False)
+    inputs = {"x": np.array([0, 1], dtype="int8")}
+    try:
+        expected = reference.evaluate_block(inputs)
+    except blosc2.PortableArtifactError:
+        with pytest.raises(blosc2.PortableArtifactError):
+            kernel.evaluate_block(inputs)
+    else:
+        assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
+    kernel.evaluate_block(inputs, valid_mask=np.array([True, False]))
+    np.testing.assert_array_equal(kernel.evaluate_block({"x": np.zeros(2, dtype="int8")}), [0, 0])
+
+
+@pytest.mark.parametrize("capture", [1.75, -1.75, 127.0, 128.0, np.inf, np.nan])
+def test_floating_weak_capture_conversion(capture):
+    source = "def k(x, c):\n    if x == 0:\n        return x\n    return x + int8(c)\n"
+    kernel = portable_kernel(source, {"x": "int8"}, "int8", constants={"c": capture})
+    reference = portable_kernel(source, {"x": "int8"}, "int8", constants={"c": capture}, jit=False)
+    inputs = {"x": np.array([0, 1], dtype="int8")}
+    try:
+        expected = reference.evaluate_block(inputs)
+    except blosc2.PortableArtifactError:
+        with pytest.raises(blosc2.PortableArtifactError):
+            kernel.evaluate_block(inputs)
+    else:
+        assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
+    kernel.evaluate_block(inputs, valid_mask=np.array([True, False]))
+
+
+@pytest.mark.parametrize(
+    "expression", ["where(x > 0, int(y), 0)", "x > 0 and int(y) > 0", "x <= 0 or int(y) > 0"]
+)
+def test_checked_expression_short_circuit(expression):
+    output = "int64" if expression.startswith("where") else "bool"
+    source = f"def k(x, y):\n    return {expression}\n"
+    signature = {"x": "float64", "y": "float64"}
+    kernel = portable_kernel(source, signature, output)
+    reference = portable_kernel(source, signature, output, jit=False)
+    inputs = {"x": np.array([-1, 1], dtype="float64"), "y": np.array([np.nan, 2], dtype="float64")}
+    actual, status = kernel.evaluate_block(inputs, return_status=True)
+    expected, reference_status = reference.evaluate_block(inputs, return_status=True)
+    assert actual.tobytes() == expected.tobytes()
+    assert status == reference_status
+
+
+def test_computed_capture_cache_reuse():
+    source = "def k(x, c):\n    return x + (c + 1)\n"
+    kernels = [
+        (portable_kernel(source, {"x": "int8"}, "int8", constants={"c": value}), value)
+        for value in (1, 7, -3, 1)
+    ]
+    x = np.array([0, 1, 2], dtype="int8")
+    for kernel, value in reversed(kernels):
+        np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), x + value + 1)
+        restored = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
+        np.testing.assert_array_equal(restored.evaluate_block({"x": x}), x + value + 1)
