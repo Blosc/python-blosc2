@@ -6,6 +6,48 @@ edited or staged here. The initial local diagnosis below is retained as historic
 evidence; the publication/remote qualification continuation supersedes its earlier
 authorization and unpublished-revision statements.
 
+## Green native and explicit-pair checkpoint
+
+**Native and explicit paired qualification passed. Release qualification remains
+incomplete**: NumPy 1.26 CTable UTF-8 fixtures, Python/Pyodide contract-test failures
+and distribution gates below are still open. Parent alias-removal commits are not
+part of this pair.
+
+- Native: `d12ca6427782a21a959255c6c2546031a75fd9bb`;
+  [green native/WASM run 37963314217](https://github.com/Blosc/miniexpr/actions/runs/37963314217).
+- Python code checkpoint: `6f8a45f8f258c4606e8cbf6999c850845c24c259`;
+  [green explicit-pair run 37963360530](https://github.com/Blosc/python-blosc2/actions/runs/37963360530),
+  dispatched with the **full exact native SHA** above. Downloaded revision artifacts
+  from all three platforms independently contain this exact pair.
+- The source-selector/report follow-up selects that same native SHA and changes
+  no Python execution code. Its resulting Python SHA is independently dispatched
+  again before completion; the final response/local evidence addendum records that
+  exact result, not an assumption that a documentation change inherits CI.
+
+| Native job | CTest passed | Configuration / retained gate |
+| --- | ---: | --- |
+| Linux x64 | 431 | TCC enabled; required portable TCC plus required CC corpora |
+| Linux ARM64 | 431 | TCC enabled; required portable TCC plus required CC corpora |
+| Linux ARM64 TCC-disabled | 338 | CC remains available and required; existing full-DSL TCC-cache exclusion |
+| macOS ARM64 | 431 | Required portable TCC plus required CC corpora |
+| Windows x64 | 335 | ClangCL Release, builtin-identity regression retained |
+| Windows ARM64 | 244 | Existing unsupported bundled-TCC/TCC-JIT configuration disabled |
+| Standalone wasm32 | 63 | Side-module helper trace explicitly confirms `compiler=tcc` |
+
+| Explicit Python pair job | Native CTest | Python required modules | Required actual portable JIT |
+| --- | ---: | ---: | ---: |
+| Linux x64 / Python 3.12.15 / NumPy 2.5.3 | 431 | 488 passed, **zero skips** (66.84 s) | 207 passed, **zero skips** (25.59 s) |
+| macOS ARM64 / Python 3.12.15 / NumPy 2.5.3 | 431 | 488 passed, **zero skips** (128.44 s) | 207 passed, **zero skips** (48.49 s) |
+| Windows x64 / Python 3.12.15 / NumPy 2.5.3 | 335 | 488 passed, **zero skips** (63.31 s) | Not a supported portable host-pointer JIT target in this qualification |
+
+All four authoritative corpora and required native logical-array capabilities were
+selected explicitly. The v2 corpus's two deliberate unsupported-capability negative
+cases are checked as such in both runners; they are not missing required numerical
+capabilities or pytest skips. Optional acceleration requests are not mislabeled as
+compiled execution: separate required-TCC, required-CC and actual-JIT gates establish
+the supported routes. No value assertion, ULP/accuracy tolerance or failed platform
+job was weakened or removed.
+
 ## Authorized publication and remote qualification continuation
 
 The user explicitly authorized task-scoped commits, pushes and workflow dispatch.
@@ -18,10 +60,10 @@ Runs launched at these exact revisions:
 
 | Workflow | Run | Revision / selection | Status |
 | --- | --- | --- | --- |
-| Native CI | [37952303800](https://github.com/Blosc/miniexpr/actions/runs/37952303800) | native `7fa177713112561c363206c97f7faf1223ab4230` | Awaiting blocking `gh run watch` |
-| Explicit paired qualification | [37952373294](https://github.com/Blosc/python-blosc2/actions/runs/37952373294) | Python `6c863eba`; dispatch `native_ref=7fa177713112561c363206c97f7faf1223ab4230` | Awaiting blocking `gh run watch` |
-| Python Tests | [37952354685](https://github.com/Blosc/python-blosc2/actions/runs/37952354685) | Python `6c863eba`, unchanged release dependency | Awaiting blocking `gh run watch` |
-| Python Tests (WASM) | [37952354689](https://github.com/Blosc/python-blosc2/actions/runs/37952354689) | Python `6c863eba`, unchanged release dependency | Awaiting blocking `gh run watch` |
+| Native CI | [37952303800](https://github.com/Blosc/miniexpr/actions/runs/37952303800) | native `7fa177713112561c363206c97f7faf1223ab4230` | Success, seven jobs |
+| Explicit paired qualification | [37952373294](https://github.com/Blosc/python-blosc2/actions/runs/37952373294) | Python `6c863eba`; dispatch `native_ref=7fa177713112561c363206c97f7faf1223ab4230` | Failed; findings below |
+| Python Tests | [37952354685](https://github.com/Blosc/python-blosc2/actions/runs/37952354685) | Python `6c863eba`, unchanged release dependency | Failed; draft 1.0 dependency lacks 1.1 |
+| Python Tests (WASM) | [37952354689](https://github.com/Blosc/python-blosc2/actions/runs/37952354689) | Python `6c863eba`, unchanged release dependency | Failed; draft 1.0 dependency lacks 1.1 |
 
 The push-triggered paired run `37952354858` selects a branch, not an explicit SHA;
 the dispatched run above is the authoritative exact-selection qualification.
@@ -90,6 +132,105 @@ five-module explicit pair **487 passed / zero skipped** (66.98 s), actual-JIT
 **207 passed / zero skipped** (142.34 s), Ruff lint/format and `git diff --check`
 passed. No compilation source changed in the follow-up native commit; no new
 compiler warnings were emitted by the incremental native build.
+
+### Second remote iteration, isolation and remaining failures
+
+Python `65a25b8a5036134057ce79477e7db070d0d54bae` was published with the initial
+workflow/reference/JIT-test fixes. Run
+[37955282982](https://github.com/Blosc/python-blosc2/actions/runs/37955282982)
+passed macOS but exposed Windows temporary-file sharing and Linux TCC headers.
+Python `36023f571c6f2c4d59fb68415840b72b35aefdc6` closes the corpus input before
+launching the native subprocess (new regression also checks cleanup), adds JIT
+trace evidence, and fixes CI-only Pandas/Arrow test runtime requirements.
+The release dependency pins remain unchanged. The NumPy 1.26 job alone uses
+PyArrow 21.0.0: PyArrow 26 rejected NumPy 1.26 at import without expressing that
+requirement in its PyPI `Requires-Dist` metadata. Pandas is an existing dev
+dependency needed by Arrow's dictionary conversions; it is installed in CI rather
+than adding a new shipping dependency.
+
+At Python `36023f57` / native `216c603`, explicit-pair run
+[37957000054](https://github.com/Blosc/python-blosc2/actions/runs/37957000054)
+passed Windows and macOS. Linux's **required** TCC test failed (not skipped):
+`/usr/include/stdint.h:26: error: include file 'bits/libc-header-start.h' not found`.
+Native follow-up `b2c88e9a22e8121024c28991763cfcf22687fbeb` discovers existing
+architecture-specific Linux system include directories through libtcc's optional
+system-include API, complementing the existing multiarch library discovery.
+No dependency was added. New native `numpy_compat_portable_tcc` requires actual
+compilation on supported bundled Linux/macOS TCC builds. It passed locally in a
+fresh static native build; Linux needs its own remote result.
+
+The parent independently committed alias cleanup at native `b0541bb` and Python
+`cf9cf359` **without publishing it**. Continued CI fixes use separate worktrees
+rooted at native `216c603` / Python `36023f57`, with task branch
+`menudet-ci-qualification`. Only task descendants are pushed explicitly as
+`HEAD:refs/heads/numpy-compat`. Parent alias commits/files, M7 plans and
+`graph-preparation.md` are not staged, changed, reset or pushed by this task.
+The final pair does **not** qualify the parent's alias-removal corpus or adapters.
+
+Concrete broader release gates still open (not removed from CI):
+
+- [Tests 37957000018](https://github.com/Blosc/python-blosc2/actions/runs/37957000018),
+  Python `36023f57` / native `216c603`: Linux Python 3.12/3.14, macOS and Windows
+  passed. Linux NumPy 1.26 failed **14 tests** in
+  `tests/ctable/test_pandas_arrow_import.py`: those fixtures request NumPy 2
+  `StringDType` UTF-8 storage, which the package correctly rejects on 1.26.
+  Other results: 12,116 passed / 423 skips. No unrelated CTable implementation or
+  test was changed to conceal these errors.
+- [Pyodide 37955282922](https://github.com/Blosc/python-blosc2/actions/runs/37955282922),
+  Python `65a25b8a` / native `216c603`: **80 failed, 10,479 passed, 1,011 skipped**
+  (758.40 s). Failures are 70 reduction tests assuming host `intp` rather than
+  the documented portable int64/uint64 accumulator defaults, nine tests demanding
+  unavailable WASM FP flags/threading, and one subprocess test on a runtime without
+  processes. These failures remain visible; no WASM job/test was hidden or numerical
+  policy weakened. Standalone native WASM success is not paired Python WASM success.
+- GitHub core API quota temporarily exhausted at 16:11 UTC; reset header was
+  16:17:53 UTC. Work waited for reset and resumed. Watches now use a 60-second
+  interval to avoid unnecessary quota consumption; no result is inferred from a
+  watch interrupted by API errors.
+
+Native `216c603` run `37954150929` counts: Linux x64 430, Linux ARM64 TCC 430,
+Linux ARM64 TCC-disabled 338, macOS ARM64 430, Windows x64 335, Windows ARM64 244,
+WASM 63. All passed, including the WASM side-module trace assertion. Native logs
+also contain pre-existing SLEEF macro/always-inline/posix_memalign warnings and
+`dsl_jit_backend_libtcc.c` diagnostic format-truncation warnings; green CI is not
+claimed to be warning-free.
+
+### Required TCC runtime asset qualification
+
+Python `e44c0044f904bdc0ebee16ea4737e273d63949b9` selected native `b2c88e9`.
+[Paired 37958957787](https://github.com/Blosc/python-blosc2/actions/runs/37958957787)
+passed Windows/macOS but the new **required native TCC** test failed on Linux.
+Native `b2c88e9` [37958780104](https://github.com/Blosc/miniexpr/actions/runs/37958780104)
+also failed Linux x64/ARM64 TCC while the other five jobs passed. The gate was
+not removed or converted back to optional fallback.
+
+Native diagnostic commit `4aabfe873d044e64583247c7322d53c6b06ff9de` enabled trace
+on that test. [37960125294](https://github.com/Blosc/miniexpr/actions/runs/37960125294)
+identified the second missing asset exactly:
+`/usr/include/string.h:33: error: include file 'stddef.h' not found`.
+The multiarch glibc header fix was working; compiler-provided TinyCC headers were
+not staged or installed beside the relocated runtime library.
+
+Native `aefe19dfc893877eb76818d0d4c57adb78fbacdf` stages/installs the existing
+bundled TinyCC `include/` tree beside `libtcc`. No new dependency, native pin,
+numeric assertion or tolerance is involved. A fresh static local native build
+passed **431/431** (103.08 s), including required TCC. Installation to a private
+prefix succeeded, and required TCC also passed with `ME_DSL_JIT_LIBTCC_PATH`
+pointing at that installed runtime (0.41 s), rather than the staged build copy.
+Local static linkage emitted duplicate `-lm` linker warnings, recorded separately
+from the prior shared-build no-warning result. Remote Linux/ARM64 must confirm
+the runtime fix; local Apple results alone are not Linux evidence.
+
+The now-working runtime exposed a genuine Linux x64 floor-division floating-status
+mismatch in native `aefe19d`
+[37961318269](https://github.com/Blosc/miniexpr/actions/runs/37961318269) and its paired
+run [37961376270](https://github.com/Blosc/python-blosc2/actions/runs/37961376270).
+Native `d12ca6427782a21a959255c6c2546031a75fd9bb` keeps a single non-inlined scalar
+floor-division implementation for interpreter and bridge calls, preventing GCC
+from specializing two inlined copies with different floating flags. The exact
+status/value assertions stay intact; diagnostic output now names source, mask and
+both statuses on failure. The green Linux x64/ARM64 native and Linux/macOS actual
+JIT results above qualify this fix without a fallback or tolerance concession.
 
 Remaining release gates include experimental-pair NumPy 1.26 and other interpreter
 versions, paired Python ARM64 Windows/Linux and WASM integration, release wheel/
