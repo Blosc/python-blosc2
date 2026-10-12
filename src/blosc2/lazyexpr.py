@@ -4798,16 +4798,17 @@ class LazyExpr(LazyArray):
         return indexing.explain_query(self)
 
     @expression_method
-    def compute(
+    def compute(  # noqa: C901 -- native-first/strict dispatch plus legacy output policies
         self,
         item=(),
         fp_accuracy: blosc2.FPAccuracy | None = None,
         jit=None,
         jit_backend: str | None = None,
-        _require_native=False,
+        _require_native=None,
         _native_tile_items=1024,
         **kwargs,
     ) -> blosc2.NDArray:
+        self.__dict__.pop("_native_execution_report", None)
         if _require_native:
             from .native_graph import compute_native_graph
 
@@ -4816,6 +4817,20 @@ class LazyExpr(LazyArray):
                     "Native-required portable execution does not accept acceleration/accuracy overrides"
                 )
             return compute_native_graph(self, item, tile_items=_native_tile_items, jit=jit is True, **kwargs)
+        jit, jit_backend = _jit_from_env(jit, jit_backend)
+        if _require_native is None:
+            from .native_graph import compute_native_graph, prepare_native_first
+
+            prepared = prepare_native_first(
+                self,
+                item,
+                jit=jit is not False,
+                jit_backend=jit_backend,
+                fp_accuracy=fp_accuracy,
+                options=kwargs,
+            )
+            if prepared is not None:
+                return compute_native_graph(self, tile_items=_native_tile_items, prepared=prepared, **kwargs)
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")
@@ -4829,7 +4844,6 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs.setdefault("fp_accuracy", fp_accuracy)
-        jit, jit_backend = _jit_from_env(jit, jit_backend)
         if jit is not None:
             kwargs["jit"] = jit
         if jit_backend is not None:

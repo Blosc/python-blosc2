@@ -125,7 +125,33 @@ This preserves artifact semantics across platforms and matches NumPy's defaults
 on 64-bit hosts, but not its platform-dependent defaults on 32-bit hosts such as
 WASM32. On those hosts, result dtypes and overflow behavior can differ from NumPy.
 
-An explicit experimental graph execution mode rejects rather than falling back:
+Ordinary ``LazyExpr.compute()`` and ``expr[:]`` now try a conservative native-first
+subset: whole-domain, nonempty NumPy arrays of native-endian bool, integer or
+float32/float64 dtype, with real numeric scalar captures. Addition, subtraction,
+multiplication, unary signs/inversion, bitwise operators and single comparisons
+are eligible, including broadcasting, when native JIT preparation succeeds.
+Automatic execution requests JIT by default; ``jit=False`` and unavailable JIT
+retain existing execution rather than using the slower native graph interpreter.
+Calls, reductions, division/powers,
+partial indexing, compressed/proxy/table operands, output aliases and execution
+overrides retain existing execution. Compressed inputs are excluded from automatic
+selection because the current graph frontend materializes them rather than
+streaming. ``evaluation="safe"`` remains a syntax policy, not a backend selector.
+
+Automatic selection prepares/validates the graph before execution; unsupported
+preparation can retain existing execution, but execution errors never trigger
+replay. ``_require_native=False`` explicitly retains existing execution.
+
+.. code-block:: python
+
+    x = np.arange(6, dtype=np.float64)
+    y = np.ones(6, dtype=np.float64)
+    expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+    values = expr[:]  # Native JIT when available; otherwise existing execution.
+    result = expr.compute()  # Same selection, returning an NDArray.
+
+An explicit experimental graph execution mode supports a broader subset and
+rejects rather than falling back:
 
 .. code-block:: python
 
@@ -141,7 +167,8 @@ validation, type inference, broadcasting, reduction planning and execution.
 Python does not generate DSL/export twice or plan broadcasting on this route.
 Plans cache signatures/captures, never
 operand results. NumExpr is not needed for this subset, but its packaging dependency
-has not been relaxed. Backend defaults are unchanged. Nested lazy/proxy/table
+has not been relaxed. Explicit backend/accuracy policies retain existing dispatch
+in automatic mode. In strict native-required mode, nested lazy/proxy/table
 operands, row filtering/ordering, output aliases, reduction partial reads and
 acceleration overrides reject. Basic elementwise slicing is supported.
 

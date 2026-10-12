@@ -1,4 +1,4 @@
-"""Opt-in native-required lowering; Python is metadata/storage frontend only.
+"""Native graph lowering; Python is metadata/storage frontend only.
 
 Plans own scalar captures, not operand results. No interpreter/NumExpr fallback
 exists in this module. Table selections, opaque operands and nested lazy values
@@ -20,6 +20,119 @@ import numpy as np
 from .expression_graph import parse_expression, validate_operands
 
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
+
+
+def _native_first_operand(value):
+    if type(value) is np.ndarray or isinstance(value, np.generic):
+        if (
+            value.dtype.kind not in "biuf"
+            or value.dtype.itemsize > 8
+            or not value.dtype.isnative
+            or value.dtype == np.dtype("float16")
+        ):
+            return False
+        if type(value) is np.ndarray:
+            return bool(value.size)
+    elif type(value) not in (bool, int, float):
+        return False
+    if type(value) is int and not -(1 << 63) <= value < (1 << 63):
+        return False
+    try:
+        scalar_descriptor(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _native_first_syntax(expression):
+    # Deliberately exclude calls, reductions, powers, division, indexing and
+    # Python short-circuit expressions until their legacy contracts are gated.
+    allowed = (
+        ast.Expression,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Compare,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.UAdd,
+        ast.USub,
+        ast.Invert,
+        ast.BitAnd,
+        ast.BitOr,
+        ast.BitXor,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+    )
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed):
+            return False
+        if isinstance(node, ast.Compare) and len(node.ops) != 1:
+            return False
+        if isinstance(node, ast.Constant) and not _native_first_operand(node.value):
+            return False
+    return True
+
+
+def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):
+    """Prepare the conservative automatic subset, without reading array values.
+
+    Return None for unsupported requests. Execution errors are never caught here:
+    once a prepared plan is selected, callers must not replay it on another route.
+    Compressed/proxy inputs are excluded until graph IO can stream them.
+    """
+    import blosc2
+
+    if not jit or jit_backend is not None or fp_accuracy is not None:
+        return None
+    if type(expr) is not blosc2.LazyExpr or any(
+        hasattr(expr, name) for name in ("_where_args", "_indices", "_order", "_output")
+    ):
+        return None
+    if getattr(expr, "_ne_args", None) is not None:
+        return None
+    if (options or {}).keys() - {"_getitem"}:
+        return None
+    # Only whole-domain reads: even a full slice of a staged graph is currently
+    # treated as a partial read by the strict adapter.
+    selection = item if isinstance(item, tuple) else (item,)
+    if any(not isinstance(s, slice) or s != slice(None) for s in selection):
+        return None
+    if not all(_native_first_operand(value) for value in expr.operands.values()):
+        return None
+    if not any(type(value) is np.ndarray for value in expr.operands.values()):
+        return None
+    if not _native_first_syntax(expr.expression):
+        return None
+    try:
+        prepared = lower_native_graph(expr, jit=jit)
+        if not prepared[0].has_jit:
+            return None
+        # Native preparation and specialization own dtype/broadcast validation.
+        # Neither phase evaluates operands or creates an output destination.
+        schedule = prepared[0].specialize(
+            {name: (value.dtype, value.shape) for name, value in prepared[1].items()}
+        )
+        if len(selection) > len(schedule.info()["map_shape"]):
+            return None
+    except NotImplementedError:
+        return None  # Older installed miniexpr without graph support.
+    except blosc2.PortableArtifactError as error:
+        if error.status not in {"invalid_signature", "unsupported"}:
+            raise
+        return None
+    return prepared
 
 
 @lru_cache(maxsize=128)
@@ -248,7 +361,7 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     return plan, adapter.arrays, adapter.nodes[root]["op"] in REDUCERS
 
 
-def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, **kwargs):  # noqa: C901 -- metadata-only selection and options preflight
+def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, prepared=None, **kwargs):  # noqa: C901 -- metadata-only selection and options preflight
     import blosc2
 
     # Preflight before input reads or any destination creation.
@@ -269,8 +382,12 @@ def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, **kwargs)
             root_options = {"initial": kwargs.pop("initial")}
         else:
             reduction_options["initial"] = kwargs.pop("initial")
-    plan, inputs, reduction = lower_native_graph(
-        expr, jit=jit, reduction_options=reduction_options, root_options=root_options
+    plan, inputs, reduction = (
+        prepared
+        if prepared is not None
+        else lower_native_graph(
+            expr, jit=jit, reduction_options=reduction_options, root_options=root_options
+        )
     )
     getitem = kwargs.pop("_getitem", False)
     for key in ("_output", "out", "_ne_args", "ne_args", "_where_args", "_indices", "_order"):
