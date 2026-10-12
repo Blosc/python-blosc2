@@ -34,6 +34,24 @@ _GC_COLLECT_INTERVAL = 500  # collect every N tests
 _test_counter = 0
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--native-semantics",
+        action="store_true",
+        help="Run optional native semantic reference matrices (qualified primarily in miniexpr).",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--native-semantics"):
+        return
+    selected = [item for item in items if item.get_closest_marker("native_semantics") is None]
+    deselected = [item for item in items if item.get_closest_marker("native_semantics") is not None]
+    items[:] = selected
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+
+
 def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
 

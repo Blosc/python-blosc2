@@ -18,7 +18,13 @@ def make(expression, dtype, *, jit, output=None, inputs=None):
     return blosc2.PortableKernel.from_json(artifact, jit=jit)
 
 
-@pytest.fixture(params=["tcc", "cc", "clang"])
+@pytest.fixture(
+    params=[
+        "tcc",
+        pytest.param("cc", marks=pytest.mark.native_semantics),
+        pytest.param("clang", marks=pytest.mark.native_semantics),
+    ]
+)
 def backend(request, monkeypatch, tmp_path):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc" if request.param == "clang" else request.param)
     monkeypatch.setenv("ME_DSL_JIT_CACHE_DIR", str(tmp_path))
@@ -48,6 +54,7 @@ def backend(request, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.native_semantics
 @pytest.mark.parametrize(
     ("expression", "boolean"),
     [
@@ -145,6 +152,7 @@ def test_fail_closed_and_casts(backend, monkeypatch):
         ("x // y", "float64", [-7, 7, -0.0, np.inf, -np.inf, np.nan, 1], [3, -3, 2, 1, np.inf, 3, 0]),
     ],
 )
+@pytest.mark.native_semantics
 def test_lowered_division_and_shift_guards(backend, expression, dtype, x, y):
     # These routes are now lowered, not fail-closed fallbacks. Require actual
     # compilation and retain exact values, signed zeros and status parity at
@@ -177,6 +185,7 @@ def test_native_graph_acceleration_and_reuse(backend, native_graph_runtime):
     assert compile_plan.cache_info().hits > hits
 
 
+@pytest.mark.native_semantics
 def test_inactive_union_bits_do_not_raise(backend):
     # Finite double whose low float32 word looks like a signaling NaN. The
     # interpreter must not speculatively widen the inactive union member.
@@ -187,6 +196,7 @@ def test_inactive_union_bits_do_not_raise(backend):
         assert status["flags"] == 0
 
 
+@pytest.mark.native_semantics
 def test_constant_operations_keep_runtime_diagnostics(backend):
     for expression in ("x + (1.0 / 0.0)", "where(x > 0, 1.0 / 0.0, x)"):
         compiled = make(expression, "float64", jit=True)
@@ -200,6 +210,7 @@ def test_constant_operations_keep_runtime_diagnostics(backend):
             assert status == expected_status
 
 
+@pytest.mark.native_semantics
 def test_boolean_short_circuit_and_mixed_float_inputs(backend):
     inputs = {"x": "float32", "y": "float64"}
     k = make("where(x > 0, x + y, y)", "float64", jit=True, inputs=inputs)
@@ -215,6 +226,7 @@ def test_boolean_short_circuit_and_mixed_float_inputs(backend):
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 @pytest.mark.parametrize("op", ["==", "!=", "<", "<=", ">", ">="])
+@pytest.mark.native_semantics
 def test_inline_comparison_nan_payloads_and_status(backend, dtype, op):
     # Construct payloads without floating arithmetic that could quiet sNaNs.
     if dtype == "float32":
@@ -244,6 +256,7 @@ def test_inline_comparison_nan_payloads_and_status(backend, dtype, op):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.native_semantics
 def test_inline_comparison_nan_in_unselected_branch(backend, dtype):
     uint = "uint32" if dtype == "float32" else "uint64"
     bits = 0x7F800001 if dtype == "float32" else 0x7FF0000000000001
@@ -256,6 +269,7 @@ def test_inline_comparison_nan_in_unselected_branch(backend, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"])
+@pytest.mark.native_semantics
 def test_modular_integer_lowering(backend, dtype):
     info = np.iinfo(dtype)
     x = np.array([info.min, info.max, 0, 1, info.max, info.min], dtype=dtype)
@@ -275,6 +289,7 @@ def test_modular_integer_lowering(backend, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.native_semantics
 def test_floor_division_quiet_nan_status(backend, dtype):
     bindings = {
         "x": np.array([np.nan, 3, -2, 0], dtype=dtype),
@@ -292,6 +307,7 @@ def test_floor_division_quiet_nan_status(backend, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.native_semantics
 def test_unary_math_lowering(backend, dtype):
     x = np.array([-np.inf, -2, -0.0, 0.0, 0.25, 1.0, 2.0, np.inf, np.nan], dtype=dtype)
     uint = "uint32" if dtype == "float32" else "uint64"
@@ -335,6 +351,7 @@ def test_unary_math_lowering(backend, dtype):
         "    z = y\n    if x != 0:\n        z = y / x\n    return z\n",
     ],
 )
+@pytest.mark.native_semantics
 def test_local_and_branch_lowering(backend, dtype, body):
     artifact = blosc2.DSLKernel.from_source("def k(x, y):\n" + body).export(
         {"x": dtype, "y": dtype}, dtype, version="1.1"

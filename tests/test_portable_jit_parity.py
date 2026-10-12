@@ -9,7 +9,7 @@ import pytest
 
 import blosc2
 
-pytestmark = pytest.mark.usefixtures("native_graph_runtime")
+pytestmark = [pytest.mark.usefixtures("native_graph_runtime"), pytest.mark.native_semantics]
 
 
 def portable_kernel(source, inputs, output, *, jit=True, constants=None, cardinality="elementwise"):

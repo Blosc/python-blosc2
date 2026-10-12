@@ -8,9 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       native_ref:
-        description: Exact Blosc/miniexpr revision to qualify with this Python revision
+        description: Fully qualified exact Blosc/miniexpr SHA to integrate with this Python revision
         required: true
         type: string
+
+concurrency:
+  group: menudet-pair-${{ github.ref }}-${{ inputs.native_ref }}
+  cancel-in-progress: true
 
 jobs:
   paired:
@@ -28,16 +32,26 @@ jobs:
       CMAKE_GENERATOR: Ninja
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: Blosc/miniexpr
-          ref: ${{ inputs.native_ref || 'graph-preparation' }}
-          path: native
       - uses: conda-incubator/setup-miniconda@v3
         with:
           activate-environment: blosc2
           python-version: '3.12'
           auto-activate-base: false
+      - name: Require exact full native qualification
+        id: qualified_native
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_NATIVE: ${{ inputs.native_ref }}
+        run: |
+          native_sha="$REQUESTED_NATIVE"
+          if [ -z "$native_sha" ]; then native_sha=$(cat .github/menudet-native-ref); fi
+          python scripts/verify_native_qualification.py "$native_sha"
+          echo "sha=$native_sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ steps.qualified_native.outputs.sha }}
+          path: native
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - name: Select Windows compiler
@@ -51,7 +65,8 @@ jobs:
           # Match Python's static linkage; Windows Ninja cannot emit both the
           # shared import library and static library as miniexpr.lib.
           cmake -S native -B native-build -DMINIEXPR_BUILD_ARTIFACT=ON -DMINIEXPR_BUILD_SHARED=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build native-build --parallel 4
+          # Python's corpus adapter needs this runner, not the native test matrix.
+          cmake --build native-build --target numpy_compat_runner --parallel 4
           native_source="$PWD/native"
           if [ "$RUNNER_OS" = Windows ]; then
             native_source=$(cygpath -m "$native_source")
@@ -69,10 +84,12 @@ jobs:
             export MENUDET_NUMPY_RUNNER="${MENUDET_NUMPY_RUNNER}.exe"
             export PATH="$PWD/native-build:$PATH"
           fi
-          ctest --test-dir native-build --output-on-failure
           python -c 'import blosc2; assert blosc2.NativeGraph.from_expression("x - sum(x)", {"x": "float32"}).info()["stages"] == 2'
-          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_portable.py tests/test_portable_artifact.py tests/test_portable_lazy.py tests/test_portable_table_export.py tests/test_portable_policy.py tests/test_portable_descriptor.py tests/test_portable_jit_parity.py tests/test_native_graph_weak_captures.py tests/test_dsl_scalar_dispatch.py -q -n 0
+          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_portable.py tests/test_portable_artifact.py tests/test_portable_lazy.py tests/test_portable_table_export.py tests/test_portable_policy.py tests/test_portable_descriptor.py tests/test_native_graph_weak_captures.py tests/test_dsl_scalar_dispatch.py -q -n 0
       - name: Build exact-pair distribution wheel
+        env:
+          ME_DSL_JIT_COMPILER: tcc
+          MENUDET_REQUIRE_JIT: ${{ runner.os != 'Windows' && '1' || '0' }}
         run: |
           native_source="$PWD/native"
           if [ "$RUNNER_OS" = Windows ]; then
@@ -80,15 +97,7 @@ jobs:
           fi
           python -m pip wheel . --no-deps --wheel-dir graph-wheels --config-settings="cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=$native_source"
           python -m pip install --force-reinstall --no-deps graph-wheels/*.whl
-          python -m pytest tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_native_graph.py tests/test_portable_jit_parity.py -q -n 0
-      - name: Require actual supported portable JIT backends
-        if: runner.os != 'Windows'
-        env:
-          MENUDET_REQUIRE_JIT: '1'
-          ME_DSL_TRACE: '1'
-        run: |
-          set -o pipefail
-          python -m pytest tests/test_menudet_jit.py tests/test_portable_jit_parity.py -q -n 0 2>&1 | tee menudet-jit.log
+          python -m pytest tests/test_portable_jit_integration.py tests/test_menudet_jit.py -q -n 0
       - name: Record exact paired revisions
         if: always()
         run: |
@@ -103,6 +112,5 @@ jobs:
           name: menudet-pair-${{ matrix.os }}
           path: |
             paired-revisions.txt
-            native-build/Testing/Temporary/LastTest.log
-            menudet-jit.log
+            native-qualification.json
             graph-wheels/*.whl

@@ -261,6 +261,29 @@ than weakening strict floating semantics. No explicit SIMD qualification is clai
 Checked 1.0 and default backend selection remain unchanged; profile and scalar
 categories survive export/import and lazy recipe persistence.
 
+Qualification ownership
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Exhaustive lowering, dtype-boundary, checked-error and backend numerical parity
+belongs to miniexpr. Its ordinary native CI runs full TCC coverage and compact
+GCC/Clang regression gates. Weekly runs and explicit manual runs with
+``full_qualification=true`` execute the full system-compiler matrix and sanitizer
+checks before publishing exact-revision qualification evidence.
+
+Python CI retains production-binding integration checks: artifact round trips,
+capture/dtype binding, exception/status translation, masks, logical context,
+original partitions, graph/lazy execution and independent wheel imports. It uses
+TCC for these checks plus a small supported-system-compiler smoke test; it does
+not rerun miniexpr's complete native test matrix. The original Python numerical
+reference tests remain available explicitly with ``pytest --native-semantics``.
+
+The final paired workflow requires a full native commit SHA and successful full
+native qualification for that exact revision. A lightweight native gate, a
+skipped full-qualification job or another revision's evidence is not sufficient.
+Release qualification should use this exact-pair workflow; ordinary development
+tests do not claim release qualification. This split does not change release
+dependency pins or supported-platform fallback behavior.
+
 Default checked profile 1.0
 ---------------------------
 
