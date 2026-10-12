@@ -83,5 +83,5 @@ class NativeGraph:
         return (result, report) if return_report else result
 
     def map_json(self):
-        """Export an eligible elementwise graph as a portable 1.1 artifact."""
+        """Export an eligible elementwise graph as a Menudet 1.0 artifact."""
         return self._handle.map_json()

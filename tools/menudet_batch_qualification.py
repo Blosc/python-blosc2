@@ -27,7 +27,7 @@ def main():
     if not compilers["gcc"] or not compilers["clang"]:
         parser.error("GCC and Clang are required")
     results = []
-    for corpus in ("arithmetic-v1.1.json", "functions-v1.1.json"):
+    for corpus in ("arithmetic-v1.0.json", "functions-v1.0.json"):
         reference = None
         for backend, compiler in compilers.items():
             with TemporaryDirectory(dir=os.environ["MENUDET_WORK_DIR"]) as cache:

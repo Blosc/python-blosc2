@@ -14,7 +14,7 @@ pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 def scalar_kernel(body, inputs, output="float64", *, jit=False, ndim=0, cardinality="block_scalar"):
     arguments = ", ".join(inputs)
     artifact = blosc2.DSLKernel.from_source(f"def k({arguments}):\n    {body}\n").export(
-        inputs, output, version="1.1", cardinality=cardinality, ndim=ndim
+        inputs, output, version="1.0", cardinality=cardinality, ndim=ndim
     )
     return blosc2.PortableKernel.from_json(artifact, jit=jit)
 

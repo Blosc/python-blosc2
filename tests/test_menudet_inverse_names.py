@@ -14,12 +14,12 @@ from blosc2.utils import MINIEXPR_FUNCTION_ALIASES, canonicalize_miniexpr_functi
 def native_runtime():
     try:
         blosc2.DSLKernel.from_source("def k(x):\n    return asin(x)\n").export(
-            {"x": "float64"}, "float64", version="1.1"
+            {"x": "float64"}, "float64", version="1.0"
         )
     except blosc2.PortableArtifactError as error:
         if os.environ.get("MENUDET_REQUIRE_ARRAY_RUNTIME"):
             pytest.fail(f"Explicit native qualification requires the updated runtime: {error}")
-        pytest.skip("Installed native dependency does not support portable 1.1")
+        pytest.skip("Installed native dependency does not support Menudet 1.0")
 
 
 @pytest.mark.parametrize("binary", [False, True])
@@ -35,7 +35,7 @@ def test_normalization_preserves_non_calls(binary):
 
 
 @pytest.mark.parametrize(("alias", "canonical"), MINIEXPR_FUNCTION_ALIASES.items())
-@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("version", ["1.0"])
 def test_authoring_normalizes_but_artifact_import_rejects_alias(native_runtime, alias, canonical, version):
     arguments = "x, 1.0" if canonical == "atan2" else "x"
     author = blosc2.DSLKernel.from_source(f"def k(x):\n    return {alias}({arguments})\n")
@@ -69,6 +69,6 @@ def test_numpy_attribute_authoring(native_runtime):
 
     assert "asin(x)" in k.dsl_source
     assert "atan2(x, 1.0)" in k.dsl_source
-    kernel = blosc2.PortableKernel.from_json(k.export({"x": "float64"}, "float64", version="1.1"))
+    kernel = blosc2.PortableKernel.from_json(k.export({"x": "float64"}, "float64", version="1.0"))
     values = np.array([-0.25, 0.0, 0.25])
     np.testing.assert_allclose(kernel.evaluate({"x": values}), np.arcsin(values) + np.arctan2(values, 1.0))

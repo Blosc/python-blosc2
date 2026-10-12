@@ -12,7 +12,7 @@ from tools import menudet_conformance as compat
 
 
 def export(source, inputs, output, **kwargs):
-    return blosc2.DSLKernel.from_source(source).export(inputs, output, version="1.1", **kwargs)
+    return blosc2.DSLKernel.from_source(source).export(inputs, output, version="1.0", **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -23,27 +23,26 @@ def numpy_runtime():
         if error.status != "unsupported_requirement":
             raise
         if os.environ.get("MENUDET_NUMPY_ARITHMETIC_CORPUS"):
-            pytest.fail("Explicit M3 testing requires a rebuilt 1.1 native dependency")
-        pytest.skip("Installed native dependency does not implement profile 1.1")
+            pytest.fail("Explicit testing requires a rebuilt Menudet 1.0 native dependency")
+        pytest.skip("Installed native dependency does not implement Menudet 1.0")
 
 
-def test_version_transition_and_metadata_only_inference():
+def test_menudet_1_default_and_metadata_only_inference():
     source = "def k(x):\n    return (x + 1) * 2\n"
     author = blosc2.DSLKernel.from_source(source)
-    old = blosc2.PortableKernel.from_json(author.export({"x": "int8"}, "int64"))
+    default = blosc2.PortableKernel.from_json(author.export({"x": "int8"}, "int64"))
     new = blosc2.PortableKernel.from_json(export(source, {"x": "int8"}, "int64"))
-    assert old.schema_version == "1.0"
-    assert old.inferred_dtype is None
-    assert new.schema_version == "1.1"
+    assert default.schema_version == "1.0"
+    assert default.inferred_dtype == np.dtype("int8")
+    assert new.schema_version == "1.0"
     assert new.inferred_dtype == np.dtype("int8")
     x = np.array([127, -128], dtype="int8")
-    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
-        old.evaluate({"x": x})
     with np.errstate(over="ignore"):
+        np.testing.assert_array_equal(default.evaluate({"x": x}), ((x + 1) * 2).astype("int64"))
         np.testing.assert_array_equal(new.evaluate({"x": x}), ((x + 1) * 2).astype("int64"))
     assert new.to_json() == export(source, {"x": "int8"}, "int64")
     # Semantic identity is explicit: partial upgrades and future profiles reject.
-    for schema, language in [("1.0", "1.1"), ("1.1", "1.0"), ("9.0", "9.0")]:
+    for schema, language in [("1.0", "1.1"), ("1.1", "1.0"), ("1.1", "1.1"), ("9.0", "9.0")]:
         artifact = json.loads(new.to_json())
         artifact["schema_version"], artifact["language"]["version"] = schema, language
         with pytest.raises(blosc2.PortableArtifactError):
@@ -139,7 +138,7 @@ def test_authoring_captured_scalar():
     def k(x):
         return x + c
 
-    artifact = k.export({"x": "float32"}, "float32", version="1.1")
+    artifact = k.export({"x": "float32"}, "float32", version="1.0")
     assert json.loads(artifact)["constants"][0]["category"] == "weak"
     kernel = blosc2.PortableKernel.from_json(artifact)
     assert kernel.inferred_dtype == np.dtype("float32")
@@ -164,7 +163,7 @@ def test_persistence_preserves_profile(tmp_path):
     path = str(tmp_path / "recipe.b2nd")
     lazy.save(path)
     restored = blosc2.open(path)
-    assert restored.kernel.schema_version == "1.1"
+    assert restored.kernel.schema_version == "1.0"
     assert restored.kernel.inferred_dtype == np.dtype("int8")
     assert restored.kernel.to_json() == kernel.to_json()
     np.testing.assert_array_equal(restored[:], np.array([-128, -127, 1, 2], dtype="int8"))

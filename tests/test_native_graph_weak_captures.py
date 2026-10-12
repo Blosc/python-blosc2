@@ -63,7 +63,7 @@ def test_out_of_range_weak_capture_keeps_lazy_fallback(dtype, value):
 def test_bool_capture_is_checked_before_integer_specialization():
     record = {
         "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-1.1",
+        "semantics": "menudet-numpy-1.0",
         "requires": ["numeric"],
         "nodes": [
             {"id": 0, "op": "input", "name": "x", "dtype": "int8"},
@@ -84,7 +84,7 @@ def test_capture_values_are_part_of_jit_cache_identity():
     oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "int32"}, jit=True)
     kernels = []
     for value in (7, 3, 11, 7):
-        artifact = source.export({"x": "int32"}, "int32", constants={"c": value}, version="1.1")
+        artifact = source.export({"x": "int32"}, "int32", constants={"c": value}, version="1.0")
         kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
         if oracle.has_jit:
             assert kernel.has_jit

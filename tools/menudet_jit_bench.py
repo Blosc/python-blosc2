@@ -45,7 +45,7 @@ def worker(route, workload, dtype, size, api):
             )
         source = f"def k(x, y):\n    return {expression}\n"
         artifact = blosc2.DSLKernel.from_source(source).export(
-            {"x": dtype, "y": dtype}, dtype, version="1.1"
+            {"x": dtype, "y": dtype}, dtype, version="1.0"
         )
         kernel, compile_ms = timed(
             lambda: blosc2.PortableKernel.from_json(artifact, jit=route != "interpreter")

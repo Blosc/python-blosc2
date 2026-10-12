@@ -5,7 +5,7 @@ functions (and checked by `blosc2.validate_dsl()`).
 It focuses on what works today and the most common gotchas.
 The portable subset is named **Menudet**, a little language for portable
 computation on arrays and tables. See the [Menudet reference](portable_dsl.rst)
-for the 1.0 draft contract. This page also documents ordinary full-DSL features;
+for the Menudet 1.0 draft contract and numerical rules. This page also documents ordinary full-DSL features;
 acceptance here does not imply portability.
 For usage walkthroughs and end-to-end examples, see the
 [LazyArray UDF DSL kernels tutorial](../tutorials/03.lazyarray-udf-kernels.ipynb).
@@ -39,18 +39,18 @@ result = blosc2.lazyudf(kernel, (x,), dtype="float64")[:]
 The source and header pragmas are preserved verbatim. Input dtypes come from the
 supplied arrays; pass an explicit output dtype. The native compiler validates the
 body with these types during computation. The constructor inspects only the
-plain positional function header and does not certify portable-profile support.
+plain positional function header and does not certify Menudet support.
 Frontend conveniences, captured globals, and Python-function fallback are not
 available on this path; use native function spellings such as `sin(x)`.
 
 This is separate from the existing Python-based persistence reconstruction path.
-Portable artifact export/import is still under development. The full native
-language reference and experimental portable profile live in miniexpr's
-`doc/dsl-syntax.md` and `doc/dsl-spec/1.0.md`, respectively. The portable profile
-and artifact contract are experimental drafts; see [portable artifacts](portable_dsl.rst)
+Menudet artifact export/import is still under development. The full native
+language reference and experimental Menudet profile live in miniexpr's
+`doc/dsl-syntax.md` and `doc/dsl-spec/1.0.md`, respectively. The Menudet profile
+and artifact contract are experimental drafts; see [Menudet artifacts](portable_dsl.rst)
 for the release boundary and legacy Python persistence policy.
 
-### Experimental portable-profile validation
+### Experimental Menudet validation
 
 ```python
 info = blosc2.validate_portable_dsl(source, {"x": "float64"}, "float64")
@@ -64,8 +64,8 @@ invokes a JIT compiler. It reports version, signature, source, and unsupported
 feature errors separately. Potential runtime errors, including missing returns
 on some paths, do not automatically invalidate a program.
 
-Draft 1.0 admits Boolean, standard integer widths, float32/float64 and fixed strings,
-mixed operand-driven numeric typing, checked arithmetic, reductions and explicit ND context.
+Menudet 1.0 admits Boolean, standard integer widths, float32/float64 and fixed strings,
+NumPy-style numeric typing/arithmetic, block reductions and explicit ND context.
 It is separate from the ordinary full language described below.
 Validation is not a sandbox, backend-support probe, or a guarantee about
 arbitrary runtime data. Older native builds report `runtime_unsupported` rather
@@ -73,7 +73,7 @@ than attempting Python validation. Native dependency integration for this
 experimental API is pending; development builds can use the local miniexpr source
 via CMake's `FETCHCONTENT_SOURCE_DIR_MINIEXPR` override.
 
-### Portable artifact export and import (experimental)
+### Menudet artifact export and import (experimental)
 
 Export with explicit input/output dtypes. Scalar globals and closure values are
 snapshotted into typed manifest constants, not inserted as Python literals:

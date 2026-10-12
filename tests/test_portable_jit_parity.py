@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.usefixtures("native_graph_runtime"), pytest.mark.nativ
 
 def portable_kernel(source, inputs, output, *, jit=True, constants=None, cardinality="elementwise"):
     artifact = blosc2.DSLKernel.from_source(source).export(
-        inputs, output, constants=constants, version="1.1", cardinality=cardinality
+        inputs, output, constants=constants, version="1.0", cardinality=cardinality
     )
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
     # Probe backend availability with universally eligible arithmetic. Boolean
@@ -454,7 +454,7 @@ def test_scalar_lazy_reduction_with_capture(select):
 )
 def test_scalar_recipes_outside_scope_keep_fallback(body):
     artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
-        {"x": "float64"}, "float64", version="1.1", cardinality="block_scalar"
+        {"x": "float64"}, "float64", version="1.0", cardinality="block_scalar"
     )
     assert not blosc2.PortableKernel.from_json(artifact, jit=True).has_jit
 
@@ -462,7 +462,7 @@ def test_scalar_recipes_outside_scope_keep_fallback(body):
 def test_scalar_mean_logical_context():
     source = "def k(x):\n    s = block_mean(float64(_flat_idx))\n    return s + 1\n"
     artifact = blosc2.DSLKernel.from_source(source).export(
-        {"x": "float64"}, "float64", version="1.1", cardinality="block_scalar", ndim=1
+        {"x": "float64"}, "float64", version="1.0", cardinality="block_scalar", ndim=1
     )
     kernels = [blosc2.PortableKernel.from_json(artifact, jit=jit) for jit in (True, False)]
     oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=True)
@@ -637,7 +637,7 @@ def test_integer_reduction_modular_map_checked_accumulator(op):
 def test_reductions_in_varying_branches_or_loops_still_rejected(body):
     dsl = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n")
     with pytest.raises(blosc2.PortableArtifactError, match="not supported inside"):
-        dsl.export({"x": "float64"}, "float64", version="1.1", cardinality="block_scalar")
+        dsl.export({"x": "float64"}, "float64", version="1.0", cardinality="block_scalar")
 
 
 @pytest.mark.parametrize("bounds", ["x, 5.0, 1.0", "0.0, 5.0, x", "5.0, 0.0, x"])
@@ -663,7 +663,7 @@ def test_explicit_modular_range_cast_remains_explicit():
 
 def test_possible_empty_loop_local_still_falls_back():
     source = "def k(x):\n    for i in range(x):\n        y = i\n    return y\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64", version="1.1")
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64", version="1.0")
     assert not blosc2.PortableKernel.from_json(artifact, jit=True).has_jit
 
 

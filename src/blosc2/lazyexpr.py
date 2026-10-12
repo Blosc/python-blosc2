@@ -4867,7 +4867,7 @@ class LazyExpr(LazyArray):
         return result
 
     def native_kernel(self):
-        """Export the eligible elementwise safe graph as an immutable native 1.1 plan.
+        """Export the eligible elementwise safe graph as an immutable native Menudet 1.0 plan.
 
         Unsupported syntax/signatures reject; no Python numerical fallback. Root
         logical reduction options are separate from this elementwise artifact.

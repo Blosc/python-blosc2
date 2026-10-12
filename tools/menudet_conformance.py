@@ -205,7 +205,7 @@ def reference(case):
                 actual = checkpoint.reference(case["operation"], arrays, value)
         except OverflowError:
             return {"diagnostic": {"category": "invalid_source", "numpy_category": "OverflowError"}}
-    return describe(actual)
+    return describe(np.asarray(actual, dtype=json.loads(case["artifact"])["output"]["dtype"]))
 
 
 def reference_expected(case):
@@ -237,14 +237,14 @@ def make_case(
         "inputs": [{"name": n, "dtype": a.dtype.name} for n, a in zip(names, arrays, strict=True)],
         "constants": [],
         "output": {"dtype": output or arrays[0].dtype.name, "contract": "elementwise"},
-        "semantics": {"fp": "strict"},
+        "semantics": {"fp": "strict", "numeric": "numpy-2.5", "casting": "unsafe"},
         "context": {"ndim": 0},
         "metadata": {},
     }
     case = {
         "id": identifier,
         "operation": operation,
-        "semantic_revision": "menudet-draft-1.0-checked",
+        "semantic_revision": "menudet-numpy-1.0",
         "requires": ["numeric"],
         "artifact": json.dumps(artifact, sort_keys=True),
         "inputs": [describe(a, n, layout) for n, a in zip(names, arrays, strict=True)],
@@ -368,7 +368,7 @@ def generate(checkpoint_path):
         case = make_case(f"diagnostic-{label}", "identity", "x", [np.array([1], dtype="int64")])
         artifact = json.loads(case["artifact"])
         if change == "schema_version":
-            artifact[change] = "1.1"
+            artifact[change] = "9.0"
         elif change == "source":
             artifact[change] = "def k(x):\n    return missing_name\n"
         else:
@@ -455,7 +455,7 @@ def validate(corpus):
         ):
             raise ValueError("Invalid or duplicate case ID")
         ids.add(identifier)
-        if case["semantic_revision"] not in {"menudet-draft-1.0-checked", "menudet-numpy-1.1"}:
+        if case["semantic_revision"] != "menudet-numpy-1.0":
             raise ValueError("Unsupported semantic revision")
         policy = case["comparison"]
         if (
@@ -651,13 +651,7 @@ def paired(corpus, runner, work_dir, observe=False):
             "generator_revision": corpus["generator_revision"],
             "corpus_sha256": hashlib.sha256(json.dumps(corpus, sort_keys=True).encode()).hexdigest(),
             "semantic_revisions": sorted({case["semantic_revision"] for case in corpus["cases"]}),
-            "local_changes": (
-                "M4 native 1.1 function signatures, accuracy and scoped floating status; checked 1.0 retained"
-                if corpus["generator_revision"].startswith("m4")
-                else "M3 opt-in native 1.1 arithmetic, inference, casts, Python authoring and tests; checked 1.0 retained"
-                if any(case["semantic_revision"] == "menudet-numpy-1.1" for case in corpus["cases"])
-                else "Checked 1.0 corpus; M1/M2 tooling plus shared infrastructure used by opt-in M3 1.1"
-            ),
+            "local_changes": "Menudet 1.0 NumPy arithmetic, signatures, floating status and optional JIT",
         },
         "reference_numpy": corpus["reference"]["numpy"],
         "installed_numpy": np.__version__,

@@ -15,7 +15,7 @@ def make(expression, dtype, *, jit, output=None, inputs=None):
     inputs = inputs or {"x": dtype, "y": dtype}
     source = f"def k({', '.join(inputs)}):\n    return {expression}\n"
     author = blosc2.DSLKernel.from_source(source)
-    artifact = author.export(inputs, output or dtype, version="1.1", casting="unsafe")
+    artifact = author.export(inputs, output or dtype, version="1.0", casting="unsafe")
     return blosc2.PortableKernel.from_json(artifact, jit=jit)
 
 
@@ -49,7 +49,7 @@ def backend(request, monkeypatch, tmp_path):
             or os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME") == "1"
         ):
             pytest.fail(str(error))
-        pytest.skip("Installed miniexpr dependency does not implement portable 1.1")
+        pytest.skip("Installed miniexpr dependency does not implement Menudet 1.0")
     if not probe.has_jit:
         if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
             pytest.fail(f"{request.param} did not produce actual portable JIT")
@@ -371,7 +371,7 @@ def test_unary_math_lowering(backend, dtype):
 @pytest.mark.native_semantics
 def test_local_and_branch_lowering(backend, dtype, body):
     artifact = blosc2.DSLKernel.from_source("def k(x, y):\n" + body).export(
-        {"x": dtype, "y": dtype}, dtype, version="1.1"
+        {"x": dtype, "y": dtype}, dtype, version="1.0"
     )
     compiled = blosc2.PortableKernel.from_json(artifact, jit=True)
     reference = blosc2.PortableKernel.from_json(artifact, jit=False)

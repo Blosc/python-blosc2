@@ -220,7 +220,7 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
             adapter.nodes[root]["initial"] = scalar_descriptor(root_options["initial"])
     document = {
         "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-1.1",
+        "semantics": "menudet-numpy-1.0",
         "requires": ["numeric", "staged"]
         if any(node["op"] in REDUCERS and node["id"] != root for node in adapter.nodes)
         else ["numeric"],
@@ -320,7 +320,7 @@ def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, **kwargs)
     result, report = schedule.execute(arrays)
     expr._native_execution_report = {
         **report,
-        "semantic_revision": "menudet-numpy-1.1",
+        "semantic_revision": "menudet-numpy-1.0",
         "backend": "portable-mixed"
         if report["jit_stages"] and report["interpreter_stages"]
         else "portable-jit"

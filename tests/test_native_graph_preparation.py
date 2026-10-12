@@ -56,7 +56,7 @@ def test_direct_sum_order_status_initial_and_fallback(dtype):
 
 def make_portable_sum(dtype, body="return block_sum(x)", cardinality="block_scalar", *, output_dtype=None):
     artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
-        {"x": dtype}, output_dtype or dtype, version="1.1", cardinality=cardinality
+        {"x": dtype}, output_dtype or dtype, version="1.0", cardinality=cardinality
     )
     return blosc2.PortableKernel.from_json(artifact, jit=False)
 
@@ -305,7 +305,7 @@ def graph(nodes, root=None, output="auto"):
     return json.dumps(
         {
             "format": "menudet-graph-1",
-            "semantics": "menudet-numpy-1.1",
+            "semantics": "menudet-numpy-1.0",
             "requires": ["numeric"],
             "nodes": [{"id": i, **node} for i, node in enumerate(nodes)],
             "root": len(nodes) - 1 if root is None else root,

@@ -376,7 +376,7 @@ def benchmark_reference(case, arrays, mask, repeat):
         case.inputs,
         case.output,
         constants=case.constants,
-        version="1.1",
+        version="1.0",
         cardinality=case.cardinality,
     )
     start = time.perf_counter_ns()

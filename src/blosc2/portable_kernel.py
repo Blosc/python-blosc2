@@ -2,7 +2,7 @@
 # Copyright (c) 2026, Blosc Development Team <blosc@blosc.org>
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
-"""Portable DSL authoring and native-only execution (draft descriptors when installed)."""
+"""Menudet authoring and native-only execution (draft descriptors when installed)."""
 
 from __future__ import annotations
 
@@ -221,7 +221,7 @@ def _export_captures(func, source, names, capture_dtypes, version="1.0"):
             candidate = f"_capture_{index}"
         occupied.add(candidate)
         scalar = portable_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
-        if version == "1.1" and scalar["dtype"] not in {"bytes", "unicode32"}:
+        if version == "1.0" and scalar["dtype"] not in {"bytes", "unicode32"}:
             scalar["category"] = (
                 "weak"
                 if type(scope[name]) in (bool, int, float) and name not in capture_dtypes
@@ -254,10 +254,10 @@ def export_portable_kernel(
     ndim=0,
 ):
     """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
-    if version not in {"1.0", "1.1"}:
+    if version != "1.0":
         raise PortableArtifactError("Unsupported artifact version", status="unsupported_version")
-    if casting not in {"safe", "same_kind", "unsafe"} or (version == "1.0" and casting != "unsafe"):
-        raise PortableArtifactError("Cast policies require version 1.1", status="unsupported_requirement")
+    if casting not in {"safe", "same_kind", "unsafe"}:
+        raise PortableArtifactError("Unsupported Menudet casting policy", status="unsupported_requirement")
     inputs = _mapping(input_dtypes, "input_dtypes")
     constants = _mapping({} if constants is None else constants, "constants")
     captures = _mapping({} if capture_dtypes is None else capture_dtypes, "capture_dtypes")
@@ -272,7 +272,7 @@ def export_portable_kernel(
     encoded = [
         portable_scalar_descriptor(name, value, captures.get(name)) for name, value in constants.items()
     ]
-    if version == "1.1":
+    if version == "1.0":
         for scalar, (name, value) in zip(encoded, constants.items(), strict=True):
             if scalar["dtype"] not in {"bytes", "unicode32"}:
                 scalar["category"] = (
@@ -304,7 +304,7 @@ def export_portable_kernel(
         "output": {**portable_dtype_descriptor(output_dtype), "contract": cardinality},
         "semantics": {
             "fp": "strict",
-            **({"numeric": "numpy-2.5", "casting": casting} if version == "1.1" else {}),
+            **({"numeric": "numpy-2.5", "casting": casting} if version == "1.0" else {}),
         },
         "context": {"ndim": ndim},
         "metadata": dict(metadata or {}),
@@ -372,7 +372,7 @@ class PortableKernel:
 
     @property
     def inferred_dtype(self):
-        """Metadata-only result dtype before final conversion (1.1 runtime required)."""
+        """Metadata-only result dtype before final conversion (Menudet 1.0 runtime required)."""
         return self._info.get("inferred_dtype")
 
     @property
@@ -403,7 +403,7 @@ class PortableKernel:
         Constant-only kernels require an explicit output ``shape`` (possibly empty).
         Draft block-scalar kernels return a scalar NumPy array. ND kernels require
         ``evaluate_block`` with explicit logical context.
-        Profile 1.1 can return ``(values, status)`` with ``return_status=True``.
+        Menudet 1.0 can return ``(values, status)`` with ``return_status=True``.
         Status has stable ``flags`` bits (invalid=1, divide=2, overflow=4,
         underflow=8) and a ``supported`` capability. ``fp_errors='raise'`` raises
         for any of these flags; the default ``'ignore'`` emits no warnings.
@@ -462,7 +462,7 @@ class PortableKernel:
         and must be aggregated explicitly by callers across blocks. This is not
         full ``numpy.seterr`` emulation.
         """
-        if self.schema_version not in {"1.0", "1.1"}:
+        if self.schema_version != "1.0":
             raise NotImplementedError("Explicit descriptor blocks require an installed draft 1.0 runtime")
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
@@ -516,7 +516,7 @@ class PortableKernel:
         tile_items=1024,
         return_report=False,
     ):
-        """Native 1.1 logical broadcasting/axis reductions with bounded iterator scratch.
+        """Menudet 1.0 logical broadcasting/axis reductions with bounded iterator scratch.
 
         Supports C/F, negative-stride and nonnative-endian numeric arrays. Results
         own C-order storage; no mutable-view or in-place guarantees. Grouping is
@@ -557,6 +557,6 @@ class PortableKernel:
         """Bind native inputs to an immutable logical block grid, not a storage grid."""
         from .portable_lazy import PortableLazyArray
 
-        if self.schema_version not in {"1.0", "1.1"}:
+        if self.schema_version != "1.0":
             raise NotImplementedError("Logical portable partitions require the descriptor profile")
         return PortableLazyArray(self, inputs, shape=shape, partitions=partitions)

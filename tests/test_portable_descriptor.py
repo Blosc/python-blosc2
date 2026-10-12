@@ -24,7 +24,7 @@ def manifest(source, inputs, output, *, requires, ndim=0):
             "inputs": inputs,
             "constants": [],
             "output": output,
-            "semantics": {"fp": "strict"},
+            "semantics": {"fp": "strict", "numeric": "numpy-2.5", "casting": "unsafe"},
             "context": {"ndim": ndim},
             "metadata": {"status": "implementation-draft"},
         }

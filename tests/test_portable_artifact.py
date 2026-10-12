@@ -25,7 +25,7 @@ SCALE = 2.0
 BIAS = -1.0
 
 
-@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("version", ["1.0"])
 @pytest.mark.parametrize("operation", ["sum", "prod", "min", "max", "mean", "any", "all"])
 def test_explicit_block_reduction_names(version, operation):
     output = "bool" if operation in {"any", "all"} else "float64"
@@ -42,7 +42,7 @@ def test_explicit_block_reduction_names(version, operation):
         )
 
 
-@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("version", ["1.0"])
 @pytest.mark.parametrize("dtype", ["bool", "int64", "uint64", "float32", "float64"])
 def test_block_mean_dtype_and_participation(version, dtype):
     output = dtype if dtype.startswith("float") else "float64"
@@ -63,9 +63,10 @@ def test_block_mean_dtype_and_participation(version, dtype):
 
 
 def assert_execution_mode(kernel, jit):
-    # Draft 1.0 is interpreter-first, including optional JIT requests.
+    # Menudet 1.0 may accelerate eligible kernels when explicitly requested.
     assert kernel.schema_version == "1.0"
-    assert not kernel.has_jit
+    if not jit:
+        assert not kernel.has_jit
 
 
 @pytest.mark.parametrize(
@@ -179,7 +180,13 @@ def test_constant_encodings(native_artifacts, dtype, value, encoding, encoded):
     author = blosc2.DSLKernel.from_source(source)
     artifact = author.export({}, dtype, constants={"value": value})
     scalar = json.loads(artifact)["constants"][0]
-    assert scalar == {"name": "value", "dtype": dtype, "encoding": encoding, "value": encoded}
+    assert scalar == {
+        "name": "value",
+        "dtype": dtype,
+        "encoding": encoding,
+        "value": encoded,
+        "category": "typed_scalar" if isinstance(value, np.generic) else "weak",
+    }
     kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
     assert kernel.source == source
     result = kernel.evaluate({}, shape=(600,))
@@ -477,7 +484,7 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
                 np.float32((float(-(2**24)) + 0.1) - float(-(2**24))),
             ],
         ),
-        ("float64", "float64", "    truth = bool(x)\n    return -truth\n", [0.0, 1.0], [0.0, -1.0]),
+        ("float64", "float64", "    truth = bool(x)\n    return -float(truth)\n", [0.0, 1.0], [-0.0, -1.0]),
     ]
     for input_dtype, output_dtype, body, samples, expected in cases:
         source = f"# me:compiler={compiler}\ndef k(x):\n{body}"
@@ -500,13 +507,12 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
         ("    return x + 0.5\n", [True, True]),
         ("    return x * 0.5\n", [False, True]),
         ("    return bool(x + 0.5)\n", [True, True]),
-        ("    return (x + x) == 2\n", [False, True]),
+        ("    return (x + x) == 2\n", [False, False]),
         ("    return (x * 0.5) == 0.5\n", [False, True]),
         ("    return int(x + 0.5) == 0\n", [True, False]),
         ("    half = x * 0.5\n    return half == 0.5\n", [False, True]),
         ("    half = x * 0.5\n    return half * 2 == x\n", [True, True]),
         ("    return x - 1\n", [True, False]),
-        ("    return -x\n", [False, True]),
         ("    return (x + 9007199254740992) - 9007199254740992\n", [False, True]),
     ],
 )
@@ -550,10 +556,10 @@ def test_bool_cast_floating_arithmetic(
 ):
     count = 257
     expressions = {
-        "sum": "bool(x) + bool(x)",
-        "difference": "bool(x) - bool(x)",
-        "product": "bool(x) * bool(x)",
-        "negation": "-bool(x)",
+        "sum": "float(bool(x)) + float(bool(x))",
+        "difference": "float(bool(x)) - float(bool(x))",
+        "product": "float(bool(x)) * float(bool(x))",
+        "negation": "-float(bool(x))",
     }
     expression = expressions[operation]
     body = ""
@@ -570,7 +576,7 @@ def test_bool_cast_floating_arithmetic(
     elif input_dtype.startswith("float"):
         samples += [-0.0, np.finfo(input_dtype).smallest_subnormal, np.inf, -np.inf, np.nan]
     values = np.resize(np.array(samples, dtype=input_dtype), count)
-    truth = (values != 0).astype("int64")
+    truth = (values != 0).astype("float64")
     expected = {
         "sum": truth + truth,
         "difference": truth - truth,

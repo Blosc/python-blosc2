@@ -25,7 +25,7 @@ DTYPES = [
 def kernel(expression="x", inputs=None, output="float64"):
     inputs = inputs or {"x": output}
     author = blosc2.DSLKernel.from_source(f"def k({', '.join(inputs)}):\n    return {expression}\n")
-    return blosc2.PortableKernel.from_json(author.export(inputs, output, version="1.1", casting="unsafe"))
+    return blosc2.PortableKernel.from_json(author.export(inputs, output, version="1.0", casting="unsafe"))
 
 
 @pytest.fixture(autouse=True)

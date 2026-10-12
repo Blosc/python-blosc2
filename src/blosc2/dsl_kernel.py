@@ -955,7 +955,7 @@ class DSLKernel:
         cardinality="elementwise",
         ndim=0,
     ):
-        """Export a typed portable JSON artifact without calling the Python function.
+        """Export a typed Menudet JSON artifact without calling the Python function.
 
         ``input_dtypes`` maps runtime parameter names to explicit logical dtypes.
         Optional ``constants`` supplies scalar values for remaining parameters.
@@ -965,13 +965,13 @@ class DSLKernel:
         supported NumPy scalars retain their dtype). Arrays, objects, and external
         callbacks cannot be captures. Import via :meth:`blosc2.PortableKernel.from_json`.
 
-        The default ``version="1.0"`` is an experimental implementation draft. It
-        retains checked integer semantics. Opt in to ``version="1.1"`` for the
-        NumPy arithmetic profile (requires an updated native runtime), with final
-        output ``casting="safe"``, ``"same_kind"`` or ``"unsafe"``. In 1.1,
+        Menudet ``version="1.0"`` is an experimental implementation draft with
+        NumPy-style arithmetic and optional JIT. Final output supports
+        ``casting="safe"``, ``"same_kind"`` or ``"unsafe"``. Numeric captures follow
+        the declared scalar category:
         ordinary numeric captures are weak scalars; NumPy scalars and explicit
         ``capture_dtypes`` are strong typed scalars.
-        Both profiles support mixed numeric types and fixed byte/Unicode snapshots;
+        Menudet supports mixed numeric types and fixed byte/Unicode snapshots;
         ``cardinality`` is ``elementwise`` or ``block_scalar``, and ``ndim``
         declares the required logical coordinate rank. The native loader
         validates normalized source, widths and cardinality before export succeeds.
@@ -1086,7 +1086,7 @@ def validate_dsl(func):
 def validate_portable_dsl(
     source, input_dtypes, output_dtype, *, language_version="1.0", ndim=0, cardinality=None
 ):
-    """Check raw native source and an exact typed signature against a portable profile.
+    """Check raw native source and an exact typed signature against the Menudet 1.0 profile.
 
     Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
     ``error``. Validation neither executes a kernel nor invokes a JIT compiler.
@@ -1114,17 +1114,17 @@ def validate_portable_dsl(
     if not isinstance(input_dtypes, Mapping):
         raise TypeError("input_dtypes must map parameter names to explicit dtypes")
     if "\x00" in source or "\x00" in language_version:
-        raise ValueError("Portable DSL source and version must not contain NUL characters")
+        raise ValueError("Menudet source and version must not contain NUL characters")
     if language_version != "1.0":
         return {
             "valid": False,
             "status": "unsupported_version",
             "line": 0,
             "column": 0,
-            "error": "Unsupported portable DSL version; expected draft 1.0",
+            "error": "Unsupported Menudet version; expected draft 1.0",
         }
     if any(not isinstance(name, str) or "\x00" in name for name in input_dtypes):
-        raise ValueError("Portable DSL input names must be strings without NUL characters")
+        raise ValueError("Menudet input names must be strings without NUL characters")
     if type(ndim) is not int or not 0 <= ndim <= 2**31 - 1:
         raise ValueError("ndim must be a nonnegative Python integer representable by the native API")
     contracts = {None: 0, "elementwise": 1, "block_scalar": 2}
@@ -1137,7 +1137,7 @@ def validate_portable_dsl(
             "status": "runtime_unsupported",
             "line": 0,
             "column": 0,
-            "error": "Rebuild miniexpr and the extension with portable DSL validation support",
+            "error": "Rebuild miniexpr and the extension with Menudet validation support",
         }
     return validator(source, input_dtypes, output_dtype, language_version, ndim, contracts[cardinality])
 

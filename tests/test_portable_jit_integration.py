@@ -11,7 +11,7 @@ pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
 def make_kernel(source, signature, output, **kwargs):
-    artifact = blosc2.DSLKernel.from_source(source).export(signature, output, version="1.1", **kwargs)
+    artifact = blosc2.DSLKernel.from_source(source).export(signature, output, version="1.0", **kwargs)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
     if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
         assert kernel.has_jit
