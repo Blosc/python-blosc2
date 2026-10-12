@@ -84,6 +84,7 @@ static me_dtype b2_graph_inferred(const void *p) { return me_graph_inferred_dtyp
 static int b2_graph_jit(const void *p) { return me_graph_has_jit(p); }
 static const char *b2_graph_json(const void *p) { return me_graph_export_json(p, NULL); }
 static const char *b2_graph_map_json(const void *p) { return me_graph_export_map_json(p); }
+static const void *b2_graph_map_artifact(const void *p) { return me_graph_map_artifact(p); }
 static size_t b2_graph_stages(const void *p) { return me_graph_stage_count(p); }
 static size_t b2_graph_intermediate(const void *s) { return me_graph_intermediate_bytes(s); }
 static size_t b2_graph_plan_bytes(const void *p) { return me_graph_plan_bytes(p); }
@@ -139,6 +140,7 @@ static me_dtype b2_graph_inferred(const void *p) { (void)p; return ME_AUTO; }
 static int b2_graph_jit(const void *p) { (void)p; return 0; }
 static const char *b2_graph_json(const void *p) { (void)p; return NULL; }
 static const char *b2_graph_map_json(const void *p) { (void)p; return NULL; }
+static const void *b2_graph_map_artifact(const void *p) { (void)p; return NULL; }
 static size_t b2_graph_stages(const void *p) { (void)p; return 0; }
 static size_t b2_graph_intermediate(const void *s) { (void)s; return 0; }
 static size_t b2_graph_plan_bytes(const void *p) { (void)p; return 0; }

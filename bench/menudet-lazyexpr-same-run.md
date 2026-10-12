@@ -39,3 +39,28 @@ staging copies. A separate backend probe confirms LazyExpr uses its current
 portable-JIT graph path (one JIT stage, no interpreted stages); that path does not
 use the new resident-array worker scheduler. These are LazyExpr reads over NumPy
 buffers, **not** direct NumPy arithmetic timings.
+
+## After LazyExpr scheduler integration
+
+Eligible single-stage LazyExpr JIT graphs now borrow their prepared native map
+artifact and share the resident scheduler. No artifact recompile is performed.
+Same-process NumPy-input measurements using the same protocol:
+
+| Same-process run | LazyExpr median ms | Menudet/Clang median ms |
+|---|---:|---:|
+| First | 5.462 | 2.761 |
+| Repeat in a fresh process | 5.428 | 2.702 |
+
+Both reports confirm twelve-worker `parallel-resident` execution, with no input
+materialization or normalization. LazyExpr improves roughly 3.9x relative to the
+earlier 21.3 ms serial-graph results, although the original graph artifact still
+takes about twice as long as the independently authored Menudet artifact in this
+test. This measurement alone does not identify the source of that remaining gap.
+Compressed-input automatic eligibility and dispatch are unchanged.
+
+The configured suite passed 13,232 tests (76 skipped, 12,605 deselected).
+Final focused qualification passed 504 tests covering graph stages, weak
+captures, native-first policy, scheduler fallback, mask participation, FP status,
+no-replay errors and borrowed-owner lifetime. The instrumented Cython binding
+ASan gate passed 434 tests; native static archives were not instrumented and
+leak detection was disabled.

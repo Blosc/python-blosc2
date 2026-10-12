@@ -143,6 +143,86 @@ def compile_plan(graph, jit=False, configuration=()):
     return NativeGraph(graph, jit=jit)
 
 
+@lru_cache(maxsize=128)
+def _resident_map_kernel(plan):
+    from types import SimpleNamespace
+
+    borrow = getattr(plan._handle, "resident_artifact", None)
+    handle = borrow() if borrow is not None else None
+    if handle is None:
+        return None
+    info = handle.info()
+    if not info["jit"]:
+        return None
+    descriptor = handle.descriptor_info()
+    captures = {}
+    for constant in json.loads(plan.map_json()).get("constants", []):
+        if constant["category"] != "weak":
+            return None
+        if constant["encoding"] == "decimal" and constant["dtype"] == "int64":
+            value = int(constant["value"])
+        elif constant["encoding"] == "boolean" and constant["dtype"] == "bool":
+            value = constant["value"]
+        elif constant["encoding"] == "ieee754-hex" and constant["dtype"] == "float64":
+            value = struct.unpack(">d", bytes.fromhex(constant["value"]))[0]
+        else:
+            return None
+        captures[constant["name"]] = value
+
+    class CaptureProof(ast.NodeTransformer):
+        def visit_Name(self, node):
+            return ast.copy_location(ast.Constant(captures[node.id]), node) if node.id in captures else node
+
+    # Metadata-only proof substitutes immutable native captures with literals.
+    # Actual execution still borrows the already-compiled original artifact.
+    proof_source = ast.unparse(CaptureProof().visit(ast.parse(info["source"])))
+    return SimpleNamespace(
+        _handle=handle,
+        source=proof_source,
+        input_dtypes=descriptor["inputs"],
+        output_dtype=descriptor["output_dtype"],
+        inferred_dtype=descriptor["inferred_dtype"],
+        result_cardinality=descriptor["cardinality"],
+        context_ndim=descriptor["ndim"],
+    )
+
+
+def _parallel_resident_graph(plan, inputs, shape, selection, reduction):
+    from types import SimpleNamespace
+
+    import blosc2
+
+    from .resident_execution import MINIMUM_WORKER_ITEMS, evaluate_resident_if_eligible
+
+    if reduction or not plan.has_jit or plan.info()["stages"] != 1:
+        return None
+    if blosc2.nthreads < 2 or math.prod(shape) < 2 * MINIMUM_WORKER_ITEMS:
+        return None
+    if any(type(value) is not np.ndarray for value in inputs.values()):
+        return None
+    if selection and not all(
+        isinstance(part, slice) and part.indices(size) == (0, size, 1)
+        for part, size in zip(selection, shape, strict=True)
+    ):
+        return None
+    kernel = _resident_map_kernel(plan)
+    if kernel is None:
+        return None
+    lazy = SimpleNamespace(kernel=kernel, inputs=inputs, _domain=shape)
+    result = evaluate_resident_if_eligible(lazy, tuple(slice(None) for _ in shape))
+    if result is None:
+        return None
+    values, report = result
+    return values, {
+        **report,
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "normalization_bytes": 0,
+    }
+
+
 def scalar_descriptor(value):
     """Lossless transport only: numerical construction/inference is native."""
     category = "typed_scalar" if isinstance(value, np.generic) else "weak"
@@ -434,7 +514,10 @@ def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, prepared=
         schedule = plan.specialize(
             {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items
         )
-    result, report = schedule.execute(arrays)
+    parallel = (
+        _parallel_resident_graph(plan, inputs, shape, selection, reduction) if tile_items == 1024 else None
+    )
+    result, report = schedule.execute(arrays) if parallel is None else parallel
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-1.0",

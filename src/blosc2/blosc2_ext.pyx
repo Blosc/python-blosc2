@@ -1359,6 +1359,7 @@ cdef extern from "dsl_graph_bridge.h":
     int b2_graph_jit(const void *)
     const char *b2_graph_json(const void *)
     const char *b2_graph_map_json(const void *)
+    const void *b2_graph_map_artifact(const void *)
     size_t b2_graph_stages(const void *)
     size_t b2_graph_intermediate(const void *)
     size_t b2_graph_plan_bytes(const void *)
@@ -1432,6 +1433,18 @@ cdef class NativeGraphHandle:
         if json == NULL:
             raise ValueError("Root reductions/final conversions cannot be exported as elementwise artifacts")
         return (<bytes>json).decode('utf-8')
+
+    def resident_artifact(self):
+        """Borrow the prepared map artifact, retaining this native plan owner."""
+        if self._handle == NULL or b2_graph_map_json(self._handle) == NULL:
+            return None
+        cdef const void *artifact = b2_graph_map_artifact(self._handle)
+        if artifact == NULL:
+            return None
+        cdef PortableArtifactHandle result = PortableArtifactHandle()
+        result._handle = <void *>artifact
+        result._owner = self
+        return result
 
     @staticmethod
     def from_expression(bytes expression, input_dtypes, int jit_mode=2, bint require_jit=False):
@@ -1590,20 +1603,26 @@ cdef void raise_artifact_error(int rc, b2_artifact_error *error) except *:
 cdef class PortableArtifactHandle:
     """Owned immutable native handle; no Python artifact decoding or source execution."""
     cdef void *_handle
+    cdef object _owner
 
-    def __cinit__(self, bytes artifact, int jit_mode):
+    def __cinit__(self, bytes artifact=None, int jit_mode=0):
         cdef b2_artifact_error error
         cdef int rc
-        cdef const char *json = artifact
-        cdef size_t size = len(artifact)
+        cdef const char *json
+        cdef size_t size
         self._handle = NULL
+        if artifact is None:
+            return
+        json = artifact
+        size = len(artifact)
         with nogil:
             rc = b2_artifact_load(json, size, jit_mode, &self._handle, &error)
         if rc:
             raise_artifact_error(rc, &error)
 
     def __dealloc__(self):
-        b2_artifact_free(self._handle)
+        if self._owner is None:
+            b2_artifact_free(self._handle)
 
     def info(self):
         cdef int i

@@ -165,6 +165,14 @@ or error propagation. Floating flags are aggregated, execution errors are never
 replayed, and standalone ``kernel.evaluate_block(...)`` remains a single logical
 invocation. Callers must not mutate inputs during a read.
 
+Eligible single-stage portable-JIT ``LazyExpr`` graphs use this scheduler too.
+Their prepared native map artifact is borrowed with its owner retained, rather
+than recompiled. Immutable weak scalar captures are substituted only in the
+metadata safety proof; evaluation continues to use the original captured values
+and artifact. Typed captures, staged/reduction graphs, partial selections,
+broadcast or strided inputs, and nondefault ``_native_tile_items`` overrides keep
+the original graph executor. Automatic backend eligibility is otherwise unchanged.
+
 Compressed storage dispatch
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
