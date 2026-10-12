@@ -207,10 +207,16 @@ already computed operands, not entire expression subtrees. Computed weak operand
 and floating captures can use runtime checks; validated immutable integer/Boolean
 capture leaves retain their value-specialized fast path.
 
-A single block-scalar return of float32/float64 ``block_sum`` or ``block_prod`` can
-also compile, including an eligible mapped operand such as ``block_sum(x * 2)``.
-Its loop fuses the map with serial accumulation, preserving per-operation rounding,
-participating masks, empty-group identities and original logical partitions.
+A straight-line block-scalar recipe containing one floating ``block_sum``,
+``block_prod`` or ``block_mean`` can also compile. Eligible mapped operands,
+scalar local assignments and surrounding arithmetic are supported, for example
+``return block_sum(x * 2) / 2`` or ``s = block_mean(x); return s + 1``.
+The reduction loop executes at its expression position, including inside lazy
+branches, and fuses the map with serial accumulation. Per-operation rounding,
+participating masks and original logical partitions are preserved. Empty sums
+and products retain their identities; empty means return NaN without introducing
+a divide-by-zero exception. Outside reduction maps, input reads must be uniform
+captures rather than array lanes.
 This is not parallel reduction or streaming of staged graph intermediates.
 Check ``kernel.has_jit`` to distinguish compiled execution from fallback. Select
 the backend before importing the artifact with ``ME_DSL_JIT_COMPILER=tcc`` or
@@ -222,8 +228,8 @@ a host bridge for NaN exception behavior. Ordered temporaries and immediate erro
 checks prevent failed operands from evaluating later operands. Local stores retain
 assignment precision and diagnostics even if their values are unused.
 
-Checked integer reductions, mean/extrema/truth reductions, multiple reductions and
-scalar statement programs retain interpreter/native-helper routes. Unsupported
+Integer and extrema/truth reductions, multiple reductions and scalar statement
+control flow retain interpreter/native-helper routes. Unsupported
 definite-assignment patterns, fixed strings, and backend limitations also fall back.
 Portable WASM JIT is not enabled: the legacy WASM source adapter does not preserve
 the exact 64-bit typed-bridge ABI. Passing WASM interpretation tests is not JIT

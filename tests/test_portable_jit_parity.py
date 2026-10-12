@@ -330,3 +330,158 @@ def test_checked_integer_reductions_keep_fallback(expression):
     assert not kernel.has_jit
     with pytest.raises(blosc2.PortableArtifactError):
         kernel.evaluate_block({"x": np.array([2**63 - 1, 2], dtype="int64")})
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("output", ["float32", "float64"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return block_sum(x * 2) / 2",
+        "return sqrt(block_sum(x))",
+        "s = block_sum(x)\n    return s + 1",
+        "a = 2.0\n    s = block_sum(x * a)\n    t = s / a\n    return t",
+        "return block_mean(x)",
+        "return block_mean(x * 2) / 2",
+        "s = block_mean(x)\n    return s + 1",
+        "s = block_prod(x + 1)\n    return s / 2",
+    ],
+)
+def test_scalar_reduction_recipes(dtype, output, body):
+    source = f"def k(x):\n    {body}\n"
+    kernel = portable_kernel(source, {"x": dtype}, output, cardinality="block_scalar")
+    reference = portable_kernel(source, {"x": dtype}, output, jit=False, cardinality="block_scalar")
+    for values in (
+        [1e16, 1, -1e16, 3],
+        [np.inf, 1, -np.inf, 3],
+        [1, np.nan, 2, 3],
+        [-0.0, 1, 0, 3],
+        [np.finfo(dtype).max, 2],
+        [np.finfo(dtype).tiny, np.finfo(dtype).tiny],
+        [],
+    ):
+        x = np.array(values, dtype=dtype)
+        for mask in (None, np.arange(x.size) % 2 == 0, np.zeros(x.size, dtype=bool)):
+            actual, status = kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True)
+            expected, expected_status = reference.evaluate_block(
+                {"x": x}, valid_mask=mask, return_status=True
+            )
+            assert actual.dtype == expected.dtype
+            if not (np.isnan(actual).all() and np.isnan(expected).all()):
+                assert actual.tobytes() == expected.tobytes()
+            assert status == expected_status
+    x = np.arange(1, 7, dtype=dtype)
+    np.testing.assert_array_equal(
+        kernel.lazy({"x": x}, partitions=(4,))[:], reference.lazy({"x": x}, partitions=(4,))[:]
+    )
+
+
+@pytest.mark.parametrize("first", [True, False])
+def test_scalar_checked_operand_order_and_recovery(first):
+    cast = "int64(c)"
+    reduction = "block_sum(sqrt(x))"
+    expression = f"{cast} + {reduction}" if first else f"{reduction} + {cast}"
+    source = f"def k(x, c):\n    return {expression}\n"
+    kernels = [
+        portable_kernel(
+            source,
+            {"x": "float64"},
+            "float64",
+            jit=jit,
+            constants={"c": 1e100},
+            cardinality="block_scalar",
+        )
+        for jit in (True, False)
+    ]
+    errors = []
+    for kernel in kernels:
+        with pytest.raises(blosc2.PortableArtifactError) as failure:
+            kernel.evaluate_block({"x": np.array([-1.0, 4.0])})
+        errors.append(failure.value)
+    assert errors[0].status == errors[1].status
+    # Checked status is invocation-local; subsequent calls still report the error.
+    with pytest.raises(blosc2.PortableArtifactError) as repeated:
+        kernels[0].evaluate_block({"x": np.array([1.0, 4.0])})
+    assert repeated.value.status == errors[0].status
+
+
+@pytest.mark.parametrize("cast", ["int8", "uint8", "int64", "uint64"])
+def test_scalar_final_checked_cast_and_recovery(cast):
+    source = f"def k(x):\n    s = block_sum(x)\n    return {cast}(s)\n"
+    kernel = portable_kernel(source, {"x": "float64"}, cast, cardinality="block_scalar")
+    reference = portable_kernel(source, {"x": "float64"}, cast, jit=False, cardinality="block_scalar")
+    for value in (np.nan, np.inf, 1e100):
+        errors = []
+        for k in (kernel, reference):
+            with pytest.raises(blosc2.PortableArtifactError) as failure:
+                k.evaluate_block({"x": np.array([value])})
+            errors.append(failure.value)
+        assert errors[0].status == errors[1].status
+    assert kernel.evaluate_block({"x": np.array([1.75, 2.0])}) == 3
+
+
+@pytest.mark.parametrize("select", [True, False])
+def test_scalar_lazy_reduction_with_capture(select):
+    source = "def k(x, select):\n    return where(select, block_mean(sqrt(x)), 7.0)\n"
+    kernel = portable_kernel(
+        source, {"x": "float64"}, "float64", constants={"select": select}, cardinality="block_scalar"
+    )
+    reference = portable_kernel(
+        source,
+        {"x": "float64"},
+        "float64",
+        jit=False,
+        constants={"select": select},
+        cardinality="block_scalar",
+    )
+    for x in (np.array([-1.0, 4.0]), np.array([], dtype="float64")):
+        for mask in (None, np.zeros(x.size, dtype=bool)):
+            actual, status = kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True)
+            expected, expected_status = reference.evaluate_block(
+                {"x": x}, valid_mask=mask, return_status=True
+            )
+            np.testing.assert_array_equal(actual, expected)
+            assert status == expected_status
+            if not select:
+                assert actual == 7
+                assert status["flags"] == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return block_sum(x) + block_sum(x)",
+        "s = block_sum(x)\n    if s > 0:\n        return s\n    return s",
+        "return block_min(x)",
+        "v = x * 2\n    return block_sum(v)",
+    ],
+)
+def test_scalar_recipes_outside_scope_keep_fallback(body):
+    artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
+        {"x": "float64"}, "float64", version="1.1", cardinality="block_scalar"
+    )
+    assert not blosc2.PortableKernel.from_json(artifact, jit=True).has_jit
+
+
+def test_scalar_mean_logical_context():
+    source = "def k(x):\n    s = block_mean(float64(_flat_idx))\n    return s + 1\n"
+    artifact = blosc2.DSLKernel.from_source(source).export(
+        {"x": "float64"}, "float64", version="1.1", cardinality="block_scalar", ndim=1
+    )
+    kernels = [blosc2.PortableKernel.from_json(artifact, jit=jit) for jit in (True, False)]
+    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=True)
+    assert kernels[0].has_jit == oracle.has_jit
+    for mask in (None, np.array([True, False, True]), np.zeros(3, dtype=bool)):
+        results = [
+            kernel.evaluate_block(
+                {"x": np.ones(3)},
+                block_shape=(3,),
+                logical_shape=(8,),
+                block_origin=(2,),
+                valid_mask=mask,
+                return_status=True,
+            )
+            for kernel in kernels
+        ]
+        np.testing.assert_array_equal(results[0][0], results[1][0])
+        assert results[0][1] == results[1][1]

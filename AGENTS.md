@@ -25,6 +25,23 @@ shared library and fail with errors like
 - `pytest -m "network"` runs tests requiring network access.
 - `cd doc && rm -rf ../html _build && python -m sphinx . ../html` builds docs.
 
+### Fast Native/Python Iteration
+- Keep a persistent CMake build directory and reuse the same native source
+  override (`FETCHCONTENT_SOURCE_DIR_MINIEXPR`) when testing a local miniexpr checkout.
+- After native/Cython edits, prefer a direct incremental build over rebuilding a
+  wheel or repeating `pip install -e .`:
+  `conda run -n blosc2 cmake --build <build-dir> --parallel 8`.
+- Verify `blosc2.__file__` and `blosc2.blosc2_ext.__file__` before testing: both must
+  belong to the intended checkout/test package. A direct build does not necessarily
+  update the extension copy loaded by an editable install. If needed, refresh only
+  the rebuilt extensions in an isolated test package; do not overwrite another
+  checkout's shared installation.
+- For isolated imports, use conda Python with `-S` and explicitly select the test
+  package and dependency paths. Run pytest in that process with `-n 0`; workers can
+  otherwise reload the shared editable install instead of the intended package.
+- Pure Python edits need no rebuild. Reinstall when packaging/configuration changes
+  require it, and retain independent-wheel checks for final integration qualification.
+
 ## Coding Style & Naming Conventions
 Use Ruff for formatting and linting (line length 109). Enable pre-commit hooks:
 `python -m pip install pre-commit` then `pre-commit install`. Follow Python

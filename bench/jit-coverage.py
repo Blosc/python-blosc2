@@ -146,6 +146,16 @@ CASES = [
         )
     ],
     Case("reduction/masked-map", "return block_sum(x * 2)", cardinality="block_scalar", masked=True),
+    Case("reduction/sum-post", "return block_sum(x * 2) / 2", cardinality="block_scalar"),
+    Case("reduction/scalar-statements", "s = block_sum(x)\nreturn s + 1", cardinality="block_scalar"),
+    Case(
+        "reduction/scalar-locals",
+        "a = 2.0\ns = block_sum(x * a)\nreturn s / a",
+        cardinality="block_scalar",
+    ),
+    Case("reduction/mean-direct", "return block_mean(x)", cardinality="block_scalar"),
+    Case("reduction/mean-map", "return block_mean(x * 2)", cardinality="block_scalar"),
+    Case("reduction/mean-post", "s = block_mean(x * 2)\nreturn s / 2", cardinality="block_scalar"),
     Case(
         "fallback/integer-reduction",
         "return block_sum(x)",
@@ -157,12 +167,6 @@ CASES = [
     Case(
         "fallback/multiple-reductions",
         "return block_sum(x) + block_sum(y)",
-        cardinality="block_scalar",
-        expect_jit=False,
-    ),
-    Case(
-        "fallback/scalar-statements",
-        "s = block_sum(x)\nreturn s + 1",
         cardinality="block_scalar",
         expect_jit=False,
     ),
