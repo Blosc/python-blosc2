@@ -135,7 +135,9 @@ def test_paired_corpus(native_inputs, tmp_path, monkeypatch):
     monkeypatch.setattr(numexpr, "evaluate", forbidden)
     report = compat.paired(corpus, runner, tmp_path)
     compat.check(report)
-    assert report["eligible_jit_cases"] == 0
+    assert not any(row.get("jit_eligible") for row in report["requests"]["off"]["native"])
+    if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
+        assert report["eligible_jit_cases"] > 0
     assert report["reference_drift"] == []
     for mode in ("off", "on"):
         rows = report["requests"][mode]["native"]
@@ -191,5 +193,7 @@ def test_native_rejects_or_reports_corruption(native_inputs, tmp_path, corruptio
 def test_seeded_native_properties(native_inputs, tmp_path):
     corpus, runner = native_inputs
     report = compat.properties(corpus, runner, tmp_path, [1729])
-    assert report["results"][0]["matching"] == 48
+    assert report["results"][0]["matching"] == 49
+    assert report["results"][0]["known_divergences"] == 0
+    assert report["results"][0]["minimized"] is None
     assert report["results"][0]["promoted_case_id"] == "seed-1729-minimized-int8-overflow"

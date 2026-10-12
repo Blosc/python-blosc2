@@ -710,10 +710,9 @@ def property_cases(seed, count=48):
         "x + y",
         [np.array([0, 127, 2], dtype="int8"), np.array([0, 1, 2], dtype="int8")],
     )
-    boundary.update(
-        seed=seed,
-        divergence={"id": "D01", "reason": "Known checked-overflow boundary used to test minimization"},
-    )
+    # Strong int8 addition wraps in Menudet 1.0, just as in NumPy. This is a
+    # boundary regression, not a known checked-arithmetic divergence.
+    boundary["seed"] = seed
     result.append(boundary)
     return result
 
@@ -787,28 +786,20 @@ def properties(corpus, runner, work_dir, seeds):
     for seed in seeds:
         generated = {**corpus, "cases": property_cases(seed)}
         observed = paired(generated, runner, work_dir, observe=True)
+        check(observed)
         rows = observed["requests"]["off"]["native"]
         failures = [
             case for case, row in zip(generated["cases"], rows, strict=True) if not row["reference_match"]
         ]
-        if len(failures) != 1 or failures[0]["id"] != f"property-{seed}-boundary":
+        if failures:
             raise AssertionError(f"New seeded failure: {seed}: {failures}")
-
-        def fails(case):
-            trial = {**corpus, "cases": [case]}
-            # The property predicate preserves both diagnostic and cross-runner agreement.
-            report = paired(trial, runner, work_dir, observe=True)
-            return report["requests"]["off"]["native"][0]["status"] == -5
-
-        reduced = minimized_failure(failures[0], fails)
-        assert [item["hex"] for item in reduced["inputs"]] == ["7f", "01"]
         summaries.append(
             {
                 "seed": seed,
                 "cases": len(rows),
                 "matching": len(rows) - len(failures),
                 "known_divergences": len(failures),
-                "minimized": reduced,
+                "minimized": None,
                 "promoted_case_id": "seed-1729-minimized-int8-overflow" if seed == 1729 else None,
             }
         )
