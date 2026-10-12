@@ -215,16 +215,51 @@ CASES = [
         cardinality="block_scalar",
     ),
     Case(
-        "fallback/integer-mean",
+        "reduction/integer-mean",
         "return block_mean(x)",
         INT,
         "float64",
         cardinality="block_scalar",
+    ),
+    Case(
+        "reduction/integer-mean-map", "return block_mean(x * 2)", INT, "float64", cardinality="block_scalar"
+    ),
+    Case(
+        "reduction/integer-mean-post",
+        "m = block_mean(x)\nreturn m / 2",
+        INT,
+        "float64",
+        cardinality="block_scalar",
+    ),
+    Case(
+        "reduction/array-local",
+        "v = x * 2\nreturn block_sum(v)",
+        cardinality="block_scalar",
+    ),
+    Case(
+        "reduction/scalar-for",
+        "s = block_sum(x)\nfor i in range(3):\n    s = s + i\nreturn s",
+        cardinality="block_scalar",
+    ),
+    Case(
+        "reduction/scalar-while",
+        "s = block_mean(x)\nj = 0\nwhile j < 3:\n    j = j + 1\n    s = s + 1\nreturn s",
+        cardinality="block_scalar",
+    ),
+    Case(
+        "reduction/array-locals-reused",
+        "v = x * 2\nw = v + x\nreturn block_sum(v) + block_mean(w)",
+        cardinality="block_scalar",
+    ),
+    Case(
+        "fallback/branch-array-local",
+        "s = block_sum(x)\nif s > 0:\n    v = x\nelse:\n    v = x * 2\nreturn block_sum(v)",
+        cardinality="block_scalar",
         expect_jit=False,
     ),
     Case(
-        "fallback/array-local",
-        "v = x * 2\nreturn block_sum(v)",
+        "fallback/loop-array-local",
+        "v = x\nfor i in range(3):\n    v = v * 2\nreturn block_sum(v)",
         cardinality="block_scalar",
         expect_jit=False,
     ),

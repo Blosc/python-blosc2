@@ -448,8 +448,8 @@ def test_scalar_lazy_reduction_with_capture(select):
 @pytest.mark.parametrize(
     "body",
     [
-        "v = x * 2\n    return block_sum(v)",
-        "return block_mean(int64(x))",
+        "s = block_sum(x)\n    if s > 0:\n        v = x\n    else:\n        v = x * 2\n    return block_sum(v)",
+        "v = x\n    for i in range(3):\n        v = v * 2\n    return block_sum(v)",
     ],
 )
 def test_scalar_recipes_outside_scope_keep_fallback(body):

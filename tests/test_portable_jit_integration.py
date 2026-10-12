@@ -41,6 +41,14 @@ def test_capture_binding_roundtrip_and_masked_error_recovery():
     [
         ("return block_sum(x * 2)", "float32", "float32"),
         ("return block_sum(x) + block_prod(x)", "int32", "int64"),
+        ("return block_mean(x * 2)", "int32", "float64"),
+        ("s = block_sum(x)\n    for i in range(3):\n        s = s + i\n    return s", "int32", "int64"),
+        (
+            "s = block_mean(x)\n    j = 0\n    while j < 3:\n        j = j + 1\n        s = s + 1\n    return s",
+            "float64",
+            "float64",
+        ),
+        ("v = x * 2\n    return block_sum(v) + block_mean(v)", "int32", "float64"),
         (
             "s = block_sum(x)\n    if s > 0:\n        return block_mean(x)\n    return s",
             "float64",
@@ -63,8 +71,11 @@ def test_scalar_partition_dtype_and_status_binding(body, dtype, output):
     )
 
 
-def test_logical_context_binding():
-    source = "def k(x):\n    return block_mean(float64(_flat_idx))\n"
+@pytest.mark.parametrize(
+    "body", ["return block_mean(float64(_flat_idx))", "v = float64(_flat_idx)\n    return block_mean(v)"]
+)
+def test_logical_context_binding(body):
+    source = f"def k(x):\n    {body}\n"
     kernel = make_kernel(source, {"x": "float64"}, "float64", cardinality="block_scalar", ndim=1)
     result = kernel.evaluate_block(
         {"x": np.ones(3)},
@@ -74,6 +85,20 @@ def test_logical_context_binding():
         valid_mask=np.array([True, False, True]),
     )
     assert result == 3
+
+
+def test_scalar_loop_cap_is_invocation_local(monkeypatch):
+    source = (
+        "def k(x):\n    s = block_mean(x)\n    j = 0\n"
+        "    while j < 5:\n        j = j + 1\n        s = s + 1\n    return s\n"
+    )
+    kernel = make_kernel(source, {"x": "int64"}, "float64", cardinality="block_scalar")
+    x = np.array([1, 3], dtype="int64")
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "2")
+    with pytest.raises(blosc2.PortableArtifactError):
+        kernel.evaluate_block({"x": x})
+    monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "0")
+    assert kernel.evaluate_block({"x": x}) == 7
 
 
 def test_system_compiler_binding_smoke(monkeypatch):

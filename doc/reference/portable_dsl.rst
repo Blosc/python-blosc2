@@ -249,8 +249,16 @@ a host bridge for NaN exception behavior. Ordered temporaries and immediate erro
 checks prevent failed operands from evaluating later operands. Local stores retain
 assignment precision and diagnostics even if their values are unused.
 
-Integer mean reductions, array-valued locals in scalar recipes and scalar
-statement loops retain interpreter/native-helper routes. Reductions inside
+Integer mean uses a checked int64/uint64 accumulator followed by float64
+conversion and division, matching interpretation (including overflow and empty
+group NaNs). Scalar recipes support ``for``/``while`` post-processing with
+``break``, ``continue`` and early returns. The while-iteration cap is read per
+invocation. Top-level array-valued locals are materialized in statement order
+and can be reused by subsequent maps and reductions; their buffers are released
+on every return/error. Branch/loop-local array assignments retain interpretation
+until per-lane initialization tracking is supported. Empty/fully masked scalar
+groups with statement control flow choose interpretation before execution.
+Reductions inside
 varying statement branches or loop bodies remain rejected. Unsupported
 definite-assignment patterns, fixed strings, and backend limitations also fall back.
 Portable WASM JIT is not enabled: the legacy WASM source adapter does not preserve
