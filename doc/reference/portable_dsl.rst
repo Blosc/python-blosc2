@@ -208,7 +208,8 @@ and floating captures can use runtime checks; validated immutable integer/Boolea
 capture leaves retain their value-specialized fast path.
 
 A straight-line block-scalar recipe containing one floating ``block_sum``,
-``block_prod`` or ``block_mean`` can also compile. Eligible mapped operands,
+``block_prod`` or ``block_mean``, or numeric ``block_min``, ``block_max``,
+``block_any`` or ``block_all``, can also compile. Eligible mapped operands,
 scalar local assignments and surrounding arithmetic are supported, for example
 ``return block_sum(x * 2) / 2`` or ``s = block_mean(x); return s + 1``.
 The reduction loop executes at its expression position, including inside lazy
@@ -217,6 +218,10 @@ participating masks and original logical partitions are preserved. Empty sums
 and products retain their identities; empty means return NaN without introducing
 a divide-by-zero exception. Outside reduction maps, input reads must be uniform
 captures rather than array lanes.
+Extrema preserve NaN and signed-zero semantics and reject empty participating
+groups. Truth reductions retain their empty-group identities and evaluate every
+participating mapped operand, even after the Boolean result is determined, so
+later checked errors and floating diagnostics are not silently skipped.
 This is not parallel reduction or streaming of staged graph intermediates.
 Check ``kernel.has_jit`` to distinguish compiled execution from fallback. Select
 the backend before importing the artifact with ``ME_DSL_JIT_COMPILER=tcc`` or
@@ -228,7 +233,7 @@ a host bridge for NaN exception behavior. Ordered temporaries and immediate erro
 checks prevent failed operands from evaluating later operands. Local stores retain
 assignment precision and diagnostics even if their values are unused.
 
-Integer and extrema/truth reductions, multiple reductions and scalar statement
+Integer sum/product/mean reductions, multiple reductions and scalar statement
 control flow retain interpreter/native-helper routes. Unsupported
 definite-assignment patterns, fixed strings, and backend limitations also fall back.
 Portable WASM JIT is not enabled: the legacy WASM source adapter does not preserve

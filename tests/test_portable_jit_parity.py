@@ -17,7 +17,9 @@ def portable_kernel(source, inputs, output, *, jit=True, constants=None, cardina
         inputs, output, constants=constants, version="1.1", cardinality=cardinality
     )
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
-    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": next(iter(inputs.values()))}, jit=jit)
+    # Probe backend availability with universally eligible arithmetic. Boolean
+    # addition itself is not an eligible graph map, although Boolean reductions are.
+    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=jit)
     if jit and os.environ.get("MENUDET_REQUIRE_JIT") == "1":
         assert oracle.has_jit, "Requested backend must compile the eligibility oracle"
     if oracle.has_jit:
@@ -452,7 +454,6 @@ def test_scalar_lazy_reduction_with_capture(select):
     [
         "return block_sum(x) + block_sum(x)",
         "s = block_sum(x)\n    if s > 0:\n        return s\n    return s",
-        "return block_min(x)",
         "v = x * 2\n    return block_sum(v)",
     ],
 )
@@ -481,6 +482,128 @@ def test_scalar_mean_logical_context():
                 valid_mask=mask,
                 return_status=True,
             )
+            for kernel in kernels
+        ]
+        np.testing.assert_array_equal(results[0][0], results[1][0])
+        assert results[0][1] == results[1][1]
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    ["bool", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float32", "float64"],
+)
+@pytest.mark.parametrize("op", ["min", "max", "any", "all"])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_scalar_extrema_truth_recipes(dtype, op, mapped):
+    operand = "where(x >= 0, x, x)" if mapped else "x"
+    source = f"def k(x):\n    s = block_{op}({operand})\n    return s\n"
+    output = "bool" if op in ("any", "all") else dtype
+    kernel = portable_kernel(source, {"x": dtype}, output, cardinality="block_scalar")
+    reference = portable_kernel(source, {"x": dtype}, output, jit=False, cardinality="block_scalar")
+    if dtype.startswith("float"):
+        cases = [[-0.0, 0.0, -0.0], [1, np.nan, 2, -np.nan], [np.inf, -np.inf], [0, 0], []]
+        snan = np.array([1.0, 0.0, 2.0], dtype=dtype)
+        snan.view("uint32" if dtype == "float32" else "uint64")[1] = (
+            0x7F800001 if dtype == "float32" else 0x7FF0000000000001
+        )
+        cases.append(snan)
+    elif dtype == "bool":
+        cases = [[False, True, False], [False, False], [True, True], []]
+    else:
+        limits = np.iinfo(dtype)
+        cases = [[limits.min, limits.max, 0], [0, 0], [1, 1], []]
+    for values in cases:
+        x = np.array(values, dtype=dtype)
+        for mask in (None, np.arange(x.size) % 2 == 0, np.zeros(x.size, dtype=bool)):
+            if op in ("min", "max") and (x.size == 0 or (mask is not None and not mask.any())):
+                errors = []
+                for k in (kernel, reference):
+                    with pytest.raises(blosc2.PortableArtifactError) as failure:
+                        k.evaluate_block({"x": x}, valid_mask=mask)
+                    errors.append(failure.value)
+                assert errors[0].status == errors[1].status
+                continue
+            actual, status = kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True)
+            expected, expected_status = reference.evaluate_block(
+                {"x": x}, valid_mask=mask, return_status=True
+            )
+            assert actual.dtype == expected.dtype
+            if not (np.isnan(actual).all() and np.isnan(expected).all()):
+                assert actual.tobytes() == expected.tobytes()
+            assert status == expected_status
+    x = np.array([1, 2, 0, 3, 0, 1], dtype=dtype)
+    np.testing.assert_array_equal(
+        kernel.lazy({"x": x}, partitions=(4,))[:], reference.lazy({"x": x}, partitions=(4,))[:]
+    )
+
+
+@pytest.mark.parametrize(("op", "values"), [("any", [1.0, -1.0]), ("all", [0.0, -1.0])])
+def test_truth_reductions_do_not_skip_late_map_errors(op, values):
+    source = f"def k(x):\n    return block_{op}(int64(x))\n"
+    kernel = portable_kernel(source, {"x": "float64"}, "bool", cardinality="block_scalar")
+    reference = portable_kernel(source, {"x": "float64"}, "bool", jit=False, cardinality="block_scalar")
+    x = np.array([values[0], np.nan])
+    for k in (kernel, reference):
+        with pytest.raises(blosc2.PortableArtifactError):
+            k.evaluate_block({"x": x})
+        assert k.evaluate_block({"x": np.array(values)}) == (op == "any")
+
+
+@pytest.mark.parametrize(("op", "values"), [("any", [1.0, -1.0]), ("all", [0.0, -1.0])])
+def test_truth_reductions_keep_late_fp_status(op, values):
+    source = f"def k(x):\n    return block_{op}(sqrt(x))\n"
+    kernels = [
+        portable_kernel(source, {"x": "float64"}, "bool", jit=jit, cardinality="block_scalar")
+        for jit in (True, False)
+    ]
+    results = [k.evaluate_block({"x": np.array(values)}, return_status=True) for k in kernels]
+    np.testing.assert_array_equal(results[0][0], results[1][0])
+    assert results[0][1] == results[1][1]
+    if sys.platform != "emscripten":
+        assert results[0][1]["flags"] & 1
+
+
+@pytest.mark.parametrize("op", ["min", "max"])
+def test_lazy_extrema_do_not_raise_for_unselected_empty_group(op):
+    source = f"def k(x, select):\n    return where(select, block_{op}(x), 7.0)\n"
+    for jit in (True, False):
+        kernel = portable_kernel(
+            source,
+            {"x": "float64"},
+            "float64",
+            jit=jit,
+            constants={"select": False},
+            cardinality="block_scalar",
+        )
+        result, status = kernel.evaluate_block({"x": np.array([], dtype="float64")}, return_status=True)
+        assert result == 7
+        assert not status["flags"]
+
+
+@pytest.mark.parametrize("op", ["min", "max", "any", "all"])
+@pytest.mark.parametrize("capture", [0.0, -2.0])
+def test_extrema_truth_uniform_capture(op, capture):
+    source = f"def k(x, c):\n    return block_{op}(c)\n"
+    output = "bool" if op in ("any", "all") else "float64"
+    kernels = [
+        portable_kernel(
+            source,
+            {"x": "float64"},
+            output,
+            jit=jit,
+            constants={"c": capture},
+            cardinality="block_scalar",
+        )
+        for jit in (True, False)
+    ]
+    for mask in (None, np.array([True, False, True]), np.zeros(3, dtype=bool)):
+        if op in ("min", "max") and mask is not None and not mask.any():
+            for kernel in kernels:
+                with pytest.raises(blosc2.PortableArtifactError):
+                    kernel.evaluate_block({"x": np.ones(3)}, valid_mask=mask)
+            continue
+        results = [
+            kernel.evaluate_block({"x": np.ones(3)}, valid_mask=mask, return_status=True)
             for kernel in kernels
         ]
         np.testing.assert_array_equal(results[0][0], results[1][0])

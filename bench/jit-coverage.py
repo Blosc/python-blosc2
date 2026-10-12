@@ -156,6 +156,24 @@ CASES = [
     Case("reduction/mean-direct", "return block_mean(x)", cardinality="block_scalar"),
     Case("reduction/mean-map", "return block_mean(x * 2)", cardinality="block_scalar"),
     Case("reduction/mean-post", "s = block_mean(x * 2)\nreturn s / 2", cardinality="block_scalar"),
+    *[
+        Case(f"reduction/{op}-direct", f"return block_{op}(x)", cardinality="block_scalar")
+        for op in ("min", "max")
+    ],
+    *[
+        Case(f"reduction/{op}-map", f"return block_{op}(x * 2)", cardinality="block_scalar")
+        for op in ("min", "max")
+    ],
+    *[
+        Case(f"reduction/{op}-direct", f"return block_{op}(x)", output="bool", cardinality="block_scalar")
+        for op in ("any", "all")
+    ],
+    *[
+        Case(f"reduction/{op}-map", f"return block_{op}(x > 0)", output="bool", cardinality="block_scalar")
+        for op in ("any", "all")
+    ],
+    Case("reduction/min-int32-map", "return block_min(x * 2)", INT, "int32", cardinality="block_scalar"),
+    Case("reduction/max-post", "s = block_max(x * 2)\nreturn s / 2", cardinality="block_scalar"),
     Case(
         "fallback/integer-reduction",
         "return block_sum(x)",
