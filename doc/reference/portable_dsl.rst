@@ -207,9 +207,12 @@ already computed operands, not entire expression subtrees. Computed weak operand
 and floating captures can use runtime checks; validated immutable integer/Boolean
 capture leaves retain their value-specialized fast path.
 
-A straight-line block-scalar recipe containing one floating ``block_sum``,
-``block_prod`` or ``block_mean``, or numeric ``block_min``, ``block_max``,
-``block_any`` or ``block_all``, can also compile. Eligible mapped operands,
+A block-scalar recipe containing numeric ``block_sum`` or ``block_prod``,
+floating ``block_mean``, or numeric ``block_min``, ``block_max``, ``block_any``
+or ``block_all`` can also compile. Multiple reductions use independent serial
+scans in expression order, rather than fusing across checked or lazy operands.
+Uniform scalar ``if``/``elif``/``else`` branches and early returns are supported;
+only selected branches scan their reductions. Eligible mapped operands,
 scalar local assignments and surrounding arithmetic are supported, for example
 ``return block_sum(x * 2) / 2`` or ``s = block_mean(x); return s + 1``.
 The reduction loop executes at its expression position, including inside lazy
@@ -222,6 +225,19 @@ Extrema preserve NaN and signed-zero semantics and reject empty participating
 groups. Truth reductions retain their empty-group identities and evaluate every
 participating mapped operand, even after the Boolean result is determined, so
 later checked errors and floating diagnostics are not silently skipped.
+Integer sums/products use the fixed 64-bit accumulator widths described above
+and retain checked accumulator overflow, even when strong arithmetic in their
+mapped operands is modular. Plain input reductions use the optimized native
+reducer; mapped operands use a fused scan with authoritative accumulator steps.
+Empty or fully masked groups with statement conditionals are routed to the
+interpreter before execution, preserving its empty-group control-flow rules.
+
+Floating and unsigned ``range`` arguments use checked implicit ``int64``
+conversion. Floating bounds truncate toward zero; nonfinite/out-of-range bounds
+and a zero converted step raise the same error with or without JIT. Explicit
+strong integer casts remain modular. Definite assignment at conditional joins
+considers only paths that continue past the join; potentially empty loops still
+cannot establish a new local for a later read.
 This is not parallel reduction or streaming of staged graph intermediates.
 Check ``kernel.has_jit`` to distinguish compiled execution from fallback. Select
 the backend before importing the artifact with ``ME_DSL_JIT_COMPILER=tcc`` or
@@ -233,8 +249,9 @@ a host bridge for NaN exception behavior. Ordered temporaries and immediate erro
 checks prevent failed operands from evaluating later operands. Local stores retain
 assignment precision and diagnostics even if their values are unused.
 
-Integer sum/product/mean reductions, multiple reductions and scalar statement
-control flow retain interpreter/native-helper routes. Unsupported
+Integer mean reductions, array-valued locals in scalar recipes and scalar
+statement loops retain interpreter/native-helper routes. Reductions inside
+varying statement branches or loop bodies remain rejected. Unsupported
 definite-assignment patterns, fixed strings, and backend limitations also fall back.
 Portable WASM JIT is not enabled: the legacy WASM source adapter does not preserve
 the exact 64-bit typed-bridge ABI. Passing WASM interpretation tests is not JIT

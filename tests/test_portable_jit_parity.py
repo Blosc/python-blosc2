@@ -323,13 +323,9 @@ def test_serial_floating_reduction_jit(dtype, output, expression):
 
 
 @pytest.mark.parametrize("expression", ["block_sum(x)", "block_prod(x)"])
-def test_checked_integer_reductions_keep_fallback(expression):
+def test_checked_integer_reductions_jit(expression):
     source = f"def k(x):\n    return {expression}\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
-        {"x": "int64"}, "int64", version="1.1", cardinality="block_scalar"
-    )
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
-    assert not kernel.has_jit
+    kernel = portable_kernel(source, {"x": "int64"}, "int64", cardinality="block_scalar")
     with pytest.raises(blosc2.PortableArtifactError):
         kernel.evaluate_block({"x": np.array([2**63 - 1, 2], dtype="int64")})
 
@@ -452,9 +448,8 @@ def test_scalar_lazy_reduction_with_capture(select):
 @pytest.mark.parametrize(
     "body",
     [
-        "return block_sum(x) + block_sum(x)",
-        "s = block_sum(x)\n    if s > 0:\n        return s\n    return s",
         "v = x * 2\n    return block_sum(v)",
+        "return block_mean(int64(x))",
     ],
 )
 def test_scalar_recipes_outside_scope_keep_fallback(body):
@@ -486,6 +481,190 @@ def test_scalar_mean_logical_context():
         ]
         np.testing.assert_array_equal(results[0][0], results[1][0])
         assert results[0][1] == results[1][1]
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return block_sum(x) / block_sum(x * 2)",
+        "a = block_sum(x)\n    b = block_prod(x)\n    return a + b",
+        "return block_sum(x) + block_sum(x)",
+        "s = block_sum(x)\n    if s > 0:\n        return block_mean(x)\n    return s",
+        "s = block_sum(x)\n    if s > 0:\n        return block_max(x)\n    elif s < 0:\n        return block_min(x)\n    else:\n        return s",
+        "s = block_sum(x)\n    if s < 0:\n        return s\n    else:\n        t = block_prod(x)\n    return t",
+        "s = block_sum(x)\n    if s > 0:\n        t = block_prod(x)\n    else:\n        t = block_sum(x * 2)\n    return t",
+        "return where(block_sum(x) > 0, block_mean(x), block_sum(x * 2))",
+    ],
+)
+def test_multiple_reductions_and_scalar_flow(dtype, body):
+    source = f"def k(x):\n    {body}\n"
+    kernels = [
+        portable_kernel(source, {"x": dtype}, dtype, jit=jit, cardinality="block_scalar")
+        for jit in (True, False)
+    ]
+    for values in ([1, 2, 3], [-1, -2, -3], [0, 0, 0], [np.inf, -np.inf], [np.nan, 1], []):
+        x = np.array(values, dtype=dtype)
+        for mask in (None, np.arange(x.size) % 2 == 0, np.zeros(x.size, dtype=bool)):
+            results, errors = [], []
+            for kernel in kernels:
+                try:
+                    results.append(kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True))
+                except blosc2.PortableArtifactError as error:
+                    errors.append(error.status)
+            if errors:
+                assert len(errors) == 2
+                assert errors[0] == errors[1]
+                continue
+            if not (np.isnan(results[0][0]).all() and np.isnan(results[1][0]).all()):
+                assert results[0][0].tobytes() == results[1][0].tobytes()
+            assert results[0][1] == results[1][1]
+
+
+@pytest.mark.parametrize(
+    "dtype", ["bool", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64"]
+)
+@pytest.mark.parametrize("op", ["sum", "prod"])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_integer_reduction_recipes(dtype, op, mapped):
+    operand = "where(x != 0, x, x)" if mapped else "x"
+    source = f"def k(x):\n    s = block_{op}({operand})\n    return s\n"
+    output = "uint64" if dtype.startswith("uint") else "int64"
+    kernels = [
+        portable_kernel(source, {"x": dtype}, output, jit=jit, cardinality="block_scalar")
+        for jit in (True, False)
+    ]
+    cases = [[0, 1, 1], [1, 2, 3], []]
+    if dtype != "bool":
+        limits = np.iinfo(dtype)
+        cases += [[limits.max, 2], [limits.min, -1] if dtype.startswith("int") else [limits.max, 1]]
+    for values in cases:
+        x = np.array(values, dtype=dtype)
+        for mask in (None, np.arange(x.size) % 2 == 0, np.zeros(x.size, dtype=bool)):
+            results, errors = [], []
+            for kernel in kernels:
+                try:
+                    results.append(kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True))
+                except blosc2.PortableArtifactError as error:
+                    errors.append(error.status)
+            if errors:
+                assert len(errors) == 2
+                assert errors[0] == errors[1]
+            else:
+                assert results[0][0].tobytes() == results[1][0].tobytes()
+                assert results[0][1] == results[1][1]
+    for kernel in kernels:
+        assert kernel.evaluate_block({"x": np.array([1, 1], dtype=dtype)}) == (2 if op == "sum" else 1)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64", "uint32", "uint64"])
+def test_checked_range_bounds(dtype):
+    source = "def k(x):\n    s = 0\n    for i in range(x):\n        s = s + i\n    return s\n"
+    kernels = [portable_kernel(source, {"x": dtype}, "int64", jit=jit) for jit in (True, False)]
+    x = np.array([0, 1, 3, 4], dtype=dtype)
+    for kernel in kernels:
+        np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), [0, 0, 3, 6])
+    invalid = (
+        [2**63, 2**64 - 1]
+        if dtype == "uint64"
+        else ([np.nan, np.inf, -np.inf, float(2**63)] if dtype.startswith("float") else [])
+    )
+    for value in invalid:
+        for kernel in kernels:
+            with pytest.raises(blosc2.PortableArtifactError):
+                kernel.evaluate_block({"x": np.array([value], dtype=dtype)})
+            np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), [0, 0, 3, 6])
+    if dtype.startswith("float"):
+        for kernel in kernels:
+            np.testing.assert_array_equal(
+                kernel.evaluate_block({"x": np.array([3.9, -2.9], dtype=dtype)}), [3, 0]
+            )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "if x < 0:\n        return x\n    else:\n        y = x + 1\n    return y",
+        "if x < 0:\n        return x\n    elif x == 0:\n        return x\n    else:\n        y = x + 1\n    return y",
+        "for i in range(2):\n        if x < 0:\n            continue\n        else:\n            y = x + 1\n        return y\n    return x",
+    ],
+)
+def test_definite_assignment_at_live_joins(body):
+    source = f"def k(x):\n    {body}\n"
+    kernels = [portable_kernel(source, {"x": "float64"}, "float64", jit=jit) for jit in (True, False)]
+    x = np.array([-2.0, 0.0, 3.0])
+    results = [kernel.evaluate_block({"x": x}, return_status=True) for kernel in kernels]
+    np.testing.assert_array_equal(results[0][0], results[1][0])
+    assert results[0][1] == results[1][1]
+
+
+def test_scalar_elif_reduction_participation():
+    source = (
+        "def k(x):\n    s = block_sum(x)\n    if s > 0:\n        return s\n"
+        "    elif block_sum(int64(x * 1e100)) > 0:\n        return s\n    return s\n"
+    )
+    kernels = [
+        portable_kernel(source, {"x": "float64"}, "float64", jit=jit, cardinality="block_scalar")
+        for jit in (True, False)
+    ]
+    for kernel in kernels:
+        assert kernel.evaluate_block({"x": np.array([1.0, 2.0])}) == 3
+        with pytest.raises(blosc2.PortableArtifactError):
+            kernel.evaluate_block({"x": np.array([-1.0, -2.0])})
+        assert kernel.evaluate_block({"x": np.array([1.0, 2.0])}) == 3
+
+
+@pytest.mark.parametrize("op", ["sum", "prod"])
+def test_integer_reduction_modular_map_checked_accumulator(op):
+    source = f"def k(x):\n    return block_{op}(x + 1)\n"
+    kernels = [
+        portable_kernel(source, {"x": "int8"}, "int64", jit=jit, cardinality="block_scalar")
+        for jit in (True, False)
+    ]
+    for kernel in kernels:
+        assert kernel.evaluate_block({"x": np.array([127, 0], dtype="int8")}) == (
+            -127 if op == "sum" else -128
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "if x > 0:\n        return block_sum(x)\n    return block_sum(x)",
+        "s = block_sum(x)\n    for i in range(2):\n        s = block_sum(x)\n    return s",
+    ],
+)
+def test_reductions_in_varying_branches_or_loops_still_rejected(body):
+    dsl = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n")
+    with pytest.raises(blosc2.PortableArtifactError, match="not supported inside"):
+        dsl.export({"x": "float64"}, "float64", version="1.1", cardinality="block_scalar")
+
+
+@pytest.mark.parametrize("bounds", ["x, 5.0, 1.0", "0.0, 5.0, x", "5.0, 0.0, x"])
+def test_checked_range_start_and_step(bounds):
+    source = f"def k(x):\n    s = 0\n    for i in range({bounds}):\n        s = s + i\n    return s\n"
+    kernels = [portable_kernel(source, {"x": "float64"}, "int64", jit=jit) for jit in (True, False)]
+    x = np.array([1.9, -1.9, 2.1])
+    np.testing.assert_array_equal(kernels[0].evaluate_block({"x": x}), kernels[1].evaluate_block({"x": x}))
+    for value in (np.nan, np.inf, 1e100, *([0.9] if bounds.endswith("x") else [])):
+        for kernel in kernels:
+            with pytest.raises(blosc2.PortableArtifactError):
+                kernel.evaluate_block({"x": np.array([value])})
+            # Nonparticipating invalid bounds never execute conversion/step checks.
+            kernel.evaluate_block({"x": np.array([value, 1.0])}, valid_mask=np.array([False, True]))
+
+
+def test_explicit_modular_range_cast_remains_explicit():
+    source = "def k(x):\n    s = 0\n    for i in range(int64(x)):\n        s = s + i\n    return s\n"
+    for jit in (True, False):
+        kernel = portable_kernel(source, {"x": "uint64"}, "int64", jit=jit)
+        assert kernel.evaluate_block({"x": np.array([2**64 - 1], dtype="uint64")}) == 0
+
+
+def test_possible_empty_loop_local_still_falls_back():
+    source = "def k(x):\n    for i in range(x):\n        y = i\n    return y\n"
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64", version="1.1")
+    assert not blosc2.PortableKernel.from_json(artifact, jit=True).has_jit
 
 
 @pytest.mark.parametrize(
