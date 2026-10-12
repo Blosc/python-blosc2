@@ -146,6 +146,25 @@ storage dispatch as described below.
 Existing ``@blosc2.dsl_kernel`` authoring/export and legacy UDF calling conventions
 are unchanged. See ``examples/menudet_decorator.py`` and ``bench/menudet-api.py``.
 
+Parallel resident reads
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Full lazy reads of large resident NumPy arrays can run the prepared portable
+artifact concurrently. Initial eligibility requires matching shapes, aligned
+C-contiguous host-endian floating inputs, and a proven lane-local elementwise
+recipe. Broadcasting, partial reads, reductions, context, scalar captures,
+constant-only weak arithmetic and final dtype conversions retain their original
+execution. Inputs are not copied or automatically normalized for this route.
+
+The scheduler uses at most ``blosc2.nthreads`` workers (capped at 32), with at
+least 128K values per worker on average; fewer than two workers keeps serial
+execution. Set ``blosc2.set_nthreads(1)`` to retain serial resident reads.
+Reusable threads invoke the native evaluator without the GIL and write disjoint
+regions of one private output allocation. All workers finish before publication
+or error propagation. Floating flags are aggregated, execution errors are never
+replayed, and standalone ``kernel.evaluate_block(...)`` remains a single logical
+invocation. Callers must not mutate inputs during a read.
+
 Compressed storage dispatch
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -57,13 +57,25 @@ def main():
         lazy_compressed = adjusted(**compressed)
         assert lazy_numpy.kernel.has_jit
         assert lazy_compressed.kernel.has_jit
+        previous_threads = blosc2.nthreads
+        try:
+            blosc2.set_nthreads(1)
+            serial_ms = measure(lambda lazy=lazy_numpy: lazy[:], expected, args.samples)
+        finally:
+            blosc2.set_nthreads(previous_threads)
         row = {
             "items": size,
             "chunks": compressed["x"].chunks,
             "blocks": compressed["x"].blocks,
             "numpy_ms": measure(lambda x=x, y=y: x + (y - 1), expected, args.samples),
             "menudet_numpy_ms": measure(lambda lazy=lazy_numpy: lazy[:], expected, args.samples),
-            "numpy_compressed_ms": measure(lambda inputs=compressed: numpy_read(inputs), expected, args.samples),
+            "menudet_numpy_serial_ms": serial_ms,
+            "menudet_numpy_route": getattr(
+                lazy_numpy, "_source_execution_report", {"route": "serial-resident"}
+            ),
+            "numpy_compressed_ms": measure(
+                lambda inputs=compressed: numpy_read(inputs), expected, args.samples
+            ),
             "menudet_compressed_ms": measure(lambda lazy=lazy_compressed: lazy[:], expected, args.samples),
             "menudet_compressed_route": lazy_compressed._source_execution_report,
         }

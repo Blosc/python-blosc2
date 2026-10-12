@@ -145,6 +145,12 @@ class PortableLazyArray(LazyArray):
         if streamed is not None:
             values, self._source_execution_report = streamed
             return values
+        from .resident_execution import evaluate_resident_if_eligible
+
+        resident = evaluate_resident_if_eligible(self, selection)
+        if resident is not None:
+            values, self._source_execution_report = resident
+            return values
         if (
             self.kernel.result_cardinality == "elementwise"
             and all(groups == 1 for groups in self._grid)

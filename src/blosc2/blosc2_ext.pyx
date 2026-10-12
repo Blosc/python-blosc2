@@ -1272,6 +1272,10 @@ def portable_prefilter_available():
     return bool(b2_artifact_descriptor_available())
 
 
+def portable_resident_available():
+    return bool(b2_artifact_descriptor_available())
+
+
 def native_array_sources_available():
     return bool(b2_array_sources_available())
 
@@ -1638,7 +1642,7 @@ cdef class PortableArtifactHandle:
         }
 
     def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None,
-                       bint return_status=False, unsigned fp_raise=0):
+                       bint return_status=False, unsigned fp_raise=0, _output=None):
         """Evaluate one explicit logical block; never infer ND coordinates from a physical tile."""
         cdef b2_artifact_fp_status fp_status
         from math import prod
@@ -1687,8 +1691,15 @@ cdef class PortableArtifactHandle:
             mask = np.ascontiguousarray(mask, dtype=np.uint8)
             descriptor.valid_mask = <const uint8_t *>np.PyArray_DATA(mask)
             descriptor.valid_mask_capacity = mask.nbytes
-        output = np.empty(() if b2_artifact_cardinality(self._handle) == 1 else block_shape,
-                          dtype=self.signature_dtype(-1))
+        output_shape = () if b2_artifact_cardinality(self._handle) == 1 else block_shape
+        output = (np.empty(output_shape, dtype=self.signature_dtype(-1))
+                  if _output is None else _output)
+        if ((<object>output).shape != output_shape or output.dtype != self.signature_dtype(-1)
+                or not output.flags.c_contiguous or not output.flags.aligned
+                or not output.flags.writeable):
+            raise ValueError("Output must be writable, aligned, contiguous and match the result signature")
+        if _output is not None and any(np.shares_memory(output, value) for value in arrays):
+            raise ValueError("Portable block output must not alias inputs")
         descriptor.output_capacity = output.nbytes
         if n:
             bindings = <b2_artifact_buffer *>calloc(n, sizeof(b2_artifact_buffer))
