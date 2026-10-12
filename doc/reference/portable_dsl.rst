@@ -95,6 +95,57 @@ rounding mode and flags. ``fp_errors="ignore"`` is default; ``"raise"`` attaches
 is promised. On WASM, status reports ``supported=False`` and raising is unsupported;
 zero flags there do not imply exception-free computation.
 
+Decorated Menudet functions
+--------------------------
+
+``@blosc2.menudet`` wraps ordinary function source as a portable native kernel.
+Calling it binds inputs and returns a lazy array; the original Python function
+is never executed, even when JIT is unavailable or native execution fails.
+
+.. code-block:: python
+
+    @blosc2.menudet
+    def adjusted(x, y):
+        return x + (y - 1)
+
+
+    values = adjusted(x, y)[:]
+    result = adjusted(x, y).compute()  # Materialized NDArray.
+    kernel = adjusted.specialize(x, y)  # PortableKernel; no array evaluation.
+    artifact = kernel.to_json()
+
+Unannotated NumPy/Blosc2 arrays supply their element dtypes at call time.
+Numeric result dtypes are inferred by native compilation before final output
+conversion, not by executing Python or inspecting input values. The numeric
+inference probe uses a temporary float64 output signature but never evaluates
+that artifact. If native inference is unavailable, specify a return annotation.
+Nonnumeric kernels require an explicit return dtype annotation.
+
+.. code-block:: python
+
+    @blosc2.menudet(jit=True)
+    def adjusted(x: np.float64, y: np.float64) -> np.float64:
+        return x + (y - 1)
+
+Annotations describe element dtypes, not shapes. Annotated inputs must match
+exactly; there are no implicit input casts. Scalar arguments require annotations.
+Positional/keyword calls and Python defaults are bound without executing the
+function. Scalar globals/closures are snapshotted at decoration; unsupported
+captures reject. Specializations are cached by dtype signature, independently of
+array shapes and values. Logical broadcasting follows ``PortableKernel.lazy``.
+
+JIT is preferred by default. ``jit=False`` selects native interpretation;
+``require_jit=True`` rejects a specialization without compiled JIT. Unsupported
+JIT lowering can use the native interpreter, but numerical failures are never
+replayed. Unlike automatic LazyExpr dispatch, Menudet remains native even when
+interpretation is slower. ``partitions``, ``cardinality``, ``ndim`` and ``casting``
+are decorator options for explicit portable block/context contracts. Default
+partitions cover the whole logical domain; compressed inputs currently use the
+existing portable lazy adapter, not the new native storage-reader ABI.
+
+Existing ``@blosc2.dsl_kernel`` authoring/export and legacy UDF calling conventions
+are unchanged. See ``examples/menudet_decorator.py`` and ``bench/menudet-api.py``.
+
 Logical arrays and native-required graphs
 ----------------------------------------
 

@@ -840,6 +840,8 @@ from .schema import (
 ndarray.NDArray = NDArray
 ndarray.NDField = NDField
 
+from .menudet import MenudetKernel, menudet
+
 __all__ = [  # noqa : RUF022
     # Constants
     "EXTENDED_HEADER_LENGTH",
@@ -1071,6 +1073,8 @@ __all__ = [  # noqa : RUF022
     "jit",
     "lazyexpr",
     "dsl_kernel",
+    "menudet",
+    "MenudetKernel",
     "validate_dsl",
     "validate_dsl_jit",
     "lazyudf",

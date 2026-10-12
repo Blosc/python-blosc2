@@ -139,6 +139,27 @@ class PortableLazyArray(LazyArray):
         selection += (slice(None),) * (len(self.shape) - len(selection))
         if len(selection) != len(self.shape):
             raise IndexError("Too many indices")
+        if (
+            self.kernel.result_cardinality == "elementwise"
+            and all(groups == 1 for groups in self._grid)
+            and all(
+                isinstance(part, slice) and part.indices(size) == (0, size, 1)
+                for part, size in zip(selection, self.shape, strict=True)
+            )
+        ):
+            # One complete original group needs neither coordinate index arrays
+            # nor advanced-index copies. Keep evaluate_block (not evaluate_array):
+            # block reductions and native coordinates must see that entire group.
+            operands = {
+                name: np.broadcast_to(np.asarray(value[()]), self._domain)
+                for name, value in self.inputs.items()
+            }
+            context = (
+                {"logical_shape": self._domain, "block_origin": (0,) * len(self._domain)}
+                if self.kernel.context_ndim
+                else {}
+            )
+            return self.kernel.evaluate_block(operands, block_shape=self._domain, **context)
         selected, squeeze = [], []
         for axis, (part, size) in enumerate(zip(selection, self.shape, strict=True)):
             if isinstance(part, int):
