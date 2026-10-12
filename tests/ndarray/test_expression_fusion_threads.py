@@ -5,10 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event, get_ident
 
 import numpy as np
+import pytest
 
 import blosc2
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Pyodide does not support Python threads")
 def test_fusion_keeps_elementwise_equality_in_other_threads(monkeypatch):
     module = importlib.import_module("blosc2.lazyexpr")
     arr = blosc2.asarray(np.arange(4))
