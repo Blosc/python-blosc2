@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -43,14 +44,30 @@ def backend(request, monkeypatch, tmp_path):
     except blosc2.PortableArtifactError as error:
         if "unsupported portable artifact version" not in str(error):
             raise
-        if os.environ.get("MENUDET_REQUIRE_JIT") or os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME"):
+        if (
+            os.environ.get("MENUDET_REQUIRE_JIT") == "1"
+            or os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME") == "1"
+        ):
             pytest.fail(str(error))
         pytest.skip("Installed miniexpr dependency does not implement portable 1.1")
     if not probe.has_jit:
-        if os.environ.get("MENUDET_REQUIRE_JIT"):
+        if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
             pytest.fail(f"{request.param} did not produce actual portable JIT")
         pytest.skip(f"Portable {request.param} JIT unavailable in this runtime")
     return request.param
+
+
+@pytest.mark.parametrize("required", ["0", "1"])
+def test_backend_requirement_flag(monkeypatch, tmp_path, required):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("MENUDET_REQUIRE_JIT", required)
+    monkeypatch.setattr(
+        sys.modules[__name__], "make", lambda *args, **kwargs: SimpleNamespace(has_jit=False)
+    )
+    exception = pytest.fail.Exception if required == "1" else pytest.skip.Exception
+    with pytest.raises(exception):
+        backend.__wrapped__(SimpleNamespace(param="tcc"), monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
