@@ -3788,96 +3788,91 @@ class LazyExpr(LazyArray):
 
     @expression_method
     def update_expr(self, new_op):
-        prev_flag = blosc2._disable_overloaded_equal
-        # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
-        blosc2._disable_overloaded_equal = True
-        # One of the two operands are LazyExpr instances
-        try:
-            value1, op, value2 = new_op
-            value1 = value1._raw_col if hasattr(value1, "_raw_col") else value1
-            value2 = value2._raw_col if hasattr(value2, "_raw_col") else value2
-            dtype_ = check_dtype(op, value1, value2)  # conserve dtype
-            # The new expression and operands
-            expression = None
-            new_operands = {}
-            # where() handling requires evaluating the expression prior to merge.
-            # This is different from reductions, where the expression is evaluated
-            # and returned a NumPy array (for usability convenience).
-            # We do things like this to enable the fusion of operations like
-            # `a.where(0, 1).sum()`.
-            # Another possibility would have been to always evaluate where() and produce
-            # an NDArray, but that would have been less efficient for the case above.
-            if hasattr(value1, "_where_args"):
-                value1 = value1.compute()
-            if hasattr(value2, "_where_args"):
-                value2 = value2.compute()
+        # Operand deduplication uses identity; never change global equality
+        # behavior while other threads may be constructing expressions.
+        value1, op, value2 = new_op
+        value1 = value1._raw_col if hasattr(value1, "_raw_col") else value1
+        value2 = value2._raw_col if hasattr(value2, "_raw_col") else value2
+        dtype_ = check_dtype(op, value1, value2)  # conserve dtype
+        # The new expression and operands
+        expression = None
+        new_operands = {}
+        # where() handling requires evaluating the expression prior to merge.
+        # This is different from reductions, where the expression is evaluated
+        # and returned a NumPy array (for usability convenience).
+        # We do things like this to enable the fusion of operations like
+        # `a.where(0, 1).sum()`.
+        # Another possibility would have been to always evaluate where() and produce
+        # an NDArray, but that would have been less efficient for the case above.
+        if hasattr(value1, "_where_args"):
+            value1 = value1.compute()
+        if hasattr(value2, "_where_args"):
+            value2 = value2.compute()
 
-            if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
-                # We converted some of the operands to NDArray (where() handling above)
-                new_operands = {"o0": value1, "o1": value2}
-                expression = "op(o0, o1)" if op in funcs_2args else f"(o0 {op} o1)"
-                return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
-            elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
-                # Expression fusion
-                # Fuse operands in expressions and detect duplicates
-                new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
-                # Take expression 2 and rebase the operands while removing duplicates
-                new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-                expression = (
-                    f"{op}({value1.expression}, {new_expr})"
-                    if op in funcs_2args
-                    else f"({value1.expression} {op} {new_expr})"
-                )
-                def_operands = value1.operands
-            elif isinstance(value1, LazyExpr):
-                if np.isscalar(value2):
-                    v2 = format_expr_scalar(value2)
-                elif hasattr(value2, "shape") and value2.shape == ():
-                    v2 = format_expr_scalar(value2[()])
-                else:
-                    operand_to_key = {id(v): k for k, v in value1.operands.items()}
-                    try:
-                        v2 = operand_to_key[id(value2)]
-                    except KeyError:
-                        v2 = f"o{len(value1.operands)}"
-                        new_operands = {v2: value2}
-                if op == "~":
-                    expression = f"({op}{value1.expression})"
-                else:
-                    expression = (
-                        f"{op}({value1.expression}, {v2})"
-                        if op in funcs_2args
-                        else f"({value1.expression} {op} {v2})"
-                    )
-                def_operands = value1.operands
+        if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
+            # We converted some of the operands to NDArray (where() handling above)
+            new_operands = {"o0": value1, "o1": value2}
+            expression = "op(o0, o1)" if op in funcs_2args else f"(o0 {op} o1)"
+            return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
+        elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
+            # Expression fusion
+            # Fuse operands in expressions and detect duplicates
+            new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
+            # Take expression 2 and rebase the operands while removing duplicates
+            new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
+            expression = (
+                f"{op}({value1.expression}, {new_expr})"
+                if op in funcs_2args
+                else f"({value1.expression} {op} {new_expr})"
+            )
+            def_operands = value1.operands
+        elif isinstance(value1, LazyExpr):
+            if np.isscalar(value2):
+                v2 = format_expr_scalar(value2)
+            elif hasattr(value2, "shape") and value2.shape == ():
+                v2 = format_expr_scalar(value2[()])
             else:
-                if np.isscalar(value1):
-                    v1 = format_expr_scalar(value1)
-                elif hasattr(value1, "shape") and value1.shape == ():
-                    v1 = format_expr_scalar(value1[()])
-                else:
-                    operand_to_key = {id(v): k for k, v in value2.operands.items()}
-                    try:
-                        v1 = operand_to_key[id(value1)]
-                    except KeyError:
-                        v1 = f"o{len(value2.operands)}"
-                        new_operands = {v1: value1}
-                if op == "[]":  # syntactic sugar for slicing
-                    expression = f"({v1}[{value2.expression}])"
-                else:
-                    expression = (
-                        f"{op}({v1}, {value2.expression})"
-                        if op in funcs_2args
-                        else f"({v1} {op} {value2.expression})"
-                    )
-                    def_operands = value2.operands
-            # Return a new expression
-            operands = def_operands | new_operands
-            expr = self._new_expr(expression, operands, guess=False, out=None, where=None)
-            expr._dtype = dtype_  # override dtype with preserved dtype
-            return expr
-        finally:
-            blosc2._disable_overloaded_equal = prev_flag
+                operand_to_key = {id(v): k for k, v in value1.operands.items()}
+                try:
+                    v2 = operand_to_key[id(value2)]
+                except KeyError:
+                    v2 = f"o{len(value1.operands)}"
+                    new_operands = {v2: value2}
+            if op == "~":
+                expression = f"({op}{value1.expression})"
+            else:
+                expression = (
+                    f"{op}({value1.expression}, {v2})"
+                    if op in funcs_2args
+                    else f"({value1.expression} {op} {v2})"
+                )
+            def_operands = value1.operands
+        else:
+            if np.isscalar(value1):
+                v1 = format_expr_scalar(value1)
+            elif hasattr(value1, "shape") and value1.shape == ():
+                v1 = format_expr_scalar(value1[()])
+            else:
+                operand_to_key = {id(v): k for k, v in value2.operands.items()}
+                try:
+                    v1 = operand_to_key[id(value1)]
+                except KeyError:
+                    v1 = f"o{len(value2.operands)}"
+                    new_operands = {v1: value1}
+            if op == "[]":  # syntactic sugar for slicing
+                expression = f"({v1}[{value2.expression}])"
+            else:
+                expression = (
+                    f"{op}({v1}, {value2.expression})"
+                    if op in funcs_2args
+                    else f"({v1} {op} {value2.expression})"
+                )
+                def_operands = value2.operands
+        # Return a new expression
+        operands = def_operands | new_operands
+        expr = self._new_expr(expression, operands, guess=False, out=None, where=None)
+        expr._dtype = dtype_  # override dtype with preserved dtype
+        return expr
 
     def _miniexpr_string_dtype(self):
         """Width of a string-valued result, as inferred by miniexpr itself.
