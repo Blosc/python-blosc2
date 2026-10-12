@@ -73,7 +73,9 @@ def reference_cases(mp):
         "fmax": (max, [(-8, 0.125), (0.125, 8)], 0),
         "copysign": (lambda x, y: abs(x) * mp.sign(y), [(0.125, -8), (-8, 0.125)], 0),
         "fmod": (lambda x, y: x - int(x / y) * y, [(-8.125, 2), (8.125, 2)], 0),
-        "remainder": (lambda x, y: x - mp.nint(x / y) * y, [(-7, 2), (7, 2)], 0),
+        # Menudet 1.0 remainder follows floor division (divisor sign), not
+        # the legacy IEEE remainder operation's nearest-integer quotient.
+        "remainder": (lambda x, y: x - mp.floor(x / y) * y, [(-7, 2), (7, 2), (-7, -2), (7, -2)], 0),
         "ldexp": (lambda x, y: x * mp.power(2, int(y)), [(0.125, -8), (1.5, 8)], 0),
         "fma": (lambda x, y, z: x * y + z, [(1.0009765625, 0.9990234375, -1), (0.125, 8, -0.75)], 0),
     }

@@ -2511,6 +2511,26 @@
         "0x1.c000000000000p+2",
         "0x1.0000000000000p+1"
       ],
+      "expected": "0x1.0000000000000p+0",
+      "max_ulp": 0
+    },
+    {
+      "function": "remainder",
+      "dtype": "float32",
+      "inputs": [
+        "-0x1.c000000000000p+2",
+        "-0x1.0000000000000p+1"
+      ],
+      "expected": "-0x1.0000000000000p+0",
+      "max_ulp": 0
+    },
+    {
+      "function": "remainder",
+      "dtype": "float32",
+      "inputs": [
+        "0x1.c000000000000p+2",
+        "-0x1.0000000000000p+1"
+      ],
       "expected": "-0x1.0000000000000p+0",
       "max_ulp": 0
     },
@@ -2530,6 +2550,26 @@
       "inputs": [
         "0x1.c000000000000p+2",
         "0x1.0000000000000p+1"
+      ],
+      "expected": "0x1.0000000000000p+0",
+      "max_ulp": 0
+    },
+    {
+      "function": "remainder",
+      "dtype": "float64",
+      "inputs": [
+        "-0x1.c000000000000p+2",
+        "-0x1.0000000000000p+1"
+      ],
+      "expected": "-0x1.0000000000000p+0",
+      "max_ulp": 0
+    },
+    {
+      "function": "remainder",
+      "dtype": "float64",
+      "inputs": [
+        "0x1.c000000000000p+2",
+        "-0x1.0000000000000p+1"
       ],
       "expected": "-0x1.0000000000000p+0",
       "max_ulp": 0
