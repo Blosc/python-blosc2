@@ -117,7 +117,7 @@ class PortableLazyArray(LazyArray):
     def blocks(self):
         return self.chunks
 
-    def _values(self, selection=None):
+    def _values(self, selection=None):  # noqa: C901 -- bounded readers plus original partition/context paths
         if selection is None:
             selection = tuple(slice(None) for _ in self.shape)
         elif not isinstance(selection, tuple):
@@ -139,6 +139,12 @@ class PortableLazyArray(LazyArray):
         selection += (slice(None),) * (len(self.shape) - len(selection))
         if len(selection) != len(self.shape):
             raise IndexError("Too many indices")
+        from .storage_readers import evaluate_storage_if_eligible
+
+        streamed = evaluate_storage_if_eligible(self, selection)
+        if streamed is not None:
+            values, self._source_execution_report = streamed
+            return values
         if (
             self.kernel.result_cardinality == "elementwise"
             and all(groups == 1 for groups in self._grid)

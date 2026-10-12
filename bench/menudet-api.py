@@ -67,6 +67,10 @@ def main():
                         "items": size,
                         "api": api,
                         "route": route,
+                        "storage_route": "bounded-readers"
+                        if hasattr(lazy, "_source_execution_report")
+                        else "existing",
+                        "source_report": getattr(lazy, "_source_execution_report", None),
                         "binding_plus_first_ms": round(binding_ms + first_ms, 3),
                         "warm_median_ms": round(warm_ms, 3),
                     }

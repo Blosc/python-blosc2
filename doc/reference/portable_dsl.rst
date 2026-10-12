@@ -140,11 +140,53 @@ JIT lowering can use the native interpreter, but numerical failures are never
 replayed. Unlike automatic LazyExpr dispatch, Menudet remains native even when
 interpretation is slower. ``partitions``, ``cardinality``, ``ndim`` and ``casting``
 are decorator options for explicit portable block/context contracts. Default
-partitions cover the whole logical domain; compressed inputs currently use the
-existing portable lazy adapter, not the new native storage-reader ABI.
+partitions cover the whole logical domain; eligible compressed inputs use native
+storage dispatch as described below.
 
 Existing ``@blosc2.dsl_kernel`` authoring/export and legacy UDF calling conventions
 are unchanged. See ``examples/menudet_decorator.py`` and ``bench/menudet-api.py``.
+
+Compressed storage dispatch
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the native runtime provides storage readers, eligible elementwise Menudet
+calls support bounded compressed input reads, including basic integer/slice
+indexing and broadcasting. NumPy buffers remain resident. Automatic dispatch
+also accelerates full reads of matching, resident 1-D floating-point arrays:
+
+* A single chunk with at most 32 MiB of total physical input capacity is decoded
+  once into NumPy buffers and evaluated by the portable kernel.
+* Matching multi-chunk inputs (or single chunks over that budget) use a native
+  C-Blosc2 prefilter. Compression workers decode input blocks and call the same
+  prepared portable Menudet evaluator, not the legacy DSL evaluator.
+* Partial selections, mismatched layouts, broadcasting, persisted inputs,
+  dictionary inputs, postfilters, and unsupported dense layouts retain bounded
+  storage readers. No automatic whole-array rechunking is performed.
+
+The prefilter route caps input block staging at 32 MiB by limiting worker count,
+and requires its output scheduling chunk buffer to fit within another 32 MiB.
+These are not total-memory limits: codec/evaluator scratch, compressed output
+storage and the final NumPy result are additional. Result memory is proportional
+to the requested output in every route. Eligibility checks precede input reads;
+execution failures propagate without selecting another route.
+
+Explicit reader execution and scratch diagnostics are available through
+``kernel.evaluate_sources(inputs, tile_items=65536, return_report=True)``.
+This explicit API always uses readers/resident buffers, independently of automatic
+single-chunk or prefilter selection.
+The report's ``temporary_bytes`` covers native iterator scratch, not the result,
+Python tile metadata, or codec internals. ``maximum_reader_items`` records the
+largest reader request. Reader execution is not necessarily faster than existing
+chunked LazyExpr execution: small spans can repeatedly decompress boundary blocks.
+
+This initial route excludes block reductions, locals/loops, coordinate-dependent
+kernels, checked weak integer intermediates, and final dtype conversions. Scalar
+captures and out-of-range weak floating constants also prevent proving lane-local
+conversion safety. These lazy calls retain their original partition execution.
+Proxies and table columns
+also retain existing execution. Explicit reader requests reject unsupported
+kernels/runtimes before reading; numerical or storage errors never replay through
+another backend.
 
 Logical arrays and native-required graphs
 ----------------------------------------

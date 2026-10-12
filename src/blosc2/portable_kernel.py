@@ -553,6 +553,20 @@ class PortableKernel:
         )
         return (values, report) if return_report else values
 
+    def evaluate_sources(self, inputs, *, shape=None, selection=None, tile_items=65536, return_report=False):
+        """Evaluate eligible lane-local kernels using bounded storage readers.
+
+        NumPy buffers remain resident; compressed inputs are read one native tile
+        at a time. Basic selections do not read discarded lanes. Block reductions,
+        locals/loops, context-dependent kernels and final conversions reject before
+        reads. Unsupported runtimes reject; numerical/storage failures never replay.
+        Report scratch excludes output, Python tile metadata and codec internals.
+        """
+        from .storage_readers import evaluate_storage_sources
+
+        values, report = evaluate_storage_sources(self, inputs, shape, selection, tile_items)
+        return (values, report) if return_report else values
+
     def lazy(self, inputs, *, shape=None, partitions=None):
         """Bind native inputs to an immutable logical block grid, not a storage grid."""
         from .portable_lazy import PortableLazyArray

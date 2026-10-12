@@ -42,4 +42,23 @@ static int b2_array_eval(const void *handle, const b2_array_view *inputs, int ni
     memset(error,0,sizeof(*error)); snprintf(error->message,sizeof(error->message),"Native runtime does not support logical arrays"); return -2;
 }
 #endif
+typedef int (*b2_array_reader)(void *, const size_t *, size_t, void *, size_t);
+#ifdef B2_HAVE_ARRAY_SOURCES
+typedef me_array_source b2_array_source;
+static int b2_array_sources_available(void) { return 1; }
+static int b2_array_eval_sources(const void *handle, const b2_array_source *inputs, int ninputs,
+    int rank, const int64_t *shape, const b2_array_options *options, void *output,
+    size_t capacity, b2_array_report *report, b2_artifact_error *error) {
+    return me_artifact_eval_array_sources(handle,inputs,ninputs,rank,shape,options,output,capacity,report,error);
+}
+#else
+typedef struct { b2_array_view view; b2_array_reader read; void *owner; } b2_array_source;
+static int b2_array_sources_available(void) { return 0; }
+static int b2_array_eval_sources(const void *handle, const b2_array_source *inputs, int ninputs,
+    int rank, const int64_t *shape, const b2_array_options *options, void *output,
+    size_t capacity, b2_array_report *report, b2_artifact_error *error) {
+    (void)handle; (void)inputs; (void)ninputs; (void)rank; (void)shape; (void)options; (void)output; (void)capacity; (void)report;
+    memset(error,0,sizeof(*error)); snprintf(error->message,sizeof(error->message),"Native runtime does not support storage readers"); return -2;
+}
+#endif
 #endif

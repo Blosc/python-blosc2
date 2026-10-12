@@ -54,6 +54,29 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
         return result
 
     monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", evaluate)
+    # Lane-local recipes may use native readers instead of materializing groups.
+    # Keep the same lifetime/memory assertions for both execution routes.
+    from blosc2.storage_readers import StorageReader
+
+    original_read = StorageReader.read
+    original_sources = blosc2.PortableKernel.evaluate_sources
+
+    def read(self, indices):
+        result = original_read(self, indices)
+        if self.value is source:
+            assert result.nbytes <= 128 * data.dtype.itemsize
+            refs.append(weakref.ref(result))
+            extents.append(result.shape)
+        return result
+
+    def evaluate_sources(self, *args, **kwargs):
+        result = original_sources(self, *args, **kwargs)
+        if self is native:
+            refs.append(weakref.ref(result[0] if kwargs.get("return_report") else result))
+        return result
+
+    monkeypatch.setattr(StorageReader, "read", read)
+    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_sources", evaluate_sources)
     expr = blosc2.lazyexpr("x + 2", {"x": lazy}, evaluation="safe")
     expected = data.reshape(-1, 128).sum(axis=1) + 2 if scalar else data + 3
     enabled = gc.isenabled()

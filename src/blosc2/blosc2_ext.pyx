@@ -1139,6 +1139,164 @@ cdef extern from "dsl_array_bridge.h":
         unsigned fp_supported
     int b2_array_shape(const void *, int, const int64_t *, const b2_array_options *, int *, int64_t *, me_dtype *, b2_artifact_error *) nogil
     int b2_array_eval(const void *, const b2_array_view *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
+    ctypedef int (*b2_array_reader)(void *, const size_t *, size_t, void *, size_t) noexcept nogil
+    ctypedef struct b2_array_source:
+        b2_array_view view
+        b2_array_reader read
+        void *owner
+    int b2_array_sources_available()
+    int b2_array_eval_sources(const void *, const b2_array_source *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
+
+
+cdef struct portable_prefilter_state:
+    const void *artifact
+    b2nd_array_t *inputs[128]
+    b2_artifact_buffer signature[128]
+    int ninputs
+    int64_t size
+    int64_t chunk_items
+    int64_t block_items
+    int status
+    int64_t error_block
+    b2_artifact_error error
+    unsigned fp_flags
+    unsigned fp_supported
+    size_t evaluated_blocks
+    PyThread_type_lock lock
+
+
+cdef extern from "fenv.h":
+    ctypedef struct fenv_t:
+        pass
+    int feholdexcept(fenv_t *) noexcept nogil
+    int fesetenv(const fenv_t *) noexcept nogil
+
+
+cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept nogil:
+    cdef portable_prefilter_state *state = <portable_prefilter_state *>params.user_data
+    cdef b2_artifact_buffer bindings[128]
+    cdef void *owned[128]
+    cdef b2_artifact_descriptor descriptor
+    cdef b2_artifact_error error
+    cdef b2_artifact_fp_status fp
+    cdef blosc2_dparams dparams
+    cdef blosc2_context *dctx = NULL
+    cdef uint8_t *chunk = NULL
+    cdef c_bool needs_free = False
+    cdef int i, rc = 0, read_status, chunk_bytes
+    cdef int32_t decoded_bytes, encoded_bytes, block_bytes
+    cdef int64_t origin = params.nchunk * state.chunk_items + params.nblock * state.block_items
+    cdef int64_t count = min(state.block_items, state.size - origin)
+    cdef int64_t block_id = origin // state.block_items
+    cdef fenv_t environment
+    memset(owned, 0, sizeof(owned))
+    memset(&error, 0, sizeof(error))
+    memset(&fp, 0, sizeof(fp))
+    memset(params.output, 0, params.output_size)
+    if count <= 0:
+        return 0
+    if feholdexcept(&environment):
+        return -1
+    for i in range(state.ninputs):
+        bindings[i] = state.signature[i]
+        owned[i] = malloc(state.block_items * bindings[i].itemsize)
+        if owned[i] == NULL:
+            rc = -6
+            strcpy(error.message, "Cannot allocate portable prefilter input block")
+            break
+        bindings[i].data = owned[i]
+        bindings[i].capacity = count * bindings[i].itemsize
+        chunk_bytes = blosc2_schunk_get_chunk(state.inputs[i].sc, params.nchunk, &chunk, &needs_free)
+        if chunk_bytes < 0:
+            rc = -5
+            error.native_status = chunk_bytes
+            strcpy(error.message, "Portable prefilter could not read an input chunk")
+            break
+        read_status = blosc2_cbuffer_sizes(chunk, &decoded_bytes, &encoded_bytes, &block_bytes)
+        if read_status < 0 or block_bytes != state.block_items * bindings[i].itemsize:
+            rc = -5
+            error.native_status = read_status
+            strcpy(error.message, "Portable prefilter input block layout mismatch")
+        else:
+            dparams = state.inputs[i].sc.storage.dparams[0]
+            dparams.nthreads = 1
+            dparams.schunk = state.inputs[i].sc
+            dparams.typesize = state.inputs[i].sc.typesize
+            dctx = blosc2_create_dctx(dparams)
+            if dctx == NULL:
+                rc = -6
+                strcpy(error.message, "Cannot allocate portable prefilter decoder")
+            else:
+                read_status = blosc2_getitem_bytes_ctx(dctx, chunk, chunk_bytes,
+                    params.nblock * block_bytes, block_bytes, owned[i], block_bytes)
+                blosc2_free_ctx(dctx)
+                dctx = NULL
+                if read_status != block_bytes:
+                    rc = -5
+                    error.native_status = read_status
+                    strcpy(error.message, "Portable prefilter input decompression failed")
+        if needs_free:
+            free(chunk)
+        chunk = NULL
+        needs_free = False
+        if rc:
+            break
+    if not rc:
+        memset(&descriptor, 0, sizeof(descriptor))
+        descriptor.struct_size = sizeof(descriptor)
+        descriptor.version = 1
+        descriptor.nitems = count
+        descriptor.output_capacity = count * params.output_typesize
+        # Decoder/postfilter work must not contribute to numerical FP flags.
+        rc = b2_artifact_eval_status(state.artifact, bindings, state.ninputs,
+                                    params.output, &descriptor, 0, &fp, &error)
+    for i in range(state.ninputs):
+        free(owned[i])
+    if fesetenv(&environment):
+        rc = -5
+        strcpy(error.message, "Cannot restore portable prefilter floating environment")
+    PyThread_acquire_lock(state.lock, 1)
+    if rc and (state.status == 0 or block_id < state.error_block):
+        state.status = rc
+        state.error = error
+        state.error_block = block_id
+    if not rc:
+        state.fp_flags |= fp.flags
+        state.fp_supported &= fp.supported
+        state.evaluated_blocks += 1
+    PyThread_release_lock(state.lock)
+    return -1 if rc else 0
+
+
+def portable_prefilter_available():
+    return bool(b2_artifact_descriptor_available())
+
+
+def native_array_sources_available():
+    return bool(b2_array_sources_available())
+
+
+cdef int storage_reader_callback(void *opaque, const size_t *indices, size_t count,
+                                void *destination, size_t capacity) noexcept with gil:
+    cdef object state = <object>opaque
+    cdef np.npy_intp dimensions[1]
+    cdef np.ndarray requested, values
+    try:
+        dimensions[0] = count
+        requested = np.PyArray_SimpleNewFromData(1, dimensions, np.NPY_UINTP, <void *>indices)
+        # Exceptions/tracebacks may outlive the native invocation scratch.
+        requested = requested.copy()
+        requested.flags.writeable = False
+        values = np.ascontiguousarray(state.reader.read(requested), dtype=state.dtype)
+        if values.size != count or <size_t>values.nbytes != capacity:
+            raise ValueError("Storage reader returned an invalid value count")
+        memcpy(destination, np.PyArray_DATA(values), capacity)
+        state.max_items = max(state.max_items, count)
+        state.read_bytes += capacity
+        return 0
+    except BaseException as error:
+        state.error = error
+        return 1
 
 cdef object array_view_binding(np.ndarray array, b2_array_view *view):
     cdef np.ndarray root
@@ -1647,6 +1805,98 @@ cdef class PortableArtifactHandle:
         finally:
             free(views)
 
+    def evaluate_prefilter(self, inputs):
+        """Run an already-prepared portable artifact through C-Blosc2 scheduling."""
+        if not portable_prefilter_inputs_eligible(inputs):
+            raise NotImplementedError("Inputs are not eligible for portable prefilter execution")
+        signature = self.descriptor_info()
+        if set(inputs) != set(signature["inputs"]):
+            raise ValueError("Portable prefilter input names disagree with signature")
+        if signature["cardinality"] != "elementwise" or signature["ndim"]:
+            raise ValueError("Portable prefilters require context-free elementwise kernels")
+        if any(value.dtype != signature["inputs"][name] for name, value in inputs.items()):
+            raise TypeError("Portable prefilter input dtype disagrees with signature")
+        first = next(iter(inputs.values()))
+        block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in inputs.values())
+        threads = max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
+        output = blosc2.uninit(first.shape, dtype=self.signature_dtype(-1),
+                              chunks=first.chunks, blocks=first.blocks,
+                              cparams=blosc2.CParams(clevel=0, nthreads=threads))
+        return output._execute_portable_prefilter(self, inputs)
+
+    def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
+        cdef b2_array_source *sources = NULL
+        cdef b2_array_options options
+        cdef b2_array_report report
+        cdef b2_artifact_error error
+        cdef int64_t domain[16]
+        cdef int64_t result_shape[16]
+        cdef int rank = len(shape), result_rank, rc, n = len(inputs), i, j
+        cdef me_dtype result_dtype
+        cdef size_t output_bytes
+        cdef np.ndarray array, bound, output
+        cdef bytes name
+        cdef object state, value
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef list owned = []
+        cdef list states = []
+        if not b2_array_sources_available():
+            raise NotImplementedError("Native runtime does not support storage readers")
+        if rank > 16 or n > 128 or tile_items == 0 or tile_items > 2147483647:
+            raise ValueError("Invalid storage-reader rank, input count or tile size")
+        memset(&options, 0, sizeof(options))
+        options.version = 1
+        options.tile_items = tile_items
+        for i in range(rank):
+            domain[i] = shape[i]
+        with nogil:
+            rc = b2_array_shape(self._handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+        output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
+        output_bytes = output.nbytes
+        if n:
+            sources = <b2_array_source *>calloc(n, sizeof(b2_array_source))
+            if sources == NULL:
+                raise MemoryError()
+        try:
+            for i, (key, value) in enumerate(inputs.items()):
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names cannot contain NUL")
+                if key in readers:
+                    state = readers[key]
+                    states.append(state)
+                    sources[i].view.dtype = _me_dtype_from_numpy_dtype(state.dtype)
+                    sources[i].view.rank = len(state.reader.shape)
+                    if sources[i].view.rank > 16:
+                        raise ValueError("Storage reader rank limit exceeded")
+                    for j in range(sources[i].view.rank):
+                        sources[i].view.shape[j] = state.reader.shape[j]
+                    sources[i].read = storage_reader_callback
+                    sources[i].owner = <void *>state
+                else:
+                    array = np.asarray(value)
+                    bound = array_view_binding(array, &sources[i].view)
+                    owned.append(bound)
+                sources[i].view.name = name
+            with nogil:
+                rc = b2_array_eval_sources(self._handle, sources, n, rank, domain, &options,
+                    np.PyArray_DATA(output), output_bytes, &report, &error)
+            for state in states:
+                if state.error is not None:
+                    raise state.error
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output, {"temporary_bytes": report.temporary_bytes,
+                "gathered_bytes": report.gathered_bytes, "evaluated_tiles": report.evaluated_tiles,
+                "zero_copy_tiles": report.zero_copy_tiles, "fp_flags": report.fp_flags,
+                "fp_supported": bool(report.fp_supported), "tile_items": tile_items,
+                "maximum_reader_items": max((state.max_items for state in states), default=0),
+                "reader_bytes": sum(state.read_bytes for state in states)}
+        finally:
+            free(sources)
+
     def evaluate(self, inputs, shape):
         cdef Py_ssize_t n = len(inputs)
         if n > 128:
@@ -2030,7 +2280,9 @@ cdef _check_cparams(blosc2_cparams *cparams):
             if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
                 raise ValueError("Cannot use multi-threading with user defined Python filters")
 
-        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter):
+        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter
+                and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter
+                and cparams.prefilter != <blosc2_prefilter_fn>portable_menudet_prefilter):
             # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
@@ -4643,13 +4895,15 @@ cdef class NDArray:
 
         return arr
 
-    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
+    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems, int nthreads=0):
         if self.ndim != 1:
             raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
         if nchunk < 0 or nchunk >= self.array.sc.nchunks:
             raise IndexError("chunk index out of range")
         if start < 0 or nitems < 0:
             raise ValueError("start and nitems must be >= 0")
+        if nthreads < 0 or nthreads > 32767:
+            raise ValueError("span nthreads must be between 0 and 32767")
         if start + nitems > self.array.chunknitems:
             raise ValueError("requested span exceeds chunk size")
 
@@ -4692,6 +4946,10 @@ cdef class NDArray:
         # since some codecs/filters resolve per-schunk state (e.g.
         # dictionaries) through dparams.schunk during decompression.
         cdef blosc2_dparams dparams = dereference(self.array.sc.storage.dparams)
+        # Small bounded-reader spans should not repeatedly start large worker
+        # teams. Zero preserves the existing caller/storage decompression policy.
+        if nthreads:
+            dparams.nthreads = nthreads
         dparams.schunk = self.array.sc
         dparams.typesize = self.array.sc.typesize
         dctx = blosc2_create_dctx(dparams)
@@ -5290,6 +5548,85 @@ cdef class NDArray:
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    def _portable_chunk_buffer(self):
+        """Decode one physical chunk without leaking codec floating flags."""
+        cdef fenv_t environment
+        buffer = np.empty(self.array.sc.chunksize // self.dtype.itemsize, dtype=self.dtype)
+        if feholdexcept(&environment):
+            raise RuntimeError("Cannot isolate portable chunk decoder floating environment")
+        try:
+            self.schunk.decompress_chunk(0, dst=buffer)
+        finally:
+            if fesetenv(&environment):
+                raise RuntimeError("Cannot restore portable chunk decoder floating environment")
+        return buffer[:self.array.shape[0]]
+
+    def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs):
+        cdef portable_prefilter_state state
+        cdef blosc2_prefilter_params parameters
+        cdef blosc2_cparams *cparams = self.array.sc.storage.cparams
+        cdef NDArray value
+        cdef int i
+        cdef int64_t chunk
+        memset(&state, 0, sizeof(state))
+        memset(&parameters, 0, sizeof(parameters))
+        state.artifact = kernel._handle
+        state.ninputs = len(inputs)
+        state.size = self.array.shape[0]
+        state.chunk_items = self.array.chunkshape[0]
+        state.block_items = self.array.blockshape[0]
+        state.fp_supported = 1
+        # All names and source arrays stay owned by kernel/inputs until the
+        # synchronous compression workers have joined and the context is freed.
+        for i, (name, source) in enumerate(inputs.items()):
+            value = source
+            state.inputs[i] = value.array
+            state.signature[i].name = b2_artifact_name(kernel._handle, i)
+            # Mapping order may differ from the artifact's signature order.
+            encoded_name = name.encode("utf-8")
+            for j in range(state.ninputs):
+                if encoded_name == <bytes>b2_artifact_name(kernel._handle, j):
+                    state.signature[i].name = b2_artifact_name(kernel._handle, j)
+                    state.signature[i].dtype = b2_artifact_dtype(kernel._handle, j)
+                    state.signature[i].itemsize = b2_artifact_width(kernel._handle, j)
+                    break
+        data = np.empty(self.array.sc.chunksize, dtype=np.uint8)
+        state.lock = PyThread_allocate_lock()
+        if state.lock == NULL:
+            raise MemoryError()
+        parameters.user_data = &state
+        cparams.prefilter = portable_menudet_prefilter
+        cparams.preparams = &parameters
+        try:
+            if self.array.sc.cctx != NULL:
+                blosc2_free_ctx(self.array.sc.cctx)
+            self.array.sc.cctx = blosc2_create_cctx(cparams[0])
+            if self.array.sc.cctx == NULL:
+                raise MemoryError("Cannot create portable prefilter compression context")
+            try:
+                for chunk in range(self.array.sc.nchunks):
+                    self.schunk.update_data(chunk, data, copy=False)
+            except Exception:
+                if state.status:
+                    raise_artifact_error(state.status, &state.error)
+                raise
+            if state.status:
+                raise_artifact_error(state.status, &state.error)
+        finally:
+            if self.array.sc.cctx != NULL:
+                blosc2_free_ctx(self.array.sc.cctx)
+            cparams.prefilter = NULL
+            cparams.preparams = NULL
+            self.array.sc.cctx = blosc2_create_cctx(cparams[0])
+            PyThread_free_lock(state.lock)
+        result = self[()]
+        return result, {"route": "portable-prefilter", "evaluated_blocks": state.evaluated_blocks,
+                        "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
+                        "threads": cparams.nthreads,
+                        "output_chunk_buffer_bytes": self.array.sc.chunksize,
+                        "input_buffer_bytes": cparams.nthreads * sum(
+                            source.blocks[0] * source.dtype.itemsize for source in inputs.values())}
+
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -5711,3 +6048,34 @@ def get_loaded_matmul_cblas_library():
     if path == NULL:
         return None
     return path.decode("utf-8")
+
+
+def portable_prefilter_inputs_eligible(inputs):
+    """Metadata-only gate for bounded resident 1-D portable prefilters."""
+    cdef NDArray value
+    if not b2_artifact_descriptor_available() or blosc2.IS_WASM or not 0 < len(inputs) <= 128:
+        return False
+    first = next(iter(inputs.values()))
+    if not isinstance(first, NDArray) or first.ndim != 1 or not first.size:
+        return False
+    if first.chunks[0] % first.blocks[0]:
+        return False
+    # The scheduling dummy chunk is host scratch, separate from input blocks.
+    # Eight bytes covers every numeric output dtype admitted by the Python gate.
+    if first.chunks[0] * 8 > 32 * 1024**2:
+        return False
+    block_bytes = 0
+    for source in inputs.values():
+        if not isinstance(source, NDArray):
+            return False
+        value = source
+        if source.shape != first.shape or source.chunks != first.chunks or source.blocks != first.blocks:
+            return False
+        if source.dtype.kind != "f" or not source.dtype.isnative:
+            return False
+        if value.array.sc.storage.urlpath != NULL or value.array.sc.storage.dparams.postfilter != NULL:
+            return False
+        if source.schunk.cparams.use_dict:
+            return False
+        block_bytes += source.blocks[0] * source.dtype.itemsize
+    return block_bytes <= 32 * 1024**2
