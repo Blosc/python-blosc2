@@ -20,7 +20,8 @@ import numpy as np
 from .expression_graph import parse_expression, validate_operands
 
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
-PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max"}
+PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
+TRUTH_GRAPH_REDUCERS = {"any", "all"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 
 
@@ -219,10 +220,12 @@ def _parallel_resident_reduction(plan, inputs, shape, tile_items):
     axes = root["axes"]
     if axes is not None and {a % len(shape) for a in axes} != set(range(len(shape))):
         return None
+    input_kinds = "biuf" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
+    output_kind = "b" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
     if any(
         type(value) is not np.ndarray
         or value.shape != shape
-        or value.dtype.kind != "f"
+        or value.dtype.kind not in input_kinds
         or not value.flags.c_contiguous
         or not value.flags.aligned
         for value in inputs.values()
@@ -243,7 +246,7 @@ def _parallel_resident_reduction(plan, inputs, shape, tile_items):
         schedule = plan.specialize(
             {name: (value.dtype, value.shape) for name, value in arrays.items()}, worker_tile_items
         )
-        if schedule.info()["dtype"].kind != "f":
+        if schedule.info()["dtype"].kind != output_kind:
             return None
         schedules.append((schedule, arrays))
     futures = []
@@ -266,7 +269,14 @@ def _combine_graph_reductions(document, root, results, reports):
     partials = np.stack(results)
     document["nodes"] = [
         {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
-        {**root, "id": 1, "args": [0], "axes": [0], "keepdims": False, "dtype": partials.dtype.name},
+        {
+            **root,
+            "id": 1,
+            "args": [0],
+            "axes": [0],
+            "keepdims": False,
+            "dtype": "auto" if root["op"] in TRUTH_GRAPH_REDUCERS else partials.dtype.name,
+        },
     ]
     document["root"] = 1
     combine = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")))
@@ -313,10 +323,11 @@ def _compressed_reduction_layout(plan, inputs, shape):
         or root["where"] is not None
     ):
         return None
+    input_kinds = "biuf" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
     if any(
         type(value) not in (np.ndarray, blosc2.NDArray)
         or value.shape != shape
-        or value.dtype.kind != "f"
+        or value.dtype.kind not in input_kinds
         or not value.dtype.isnative
         or (type(value) is np.ndarray and (not value.flags.c_contiguous or not value.flags.aligned))
         for value in inputs.values()
@@ -342,6 +353,7 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     if layout is None:
         return None
     first, workers, document, root = layout
+    output_kind = "b" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
 
     class SpanReader(StorageReader):
         def __init__(self, value, start, stop):
@@ -372,7 +384,7 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
         }
         metadata = {name: (value.dtype, (stop - start,)) for name, value in inputs.items()}
         schedule = plan.specialize(metadata, worker_tile)
-        if schedule.info()["dtype"].kind != "f":
+        if schedule.info()["dtype"].kind != output_kind:
             return None
         schedules.append((schedule, arrays, readers))
     futures = []

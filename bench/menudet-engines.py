@@ -14,6 +14,7 @@ With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
 Numexpr's mean is implemented as sum/count. Reduction threading depends on the
 engine and is not necessarily the configured thread count.
+Numexpr any/all use max/min of exact floating 0/1 truth values.
 
 Usage::
 
@@ -72,6 +73,16 @@ def adjusted_max(x, y):
     return block_max(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
 
 
+@blosc2.menudet(cardinality="block_scalar")
+def adjusted_any(x, y):
+    return block_any(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+
+
+@blosc2.menudet(cardinality="block_scalar")
+def adjusted_all(x, y):
+    return block_all(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+
+
 def build_operands(size, kind):
     """Return the ``x``/``y`` operands and the expected result for one storage kind."""
     x = np.linspace(0, 1, size)
@@ -92,6 +103,11 @@ def make_engines(inputs, kind, reduc=None):
     """
     numpy_reduce = getattr(np, reduc) if reduc else None
     numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({EXPRESSION})" if reduc else EXPRESSION
+    if reduc in ("any", "all"):
+        # Numexpr has no any/all intrinsic; reduce exact floating 0/1 values.
+        # Float literals also avoid integer-extrema seed narrowing on NumPy 2.
+        operation = "max" if reduc == "any" else "min"
+        numexpr_expression = f"{operation}(where(({EXPRESSION}) != 0, 1.0, 0.0))"
 
     def finish_numpy(values):
         return numpy_reduce(values) if reduc else values
@@ -100,6 +116,8 @@ def make_engines(inputs, kind, reduc=None):
         result = ne.evaluate(numexpr_expression, local_dict=resident)
         if reduc == "mean":
             return result.item() / inputs["x"].size
+        if reduc in ("any", "all"):
+            return bool(result.item())
         return result.item() if reduc else result
 
     if kind == "numpy":
@@ -123,9 +141,14 @@ def make_engines(inputs, kind, reduc=None):
 
     lazy = blosc2.lazyexpr(EXPRESSION, inputs)
     if reduc:
-        author = {"sum": adjusted_sum, "mean": adjusted_mean, "min": adjusted_min, "max": adjusted_max}[
-            reduc
-        ]
+        author = {
+            "sum": adjusted_sum,
+            "mean": adjusted_mean,
+            "min": adjusted_min,
+            "max": adjusted_max,
+            "any": adjusted_any,
+            "all": adjusted_all,
+        }[reduc]
         kernel = author.specialize(**inputs)
 
         def menudet_reduce():
@@ -228,7 +251,9 @@ def main():
     parser.add_argument("--operands", choices=("both", "numpy", "blosc2"), default="both")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     parser.add_argument(
-        "--reduc", choices=("sum", "mean", "min", "max"), help="reduce the expression to a scalar"
+        "--reduc",
+        choices=("sum", "mean", "min", "max", "any", "all"),
+        help="reduce the expression to a scalar",
     )
     args = parser.parse_args()
     if args.samples <= 0 or args.warmups < 0 or any(size <= 0 for size in args.items):
@@ -277,6 +302,8 @@ def main():
         print(
             "Menudet uses a native block reduction; numexpr mean uses sum/count. Reduction threading is engine-dependent."
         )
+        if args.reduc in ("any", "all"):
+            print("Numexpr any/all use 0/1 truth max/min; Menudet block truth reductions may short-circuit.")
     else:
         print(
             "Blosc2 operands: NumPy and numexpr figures include operand decompression; "

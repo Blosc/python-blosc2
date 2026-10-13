@@ -259,6 +259,8 @@ partial indexing, proxy/table operands, output aliases and execution overrides
 retain existing execution. Compressed inputs can automatically select streamed
 whole-domain floating sum/min/max reductions over same-shaped 1-D inputs with
 matching compressed chunks/blocks, no mask or ``initial``, and at least two workers.
+Whole-domain ``any/all`` use the same streamed path with Boolean, integer or
+float32/float64 inputs, including Boolean comparison expressions.
 Selection currently requires at least 16 million items and blocks of at most 65,536 items to amortize
 reader overhead; smaller or unsupported cases retain legacy execution. NumPy
 operands can be mixed with these compressed inputs. Compressed elementwise reads
@@ -272,7 +274,12 @@ replay. ``_require_native=False`` explicitly retains existing execution.
 Large whole-domain floating sum/min/max reductions over aligned, contiguous,
 same-shaped NumPy operands can run in parallel using ``blosc2.nthreads``. Each
 worker reduces its region serially, then partial results are combined in region
-order. Floating sums change addition grouping: small differences from serial or
+order. ``any/all`` also run in parallel for same-shaped, contiguous Boolean,
+integer or float32/float64 NumPy inputs. They evaluate all regions rather than
+short-circuiting on a decisive partial result, preserving later execution errors
+and aggregated floating status. Partial Booleans are combined with native OR/AND;
+there is no rounding-order difference for the truth reduction itself.
+Floating sums change addition grouping: small differences from serial or
 NumPy reductions are expected, and cancellation can amplify them. Results can depend on the thread
 count. Parallel extrema preserve the serial native graph's first-NaN payload
 selection and signed-zero policy (min favors negative zero, max positive zero).

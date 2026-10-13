@@ -17,7 +17,7 @@ def engine_benchmark():
 
 @pytest.mark.parametrize("size", [1, 257])
 @pytest.mark.parametrize("kind", ["numpy", "blosc2"])
-@pytest.mark.parametrize("reduc", [None, "sum", "mean", "min", "max"])
+@pytest.mark.parametrize("reduc", [None, "sum", "mean", "min", "max", "any", "all"])
 def test_engine_results(engine_benchmark, size, kind, reduc):
     inputs, values = engine_benchmark["build_operands"](size, "numpy")
     expected = getattr(np, reduc)(values) if reduc else values
