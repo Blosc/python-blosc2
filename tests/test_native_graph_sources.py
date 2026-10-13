@@ -55,7 +55,10 @@ def test_graph_sources_direct_reduction_dtype(dtype):
     x = blosc2.asarray(values, chunks=(7,), blocks=(3,))
     plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
     result, report = plan.evaluate_sources({"x": x}, tile_items=4, return_report=True)
-    expected = np.sum(values)
+    # Native graph sums use fixed 64-bit integer accumulators, independently of
+    # NumPy's platform-sized defaults (32 bits for bool/int32 on WASM32).
+    accumulator = "int64" if values.dtype.kind in "bi" else "uint64" if values.dtype.kind == "u" else dtype
+    expected = np.sum(values, dtype=accumulator)
     assert result.dtype == expected.dtype
     assert result == expected
     assert report["evaluated_tiles"] == 0
