@@ -194,6 +194,7 @@ def test_prefilter_fp_status_matches_resident(dispatch_runtime):
     assert report["fp_supported"] == status["supported"]
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Concurrent prefilters require host threads")
 def test_shared_artifact_concurrent_prefilters(dispatch_runtime):
     from concurrent.futures import ThreadPoolExecutor
 

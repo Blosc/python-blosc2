@@ -16,9 +16,20 @@ def runtime():
     blosc2.set_nthreads(previous)
 
 
+@pytest.fixture
+def parallel_runtime(runtime):
+    from blosc2.graph_plan import NativeGraph
+
+    if blosc2.IS_WASM:
+        pytest.skip("Parallel graph execution requires host threads")
+    plan = NativeGraph.from_expression("x + 1", {"x": np.dtype("float64")}, jit=True)
+    if not plan.has_jit:
+        pytest.skip("Parallel graph execution requires an available portable JIT backend")
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 @pytest.mark.parametrize("expression", ["x + (y - 1)", "x > y", "x * 0.5 + y"])
-def test_native_graph_parallel(dtype, expression):
+def test_native_graph_parallel(parallel_runtime, dtype, expression):
     x = np.linspace(0, 1, 600_003, dtype=dtype)
     y = np.linspace(1, 2, 600_003, dtype=dtype)
     expr = blosc2.lazyexpr(expression, {"x": x, "y": y})
@@ -60,7 +71,21 @@ def test_reduction_and_staged_graph_retained():
         assert expr._native_execution_report.get("route") != "parallel-resident"
 
 
-def test_graph_fp_status_matches_original():
+def test_threadless_runtime_keeps_native_graph_values(monkeypatch):
+    x = np.linspace(0, 1, 600_003)
+    expr = blosc2.lazyexpr("x + (x - 1)", {"x": x})
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Threadless runtime scheduled graph workers")
+
+    monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
+    result = expr.compute(_require_native=True, jit=True, _getitem=True)
+    np.testing.assert_array_equal(result, x + (x - 1))
+    assert expr._native_execution_report.get("route") != "parallel-resident"
+
+
+def test_graph_fp_status_matches_original(parallel_runtime):
     x = np.full(600_003, np.finfo(np.float64).max)
     expr = blosc2.lazyexpr("x * x", {"x": x})
     expected = expr.compute(_require_native=True, jit=True, _native_tile_items=1023, _getitem=True)
@@ -69,7 +94,7 @@ def test_graph_fp_status_matches_original():
     assert expr._native_execution_report["fp_flags"] == status
 
 
-def test_lazy_map_participation_mask_preserved():
+def test_lazy_map_participation_mask_preserved(parallel_runtime):
     x = np.linspace(-1, 1, 600_003)
     y = np.ones_like(x)
     # Avoid the existing where-construction path, which requires a Blosc2 condition.
@@ -83,7 +108,7 @@ def test_lazy_map_participation_mask_preserved():
     assert expr._native_execution_report["fp_flags"] == 0
 
 
-def test_graph_execution_failure_never_replays(monkeypatch):
+def test_graph_execution_failure_never_replays(parallel_runtime, monkeypatch):
     def fail(*args, **kwargs):
         raise ArithmeticError("Parallel graph failed")
 
@@ -94,7 +119,7 @@ def test_graph_execution_failure_never_replays(monkeypatch):
         expr[:]
 
 
-def test_borrowed_artifact_retains_native_owner():
+def test_borrowed_artifact_retains_native_owner(parallel_runtime):
     from blosc2.graph_plan import NativeGraph
 
     plan = NativeGraph.from_expression("x + 1", {"x": np.dtype("float64")}, jit=True)

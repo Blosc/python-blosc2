@@ -22,6 +22,7 @@ def kernel(source="def k(x, y):\n    return x + (y - 1)\n", dtype="float64", out
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 @pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
 def test_full_read_parallel(dtype, jit):
     values = np.arange(600_003, dtype=dtype).reshape(3, 200001)
     lazy = kernel(dtype=dtype, jit=jit).lazy({"x": values, "y": values})
@@ -54,6 +55,18 @@ def test_conservative_fallback(case, monkeypatch):
     np.testing.assert_array_equal(lazy[selection], (values + (other - 1))[selection])
 
 
+def test_threadless_runtime_keeps_serial_values(monkeypatch):
+    values = np.arange(600_003.0)
+    lazy = kernel().lazy({"x": values, "y": values})
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Threadless runtime scheduled resident workers")
+
+    monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
+    np.testing.assert_array_equal(lazy[:], values + (values - 1))
+
+
 def test_reduction_retains_logical_partition(monkeypatch):
     values = np.arange(600_003.0)
     native = kernel("def k(x, y):\n    return x + block_sum(y)\n")
@@ -66,6 +79,7 @@ def test_reduction_retains_logical_partition(monkeypatch):
     np.testing.assert_array_equal(lazy[:], native.evaluate_block({"x": values, "y": values}))
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel FP aggregation requires host threads")
 def test_fp_status_aggregation():
     values = np.linspace(-1, 1, 600_003)
     native = kernel("def k(x, y):\n    return sqrt(x) + y\n")
@@ -76,6 +90,7 @@ def test_fp_status_aggregation():
     assert lazy._source_execution_report["fp_supported"] == status["supported"]
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
 def test_boolean_output():
     values = np.linspace(-1, 1, 600_003)
     native = kernel("def k(x, y):\n    return x > y\n", output="bool")
@@ -84,6 +99,7 @@ def test_boolean_output():
     assert lazy._source_execution_report["route"] == "parallel-resident"
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Worker joining requires host threads")
 def test_failures_join_and_never_replay():
     import threading
     from types import SimpleNamespace
@@ -125,6 +141,7 @@ def test_weak_scalar_intermediates_rejected(expression):
     assert not resident_scalar_operations_safe(fake)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Concurrent artifact reads require host threads")
 def test_concurrent_reads_share_prepared_artifact():
     from concurrent.futures import ThreadPoolExecutor
 
@@ -139,6 +156,7 @@ def test_concurrent_reads_share_prepared_artifact():
             np.testing.assert_array_equal(result, values * 2 - 1)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Worker joining requires host threads")
 def test_submission_failure_joins_started_workers(monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
