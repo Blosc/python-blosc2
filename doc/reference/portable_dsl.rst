@@ -257,9 +257,9 @@ expressions over eligible arithmetic also select native graphs, including axes,
 ``keepdims``, accumulator dtypes and ``initial``. General calls, division/powers,
 partial indexing, proxy/table operands, output aliases and execution overrides
 retain existing execution. Compressed inputs can automatically select streamed
-whole-domain floating sums over same-shaped 1-D inputs with matching compressed
-chunks/blocks, no mask or ``initial``, and at least two workers. Selection currently
-requires at least 16 million items and blocks of at most 65,536 items to amortize
+whole-domain floating sum/min/max reductions over same-shaped 1-D inputs with
+matching compressed chunks/blocks, no mask or ``initial``, and at least two workers.
+Selection currently requires at least 16 million items and blocks of at most 65,536 items to amortize
 reader overhead; smaller or unsupported cases retain legacy execution. NumPy
 operands can be mixed with these compressed inputs. Compressed elementwise reads
 remain outside automatic graph selection. ``evaluation="safe"`` remains a syntax
@@ -269,19 +269,22 @@ Automatic selection prepares/validates the graph before execution; unsupported
 preparation can retain existing execution, but execution errors never trigger
 replay. ``_require_native=False`` explicitly retains existing execution.
 
-Large whole-domain floating sums over aligned, contiguous, same-shaped NumPy
-operands can run in parallel using ``blosc2.nthreads``. Each worker accumulates
-its region serially, then partial sums are combined in region order. This changes
-floating-point grouping: small differences from serial or NumPy reductions are
-expected, and cancellation can amplify them. Results can depend on the thread
-count. Other graph reductions, sums with ``initial``, broadcasting, strided inputs
-or only some axes reduced retain serial native accumulation for now.
+Large whole-domain floating sum/min/max reductions over aligned, contiguous,
+same-shaped NumPy operands can run in parallel using ``blosc2.nthreads``. Each
+worker reduces its region serially, then partial results are combined in region
+order. Floating sums change addition grouping: small differences from serial or
+NumPy reductions are expected, and cancellation can amplify them. Results can depend on the thread
+count. Parallel extrema preserve the serial native graph's first-NaN payload
+selection and signed-zero policy (min favors negative zero, max positive zero).
+This policy need not match NumPy's bitwise zero selection. Other graph reductions,
+reductions with ``initial``, broadcasting, strided inputs or only some axes reduced
+retain serial native accumulation for now.
 Use ``expr.sum(_require_native=False)`` to retain legacy reduction execution
 (which is not necessarily serial). Use
 ``expr.sum(_require_native=True, jit=True)`` for serial native graph accumulation.
 Explicit ``NativeGraph`` execution likewise retains its serial-order contract.
-Automatically streamed compressed sums use the same partial-sum policy. Their
-native readers own independent decompression contexts and cache only the current
+Automatically streamed compressed reductions use the same partial-result policy.
+Their native readers own independent decompression contexts and cache only the current
 compressed chunk; decoded scratch is bounded by worker count and tile size, not
 the full operand size. They do not materialize complete operands.
 

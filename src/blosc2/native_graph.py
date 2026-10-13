@@ -20,6 +20,7 @@ import numpy as np
 from .expression_graph import parse_expression, validate_operands
 
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
+PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 
 
@@ -80,7 +81,7 @@ def _native_first_syntax(expression, *, reduction_only=False):
         return False
     if isinstance(tree.body, ast.Call):
         call = tree.body
-        reducers = {"sum"} if reduction_only else REDUCERS
+        reducers = PARALLEL_GRAPH_REDUCERS if reduction_only else REDUCERS
         if isinstance(call.func, ast.Name) and call.func.id in reducers and len(call.args) == 1:
             value = call.args[0]
         elif isinstance(call.func, ast.Attribute) and call.func.attr in reducers and not call.args:
@@ -161,7 +162,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         return None
     if not any(type(value) in (np.ndarray, blosc2.NDArray) for value in expr.operands.values()):
         return None
-    if compressed and explicit is not None and explicit["op_str"] != "sum":
+    if compressed and explicit is not None and explicit["op_str"] not in PARALLEL_GRAPH_REDUCERS:
         return None
     if not _native_first_syntax(expr.expression, reduction_only=compressed and reduction_options is None):
         return None
@@ -187,7 +188,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             return None
         if (
             compressed
-            and _compressed_sum_layout(prepared[0], prepared[1], schedule.info()["map_shape"]) is None
+            and _compressed_reduction_layout(prepared[0], prepared[1], schedule.info()["map_shape"]) is None
         ):
             return None
     except NotImplementedError:
@@ -199,8 +200,8 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     return prepared
 
 
-def _parallel_resident_sum(plan, inputs, shape, tile_items):
-    """Automatic whole-domain sums; strict native execution keeps serial order."""
+def _parallel_resident_reduction(plan, inputs, shape, tile_items):
+    """Automatic whole-domain reductions; strict native execution keeps serial order."""
     from concurrent.futures import wait
 
     import blosc2
@@ -213,7 +214,7 @@ def _parallel_resident_sum(plan, inputs, shape, tile_items):
         return None
     document = json.loads(plan.to_json())
     root = document["nodes"][document["root"]]
-    if root["op"] != "sum" or root["initial"] is not None or root["where"] is not None:
+    if root["op"] not in PARALLEL_GRAPH_REDUCERS or root["initial"] is not None or root["where"] is not None:
         return None
     axes = root["axes"]
     if axes is not None and {a % len(shape) for a in axes} != set(range(len(shape))):
@@ -253,12 +254,15 @@ def _parallel_resident_sum(plan, inputs, shape, tile_items):
         # Never replay failures; join all workers before releasing their inputs.
         wait(futures)
     results, reports = zip(*(future.result() for future in futures), strict=True)
-    result, report = _combine_graph_sums(document, root, results, reports)
+    result, report = _combine_graph_reductions(document, root, results, reports)
     report.update(route="parallel-resident-reduction", threads=workers)
     return result, report
 
 
-def _combine_graph_sums(document, root, results, reports):
+def _combine_graph_reductions(document, root, results, reports):
+    # Combine in logical region order through the same native reducer. Extrema
+    # retain first-NaN payload selection and their deterministic signed-zero rule;
+    # NumPy's minimum/maximum reductions have a different zero-selection policy.
     partials = np.stack(results)
     document["nodes"] = [
         {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
@@ -285,7 +289,7 @@ def _combine_graph_sums(document, root, results, reports):
     return result, report
 
 
-def _compressed_sum_layout(plan, inputs, shape):
+def _compressed_reduction_layout(plan, inputs, shape):
     """Conservative metadata-only automatic gate; avoid small/serial IO regressions."""
     import blosc2
 
@@ -303,7 +307,7 @@ def _compressed_sum_layout(plan, inputs, shape):
     document = json.loads(plan.to_json())
     root = document["nodes"][document["root"]]
     if (
-        root["op"] != "sum"
+        root["op"] not in PARALLEL_GRAPH_REDUCERS
         or root["axes"] not in (None, [0], [-1])
         or root["initial"] is not None
         or root["where"] is not None
@@ -325,7 +329,7 @@ def _compressed_sum_layout(plan, inputs, shape):
     return first, workers, document, root
 
 
-def _parallel_compressed_sum(plan, inputs, shape, tile_items):
+def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     """Stream independent 1-D chunk regions with bounded, invocation-local readers."""
     from concurrent.futures import wait
 
@@ -334,7 +338,7 @@ def _parallel_compressed_sum(plan, inputs, shape, tile_items):
     from .resident_execution import resident_pool
     from .storage_readers import ReaderState, StorageReader
 
-    layout = _compressed_sum_layout(plan, inputs, shape)
+    layout = _compressed_reduction_layout(plan, inputs, shape)
     if layout is None:
         return None
     first, workers, document, root = layout
@@ -380,7 +384,7 @@ def _parallel_compressed_sum(plan, inputs, shape, tile_items):
     finally:
         wait(futures)
     results, reports = zip(*(future.result() for future in futures), strict=True)
-    result, report = _combine_graph_sums(document, root, results, reports)
+    result, report = _combine_graph_reductions(document, root, results, reports)
     report.update(
         route="parallel-graph-bounded-readers",
         threads=workers,
@@ -786,7 +790,9 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         if reduction:
             raise ValueError("Native reduction partial reads are not yet eligible; select operands first")
     if reduction and not selection and any(type(value) is blosc2.NDArray for value in inputs.values()):
-        streamed = _parallel_compressed_sum(plan, inputs, shape, tile_items) if parallel_reductions else None
+        streamed = (
+            _parallel_compressed_reduction(plan, inputs, shape, tile_items) if parallel_reductions else None
+        )
         result, report = (
             evaluate_graph_sources(plan, inputs, tile_items=max(tile_items, 65536))
             if streamed is None
@@ -821,7 +827,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         _parallel_resident_graph(plan, inputs, shape, selection, reduction) if tile_items == 1024 else None
     )
     if reduction and parallel_reductions:
-        parallel = _parallel_resident_sum(plan, arrays, shape, tile_items)
+        parallel = _parallel_resident_reduction(plan, arrays, shape, tile_items)
     result, report = schedule.execute(arrays) if parallel is None else parallel
     expr._native_execution_report = {
         **report,
