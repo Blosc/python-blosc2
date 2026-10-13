@@ -1,14 +1,16 @@
 """Compare compute engines for ``x + (y - 1)`` over NumPy and Blosc2 operands.
 
 A single human-readable table reports warm medians for the same expression
-evaluated by four engines -- NumPy, numexpr, LazyExpr and a Menudet kernel -- on
+evaluated by NumPy, numexpr, LazyExpr, blosc2.evaluate and a Menudet kernel -- on
 resident NumPy operands and on compressed Blosc2 operands (both filled with
 ``numpy.linspace``). The fastest figure of every row is highlighted in green.
 
 For Blosc2 operands, NumPy and numexpr must first materialize (decompress) the
-inputs, and that cost is included in their timings. LazyExpr and the Menudet
+inputs, and that cost is included in their timings. LazyExpr, evaluate and the Menudet
 kernel evaluate directly over the compressed chunks, so the table shows the
 practical difference between the two input storages.
+The evaluate column calls ``blosc2.evaluate`` afresh each time, including
+expression preparation and NumPy output allocation; no result buffer is reused.
 
 With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
@@ -34,7 +36,7 @@ import numpy as np
 import blosc2
 
 EXPRESSION = "x + (y - 1)"
-ENGINES = ("NumPy", "numexpr", "LazyExpr", "Menudet")
+ENGINES = ("NumPy", "numexpr", "LazyExpr", "evaluate", "Menudet")
 GREEN = "\033[1;32m"
 RESET = "\033[0m"
 
@@ -159,6 +161,7 @@ def make_engines(inputs, kind, reduc=None):
             "NumPy": numpy_run,
             "numexpr": numexpr_run,
             "LazyExpr": getattr(lazy, reduc),
+            "evaluate": lambda: blosc2.evaluate(f"{reduc}({EXPRESSION})", local_dict=inputs),
             "Menudet": menudet_reduce,
         }
     menudet = adjusted(**inputs)
@@ -166,6 +169,7 @@ def make_engines(inputs, kind, reduc=None):
         "NumPy": numpy_run,
         "numexpr": numexpr_run,
         "LazyExpr": lambda lazy=lazy: lazy[:],
+        "evaluate": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
         "Menudet": lambda menudet=menudet: menudet[:],
     }
 
@@ -297,7 +301,8 @@ def main():
     print()
     if args.reduc:
         print(
-            "Blosc2 operands: NumPy, numexpr and Menudet include operand decompression; LazyExpr reduces directly."
+            "Blosc2 operands: NumPy, numexpr and Menudet include operand decompression; "
+            "LazyExpr and evaluate reduce directly."
         )
         print(
             "Menudet uses a native block reduction; numexpr mean uses sum/count. Reduction threading is engine-dependent."
@@ -307,8 +312,9 @@ def main():
     else:
         print(
             "Blosc2 operands: NumPy and numexpr figures include operand decompression; "
-            "LazyExpr and Menudet evaluate the compressed chunks directly."
+            "LazyExpr, evaluate and Menudet evaluate the compressed chunks directly."
         )
+    print("evaluate includes fresh expression preparation and output allocation on every call.")
 
 
 if __name__ == "__main__":

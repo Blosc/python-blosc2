@@ -25,6 +25,7 @@ def test_engine_results(engine_benchmark, size, kind, reduc):
         # Multiple chunks plus a partial tail for the nontrivial size.
         inputs = {name: blosc2.asarray(value, chunks=(128,), blocks=(32,)) for name, value in inputs.items()}
     engines = engine_benchmark["make_engines"](inputs, kind, reduc)
+    assert tuple(engines) == engine_benchmark["ENGINES"]
     for name, operation in engines.items():
         result = operation()
         if reduc:
@@ -32,3 +33,19 @@ def test_engine_results(engine_benchmark, size, kind, reduc):
             np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12, err_msg=name)
         else:
             np.testing.assert_array_equal(result, expected, err_msg=name)
+
+
+def test_evaluate_column_calls_public_api_every_time(engine_benchmark, monkeypatch):
+    inputs, expected = engine_benchmark["build_operands"](257, "numpy")
+    calls = []
+
+    def evaluate(expression, *, local_dict):
+        calls.append((expression, local_dict))
+        return expected.copy()
+
+    monkeypatch.setattr(blosc2, "evaluate", evaluate)
+    engines = engine_benchmark["make_engines"](inputs, "numpy")
+    first = engines["evaluate"]()
+    second = engines["evaluate"]()
+    assert first is not second
+    assert calls == [(engine_benchmark["EXPRESSION"], inputs)] * 2

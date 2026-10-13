@@ -1830,7 +1830,7 @@ def fast_eval(  # noqa: C901
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
-    elif isinstance(out, np.ndarray):
+    elif isinstance(out, np.ndarray) and not any(hasattr(o, "chunks") for o in operands.values()):
         # If 'out' is a NumPy array, create a NDArray with the same shape and dtype
         basearr = blosc2.empty(out.shape, dtype=out.dtype, **kwargs)
     else:
@@ -1944,7 +1944,18 @@ def fast_eval(  # noqa: C901
                 dsl_disable_reason = (
                     "all DSL operands must be NDArray or NumPy inputs sharing shape/chunks/blocks."
                 )
-        if not (all_eligible_miniexpr and out is None):
+        numpy_output = (
+            (getitem or isinstance(out, np.ndarray))
+            and len(shape) == 1
+            and chunks[0] % blocks[0] == 0
+            and not prune_chunks
+            and (out is None or not is_dsl)
+            # Rebinding an existing LazyExpr can leave unused operand names.
+            # Retain its established fallback rather than compiling extra inputs.
+            and (is_dsl or set(operands_miniexpr) == set(get_expr_operands(expr_string)))
+            and (out is None or (out.dtype == dtype and out.flags.writeable))
+        )
+        if not (all_eligible_miniexpr and (out is None or numpy_output)):
             use_miniexpr = False
             if is_dsl and dsl_disable_reason is None:
                 dsl_disable_reason = (
@@ -1983,9 +1994,10 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", None)
-        if cparams is None and getitem:
-            # getitem output is throwaway scratch (returned as a NumPy array and
-            # discarded), so compressing it buys nothing but a round trip.
+        if numpy_output:
+            # NumPy output needs only an uncompressed, reusable chunk payload.
+            cparams = blosc2.CParams(clevel=0)
+        elif cparams is None and getitem:
             cparams = blosc2.CParams(clevel=0)
         # Otherwise leave cparams unset rather than passing CParams(): its
         # filters_meta defaults to all zeros, which *overrides* the dtype-aware
@@ -2020,6 +2032,22 @@ def fast_eval(  # noqa: C901
             # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            if numpy_output:
+                output_storage = None
+                if out is None:
+                    # Reserve a header prefix and at most one chunk of tail
+                    # padding. C-Blosc2 can then write each uncompressed payload
+                    # directly into the final NumPy allocation, in parallel.
+                    output_storage = np.empty(
+                        res_eval.schunk.nchunks * data.size + blosc2.EXTENDED_HEADER_LENGTH, dtype=np.uint8
+                    )
+                    out = np.ndarray(
+                        shape, dtype=dtype, buffer=output_storage, offset=blosc2.EXTENDED_HEADER_LENGTH
+                    )
+                else:
+                    # Caller-owned output has no reserved header prefix. Keep
+                    # the existing buffer and reuse bounded chunk scratch.
+                    chunk_data = np.empty(data.size + blosc2.MAX_OVERHEAD, dtype=np.uint8)
             # Exercise prefilter for each chunk.  With a candidate bitmap the
             # prefilter zeroes non-candidate blocks without decompressing inputs
             # or running miniexpr, which is where the savings come from.  With
@@ -2034,7 +2062,30 @@ def fast_eval(  # noqa: C901
             for nchunk in range(res_eval.schunk.nchunks):
                 if chunk_has_candidate is not None and not chunk_has_candidate[nchunk]:
                     continue
-                res_eval.schunk.update_data(nchunk, data, copy=False)
+                if numpy_output:
+                    start = nchunk * chunks[0]
+                    count = min(chunks[0], shape[0] - start)
+                    if output_storage is not None:
+                        byte_start = nchunk * data.size
+                        chunk_data = output_storage[
+                            byte_start : byte_start + data.size + blosc2.EXTENDED_HEADER_LENGTH
+                        ]
+                        # Beyond the first chunk the header overlaps the end of
+                        # the preceding result. Preserve it while this synchronous
+                        # call runs, then restore before advancing to the next chunk.
+                        header = chunk_data[: blosc2.EXTENDED_HEADER_LENGTH].copy()
+                        try:
+                            res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                        finally:
+                            chunk_data[: blosc2.EXTENDED_HEADER_LENGTH] = header
+                    else:
+                        res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                        values = np.frombuffer(
+                            chunk_data, dtype=dtype, count=count, offset=blosc2.EXTENDED_HEADER_LENGTH
+                        )
+                        out[start : start + count] = values
+                else:
+                    res_eval.schunk.update_data(nchunk, data, copy=False)
             # _cb_anchor (if any) stays referenced until fast_eval returns, which
             # is after the finally below removes the prefilter — so the buffer
             # safely outlives every prefilter dereference.
@@ -2066,6 +2117,8 @@ def fast_eval(  # noqa: C901
             # (continue to the manual chunked evaluation below)
             pass
         else:
+            if numpy_output:
+                return out
             if getitem:
                 return res_eval[()]
             return res_eval
@@ -2126,7 +2179,7 @@ def fast_eval(  # noqa: C901
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
 
         # Store the result in the output array
-        if getitem:
+        if getitem or isinstance(out, np.ndarray):
             try:
                 out[cslice] = result
             except ComplexWarning:
@@ -3458,11 +3511,10 @@ def chunked_eval(  # noqa: C901
                     **kwargs,
                 )
             elif (kwargs.get("chunks") is None and kwargs.get("blocks") is None) and (
-                out is None or isinstance(out, blosc2.NDArray)
+                out is None or isinstance(out, (blosc2.NDArray, np.ndarray))
             ):
                 # If not, the conditions to use the fast path are a bit more restrictive
-                # e.g. the user cannot specify chunks or blocks, or an output that is not
-                # a blosc2.NDArray
+                # e.g. the user cannot specify chunks or blocks here.
                 return fast_eval(
                     expression,
                     operands,
@@ -5746,6 +5798,10 @@ def lazyexpr(
     out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
+        Eligible one-dimensional compressed inputs use the miniexpr prefilter
+        to write directly into this new NumPy allocation, without storing an
+        intermediate Blosc2 result. A supplied NumPy output uses bounded chunk
+        scratch instead. Other layouts retain the regular evaluation paths.
     where: tuple, list, optional
         A sequence of arguments for the where clause in the expression.
     local_dict: dict, optional
@@ -6010,7 +6066,7 @@ def evaluate(
     [16.0625   21.140625 27.      ]]
     """
     lexpr = lazyexpr(
-        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=kwargs, _frame_depth=3
+        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=kwargs or None, _frame_depth=3
     )
     if out is not None:
         # The user specified an output array

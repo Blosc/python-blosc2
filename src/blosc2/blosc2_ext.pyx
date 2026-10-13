@@ -3412,9 +3412,13 @@ cdef class SChunk:
         cdef Py_buffer chunk_buf
         PyObject_GetBuffer(chunk_data, &chunk_buf, PyBUF_SIMPLE)
         self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
-        cdef int size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
-        PyBuffer_Release(&buf)
-        PyBuffer_Release(&chunk_buf)
+        cdef int size
+        try:
+            with nogil:
+                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
+        finally:
+            PyBuffer_Release(&buf)
+            PyBuffer_Release(&chunk_buf)
         if size < 0:
             raise RuntimeError("Could not compress the data")
         elif size == 0:
