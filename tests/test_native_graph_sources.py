@@ -12,6 +12,21 @@ def graph_sources_runtime(native_graph_runtime):
         pytest.skip("Installed extension does not implement graph storage readers")
 
 
+@pytest.fixture
+def parallel_sources_runtime(request, monkeypatch):
+    from blosc2.native_graph import prepare_native_first
+
+    if blosc2.IS_WASM:
+        pytest.skip("Parallel graph reductions require threads")
+    backend = getattr(request.node, "callspec", None)
+    backend = backend.params.get("backend") if backend is not None else None
+    if backend is not None:
+        monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
+    expr = blosc2.lazyexpr("x + 1", {"x": np.ones(4)})
+    if prepare_native_first(expr, ()) is None:
+        pytest.skip("Parallel graph storage readers require an available graph JIT")
+
+
 @pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [None, 0, -1, ()])
 @pytest.mark.parametrize("keepdims", [False, True])
@@ -67,7 +82,9 @@ def test_required_compressed_graph_is_serial_and_bounded(monkeypatch):
 @pytest.mark.parametrize("backend", ["cc", "tcc"])
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("keepdims", [False, True])
-def test_automatic_compressed_graph_parallel_sum(backend, mixed, keepdims, monkeypatch):
+def test_automatic_compressed_graph_parallel_sum(
+    backend, mixed, keepdims, monkeypatch, parallel_sources_runtime
+):
     import blosc2.native_graph as native
     from blosc2.storage_readers import StorageReader
 
@@ -159,12 +176,13 @@ def test_graph_sources_mismatched_partitions_and_initial(monkeypatch):
     assert expr._native_execution_report["input_materialization_bytes"] == 0
 
 
-def test_automatic_compressed_graph_persisted_native_readers(tmp_path, monkeypatch):
+def test_automatic_compressed_graph_persisted_native_readers(
+    tmp_path, monkeypatch, parallel_sources_runtime
+):
     import blosc2.native_graph as native
     from blosc2.storage_readers import StorageReader
 
     monkeypatch.setattr(native, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 4_000_000)
-    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc")
     values = np.linspace(0, 1, 4_200_003)
     x = blosc2.asarray(values, chunks=(1_000_000,), blocks=(6250,), urlpath=tmp_path / "x.b2nd")
     expr = blosc2.lazyexpr("x + 1", {"x": x})
@@ -228,7 +246,7 @@ def test_graph_sources_empty_domain_does_not_read(monkeypatch):
     assert report["reader_bytes"] == report["maximum_reader_items"] == 0
 
 
-def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch):
+def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch, parallel_sources_runtime):
     import blosc2.native_graph as native
     import blosc2.resident_execution as resident
 
@@ -251,5 +269,27 @@ def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch):
     try:
         with pytest.raises(OSError, match="Compressed worker failed"):
             blosc2.lazyexpr("x + 1", {"x": x}).sum()
+    finally:
+        blosc2.set_nthreads(previous)
+
+
+def test_native_compressed_readers_acquire_gil_for_postfilters(monkeypatch, parallel_sources_runtime):
+    import blosc2.native_graph as native
+
+    size = 4 * 128 * 1024
+    monkeypatch.setattr(native, "MINIMUM_COMPRESSED_GRAPH_ITEMS", size)
+    values = (np.arange(size) % 3).astype("int32")
+    x = blosc2.asarray(values, chunks=(128 * 1024,), blocks=(8192,))
+    x.schunk.dparams = blosc2.DParams(nthreads=1)
+
+    @x.schunk.postfilter(np.int32, np.int32)
+    def make_nonzero(input, output, offset):
+        output[:] = input + 1
+
+    previous = blosc2.set_nthreads(2)
+    try:
+        expr = blosc2.lazyexpr("x", {"x": x})
+        assert bool(expr.all())
+        assert expr._native_execution_report["route"] == "parallel-graph-bounded-readers"
     finally:
         blosc2.set_nthreads(previous)

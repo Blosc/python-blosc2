@@ -8,7 +8,13 @@ from blosc2.native_graph import prepare_native_first
 
 
 @pytest.fixture(autouse=True)
-def graph_truth_runtime(native_graph_runtime):
+def graph_truth_runtime(native_graph_runtime, request, monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("Parallel graph reductions require threads")
+    backend = getattr(request.node, "callspec", None)
+    backend = backend.params.get("backend") if backend is not None else None
+    if backend is not None:
+        monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
     expr = blosc2.lazyexpr("x > 0", {"x": np.ones(4)})
     if prepare_native_first(expr, ()) is None:
         pytest.skip("Parallel graph truth reductions require an available graph JIT")

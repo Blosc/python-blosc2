@@ -3822,7 +3822,7 @@ cdef class SChunk:
 
 
 # postfilter
-cdef int general_postfilter(blosc2_postfilter_params *params):
+cdef int general_postfilter(blosc2_postfilter_params *params) with gil:
     cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
     cdef int nd = 1
     cdef np.npy_intp dims = params.size // params.typesize
@@ -4442,7 +4442,7 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
     return aux_udf(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
 
 
-cdef int general_udf_postfilter(blosc2_postfilter_params *params):
+cdef int general_udf_postfilter(blosc2_postfilter_params *params) with gil:
     cdef udf_udata *udata = <udf_udata *> params.user_data
     return aux_udf(udata, params.nchunk, params.nblock, True, params.output, params.typesize)
 
