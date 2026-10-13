@@ -4830,7 +4830,13 @@ class LazyExpr(LazyArray):
                 options=kwargs,
             )
             if prepared is not None:
-                return compute_native_graph(self, tile_items=_native_tile_items, prepared=prepared, **kwargs)
+                return compute_native_graph(
+                    self,
+                    tile_items=_native_tile_items,
+                    prepared=prepared,
+                    parallel_reductions=True,
+                    **kwargs,
+                )
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")

@@ -35,7 +35,7 @@ def test_native_first_arithmetic(dtype, safe, native_first_runtime, monkeypatch)
     np.testing.assert_array_equal(expr[:], expected)
 
 
-@pytest.mark.parametrize("expression", ["x / 2", "x ** 2", "sqrt(x)", "sum(x)"])
+@pytest.mark.parametrize("expression", ["x / 2", "x ** 2", "sqrt(x)", "sum(sqrt(x))"])
 def test_native_first_excluded_syntax(expression, monkeypatch):
     expr = blosc2.lazyexpr(expression, {"x": np.arange(1, 7.0)}, evaluation="safe")
     assert prepare_native_first(expr, ()) is None
@@ -235,3 +235,128 @@ def test_native_first_jit_false_retains_legacy(monkeypatch):
     monkeypatch.setattr(native, "lower_native_graph", forbidden)
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
     np.testing.assert_array_equal(expr.compute(jit=False)[:], np.arange(4.0) + 1)
+
+
+@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
+@pytest.mark.parametrize("axis", [None, 0, -1, (), (0, 1)])
+@pytest.mark.parametrize("keepdims", [False, True])
+def test_native_first_reductions(op, axis, keepdims, native_first_runtime, monkeypatch):
+    x = np.arange(1, 7.0).reshape(2, 3)
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Eligible reduction used legacy execution")
+
+    monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
+    result = getattr(expr, op)(axis=axis, keepdims=keepdims)
+    expected = getattr(np, op)(x + 1, axis=axis, keepdims=keepdims)
+    np.testing.assert_allclose(result, expected)
+    assert result.shape == expected.shape
+    assert result.dtype == expected.dtype
+    assert expr._native_execution_report["jit_stages"] == 1
+
+
+@pytest.mark.parametrize("expression", ["sum(x + 1)", "(x + 1).sum(axis=-1, keepdims=True)"])
+def test_native_first_root_reductions(expression, native_first_runtime, monkeypatch):
+    x = np.arange(6.0).reshape(2, 3)
+    expr = blosc2.lazyexpr(expression, {"x": x}, evaluation="safe")
+    expected = expr.compute(_require_native=True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Root reduction used legacy execution")
+
+    monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
+    np.testing.assert_array_equal(expr.compute(), expected)
+    assert expr._native_execution_report["jit_stages"] == 1
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "uint32"])
+def test_native_first_reduction_dtype_initial(dtype, native_first_runtime):
+    x = np.arange(6).astype(dtype)
+    expr = blosc2.lazyexpr("x + x", {"x": x})
+    result = expr.sum(dtype="float64", initial=3)
+    np.testing.assert_array_equal(result, np.sum(x + x, dtype="float64", initial=3))
+    assert result.dtype == np.dtype("float64")
+    assert hasattr(expr, "_native_execution_report")
+
+
+@pytest.mark.parametrize("keepdims", [False, True])
+def test_native_first_parallel_sum_and_opt_out(keepdims, native_first_runtime):
+    previous = blosc2.set_nthreads(2)
+    try:
+        x = np.linspace(0, 1, 4 * 128 * 1024).reshape(4, -1)
+        expr = blosc2.lazyexpr("x + 1", {"x": x})
+        result = expr.sum(keepdims=keepdims)
+        np.testing.assert_allclose(result, np.sum(x + 1, keepdims=keepdims), rtol=1e-12)
+        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["threads"] == 2
+        serial = expr.sum(keepdims=keepdims, _require_native=True, jit=True)
+        np.testing.assert_allclose(result, serial, rtol=1e-12)
+        assert expr._native_execution_report.get("route") != "parallel-resident-reduction"
+        legacy = expr.sum(keepdims=keepdims, _require_native=False)
+        np.testing.assert_allclose(result, legacy, rtol=1e-12)
+        assert not hasattr(expr, "_native_execution_report")
+    finally:
+        blosc2.set_nthreads(previous)
+
+
+@pytest.mark.parametrize("case", ["broadcast", "strided", "initial", "axis", "single_thread"])
+def test_native_first_sum_keeps_serial_when_not_parallel_eligible(case, native_first_runtime):
+    previous = blosc2.set_nthreads(1 if case == "single_thread" else 2)
+    try:
+        x = np.ones((4, 128 * 1024))
+        if case == "strided":
+            x = x[:, ::-1]
+        y = np.ones((1, x.shape[1])) if case == "broadcast" else np.ones_like(x)
+        expr = blosc2.lazyexpr("x + y", {"x": x, "y": y})
+        options = {"initial": 3} if case == "initial" else {"axis": 0} if case == "axis" else {}
+        result = expr.sum(**options)
+        np.testing.assert_array_equal(result, np.sum(x + y, **options))
+        assert expr._native_execution_report.get("route") != "parallel-resident-reduction"
+    finally:
+        blosc2.set_nthreads(previous)
+
+
+def test_native_first_parallel_sum_failure_is_not_replayed(native_first_runtime, monkeypatch):
+    import blosc2.resident_execution as resident
+
+    class FailedPool:
+        def submit(self, *args, **kwargs):
+            from concurrent.futures import Future
+
+            future = Future()
+            future.set_exception(FloatingPointError("Reduction worker failed"))
+            return future
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Reduction failure was replayed")
+
+    previous = blosc2.set_nthreads(2)
+    try:
+        monkeypatch.setattr(resident, "resident_pool", lambda: FailedPool())
+        monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
+        expr = blosc2.lazyexpr("x + 1", {"x": np.ones(4 * 128 * 1024)})
+        with pytest.raises(FloatingPointError, match="Reduction worker failed"):
+            expr.sum()
+    finally:
+        blosc2.set_nthreads(previous)
+
+
+def test_native_first_parallel_sum_combination_status(native_first_runtime):
+    previous = blosc2.set_nthreads(2)
+    try:
+        x = np.zeros(4 * 128 * 1024)
+        x[0] = x[x.size // 2] = np.finfo("float64").max * 0.75
+        expr = blosc2.lazyexpr("x + 0", {"x": x})
+        assert np.isposinf(expr.sum())
+        assert expr._native_execution_report["fp_flags"] & 4
+        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+    finally:
+        blosc2.set_nthreads(previous)
+
+
+def test_native_first_reduction_compressed_stays_legacy(native_first_runtime):
+    x = blosc2.asarray(np.arange(100.0))
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    assert expr.sum() == 5050
+    assert not hasattr(expr, "_native_execution_report")

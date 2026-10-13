@@ -45,7 +45,7 @@ def _native_first_operand(value):
 
 
 def _native_first_syntax(expression):
-    # Deliberately exclude calls, reductions, powers, division, indexing and
+    # Deliberately exclude general calls, nested reductions, powers, division, indexing and
     # Python short-circuit expressions until their legacy contracts are gated.
     allowed = (
         ast.Expression,
@@ -75,6 +75,24 @@ def _native_first_syntax(expression):
         tree = ast.parse(expression, mode="eval")
     except SyntaxError:
         return False
+    if isinstance(tree.body, ast.Call):
+        call = tree.body
+        if isinstance(call.func, ast.Name) and call.func.id in REDUCERS and len(call.args) == 1:
+            value = call.args[0]
+        elif isinstance(call.func, ast.Attribute) and call.func.attr in REDUCERS and not call.args:
+            value = call.func.value
+        else:
+            return False
+        seen = set()
+        for keyword in call.keywords:
+            if keyword.arg not in {"axis", "keepdims", "dtype", "initial"} or keyword.arg in seen:
+                return False
+            seen.add(keyword.arg)
+            try:
+                ast.literal_eval(keyword.value)
+            except (ValueError, TypeError):
+                return False
+        tree = ast.Expression(body=value)
     for node in ast.walk(tree):
         if not isinstance(node, allowed):
             return False
@@ -85,7 +103,7 @@ def _native_first_syntax(expression):
     return True
 
 
-def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):
+def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):  # noqa: C901 -- conservative metadata-only admission gates
     """Prepare the conservative automatic subset, without reading array values.
 
     Return None for unsupported requests. Execution errors are never caught here:
@@ -102,7 +120,21 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         return None
     if getattr(expr, "_ne_args", None) is not None:
         return None
-    if (options or {}).keys() - {"_getitem"}:
+    options = options or {}
+    explicit = options.get("_reduce_args")
+    reduction_options = None
+    if explicit is not None:
+        if not {"op", "op_str", "axis", "keepdims"} <= explicit.keys():
+            return None
+        if explicit["op_str"] not in REDUCERS:
+            return None
+        reduction_options = {
+            "reduction": explicit["op_str"],
+            "axis": explicit["axis"],
+            "dtype": explicit.get("dtype"),
+            "keepdims": explicit["keepdims"],
+        }
+    if options.keys() - {"_getitem", "_reduce_args", "initial"}:
         return None
     # Only whole-domain reads: even a full slice of a staged graph is currently
     # treated as a partial read by the strict adapter.
@@ -116,7 +148,14 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     if not _native_first_syntax(expr.expression):
         return None
     try:
-        prepared = lower_native_graph(expr, jit=jit)
+        prepared = lower_native_graph(
+            expr,
+            jit=jit,
+            reduction_options=reduction_options,
+            root_options={"initial": options["initial"]} if "initial" in options else None,
+        )
+        if prepared[2] and selection:
+            return None
         if not prepared[0].has_jit:
             return None
         # Native preparation and specialization own dtype/broadcast validation.
@@ -133,6 +172,81 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             raise
         return None
     return prepared
+
+
+def _parallel_resident_sum(plan, inputs, shape, tile_items):
+    """Automatic whole-domain sums; strict native execution keeps serial order."""
+    from concurrent.futures import wait
+
+    import blosc2
+
+    from .resident_execution import MAXIMUM_WORKERS, MINIMUM_WORKER_ITEMS, resident_pool
+
+    count = math.prod(shape)
+    workers = min(blosc2.nthreads, MAXIMUM_WORKERS, count // MINIMUM_WORKER_ITEMS)
+    if workers < 2 or blosc2.IS_WASM or plan.info()["stages"] != 1 or not inputs:
+        return None
+    document = json.loads(plan.to_json())
+    root = document["nodes"][document["root"]]
+    if root["op"] != "sum" or root["initial"] is not None or root["where"] is not None:
+        return None
+    axes = root["axes"]
+    if axes is not None and {a % len(shape) for a in axes} != set(range(len(shape))):
+        return None
+    if any(
+        type(value) is not np.ndarray
+        or value.shape != shape
+        or value.dtype.kind != "f"
+        or not value.flags.c_contiguous
+        or not value.flags.aligned
+        for value in inputs.values()
+    ):
+        return None
+    # Keep the original rank/axes; split the first dimension into full C-order slabs.
+    workers = min(workers, shape[0])
+    if workers < 2:
+        return None
+    schedules = []
+    # Map calls validate bindings and isolate FP state per tile. Small tiles
+    # amplify that overhead and environment-lock contention between workers;
+    # 4096 lanes keeps float64 scratch at 32 KiB per worker.
+    worker_tile_items = max(tile_items, 4096)
+    for worker in range(workers):
+        start, stop = shape[0] * worker // workers, shape[0] * (worker + 1) // workers
+        arrays = {name: value[start:stop] for name, value in inputs.items()}
+        schedule = plan.specialize(
+            {name: (value.dtype, value.shape) for name, value in arrays.items()}, worker_tile_items
+        )
+        if schedule.info()["dtype"].kind != "f":
+            return None
+        schedules.append((schedule, arrays))
+    futures = []
+    try:
+        for schedule, arrays in schedules:
+            futures.append(resident_pool().submit(schedule.execute, arrays))
+    finally:
+        # Never replay failures; join all workers before releasing their inputs.
+        wait(futures)
+    results, reports = zip(*(future.result() for future in futures), strict=True)
+    partials = np.stack(results)
+    document["nodes"] = [
+        {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
+        {**root, "id": 1, "args": [0], "axes": [0], "keepdims": False, "dtype": partials.dtype.name},
+    ]
+    document["root"] = 1
+    combine = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")))
+    result, combined_report = combine.evaluate({"partials": partials}, return_report=True)
+    report = dict(reports[0])
+    for key in ("evaluated_tiles", "zero_copy_tiles", "gathered_bytes", "temporary_bytes"):
+        report[key] = sum(part[key] for part in reports)
+    report["fp_flags"] = combined_report["fp_flags"]
+    for part in reports:
+        report["fp_flags"] |= part["fp_flags"]
+    report["fp_supported"] = combined_report["fp_supported"] and all(
+        part["fp_supported"] for part in reports
+    )
+    report.update(route="parallel-resident-reduction", threads=workers)
+    return result, report
 
 
 @lru_cache(maxsize=128)
@@ -441,7 +555,9 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     return plan, adapter.arrays, adapter.nodes[root]["op"] in REDUCERS
 
 
-def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, prepared=None, **kwargs):  # noqa: C901 -- metadata-only selection and options preflight
+def compute_native_graph(  # noqa: C901 -- metadata-only selection and options preflight
+    expr, item=(), *, tile_items=1024, jit=False, prepared=None, parallel_reductions=False, **kwargs
+):
     import blosc2
 
     # Preflight before input reads or any destination creation.
@@ -517,6 +633,8 @@ def compute_native_graph(expr, item=(), *, tile_items=1024, jit=False, prepared=
     parallel = (
         _parallel_resident_graph(plan, inputs, shape, selection, reduction) if tile_items == 1024 else None
     )
+    if reduction and parallel_reductions:
+        parallel = _parallel_resident_sum(plan, arrays, shape, tile_items)
     result, report = schedule.execute(arrays) if parallel is None else parallel
     expr._native_execution_report = {
         **report,

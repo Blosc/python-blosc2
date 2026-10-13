@@ -252,7 +252,9 @@ multiplication, unary signs/inversion, bitwise operators and single comparisons
 are eligible, including broadcasting, when native JIT preparation succeeds.
 Automatic execution requests JIT by default; ``jit=False`` and unavailable JIT
 retain existing execution rather than using the slower native graph interpreter.
-Calls, reductions, division/powers,
+The six reduction methods (``sum/prod/min/max/any/all``) and root reduction
+expressions over eligible arithmetic also select native graphs, including axes,
+``keepdims``, accumulator dtypes and ``initial``. General calls, division/powers,
 partial indexing, compressed/proxy/table operands, output aliases and execution
 overrides retain existing execution. Compressed inputs are excluded from automatic
 selection because the current graph frontend materializes them rather than
@@ -262,6 +264,18 @@ Automatic selection prepares/validates the graph before execution; unsupported
 preparation can retain existing execution, but execution errors never trigger
 replay. ``_require_native=False`` explicitly retains existing execution.
 
+Large whole-domain floating sums over aligned, contiguous, same-shaped NumPy
+operands can run in parallel using ``blosc2.nthreads``. Each worker accumulates
+its region serially, then partial sums are combined in region order. This changes
+floating-point grouping: small differences from serial or NumPy reductions are
+expected, and cancellation can amplify them. Results can depend on the thread
+count. Other graph reductions, sums with ``initial``, broadcasting, strided inputs
+or only some axes reduced retain serial native accumulation for now.
+Use ``expr.sum(_require_native=False)`` to retain legacy reduction execution
+(which is not necessarily serial). Use
+``expr.sum(_require_native=True, jit=True)`` for serial native graph accumulation.
+Explicit ``NativeGraph`` execution likewise retains its serial-order contract.
+
 .. code-block:: python
 
     x = np.arange(6, dtype=np.float64)
@@ -269,6 +283,7 @@ replay. ``_require_native=False`` explicitly retains existing execution.
     expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
     values = expr[:]  # Native JIT when available; otherwise existing execution.
     result = expr.compute()  # Same selection, returning an NDArray.
+    total = expr.sum()  # Native graph; large eligible floating sums use parallel workers.
 
 An explicit experimental graph execution mode supports a broader subset and
 rejects rather than falling back:

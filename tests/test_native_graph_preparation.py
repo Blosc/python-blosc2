@@ -54,6 +54,63 @@ def test_direct_sum_order_status_initial_and_fallback(dtype):
     assert report["gathered_bytes"] > 0
 
 
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int8", "int64", "uint64"])
+@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
+@pytest.mark.parametrize("tile", [1, 3, 64])
+def test_computed_reduction_typed_matches_masked_generic(dtype, op, tile):
+    x = np.array([1, 2, 0, 3, 1, 2], dtype=dtype)
+    initial = ", initial=0" if op in ("min", "max") else ""
+    expression = f"{op}(x + zero{initial})"
+    inputs = {"x": x, "zero": np.zeros_like(x)}
+    plan = blosc2.NativeGraph.from_expression(
+        expression, {name: value.dtype for name, value in inputs.items()}
+    )
+    actual, report = plan.evaluate(inputs, tile_items=tile, return_report=True)
+    inputs["mask"] = np.ones(x.shape, dtype=bool)
+    generic = blosc2.NativeGraph.from_expression(
+        f"{op}(x + zero, where=mask{initial})", {name: value.dtype for name, value in inputs.items()}
+    )
+    expected, reference = generic.evaluate(inputs, tile_items=tile, return_report=True)
+    assert actual.dtype == expected.dtype
+    assert actual.tobytes() == expected.tobytes()
+    assert report["fp_flags"] == reference["fp_flags"]
+    assert report["evaluated_tiles"] > 0
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
+@pytest.mark.parametrize("case", ["cancellation", "nan", "snan", "overflow", "underflow", "signed_zero"])
+def test_computed_reduction_float_edge_parity(dtype, op, case):
+    large = 2 ** (24 if dtype == "float32" else 53)
+    values = {
+        "cancellation": [large, 1, -large, 3],
+        "nan": [1, np.nan, 2, -np.nan],
+        "snan": [1, 2],
+        "overflow": [np.finfo(dtype).max, np.finfo(dtype).max],
+        "underflow": [np.finfo(dtype).tiny, np.finfo(dtype).tiny],
+        "signed_zero": [-0.0, 0.0, -0.0],
+    }
+    x = np.array(values[case], dtype=dtype)
+    if case == "snan":
+        x.view("uint32" if dtype == "float32" else "uint64")[1] = (
+            0x7F800001 if dtype == "float32" else 0x7FF0000000000001
+        )
+    initial = ", initial=0" if op in ("min", "max") else ""
+    inputs = {"x": x, "one": np.ones_like(x)}
+    plan = blosc2.NativeGraph.from_expression(
+        f"{op}(x * one{initial})", {name: value.dtype for name, value in inputs.items()}
+    )
+    masked_inputs = {**inputs, "mask": np.ones(x.shape, dtype=bool)}
+    generic = blosc2.NativeGraph.from_expression(
+        f"{op}(x * one, where=mask{initial})", {name: value.dtype for name, value in masked_inputs.items()}
+    )
+    for tile in (1, 3, 64):
+        actual, report = plan.evaluate(inputs, tile_items=tile, return_report=True)
+        expected, reference = generic.evaluate(masked_inputs, tile_items=tile, return_report=True)
+        assert actual.tobytes() == expected.tobytes()
+        assert report["fp_flags"] == reference["fp_flags"]
+
+
 def make_portable_sum(dtype, body="return block_sum(x)", cardinality="block_scalar", *, output_dtype=None):
     artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
         {"x": dtype}, output_dtype or dtype, version="1.0", cardinality=cardinality
