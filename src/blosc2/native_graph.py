@@ -116,7 +116,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
 
     Return None for unsupported requests. Execution errors are never caught here:
     once a prepared plan is selected, callers must not replay it on another route.
-    Compressed inputs require a single-region reduction and graph reader support.
+    Compressed inputs require a single region and graph reader support.
     Proxy inputs remain outside this automatic subset.
     """
     import blosc2
@@ -165,7 +165,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         return None
     if compressed and explicit is not None and explicit["op_str"] not in PARALLEL_GRAPH_REDUCERS:
         return None
-    if not _native_first_syntax(expr.expression, reduction_only=compressed and reduction_options is None):
+    if not _native_first_syntax(expr.expression):
         return None
     try:
         prepared = lower_native_graph(
@@ -176,8 +176,10 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         )
         if prepared[2] and selection:
             return None
-        if compressed and (not prepared[2] or prepared[0].info()["stages"] != 1):
+        if compressed and prepared[0].info()["stages"] != 1:
             return None
+        if compressed and not prepared[2] and not options.get("_getitem", False):
+            return None  # Compressed-result compute() keeps its prefilter route.
         if not prepared[0].has_jit:
             return None
         # Native preparation and specialization own dtype/broadcast validation.
@@ -189,7 +191,10 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             return None
         if (
             compressed
-            and _compressed_reduction_layout(prepared[0], prepared[1], schedule.info()["map_shape"]) is None
+            and _compressed_execution_layout(
+                prepared[0], prepared[1], schedule.info()["map_shape"], reduction=prepared[2]
+            )
+            is None
         ):
             return None
     except NotImplementedError:
@@ -299,7 +304,7 @@ def _combine_graph_reductions(document, root, results, reports):
     return result, report
 
 
-def _compressed_reduction_layout(plan, inputs, shape):
+def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     """Conservative metadata-only automatic gate; avoid small/serial IO regressions."""
     import blosc2
 
@@ -316,14 +321,14 @@ def _compressed_reduction_layout(plan, inputs, shape):
         return None
     document = json.loads(plan.to_json())
     root = document["nodes"][document["root"]]
-    if (
+    if reduction and (
         root["op"] not in PARALLEL_GRAPH_REDUCERS
         or root["axes"] not in (None, [0], [-1])
         or root["initial"] is not None
         or root["where"] is not None
     ):
         return None
-    input_kinds = "biuf" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
+    input_kinds = "biuf" if not reduction or root["op"] in TRUTH_GRAPH_REDUCERS else "f"
     if any(
         type(value) not in (np.ndarray, blosc2.NDArray)
         or value.shape != shape
@@ -349,7 +354,7 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     from .resident_execution import resident_pool
     from .storage_readers import ReaderState, StorageReader
 
-    layout = _compressed_reduction_layout(plan, inputs, shape)
+    layout = _compressed_execution_layout(plan, inputs, shape)
     if layout is None:
         return None
     first, workers, document, root = layout
@@ -403,9 +408,98 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
         tile_items=worker_tile,
         maximum_reader_items=max(part["maximum_reader_items"] for part in reports),
         reader_bytes=sum(part["reader_bytes"] for part in reports),
+        native_decoder_contexts=sum(part["native_decoder_contexts"] for part in reports),
         input_materialization_bytes=0,
     )
     return result, report
+
+
+def _parallel_compressed_map(plan, inputs, shape, tile_items):
+    """One whole-domain job; worker-private decoders write disjoint output regions.
+
+    Native source iterators reuse bounded input/map scratch throughout a region.
+    No compression prefilter is involved, so output is not cleared before stores.
+    """
+    from concurrent.futures import wait
+
+    import blosc2
+
+    from .resident_execution import resident_pool
+    from .storage_readers import ReaderState, StorageReader
+
+    layout = _compressed_execution_layout(plan, inputs, shape, reduction=False)
+    if layout is None:
+        return None
+    first, workers, _, _ = layout
+    block = first.blocks[0]
+    worker_tile = max(1, max(tile_items, 65536) // block) * block
+
+    class SpanReader(StorageReader):
+        def __init__(self, value, start, stop):
+            super().__init__(value, shape)
+            self.start = start
+            self.shape = (stop - start,)
+
+        def read(self, indices):
+            return super().read(indices + self.start)
+
+    schedules = []
+    for worker in range(workers):
+        start = first.schunk.nchunks * worker // workers * first.chunks[0]
+        stop = min(shape[0], first.schunk.nchunks * (worker + 1) // workers * first.chunks[0])
+        arrays = {
+            name: value if type(value) is blosc2.NDArray else value[start:stop]
+            for name, value in inputs.items()
+        }
+        readers = {
+            name: ReaderState(SpanReader(value, start, stop))
+            for name, value in inputs.items()
+            if type(value) is blosc2.NDArray
+        }
+        schedule = plan.specialize(
+            {name: (value.dtype, (stop - start,)) for name, value in inputs.items()}, worker_tile
+        )
+        info = schedule.info()
+        if info["shape"] != (stop - start,):
+            return None
+        schedules.append((start, stop, schedule, arrays, readers))
+    output = np.empty(shape, dtype=schedules[0][2].info()["dtype"])
+    futures = []
+    try:
+        for start, stop, schedule, arrays, readers in schedules:
+            futures.append(
+                resident_pool().submit(
+                    schedule.execute_sources, arrays, readers, native_spans=True, out=output[start:stop]
+                )
+            )
+    finally:
+        wait(futures)  # Keep output/readers alive until every submitted worker joins.
+    reports = [future.result()[1] for future in futures]
+    report = dict(reports[0])
+    for key in (
+        "temporary_bytes",
+        "gathered_bytes",
+        "normalization_bytes",
+        "zero_copy_tiles",
+        "evaluated_tiles",
+        "reader_bytes",
+        "native_decoder_contexts",
+    ):
+        report[key] = sum(part[key] for part in reports)
+    report["fp_flags"] = 0
+    for part in reports:
+        report["fp_flags"] |= part["fp_flags"]
+    report.update(
+        route="parallel-graph-bounded-map",
+        threads=workers,
+        tile_items=worker_tile,
+        fp_supported=all(part["fp_supported"] for part in reports),
+        maximum_reader_items=max(part["maximum_reader_items"] for part in reports),
+        input_materialization_bytes=0,
+        output_copy_bytes=0,
+        output_zero_fill_bytes=0,
+    )
+    return output, report
 
 
 @lru_cache(maxsize=128)
@@ -821,6 +915,29 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
             "plan_cache": compile_plan.cache_info()._asdict(),
         }
         return result
+    if (
+        not reduction
+        and getitem
+        and parallel_reductions
+        and any(type(value) is blosc2.NDArray for value in inputs.values())
+        and (
+            not selection
+            or all(
+                isinstance(s, slice) and s.indices(n) == (0, n, 1)
+                for s, n in zip(selection, shape, strict=True)
+            )
+        )
+    ):
+        streamed = _parallel_compressed_map(plan, inputs, shape, tile_items)
+        if streamed is not None:
+            result, report = streamed
+            expr._native_execution_report = {
+                **report,
+                "semantic_revision": "menudet-numpy-1.0",
+                "backend": "portable-jit",
+                "plan_cache": compile_plan.cache_info()._asdict(),
+            }
+            return result
     arrays = {}
     for name, value in inputs.items():
         if selection:

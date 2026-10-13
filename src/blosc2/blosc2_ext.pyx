@@ -1643,7 +1643,7 @@ cdef class NativeGraphSchedule:
                         "jit_stages": report.jit_stages, "interpreter_stages": report.interpreter_stages,
                         "intermediate_bytes": b2_graph_intermediate(self._handle)}
 
-    def execute_sources(self, inputs, readers, unsigned raise_mask=0, *, bint native_spans=False):
+    def execute_sources(self, inputs, readers, unsigned raise_mask=0, *, bint native_spans=False, out=None):
         """Bind invocation-local metadata readers; native traversal owns all requests."""
         cdef b2_array_source sources[128]
         cdef graph_span_reader_state spans[128]
@@ -1658,7 +1658,18 @@ cdef class NativeGraphSchedule:
         memset(sources, 0, sizeof(sources))
         memset(spans, 0, sizeof(spans))
         info = self.info()
-        output = np.empty(info['shape'], dtype=info['dtype'])
+        if out is None:
+            output = np.empty(info['shape'], dtype=info['dtype'])
+        else:
+            if not isinstance(out, np.ndarray):
+                raise TypeError("Graph output requires a NumPy array")
+            output = out
+            if out.shape != info['shape'] or out.dtype != info['dtype']:
+                raise ValueError("Graph output shape/dtype disagree with schedule")
+            if not output.flags.c_contiguous or not output.flags.aligned or not output.flags.writeable:
+                raise ValueError("Graph output must be writable, aligned and C-contiguous")
+            if any(isinstance(value, np.ndarray) and np.shares_memory(output, value) for value in inputs.values()):
+                raise ValueError("Graph output must not overlap resident inputs")
         try:
             return self._execute_sources_bound(inputs, readers, raise_mask, native_spans,
                                                sources, spans, names, owned, states, output)
@@ -1743,8 +1754,9 @@ cdef class NativeGraphSchedule:
                         "intermediate_bytes": b2_graph_intermediate(self._handle),
                         "maximum_reader_items": max(max((state.max_items for state in states), default=0),
                                                      max((spans[i].maximum_items for i in range(n)), default=0)),
-                        "reader_bytes": sum(state.read_bytes for state in states) + sum(spans[i].read_bytes for i in range(n)),
-                        "input_materialization_bytes": 0}
+                         "reader_bytes": sum(state.read_bytes for state in states) + sum(spans[i].read_bytes for i in range(n)),
+                         "native_decoder_contexts": sum(spans[i].dctx != NULL for i in range(n)),
+                         "input_materialization_bytes": 0}
 
 
 def portable_artifact_available():

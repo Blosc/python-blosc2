@@ -263,9 +263,15 @@ Whole-domain ``any/all`` use the same streamed path with Boolean, integer or
 float32/float64 inputs, including Boolean comparison expressions.
 Selection currently requires at least 16 million items and blocks of at most 65,536 items to amortize
 reader overhead; smaller or unsupported cases retain legacy execution. NumPy
-operands can be mixed with these compressed inputs. Compressed elementwise reads
-remain outside automatic graph selection. ``evaluation="safe"`` remains a syntax
-policy, not a backend selector.
+operands can be mixed with these compressed inputs. Whole-domain NumPy-output
+elementwise reads (``expr[:]`` and ``blosc2.evaluate(...)`` without ``out=``)
+also select streamed graphs under the same size/layout limits, with Boolean,
+integer or float32/float64 inputs. Workers process disjoint contiguous regions
+of one fresh NumPy allocation, retaining private decoder contexts and bounded
+input scratch for their whole region. There is no full intermediate result,
+output copy or prefilter zero-fill. Compressed-result ``compute()`` and explicit
+output buffers retain their existing routes. ``evaluation="safe"`` remains a
+syntax policy, not a backend selector.
 
 Automatic selection prepares/validates the graph before execution; unsupported
 preparation can retain existing execution, but execution errors never trigger
