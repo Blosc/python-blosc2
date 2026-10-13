@@ -11,6 +11,12 @@ def dispatch_runtime():
         pytest.skip("Runtime does not provide portable prefilter dispatch")
 
 
+@pytest.fixture
+def dense_dispatch_runtime(dispatch_runtime):
+    if blosc2.IS_WASM:
+        pytest.skip("Dense chunk/prefilter dispatch is host-only; WASM uses bounded readers")
+
+
 def kernel(source="def k(x, y):\n    return x + (y - 1)\n", dtype="float64", output=None, jit=True):
     author = blosc2.DSLKernel.from_source(source)
     return blosc2.PortableKernel.from_json(author.export({"x": dtype, "y": dtype}, output or dtype), jit=jit)
@@ -20,7 +26,7 @@ def forbidden(*args, **kwargs):
     pytest.fail("Unexpected evaluation route or execution replay")
 
 
-def test_single_chunk_materializes_once(dispatch_runtime, monkeypatch):
+def test_single_chunk_materializes_once(dense_dispatch_runtime, monkeypatch):
     values = np.arange(100_000.0)
     x = blosc2.asarray(values)
     lazy = kernel().lazy({"x": x, "y": x})
@@ -34,7 +40,7 @@ def test_single_chunk_materializes_once(dispatch_runtime, monkeypatch):
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 @pytest.mark.parametrize("jit", [False, True])
-def test_multichunk_uses_portable_prefilter(dispatch_runtime, monkeypatch, dtype, jit):
+def test_multichunk_uses_portable_prefilter(dense_dispatch_runtime, monkeypatch, dtype, jit):
     values = np.arange(2003, dtype=dtype)
     x = blosc2.asarray(values, chunks=(1000,), blocks=(100,))
     lazy = kernel(dtype=dtype, jit=jit).lazy({"y": x, "x": x})
@@ -48,7 +54,7 @@ def test_multichunk_uses_portable_prefilter(dispatch_runtime, monkeypatch, dtype
     assert report["input_buffer_bytes"] <= 32 * 1024**2
 
 
-def test_prefilter_output_dtype_and_padding(dispatch_runtime):
+def test_prefilter_output_dtype_and_padding(dense_dispatch_runtime):
     values = np.linspace(-1, 1, 2003)
     x = blosc2.asarray(values, chunks=(1000,), blocks=(100,))
     native = kernel("def k(x, y):\n    return x > y\n", output="bool")
@@ -79,7 +85,7 @@ def test_mismatched_layouts_stay_bounded(dispatch_runtime, monkeypatch):
     assert lazy._source_execution_report["route"] == "bounded-readers"
 
 
-def test_single_chunk_failure_never_replays(dispatch_runtime, monkeypatch):
+def test_single_chunk_failure_never_replays(dense_dispatch_runtime, monkeypatch):
     x = blosc2.asarray(np.arange(100.0))
     lazy = kernel().lazy({"x": x, "y": x})
     calls = []
@@ -96,7 +102,7 @@ def test_single_chunk_failure_never_replays(dispatch_runtime, monkeypatch):
     assert len(calls) == 1
 
 
-def test_single_chunk_decoder_failure_never_replays(dispatch_runtime, monkeypatch):
+def test_single_chunk_decoder_failure_never_replays(dense_dispatch_runtime, monkeypatch):
     x = blosc2.asarray(np.arange(100.0))
     lazy = kernel().lazy({"x": x, "y": x})
 
@@ -110,7 +116,7 @@ def test_single_chunk_decoder_failure_never_replays(dispatch_runtime, monkeypatc
         lazy[:]
 
 
-def test_prefilter_failure_never_replays(dispatch_runtime, monkeypatch):
+def test_prefilter_failure_never_replays(dense_dispatch_runtime, monkeypatch):
     x = blosc2.asarray(np.arange(2000.0), chunks=(1000,), blocks=(100,))
     lazy = kernel().lazy({"x": x, "y": x})
 
@@ -124,7 +130,7 @@ def test_prefilter_failure_never_replays(dispatch_runtime, monkeypatch):
         lazy[:]
 
 
-def test_native_prefilter_corrupt_layout_failure(dispatch_runtime, monkeypatch):
+def test_native_prefilter_corrupt_layout_failure(dense_dispatch_runtime, monkeypatch):
     import struct
 
     x = blosc2.asarray(np.arange(2000.0), chunks=(1000,), blocks=(100,))
@@ -138,7 +144,7 @@ def test_native_prefilter_corrupt_layout_failure(dispatch_runtime, monkeypatch):
         lazy[:]
 
 
-def test_materialization_budget(dispatch_runtime, monkeypatch):
+def test_materialization_budget(dense_dispatch_runtime, monkeypatch):
     values = np.arange(2_125_000.0)
     x = blosc2.asarray(values, chunks=(values.size,), blocks=(15625,))
     lazy = kernel().lazy({"x": x, "y": x})
@@ -147,7 +153,7 @@ def test_materialization_budget(dispatch_runtime, monkeypatch):
     assert lazy._source_execution_report["route"] == "portable-prefilter"
 
 
-def test_materialization_budget_uses_physical_chunk_capacity(dispatch_runtime, monkeypatch):
+def test_materialization_budget_uses_physical_chunk_capacity(dense_dispatch_runtime, monkeypatch):
     values = np.arange(3.0)
     # Logical input bytes are tiny, but physical chunks exceed the materialization budget.
     x = blosc2.asarray(values, chunks=(2_125_000,), blocks=(15625,))
@@ -224,3 +230,44 @@ def test_checked_weak_conversion_metadata_rejects_retiling(dispatch_runtime, exp
         context_ndim=0,
     )
     assert not storage_reader_eligible(metadata)
+
+
+@pytest.mark.parametrize("chunks", [1000, 3000])
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("output", ["float", "bool"])
+def test_threadless_compressed_reads_use_bounded_readers(
+    dispatch_runtime, monkeypatch, chunks, dtype, output
+):
+    values = np.linspace(-1, 1, 2003, dtype=dtype)
+    x = blosc2.asarray(values, chunks=(chunks,), blocks=(100,))
+    boolean = output == "bool"
+    native = kernel(
+        "def k(x, y):\n    return x > y\n" if boolean else "def k(x, y):\n    return x + (y - 1)\n",
+        dtype=dtype,
+        output="bool" if boolean else dtype,
+    )
+    lazy = native.lazy({"x": x, "y": x})
+    # Exercise the real threadless dispatch gate even when this test runs on a host.
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", forbidden)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", forbidden)
+    np.testing.assert_array_equal(lazy[:], values > values if boolean else values + (values - 1))
+    assert lazy._source_execution_report["route"] == "bounded-readers"
+
+
+def test_threadless_reader_failure_never_replays(dispatch_runtime, monkeypatch):
+    x = blosc2.asarray(np.arange(2003.0), chunks=(1000,), blocks=(100,))
+    lazy = kernel().lazy({"x": x, "y": x})
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise OSError("Threadless storage read failed")
+
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    monkeypatch.setattr(StorageReader, "read", fail)
+    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", forbidden)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", forbidden)
+    with pytest.raises(OSError, match="Threadless storage read failed"):
+        lazy[:]
+    assert len(calls) == 1
