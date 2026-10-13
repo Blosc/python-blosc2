@@ -355,7 +355,7 @@ def test_native_first_parallel_sum_combination_status(native_first_runtime):
         blosc2.set_nthreads(previous)
 
 
-def test_native_first_reduction_compressed_stays_legacy(native_first_runtime):
+def test_native_first_small_compressed_reduction_stays_legacy(native_first_runtime):
     x = blosc2.asarray(np.arange(100.0))
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     assert expr.sum() == 5050

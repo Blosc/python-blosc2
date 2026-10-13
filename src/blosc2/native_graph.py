@@ -20,10 +20,13 @@ import numpy as np
 from .expression_graph import parse_expression, validate_operands
 
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
+MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 
 
 def _native_first_operand(value):
-    if type(value) is np.ndarray or isinstance(value, np.generic):
+    import blosc2
+
+    if type(value) in (np.ndarray, blosc2.NDArray) or isinstance(value, np.generic):
         if (
             value.dtype.kind not in "biuf"
             or value.dtype.itemsize > 8
@@ -31,7 +34,7 @@ def _native_first_operand(value):
             or value.dtype == np.dtype("float16")
         ):
             return False
-        if type(value) is np.ndarray:
+        if type(value) in (np.ndarray, blosc2.NDArray):
             return bool(value.size)
     elif type(value) not in (bool, int, float):
         return False
@@ -44,7 +47,7 @@ def _native_first_operand(value):
     return True
 
 
-def _native_first_syntax(expression):
+def _native_first_syntax(expression, *, reduction_only=False):
     # Deliberately exclude general calls, nested reductions, powers, division, indexing and
     # Python short-circuit expressions until their legacy contracts are gated.
     allowed = (
@@ -77,9 +80,10 @@ def _native_first_syntax(expression):
         return False
     if isinstance(tree.body, ast.Call):
         call = tree.body
-        if isinstance(call.func, ast.Name) and call.func.id in REDUCERS and len(call.args) == 1:
+        reducers = {"sum"} if reduction_only else REDUCERS
+        if isinstance(call.func, ast.Name) and call.func.id in reducers and len(call.args) == 1:
             value = call.args[0]
-        elif isinstance(call.func, ast.Attribute) and call.func.attr in REDUCERS and not call.args:
+        elif isinstance(call.func, ast.Attribute) and call.func.attr in reducers and not call.args:
             value = call.func.value
         else:
             return False
@@ -93,6 +97,8 @@ def _native_first_syntax(expression):
             except (ValueError, TypeError):
                 return False
         tree = ast.Expression(body=value)
+    elif reduction_only:
+        return False
     for node in ast.walk(tree):
         if not isinstance(node, allowed):
             return False
@@ -108,7 +114,8 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
 
     Return None for unsupported requests. Execution errors are never caught here:
     once a prepared plan is selected, callers must not replay it on another route.
-    Compressed/proxy inputs are excluded until graph IO can stream them.
+    Compressed inputs require a single-region reduction and graph reader support.
+    Proxy inputs remain outside this automatic subset.
     """
     import blosc2
 
@@ -143,9 +150,20 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         return None
     if not all(_native_first_operand(value) for value in expr.operands.values()):
         return None
-    if not any(type(value) is np.ndarray for value in expr.operands.values()):
+    compressed = any(type(value) is blosc2.NDArray for value in expr.operands.values())
+    if compressed and not getattr(blosc2.blosc2_ext, "native_graph_sources_available", lambda: False)():
         return None
-    if not _native_first_syntax(expr.expression):
+    if (
+        compressed
+        and max(value.size for value in expr.operands.values() if type(value) is blosc2.NDArray)
+        < MINIMUM_COMPRESSED_GRAPH_ITEMS
+    ):
+        return None
+    if not any(type(value) in (np.ndarray, blosc2.NDArray) for value in expr.operands.values()):
+        return None
+    if compressed and explicit is not None and explicit["op_str"] != "sum":
+        return None
+    if not _native_first_syntax(expr.expression, reduction_only=compressed and reduction_options is None):
         return None
     try:
         prepared = lower_native_graph(
@@ -156,6 +174,8 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         )
         if prepared[2] and selection:
             return None
+        if compressed and (not prepared[2] or prepared[0].info()["stages"] != 1):
+            return None
         if not prepared[0].has_jit:
             return None
         # Native preparation and specialization own dtype/broadcast validation.
@@ -164,6 +184,11 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             {name: (value.dtype, value.shape) for name, value in prepared[1].items()}
         )
         if len(selection) > len(schedule.info()["map_shape"]):
+            return None
+        if (
+            compressed
+            and _compressed_sum_layout(prepared[0], prepared[1], schedule.info()["map_shape"]) is None
+        ):
             return None
     except NotImplementedError:
         return None  # Older installed miniexpr without graph support.
@@ -228,6 +253,12 @@ def _parallel_resident_sum(plan, inputs, shape, tile_items):
         # Never replay failures; join all workers before releasing their inputs.
         wait(futures)
     results, reports = zip(*(future.result() for future in futures), strict=True)
+    result, report = _combine_graph_sums(document, root, results, reports)
+    report.update(route="parallel-resident-reduction", threads=workers)
+    return result, report
+
+
+def _combine_graph_sums(document, root, results, reports):
     partials = np.stack(results)
     document["nodes"] = [
         {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
@@ -237,7 +268,13 @@ def _parallel_resident_sum(plan, inputs, shape, tile_items):
     combine = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")))
     result, combined_report = combine.evaluate({"partials": partials}, return_report=True)
     report = dict(reports[0])
-    for key in ("evaluated_tiles", "zero_copy_tiles", "gathered_bytes", "temporary_bytes"):
+    for key in (
+        "evaluated_tiles",
+        "zero_copy_tiles",
+        "gathered_bytes",
+        "temporary_bytes",
+        "normalization_bytes",
+    ):
         report[key] = sum(part[key] for part in reports)
     report["fp_flags"] = combined_report["fp_flags"]
     for part in reports:
@@ -245,7 +282,113 @@ def _parallel_resident_sum(plan, inputs, shape, tile_items):
     report["fp_supported"] = combined_report["fp_supported"] and all(
         part["fp_supported"] for part in reports
     )
-    report.update(route="parallel-resident-reduction", threads=workers)
+    return result, report
+
+
+def _compressed_sum_layout(plan, inputs, shape):
+    """Conservative metadata-only automatic gate; avoid small/serial IO regressions."""
+    import blosc2
+
+    from .resident_execution import MAXIMUM_WORKERS, MINIMUM_WORKER_ITEMS
+
+    compressed = [value for value in inputs.values() if type(value) is blosc2.NDArray]
+    if len(shape) != 1 or not compressed or blosc2.IS_WASM or plan.info()["stages"] != 1:
+        return None
+    if shape[0] < MINIMUM_COMPRESSED_GRAPH_ITEMS:
+        return None
+    first = compressed[0]
+    workers = min(blosc2.nthreads, MAXIMUM_WORKERS, shape[0] // MINIMUM_WORKER_ITEMS, first.schunk.nchunks)
+    if workers < 2:
+        return None
+    document = json.loads(plan.to_json())
+    root = document["nodes"][document["root"]]
+    if (
+        root["op"] != "sum"
+        or root["axes"] not in (None, [0], [-1])
+        or root["initial"] is not None
+        or root["where"] is not None
+    ):
+        return None
+    if any(
+        type(value) not in (np.ndarray, blosc2.NDArray)
+        or value.shape != shape
+        or value.dtype.kind != "f"
+        or not value.dtype.isnative
+        or (type(value) is np.ndarray and (not value.flags.c_contiguous or not value.flags.aligned))
+        for value in inputs.values()
+    ):
+        return None
+    if any(value.chunks != first.chunks or value.blocks != first.blocks for value in compressed):
+        return None
+    if first.blocks[0] > 65536:
+        return None
+    return first, workers, document, root
+
+
+def _parallel_compressed_sum(plan, inputs, shape, tile_items):
+    """Stream independent 1-D chunk regions with bounded, invocation-local readers."""
+    from concurrent.futures import wait
+
+    import blosc2
+
+    from .resident_execution import resident_pool
+    from .storage_readers import ReaderState, StorageReader
+
+    layout = _compressed_sum_layout(plan, inputs, shape)
+    if layout is None:
+        return None
+    first, workers, document, root = layout
+
+    class SpanReader(StorageReader):
+        def __init__(self, value, start, stop):
+            super().__init__(value, shape)
+            self.start = start
+            self.shape = (stop - start,)
+
+        def read(self, indices):
+            return super().read(indices + self.start)
+
+    # Match tiles to compression blocks so adjacent requests do not decompress
+    # the same boundary block twice. Scratch scales with tiles, never array size.
+    block = first.blocks[0]
+    target = max(tile_items, 65536)
+    worker_tile = max(1, target // block) * block if block <= target else target
+    schedules = []
+    for worker in range(workers):
+        start = first.schunk.nchunks * worker // workers * first.chunks[0]
+        stop = min(shape[0], first.schunk.nchunks * (worker + 1) // workers * first.chunks[0])
+        arrays = {
+            name: value if type(value) is blosc2.NDArray else value[start:stop]
+            for name, value in inputs.items()
+        }
+        readers = {
+            name: ReaderState(SpanReader(value, start, stop))
+            for name, value in inputs.items()
+            if type(value) is blosc2.NDArray
+        }
+        metadata = {name: (value.dtype, (stop - start,)) for name, value in inputs.items()}
+        schedule = plan.specialize(metadata, worker_tile)
+        if schedule.info()["dtype"].kind != "f":
+            return None
+        schedules.append((schedule, arrays, readers))
+    futures = []
+    try:
+        for schedule, arrays, readers in schedules:
+            futures.append(
+                resident_pool().submit(schedule.execute_sources, arrays, readers, native_spans=True)
+            )
+    finally:
+        wait(futures)
+    results, reports = zip(*(future.result() for future in futures), strict=True)
+    result, report = _combine_graph_sums(document, root, results, reports)
+    report.update(
+        route="parallel-graph-bounded-readers",
+        threads=workers,
+        tile_items=worker_tile,
+        maximum_reader_items=max(part["maximum_reader_items"] for part in reports),
+        reader_bytes=sum(part["reader_bytes"] for part in reports),
+        input_materialization_bytes=0,
+    )
     return result, report
 
 
@@ -255,6 +398,32 @@ def compile_plan(graph, jit=False, configuration=()):
     from .graph_plan import NativeGraph
 
     return NativeGraph(graph, jit=jit)
+
+
+def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0):
+    """Single-region native graph reader bindings; metadata validation precedes IO."""
+    import blosc2
+
+    from .storage_readers import ReaderState, StorageReader
+
+    if not getattr(blosc2.blosc2_ext, "native_graph_sources_available", lambda: False)():
+        raise NotImplementedError("Native runtime does not support graph storage readers")
+    if plan.info()["stages"] != 1:
+        raise ValueError("Storage readers require a single-region graph")
+    if any(type(value) not in (np.ndarray, blosc2.NDArray) for value in inputs.values()):
+        raise TypeError("Graph storage readers require NumPy or Blosc2 arrays")
+    schedule = plan.specialize(
+        {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
+    )
+    domain = schedule.info()["map_shape"]
+    readers = {
+        name: ReaderState(StorageReader(value, domain))
+        for name, value in inputs.items()
+        if type(value) is blosc2.NDArray
+    }
+    result, report = schedule.execute_sources(inputs, readers, raise_mask)
+    report.update(route="graph-bounded-readers", tile_items=tile_items)
+    return result, report
 
 
 @lru_cache(maxsize=128)
@@ -616,6 +785,24 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         selection += (slice(None),) * (len(shape) - len(selection))
         if reduction:
             raise ValueError("Native reduction partial reads are not yet eligible; select operands first")
+    if reduction and not selection and any(type(value) is blosc2.NDArray for value in inputs.values()):
+        streamed = _parallel_compressed_sum(plan, inputs, shape, tile_items) if parallel_reductions else None
+        result, report = (
+            evaluate_graph_sources(plan, inputs, tile_items=max(tile_items, 65536))
+            if streamed is None
+            else streamed
+        )
+        expr._native_execution_report = {
+            **report,
+            "semantic_revision": "menudet-numpy-1.0",
+            "backend": "portable-mixed"
+            if report["jit_stages"] and report["interpreter_stages"]
+            else "portable-jit"
+            if report["jit_stages"]
+            else "portable-interpreter",
+            "plan_cache": compile_plan.cache_info()._asdict(),
+        }
+        return result
     arrays = {}
     for name, value in inputs.items():
         if selection:

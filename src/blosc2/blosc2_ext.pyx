@@ -1302,6 +1302,67 @@ cdef int storage_reader_callback(void *opaque, const size_t *indices, size_t cou
         state.error = error
         return 1
 
+
+cdef struct graph_span_reader_state:
+    b2nd_array_t *array
+    blosc2_context *dctx
+    int64_t origin
+    int64_t extent
+    int64_t chunk_id
+    uint8_t *chunk
+    int chunk_bytes
+    c_bool needs_free
+    size_t maximum_items
+    size_t read_bytes
+
+
+cdef int graph_span_reader_callback(void *opaque, const size_t *indices, size_t count,
+                                     void *destination, size_t capacity) noexcept nogil:
+    """Invocation-owned decoder/chunk cache; no Python or full-array buffers."""
+    cdef graph_span_reader_state *state = <graph_span_reader_state *>opaque
+    cdef size_t i, done = 0, take
+    cdef int64_t first, chunk_id, offset
+    cdef int rc
+    cdef int32_t decoded, encoded, block_bytes, wanted
+    cdef int typesize = state.array.sc.typesize
+    if not count:
+        return 0
+    if typesize <= 0 or count > 2147483647 or count > capacity // typesize or capacity != count * typesize:
+        return 1
+    if indices[0] >= <size_t>state.extent or count > <size_t>state.extent - indices[0]:
+        return 1
+    for i in range(1, count):
+        if indices[i] != indices[0] + i:
+            return 1
+    first = state.origin + indices[0]
+    while done < count:
+        chunk_id = (first + done) // state.array.chunknitems
+        offset = (first + done) % state.array.chunknitems
+        take = min(count - done, <size_t>(state.array.chunknitems - offset))
+        if state.chunk == NULL or state.chunk_id != chunk_id:
+            if state.needs_free:
+                free(state.chunk)
+            state.chunk = NULL
+            state.needs_free = False
+            state.chunk_bytes = blosc2_schunk_get_lazychunk(state.array.sc, chunk_id,
+                                                         &state.chunk, &state.needs_free)
+            state.chunk_id = chunk_id
+            if state.chunk_bytes < 0 or state.chunk == NULL:
+                return 1
+        rc = blosc2_cbuffer_sizes(state.chunk, &decoded, &encoded, &block_bytes)
+        if rc < 0 or decoded < 0 or offset + take > <size_t>(decoded // typesize):
+            return 1
+        wanted = take * typesize
+        rc = blosc2_getitem_bytes_ctx(state.dctx, state.chunk, state.chunk_bytes,
+                                      offset * typesize, wanted,
+                                      <uint8_t *>destination + done * typesize, wanted)
+        if rc != wanted:
+            return 1
+        done += take
+    state.maximum_items = max(state.maximum_items, count)
+    state.read_bytes += capacity
+    return 0
+
 cdef object array_view_binding(np.ndarray array, b2_array_view *view):
     cdef np.ndarray root
     cdef object owner = array
@@ -1350,6 +1411,8 @@ cdef extern from "dsl_graph_bridge.h":
     int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, void **, b2_graph_error *) nogil
     int b2_graph_specialize(const void *, const b2_graph_metadata *, int, size_t, size_t, void **, b2_graph_error *) nogil
     int b2_graph_execute(const void *, const b2_array_view *, int, void *, size_t, unsigned, b2_graph_report *, b2_graph_error *) nogil
+    int b2_graph_sources_available()
+    int b2_graph_execute_sources(const void *, const b2_array_source *, int, void *, size_t, unsigned, b2_graph_report *, b2_graph_error *) nogil
     void b2_graph_free(void *)
     void b2_graph_schedule_free(void *)
     int b2_graph_ninputs(const void *)
@@ -1387,6 +1450,10 @@ cdef void raise_graph_error(int rc, b2_graph_error *error, b2_array_report *repo
     if report != NULL:
         exception.fp_status = {"flags": report.fp_flags, "supported": bool(report.fp_supported)}
     raise exception
+
+
+def native_graph_sources_available():
+    return bool(b2_graph_sources_available())
 
 
 cdef class NativeGraphHandle:
@@ -1575,6 +1642,109 @@ cdef class NativeGraphSchedule:
                         "fp_supported": bool(report.array.fp_supported), "stages": report.stages,
                         "jit_stages": report.jit_stages, "interpreter_stages": report.interpreter_stages,
                         "intermediate_bytes": b2_graph_intermediate(self._handle)}
+
+    def execute_sources(self, inputs, readers, unsigned raise_mask=0, *, bint native_spans=False):
+        """Bind invocation-local metadata readers; native traversal owns all requests."""
+        cdef b2_array_source sources[128]
+        cdef graph_span_reader_state spans[128]
+        cdef int n = len(inputs), i
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef list owned = [], states = []
+        cdef np.ndarray output
+        if not b2_graph_sources_available():
+            raise NotImplementedError("Native runtime does not support graph storage readers")
+        if n > 128 or set(readers) - set(inputs):
+            raise ValueError("Invalid graph storage-reader bindings")
+        memset(sources, 0, sizeof(sources))
+        memset(spans, 0, sizeof(spans))
+        info = self.info()
+        output = np.empty(info['shape'], dtype=info['dtype'])
+        try:
+            return self._execute_sources_bound(inputs, readers, raise_mask, native_spans,
+                                               sources, spans, names, owned, states, output)
+        finally:
+            for i in range(n):
+                if spans[i].dctx != NULL:
+                    blosc2_free_ctx(spans[i].dctx)
+                if spans[i].needs_free:
+                    free(spans[i].chunk)
+
+    cdef object _execute_sources_bound(self, object inputs, object readers, unsigned raise_mask,
+                                      bint native_spans, b2_array_source *sources,
+                                      graph_span_reader_state *spans, list names, list owned,
+                                      list states, np.ndarray output):
+        cdef b2_graph_report report
+        cdef b2_graph_error error
+        cdef int n = len(inputs), i, j, rc
+        cdef bytes name
+        cdef object state, value
+        cdef np.ndarray array, bound
+        cdef size_t normalized = 0, capacity = output.nbytes
+        cdef blosc2_dparams dparams
+        cdef NDArray compressed
+        for i, (key, value) in enumerate(inputs.items()):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            if key in readers:
+                state = readers[key]
+                states.append(state)
+                sources[i].view.dtype = _me_dtype_from_numpy_dtype(state.dtype)
+                sources[i].view.rank = len(state.reader.shape)
+                if sources[i].view.rank > 16:
+                    raise ValueError("Storage reader rank limit exceeded")
+                for j in range(sources[i].view.rank):
+                    sources[i].view.shape[j] = state.reader.shape[j]
+                sources[i].read = storage_reader_callback
+                sources[i].owner = <void *>state
+                if native_spans:
+                    if not isinstance(value, NDArray) or sources[i].view.rank != 1:
+                        raise ValueError("Native span readers require 1-D compressed arrays")
+                    compressed = value
+                    if compressed.ndim != 1:
+                        raise ValueError("Native span readers require 1-D compressed arrays")
+                    spans[i].array = compressed.array
+                    spans[i].origin = state.reader.start
+                    spans[i].extent = state.reader.shape[0]
+                    if spans[i].origin < 0 or spans[i].extent < 0 or spans[i].origin + spans[i].extent > compressed.array.shape[0]:
+                        raise ValueError("Native span reader extent exceeds input shape")
+                    dparams = compressed.array.sc.storage.dparams[0]
+                    dparams.nthreads = 1
+                    dparams.schunk = compressed.array.sc
+                    dparams.typesize = compressed.array.sc.typesize
+                    spans[i].dctx = blosc2_create_dctx(dparams)
+                    if spans[i].dctx == NULL:
+                        raise MemoryError("Cannot allocate native graph decoder")
+                    sources[i].read = graph_span_reader_callback
+                    sources[i].owner = &spans[i]
+            else:
+                if not isinstance(value, np.ndarray):
+                    raise TypeError("Resident graph inputs require NumPy buffers")
+                array = value
+                bound = array_view_binding(array, &sources[i].view)
+                if bound is not array:
+                    normalized += bound.nbytes
+                owned.append(bound)
+            sources[i].view.name = name
+        with nogil:
+            rc = b2_graph_execute_sources(self._handle, sources, n, np.PyArray_DATA(output), capacity,
+                                          raise_mask, &report, &error)
+        for state in states:
+            if state.error is not None:
+                raise state.error
+        if rc:
+            raise_graph_error(rc, &error, &report.array)
+        return output, {"temporary_bytes": report.array.temporary_bytes,
+                        "gathered_bytes": report.array.gathered_bytes, "normalization_bytes": normalized,
+                        "zero_copy_tiles": report.array.zero_copy_tiles, "evaluated_tiles": report.array.evaluated_tiles,
+                        "fp_flags": report.array.fp_flags, "fp_supported": bool(report.array.fp_supported),
+                        "stages": report.stages, "jit_stages": report.jit_stages,
+                        "interpreter_stages": report.interpreter_stages,
+                        "intermediate_bytes": b2_graph_intermediate(self._handle),
+                        "maximum_reader_items": max(max((state.max_items for state in states), default=0),
+                                                     max((spans[i].maximum_items for i in range(n)), default=0)),
+                        "reader_bytes": sum(state.read_bytes for state in states) + sum(spans[i].read_bytes for i in range(n)),
+                        "input_materialization_bytes": 0}
 
 
 def portable_artifact_available():
@@ -4995,9 +5165,13 @@ cdef class NDArray:
         # The getitem entry points need the full lazy chunk size returned by
         # blosc2_schunk_get_lazychunk().
         want_nbytes = nitems * self.array.sc.typesize
-        rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
-                                      start * self.array.sc.typesize, want_nbytes,
-                                      view.buf, view.len)
+        # This invocation owns its context, chunk reference and destination;
+        # release the GIL so independent bounded graph readers can decompress
+        # concurrently instead of serializing all native source callbacks.
+        with nogil:
+            rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
+                                          start * self.array.sc.typesize, want_nbytes,
+                                          view.buf, view.len)
         blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)
         if needs_free:

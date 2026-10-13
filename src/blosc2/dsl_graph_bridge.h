@@ -153,4 +153,35 @@ static int b2_graph_stage_info(const void *s, int stage, int64_t *shape, me_dtyp
 static int b2_graph_shape(const void *s, int64_t *shape, me_dtype *dtype) { (void)s; (void)shape; *dtype = ME_AUTO; return -1; }
 static int b2_graph_map_shape(const void *s, int64_t *shape) { (void)s; (void)shape; return -1; }
 #endif
+static int b2_graph_sources_available(void) {
+#ifdef B2_HAVE_GRAPH_SOURCES
+    return 1;
+#else
+    return 0;
+#endif
+}
+static int b2_graph_execute_sources(const void *s, const b2_array_source *inputs, int n,
+    void *out, size_t bytes, unsigned raise_mask, b2_graph_report *report, b2_graph_error *e) {
+#ifdef B2_HAVE_GRAPH_SOURCES
+    me_graph_execute_options options = {sizeof(options), ME_GRAPH_VERSION, raise_mask};
+    me_graph_report result = {0}; me_graph_error error = {0};
+    int rc = me_graph_execute_sources(s, inputs, n, out, bytes, &options, &result, &error);
+    report->array = result.array;
+    report->stages = result.stages;
+#ifdef ME_GRAPH_STAGED_FORMAT
+    report->jit_stages = result.jit_stages;
+    report->interpreter_stages = result.interpreter_stages;
+#else
+    report->jit_stages = result.has_jit ? 1 : 0;
+    report->interpreter_stages = result.stages - report->jit_stages;
+#endif
+    e->node = error.node; e->stage = error.stage; e->native = error.native;
+    return rc;
+#else
+    (void)s; (void)inputs; (void)n; (void)out; (void)bytes; (void)raise_mask;
+    memset(report, 0, sizeof(*report)); memset(e, 0, sizeof(*e));
+    snprintf(e->native.message, sizeof(e->native.message), "Native runtime does not support graph storage readers");
+    return -100;
+#endif
+}
 #endif

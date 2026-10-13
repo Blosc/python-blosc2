@@ -255,10 +255,15 @@ retain existing execution rather than using the slower native graph interpreter.
 The six reduction methods (``sum/prod/min/max/any/all``) and root reduction
 expressions over eligible arithmetic also select native graphs, including axes,
 ``keepdims``, accumulator dtypes and ``initial``. General calls, division/powers,
-partial indexing, compressed/proxy/table operands, output aliases and execution
-overrides retain existing execution. Compressed inputs are excluded from automatic
-selection because the current graph frontend materializes them rather than
-streaming. ``evaluation="safe"`` remains a syntax policy, not a backend selector.
+partial indexing, proxy/table operands, output aliases and execution overrides
+retain existing execution. Compressed inputs can automatically select streamed
+whole-domain floating sums over same-shaped 1-D inputs with matching compressed
+chunks/blocks, no mask or ``initial``, and at least two workers. Selection currently
+requires at least 16 million items and blocks of at most 65,536 items to amortize
+reader overhead; smaller or unsupported cases retain legacy execution. NumPy
+operands can be mixed with these compressed inputs. Compressed elementwise reads
+remain outside automatic graph selection. ``evaluation="safe"`` remains a syntax
+policy, not a backend selector.
 
 Automatic selection prepares/validates the graph before execution; unsupported
 preparation can retain existing execution, but execution errors never trigger
@@ -275,6 +280,10 @@ Use ``expr.sum(_require_native=False)`` to retain legacy reduction execution
 (which is not necessarily serial). Use
 ``expr.sum(_require_native=True, jit=True)`` for serial native graph accumulation.
 Explicit ``NativeGraph`` execution likewise retains its serial-order contract.
+Automatically streamed compressed sums use the same partial-sum policy. Their
+native readers own independent decompression contexts and cache only the current
+compressed chunk; decoded scratch is bounded by worker count and tile size, not
+the full operand size. They do not materialize complete operands.
 
 .. code-block:: python
 
@@ -307,9 +316,25 @@ in automatic mode. In strict native-required mode, nested lazy/proxy/table
 operands, row filtering/ordering, output aliases, reduction partial reads and
 acceleration overrides reject. Basic elementwise slicing is supported.
 
-Native iterator scratch is not an end-to-end memory bound: compressed operands
-can still require full frontend materialization. The execution report records those
-bytes separately. Exported elementwise Menudet artifacts can use existing safe
+Single-region native-required reductions stream compressed operands, including
+axes, broadcasting and mixed storage, without full input materialization.
+``NativeGraph.evaluate_sources()`` exposes this bounded reader route explicitly:
+
+.. code-block:: python
+
+    compressed = blosc2.asarray(np.arange(1000, dtype=np.float64))
+    plan = blosc2.NativeGraph.from_expression("sum(x + 1)", {"x": "float64"}, jit=True)
+    total, report = plan.evaluate_sources(
+        {"x": compressed}, tile_items=65536, return_report=True
+    )
+    assert report["input_materialization_bytes"] == 0
+
+Native traversal validates bindings before storage reads; reader or numerical
+failures never trigger legacy replay. Staged reader graphs and compressed reduction
+masks are not supported. Native iterator scratch is not an end-to-end memory bound:
+decoder/chunk caches, output storage and resident-buffer normalization are separate.
+Other explicit compressed graph execution (such as elementwise reads) can still
+materialize inputs, reported separately. Exported elementwise Menudet artifacts can use existing safe
 portable persistence; logical reduction descriptors are not persisted as though
 they were block-scalar recipes.
 

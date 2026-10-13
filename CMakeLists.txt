@@ -160,6 +160,11 @@ if(TARGET miniexpr_artifact)
   endif()
   if(EXISTS "${miniexpr_SOURCE_DIR}/src/miniexpr_graph.h")
     target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_NATIVE_GRAPH=1)
+    file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_graph.h" B2_GRAPH_SOURCE_DECLARATION
+      REGEX "^me_graph_status me_graph_execute_sources\\(")
+    if(B2_GRAPH_SOURCE_DECLARATION AND B2_ARRAY_SOURCE_DECLARATION)
+      target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_GRAPH_SOURCES=1)
+    endif()
   endif()
   FetchContent_GetProperties(yyjson SOURCE_DIR B2_YYJSON_SOURCE_DIR)
   install(FILES "${B2_YYJSON_SOURCE_DIR}/LICENSE"

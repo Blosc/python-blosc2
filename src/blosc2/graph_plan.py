@@ -14,7 +14,7 @@ class NativeGraph:
 
     This format is separate from portable elementwise artifact persistence.
     Preparation and specialization require only explicit numerical metadata.
-    Compressed storage is a frontend concern, not native graph IO.
+    Compressed storage is adapted through invocation-local native graph readers.
     """
 
     def __init__(self, graph: str | bytes | dict, *, jit: bool = False, require_jit: bool = False):
@@ -85,3 +85,15 @@ class NativeGraph:
     def map_json(self):
         """Export an eligible elementwise graph as a Menudet 1.0 artifact."""
         return self._handle.map_json()
+
+    def evaluate_sources(self, inputs, *, tile_items=65536, raise_mask=0, return_report=False):
+        """Stream a single-region graph from NumPy/Blosc2 inputs with bounded scratch.
+
+        Native traversal owns broadcasting, axes and serial reduction order.
+        Compressed operands are decoded only for requested tiles, never materialized.
+        Staged graphs and compressed participation masks remain unsupported.
+        """
+        from .native_graph import evaluate_graph_sources
+
+        result, report = evaluate_graph_sources(self, inputs, tile_items=tile_items, raise_mask=raise_mask)
+        return (result, report) if return_report else result
