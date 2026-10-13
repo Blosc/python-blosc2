@@ -144,7 +144,7 @@ partitions cover the whole logical domain; eligible compressed inputs use native
 storage dispatch as described below.
 
 Existing ``@blosc2.dsl_kernel`` authoring/export and legacy UDF calling conventions
-are unchanged. See ``examples/menudet_decorator.py`` and ``bench/menudet-api.py``.
+are unchanged. See ``examples/menudet_decorator.py`` and ``bench/menudet-engines.py``.
 
 Parallel resident reads
 ~~~~~~~~~~~~~~~~~~~~~~~
