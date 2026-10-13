@@ -10,9 +10,15 @@ inputs, and that cost is included in their timings. LazyExpr and the Menudet
 kernel evaluate directly over the compressed chunks, so the table shows the
 practical difference between the two input storages.
 
+With ``--reduc``, each engine returns a scalar. Menudet uses a native block
+reduction, which requires resident operands (decompression is timed for Blosc2).
+Numexpr's mean is implemented as sum/count. Reduction threading depends on the
+engine and is not necessarily the configured thread count.
+
 Usage::
 
     python bench/menudet-engines.py --items 100000 1000000 8000000
+    python bench/menudet-engines.py --reduc sum
 """
 
 import argparse
@@ -46,6 +52,26 @@ def adjusted(x, y):
     return x + (y - 1)
 
 
+@blosc2.menudet(cardinality="block_scalar")
+def adjusted_sum(x, y):
+    return block_sum(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+
+
+@blosc2.menudet(cardinality="block_scalar")
+def adjusted_mean(x, y):
+    return block_mean(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+
+
+@blosc2.menudet(cardinality="block_scalar")
+def adjusted_min(x, y):
+    return block_min(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+
+
+@blosc2.menudet(cardinality="block_scalar")
+def adjusted_max(x, y):
+    return block_max(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+
+
 def build_operands(size, kind):
     """Return the ``x``/``y`` operands and the expected result for one storage kind."""
     x = np.linspace(0, 1, size)
@@ -58,32 +84,60 @@ def build_operands(size, kind):
     return inputs, expected
 
 
-def make_engines(inputs, kind):
+def make_engines(inputs, kind, reduc=None):
     """Return an ordered mapping of engine name to a callable producing a result.
 
     Over Blosc2 operands the NumPy and numexpr callables include operand
     materialization, while LazyExpr and Menudet read the compressed inputs.
     """
+    numpy_reduce = getattr(np, reduc) if reduc else None
+    numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({EXPRESSION})" if reduc else EXPRESSION
+
+    def finish_numpy(values):
+        return numpy_reduce(values) if reduc else values
+
+    def finish_numexpr(resident):
+        result = ne.evaluate(numexpr_expression, local_dict=resident)
+        if reduc == "mean":
+            return result.item() / inputs["x"].size
+        return result.item() if reduc else result
+
     if kind == "numpy":
 
         def numpy_run():
-            return inputs["x"] + (inputs["y"] - 1)
+            return finish_numpy(inputs["x"] + (inputs["y"] - 1))
 
         def numexpr_run():
-            return ne.evaluate(EXPRESSION, local_dict=inputs)
+            return finish_numexpr(inputs)
 
     else:
 
         def numpy_run():
             x = inputs["x"][:]
             y = inputs["y"][:]
-            return x + (y - 1)
+            return finish_numpy(x + (y - 1))
 
         def numexpr_run():
             resident = {name: value[:] for name, value in inputs.items()}
-            return ne.evaluate(EXPRESSION, local_dict=resident)
+            return finish_numexpr(resident)
 
     lazy = blosc2.lazyexpr(EXPRESSION, inputs)
+    if reduc:
+        author = {"sum": adjusted_sum, "mean": adjusted_mean, "min": adjusted_min, "max": adjusted_max}[
+            reduc
+        ]
+        kernel = author.specialize(**inputs)
+
+        def menudet_reduce():
+            resident = inputs if kind == "numpy" else {name: value[:] for name, value in inputs.items()}
+            return kernel.evaluate_block(resident).item()
+
+        return {
+            "NumPy": numpy_run,
+            "numexpr": numexpr_run,
+            "LazyExpr": getattr(lazy, reduc),
+            "Menudet": menudet_reduce,
+        }
     menudet = adjusted(**inputs)
     return {
         "NumPy": numpy_run,
@@ -97,7 +151,13 @@ def benchmark(engines, expected, samples, warmups, rng):
     """Correctness-check once, warm up, then time interleaved shuffled samples."""
     for operation in engines.values():
         result = operation()
-        np.testing.assert_array_equal(result, expected)
+        if np.ndim(expected) == 0:
+            if np.ndim(result) != 0:
+                raise AssertionError("Reduction must return a scalar")
+            # Native/parallel summation can group floating additions differently.
+            np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+        else:
+            np.testing.assert_array_equal(result, expected)
         del result
     for _ in range(warmups):
         for operation in engines.values():
@@ -167,6 +227,9 @@ def main():
     parser.add_argument("--threads", type=int, default=12)
     parser.add_argument("--operands", choices=("both", "numpy", "blosc2"), default="both")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
+    parser.add_argument(
+        "--reduc", choices=("sum", "mean", "min", "max"), help="reduce the expression to a scalar"
+    )
     args = parser.parse_args()
     if args.samples <= 0 or args.warmups < 0 or any(size <= 0 for size in args.items):
         parser.error("items and samples must be positive; warmups must be non-negative")
@@ -178,7 +241,8 @@ def main():
     ne.set_num_threads(args.threads)
     kinds = ("numpy", "blosc2") if args.operands == "both" else (args.operands,)
 
-    print(f"Expression: {EXPRESSION}")
+    expression = f"{args.reduc}({EXPRESSION})" if args.reduc else EXPRESSION
+    print(f"Expression: {expression}")
     print("Warm medians in milliseconds (lower is better); fastest figure per row in green.")
     print(
         f"blosc2 {blosc2.__version__} | numpy {np.__version__} | numexpr {ne.__version__}"
@@ -194,7 +258,9 @@ def main():
     for size in args.items:
         for kind in kinds:
             inputs, expected = build_operands(size, kind)
-            engines = make_engines(inputs, kind)
+            if args.reduc:
+                expected = getattr(np, args.reduc)(expected)
+            engines = make_engines(inputs, kind, args.reduc)
             times = benchmark(engines, expected, args.samples, args.warmups, rng)
             del inputs, engines, expected
             if previous is not None and size != previous:
@@ -204,10 +270,18 @@ def main():
             previous = size
 
     print()
-    print(
-        "Blosc2 operands: NumPy and numexpr figures include operand decompression; "
-        "LazyExpr and Menudet evaluate the compressed chunks directly."
-    )
+    if args.reduc:
+        print(
+            "Blosc2 operands: NumPy, numexpr and Menudet include operand decompression; LazyExpr reduces directly."
+        )
+        print(
+            "Menudet uses a native block reduction; numexpr mean uses sum/count. Reduction threading is engine-dependent."
+        )
+    else:
+        print(
+            "Blosc2 operands: NumPy and numexpr figures include operand decompression; "
+            "LazyExpr and Menudet evaluate the compressed chunks directly."
+        )
 
 
 if __name__ == "__main__":
