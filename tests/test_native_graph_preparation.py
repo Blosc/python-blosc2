@@ -107,7 +107,13 @@ def test_computed_reduction_float_edge_parity(dtype, op, case):
     for tile in (1, 3, 64):
         actual, report = plan.evaluate(inputs, tile_items=tile, return_report=True)
         expected, reference = generic.evaluate(masked_inputs, tile_items=tile, return_report=True)
-        assert actual.tobytes() == expected.tobytes()
+        assert actual.dtype == expected.dtype
+        # Portable arithmetic does not specify NaN payload/sign. Preserve exact
+        # bits for all other results, especially signed-zero selection.
+        if np.isnan(expected).all():
+            assert np.isnan(actual).all()
+        else:
+            assert actual.tobytes() == expected.tobytes()
         assert report["fp_flags"] == reference["fp_flags"]
 
 
