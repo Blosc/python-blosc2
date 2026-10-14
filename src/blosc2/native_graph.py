@@ -125,12 +125,15 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     if not jit or jit_backend is not None or fp_accuracy is not None:
         return None
     if type(expr) is not blosc2.LazyExpr or any(
-        hasattr(expr, name) for name in ("_where_args", "_indices", "_order", "_output")
+        hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
     ):
         return None
     if getattr(expr, "_ne_args", None) is not None:
         return None
     options = options or {}
+    output = options.get("out", getattr(expr, "_output", None))
+    if output is not None and type(output) is not np.ndarray:
+        return None
     explicit = options.get("_reduce_args")
     reduction_options = None
     if explicit is not None:
@@ -144,7 +147,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             "dtype": explicit.get("dtype"),
             "keepdims": explicit["keepdims"],
         }
-    if options.keys() - {"_getitem", "_reduce_args", "initial"}:
+    if options.keys() - {"_getitem", "_reduce_args", "initial", "out"}:
         return None
     # Only whole-domain reads: even a full slice of a staged graph is currently
     # treated as a partial read by the strict adapter.
@@ -154,6 +157,8 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     if not all(_native_first_operand(value) for value in expr.operands.values()):
         return None
     compressed = any(type(value) is blosc2.NDArray for value in expr.operands.values())
+    if output is not None and (not compressed or explicit is not None):
+        return None
     if compressed and not getattr(blosc2.blosc2_ext, "native_graph_sources_available", lambda: False)():
         return None
     if compressed:
@@ -174,14 +179,22 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         return None
     if not _native_first_syntax(expr.expression):
         return None
+    if any(
+        isinstance(node, ast.Name) and node.id not in expr.operands and node.id not in REDUCERS
+        for node in ast.walk(ast.parse(expr.expression, mode="eval"))
+    ):
+        return None
     try:
         prepared = lower_native_graph(
             expr,
             jit=jit,
             reduction_options=reduction_options,
             root_options={"initial": options["initial"]} if "initial" in options else None,
+            allow_output=True,
         )
         if prepared[2] and selection:
+            return None
+        if output is not None and prepared[2]:
             return None
         if compressed and prepared[0].info()["stages"] != 1:
             return None
@@ -194,6 +207,18 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         schedule = prepared[0].specialize(
             {name: (value.dtype, value.shape) for name, value in prepared[1].items()}
         )
+        if output is not None and (
+            output.shape != schedule.info()["shape"]
+            or output.dtype != schedule.info()["dtype"]
+            or not output.flags.c_contiguous
+            or not output.flags.aligned
+            or not output.flags.writeable
+            or any(
+                type(value) is np.ndarray and np.shares_memory(output, value)
+                for value in prepared[1].values()
+            )
+        ):
+            return None
         if len(selection) > len(schedule.info()["map_shape"]):
             return None
         if (
@@ -211,6 +236,109 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             raise
         return None
     return prepared
+
+
+def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/output admission
+    expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None
+):
+    """Use the shared portable prefilter for matching Blosc2 result storage."""
+    from types import SimpleNamespace
+
+    import blosc2
+
+    from .storage_readers import compute_storage_if_eligible
+
+    if not jit or jit_backend is not None or fp_accuracy is not None:
+        return None
+    if type(expr) is not blosc2.LazyExpr or any(
+        hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
+    ):
+        return None
+    if getattr(expr, "_ne_args", None) is not None:
+        return None
+    options = dict(options or {})
+    if options.pop("_getitem", False):
+        return None
+    options.pop("_use_index", None)
+    if options.keys() - {
+        "out",
+        "chunks",
+        "blocks",
+        "cparams",
+        "dparams",
+        "meta",
+        "urlpath",
+        "contiguous",
+        "mode",
+        "mmap_mode",
+        "initial_mapping_size",
+        "locking",
+        "storage",
+    }:
+        return None
+    output = options.get("out", getattr(expr, "_output", None))
+    if output is not None:
+        if type(output) is not blosc2.NDArray:
+            return None
+        options["out"] = output
+    selection = item if isinstance(item, tuple) else (item,)
+    if any(not isinstance(s, slice) or s != slice(None) for s in selection):
+        return None
+    # The first implementation deliberately excludes mixed storage, broadcasting
+    # and scalar operands. Admission must remain metadata-only.
+    values = tuple(expr.operands.values())
+    if not values or any(
+        type(value) is not blosc2.NDArray or value.dtype.kind != "f" or not _native_first_operand(value)
+        for value in values
+    ):
+        return None
+    first = values[0]
+    if (
+        first.ndim != 1
+        or not first.size
+        or any(
+            value.shape != first.shape or value.chunks != first.chunks or value.blocks != first.blocks
+            for value in values
+        )
+    ):
+        return None
+    if not _native_first_syntax(expr.expression):
+        return None
+    if any(
+        isinstance(node, ast.Name) and node.id not in expr.operands
+        for node in ast.walk(ast.parse(expr.expression, mode="eval"))
+    ):
+        return None
+    try:
+        plan, inputs, reduction = lower_native_graph(expr, jit=True, allow_output=True)
+        if reduction or plan.info()["stages"] != 1:
+            return None
+        kernel = _resident_map_kernel(plan)
+    except NotImplementedError:
+        return None
+    except blosc2.PortableArtifactError as error:
+        if error.status not in {"invalid_signature", "unsupported"}:
+            raise
+        return None
+    if kernel is None or kernel.output_dtype != expr.dtype:
+        return None
+    lazy = SimpleNamespace(
+        kernel=kernel, inputs=inputs, _domain=first.shape, shape=first.shape, dtype=expr.dtype
+    )
+    result = compute_storage_if_eligible(lazy, options)
+    if result is None:
+        return None
+    output, report = result
+    expr._native_execution_report = {
+        **report,
+        "semantic_revision": "menudet-numpy-1.0",
+        "backend": "portable-jit",
+        "frontend": getattr(plan, "_frontend", "declarative-json"),
+        "plan_cache": compile_plan.cache_info()._asdict(),
+        "input_materialization_bytes": 0,
+        "output_copy_bytes": 0,
+    }
+    return output
 
 
 def _parallel_resident_reduction(plan, inputs, shape, tile_items):
@@ -465,7 +593,7 @@ def _compressed_map_schedules(plan, shape, workers, chunk, block, units, worker_
     return tuple(schedules)
 
 
-def _parallel_compressed_map(plan, inputs, shape, tile_items):
+def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
     """One whole-domain job; worker-private decoders write disjoint output regions.
 
     Native source iterators reuse bounded input/map scratch throughout a region.
@@ -505,7 +633,17 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items):
     schedules = _compressed_map_schedules(plan, shape, workers, first.chunks[0], block, units, worker_tile)
     if schedules is None:
         return None
-    output = np.empty(shape, dtype=schedules[0][2].info()["dtype"])
+    dtype = schedules[0][2].info()["dtype"]
+    if out is None:
+        output = np.empty(shape, dtype=dtype)
+    else:
+        if type(out) is not np.ndarray or out.shape != shape or out.dtype != dtype:
+            raise ValueError("Native map output shape/dtype disagree with the expression")
+        if not out.flags.c_contiguous or not out.flags.aligned or not out.flags.writeable:
+            raise ValueError("Native map output must be writable, aligned and C-contiguous")
+        if any(type(value) is np.ndarray and np.shares_memory(out, value) for value in inputs.values()):
+            raise ValueError("Native map output must not overlap an input")
+        output = out
     futures = []
     try:
         for start, stop, schedule in schedules:
@@ -879,12 +1017,14 @@ class GraphAdapter:
         raise ValueError(f"Unsupported native syntax: {type(node).__name__}")
 
 
-def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=None):
+def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=None, allow_output=False):
     import blosc2
 
     if type(expr) is not blosc2.LazyExpr:
         raise TypeError("Native graph lowering requires a LazyExpr")
-    if any(hasattr(expr, name) for name in ("_where_args", "_indices", "_order", "_output")):
+    if any(hasattr(expr, name) for name in ("_where_args", "_indices", "_order")) or (
+        not allow_output and hasattr(expr, "_output")
+    ):
         raise ValueError("Table filtering, ordering and output aliases are not native-graph eligible")
     graph = parse_expression(expr.expression)
     operands = dict(expr.operands)
@@ -958,6 +1098,9 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         )
     )
     getitem = kwargs.pop("_getitem", False)
+    output = kwargs.pop("out", None)
+    if output is not None and (reduction or not getitem or not parallel_reductions):
+        raise ValueError("Explicit native output requires an eligible compressed parallel map")
     for key in ("_output", "out", "_ne_args", "ne_args", "_where_args", "_indices", "_order"):
         if key in kwargs:
             raise ValueError(f"{key} is not native-graph eligible")
@@ -1022,7 +1165,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
             )
         )
     ):
-        streamed = _parallel_compressed_map(plan, inputs, shape, tile_items)
+        streamed = _parallel_compressed_map(plan, inputs, shape, tile_items, out=output)
         if streamed is not None:
             result, report = streamed
             expr._native_execution_report = {
@@ -1033,6 +1176,8 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
                 "frontend": getattr(plan, "_frontend", "declarative-json"),
             }
             return result
+    if output is not None:
+        raise ValueError("Explicit native output requires an eligible compressed parallel map")
     arrays = {}
     for name, value in inputs.items():
         if selection:

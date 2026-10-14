@@ -32,11 +32,12 @@ def test_engine_results(engine_benchmark, size, kind, reduc):
             assert np.ndim(result) == 0, name
             np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12, err_msg=name)
         else:
-            if kind == "blosc2" and name != "evaluate":
+            if name == "LazyExpr" or (kind == "blosc2" and name == "Menudet"):
                 assert isinstance(result, blosc2.NDArray), name
                 assert result.cparams.clevel == 0, name
-                assert result.chunks == inputs["x"].chunks, name
-                assert result.blocks == inputs["x"].blocks, name
+                if kind == "blosc2":
+                    assert result.chunks == inputs["x"].chunks, name
+                    assert result.blocks == inputs["x"].blocks, name
                 result = result[:]
             else:
                 assert isinstance(result, np.ndarray), name

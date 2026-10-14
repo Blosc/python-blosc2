@@ -218,16 +218,35 @@ def compute_storage_if_eligible(lazy, kwargs):
         or not _dense_compressed_eligible(lazy)
         or not getattr(extension, "portable_prefilter_available", lambda: False)()
         or not extension.portable_prefilter_inputs_eligible(lazy.inputs)
-        or "out" in kwargs
     ):
         return None
     first = next(iter(lazy.inputs.values()))
+    options = dict(kwargs)
+    output = options.pop("out", None)
+    if output is not None:
+        block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in lazy.inputs.values())
+        for name in ("chunks", "blocks"):
+            requested = options.pop(name, None)
+            if requested is not None and tuple(requested) != getattr(first, name):
+                return None
+        if (
+            type(output) is not blosc2.NDArray
+            or options
+            or output.shape != lazy.shape
+            or output.dtype != lazy.dtype
+            or output.chunks != first.chunks
+            or output.blocks != first.blocks
+            or output.cparams.nthreads * block_bytes > DENSE_MATERIALIZATION_BUDGET
+            or any(output is value for value in lazy.inputs.values())
+        ):
+            return None
+        return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
     if any(
         kwargs.get(name) is not None and tuple(kwargs[name]) != getattr(first, name)
         for name in ("chunks", "blocks")
     ):
         return None
-    options = {**kwargs, "chunks": first.chunks, "blocks": first.blocks}
+    options.update(chunks=first.chunks, blocks=first.blocks)
     # Match the existing prefilter's bounded per-worker input scratch budget.
     block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in lazy.inputs.values())
     thread_limit = max(1, (32 * 1024**2) // block_bytes)

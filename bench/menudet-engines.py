@@ -1,7 +1,7 @@
 """Compare compute engines for ``x + (y - 1)`` over NumPy and Blosc2 operands.
 
 A single human-readable table reports warm medians for the same expression
-evaluated by NumPy, numexpr, LazyExpr, blosc2.evaluate and a Menudet kernel -- on
+evaluated by NumPy, numexpr, both LazyExpr output paths, blosc2.evaluate and a Menudet kernel -- on
 resident NumPy operands and on compressed Blosc2 operands (both filled with
 ``numpy.linspace``). The fastest figure of every row is highlighted in green.
 
@@ -12,9 +12,10 @@ from the NumPy-output paths.
 The evaluate column calls ``blosc2.evaluate`` afresh each time. Repeated
 preparation uses an operand-free recipe cache; input rebinding and fresh NumPy
 output allocation are timed, and no result buffer is reused. The evaluate column
-always returns NumPy output for elementwise expressions. Other engines in Blosc2
-input rows return uncompressed Blosc2 outputs with the input chunk/block layout;
-NumPy and numexpr include conversion of their resident results to that storage.
+always returns NumPy output for elementwise expressions, as do NumPy, numexpr
+and LazyExpr-NumPy. LazyExpr always returns uncompressed Blosc2 output. Menudet
+returns uncompressed Blosc2 output for Blosc2 inputs and NumPy output for NumPy
+inputs. Blosc2 outputs use the input chunk/block layout for Blosc2 inputs.
 
 With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
@@ -40,7 +41,7 @@ import numpy as np
 import blosc2
 
 EXPRESSION = "x + (y - 1)"
-ENGINES = ("NumPy", "numexpr", "LazyExpr", "evaluate", "Menudet")
+ENGINES = ("NumPy", "numexpr", "LazyExpr-NumPy", "LazyExpr", "evaluate", "Menudet")
 GREEN = "\033[1;32m"
 RESET = "\033[0m"
 
@@ -104,9 +105,8 @@ def build_operands(size, kind):
 def make_engines(inputs, kind, reduc=None):
     """Return an ordered mapping of engine name to a callable producing a result.
 
-    Elementwise Blosc2 rows return uncompressed Blosc2 arrays except evaluate,
-    which always returns NumPy. NumPy and numexpr include operand materialization
-    and output conversion.
+    LazyExpr returns uncompressed Blosc2 output; LazyExpr-NumPy, NumPy, numexpr
+    and evaluate always return NumPy. Menudet preserves the input storage kind.
     """
     numpy_reduce = getattr(np, reduc) if reduc else None
     numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({EXPRESSION})" if reduc else EXPRESSION
@@ -165,32 +165,23 @@ def make_engines(inputs, kind, reduc=None):
         return {
             "NumPy": numpy_run,
             "numexpr": numexpr_run,
+            "LazyExpr-NumPy": getattr(lazy, reduc),
             "LazyExpr": getattr(lazy, reduc),
             "evaluate": lambda: blosc2.evaluate(f"{reduc}({EXPRESSION})", local_dict=inputs),
             "Menudet": menudet_reduce,
         }
     menudet = adjusted(**inputs)
+    output_options = {"cparams": blosc2.CParams(clevel=0)}
     if kind == "blosc2":
         first = inputs["x"]
-        output_options = {
-            "chunks": first.chunks,
-            "blocks": first.blocks,
-            "cparams": blosc2.CParams(clevel=0),
-        }
-
-        return {
-            "NumPy": lambda: blosc2.asarray(numpy_run(), **output_options),
-            "numexpr": lambda: blosc2.asarray(numexpr_run(), **output_options),
-            "LazyExpr": lambda: lazy.compute(**output_options),
-            "evaluate": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
-            "Menudet": lambda: menudet.compute(**output_options),
-        }
+        output_options.update(chunks=first.chunks, blocks=first.blocks)
     return {
         "NumPy": numpy_run,
         "numexpr": numexpr_run,
-        "LazyExpr": lambda lazy=lazy: lazy[:],
+        "LazyExpr-NumPy": lambda: lazy[:],
+        "LazyExpr": lambda: lazy.compute(**output_options),
         "evaluate": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
-        "Menudet": lambda menudet=menudet: menudet[:],
+        "Menudet": (lambda: menudet.compute(**output_options)) if kind == "blosc2" else (lambda: menudet[:]),
     }
 
 
@@ -324,7 +315,7 @@ def main():
     if args.reduc:
         print(
             "Blosc2 operands: NumPy, numexpr and Menudet include operand decompression; "
-            "LazyExpr and evaluate reduce directly."
+            "both LazyExpr columns and evaluate reduce directly."
         )
         print(
             "Menudet uses a native block reduction; numexpr mean uses sum/count. Reduction threading is engine-dependent."
@@ -333,13 +324,12 @@ def main():
             print("Numexpr any/all use 0/1 truth max/min; Menudet block truth reductions may short-circuit.")
     else:
         print(
-            "Blosc2 operands: NumPy and numexpr figures include operand decompression "
-            "and output conversion; other engines use their existing compute paths."
+            "Blosc2 operands: NumPy and numexpr figures include operand decompression; "
+            "other engines evaluate directly over compressed inputs when eligible."
         )
         print(
-            "evaluate always returns NumPy output; other engines in Blosc2 input rows "
-            "return Blosc2 outputs (clevel=0, input layout). "
-            "NumPy and numexpr output conversion is timed. NumPy input rows return NumPy outputs."
+            "NumPy, numexpr, LazyExpr-NumPy and evaluate return NumPy outputs. "
+            "LazyExpr returns Blosc2 output (clevel=0); Menudet does so for Blosc2 inputs only."
         )
     print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
 

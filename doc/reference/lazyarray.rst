@@ -54,6 +54,23 @@ An expression like ``a + sum(b)``, where there is at least one NDArray object in
 
 This object follows the `LazyArray`_ API for computation and storage.
 
+For eligible elementwise expressions over matching in-memory, one-dimensional
+Blosc2 operands, execution follows the requested output storage:
+
+* ``expr.compute()`` writes directly to Blosc2 chunks through the native
+  prefilter. Matching explicit ``chunks``/``blocks`` and a matching Blosc2
+  ``out`` buffer remain eligible. Compression and storage options are honored;
+  use ``cparams=blosc2.CParams(clevel=0)`` for uncompressed output.
+* ``expr[:]`` returns NumPy values. Above the automatic parallel-map crossover,
+  workers decompress and evaluate bounded tiles directly into the final NumPy
+  allocation. Matching writable, contiguous NumPy ``out`` buffers can use this
+  path too.
+
+Blosc2-output requests with partial selections, incompatible grids, mixed storage
+or unsupported numerical contracts retain their existing fallbacks. An execution
+failure on an admitted native route is raised, rather than replayed through
+another engine.
+
 .. autofunction:: lazyexpr
 
 .. _LazyUDF:

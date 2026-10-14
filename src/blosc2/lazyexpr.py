@@ -4873,9 +4873,13 @@ class LazyExpr(LazyArray):
             return compute_native_graph(self, item, tile_items=_native_tile_items, jit=jit is True, **kwargs)
         jit, jit_backend = _jit_from_env(jit, jit_backend)
         if _require_native is None:
-            from .native_graph import compute_native_graph, prepare_native_first
+            from .native_graph import (
+                compute_native_graph,
+                compute_native_prefilter_if_eligible,
+                prepare_native_first,
+            )
 
-            prepared = prepare_native_first(
+            stored = compute_native_prefilter_if_eligible(
                 self,
                 item,
                 jit=jit is not False,
@@ -4883,13 +4887,30 @@ class LazyExpr(LazyArray):
                 fp_accuracy=fp_accuracy,
                 options=kwargs,
             )
+            if stored is not None:
+                return stored
+
+            native_options = dict(kwargs)
+            if hasattr(self, "_output"):
+                native_options.setdefault("out", self._output)
+            if type(native_options.get("out")) is np.ndarray:
+                native_options["_getitem"] = True
+
+            prepared = prepare_native_first(
+                self,
+                item,
+                jit=jit is not False,
+                jit_backend=jit_backend,
+                fp_accuracy=fp_accuracy,
+                options=native_options,
+            )
             if prepared is not None:
                 return compute_native_graph(
                     self,
                     tile_items=_native_tile_items,
                     prepared=prepared,
                     parallel_reductions=True,
-                    **kwargs,
+                    **native_options,
                 )
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
