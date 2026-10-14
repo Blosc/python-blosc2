@@ -101,6 +101,7 @@ def test_evaluate_cache_is_bounded(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["full", "safe"])
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Concurrent cache calls require host threads")
 def test_evaluate_cache_concurrent_calls(mode):
     def run(value):
         x = np.arange(257, dtype=np.float64) + value
