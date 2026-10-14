@@ -11,6 +11,14 @@ def storage_runtime():
         pytest.skip("Native dependency does not provide bounded storage readers")
 
 
+@pytest.fixture
+def prefilter_runtime(storage_runtime):
+    if blosc2.IS_WASM:
+        pytest.skip("Native compressed prefilters are host-only; WASM uses bounded readers")
+    if not getattr(blosc2.blosc2_ext, "portable_prefilter_available", lambda: False)():
+        pytest.skip("Native dependency does not provide portable prefilters")
+
+
 def make_kernel(source="def k(x, y):\n    return x + (y - 1)\n", inputs=None, output="float64", jit=True):
     author = blosc2.DSLKernel.from_source(source)
     return blosc2.PortableKernel.from_json(
@@ -180,7 +188,7 @@ def test_numerical_status_matches_resident_tiles(storage_runtime, jit):
 @pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.parametrize("threads", [1, 2, 12])
 def test_compute_returns_prefilter_output_without_numpy_staging(
-    storage_runtime, monkeypatch, size, dtype, jit, threads
+    prefilter_runtime, monkeypatch, size, dtype, jit, threads
 ):
     values = np.arange(size, dtype=dtype)
     x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
@@ -217,7 +225,7 @@ def test_compute_returns_prefilter_output_without_numpy_staging(
     np.testing.assert_array_equal(tail[live_items:], 0)
 
 
-def test_compute_prefilter_preserves_storage_options(storage_runtime, tmp_path):
+def test_compute_prefilter_preserves_storage_options(prefilter_runtime, tmp_path):
     values = np.arange(257.0)
     x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
     lazy = make_kernel().lazy({"x": x, "y": x})
@@ -258,7 +266,7 @@ def test_compute_prefilter_fp_status(storage_runtime):
     assert lazy._source_execution_report["fp_supported"] == status["fp_supported"]
 
 
-def test_prefilter_reuses_scratch_across_chunks_and_rebinding(storage_runtime):
+def test_prefilter_reuses_scratch_across_chunks_and_rebinding(prefilter_runtime):
     values = np.arange(10003.0)
     x = blosc2.asarray(values, chunks=(3000,), blocks=(300,))
     lazy = make_kernel().lazy({"x": x, "y": x})
@@ -277,7 +285,7 @@ def test_prefilter_reuses_scratch_across_chunks_and_rebinding(storage_runtime):
 
 
 @pytest.mark.parametrize("clevel", [0, 5])
-def test_prefilter_failure_is_raised_and_output_can_be_reused(storage_runtime, clevel):
+def test_prefilter_failure_is_raised_and_output_can_be_reused(prefilter_runtime, clevel):
     # Call the native adapter directly to exercise worker failures. The Python
     # lane-local gate intentionally excludes this checked weak-scalar operation.
     failing = make_kernel("def k(x):\n    return x + (1 // 0)\n", {"x": "float64"})
@@ -296,7 +304,7 @@ def test_prefilter_failure_is_raised_and_output_can_be_reused(storage_runtime, c
 
 
 @pytest.mark.parametrize("clevel", [0, 1, 5])
-def test_prefilter_incompressible_output_and_concurrent_calls(storage_runtime, clevel):
+def test_prefilter_incompressible_output_and_concurrent_calls(prefilter_runtime, clevel):
     from concurrent.futures import ThreadPoolExecutor
 
     values = np.random.default_rng(42).normal(size=10003)
@@ -311,3 +319,29 @@ def test_prefilter_incompressible_output_and_concurrent_calls(storage_runtime, c
     for result in results:
         np.testing.assert_array_equal(result[:], values + (values - 1))
         assert result.cparams.clevel == clevel
+
+
+@pytest.mark.parametrize("clevel", [0, 1, 5])
+def test_compute_incompressible_output_on_all_runtimes(storage_runtime, clevel):
+    # Keep serial value/compression coverage on WASM as well as the host-only
+    # concurrent prefilter coverage above.
+    values = np.random.default_rng(42).normal(size=10003)
+    x = blosc2.asarray(values, chunks=(3000,), blocks=(300,))
+    result = make_kernel().lazy({"x": x, "y": x}).compute(cparams={"clevel": clevel, "nthreads": 1})
+    np.testing.assert_array_equal(result[:], values + (values - 1))
+    assert result.cparams.clevel == clevel
+
+
+def test_wasm_compute_keeps_bounded_reader_fallback(storage_runtime, monkeypatch):
+    values = np.arange(257.0)
+    x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
+    lazy = make_kernel(jit=False).lazy({"x": x, "y": x})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Threadless WASM requested a host-only prefilter")
+
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", forbidden)
+    result = lazy.compute(chunks=(128,), blocks=(32,), cparams={"clevel": 0, "nthreads": 1})
+    np.testing.assert_array_equal(result[:], values * 2 - 1)
+    assert lazy._source_execution_report["route"] == "bounded-readers"
