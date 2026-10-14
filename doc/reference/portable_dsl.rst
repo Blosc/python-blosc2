@@ -277,6 +277,18 @@ Automatic selection prepares/validates the graph before execution; unsupported
 preparation can retain existing execution, but execution errors never trigger
 replay. ``_require_native=False`` explicitly retains existing execution.
 
+For the shared basic grammar, array-only arithmetic/comparison expressions and
+supported root reduction calls with literal arguments are ingested directly by
+miniexpr's native text frontend. Python retains syntax/operand safety checks but
+does not construct graph nodes or serialize declarative JSON for this subset.
+Plans are cached by normalized expression, input dtypes and JIT configuration,
+never by input values. External scalar captures, method-style reductions,
+explicit reduction-method options, dtype syntax requiring normalization and
+staged expressions retain the declarative Python adapter. Execution reports
+identify the selected ``frontend`` as ``native-expression`` or ``declarative-json``.
+This changes preparation only; execution thresholds and storage scheduling are
+unchanged.
+
 Large whole-domain floating sum/min/max reductions over aligned, contiguous,
 same-shaped NumPy operands can run in parallel using ``blosc2.nthreads``. Each
 worker reduces its region serially, then partial results are combined in region

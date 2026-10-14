@@ -503,11 +503,57 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items):
 
 
 @lru_cache(maxsize=128)
-def compile_plan(graph, jit=False, configuration=()):
+def compile_plan(graph, jit=False, configuration=(), *, input_dtypes=None):
     """Reusable native plans; cache identity includes explicit captures and policy."""
     from .graph_plan import NativeGraph
 
-    return NativeGraph(graph, jit=jit)
+    if input_dtypes is None:
+        plan = NativeGraph(graph, jit=jit)
+        plan._frontend = "declarative-json"
+    else:
+        plan = NativeGraph.from_expression(graph, dict(input_dtypes), jit=jit)
+        plan._frontend = "native-expression"
+    return plan
+
+
+@lru_cache(maxsize=128)
+def _native_text_expression(expression):
+    """Prove a shared grammar subset before choosing native text ingestion.
+
+    This checks syntax only; native preparation owns graph construction and
+    numerical semantics. Method syntax, captures and dtype normalization retain
+    the declarative adapter until their frontend parity is qualified.
+    """
+    if not _native_first_syntax(expression):
+        return None
+    tree = ast.parse(expression, mode="eval")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) or (isinstance(node, ast.keyword) and node.arg == "dtype"):
+            return None
+        if isinstance(node, ast.Name) and (
+            not node.id.isascii() or len(node.id) >= 80 or node.id in {"true", "false", "null"}
+        ):
+            return None
+    # Normalize Python numeric spelling (hex, underscores) without constructing
+    # graph nodes. The accepted operators share the native parser's precedence.
+    return ast.unparse(tree), isinstance(tree.body, ast.Call)
+
+
+def _graph_configuration(jit):
+    if not jit:
+        return ()
+    return tuple(
+        (key, os.environ.get(key))
+        for key in (
+            "ME_DSL_JIT_COMPILER",
+            "CC",
+            "CFLAGS",
+            "ME_DSL_JIT_TCC_OPTIONS",
+            "ME_DSL_JIT_CACHE_DIR",
+            "ME_DSL_JIT",
+            "ME_DSL_JIT_LIBTCC_PATH",
+        )
+    )
 
 
 def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0):
@@ -794,6 +840,18 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     validate_operands(operands)
     if graph.names - operands.keys():
         raise ValueError("Native graph contains unbound names")
+    configuration = _graph_configuration(jit)
+    text = _native_text_expression(graph.text) if not reduction_options and not root_options else None
+    arrays = {name: operands[name] for name in sorted(graph.names)}
+    if (
+        text is not None
+        and arrays
+        and all(type(value) in (np.ndarray, blosc2.NDArray) for value in arrays.values())
+    ):
+        source, reduction = text
+        signature = tuple((name, value.dtype.name) for name, value in arrays.items())
+        plan = compile_plan(source, jit, configuration, input_dtypes=signature)
+        return plan, arrays, reduction
     adapter = GraphAdapter(operands)
     root = adapter.visit(ast.parse(graph.text, mode="eval").body)
     if reduction_options:
@@ -814,22 +872,6 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
         "root": root,
         "output": {"dtype": "auto", "casting": "unsafe"},
     }
-    configuration = (
-        tuple(
-            (key, os.environ.get(key))
-            for key in (
-                "ME_DSL_JIT_COMPILER",
-                "CC",
-                "CFLAGS",
-                "ME_DSL_JIT_TCC_OPTIONS",
-                "ME_DSL_JIT_CACHE_DIR",
-                "ME_DSL_JIT",
-                "ME_DSL_JIT_LIBTCC_PATH",
-            )
-        )
-        if jit
-        else ()
-    )
     plan = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")), jit, configuration)
     return plan, adapter.arrays, adapter.nodes[root]["op"] in REDUCERS
 
@@ -913,6 +955,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
             if report["jit_stages"]
             else "portable-interpreter",
             "plan_cache": compile_plan.cache_info()._asdict(),
+            "frontend": getattr(plan, "_frontend", "declarative-json"),
         }
         return result
     if (
@@ -936,6 +979,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
                 "semantic_revision": "menudet-numpy-1.0",
                 "backend": "portable-jit",
                 "plan_cache": compile_plan.cache_info()._asdict(),
+                "frontend": getattr(plan, "_frontend", "declarative-json"),
             }
             return result
     arrays = {}
@@ -967,6 +1011,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         if report["jit_stages"]
         else "portable-interpreter",
         "plan_cache": compile_plan.cache_info()._asdict(),
+        "frontend": getattr(plan, "_frontend", "declarative-json"),
         "input_materialization_bytes": sum(
             v.nbytes for k, v in arrays.items() if not isinstance(inputs[k], np.ndarray)
         ),
