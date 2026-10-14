@@ -1,3 +1,12 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
+"""Conversion utilities for converting between a Blosc2 .b2nd file (NDArray) and a Zarr array."""
+
 from __future__ import annotations
 
 import contextlib
@@ -33,7 +42,6 @@ except ImportError:
 
 DEFAULT_BUFFER_SIZE_MB = 128
 
-# Blosc codec names (as used by Zarr's Blosc compressors and the CLIs) -> Blosc2 codecs.
 BLOSC2_CODECS = {
     "blosclz": blosc2.Codec.BLOSCLZ,
     "lz4": blosc2.Codec.LZ4,
@@ -42,7 +50,6 @@ BLOSC2_CODECS = {
     "zstd": blosc2.Codec.ZSTD,
 }
 
-# Shuffle mode names -> Blosc2 filters.
 BLOSC2_SHUFFLE_FILTERS = {
     "noshuffle": blosc2.Filter.NOFILTER,
     "shuffle": blosc2.Filter.SHUFFLE,
@@ -168,10 +175,7 @@ def copy_batches(
     quiet: bool = False,
     verbose: bool = False,
 ) -> float:
-    """Copy data slices from the source array to the destination array with progress tracking.
-
-    ``src`` and ``dst`` may be Blosc2 or Zarr arrays (any object supporting slice reads/writes).
-    """
+    """Copy data slices from ``src`` to ``dst`` (Blosc2 or Zarr arrays) with progress tracking."""
     total_batches = len(batch_slices)
     if total_batches == 0:
         return 0.0
@@ -267,10 +271,7 @@ def verify_arrays(
 
 
 def print_summary(summary: dict[str, Any], dst_label: str) -> None:
-    """Print the conversion summary, using a rich table when available.
-
-    ``dst_label`` names the destination format in the compression rows (e.g. "Zarr").
-    """
+    """Print the conversion summary, using a rich table when available."""
     if HAVE_RICH:
         console = Console()
         table = Table(title="[bold green]Conversion Summary[/bold green]", box=None)

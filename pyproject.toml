@@ -71,6 +71,7 @@ fsspec = ["fsspec[http]"]
 [project.scripts]
 parquet-to-blosc2 = "blosc2.cli.parquet_to_blosc2:main"
 b2nd-to-zarr = "blosc2.cli.b2nd_to_zarr:main"
+zarr-to-b2nd = "blosc2.cli.zarr_to_b2nd:main"
 blosc2-to-zarr = "blosc2.cli.b2nd_to_zarr:main"
 b2view = "blosc2.b2view.cli:main"
 
