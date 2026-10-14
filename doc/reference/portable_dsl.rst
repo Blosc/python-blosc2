@@ -289,6 +289,16 @@ identify the selected ``frontend`` as ``native-expression`` or ``declarative-jso
 This changes preparation only; execution thresholds and storage scheduling are
 unchanged.
 
+``blosc2.evaluate()`` also keeps up to 128 operand-free construction recipes for
+array-only basic arithmetic/comparison expressions without ``out=`` or extra
+options. Recipe identity includes the expression, input dtypes/shapes, storage
+kind, compressed layout and evaluation policy. Every invocation owns a fresh
+LazyExpr, binds current inputs and rechecks execution eligibility; array values,
+operand ownership, output buffers and execution reports are never cached.
+Scalar captures, aliased input names, reductions and more complex syntax retain
+ordinary construction. Warm ``evaluate`` benchmark timings include input
+rebinding and fresh output allocation, but avoid repeated metadata inference.
+
 Large whole-domain floating sum/min/max reductions over aligned, contiguous,
 same-shaped NumPy operands can run in parallel using ``blosc2.nthreads``. Each
 worker reduces its region serially, then partial results are combined in region

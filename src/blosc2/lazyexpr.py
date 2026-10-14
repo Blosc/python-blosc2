@@ -23,9 +23,11 @@ import re
 import sys
 import threading
 from abc import ABC, abstractmethod, abstractproperty
+from collections import OrderedDict
 from collections.abc import MutableMapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any
@@ -6007,6 +6009,134 @@ def open_lazyarray(array):
 
 
 # Mimim numexpr's evaluate function
+@dataclass(frozen=True, slots=True)
+class _EvaluateRecipe:
+    """Operand-free construction metadata; each invocation owns a new LazyExpr."""
+
+    expression: str
+    bindings: tuple
+    dtype: np.dtype
+    shape: tuple
+    chunks: tuple | None
+    blocks: tuple | None
+
+
+_evaluate_recipe_cache = OrderedDict()
+_evaluate_recipe_lock = threading.Lock()
+_EVALUATE_RECIPE_CACHE_SIZE = 128
+
+
+@lru_cache(maxsize=128)
+def _evaluate_recipe_names(expression):
+    """Restrict caching to reviewed elementwise syntax with literal constants."""
+    if type(expression) is not str:
+        return None
+    try:
+        graph = parse_expression(expression)
+        tree = ast.parse(expression, mode="eval")
+    except (exceptions.UnsafeDeserializationError, ValueError, SyntaxError):
+        return None
+    allowed = (
+        ast.Expression,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Compare,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.UAdd,
+        ast.USub,
+        ast.Invert,
+        ast.BitAnd,
+        ast.BitOr,
+        ast.BitXor,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+    )
+    if any(not isinstance(node, allowed) for node in ast.walk(tree)):
+        return None
+    return tuple(sorted(graph.names)) or None
+
+
+def _prepare_cached_evaluate(expression, local_dict, global_dict):
+    if type(expression) is not str or len(expression) > 65536:
+        return None
+    names = _evaluate_recipe_names(expression)
+    if names is None:
+        return None
+    # seek_operands -> this helper -> evaluate -> user; preserve evaluate's
+    # ordinary caller-local/global resolution, including explicitly supplied dicts.
+    inputs = seek_operands(names, local_dict, global_dict, _frame_depth=3)
+    if any(
+        type(value) not in (np.ndarray, blosc2.NDArray)
+        or value.dtype.kind not in "biuf"
+        or not value.dtype.isnative
+        or value.dtype.metadata is not None
+        for value in inputs.values()
+    ) or len({id(value) for value in inputs.values()}) != len(inputs):
+        # Avoid ambiguous alias-to-name mappings and scalar capture semantics.
+        return lazyexpr(expression, operands=inputs, ne_args=None)
+    validate_operands(inputs)
+    mode = evaluation_mode()
+    signature = tuple(
+        (
+            name,
+            type(value),
+            value.dtype,
+            tuple(value.shape),
+            value.chunks if type(value) is blosc2.NDArray else None,
+            value.blocks if type(value) is blosc2.NDArray else None,
+        )
+        for name, value in inputs.items()
+    )
+    key = (expression, signature, mode)
+    with _evaluate_recipe_lock:
+        recipe = _evaluate_recipe_cache.get(key)
+        if recipe is not None:
+            _evaluate_recipe_cache.move_to_end(key)
+    if recipe is None:
+        expr = lazyexpr(expression, operands=inputs, ne_args=None)
+        # Match constructor-renamed bindings to original names without retaining
+        # arrays in either the cache key or recipe. Aliased inputs were excluded.
+        source_names = {id(value): name for name, value in inputs.items()}
+        if any(id(value) not in source_names for value in expr.operands.values()):
+            return expr
+        recipe = _EvaluateRecipe(
+            expr.expression,
+            tuple((name, source_names[id(value)]) for name, value in expr.operands.items()),
+            np.dtype(expr.dtype),
+            tuple(expr.shape),
+            tuple(expr._chunks) if hasattr(expr, "_chunks") else None,
+            tuple(expr._blocks) if hasattr(expr, "_blocks") else None,
+        )
+        with _evaluate_recipe_lock:
+            _evaluate_recipe_cache[key] = recipe
+            _evaluate_recipe_cache.move_to_end(key)
+            while len(_evaluate_recipe_cache) > _EVALUATE_RECIPE_CACHE_SIZE:
+                _evaluate_recipe_cache.popitem(last=False)
+        return expr
+    expr = LazyExpr(None)
+    expr.expression = recipe.expression
+    expr.operands = {name: inputs[source] for name, source in recipe.bindings}
+    expr.expression_tosave = expression
+    expr.operands_tosave = dict(inputs)
+    expr._dtype, expr._shape = recipe.dtype, recipe.shape
+    if recipe.chunks is not None:
+        expr._chunks, expr._blocks = recipe.chunks, recipe.blocks
+    expr._ne_args = None
+    expr._evaluation = mode
+    if mode == "safe":
+        record_expression_metadata(expr)
+    return expr
+
+
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
@@ -6026,6 +6156,11 @@ def evaluate(
 
     As NDArrays can be on-disk, the expression can be evaluated without loading
     the whole array into memory (i.e. using an out-of-core approach).
+
+    Repeated array-only basic arithmetic/comparison expressions without ``out``
+    or extra options reuse a bounded, operand-free preparation recipe. Current
+    inputs are rebound on every call and the NumPy output is freshly allocated;
+    neither operand arrays nor numerical results are retained in the cache.
 
     Parameters
     ----------
@@ -6065,9 +6200,16 @@ def evaluate(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
-    lexpr = lazyexpr(
-        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=kwargs or None, _frame_depth=3
-    )
+    lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if out is None and not kwargs else None
+    if lexpr is None:
+        lexpr = lazyexpr(
+            ex,
+            local_dict=local_dict,
+            global_dict=global_dict,
+            out=out,
+            ne_args=kwargs or None,
+            _frame_depth=3,
+        )
     if out is not None:
         # The user specified an output array
         return lexpr.compute()

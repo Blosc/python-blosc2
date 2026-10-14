@@ -84,6 +84,7 @@ def test_evaluate_without_options_preserves_native_eligibility(monkeypatch):
     import importlib
 
     module = importlib.import_module("blosc2.lazyexpr")
+    module._evaluate_recipe_cache.clear()
     original = module.lazyexpr
     observed = []
 

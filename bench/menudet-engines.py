@@ -9,8 +9,9 @@ For Blosc2 operands, NumPy and numexpr must first materialize (decompress) the
 inputs, and that cost is included in their timings. LazyExpr, evaluate and the Menudet
 kernel evaluate directly over the compressed chunks, so the table shows the
 practical difference between the two input storages.
-The evaluate column calls ``blosc2.evaluate`` afresh each time, including
-expression preparation and NumPy output allocation; no result buffer is reused.
+The evaluate column calls ``blosc2.evaluate`` afresh each time. Repeated
+preparation uses an operand-free recipe cache; input rebinding and fresh NumPy
+output allocation are timed, and no result buffer is reused.
 
 With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
@@ -314,7 +315,7 @@ def main():
             "Blosc2 operands: NumPy and numexpr figures include operand decompression; "
             "LazyExpr, evaluate and Menudet evaluate the compressed chunks directly."
         )
-    print("evaluate includes fresh expression preparation and output allocation on every call.")
+    print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
 
 
 if __name__ == "__main__":
