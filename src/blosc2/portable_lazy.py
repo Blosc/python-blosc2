@@ -230,8 +230,21 @@ class PortableLazyArray(LazyArray):
         return self._values(item)
 
     def compute(self, item=None, **kwargs):
+        """Materialize into Blosc2 storage, honoring output storage options.
+
+        Eligible full-domain, lane-local kernels over matching compressed 1-D
+        inputs write directly through a native prefilter. Omitted chunks/blocks
+        retain the input grid on this path. Partial selections and different
+        output grids keep the general partition-preserving implementation.
+        """
         if item is not None:
             return blosc2.asarray(self._values(item), **kwargs)
+        from .storage_readers import compute_storage_if_eligible
+
+        streamed = compute_storage_if_eligible(self, kwargs)
+        if streamed is not None:
+            output, self._source_execution_report = streamed
+            return output
         output = blosc2.empty(self.shape, dtype=self.dtype, **kwargs)
         if not self.shape:
             output[()] = self._values()

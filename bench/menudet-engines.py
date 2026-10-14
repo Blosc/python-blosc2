@@ -6,12 +6,15 @@ resident NumPy operands and on compressed Blosc2 operands (both filled with
 ``numpy.linspace``). The fastest figure of every row is highlighted in green.
 
 For Blosc2 operands, NumPy and numexpr must first materialize (decompress) the
-inputs, and that cost is included in their timings. LazyExpr, evaluate and the Menudet
-kernel evaluate directly over the compressed chunks, so the table shows the
-practical difference between the two input storages.
+inputs, and that cost is included in their timings. Blosc2-output rows exercise
+the existing compute paths, whose input materialization and scheduling may differ
+from the NumPy-output paths.
 The evaluate column calls ``blosc2.evaluate`` afresh each time. Repeated
 preparation uses an operand-free recipe cache; input rebinding and fresh NumPy
-output allocation are timed, and no result buffer is reused.
+output allocation are timed, and no result buffer is reused. The evaluate column
+always returns NumPy output for elementwise expressions. Other engines in Blosc2
+input rows return uncompressed Blosc2 outputs with the input chunk/block layout;
+NumPy and numexpr include conversion of their resident results to that storage.
 
 With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
@@ -101,8 +104,9 @@ def build_operands(size, kind):
 def make_engines(inputs, kind, reduc=None):
     """Return an ordered mapping of engine name to a callable producing a result.
 
-    Over Blosc2 operands the NumPy and numexpr callables include operand
-    materialization, while LazyExpr and Menudet read the compressed inputs.
+    Elementwise Blosc2 rows return uncompressed Blosc2 arrays except evaluate,
+    which always returns NumPy. NumPy and numexpr include operand materialization
+    and output conversion.
     """
     numpy_reduce = getattr(np, reduc) if reduc else None
     numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({EXPRESSION})" if reduc else EXPRESSION
@@ -166,6 +170,21 @@ def make_engines(inputs, kind, reduc=None):
             "Menudet": menudet_reduce,
         }
     menudet = adjusted(**inputs)
+    if kind == "blosc2":
+        first = inputs["x"]
+        output_options = {
+            "chunks": first.chunks,
+            "blocks": first.blocks,
+            "cparams": blosc2.CParams(clevel=0),
+        }
+
+        return {
+            "NumPy": lambda: blosc2.asarray(numpy_run(), **output_options),
+            "numexpr": lambda: blosc2.asarray(numexpr_run(), **output_options),
+            "LazyExpr": lambda: lazy.compute(**output_options),
+            "evaluate": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
+            "Menudet": lambda: menudet.compute(**output_options),
+        }
     return {
         "NumPy": numpy_run,
         "numexpr": numexpr_run,
@@ -179,6 +198,8 @@ def benchmark(engines, expected, samples, warmups, rng):
     """Correctness-check once, warm up, then time interleaved shuffled samples."""
     for operation in engines.values():
         result = operation()
+        if isinstance(result, blosc2.NDArray):
+            result = result[:]
         if np.ndim(expected) == 0:
             if np.ndim(result) != 0:
                 raise AssertionError("Reduction must return a scalar")
@@ -312,8 +333,13 @@ def main():
             print("Numexpr any/all use 0/1 truth max/min; Menudet block truth reductions may short-circuit.")
     else:
         print(
-            "Blosc2 operands: NumPy and numexpr figures include operand decompression; "
-            "LazyExpr, evaluate and Menudet evaluate the compressed chunks directly."
+            "Blosc2 operands: NumPy and numexpr figures include operand decompression "
+            "and output conversion; other engines use their existing compute paths."
+        )
+        print(
+            "evaluate always returns NumPy output; other engines in Blosc2 input rows "
+            "return Blosc2 outputs (clevel=0, input layout). "
+            "NumPy and numexpr output conversion is timed. NumPy input rows return NumPy outputs."
         )
     print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
 

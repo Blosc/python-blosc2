@@ -1148,11 +1148,28 @@ cdef extern from "dsl_array_bridge.h":
     int b2_array_eval_sources(const void *, const b2_array_source *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
 
 
+cdef struct portable_prefilter_worker:
+    b2_artifact_buffer *bindings
+    blosc2_context **decoders
+    int status
+    int64_t error_block
+    b2_artifact_error error
+    unsigned fp_flags
+    unsigned fp_supported
+    size_t evaluated_blocks
+    size_t output_zero_fill_bytes
+
+
 cdef struct portable_prefilter_state:
     const void *artifact
     b2nd_array_t *inputs[128]
     b2_artifact_buffer signature[128]
+    uint8_t *chunks[128]
+    int chunk_bytes[128]
+    c_bool chunk_owned[128]
     int ninputs
+    int nworkers
+    portable_prefilter_worker *workers
     int64_t size
     int64_t chunk_items
     int64_t block_items
@@ -1162,7 +1179,27 @@ cdef struct portable_prefilter_state:
     unsigned fp_flags
     unsigned fp_supported
     size_t evaluated_blocks
-    PyThread_type_lock lock
+    size_t output_zero_fill_bytes
+
+
+cdef void portable_prefilter_merge(portable_prefilter_state *state) noexcept:
+    """Merge worker-local status only after synchronous compression has joined."""
+    cdef portable_prefilter_worker *worker
+    cdef int tid
+    state.fp_flags = 0
+    state.fp_supported = 1
+    state.evaluated_blocks = 0
+    state.output_zero_fill_bytes = 0
+    for tid in range(state.nworkers):
+        worker = &state.workers[tid]
+        if worker.status and (not state.status or worker.error_block < state.error_block):
+            state.status = worker.status
+            state.error = worker.error
+            state.error_block = worker.error_block
+        state.fp_flags |= worker.fp_flags
+        state.fp_supported &= worker.fp_supported
+        state.evaluated_blocks += worker.evaluated_blocks
+        state.output_zero_fill_bytes += worker.output_zero_fill_bytes
 
 
 cdef extern from "fenv.h":
@@ -1174,72 +1211,63 @@ cdef extern from "fenv.h":
 
 cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept nogil:
     cdef portable_prefilter_state *state = <portable_prefilter_state *>params.user_data
-    cdef b2_artifact_buffer bindings[128]
-    cdef void *owned[128]
+    cdef portable_prefilter_worker *worker = &state.workers[params.tid]
     cdef b2_artifact_descriptor descriptor
     cdef b2_artifact_error error
     cdef b2_artifact_fp_status fp
     cdef blosc2_dparams dparams
-    cdef blosc2_context *dctx = NULL
-    cdef uint8_t *chunk = NULL
-    cdef c_bool needs_free = False
-    cdef int i, rc = 0, read_status, chunk_bytes
-    cdef int32_t decoded_bytes, encoded_bytes, block_bytes
+    cdef int i, rc = 0, read_status
+    cdef int32_t block_bytes
     cdef int64_t origin = params.nchunk * state.chunk_items + params.nblock * state.block_items
     cdef int64_t count = min(state.block_items, state.size - origin)
     cdef int64_t block_id = origin // state.block_items
+    cdef size_t written_bytes = max(count, 0) * params.output_typesize
     cdef fenv_t environment
-    memset(owned, 0, sizeof(owned))
     memset(&error, 0, sizeof(error))
     memset(&fp, 0, sizeof(fp))
-    memset(params.output, 0, params.output_size)
+    # Elementwise evaluation overwrites all live lanes. Only padded lanes in
+    # the final physical chunk must be cleared before storing/compressing them.
+    if not params.output_is_disposable:
+        # C-Blosc2 itself clears non-disposable prefilter outputs.
+        worker.output_zero_fill_bytes += params.output_size
+    elif written_bytes < <size_t>params.output_size:
+        memset(params.output + written_bytes, 0, params.output_size - written_bytes)
+        worker.output_zero_fill_bytes += params.output_size - written_bytes
     if count <= 0:
         return 0
     if feholdexcept(&environment):
+        memset(params.output, 0, params.output_size)
+        worker.status = -5
+        worker.error_block = block_id
+        strcpy(worker.error.message, "Cannot isolate portable prefilter floating environment")
         return -1
     for i in range(state.ninputs):
-        bindings[i] = state.signature[i]
-        owned[i] = malloc(state.block_items * bindings[i].itemsize)
-        if owned[i] == NULL:
-            rc = -6
-            strcpy(error.message, "Cannot allocate portable prefilter input block")
-            break
-        bindings[i].data = owned[i]
-        bindings[i].capacity = count * bindings[i].itemsize
-        chunk_bytes = blosc2_schunk_get_chunk(state.inputs[i].sc, params.nchunk, &chunk, &needs_free)
-        if chunk_bytes < 0:
-            rc = -5
-            error.native_status = chunk_bytes
-            strcpy(error.message, "Portable prefilter could not read an input chunk")
-            break
-        read_status = blosc2_cbuffer_sizes(chunk, &decoded_bytes, &encoded_bytes, &block_bytes)
-        if read_status < 0 or block_bytes != state.block_items * bindings[i].itemsize:
-            rc = -5
-            error.native_status = read_status
-            strcpy(error.message, "Portable prefilter input block layout mismatch")
-        else:
+        block_bytes = state.block_items * worker.bindings[i].itemsize
+        # Allocate lazily: small chunks may use only a subset of the configured
+        # compression workers. Each active worker reuses these across chunks.
+        if worker.bindings[i].data == NULL:
+            worker.bindings[i].data = malloc(block_bytes)
+            if worker.bindings[i].data == NULL:
+                rc = -6
+                strcpy(error.message, "Cannot allocate portable prefilter input block")
+                break
+        if worker.decoders[i] == NULL:
             dparams = state.inputs[i].sc.storage.dparams[0]
             dparams.nthreads = 1
             dparams.schunk = state.inputs[i].sc
             dparams.typesize = state.inputs[i].sc.typesize
-            dctx = blosc2_create_dctx(dparams)
-            if dctx == NULL:
+            worker.decoders[i] = blosc2_create_dctx(dparams)
+            if worker.decoders[i] == NULL:
                 rc = -6
                 strcpy(error.message, "Cannot allocate portable prefilter decoder")
-            else:
-                read_status = blosc2_getitem_bytes_ctx(dctx, chunk, chunk_bytes,
-                    params.nblock * block_bytes, block_bytes, owned[i], block_bytes)
-                blosc2_free_ctx(dctx)
-                dctx = NULL
-                if read_status != block_bytes:
-                    rc = -5
-                    error.native_status = read_status
-                    strcpy(error.message, "Portable prefilter input decompression failed")
-        if needs_free:
-            free(chunk)
-        chunk = NULL
-        needs_free = False
-        if rc:
+                break
+        worker.bindings[i].capacity = count * worker.bindings[i].itemsize
+        read_status = blosc2_getitem_bytes_ctx(worker.decoders[i], state.chunks[i], state.chunk_bytes[i],
+            params.nblock * block_bytes, block_bytes, <void *>worker.bindings[i].data, block_bytes)
+        if read_status != block_bytes:
+            rc = -5
+            error.native_status = read_status
+            strcpy(error.message, "Portable prefilter input decompression failed")
             break
     if not rc:
         memset(&descriptor, 0, sizeof(descriptor))
@@ -1248,23 +1276,23 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         descriptor.nitems = count
         descriptor.output_capacity = count * params.output_typesize
         # Decoder/postfilter work must not contribute to numerical FP flags.
-        rc = b2_artifact_eval_status(state.artifact, bindings, state.ninputs,
+        rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
                                     params.output, &descriptor, 0, &fp, &error)
-    for i in range(state.ninputs):
-        free(owned[i])
     if fesetenv(&environment):
         rc = -5
         strcpy(error.message, "Cannot restore portable prefilter floating environment")
-    PyThread_acquire_lock(state.lock, 1)
-    if rc and (state.status == 0 or block_id < state.error_block):
-        state.status = rc
-        state.error = error
-        state.error_block = block_id
+    if rc and (worker.status == 0 or block_id < worker.error_block):
+        worker.status = rc
+        worker.error = error
+        worker.error_block = block_id
+    if rc:
+        # Disposable prefilters do not propagate failures through C-Blosc2;
+        # return deterministic bytes until the caller raises worker status.
+        memset(params.output, 0, params.output_size)
     if not rc:
-        state.fp_flags |= fp.flags
-        state.fp_supported &= fp.supported
-        state.evaluated_blocks += 1
-    PyThread_release_lock(state.lock)
+        worker.fp_flags |= fp.flags
+        worker.fp_supported &= fp.supported
+        worker.evaluated_blocks += 1
     return -1 if rc else 0
 
 
@@ -2022,7 +2050,7 @@ cdef class PortableArtifactHandle:
         finally:
             free(views)
 
-    def evaluate_prefilter(self, inputs):
+    def evaluate_prefilter(self, inputs, out=None):
         """Run an already-prepared portable artifact through C-Blosc2 scheduling."""
         if not portable_prefilter_inputs_eligible(inputs):
             raise NotImplementedError("Inputs are not eligible for portable prefilter execution")
@@ -2036,10 +2064,19 @@ cdef class PortableArtifactHandle:
         first = next(iter(inputs.values()))
         block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in inputs.values())
         threads = max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
-        output = blosc2.uninit(first.shape, dtype=self.signature_dtype(-1),
-                              chunks=first.chunks, blocks=first.blocks,
-                              cparams=blosc2.CParams(clevel=0, nthreads=threads))
-        return output._execute_portable_prefilter(self, inputs)
+        if out is None:
+            output = blosc2.uninit(first.shape, dtype=self.signature_dtype(-1),
+                                  chunks=first.chunks, blocks=first.blocks,
+                                  cparams=blosc2.CParams(clevel=0, nthreads=threads))
+        else:
+            if (type(out) is not blosc2.NDArray or out.shape != first.shape
+                    or out.dtype != self.signature_dtype(-1)
+                    or out.chunks != first.chunks or out.blocks != first.blocks):
+                raise ValueError("Portable prefilter output must match the input grid and result dtype")
+            if any(out is source for source in inputs.values()):
+                raise ValueError("Portable prefilter output must not alias an input")
+            output = out
+        return output._execute_portable_prefilter(self, inputs, materialize=out is None)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -5786,12 +5823,15 @@ cdef class NDArray:
                 raise RuntimeError("Cannot restore portable chunk decoder floating environment")
         return buffer[:self.array.shape[0]]
 
-    def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs):
+    def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs, materialize=True):
         cdef portable_prefilter_state state
+        cdef portable_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
         cdef blosc2_cparams *cparams = self.array.sc.storage.cparams
         cdef NDArray value
-        cdef int i
+        cdef int i, tid, rc
+        cdef int32_t decoded_bytes, encoded_bytes, block_bytes
+        cdef size_t decoder_contexts = 0, input_buffer_allocations = 0, input_chunk_fetches = 0
         cdef int64_t chunk
         memset(&state, 0, sizeof(state))
         memset(&parameters, 0, sizeof(parameters))
@@ -5816,13 +5856,30 @@ cdef class NDArray:
                     state.signature[i].itemsize = b2_artifact_width(kernel._handle, j)
                     break
         data = np.empty(self.array.sc.chunksize, dtype=np.uint8)
-        state.lock = PyThread_allocate_lock()
-        if state.lock == NULL:
+        state.nworkers = cparams.nthreads
+        # One compact allocation holds worker records and only the bindings
+        # actually used by this signature, rather than 128 slots per worker.
+        state.workers = <portable_prefilter_worker *>calloc(state.nworkers,
+            sizeof(portable_prefilter_worker) + state.ninputs * (sizeof(b2_artifact_buffer) + sizeof(void *)))
+        if state.workers == NULL:
             raise MemoryError()
         parameters.user_data = &state
+        # With clevel=0 C-Blosc2 keeps the prefilter's memcpy payload, but the
+        # disposable flag skips its unconditional prefilter memset. Never use
+        # this for compressed outputs: it would substitute zero-run streams.
+        parameters.output_is_disposable = cparams.clevel == 0
         cparams.prefilter = portable_menudet_prefilter
         cparams.preparams = &parameters
         try:
+            # Active workers allocate their private scratch on first use.
+            for tid in range(state.nworkers):
+                worker = &state.workers[tid]
+                worker.bindings = <b2_artifact_buffer *>(state.workers + state.nworkers) + tid * state.ninputs
+                worker.decoders = <blosc2_context **>(<b2_artifact_buffer *>(state.workers + state.nworkers)
+                    + state.nworkers * state.ninputs) + tid * state.ninputs
+                worker.fp_supported = 1
+                for i in range(state.ninputs):
+                    worker.bindings[i] = state.signature[i]
             if self.array.sc.cctx != NULL:
                 blosc2_free_ctx(self.array.sc.cctx)
             self.array.sc.cctx = blosc2_create_cctx(cparams[0])
@@ -5830,11 +5887,41 @@ cdef class NDArray:
                 raise MemoryError("Cannot create portable prefilter compression context")
             try:
                 for chunk in range(self.array.sc.nchunks):
+                    # Fetch/validate each compressed input chunk once. The
+                    # synchronous update joins all workers before these shared
+                    # read-only pointers advance to the next chunk.
+                    for i in range(state.ninputs):
+                        if state.chunk_owned[i]:
+                            free(state.chunks[i])
+                        state.chunks[i] = NULL
+                        state.chunk_owned[i] = False
+                        state.chunk_bytes[i] = blosc2_schunk_get_chunk(state.inputs[i].sc, chunk,
+                            &state.chunks[i], &state.chunk_owned[i])
+                        input_chunk_fetches += 1
+                        if state.chunk_bytes[i] < 0:
+                            state.status = -5
+                            state.error.native_status = state.chunk_bytes[i]
+                            strcpy(state.error.message, "Portable prefilter could not read an input chunk")
+                            raise_artifact_error(state.status, &state.error)
+                        rc = blosc2_cbuffer_sizes(state.chunks[i], &decoded_bytes, &encoded_bytes, &block_bytes)
+                        if rc < 0 or block_bytes != state.block_items * state.signature[i].itemsize:
+                            state.status = -5
+                            state.error.native_status = rc
+                            strcpy(state.error.message, "Portable prefilter input block layout mismatch")
+                            raise_artifact_error(state.status, &state.error)
                     self.schunk.update_data(chunk, data, copy=False)
+                    # In the uncompressed/disposable route callback failures
+                    # are captured locally rather than propagated by Blosc2.
+                    for tid in range(state.nworkers):
+                        if state.workers[tid].status:
+                            portable_prefilter_merge(&state)
+                            raise_artifact_error(state.status, &state.error)
             except Exception:
+                portable_prefilter_merge(&state)
                 if state.status:
                     raise_artifact_error(state.status, &state.error)
                 raise
+            portable_prefilter_merge(&state)
             if state.status:
                 raise_artifact_error(state.status, &state.error)
         finally:
@@ -5843,11 +5930,27 @@ cdef class NDArray:
             cparams.prefilter = NULL
             cparams.preparams = NULL
             self.array.sc.cctx = blosc2_create_cctx(cparams[0])
-            PyThread_free_lock(state.lock)
-        result = self[()]
+            for tid in range(state.nworkers):
+                worker = &state.workers[tid]
+                for i in range(state.ninputs):
+                    if worker.decoders[i] != NULL:
+                        decoder_contexts += 1
+                        blosc2_free_ctx(worker.decoders[i])
+                    if worker.bindings[i].data != NULL:
+                        input_buffer_allocations += 1
+                    free(<void *>worker.bindings[i].data)
+            free(state.workers)
+            for i in range(state.ninputs):
+                if state.chunk_owned[i]:
+                    free(state.chunks[i])
+        result = self[()] if materialize else self
         return result, {"route": "portable-prefilter", "evaluated_blocks": state.evaluated_blocks,
                         "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
-                        "threads": cparams.nthreads,
+                         "threads": cparams.nthreads,
+                         "native_decoder_contexts": decoder_contexts,
+                         "input_buffer_allocations": input_buffer_allocations,
+                         "input_chunk_fetches": input_chunk_fetches,
+                         "output_zero_fill_bytes": state.output_zero_fill_bytes,
                         "output_chunk_buffer_bytes": self.array.sc.chunksize,
                         "input_buffer_bytes": cparams.nthreads * sum(
                             source.blocks[0] * source.dtype.itemsize for source in inputs.values())}

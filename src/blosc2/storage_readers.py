@@ -1,6 +1,7 @@
 """Bounded adapters for the native portable array storage-reader ABI."""
 
 import ast
+from dataclasses import replace
 
 import numpy as np
 
@@ -205,6 +206,39 @@ def evaluate_storage_if_eligible(lazy, selection):
     return lazy.kernel.evaluate_sources(
         lazy.inputs, shape=lazy._domain, selection=selection, return_report=True
     )
+
+
+def compute_storage_if_eligible(lazy, kwargs):
+    """Write a full lane-local domain directly into matching Blosc2 output tiles."""
+    import blosc2
+
+    extension = blosc2.blosc2_ext
+    if (
+        not storage_reader_eligible(lazy.kernel)
+        or not _dense_compressed_eligible(lazy)
+        or not getattr(extension, "portable_prefilter_available", lambda: False)()
+        or not extension.portable_prefilter_inputs_eligible(lazy.inputs)
+        or "out" in kwargs
+    ):
+        return None
+    first = next(iter(lazy.inputs.values()))
+    if any(
+        kwargs.get(name) is not None and tuple(kwargs[name]) != getattr(first, name)
+        for name in ("chunks", "blocks")
+    ):
+        return None
+    options = {**kwargs, "chunks": first.chunks, "blocks": first.blocks}
+    # Match the existing prefilter's bounded per-worker input scratch budget.
+    block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in lazy.inputs.values())
+    thread_limit = max(1, (32 * 1024**2) // block_bytes)
+    cparams = options.get("cparams")
+    if cparams is None:
+        cparams = blosc2.CParams()
+    elif isinstance(cparams, dict):
+        cparams = blosc2.CParams(**cparams)
+    options["cparams"] = replace(cparams, nthreads=min(cparams.nthreads, thread_limit))
+    output = blosc2.uninit(lazy.shape, dtype=lazy.dtype, **options)
+    return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
 
 
 def _evaluate_dense_compressed(lazy):

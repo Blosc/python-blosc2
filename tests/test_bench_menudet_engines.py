@@ -32,11 +32,20 @@ def test_engine_results(engine_benchmark, size, kind, reduc):
             assert np.ndim(result) == 0, name
             np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12, err_msg=name)
         else:
+            if kind == "blosc2" and name != "evaluate":
+                assert isinstance(result, blosc2.NDArray), name
+                assert result.cparams.clevel == 0, name
+                assert result.chunks == inputs["x"].chunks, name
+                assert result.blocks == inputs["x"].blocks, name
+                result = result[:]
+            else:
+                assert isinstance(result, np.ndarray), name
             np.testing.assert_array_equal(result, expected, err_msg=name)
 
 
-def test_evaluate_column_calls_public_api_every_time(engine_benchmark, monkeypatch):
-    inputs, expected = engine_benchmark["build_operands"](257, "numpy")
+@pytest.mark.parametrize("kind", ["numpy", "blosc2"])
+def test_evaluate_column_calls_public_api_every_time(engine_benchmark, monkeypatch, kind):
+    inputs, expected = engine_benchmark["build_operands"](257, kind)
     calls = []
 
     def evaluate(expression, *, local_dict):
@@ -44,7 +53,7 @@ def test_evaluate_column_calls_public_api_every_time(engine_benchmark, monkeypat
         return expected.copy()
 
     monkeypatch.setattr(blosc2, "evaluate", evaluate)
-    engines = engine_benchmark["make_engines"](inputs, "numpy")
+    engines = engine_benchmark["make_engines"](inputs, kind)
     first = engines["evaluate"]()
     second = engines["evaluate"]()
     assert first is not second
