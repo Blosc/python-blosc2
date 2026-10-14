@@ -48,6 +48,93 @@ compiled execution: separate required-TCC, required-CC and actual-JIT gates esta
 the supported routes. No value assertion, ULP/accuracy tolerance or failed platform
 job was weakened or removed.
 
+## Final task-qualified pair (supersedes historical/pending statements below)
+
+**Native and explicit-pair CI are green. Broader/release CI is not fully green.**
+The final result artifact is local so recording the final tested SHA/run does not
+create a new, unqualified revision. Full published investigation/matrices are in
+[the task report at Python 442bf8a7](https://github.com/Blosc/python-blosc2/blob/442bf8a7ee3b858fcfbbbf1e4e6a69dc1c55e131/plans/menudet-ci-qualification.md).
+
+| Component | Exact task-qualified SHA | Green run |
+| --- | --- | --- |
+| Native | `d12ca6427782a21a959255c6c2546031a75fd9bb` | [37963314217](https://github.com/Blosc/miniexpr/actions/runs/37963314217) |
+| Python, explicit native override | `442bf8a7ee3b858fcfbbbf1e4e6a69dc1c55e131` | [37964800176](https://github.com/Blosc/python-blosc2/actions/runs/37964800176) |
+
+The paired workflow was dispatched with that full exact native SHA. Downloaded
+`paired-revisions.txt` artifacts from Linux, macOS and Windows all independently
+confirm both full SHAs. Publication was exclusively task-scoped. Parent native
+`b0541bb54f65cbe8cdb7d9de2601372117a1ffaf`, Python
+`cf9cf3596708d69f1318c739613e03b6fcb56d84`, their alias cleanup and ongoing work
+remain in the original root checkouts and **were not pushed, reset or included**.
+Later CI fixes used separate `menudet-ci-qualification` worktrees rooted at native
+`216c603` / Python `36023f57`, pushed as explicit `HEAD:refs/heads/numpy-compat`.
+This pair does **not** qualify the parent's new alias-removal corpus/adapters.
+
+| Supported native job | Passed CTest |
+| --- | ---: |
+| Linux x64 / TCC enabled | 431 |
+| Linux ARM64 / TCC enabled | 431 |
+| Linux ARM64 / TCC disabled, CC still required | 338 |
+| macOS ARM64 | 431 |
+| Windows x64 / ClangCL Release | 335 |
+| Windows ARM64 / existing TCC-disabled configuration | 244 |
+| Standalone wasm32 / side-module JIT trace required | 63 |
+
+| Explicit Python 3.12.15 / NumPy 2.5.3 pair | Native CTest | Required Python modules | Required actual JIT |
+| --- | ---: | ---: | ---: |
+| Linux x64 | 431 | 488, zero skips (57.48 s) | 207, zero skips (25.61 s) |
+| macOS ARM64 | 431 | 488, zero skips (130.98 s) | 207, zero skips (38.75 s) |
+| Windows x64 | 335 | 488, zero skips (52.50 s) | Not a qualified portable host-pointer JIT target |
+
+All four authoritative corpora and required logical-array capabilities were
+selected explicitly. Two deliberate unsupported-capability v2 negative cases
+remain checked in both runners; they are not missing numerical capabilities or
+pytest skips. Required native TCC/CC and actual Python JIT gates prevent successful
+interpreter fallback from being counted as compiled execution. No numeric
+assertion/tolerance or platform job was weakened or hidden.
+
+Additional task fixes after the first report: Windows corpus input is closed before
+the native reader opens it (sharing regression added); exact reviewed x64/ARM64
+observations handle the already platform-qualified NumPy nonfinite cast without
+changing native rejection/baselines; arithmetic time budgets are 180 s; Windows
+Ninja paired linkage is static-only. Linux TCC required glibc multiarch headers
+and staged/installed **existing** TinyCC compiler headers beside `libtcc`. The
+working runtime then exposed a genuine floor-division FP-status mismatch; one
+non-inlined scalar implementation now serves interpreter and JIT bridge, retaining
+exact status/value assertions and failure diagnostics. Native required TCC and
+all final supported native/WASM jobs passed these fixes. Local fresh static build
+passed 431/431 and required TCC also passed using its installed runtime path.
+
+Main/release dependency defaults and pins are unchanged. Branch-specific Python
+CI selects the exact native revision through `.github/menudet-native-ref`. CI
+installs existing dev dependency Pandas for Arrow conversions; the NumPy 1.26 job
+alone pins PyArrow 21.0.0 because PyArrow 26 rejects NumPy 1 at import without
+declaring that requirement in `Requires-Dist`. No shipping dependency was added.
+Logs contain existing SLEEF/compiler diagnostic warnings and macOS static duplicate
+`-lm`/archive linker warnings; green CI is not claimed to be warning-free.
+
+### Concrete remaining release gates at the final pair
+
+- [Tests 37964801216](https://github.com/Blosc/python-blosc2/actions/runs/37964801216):
+  Linux Python 3.12/3.14, macOS and Windows green. NumPy 1.26 remains red:
+  **14 failed, 12,185 passed, 354 skipped** (159.98 s). Failures are unchanged
+  `tests/ctable/test_pandas_arrow_import.py` fixtures requesting NumPy 2
+  `StringDType` UTF-8 storage, correctly rejected under NumPy 1.26.
+- [Python/Pyodide 37964801139](https://github.com/Blosc/python-blosc2/actions/runs/37964801139):
+  **80 failed, 10,480 passed, 1,011 skipped, 11,923 deselected, one xpassed**
+  (510.54 s). Seventy reduction tests assume host `intp` rather than portable
+  int64/uint64 defaults; nine demand unsupported WASM FP flags/threading; one
+  invokes unsupported subprocesses. Failures remain visible. Standalone WASM
+  success is not a claim of paired Python WASM success.
+- Release wheel/sdist workflows were inspected, not dispatched; no exact-pair
+  abi3/free-threaded/wheel qualification, no-GIL claim or optional clean-install
+  packaging acceptance. Other interpreter/NumPy/architecture cross-products,
+  sanitizer/stress and M7 matrix/docs/scope/performance gates remain open.
+
+Required native/explicit-pair qualification is complete. Broader all-workflow and
+release acceptance remain incomplete; neither historical green runs nor the
+parent's local alias tests close those separate gates.
+
 ## Authorized publication and remote qualification continuation
 
 The user explicitly authorized task-scoped commits, pushes and workflow dispatch.
