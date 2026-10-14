@@ -20,7 +20,8 @@ def make_kernel(source="def k(x, y):\n    return x + (y - 1)\n", inputs=None, ou
 
 @pytest.mark.parametrize("jit", [False, True])
 def test_bounded_full_reads(storage_runtime, jit, monkeypatch):
-    size, tile = 200_000, 4096
+    tile = 4096
+    size = 3 * tile + 17  # Several full tiles plus a partial tail.
     x_np, y_np = np.arange(size, dtype="float64"), np.ones(size)
     x, y = blosc2.asarray(x_np), blosc2.asarray(y_np)
     original = blosc2.NDArray.get_1d_span_numpy

@@ -68,7 +68,10 @@ def test_threadless_runtime_keeps_serial_values(monkeypatch):
 
 
 def test_reduction_retains_logical_partition(monkeypatch):
-    values = np.arange(600_003.0)
+    # Keep four workers eligible without a large interpreted block reduction.
+    # If the reduction gate regresses, this still schedules forbidden workers.
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 256)
+    values = np.arange(1027.0)
     native = kernel("def k(x, y):\n    return x + block_sum(y)\n")
     lazy = native.lazy({"x": values, "y": values})
 
@@ -76,7 +79,7 @@ def test_reduction_retains_logical_partition(monkeypatch):
         pytest.fail("Reduction was repartitioned")
 
     monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
-    np.testing.assert_array_equal(lazy[:], native.evaluate_block({"x": values, "y": values}))
+    np.testing.assert_array_equal(lazy[:], values + values.sum())
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel FP aggregation requires host threads")

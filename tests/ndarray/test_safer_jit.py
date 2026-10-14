@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(
 HERE = Path(__file__).resolve().parent
 
 
-def run_probe(tmp_path, backend="tcc", mode="on", trace=False, **overrides):
+def run_probe(tmp_path, backend="tcc", mode="on", trace=False, workload="all", **overrides):
     env = os.environ.copy()
     for name in list(env):
         if name.startswith(("ME_DSL_", "BLOSC_ME_JIT")) or name in ("CC", "CFLAGS"):
@@ -25,7 +25,7 @@ def run_probe(tmp_path, backend="tcc", mode="on", trace=False, **overrides):
     env.update(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(tmp_path), ME_DSL_TRACE="1" if trace else "0")
     env.update(overrides)
     return subprocess.run(
-        [sys.executable, str(HERE / "safer_jit_probe.py"), backend, mode],
+        [sys.executable, str(HERE / "safer_jit_probe.py"), backend, mode, workload],
         env=env,
         text=True,
         capture_output=True,
@@ -158,12 +158,14 @@ def test_cc_failure_is_quiet(tmp_path, failure, trace):
 def test_cc_reuses_disk_cache_in_fresh_process(tmp_path):
     if shutil.which("cc") is None:
         pytest.skip("System compiler unavailable")
-    cold = run_probe(tmp_path, backend="cc", trace=True)
-    warm = run_probe(tmp_path, backend="cc", trace=True)
+    # One real compiled kernel is enough to prove cross-process disk reuse.
+    # Other probes retain the full constructor/expression/UDF/reduction workload.
+    cold = run_probe(tmp_path, backend="cc", trace=True, workload="cache", CFLAGS="-O0")
+    warm = run_probe(tmp_path, backend="cc", trace=True, workload="cache", CFLAGS="-O0")
     assert "jit runtime built:" in cold.stderr
     assert "source=disk-cache" in warm.stderr
     assert "jit runtime built:" not in warm.stderr
-    assert list((tmp_path / "miniexpr-jit").glob("kernel_*.meta"))
+    assert len(list((tmp_path / "miniexpr-jit").glob("kernel_*.meta"))) == 1
 
 
 def test_cc_compiler_output_is_opt_in(tmp_path):

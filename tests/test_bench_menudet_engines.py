@@ -1,6 +1,8 @@
 """Scalar and elementwise correctness of the engine comparison benchmark."""
 
+import os
 import runpy
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -59,3 +61,27 @@ def test_evaluate_column_calls_public_api_every_time(engine_benchmark, monkeypat
     second = engines["evaluate"]()
     assert first is not second
     assert calls == [(engine_benchmark["EXPRESSION"], inputs)] * 2
+
+
+@pytest.mark.parametrize("backend", [None, "tcc", "cc"])
+def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
+    main = engine_benchmark["main"]
+    namespace = main.__globals__
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
+    argv = ["menudet-engines.py", "--items", "1", "--samples", "1", "--warmups", "0"]
+    if backend:
+        argv += ["--jit", backend]
+    monkeypatch.setattr(sys, "argv", argv)
+    observed = []
+
+    def make_engines(inputs, kind, reduc):
+        observed.append((kind, os.environ["ME_DSL_JIT_COMPILER"]))
+        return {name: lambda: np.zeros(1) for name in namespace["ENGINES"]}
+
+    monkeypatch.setitem(namespace, "make_engines", make_engines)
+    monkeypatch.setattr(blosc2, "set_nthreads", lambda threads: None)
+    monkeypatch.setattr(namespace["ne"], "set_num_threads", lambda threads: None)
+    main()
+    expected = backend or "tcc"
+    assert observed == [("numpy", expected), ("blosc2", expected)]
+    assert f"Miniexpr JIT backend request: {expected}" in capsys.readouterr().out

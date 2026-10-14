@@ -27,9 +27,15 @@ Usage::
 
     python bench/menudet-engines.py --items 100000 1000000 8000000
     python bench/menudet-engines.py --reduc sum
+    python bench/menudet-engines.py --jit cc
+
+``--jit tcc|cc`` selects miniexpr's JIT compiler backend. With ``cc``, the
+``CC`` environment variable selects the system compiler. Omitting ``--jit``
+preserves the existing environment/default backend selection.
 """
 
 import argparse
+import os
 import random
 import sys
 from statistics import median
@@ -265,6 +271,12 @@ def main():
         "--warmups", type=int, default=3, help="untimed repetitions run before timing each row"
     )
     parser.add_argument("--threads", type=int, default=12)
+    parser.add_argument(
+        "--jit",
+        choices=("tcc", "cc"),
+        metavar="BACKEND",
+        help="miniexpr JIT compiler backend: tcc or cc (system compiler selected by CC)",
+    )
     parser.add_argument("--operands", choices=("both", "numpy", "blosc2"), default="both")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     parser.add_argument(
@@ -278,6 +290,11 @@ def main():
     if args.threads <= 0:
         parser.error("threads must be positive")
 
+    # Select before LazyExpr preparation or Menudet dtype specialization. Both
+    # native compilation paths consume this environment override.
+    if args.jit is not None:
+        os.environ["ME_DSL_JIT_COMPILER"] = args.jit
+
     use_color = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
     blosc2.set_nthreads(args.threads)
     ne.set_num_threads(args.threads)
@@ -290,6 +307,7 @@ def main():
         f"blosc2 {blosc2.__version__} | numpy {np.__version__} | numexpr {ne.__version__}"
         f" | dtype float64 | threads {args.threads} | samples {args.samples}"
     )
+    print(f"Miniexpr JIT backend request: {os.environ.get('ME_DSL_JIT_COMPILER', 'runtime default')}")
     print()
     widths = column_widths(args.items)
     print(table_header(widths))

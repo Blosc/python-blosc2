@@ -582,10 +582,14 @@ def test_remote_full_index_selective_lookup(tmp_path, expression, expected):
 
 @pytest.mark.parametrize("kind", ["partial", "opsi", "bucket"])
 def test_remote_positional_index_lookup(tmp_path, kind):
-    url, _ = indexed_remote_table_url(tmp_path, kind, rows=5000)
+    rows = 1025  # Five 256-row chunks, with a partial final chunk.
+    url, _ = indexed_remote_table_url(tmp_path, kind, rows=rows)
     with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
-        np.testing.assert_array_equal(remote.where("x == 7").y[:], [4993])
-        np.testing.assert_array_equal(remote.where("(x >= 7) & (x < 10)").y[:], [4993, 4992, 4991])
+        np.testing.assert_array_equal(remote.where("x == 7").y[:], [rows - 7])
+        # Cross a chunk boundary, and check the partial tail and an empty result.
+        np.testing.assert_array_equal(remote.where("(x >= 255) & (x < 258)").y[:], [770, 769, 768])
+        np.testing.assert_array_equal(remote.where("x == 1024").y[:], [1])
+        np.testing.assert_array_equal(remote.where("x == 1025").y[:], [])
         assert any(f"_indexes/x/{kind}." in (array.dataset or "") for array in remote._storage._arrays)
 
 
@@ -2156,12 +2160,8 @@ def test_parallel_metadata_benchmark(tmp_path, monkeypatch):
         assert repr(list(table[:5])) == expected[1]
 
 
-@pytest.mark.parametrize(
-    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
-)
-@pytest.mark.parametrize("budget", [128, 1 << 20])
-@needs_utf8
-def test_parallel_rows_cache_policies(tmp_path, policy, budget):
+@pytest.fixture(scope="module")
+def parallel_rows_archive(tmp_path_factory):
     @dataclasses.dataclass
     class Mixed:
         x: int = blosc2.field(blosc2.int64(null_storage="mask"))
@@ -2177,7 +2177,22 @@ def test_parallel_rows_cache_policies(tmp_path, policy, budget):
         create_summary_index=False,
     )
     local.delete([2, 9])
-    url = remote_table_url(tmp_path, local)
+    archive = tmp_path_factory.mktemp("parallel-rows") / "table.b2z"
+    local.to_b2z(archive)
+    return local, archive.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
+)
+@pytest.mark.parametrize("budget", [128, 1 << 20])
+@needs_utf8
+def test_parallel_rows_cache_policies(tmp_path, parallel_rows_archive, policy, budget):
+    # Reuse only immutable source bytes; each case gets a distinct URL and fresh
+    # caches, so no policy/budget case can benefit from another one's warm reads.
+    local, archive = parallel_rows_archive
+    url = f"memory://{tmp_path.name}-parallel-rows.b2z"
+    fsspec.filesystem("memory").pipe(url, archive)
     options = {"cache_policy": policy, "row_buffer_bytes": budget, "metadata_buffer_bytes": budget}
     if policy == blosc2.CachePolicy.DISK:
         options["cache_dir"] = tmp_path / "cache"
