@@ -261,14 +261,21 @@ whole-domain floating sum/min/max reductions over same-shaped 1-D inputs with
 matching compressed chunks/blocks, no mask or ``initial``, and at least two workers.
 Whole-domain ``any/all`` use the same streamed path with Boolean, integer or
 float32/float64 inputs, including Boolean comparison expressions.
-Selection currently requires at least 16 million items and blocks of at most 65,536 items to amortize
+Reduction selection requires at least 16 million items and blocks of at most 65,536 items to amortize
 reader overhead; smaller or unsupported cases retain legacy execution. NumPy
 operands can be mixed with these compressed inputs. Whole-domain NumPy-output
 elementwise reads (``expr[:]`` and ``blosc2.evaluate(...)`` without ``out=``)
-also select streamed graphs under the same size/layout limits, with Boolean,
-integer or float32/float64 inputs. Workers process disjoint contiguous regions
+also select streamed graphs with Boolean, integer or float32/float64 inputs.
+For all-float64 inputs with at least eight configured threads, their size floor
+is 2 million items; other elementwise cases keep the 16-million-item floor.
+The layout/block limits are unchanged. Small-array benchmarks did not justify
+using streamed graphs at 1 million items or below. Workers process disjoint,
+physical-block-aligned contiguous regions, including regions within one chunk,
 of one fresh NumPy allocation, retaining private decoder contexts and bounded
-input scratch for their whole region. There is no full intermediate result,
+input scratch for their whole region. Ordinary tiles match one physical block;
+tiny blocks are grouped to amortize dispatch. The reader decodes block by block
+to avoid the decoder's multi-block input-copy path. Immutable region schedules are cached without
+retaining input or output arrays. There is no full intermediate result,
 output copy or prefilter zero-fill. Compressed-result ``compute()`` and explicit
 output buffers retain their existing routes. ``evaluation="safe"`` remains a
 syntax policy, not a backend selector.

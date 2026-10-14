@@ -23,6 +23,7 @@ REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
 PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
 TRUTH_GRAPH_REDUCERS = {"any", "all"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
+MINIMUM_COMPRESSED_MAP_ITEMS = 2_000_000
 
 
 def _native_first_operand(value):
@@ -155,12 +156,18 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     compressed = any(type(value) is blosc2.NDArray for value in expr.operands.values())
     if compressed and not getattr(blosc2.blosc2_ext, "native_graph_sources_available", lambda: False)():
         return None
-    if (
-        compressed
-        and max(value.size for value in expr.operands.values() if type(value) is blosc2.NDArray)
-        < MINIMUM_COMPRESSED_GRAPH_ITEMS
-    ):
-        return None
+    if compressed:
+        size = max(value.size for value in expr.operands.values() if type(value) is blosc2.NDArray)
+        if size < min(MINIMUM_COMPRESSED_GRAPH_ITEMS, MINIMUM_COMPRESSED_MAP_ITEMS):
+            return None
+        reduction_request = explicit is not None or _native_first_syntax(
+            expr.expression, reduction_only=True
+        )
+        minimum = (
+            MINIMUM_COMPRESSED_GRAPH_ITEMS if reduction_request else _compressed_map_minimum(expr.operands)
+        )
+        if size < minimum:
+            return None
     if not any(type(value) in (np.ndarray, blosc2.NDArray) for value in expr.operands.values()):
         return None
     if compressed and explicit is not None and explicit["op_str"] not in PARALLEL_GRAPH_REDUCERS:
@@ -304,6 +311,25 @@ def _combine_graph_reductions(document, root, results, reports):
     return result, report
 
 
+def _compressed_map_minimum(inputs):
+    """Lower the crossover only for the measured wide-float/high-thread case."""
+    import blosc2
+
+    arrays = [value for value in inputs.values() if type(value) in (np.ndarray, blosc2.NDArray)]
+    if blosc2.nthreads >= 8 and arrays and all(value.dtype == np.dtype("float64") for value in arrays):
+        return MINIMUM_COMPRESSED_MAP_ITEMS
+    return MINIMUM_COMPRESSED_GRAPH_ITEMS
+
+
+def _compressed_map_blocks(first, size):
+    """Count physical blocks containing logical values, excluding tail padding."""
+    chunk, block = first.chunks[0], first.blocks[0]
+    full_chunks = (size - 1) // chunk
+    blocks_per_chunk = (chunk + block - 1) // block
+    tail_items = size - full_chunks * chunk
+    return full_chunks * blocks_per_chunk + (tail_items + block - 1) // block
+
+
 def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     """Conservative metadata-only automatic gate; avoid small/serial IO regressions."""
     import blosc2
@@ -313,10 +339,12 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     compressed = [value for value in inputs.values() if type(value) is blosc2.NDArray]
     if len(shape) != 1 or not compressed or blosc2.IS_WASM or plan.info()["stages"] != 1:
         return None
-    if shape[0] < MINIMUM_COMPRESSED_GRAPH_ITEMS:
+    minimum = MINIMUM_COMPRESSED_GRAPH_ITEMS if reduction else _compressed_map_minimum(inputs)
+    if shape[0] < minimum:
         return None
     first = compressed[0]
-    workers = min(blosc2.nthreads, MAXIMUM_WORKERS, shape[0] // MINIMUM_WORKER_ITEMS, first.schunk.nchunks)
+    units = first.schunk.nchunks if reduction else _compressed_map_blocks(first, shape[0])
+    workers = min(blosc2.nthreads, MAXIMUM_WORKERS, shape[0] // MINIMUM_WORKER_ITEMS, units)
     if workers < 2:
         return None
     document = json.loads(plan.to_json())
@@ -414,6 +442,29 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     return result, report
 
 
+@lru_cache(maxsize=128)
+def _compressed_map_schedules(plan, shape, workers, chunk, block, units, worker_tile):
+    """Reusable immutable region schedules, with no input/output ownership."""
+    blocks_per_chunk = (chunk + block - 1) // block
+
+    def region_offset(unit):
+        nchunk, within_chunk = divmod(unit, blocks_per_chunk)
+        return min(shape[0], nchunk * chunk + within_chunk * block)
+
+    schedules = []
+    dtypes = plan.input_dtypes
+    for worker in range(workers):
+        start = region_offset(units * worker // workers)
+        stop = region_offset(units * (worker + 1) // workers)
+        schedule = plan.specialize(
+            {name: (dtype, (stop - start,)) for name, dtype in dtypes.items()}, worker_tile
+        )
+        if schedule.info()["shape"] != (stop - start,):
+            return None
+        schedules.append((start, stop, schedule))
+    return tuple(schedules)
+
+
 def _parallel_compressed_map(plan, inputs, shape, tile_items):
     """One whole-domain job; worker-private decoders write disjoint output regions.
 
@@ -432,7 +483,14 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items):
         return None
     first, workers, _, _ = layout
     block = first.blocks[0]
-    worker_tile = max(1, max(tile_items, 65536) // block) * block
+    # Match ordinary tiles to one block; group tiny blocks so graph/kernel
+    # dispatch is still amortized. The reader decodes each block directly into
+    # iterator scratch, even when a tile contains multiple physical blocks.
+    worker_tile = (
+        max(1, (4096 + block - 1) // block) * block
+        if tile_items == 1024
+        else max(1, max(tile_items, 65536) // block) * block
+    )
 
     class SpanReader(StorageReader):
         def __init__(self, value, start, stop):
@@ -443,30 +501,23 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items):
         def read(self, indices):
             return super().read(indices + self.start)
 
-    schedules = []
-    for worker in range(workers):
-        start = first.schunk.nchunks * worker // workers * first.chunks[0]
-        stop = min(shape[0], first.schunk.nchunks * (worker + 1) // workers * first.chunks[0])
-        arrays = {
-            name: value if type(value) is blosc2.NDArray else value[start:stop]
-            for name, value in inputs.items()
-        }
-        readers = {
-            name: ReaderState(SpanReader(value, start, stop))
-            for name, value in inputs.items()
-            if type(value) is blosc2.NDArray
-        }
-        schedule = plan.specialize(
-            {name: (value.dtype, (stop - start,)) for name, value in inputs.items()}, worker_tile
-        )
-        info = schedule.info()
-        if info["shape"] != (stop - start,):
-            return None
-        schedules.append((start, stop, schedule, arrays, readers))
+    units = _compressed_map_blocks(first, shape[0])
+    schedules = _compressed_map_schedules(plan, shape, workers, first.chunks[0], block, units, worker_tile)
+    if schedules is None:
+        return None
     output = np.empty(shape, dtype=schedules[0][2].info()["dtype"])
     futures = []
     try:
-        for start, stop, schedule, arrays, readers in schedules:
+        for start, stop, schedule in schedules:
+            arrays = {
+                name: value if type(value) is blosc2.NDArray else value[start:stop]
+                for name, value in inputs.items()
+            }
+            readers = {
+                name: ReaderState(SpanReader(value, start, stop))
+                for name, value in inputs.items()
+                if type(value) is blosc2.NDArray
+            }
             futures.append(
                 resident_pool().submit(
                     schedule.execute_sources, arrays, readers, native_spans=True, out=output[start:stop]

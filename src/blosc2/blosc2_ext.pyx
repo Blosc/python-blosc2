@@ -1350,8 +1350,13 @@ cdef int graph_span_reader_callback(void *opaque, const size_t *indices, size_t 
             if state.chunk_bytes < 0 or state.chunk == NULL:
                 return 1
         rc = blosc2_cbuffer_sizes(state.chunk, &decoded, &encoded, &block_bytes)
-        if rc < 0 or decoded < 0 or offset + take > <size_t>(decoded // typesize):
+        if rc < 0 or decoded < 0 or block_bytes <= 0 or block_bytes % typesize or offset + take > <size_t>(decoded // typesize):
             return 1
+        # Keep each request inside one physical block. Besides avoiding the
+        # decoder's multi-block copy, this prevents an unaligned block-sized
+        # request from taking C-Blosc2's single-block destination shortcut on
+        # its second block and overwriting already-decoded leading values.
+        take = min(take, <size_t>(block_bytes // typesize - offset % (block_bytes // typesize)))
         wanted = take * typesize
         rc = blosc2_getitem_bytes_ctx(state.dctx, state.chunk, state.chunk_bytes,
                                       offset * typesize, wanted,

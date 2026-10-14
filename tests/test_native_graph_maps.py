@@ -1,6 +1,7 @@
 """Whole-domain compressed maps reuse readers and write directly into NumPy output."""
 
 from concurrent.futures import Future
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -155,3 +156,72 @@ def test_graph_sources_explicit_output_validation():
         schedule.execute_sources({"x": values}, {}, out=out)
     with pytest.raises(ValueError, match="overlap"):
         schedule.execute_sources({"x": values}, {}, out=values)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int32"])
+@pytest.mark.parametrize("threads", [4, 8, 12])
+@pytest.mark.parametrize("size", [1_000_000, 2_000_000])
+def test_map_crossover_policy(dtype, threads, size, monkeypatch):
+    import blosc2.native_graph as native
+
+    # Restore production limits rather than the fixture's small test threshold.
+    monkeypatch.setattr(native, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 16_000_000)
+    monkeypatch.setattr(native, "MINIMUM_COMPRESSED_MAP_ITEMS", 2_000_000)
+    blosc2.set_nthreads(threads)
+    values = np.arange(size, dtype=dtype)
+    x = blosc2.asarray(values, chunks=(size,), blocks=(15625,))
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    prepared = native.prepare_native_first(expr, (), options={"_getitem": True})
+    eligible = dtype == "float64" and threads >= 8 and size >= 2_000_000
+    assert (prepared is not None) == eligible
+    if eligible:
+        result = expr[:]
+        np.testing.assert_array_equal(result, values + 1)
+        assert expr._native_execution_report["threads"] > x.schunk.nchunks
+        assert expr._native_execution_report["tile_items"] == x.blocks[0]
+    # Reductions keep their old floor even for the new map crossover.
+    assert native.prepare_native_first(blosc2.lazyexpr("sum(x + 1)", {"x": x}), ()) is None
+
+
+def test_map_schedules_are_immutable_and_operand_free():
+    import gc
+    import weakref
+
+    import blosc2.native_graph as native
+
+    native._compressed_map_schedules.cache_clear()
+    values = np.arange(4 * 65536, dtype=np.float64)
+    x = blosc2.asarray(values, chunks=(4 * 65536,), blocks=(4096,))
+    reference = weakref.ref(x)
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    np.testing.assert_array_equal(expr[:], values + 1)
+    hits = native._compressed_map_schedules.cache_info().hits
+    np.testing.assert_array_equal(expr[:], values + 1)
+    assert native._compressed_map_schedules.cache_info().hits > hits
+    del x, expr
+    gc.collect()
+    assert reference() is None
+
+
+def test_balanced_regions_split_physical_blocks_with_tail_padding():
+    import blosc2.native_graph as native
+
+    values = np.arange(4 * 65536 + 1, dtype=np.float64)
+    x = blosc2.asarray(values, chunks=(60000,), blocks=(4096,))
+    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    units = native._compressed_map_blocks(x, values.size)
+    regions = native._compressed_map_schedules(plan, values.shape, 8, 60000, 4096, units, 4096)
+    assert regions[0][0] == 0
+    assert regions[-1][1] == values.size
+    for start, stop, _ in regions:
+        assert start < stop
+        assert start % 60000 % 4096 == 0
+    assert all(left[1] == right[0] for left, right in pairwise(regions))
+
+
+def test_map_groups_tiny_blocks_to_amortize_dispatch():
+    values = np.arange(4 * 65536, dtype=np.float64)
+    x = blosc2.asarray(values, chunks=(65536,), blocks=(128,))
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    np.testing.assert_array_equal(expr[:], values + 1)
+    assert expr._native_execution_report["tile_items"] == 4096

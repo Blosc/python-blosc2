@@ -296,3 +296,23 @@ def test_native_compressed_readers_acquire_gil_for_postfilters(monkeypatch, para
         assert expr._native_execution_report["route"] == "parallel-graph-bounded-readers"
     finally:
         blosc2.set_nthreads(previous)
+
+
+def test_native_span_unaligned_block_sized_requests(graph_sources_runtime):
+    from blosc2.storage_readers import ReaderState, StorageReader
+
+    values = np.arange(1024, dtype=np.float64)
+    x = blosc2.asarray(values, chunks=(1024,), blocks=(128,))
+
+    class SpanReader(StorageReader):
+        def __init__(self):
+            super().__init__(x, (384,))
+            self.start = 3
+            self.shape = (384,)
+
+    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"})
+    schedule = plan.specialize({"x": (values.dtype, (384,))}, tile_items=128)
+    result, report = schedule.execute_sources({"x": x}, {"x": ReaderState(SpanReader())}, native_spans=True)
+    np.testing.assert_array_equal(result, values[3:387] + 1)
+    assert report["maximum_reader_items"] == 128
+    assert report["reader_bytes"] == 384 * values.itemsize
