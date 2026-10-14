@@ -19,6 +19,17 @@ def prefilter_runtime(native_graph_runtime):
         pytest.skip("Automatic output dispatch requires a native JIT")
 
 
+@pytest.fixture
+def parallel_threads():
+    # Other modules can leave the process-wide codec thread count at one.
+    # A test requiring the parallel map must establish and restore its policy.
+    previous = blosc2.set_nthreads(2)
+    try:
+        yield
+    finally:
+        blosc2.set_nthreads(previous)
+
+
 def operands(size=257, dtype="float64"):
     x = np.linspace(0, 1, size, dtype=dtype)
     y = np.linspace(1, 2, size, dtype=dtype)
@@ -80,7 +91,7 @@ def test_matching_blosc2_out_and_evaluate(monkeypatch, bound):
 
 @pytest.mark.parametrize("explicit_out", [False, True])
 @pytest.mark.parametrize("bound", [False, True])
-def test_numpy_output_native_parallel_map(monkeypatch, explicit_out, bound):
+def test_numpy_output_native_parallel_map(monkeypatch, parallel_threads, explicit_out, bound):
     from blosc2 import native_graph, resident_execution
 
     monkeypatch.setattr(native_graph, "MINIMUM_COMPRESSED_MAP_ITEMS", 1)

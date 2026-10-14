@@ -132,6 +132,9 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         return None
     options = options or {}
     output = options.get("out", getattr(expr, "_output", None))
+    # Only a concrete, validated NumPy output extends the old admission gate.
+    if "out" in options and output is None:
+        return None
     if output is not None and type(output) is not np.ndarray:
         return None
     explicit = options.get("_reduce_args")

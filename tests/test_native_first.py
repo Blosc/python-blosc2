@@ -237,6 +237,38 @@ def test_native_first_jit_false_retains_legacy(monkeypatch):
     np.testing.assert_array_equal(expr.compute(jit=False)[:], np.arange(4.0) + 1)
 
 
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
+@pytest.mark.parametrize(
+    "policy",
+    [{"jit": False}, {"jit_backend": "tcc"}, {"fp_accuracy": blosc2.FPAccuracy.HIGH}],
+)
+def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, scoped, policy):
+    import blosc2.native_graph as native
+
+    monkeypatch.delenv("BLOSC_ME_JIT", raising=False)
+    values = np.arange(32.0)
+    operand = blosc2.asarray(values) if compressed else values
+    expr = blosc2.lazyexpr("x + 1", {"x": operand})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Inherited JIT/backend/accuracy policy attempted native graph compilation")
+
+    monkeypatch.setattr(native, "lower_native_graph", forbidden)
+    previous = blosc2.get_jit_options()
+    try:
+        if scoped:
+            with blosc2.jit_options(**policy):
+                result = expr.compute()
+        else:
+            blosc2.set_jit_options(**policy)
+            result = expr.compute()
+        np.testing.assert_array_equal(result[:], values + 1)
+        assert not hasattr(expr, "_native_execution_report")
+    finally:
+        blosc2.set_jit_options(**previous)
+
+
 @pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [None, 0, -1, (), (0, 1)])
 @pytest.mark.parametrize("keepdims", [False, True])

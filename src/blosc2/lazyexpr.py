@@ -4879,12 +4879,23 @@ class LazyExpr(LazyArray):
                 prepare_native_first,
             )
 
+            # Legacy chunked execution resolves inherited policy in its JIT
+            # decorator. Automatic dispatch must respect that same policy
+            # before choosing a route that cannot honor backend/accuracy
+            # overrides. Keep the original kwargs for legacy resolution.
+            policy = blosc2.jit_config.execution_options()
+            native_jit = policy["jit"] if jit is None else jit
+            native_backend = policy["jit_backend"] if jit_backend is None else jit_backend
+            native_accuracy = fp_accuracy
+            if native_accuracy is None and policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
+                native_accuracy = policy["fp_accuracy"]
+
             stored = compute_native_prefilter_if_eligible(
                 self,
                 item,
-                jit=jit is not False,
-                jit_backend=jit_backend,
-                fp_accuracy=fp_accuracy,
+                jit=native_jit is not False,
+                jit_backend=native_backend,
+                fp_accuracy=native_accuracy,
                 options=kwargs,
             )
             if stored is not None:
@@ -4899,9 +4910,9 @@ class LazyExpr(LazyArray):
             prepared = prepare_native_first(
                 self,
                 item,
-                jit=jit is not False,
-                jit_backend=jit_backend,
-                fp_accuracy=fp_accuracy,
+                jit=native_jit is not False,
+                jit_backend=native_backend,
+                fp_accuracy=native_accuracy,
                 options=native_options,
             )
             if prepared is not None:
