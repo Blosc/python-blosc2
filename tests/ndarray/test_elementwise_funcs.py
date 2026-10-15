@@ -44,6 +44,17 @@ SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
 SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
+def _function_dtype_layout_cases(function_pairs):
+    # Dtype support is function-specific, so retain every function/dtype pair.
+    # Rank and chunk traversal are shared: rotate 1-D/2-D layouts instead of
+    # duplicating every pair. Each function and dtype still sees both ranks.
+    return [
+        (np_func, blosc_func, dtype, *SHAPES_CHUNKS[(function_index + dtype_index) % len(SHAPES_CHUNKS)])
+        for function_index, (np_func, blosc_func) in enumerate(function_pairs)
+        for dtype_index, dtype in enumerate(DTYPES)
+    ]
+
+
 def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
     """Helper function containing the actual test logic for unary functions."""
     if np_func.__name__ in ("arccos", "arcsin", "arctanh"):
@@ -307,9 +318,10 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
                 raise
 
 
-@pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
+@pytest.mark.parametrize(
+    ("np_func", "blosc_func", "dtype", "shape", "chunkshape"),
+    _function_dtype_layout_cases(UNARY_FUNC_PAIRS),
+)
 def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
     _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 
@@ -332,9 +344,10 @@ def test_unary_funcs_heavy(np_func, blosc_func, dtype, shape, chunkshape):
     _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 
 
-@pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
+@pytest.mark.parametrize(
+    ("np_func", "blosc_func", "dtype", "shape", "chunkshape"),
+    _function_dtype_layout_cases(BINARY_FUNC_PAIRS),
+)
 def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
     _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 

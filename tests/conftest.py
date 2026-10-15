@@ -7,8 +7,11 @@
 
 import gc
 import os
+import socketserver
 import sys
+import threading
 import time
+import traceback
 
 import httpx
 import pytest
@@ -78,6 +81,36 @@ def orthogonal_cases(*dimensions):
     return cases
 
 
+def report_http_server_error(log_path, client_address):
+    """Record the active request exception before parallel output can hide it."""
+    exception_type, error, tb = sys.exc_info()
+    summary = "".join(traceback.format_exception_only(exception_type, error)).strip()
+    test = os.environ.get("PYTEST_CURRENT_TEST", "outside a running test")
+    message = f"HTTP request error: {summary}\nTest: {test}\nClient: {client_address!r}\n" + "".join(
+        traceback.format_exception(exception_type, error, tb)
+    )
+    # Persist first: xdist/capture/teardown can interrupt or hide stderr output.
+    with log_path.open("a", encoding="utf-8") as stream:
+        stream.write(message + "\n")
+    sys.stderr.write(f"{message}\nFull HTTP error log: {log_path}\n")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _http_server_diagnostics(pytestconfig):
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    log_path = pytestconfig.cache.mkdir("http-server-errors") / f"{worker}.log"
+    log_path.write_text("", encoding="utf-8")
+    lock = threading.Lock()
+
+    def handle_error(server, request, client_address):
+        with lock:
+            report_http_server_error(log_path, client_address)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(socketserver.BaseServer, "handle_error", handle_error)
+        yield
+
+
 @pytest.fixture(scope="session")
 def native_graph_runtime():
     """Optional dependency feature; qualification jobs must require its presence."""
@@ -120,6 +153,20 @@ def _fast_textual_idle():
     textual_wait.SLEEP_GRANULARITY = 0.008  # 20 ms -> 8 ms
     yield
     textual_wait.SLEEP_GRANULARITY = saved
+
+
+@pytest.fixture(autouse=True)
+def isolate_releasegil():
+    """Keep process-global GIL policy from leaking into Python callback tests.
+
+    Compression tests exercise both policies. Their final parameter must not
+    determine whether a later filler/prefilter runs Python without the GIL.
+    """
+    previous = blosc2.set_releasegil(False)
+    try:
+        yield
+    finally:
+        blosc2.set_releasegil(previous)
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -311,8 +311,9 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 @pytest.mark.parametrize(
     "shapes",
     [
+        # Both former small sizes used identical ranks/broadcast directions.
+        # Keep one small geometry and the opt-in large-array qualification.
         ((5, 5, 5), (5, 5), (5,)),
-        ((10, 10, 10), (10, 10), (10,)),
         pytest.param(((100, 100, 100), (100, 100), (100,)), marks=pytest.mark.heavy),
     ],
 )
