@@ -258,30 +258,35 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
 
 # TODO: "prod" is not supported here because it overflows with current values
 @pytest.mark.parametrize(
-    "reduce_op",
+    ("reduce_op", "shape_fixture", "axis"),
     [
-        "cumulative_sum",
-        "sum",
-        "min",
-        "mean",
-        "argmax",
-        pytest.param("max", marks=pytest.mark.heavy),
-        pytest.param("std", marks=pytest.mark.heavy),
-        pytest.param("var", marks=pytest.mark.heavy),
-        pytest.param("any", marks=pytest.mark.heavy),
-        pytest.param("all", marks=pytest.mark.heavy),
-        pytest.param("argmin", marks=pytest.mark.heavy),
+        pytest.param(
+            op,
+            shape,
+            axis,
+            marks=[] if op in {"cumulative_sum", "sum", "min", "mean", "argmax"} else pytest.mark.heavy,
+        )
+        for op in (
+            "cumulative_sum",
+            "sum",
+            "min",
+            "mean",
+            "argmax",
+            "max",
+            "std",
+            "var",
+            "any",
+            "all",
+            "argmin",
+        )
+        for shape in ((NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100))
+        for axis in (None, 0, 1)
+        if (axis is None or axis < len(shape)) and not (op == "cumulative_sum" and axis is None)
     ],
+    indirect=["shape_fixture"],
 )
-@pytest.mark.parametrize("axis", [None, 0, 1])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    if axis is not None:
-        if len(a1.shape) <= axis:
-            return
-    else:
-        if reduce_op == "cumulative_sum":
-            return
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
     tol = 1e-12 if a1.dtype == "float64" else 5e-5

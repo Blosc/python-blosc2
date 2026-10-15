@@ -75,3 +75,26 @@ traceback. The same details are saved under
 Each worker resets its log at session startup. Request errors are still logged,
 not suppressed or automatically turned into test failures; inspect these files
 if parallel progress output obscures a traceback from an otherwise passing run.
+
+## Shared fixtures and duplicate cases
+
+A final focused pass reduced default collection from 12,006 to 11,588 units:
+
+| Module | Before | After |
+| --- | ---: | ---: |
+| `ndarray/test_lazyexpr.py` | 898 | 742 |
+| `ndarray/test_lazyexpr_fields.py` | 442 | 242 |
+| `ndarray/test_reductions.py` | 589 | 563 |
+| `ndarray/test_stringarrays.py` | 76 | 40 |
+
+Shared array fixtures now use explicit scenarios: both floating precisions still
+see every original size/rank, and each default mixed-field dtype pair still sees
+both sizes and both default partition relationships. Standalone dtype/shape
+fixtures are unchanged. Remaining shared-fixture combinations retain their full
+original coverage under `heavy`, including the NumPy 1.x short-integer skip.
+
+Unicode roundtrips retain all 12 distinct effective partition configurations;
+the former 48-case grid repeatedly normalized wrong-rank chunk/block tuples to
+`None`. Reduction-expression tests collect only valid shape/axis/operation
+combinations instead of counting early returns as passes. All cases that
+previously performed numerical comparisons remain covered.

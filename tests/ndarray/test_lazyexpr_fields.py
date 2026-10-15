@@ -15,53 +15,57 @@ NITEMS_SMALL = 100
 NITEMS = 1000
 
 
+FIELD_DTYPE_PAIRS = [
+    (np.float32, np.float64),
+    (np.float64, np.float64),
+    (np.int32, np.float32),
+    (np.int32, np.uint32),
+    (np.int8, np.int16),
+    (np.int32, np.float64),
+    (np.int8, np.float64),
+    (np.uint8, np.uint16),
+    (np.uint8, np.uint32),
+    (np.uint8, np.float32),
+    (np.uint16, np.float64),
+]
+
+# Preserve every default mixed-dtype pair with both partition relationships and
+# both sizes; rotate their combinations. All other original cases stay heavy.
+DEFAULT_ARRAY_SCENARIOS = {
+    ((np.float32, np.float64), (NITEMS_SMALL,), (True, True)),
+    ((np.float32, np.float64), (NITEMS,), (True, False)),
+    ((np.int32, np.float32), (NITEMS_SMALL,), (True, False)),
+    ((np.int32, np.float32), (NITEMS,), (True, True)),
+    ((np.int32, np.uint32), (NITEMS_SMALL,), (True, True)),
+    ((np.int32, np.uint32), (NITEMS,), (True, False)),
+    ((np.int8, np.int16), (NITEMS_SMALL,), (True, False)),
+    ((np.int8, np.int16), (NITEMS,), (True, True)),
+}
+
+
 @pytest.fixture(
     params=[
-        (np.float32, np.float64),
-        pytest.param((np.float64, np.float64), marks=pytest.mark.heavy),
-        (np.int32, np.float32),
-        (np.int32, np.uint32),
         pytest.param(
-            (np.int8, np.int16),
-            marks=pytest.mark.skipif(
-                np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules"
+            (dtypes, shape, partitions),
+            marks=([] if (dtypes, shape, partitions) in DEFAULT_ARRAY_SCENARIOS else [pytest.mark.heavy])
+            + (
+                [
+                    pytest.mark.skipif(
+                        np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules"
+                    )
+                ]
+                if dtypes == (np.int8, np.int16)
+                else []
             ),
-        ),
-        # The next dtypes work, but running everything takes too much time
-        pytest.param((np.int32, np.float64), marks=pytest.mark.heavy),
-        pytest.param((np.int8, np.float64), marks=pytest.mark.heavy),
-        pytest.param((np.uint8, np.uint16), marks=pytest.mark.heavy),
-        pytest.param((np.uint8, np.uint32), marks=pytest.mark.heavy),
-        pytest.param((np.uint8, np.float32), marks=pytest.mark.heavy),
-        pytest.param((np.uint16, np.float64), marks=pytest.mark.heavy),
+            id=f"{np.dtype(dtypes[0]).name}-{np.dtype(dtypes[1]).name}-{shape}-{partitions}",
+        )
+        for dtypes in FIELD_DTYPE_PAIRS
+        for shape in ((NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100))
+        for partitions in ((True, True), (True, False), (False, True), (False, False))
     ]
 )
-def dtype_fixture(request):
-    return request.param
-
-
-@pytest.fixture(
-    params=[(NITEMS_SMALL,), (NITEMS,), pytest.param((NITEMS // 10, 100), marks=pytest.mark.heavy)]
-)
-def shape_fixture(request):
-    return request.param
-
-
-# params: (same_chunks, same_blocks)
-@pytest.fixture(
-    params=[
-        (True, True),
-        (True, False),
-        pytest.param((False, True), marks=pytest.mark.heavy),
-        pytest.param((False, False), marks=pytest.mark.heavy),
-    ]
-)
-def chunks_blocks_fixture(request):
-    return request.param
-
-
-@pytest.fixture
-def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
+def array_fixture(request):
+    dtype_fixture, shape_fixture, chunks_blocks_fixture = request.param
     nelems = np.prod(shape_fixture)
     dt1, dt2 = dtype_fixture
     na1_ = np.linspace(0, nelems, nelems, dtype=dt1).reshape(shape_fixture)

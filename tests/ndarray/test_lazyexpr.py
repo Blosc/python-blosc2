@@ -87,21 +87,32 @@ def shape_fixture(request):
     return request.param
 
 
-# params: (same_chunks, same_blocks)
+# Keep both precisions at every size/rank, rotating the partition relationship
+# instead of multiplying it across every case. The full grid remains opt-in.
+DEFAULT_ARRAY_SCENARIOS = {
+    (np.float32, (NITEMS_SMALL,), (True, True)),
+    (np.float32, (NITEMS,), (True, False)),
+    (np.float32, (NITEMS // 10, 100), (True, True)),
+    (np.float64, (NITEMS_SMALL,), (True, False)),
+    (np.float64, (NITEMS,), (True, True)),
+    (np.float64, (NITEMS // 10, 100), (True, False)),
+}
+
+
 @pytest.fixture(
     params=[
-        (True, True),
-        (True, False),
-        pytest.param((False, True), marks=pytest.mark.heavy),
-        pytest.param((False, False), marks=pytest.mark.heavy),
+        pytest.param(
+            (dtype, shape, partitions),
+            marks=[] if (dtype, shape, partitions) in DEFAULT_ARRAY_SCENARIOS else pytest.mark.heavy,
+            id=f"{np.dtype(dtype).name}-{shape}-{partitions}",
+        )
+        for dtype in (np.float32, np.float64)
+        for shape in ((NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100))
+        for partitions in ((True, True), (True, False), (False, True), (False, False))
     ]
 )
-def chunks_blocks_fixture(request):
-    return request.param
-
-
-@pytest.fixture
-def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
+def array_fixture(request):
+    dtype_fixture, shape_fixture, chunks_blocks_fixture = request.param
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     chunks = chunks1 = blocks = blocks1 = None  # silence linter
