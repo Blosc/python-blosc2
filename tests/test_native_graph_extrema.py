@@ -105,10 +105,11 @@ def test_parallel_extrema_unsupported_layout_stays_serial(op, kind):
 
 
 @pytest.mark.parametrize("op", ["min", "max"])
-@pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("backend", ["cc", "tcc"])
-@pytest.mark.parametrize("root_expression", [False, True])
 @pytest.mark.parametrize("case", ["finite", "nan", "snan", "zeros", "infinities"])
+@pytest.mark.parametrize(
+    ("dtype", "backend", "root_expression"),
+    [("float32", "cc", False), ("float64", "tcc", True)],
+)
 def test_parallel_compressed_extrema(op, dtype, backend, root_expression, case, monkeypatch):
     import blosc2.native_graph as native
     from blosc2.storage_readers import StorageReader

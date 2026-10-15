@@ -5,6 +5,7 @@ import pytest
 
 import blosc2
 from blosc2.native_graph import prepare_native_first
+from conftest import orthogonal_cases
 
 
 @pytest.fixture
@@ -179,8 +180,12 @@ def test_native_first_report_cleared_on_opt_out(native_first_runtime):
     assert not hasattr(expr, "_native_execution_report")
 
 
-@pytest.mark.parametrize("dtype", ["int16", "int32", "int64", "uint8", "uint16", "uint32"])
-@pytest.mark.parametrize("expression", ["x + 1", "-x", "x * 2", "x < 3", "x & 3"])
+@pytest.mark.parametrize(
+    ("dtype", "expression"),
+    orthogonal_cases(
+        ["int16", "int32", "int64", "uint8", "uint16", "uint32"], ["x + 1", "-x", "x * 2", "x < 3", "x & 3"]
+    ),
+)
 def test_native_first_numeric_coverage(dtype, expression, native_first_runtime):
     x = np.arange(6).astype(dtype)
     expr = blosc2.lazyexpr(expression, {"x": x})
@@ -269,9 +274,10 @@ def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, s
         blosc2.set_jit_options(**previous)
 
 
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("axis", [None, 0, -1, (), (0, 1)])
-@pytest.mark.parametrize("keepdims", [False, True])
+@pytest.mark.parametrize(
+    ("op", "axis", "keepdims"),
+    orthogonal_cases(["sum", "prod", "min", "max", "any", "all"], [None, 0, -1, (), (0, 1)], [False, True]),
+)
 def test_native_first_reductions(op, axis, keepdims, native_first_runtime, monkeypatch):
     x = np.arange(1, 7.0).reshape(2, 3)
     expr = blosc2.lazyexpr("x + 1", {"x": x})

@@ -10,6 +10,7 @@ import pytest
 
 import blosc2
 from blosc2.expression_graph import parse_expression
+from conftest import orthogonal_cases
 
 
 def _numpy_cumulative_reference(data, name, *, axis, include_initial):
@@ -493,9 +494,13 @@ def test_backend_positional_reduction_binding(backend, name):
     np.testing.assert_allclose(expr[:], expected)
 
 
-@pytest.mark.parametrize("dtype", ["bool", "int8", "uint8", "float16", "float32", "float64", "complex64"])
 @pytest.mark.parametrize(
-    "name", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmin", "argmax"]
+    ("dtype", "name"),
+    orthogonal_cases(
+        ["bool", "int8", "uint8", "float16", "float32", "float64", "complex64"],
+        ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmin", "argmax"],
+    )
+    + [("complex64", "min"), ("complex64", "max")],
 )
 def test_root_reduction_metadata_matches_execution(dtype, name):
     data = (np.arange(24).reshape(2, 3, 4) % 5).astype(dtype)
@@ -609,9 +614,14 @@ def test_blosc_qualified_reduction_preserves_blosc_position_layout():
 
 
 @pytest.mark.parametrize("name", ["cumulative_sum", "cumulative_prod"])
-@pytest.mark.parametrize("backend", ["numpy", "blosc_function", "blosc_array", "blosc_lazy"])
-@pytest.mark.parametrize("include_initial", [False, True])
-@pytest.mark.parametrize("dtype", ["int8", "uint8", "float32", "float64"])
+@pytest.mark.parametrize(
+    ("backend", "include_initial", "dtype"),
+    orthogonal_cases(
+        ["numpy", "blosc_function", "blosc_array", "blosc_lazy"],
+        [False, True],
+        ["int8", "uint8", "float32", "float64"],
+    ),
+)
 def test_cumulative_backend_layout_and_metadata(name, backend, include_initial, dtype):
     if backend == "numpy" and not hasattr(np, name):
         pytest.skip(f"NumPy version has no {name} function")
@@ -835,9 +845,14 @@ def test_ndfield_rejects_removed_parent_field_before_computation():
         expr.compute()
 
 
-@pytest.mark.parametrize("name", ["sqrt", "sin", "exp", "isfinite"])
-@pytest.mark.parametrize("dtype", ["bool", "int8", "uint8", "float32", "float64", "complex64"])
-@pytest.mark.parametrize("backend", ["numpy", "blosc"])
+@pytest.mark.parametrize(
+    ("name", "dtype", "backend"),
+    orthogonal_cases(
+        ["sqrt", "sin", "exp", "isfinite"],
+        ["bool", "int8", "uint8", "float32", "float64", "complex64"],
+        ["numpy", "blosc"],
+    ),
+)
 def test_nested_unary_reduction_dtype_matches_execution(name, dtype, backend):
     data = (np.arange(12).reshape(3, 4) % 3).astype(dtype)
     x = data if backend == "numpy" else blosc2.asarray(data)

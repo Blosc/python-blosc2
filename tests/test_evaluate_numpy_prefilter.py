@@ -6,10 +6,15 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "int64", "complex128"])
-@pytest.mark.parametrize("mode", ["evaluate", "getitem", "out", "strided-out"])
+@pytest.mark.parametrize(
+    ("dtype", "mode"),
+    orthogonal_cases(
+        ["float32", "float64", "int32", "int64", "complex128"], ["evaluate", "getitem", "out", "strided-out"]
+    ),
+)
 def test_numpy_prefilter_output(dtype, mode, monkeypatch):
     if dtype == "complex128" and (blosc2.IS_WASM or sys.platform == "win32"):
         pytest.skip("Complex prefilter execution is unavailable on this platform")

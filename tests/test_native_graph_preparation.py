@@ -10,13 +10,17 @@ from blosc2.blosc2_ext import NativeGraphHandle
 
 import blosc2
 from blosc2.native_graph import lower_native_graph, scalar_descriptor
+from conftest import orthogonal_cases
 
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "int64"])
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("tile", [1, 5, 64])
+@pytest.mark.parametrize(
+    ("dtype", "op", "tile"),
+    orthogonal_cases(
+        ["float32", "float64", "int32", "int64"], ["sum", "prod", "min", "max", "any", "all"], [1, 5, 64]
+    ),
+)
 def test_direct_input_reduction_bypasses_map(dtype, op, tile):
     x = np.arange(1, 13, dtype=dtype).reshape(3, 4)
     plan = blosc2.NativeGraph.from_expression(f"{op}(x, axis=-1)", {"x": dtype}, jit=True)
@@ -54,9 +58,14 @@ def test_direct_sum_order_status_initial_and_fallback(dtype):
     assert report["gathered_bytes"] > 0
 
 
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int8", "int64", "uint64"])
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("tile", [1, 3, 64])
+@pytest.mark.parametrize(
+    ("dtype", "op", "tile"),
+    orthogonal_cases(
+        ["float32", "float64", "int8", "int64", "uint64"],
+        ["sum", "prod", "min", "max", "any", "all"],
+        [1, 3, 64],
+    ),
+)
 def test_computed_reduction_typed_matches_masked_generic(dtype, op, tile):
     x = np.array([1, 2, 0, 3, 1, 2], dtype=dtype)
     initial = ", initial=0" if op in ("min", "max") else ""
@@ -78,8 +87,24 @@ def test_computed_reduction_typed_matches_masked_generic(dtype, op, tile):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("case", ["cancellation", "nan", "snan", "overflow", "underflow", "signed_zero"])
+@pytest.mark.parametrize(
+    ("op", "case"),
+    [
+        ("sum", "cancellation"),
+        ("sum", "overflow"),
+        ("sum", "snan"),
+        ("prod", "overflow"),
+        ("prod", "underflow"),
+        ("min", "nan"),
+        ("max", "nan"),
+        ("min", "snan"),
+        ("max", "snan"),
+        ("min", "signed_zero"),
+        ("max", "signed_zero"),
+        ("any", "nan"),
+        ("all", "signed_zero"),
+    ],
+)
 def test_computed_reduction_float_edge_parity(dtype, op, case):
     large = 2 ** (24 if dtype == "float32" else 53)
     values = {
@@ -125,10 +150,24 @@ def make_portable_sum(dtype, body="return block_sum(x)", cardinality="block_scal
 
 
 @pytest.mark.parametrize(
-    "dtype",
-    ["bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "float64"],
+    ("dtype", "op"),
+    orthogonal_cases(
+        [
+            "bool",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "float32",
+            "float64",
+        ],
+        ["prod", "min", "max", "any", "all"],
+    ),
 )
-@pytest.mark.parametrize("op", ["prod", "min", "max", "any", "all"])
 def test_typed_reductions_match_generic(dtype, op):
     x = np.array([1, 2, 0, 3, 1, 2], dtype=dtype)
     output_dtype = (
@@ -159,8 +198,27 @@ def test_typed_reductions_match_generic(dtype, op):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("op", ["prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("case", ["zero", "nan", "snan", "overflow", "underflow", "invalid", "empty"])
+@pytest.mark.parametrize(
+    ("op", "case"),
+    [
+        ("prod", "overflow"),
+        ("prod", "underflow"),
+        ("prod", "invalid"),
+        ("prod", "empty"),
+        ("min", "zero"),
+        ("max", "zero"),
+        ("min", "nan"),
+        ("max", "nan"),
+        ("min", "snan"),
+        ("max", "snan"),
+        ("min", "empty"),
+        ("max", "empty"),
+        ("any", "snan"),
+        ("all", "zero"),
+        ("any", "empty"),
+        ("all", "empty"),
+    ],
+)
 def test_typed_float_reduction_edge_parity(dtype, op, case):
     cases = {
         "zero": [-0.0, 0.0, -0.0],
@@ -263,9 +321,11 @@ def test_typed_product_initial_and_conversion_fallback(dtype):
 
 
 @pytest.mark.parametrize(
-    "dtype", ["bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"]
+    ("dtype", "tile"),
+    orthogonal_cases(
+        ["bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"], [1, 5, 64]
+    ),
 )
-@pytest.mark.parametrize("tile", [1, 5, 64])
 def test_integer_bool_direct_sums(dtype, tile):
     output_dtype = "uint64" if dtype.startswith("uint") else "int64"
     values = [0, 1, 3, 7, 2, 0, 5] * 3

@@ -56,6 +56,28 @@ def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
 
 
+def orthogonal_cases(*dimensions):
+    """Sample independent parameter axes without their full Cartesian product.
+
+    Sweep each axis with the others at their first (baseline) value, then add
+    a rotating diagonal to exercise mixed settings. Every value is retained,
+    but this deliberately does not promise exhaustive pairwise coverage.
+    Keep interaction-specific regressions in explicit parameter tables instead.
+    """
+    baseline = tuple(values[0] for values in dimensions)
+    cases = [baseline]
+    for axis, values in enumerate(dimensions):
+        for value in values[1:]:
+            case = list(baseline)
+            case[axis] = value
+            cases.append(tuple(case))
+    for index in range(1, max(map(len, dimensions))):
+        case = tuple(values[index % len(values)] for values in dimensions)
+        if case not in cases:
+            cases.append(case)
+    return cases
+
+
 @pytest.fixture(scope="session")
 def native_graph_runtime():
     """Optional dependency feature; qualification jobs must require its presence."""

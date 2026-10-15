@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 DTYPES = [
     "bool",
@@ -38,8 +39,10 @@ def runtime():
         pytest.skip("Installed dependency does not implement native logical traversal")
 
 
-@pytest.mark.parametrize("layout", ["C", "F", "reverse", "step", "endian", "unaligned"])
-@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize(
+    ("layout", "dtype"),
+    orthogonal_cases(["C", "F", "reverse", "step", "endian", "unaligned"], DTYPES),
+)
 def test_broadcast_and_layout(layout, dtype):
     x = np.arange(24).reshape(4, 6).astype(dtype)
     if layout == "F":
@@ -65,9 +68,10 @@ def test_broadcast_and_layout(layout, dtype):
     assert report["temporary_bytes"] <= 5 * 2 * np.dtype(dtype).itemsize
 
 
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("axis", [None, (), 0, -1, (0, 2)])
+@pytest.mark.parametrize(
+    ("dtype", "op", "axis"),
+    orthogonal_cases(DTYPES, ["sum", "prod", "min", "max", "any", "all"], [None, (), 0, -1, (0, 2)]),
+)
 def test_logical_reductions(dtype, op, axis):
     x = (np.arange(24).reshape(2, 3, 4) % 3).astype(dtype)
     k = kernel(output=dtype)

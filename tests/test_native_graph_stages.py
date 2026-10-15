@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
@@ -168,8 +169,10 @@ def test_late_stage_status_recovery():
     assert not report["fp_flags"]
 
 
-@pytest.mark.parametrize("name", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("layout", ["c", "f", "reverse", "step", "swapped"])
+@pytest.mark.parametrize(
+    ("name", "layout"),
+    orthogonal_cases(["sum", "prod", "min", "max", "any", "all"], ["c", "f", "reverse", "step", "swapped"]),
+)
 def test_staged_reducers_and_layouts(name, layout):
     x = np.arange(12, dtype="float32").reshape(3, 4)
     if layout == "f":

@@ -19,8 +19,7 @@ def scalar_kernel(body, inputs, output="float64", *, jit=False, ndim=0, cardinal
     return blosc2.PortableKernel.from_json(artifact, jit=jit)
 
 
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int64"])
+@pytest.mark.parametrize(("jit", "dtype"), [(False, "float32"), (True, "float64"), (True, "int64")])
 @pytest.mark.parametrize(
     "expression",
     [

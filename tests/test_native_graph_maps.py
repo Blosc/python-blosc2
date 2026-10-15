@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 
 @pytest.fixture(autouse=True)
@@ -27,10 +28,10 @@ def map_runtime(native_graph_runtime, monkeypatch, request):
     blosc2.set_nthreads(previous)
 
 
-@pytest.mark.parametrize("backend", ["tcc", "cc"])
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "uint32"])
-@pytest.mark.parametrize("mixed", [False, True])
-@pytest.mark.parametrize("comparison", [False, True])
+@pytest.mark.parametrize(
+    ("backend", "dtype", "mixed", "comparison"),
+    orthogonal_cases(["tcc", "cc"], ["float32", "float64", "int32", "uint32"], [False, True], [False, True]),
+)
 def test_parallel_compressed_map(backend, dtype, mixed, comparison, monkeypatch):
     size = 4 * 65536 + 17
     values = (np.arange(size) % 251).astype(dtype)

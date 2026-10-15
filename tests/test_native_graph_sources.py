@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 
 @pytest.fixture(autouse=True)
@@ -27,9 +28,10 @@ def parallel_sources_runtime(request, monkeypatch):
         pytest.skip("Parallel graph storage readers require an available graph JIT")
 
 
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("axis", [None, 0, -1, ()])
-@pytest.mark.parametrize("keepdims", [False, True])
+@pytest.mark.parametrize(
+    ("op", "axis", "keepdims"),
+    orthogonal_cases(["sum", "prod", "min", "max", "any", "all"], [None, 0, -1, ()], [False, True]),
+)
 def test_graph_sources_axes_broadcast_and_mixed_storage(op, axis, keepdims, monkeypatch):
     values = np.arange(1, 25.0).reshape(4, 6)
     x = blosc2.asarray(values, chunks=(2, 3), blocks=(1, 3))

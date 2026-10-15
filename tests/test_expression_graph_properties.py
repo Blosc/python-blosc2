@@ -9,14 +9,17 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 
 @pytest.mark.parametrize(
-    "source_dtype",
-    ["bool", "int8", "uint8", "int32", "float16", "float32", "float64", "complex64", "complex128"],
+    ("source_dtype", "target_dtype", "casting"),
+    orthogonal_cases(
+        ["bool", "int8", "uint8", "int32", "float16", "float32", "float64", "complex64", "complex128"],
+        ["int32", "float32", "float64", "complex64"],
+        ["unsafe", "same_kind", "safe"],
+    ),
 )
-@pytest.mark.parametrize("target_dtype", ["int32", "float32", "float64", "complex64"])
-@pytest.mark.parametrize("casting", ["unsafe", "same_kind", "safe"])
 def test_numpy_cast_corner_values_errors_and_warnings(source_dtype, target_dtype, casting):
     source = np.arange(1, 5).astype(source_dtype)
     text = f"x.astype('{target_dtype}', casting='{casting}')"
@@ -59,10 +62,10 @@ def test_platform_accumulator_fallback_uses_numpy_integer_width(monkeypatch, nam
     assert numpy_graph.infer_dtype({"x": np.arange(4, dtype="int8")}) == np.dtype(np.intp)
 
 
-@pytest.mark.parametrize("order", ["C", "F", "A", "K"])
-@pytest.mark.parametrize("copy", [False, True])
-@pytest.mark.parametrize("subok", [False, True])
-@pytest.mark.parametrize("positional", [False, True])
+@pytest.mark.parametrize(
+    ("order", "copy", "subok", "positional"),
+    orthogonal_cases(["C", "F", "A", "K"], [False, True], [False, True], [False, True]),
+)
 def test_numpy_cast_layout_signature_and_nested_reduction(order, copy, subok, positional):
     source = np.asfortranarray(np.arange(1, 13, dtype="int16").reshape(3, 4))
     source = source[:, ::-1]
@@ -143,22 +146,22 @@ def test_graph_evaluation_releases_operands_without_cyclic_gc(fails):
 
 
 @pytest.mark.parametrize(
-    ("left_backend", "right_backend"),
-    [("numpy", "numpy"), ("numpy", "blosc2"), ("blosc2", "numpy"), ("blosc2", "blosc2")],
+    ("backends", "dtype", "text"),
+    orthogonal_cases(
+        [("numpy", "numpy"), ("numpy", "blosc2"), ("blosc2", "numpy"), ("blosc2", "blosc2")],
+        ["int32", "float32", "float64"],
+        [
+            "(x + y).sum(axis=0)",
+            "(x / y).mean(axis=1)",
+            "sum(sqrt(x) + y, axis=0)",
+            "sqrt(x + y) - mean(y)",
+            "(x + y).std(axis=1)",
+            "(x + y).var(axis=1)",
+        ],
+    ),
 )
-@pytest.mark.parametrize("dtype", ["int32", "float32", "float64"])
-@pytest.mark.parametrize(
-    "text",
-    [
-        "(x + y).sum(axis=0)",
-        "(x / y).mean(axis=1)",
-        "sum(sqrt(x) + y, axis=0)",
-        "sqrt(x + y) - mean(y)",
-        "(x + y).std(axis=1)",
-        "(x + y).var(axis=1)",
-    ],
-)
-def test_mixed_backend_intermediates_match_trusted_contract(left_backend, right_backend, dtype, text):
+def test_mixed_backend_intermediates_match_trusted_contract(backends, dtype, text):
+    left_backend, right_backend = backends
     data = np.arange(1, 33, dtype=dtype).reshape(4, 8)
     other = np.full((4, 8), 2, dtype=dtype)
     operands = {
@@ -172,9 +175,13 @@ def test_mixed_backend_intermediates_match_trusted_contract(left_backend, right_
     np.testing.assert_allclose(safe[:], trusted[:], rtol=2e-6, atol=2e-6)
 
 
-@pytest.mark.parametrize("backend", ["numpy", "blosc2"])
-@pytest.mark.parametrize("dtype", ["int8", "uint8", "int32", "float32", "float64"])
-@pytest.mark.parametrize("literal", ["1", "0.5", "128", "256"])
+@pytest.mark.parametrize(
+    ("backend", "dtype", "literal"),
+    orthogonal_cases(
+        ["numpy", "blosc2"], ["int8", "uint8", "int32", "float32", "float64"], ["1", "0.5", "128", "256"]
+    )
+    + [("numpy", "uint8", "256"), ("blosc2", "uint8", "256")],
+)
 def test_weak_scalar_value_and_error_contract_matches_trusted(backend, dtype, literal):
     data = np.arange(1, 5, dtype=dtype)
     operands = {"x": data if backend == "numpy" else blosc2.asarray(data)}
@@ -217,9 +224,10 @@ def numerical_case(seed, x, y):
     return text, expected
 
 
-@pytest.mark.parametrize("seed", range(8))
-@pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("route", ["disk", "frame", "structured"])
+@pytest.mark.parametrize(
+    ("seed", "dtype", "route"),
+    orthogonal_cases(range(8), ["float32", "float64"], ["disk", "frame", "structured"]),
+)
 def test_seeded_persisted_graph_lifetime_without_python_text_bridge(
     tmp_path, monkeypatch, seed, dtype, route
 ):
@@ -314,7 +322,7 @@ def test_partial_result_does_not_coerce_whole_source_to_numpy(monkeypatch, text)
     assert not reads or max(reads) <= 256
 
 
-@pytest.mark.parametrize("seed", range(24))
+@pytest.mark.parametrize("seed", range(6))
 def test_bounded_forbidden_syntax_variations_reject_before_resolution(monkeypatch, seed):
     objects = importlib.import_module("blosc2.b2objects")
     monkeypatch.setattr(

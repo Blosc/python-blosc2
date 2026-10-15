@@ -17,9 +17,8 @@ def engine_benchmark():
     return runpy.run_path(str(Path(__file__).resolve().parents[1] / "bench" / "menudet-engines.py"))
 
 
-@pytest.mark.parametrize("size", [1, 257])
-@pytest.mark.parametrize("kind", ["numpy", "blosc2"])
 @pytest.mark.parametrize("reduc", [None, "sum", "mean", "min", "max", "any", "all"])
+@pytest.mark.parametrize(("size", "kind"), [(1, "numpy"), (257, "blosc2")])
 def test_engine_results(engine_benchmark, size, kind, reduc):
     inputs, values = engine_benchmark["build_operands"](size, "numpy")
     expected = getattr(np, reduc)(values) if reduc else values

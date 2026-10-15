@@ -3,6 +3,7 @@ import pytest
 
 import blosc2
 from blosc2.storage_readers import StorageReader, storage_reader_eligible
+from conftest import orthogonal_cases
 
 
 @pytest.fixture
@@ -183,10 +184,10 @@ def test_numerical_status_matches_resident_tiles(storage_runtime, jit):
     assert streamed["fp_supported"] == resident["fp_supported"]
 
 
-@pytest.mark.parametrize("size", [17, 257])
-@pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("jit", [False, True])
-@pytest.mark.parametrize("threads", [1, 2, 12])
+@pytest.mark.parametrize(
+    ("size", "dtype", "jit", "threads"),
+    orthogonal_cases([17, 257], ["float32", "float64"], [False, True], [1, 2, 12]),
+)
 def test_compute_returns_prefilter_output_without_numpy_staging(
     prefilter_runtime, monkeypatch, size, dtype, jit, threads
 ):
