@@ -7,7 +7,12 @@ import blosc2
 
 
 @pytest.fixture(autouse=True)
-def execution_threads():
+def execution_threads(native_graph_runtime):
+    if blosc2.IS_WASM:
+        pytest.skip("These automatic map routes require host JIT/thread/prefilter support")
+    probe = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    if not probe.has_jit:
+        pytest.skip("Automatic native map dispatch requires an available graph JIT")
     # Compressed-input NumPy maps need at least two workers. Do not inherit a
     # single-thread setting left by another test in the same xdist worker.
     previous = blosc2.set_nthreads(2)
