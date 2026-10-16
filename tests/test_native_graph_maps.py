@@ -113,10 +113,10 @@ def test_integer_chunk_map_joins_decoder_failures(monkeypatch):
     original = blosc2.NDArray._portable_chunk_span
     completed = []
 
-    def decode(self, buffer, chunk):
+    def decode(self, buffer, chunk, start=0, nitems=-1):
         if chunk == 0:
             raise OSError("decoder failure")
-        result = original(self, buffer, chunk)
+        result = original(self, buffer, chunk, start, nitems)
         completed.append(chunk)
         return result
 
@@ -136,11 +136,39 @@ def test_portable_chunk_span_checks_scratch():
     x = blosc2.asarray(values, chunks=(4,), blocks=(2,))
     scratch = np.empty(4, dtype="int16")
     np.testing.assert_array_equal(x._portable_chunk_span(scratch, 2), values[-1:])
+    np.testing.assert_array_equal(x._portable_chunk_span(scratch, 0, 2, 2), values[2:4])
+    with pytest.raises(ValueError, match="block-aligned"):
+        x._portable_chunk_span(scratch, 0, 1, 2)
     scratch.flags.writeable = False
     with pytest.raises(ValueError, match="scratch"):
         x._portable_chunk_span(scratch, 0)
     with pytest.raises(ValueError, match="scratch"):
         x._portable_chunk_span(np.empty(4, dtype="int32"), 0)
+
+
+def test_integer_chunk_map_batches_wide_inputs_without_reducing_workers(monkeypatch):
+    if not hasattr(blosc2.NDArray, "_portable_chunk_span"):
+        pytest.skip("Requires the bounded chunk decoder binding")
+    monkeypatch.setattr("blosc2.storage_readers.DENSE_MATERIALIZATION_BUDGET", 4096)
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 64)
+    monkeypatch.setattr("blosc2.native_graph.MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
+    bounds = np.iinfo("int64")
+    values = np.resize(np.array([bounds.min, bounds.max, 0, 1], dtype="int64"), 1027)
+    x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
+    y = blosc2.asarray(values, chunks=x.chunks, blocks=x.blocks)
+    expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Wide-input map fell back instead of reducing its scratch batch size")
+
+    monkeypatch.setattr("blosc2.native_graph._compressed_map_schedules", forbidden)
+    np.testing.assert_array_equal(expr[:], values + (values - 1))
+    report = expr._native_execution_report
+    assert report["route"] == "parallel-graph-chunk-map"
+    assert report["threads"] == 2
+    assert report["tile_items"] == 128
+    assert report["input_buffer_bytes"] <= 4096
+    assert report["evaluated_tiles"] == 9
 
 
 def test_parallel_map_padded_chunk_layout():

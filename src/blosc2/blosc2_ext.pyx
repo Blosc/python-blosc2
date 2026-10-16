@@ -5823,20 +5823,28 @@ cdef class NDArray:
                 raise RuntimeError("Cannot restore portable chunk decoder floating environment")
         return buffer[:self.array.shape[0]]
 
-    def _portable_chunk_span(self, np.ndarray buffer, int64_t chunk):
-        """Decode a bounded chunk into worker-owned scratch with an isolated decoder."""
+    def _portable_chunk_span(self, np.ndarray buffer, int64_t chunk,
+                             int64_t start=0, int64_t nitems=-1):
+        """Decode a block-aligned chunk span into isolated worker-owned scratch."""
         cdef fenv_t environment
         cdef int64_t count = min(self.array.chunkshape[0],
                                 self.array.shape[0] - chunk * self.array.chunkshape[0])
         if self.ndim != 1 or chunk < 0 or count <= 0:
             raise ValueError("Invalid portable chunk span")
+        if start < 0 or start >= count or nitems < -1 or nitems > count - start:
+            raise ValueError("Invalid portable chunk span bounds")
+        if start % self.array.blockshape[0]:
+            raise ValueError("Portable chunk spans must be block-aligned")
+        count = count - start if nitems == -1 else nitems
+        if count <= 0:
+            raise ValueError("Invalid portable chunk span size")
         if (buffer.dtype != self.dtype or buffer.ndim != 1
                 or not buffer.flags.c_contiguous or not buffer.flags.writeable):
             raise ValueError("Portable chunk scratch must match input dtype and layout")
         if feholdexcept(&environment):
             raise RuntimeError("Cannot isolate portable chunk decoder floating environment")
         try:
-            self.get_1d_span_numpy(buffer, chunk, 0, count, nthreads=1)
+            self.get_1d_span_numpy(buffer, chunk, start, count, nthreads=1)
         finally:
             if fesetenv(&environment):
                 raise RuntimeError("Cannot restore portable chunk decoder floating environment")

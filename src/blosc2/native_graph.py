@@ -823,10 +823,23 @@ def _parallel_integer_chunk_map(plan, inputs, shape, workers, out):
         hasattr(value, "_portable_chunk_span") for value in compressed.values()
     ):
         return None
-    scratch_per_worker = chunk_items * sum(value.dtype.itemsize for value in compressed.values())
-    workers = min(workers, first.schunk.nchunks, DENSE_MATERIALIZATION_BUDGET // scratch_per_worker)
+    input_width = sum(value.dtype.itemsize for value in compressed.values())
+    block_items = first.blocks[0]
+    # Budget one physical block per worker first, then choose a block-aligned
+    # batch. Whole-chunk scratch would reduce int64 maps to two workers with
+    # common 1M-item chunks, although smaller batches fit all workers safely.
+    workers = min(
+        workers,
+        first.schunk.nchunks,
+        DENSE_MATERIALIZATION_BUDGET // (block_items * input_width),
+    )
     if workers < 2:
         return None
+    batch_items = min(
+        chunk_items,
+        (DENSE_MATERIALIZATION_BUDGET // workers // input_width // block_items) * block_items,
+    )
+    scratch_per_worker = batch_items * input_width
     if out is not None:
         if type(out) is not np.ndarray or out.shape != shape or out.dtype != kernel.output_dtype:
             raise ValueError("Native map output shape/dtype disagree with the expression")
@@ -837,25 +850,29 @@ def _parallel_integer_chunk_map(plan, inputs, shape, workers, out):
     output = np.empty(shape, dtype=kernel.output_dtype) if out is None else out
 
     def execute(worker):
-        buffers = {name: np.empty(chunk_items, dtype=value.dtype) for name, value in compressed.items()}
+        buffers = {name: np.empty(batch_items, dtype=value.dtype) for name, value in compressed.items()}
         begin = first.schunk.nchunks * worker // workers
         end = first.schunk.nchunks * (worker + 1) // workers
-        flags, supported = 0, True
+        flags, supported, tiles = 0, True, 0
         for chunk in range(begin, end):
-            start = chunk * chunk_items
-            stop = min(start + chunk_items, shape[0])
-            operands = {
-                name: value._portable_chunk_span(buffers[name], chunk)
-                if name in compressed
-                else value[start:stop]
-                for name, value in inputs.items()
-            }
-            _, status = kernel._handle.evaluate_block(
-                operands, (stop - start,), return_status=True, _output=output[start:stop]
-            )
-            flags |= status["flags"]
-            supported &= status["supported"]
-        return flags, supported
+            origin = chunk * chunk_items
+            live_items = min(chunk_items, shape[0] - origin)
+            for offset in range(0, live_items, batch_items):
+                count = min(batch_items, live_items - offset)
+                start, stop = origin + offset, origin + offset + count
+                operands = {
+                    name: value._portable_chunk_span(buffers[name], chunk, offset, count)
+                    if name in compressed
+                    else value[start:stop]
+                    for name, value in inputs.items()
+                }
+                _, status = kernel._handle.evaluate_block(
+                    operands, (count,), return_status=True, _output=output[start:stop]
+                )
+                flags |= status["flags"]
+                supported &= status["supported"]
+                tiles += 1
+        return flags, supported, tiles
 
     futures = []
     try:
@@ -865,7 +882,7 @@ def _parallel_integer_chunk_map(plan, inputs, shape, workers, out):
         wait(futures)
     statuses = [future.result() for future in futures]
     flags = 0
-    for status, _ in statuses:
+    for status, _, _ in statuses:
         flags |= status
     return output, {
         "route": "parallel-graph-chunk-map",
@@ -882,10 +899,10 @@ def _parallel_integer_chunk_map(plan, inputs, shape, workers, out):
         "reader_bytes": sum(value.nbytes for value in compressed.values()),
         "input_materialization_bytes": 0,
         "input_buffer_bytes": workers * scratch_per_worker,
-        "tile_items": chunk_items,
-        "maximum_reader_items": min(chunk_items, shape[0]),
-        "evaluated_tiles": first.schunk.nchunks,
-        "native_decoder_contexts": first.schunk.nchunks * len(compressed),
+        "tile_items": batch_items,
+        "maximum_reader_items": min(batch_items, shape[0]),
+        "evaluated_tiles": sum(status[2] for status in statuses),
+        "native_decoder_contexts": sum(status[2] for status in statuses) * len(compressed),
         "output_copy_bytes": 0,
         "output_zero_fill_bytes": 0,
     }

@@ -231,6 +231,7 @@ def test_selected_resident_views(dtype, monkeypatch):
         )
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
 def test_integer_comparison_parallel_and_selected(monkeypatch):
     monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 64)
     values = np.arange(1027, dtype="int64")

@@ -206,3 +206,29 @@ resident execution and benchmark correctness); expanded native TCC full and Clan
 compact parity suites passed. Lint/format checks passed. Builds retain existing
 generated-C qualifier/abs, Cython shared-pointer declaration and duplicate-library
 warnings; no new warnings were introduced in the changed native lowering.
+
+### Wide-integer chunk scratch regression
+
+The original whole-chunk scratch strategy capped a 100M int64 map with two
+1M-item compressed inputs at two workers: 16,000,000 scratch bytes per worker
+under the 32 MiB total budget. Profiling reproduced LazyExpr-NumPy 75.75 ms and
+evaluate 75.96 ms, with the execution report explicitly showing two threads.
+
+Scheduling now budgets one physical block per worker first, then selects a
+block-aligned sub-chunk batch that fits the unchanged total scratch budget.
+For the standard layout this retains 12 workers with 171,875-item batches and
+33,000,000 scratch bytes. The decoder accepts bounded aligned offsets/counts;
+non-aligned spans reject so the native multi-block destination shortcut cannot
+overwrite leading decoded data. Tail batches and integer wraparound are tested.
+
+After-run (int64, LZ4 level 1, system compiler JIT, five warm samples):
+
+| items | inputs | LazyExpr-NumPy ms | evaluate ms | Menudet ms |
+|---|---|---:|---:|---:|
+| 8M | Blosc2 | 4.089 | 4.041 | 3.681 |
+| 100M | Blosc2 | 36.264 | 35.128 | 31.154 |
+
+Menudet returns compressed output in these rows; the other two return NumPy.
+The reproduced wide-integer worker-cap regression is removed without raising
+scratch memory limits. A companion int16/cc 100M compressed-input run remained
+fast (LazyExpr-NumPy 10.285 ms, evaluate 10.136 ms, compressed Menudet 15.496 ms).
