@@ -6,6 +6,17 @@ import pytest
 import blosc2
 
 
+@pytest.fixture(autouse=True)
+def execution_threads():
+    # Compressed-input NumPy maps need at least two workers. Do not inherit a
+    # single-thread setting left by another test in the same xdist worker.
+    previous = blosc2.set_nthreads(2)
+    try:
+        yield
+    finally:
+        blosc2.set_nthreads(previous)
+
+
 @pytest.mark.parametrize("inputs", ["numpy", "blosc2", "mixed"])
 @pytest.mark.parametrize("output", ["new", "numpy", "blosc2"])
 @pytest.mark.parametrize("recipe", ["integer", "math"])
