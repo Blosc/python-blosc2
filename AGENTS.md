@@ -65,6 +65,13 @@ adds `--doctest-modules`, so keep doctest examples in `blosc2/core.py`,
 `blosc2/ndarray.py`, and `blosc2/schunk.py` accurate. Use markers `heavy` and
 `network` for slow or network-dependent tests.
 
+Test behavior at the layer that owns it: exhaustive native numerical semantics,
+dtype/operator matrices, and JIT backend parity belong in miniexpr (or C-Blosc2
+for its features). Python-Blosc2 tests should focus on bindings, API contracts,
+dispatch, scheduling, and a small representative set of end-to-end cases. Check
+existing native coverage before adding parametrized Python matrices; extend the
+native tests rather than duplicating their cross-products here.
+
 ## Commit & Pull Request Guidelines
 ### GitHub CI Monitoring
 - Use `gh run watch <run-id> --interval 60 --exit-status` (or a longer interval),

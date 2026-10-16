@@ -28,11 +28,11 @@ def evaluate_resident_if_eligible(lazy, selection):
         return None
     if not getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)():
         return None
-    if not storage_reader_eligible(lazy.kernel):
-        return None
-    if not all(dtype.kind == "f" for dtype in lazy.kernel.input_dtypes.values()):
-        return None
-    if not resident_scalar_operations_safe(lazy.kernel):
+    floating = all(dtype.kind == "f" for dtype in lazy.kernel.input_dtypes.values())
+    if floating:
+        if not storage_reader_eligible(lazy.kernel) or not resident_scalar_operations_safe(lazy.kernel):
+            return None
+    elif not resident_integer_operations_safe(lazy.kernel):
         return None
     if not all(
         isinstance(part, slice) and part.indices(size) == (0, size, 1)
@@ -50,6 +50,63 @@ def evaluate_resident_if_eligible(lazy, selection):
     ):
         return None
     return evaluate_resident(lazy.kernel, lazy.inputs, lazy._domain, workers)
+
+
+def resident_integer_operations_safe(kernel):
+    """Prove a same-dtype modular integer recipe cannot fail in any lane.
+
+    Do not broaden storage-reader eligibility: this proof is only for resident
+    buffers. Checked weak subtrees, captures, casts and mixed dtypes retain their
+    original invocation/error domain.
+    """
+    dtype = kernel.output_dtype
+    if (
+        dtype.kind not in "iu"
+        or kernel.inferred_dtype != dtype
+        or kernel.result_cardinality != "elementwise"
+        or kernel.context_ndim
+        or not kernel.input_dtypes
+        or any(value != dtype for value in kernel.input_dtypes.values())
+    ):
+        return False
+    try:
+        function = ast.parse(kernel.source).body[0]
+    except (SyntaxError, IndexError):
+        return False
+    if (
+        not isinstance(function, ast.FunctionDef)
+        or len(function.body) != 1
+        or not isinstance(function.body[0], ast.Return)
+    ):
+        return False
+    bounds = np.iinfo(dtype)
+
+    def prove(node):
+        # Return (safe, contains_runtime_array). Only literal leaves may be weak;
+        # every arithmetic subtree must contain an array before it can wrap.
+        if isinstance(node, ast.Name):
+            return node.id in kernel.input_dtypes, node.id in kernel.input_dtypes
+        literal = node
+        sign = 1
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            literal = node.operand
+            sign = -1 if isinstance(node.op, ast.USub) else 1
+        if isinstance(literal, ast.Constant) and type(literal.value) is int:
+            return bounds.min <= sign * literal.value <= bounds.max, False
+        if isinstance(node, ast.BinOp) and isinstance(
+            node.op, (ast.Add, ast.Sub, ast.Mult, ast.BitAnd, ast.BitOr, ast.BitXor)
+        ):
+            left, left_array = prove(node.left)
+            right, right_array = prove(node.right)
+            runtime = left_array or right_array
+            return left and right and runtime, runtime
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub, ast.Invert)):
+            safe, runtime = prove(node.operand)
+            return safe and runtime, runtime
+        return False, False
+
+    safe, runtime = prove(function.body[0].value)
+    return safe and runtime
 
 
 def resident_scalar_operations_safe(kernel):

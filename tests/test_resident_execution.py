@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.resident_execution import evaluate_resident, resident_scalar_operations_safe
+from blosc2.resident_execution import (
+    evaluate_resident,
+    resident_integer_operations_safe,
+    resident_scalar_operations_safe,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +35,110 @@ def test_full_read_parallel(dtype, jit):
     assert report["route"] == "parallel-resident"
     assert report["threads"] == 4
     assert report["input_buffer_bytes"] == 0
+
+
+@pytest.mark.parametrize("dtype", ["int8", "int64", "uint64"])
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
+def test_integer_modular_full_read(dtype, jit, monkeypatch):
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 256)
+    bounds = np.iinfo(dtype)
+    # Include wrap boundaries and a worker tail, without overflowing Python scalars.
+    values = np.resize(np.array([bounds.min, bounds.max, 0, 1], dtype=dtype), 1027)
+    # Exhaustive dtype/operator arithmetic parity belongs in miniexpr. Here,
+    # exercise binding and actual parallel dispatch for a nested integer recipe.
+    native = kernel(dtype=dtype, jit=jit)
+    lazy = native.lazy({"x": values, "y": values})
+    expected = values + (values - 1)
+    np.testing.assert_array_equal(lazy[:], expected)
+    assert lazy._source_execution_report["route"] == "parallel-resident"
+    assert lazy._source_execution_report["threads"] == 4
+
+
+@pytest.mark.parametrize(
+    ("expression", "dtype", "safe"),
+    [
+        ("x + 1", "int8", True),
+        ("x + (-128)", "int8", True),
+        ("x + 128", "int8", False),
+        ("x + (-129)", "int8", False),
+        ("x + (-1)", "uint64", False),
+        ("x + 18446744073709551615", "uint64", True),
+        ("x + (1 + 2)", "int64", False),
+        ("x + (9223372036854775807 + 1)", "int64", False),
+        ("x + SCALE", "int64", False),
+        ("x // y", "int64", False),
+        ("x << 1", "int64", False),
+        ("int64(x) + 1", "int64", False),
+        ("where(x > 0, x, y)", "int64", False),
+        ("x + 1.0", "int64", False),
+        ("1 + 2", "int64", False),
+        ("x + True", "int64", False),
+    ],
+)
+def test_integer_safety_proof(expression, dtype, safe):
+    from types import SimpleNamespace
+
+    dtype = np.dtype(dtype)
+    fake = SimpleNamespace(
+        source=f"def k(x, y):\n    return {expression}\n",
+        input_dtypes={"x": dtype, "y": dtype},
+        output_dtype=dtype,
+        inferred_dtype=dtype,
+        result_cardinality="elementwise",
+        context_ndim=0,
+    )
+    assert resident_integer_operations_safe(fake) == safe
+
+
+@pytest.mark.parametrize("case", ["mixed", "conversion", "context", "reduction"])
+def test_integer_contract_rejected(case):
+    from types import SimpleNamespace
+
+    dtype = np.dtype("int64")
+    fake = SimpleNamespace(
+        source="def k(x, y):\n    return x + y\n",
+        input_dtypes={"x": dtype, "y": np.dtype("int8") if case == "mixed" else dtype},
+        output_dtype=dtype,
+        inferred_dtype=np.dtype("int8") if case == "conversion" else dtype,
+        result_cardinality="block_scalar" if case == "reduction" else "elementwise",
+        context_ndim=1 if case == "context" else 0,
+    )
+    assert not resident_integer_operations_safe(fake)
+
+
+@pytest.mark.parametrize(
+    "case", ["small", "strided", "broadcast", "partial", "single-thread", "conversion", "weak", "mixed"]
+)
+def test_integer_conservative_fallback(case, monkeypatch):
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 128)
+    values = np.arange(1027, dtype="int64")
+    other = values
+    expression = "x + y"
+    output = "float64" if case == "conversion" else "int64"
+    if case == "small":
+        values = other = values[:10]
+    elif case == "strided":
+        values = other = values[::-1]
+    elif case == "broadcast":
+        other = values[:1]
+    elif case == "single-thread":
+        blosc2.set_nthreads(1)
+    elif case == "mixed":
+        other = other.astype("int32")
+    elif case == "weak":
+        expression = "x + (1 + 2)"
+    author = blosc2.DSLKernel.from_source(f"def k(x, y):\n    return {expression}\n")
+    native = blosc2.PortableKernel.from_json(author.export({"x": values.dtype, "y": other.dtype}, output))
+    lazy = native.lazy({"x": values, "y": other})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Ineligible integer recipe scheduled resident workers")
+
+    monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
+    selection = slice(0, 100) if case == "partial" else slice(None)
+    expected = values + 3 if case == "weak" else values + other
+    np.testing.assert_array_equal(lazy[selection], expected.astype(output)[selection])
 
 
 @pytest.mark.parametrize("case", ["small", "strided", "broadcast", "partial", "single-thread"])

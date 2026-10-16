@@ -150,9 +150,14 @@ Parallel resident reads
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Full lazy reads of large resident NumPy arrays can run the prepared portable
-artifact concurrently. Initial eligibility requires matching shapes, aligned
-C-contiguous host-endian floating inputs, and a proven lane-local elementwise
-recipe. Broadcasting, partial reads, reductions, context, scalar captures,
+artifact concurrently. Eligibility requires matching shapes, aligned
+C-contiguous host-endian inputs, and a proven lane-local elementwise
+recipe. Floating inputs support the existing arithmetic/math subset. Same-dtype
+integer inputs additionally support modular addition, subtraction, multiplication,
+bitwise AND/OR/XOR, unary signs and inversion, with representable integer literals.
+Every arithmetic subtree must involve an array; checked constant-only expressions,
+mixed integer dtypes, shifts, division and integer casts remain on the original route.
+Broadcasting, partial reads, reductions, context, scalar captures,
 constant-only weak arithmetic and final dtype conversions retain their original
 execution. Inputs are not copied or automatically normalized for this route.
 
