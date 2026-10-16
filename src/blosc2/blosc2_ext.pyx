@@ -2066,7 +2066,8 @@ cdef class PortableArtifactHandle:
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
                            _driver_input=None, _nthreads=None, _block_items=None):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
-        if not portable_prefilter_inputs_eligible(inputs, allow_numpy=numpy_out is not None):
+        if not portable_prefilter_inputs_eligible(
+                inputs, allow_numpy=numpy_out is not None or out is not None, output=out):
             raise NotImplementedError("Inputs are not eligible for portable prefilter execution")
         signature = self.descriptor_info()
         if set(inputs) != set(signature["inputs"]):
@@ -2075,7 +2076,7 @@ cdef class PortableArtifactHandle:
             raise ValueError("Portable prefilters require context-free elementwise kernels")
         if any(value.dtype != signature["inputs"][name] for name, value in inputs.items()):
             raise TypeError("Portable prefilter input dtype disagrees with signature")
-        first = next(value for value in inputs.values() if isinstance(value, NDArray))
+        first = next((value for value in inputs.values() if isinstance(value, NDArray)), out)
         block_items = first.blocks[0]
         if _block_items is not None:
             if (numpy_out is None or out is not None or _block_items <= 0
@@ -2084,7 +2085,8 @@ cdef class PortableArtifactHandle:
             block_items = _block_items
         block_bytes = sum(block_items * value.dtype.itemsize for value in inputs.values()
                           if isinstance(value, NDArray))
-        threads = max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
+        threads = (max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
+                   if block_bytes else blosc2.nthreads)
         if _nthreads is not None:
             if numpy_out is None or not 1 <= _nthreads <= threads:
                 raise ValueError("Invalid NumPy prefilter thread count")
@@ -6467,19 +6469,23 @@ def get_loaded_matmul_cblas_library():
     return path.decode("utf-8")
 
 
-def portable_prefilter_inputs_eligible(inputs, allow_numpy=False):
+def portable_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
     """Metadata-only gate for bounded resident 1-D portable prefilters."""
     cdef NDArray value
     if not b2_artifact_descriptor_available() or blosc2.IS_WASM or not 0 < len(inputs) <= 128:
         return False
     first = next((source for source in inputs.values() if isinstance(source, NDArray)), None)
-    if first is None or first.ndim != 1 or not first.size:
+    if first is None and allow_numpy:
+        first = output
+    if not isinstance(first, NDArray) or first.ndim != 1 or not first.size:
         return False
     if first.chunks[0] % first.blocks[0]:
         return False
     # The scheduling dummy chunk is host scratch, separate from input blocks.
-    # Eight bytes covers every numeric output dtype admitted by the Python gate.
-    if first.chunks[0] * 8 > 32 * 1024**2:
+    # A supplied destination provides the exact output width; otherwise eight
+    # bytes covers every numeric output dtype admitted by the Python gate.
+    output_width = output.dtype.itemsize if isinstance(output, NDArray) else 8
+    if first.chunks[0] * output_width > 32 * 1024**2:
         return False
     block_bytes = 0
     for source in inputs.values():

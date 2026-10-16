@@ -403,3 +403,90 @@ Diagnostics under `opencode/`: `profile_numpy_stored_levels.py`,
 `stored-faults-reuse-output.txt`. Initial qualification checked the complete
 result at both levels; phase-counter runs check sampled values without creating
 an additional full-size NumPy expected result between timed invocations.
+
+### Resident-input stored prefilters and allocation-controlled comparisons
+
+The shared-prefilter work and allocation-profile findings were recorded in
+`e168cf93`. The next iteration admits conservative, contiguous, same-domain 1-D
+NumPy operands to stored-output prefilter execution. The destination provides
+the chunk/block grid; inputs are borrowed directly by the same callback already
+used for compressed sources and direct NumPy sinks. This works for implicit
+and explicit Blosc2 destinations, preserves storage options, and retains the
+existing fallback for unsupported grids, broadcasting, or semantic recipes.
+Destination-known scratch admission uses the actual output width rather than
+an eight-byte upper bound, so wide logical chunks of int16 output remain bounded
+without unnecessarily rejecting this route. No C-Blosc2 change was needed.
+
+For 100M int64 NumPy inputs, LZ4, cc JIT, and 12 threads, the same benchmark
+with fresh stored output now measures:
+
+| output level | previous chunked NumExpr fallback | resident-input prefilter |
+|---|---:|---:|
+| 0 | about 62--63 ms | 42.347 ms |
+| 1 | about 33--34 ms | 16.290 ms |
+
+Layouts/storage sizes are unchanged (2M-item chunks, 16K-item blocks;
+800,003,200 versus 5,673,032 stored bytes). Execution reports show no input
+materialization, decoder contexts, input scratch allocations, or result copy.
+Fresh raw output still incurs physical-page costs; the optimization does not
+pretend to eliminate allocation of its required 800 MB destination. An int16/cc
+LZ4-level-1 companion run measured resident-input compressed LazyExpr output
+6.211 ms at 100M, with numerical qualification passing; compressed-input
+LazyExpr-NumPy/evaluate remained 9.834/9.678 ms.
+
+The NumExpr allocation hypothesis is also confirmed directly. An independent
+same-input, shuffled eleven-sample comparison with one shared, warmed NumPy
+destination produced these medians (100M int64, cc JIT, 12 threads):
+
+| engine / allocation policy | ms | minor page faults |
+|---|---:|---:|
+| NumExpr / fresh | 40.675 | 48,829 |
+| NumExpr / reused `out=` | 13.649 | 0 |
+| evaluate / fresh | 15.737 | 48,829 |
+| evaluate / reused `out=` | 11.458 | 2 |
+
+Before this iteration `evaluate(out=...)` still allocated a full resident result
+and copied it into the requested output: 43.656 ms and 48,829 faults in the
+initial control. The existing resident worker path now accepts the final output
+buffer directly, validates shape/dtype/layout and overlap, and retains its
+join-before-error behavior. No parallel resident result copy/allocation is
+needed for this control. General nonparallel/unsupported fallbacks are unchanged.
+Fresh NumExpr and evaluate have similar fault counts but very different
+aggregate kernel CPU times (about 356 versus 93 ms across all threads in the
+follow-up run), so counts alone do not characterize first-touch cost. This does
+not establish the precise kernel locking/scheduling mechanism behind that
+difference. With page faults removed, NumExpr throughput is competitive rather
+than the approximately 2.6x gap suggested by fresh-output wall time.
+
+`bench/menudet-engines.py --allocation-control` now appends a correctness-gated
+fresh/reused NumPy-output comparison for NumExpr and evaluate on resident inputs.
+It shares one prepopulated output buffer between the sequential reused cases,
+does not time operand decompression, and leaves the original table's fresh-output
+policy unchanged. Reductions and compressed-only rows reject this option rather
+than silently changing their measurement contract. Example:
+
+```sh
+python bench/menudet-engines.py --dtype int64 --codec lz4 --clevel 1 --jit cc \
+    --items 100000000 --operands numpy --allocation-control
+```
+
+The corresponding five-sample CLI control measured NumExpr fresh/reused
+41.576/13.606 ms and evaluate fresh/reused 16.485/11.313 ms. Diagnostic scripts
+and outputs remain under `opencode/`: `compare_resident_allocation.py`,
+`resident-allocation-comparison.txt`, `resident-allocation-direct-output.txt`,
+and `profile_resident_prefilter_levels.out`.
+
+Validation covers resident stored-output defaults/explicit destinations, partial
+tail padding, file metadata, parameter immutability, input rebinding, no fallback
+after execution failure, and explicit resident NumPy output without a full-size
+temporary or copy. The previous native-first failure test now targets NumPy
+output so it continues testing that execution layer rather than the newly
+admitted stored prefilter. The focused integration suite passes 849 tests;
+additional expression graph, lifetime, ingestion, and resident suites pass 543.
+Lint/format and diff whitespace checks pass.
+
+The user reconfigured `build-portable-python` for Python 3.15 while recompiling.
+This iteration leaves that configuration and the shared editable install alone.
+Its conda-blosc2 build is isolated at `opencode/build-resident-prefilter`, reuses
+the same local miniexpr source override, and loads refreshed extensions only in
+the isolated test package. Rebuild the editable extension before user-side runs.

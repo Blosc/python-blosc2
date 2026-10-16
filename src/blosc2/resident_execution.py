@@ -19,7 +19,7 @@ def resident_pool():
     return ThreadPoolExecutor(max_workers=MAXIMUM_WORKERS, thread_name_prefix="menudet-resident")
 
 
-def evaluate_resident_if_eligible(lazy, selection):
+def evaluate_resident_if_eligible(lazy, selection, out=None):
     import blosc2
 
     count = prod(lazy._domain)
@@ -49,7 +49,7 @@ def evaluate_resident_if_eligible(lazy, selection):
         for name, value in lazy.inputs.items()
     ):
         return None
-    return evaluate_resident(lazy.kernel, lazy.inputs, lazy._domain, workers)
+    return evaluate_resident(lazy.kernel, lazy.inputs, lazy._domain, workers, out=out)
 
 
 def resident_integer_operations_safe(kernel):
@@ -206,10 +206,16 @@ def resident_scalar_operations_safe(kernel):
     return True
 
 
-def evaluate_resident(kernel, inputs, shape, workers):
-    """Own unpublished output until every worker joins; never replay failures."""
+def evaluate_resident(kernel, inputs, shape, workers, out=None):
+    """Keep output alive until every worker joins; never replay failures."""
     count = prod(shape)
-    output = np.empty(shape, dtype=kernel.output_dtype)
+    output = np.empty(shape, dtype=kernel.output_dtype) if out is None else out
+    if type(output) is not np.ndarray or output.shape != shape or output.dtype != kernel.output_dtype:
+        raise ValueError("Resident output shape/dtype disagree with the kernel")
+    if not output.flags.c_contiguous or not output.flags.aligned or not output.flags.writeable:
+        raise ValueError("Resident output must be writable, aligned and C-contiguous")
+    if any(np.shares_memory(output, value) for value in inputs.values()):
+        raise ValueError("Resident output must not overlap an input")
     flat_output = output.reshape(-1)
     flat_inputs = {name: value.reshape(-1) for name, value in inputs.items()}
     futures = []
@@ -241,4 +247,5 @@ def evaluate_resident(kernel, inputs, shape, workers):
         "fp_flags": flags,
         "fp_supported": supported,
         "input_buffer_bytes": 0,
+        "output_copy_bytes": 0,
     }

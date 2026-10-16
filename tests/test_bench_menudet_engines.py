@@ -62,6 +62,44 @@ def test_evaluate_column_calls_public_api_every_time(engine_benchmark, monkeypat
     assert calls == [(engine_benchmark["EXPRESSION"], inputs)] * 2
 
 
+def test_allocation_control_outputs(engine_benchmark):
+    inputs, expected = engine_benchmark["build_operands"](257, "numpy", "int64")
+    engines = engine_benchmark["make_allocation_engines"](inputs)
+    reused = engines["numexpr reused"]()
+    np.testing.assert_array_equal(reused, expected)
+    assert engines["evaluate reused"]() is reused
+    for name in ("numexpr fresh", "evaluate fresh"):
+        first = engines[name]()
+        second = engines[name]()
+        assert first is not second
+        np.testing.assert_array_equal(first, expected)
+    np.testing.assert_array_equal(reused, expected)
+
+
+def test_allocation_control_cli(engine_benchmark, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "menudet-engines.py",
+            "--items",
+            "17",
+            "--samples",
+            "1",
+            "--warmups",
+            "0",
+            "--operands",
+            "numpy",
+            "--allocation-control",
+        ],
+    )
+    engine_benchmark["main"]()
+    text = capsys.readouterr().out
+    assert "main table above remains fresh-output" in text
+    assert "numexpr reused" in text
+    assert "evaluate reused" in text
+
+
 @pytest.mark.parametrize("backend", [None, "tcc", "cc"])
 def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     main = engine_benchmark["main"]

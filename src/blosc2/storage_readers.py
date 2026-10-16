@@ -215,6 +215,52 @@ def evaluate_storage_if_eligible(lazy, selection):
     )
 
 
+def _compute_resident_prefilter(lazy, kwargs):
+    """Borrow resident operands directly inside stored-output compression workers."""
+    import blosc2
+
+    if (
+        len(lazy.shape) != 1
+        or not lazy.shape[0]
+        or any(
+            value.shape != lazy.shape or not value.flags.c_contiguous or not value.flags.aligned
+            for value in lazy.inputs.values()
+        )
+    ):
+        return None
+    options = dict(kwargs)
+    output = options.pop("out", None)
+    if output is None:
+        cparams = options.get("cparams")
+        if cparams is None:
+            cparams = blosc2.CParams()
+        elif isinstance(cparams, dict):
+            cparams = blosc2.CParams(**cparams)
+        chunks, blocks = blosc2.compute_chunks_blocks(
+            lazy.shape,
+            chunks=options.get("chunks"),
+            blocks=options.get("blocks"),
+            dtype=lazy.dtype,
+            cparams=cparams,
+        )
+        if chunks[0] % blocks[0] or chunks[0] * lazy.dtype.itemsize > DENSE_MATERIALIZATION_BUDGET:
+            return None
+        options.update(chunks=chunks, blocks=blocks, cparams=cparams)
+        output = blosc2.uninit(lazy.shape, dtype=lazy.dtype, **options)
+    elif (
+        type(output) is not blosc2.NDArray
+        or options
+        or output.shape != lazy.shape
+        or output.dtype != lazy.dtype
+    ):
+        return None
+    if not blosc2.blosc2_ext.portable_prefilter_inputs_eligible(
+        lazy.inputs, allow_numpy=True, output=output
+    ):
+        return None
+    return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
+
+
 def compute_storage_if_eligible(lazy, kwargs):
     """Write a full lane-local domain directly into matching Blosc2 output tiles."""
     import blosc2
@@ -222,10 +268,12 @@ def compute_storage_if_eligible(lazy, kwargs):
     extension = blosc2.blosc2_ext
     if (
         not storage_reader_eligible(lazy.kernel)
-        or not _dense_compressed_eligible(lazy)
         or not getattr(extension, "portable_prefilter_available", lambda: False)()
-        or not extension.portable_prefilter_inputs_eligible(lazy.inputs)
     ):
+        return None
+    if lazy.inputs and all(type(value) is np.ndarray for value in lazy.inputs.values()):
+        return _compute_resident_prefilter(lazy, kwargs)
+    if not _dense_compressed_eligible(lazy) or not extension.portable_prefilter_inputs_eligible(lazy.inputs):
         return None
     first = next(iter(lazy.inputs.values()))
     options = dict(kwargs)

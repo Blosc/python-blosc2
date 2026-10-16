@@ -391,23 +391,35 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     selection = item if isinstance(item, tuple) else (item,)
     if any(not isinstance(s, slice) or s != slice(None) for s in selection):
         return None
-    if output is not None and not all(
-        output.ndim == 1
-        and type(value) is blosc2.NDArray
-        and value.dtype.kind in "biuf"
-        and value.shape == output.shape
-        and value.chunks == output.chunks
-        and value.blocks == output.blocks
-        for value in expr.operands.values()
+    values = tuple(expr.operands.values())
+    resident = bool(values) and all(
+        type(value) is np.ndarray
+        and value.ndim == 1
+        and value.shape == values[0].shape
+        and value.flags.c_contiguous
+        and value.flags.aligned
+        for value in values
+    )
+    if (
+        output is not None
+        and not resident
+        and not all(
+            output.ndim == 1
+            and type(value) is blosc2.NDArray
+            and value.dtype.kind in "biuf"
+            and value.shape == output.shape
+            and value.chunks == output.chunks
+            and value.blocks == output.blocks
+            for value in expr.operands.values()
+        )
     ):
         stored = _compute_native_stored_output(expr, output, options)
         if stored is not None:
             return stored
-    # The first implementation deliberately excludes mixed storage, broadcasting
-    # and scalar operands. Admission must remain metadata-only.
-    values = tuple(expr.operands.values())
+    # Mixed storage, broadcasting and scalar operands retain their existing
+    # stored-output fallback. Admission must remain metadata-only.
     if not values or any(
-        type(value) is not blosc2.NDArray
+        (type(value) is not blosc2.NDArray and not resident)
         or value.dtype.kind not in "biuf"
         or not _native_first_operand(value)
         for value in values
@@ -418,7 +430,8 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         first.ndim != 1
         or not first.size
         or any(
-            value.shape != first.shape or value.chunks != first.chunks or value.blocks != first.blocks
+            value.shape != first.shape
+            or (not resident and (value.chunks != first.chunks or value.blocks != first.blocks))
             for value in values
         )
     ):
@@ -450,6 +463,8 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     )
     result = compute_storage_if_eligible(lazy, options)
     if result is None:
+        if output is not None:
+            return _compute_native_stored_output(expr, output, options)
         return None
     output, report = result
     expr._native_execution_report = {
@@ -1043,7 +1058,7 @@ def _resident_map_kernel(plan):
     )
 
 
-def _parallel_resident_graph(plan, inputs, shape, selection, reduction):
+def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None):
     from types import SimpleNamespace
 
     import blosc2
@@ -1065,7 +1080,7 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction):
     if kernel is None:
         return None
     lazy = SimpleNamespace(kernel=kernel, inputs=inputs, _domain=shape)
-    result = evaluate_resident_if_eligible(lazy, tuple(slice(None) for _ in shape))
+    result = evaluate_resident_if_eligible(lazy, tuple(slice(None) for _ in shape), out=out)
     if result is None:
         return None
     values, report = result
@@ -1419,12 +1434,14 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
             {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items
         )
     parallel = (
-        _parallel_resident_graph(plan, inputs, shape, selection, reduction) if tile_items == 1024 else None
+        _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=output)
+        if tile_items == 1024
+        else None
     )
     if reduction and parallel_reductions:
         parallel = _parallel_resident_reduction(plan, arrays, shape, tile_items)
     result, report = schedule.execute(arrays) if parallel is None else parallel
-    if output is not None:
+    if output is not None and result is not output:
         # Admission checked shape/dtype/layout and aliasing before any execution.
         # Preserve the existing destination identity, without replaying kernels.
         np.copyto(output, result, casting="no")

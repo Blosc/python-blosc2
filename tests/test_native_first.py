@@ -109,7 +109,7 @@ def test_native_first_execution_failure_is_not_replayed(native_first_runtime, mo
     monkeypatch.setattr(native, "compute_native_graph", failure)
     monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
     with pytest.raises(FloatingPointError, match="Invocation failed"):
-        expr.compute()
+        expr[:]
 
 
 @pytest.mark.parametrize("status", ["invalid_signature", "unsupported"])

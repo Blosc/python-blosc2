@@ -18,6 +18,9 @@ output for Blosc2 inputs and NumPy output for NumPy inputs. ``--codec`` and
 ``--clevel`` configure compressed inputs and outputs (defaults: zstd, 5).
 Blosc2 outputs use the input chunk/block layout for Blosc2 inputs.
 Engines with unsupported dtypes or different numerical results are reported as N/A.
+``--allocation-control`` adds a separate resident-input comparison of numexpr
+and evaluate with fresh versus reused NumPy destinations. It does not change
+the fresh-output policy of the main table.
 
 With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
@@ -31,6 +34,7 @@ Usage::
     python bench/menudet-engines.py --reduc sum
     python bench/menudet-engines.py --jit cc
     python bench/menudet-engines.py --dtype int16 --codec lz4 --clevel 3
+    python bench/menudet-engines.py --dtype int64 --jit cc --allocation-control
 
 ``--jit tcc|cc`` selects miniexpr's JIT compiler backend. With ``cc``, the
 ``CC`` environment variable selects the system compiler. Omitting ``--jit``
@@ -205,6 +209,21 @@ def make_engines(inputs, kind, reduc=None, cparams=None):
     }
 
 
+def make_allocation_engines(inputs):
+    """Compare fresh/reused NumPy destinations without changing the main table.
+
+    Reused cases share one buffer: benchmark calls are sequential and qualify
+    each result immediately. No operands are decompressed in this control.
+    """
+    output = np.empty_like(inputs["x"])
+    return {
+        "numexpr fresh": lambda: ne.evaluate(EXPRESSION, local_dict=inputs),
+        "numexpr reused": lambda: ne.evaluate(EXPRESSION, local_dict=inputs, out=output),
+        "evaluate fresh": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
+        "evaluate reused": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs, out=output),
+    }
+
+
 def benchmark(engines, expected, samples, warmups, rng, failures=None):
     """Correctness-check once, warm up, then time interleaved shuffled samples."""
     qualified = {}
@@ -336,6 +355,11 @@ def main():
         help="miniexpr JIT compiler backend: tcc or cc (system compiler selected by CC)",
     )
     parser.add_argument("--operands", choices=("both", "numpy", "blosc2"), default="both")
+    parser.add_argument(
+        "--allocation-control",
+        action="store_true",
+        help="also compare fresh/reused NumPy outputs for numexpr and evaluate (resident maps only)",
+    )
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     parser.add_argument(
         "--reduc",
@@ -347,6 +371,8 @@ def main():
         parser.error("items and samples must be positive; warmups must be non-negative")
     if args.threads <= 0:
         parser.error("threads must be positive")
+    if args.allocation_control and (args.reduc or args.operands == "blosc2"):
+        parser.error("--allocation-control requires elementwise NumPy operand rows")
 
     # Select before LazyExpr preparation or Menudet dtype specialization. Both
     # native compilation paths consume this environment override.
@@ -375,6 +401,7 @@ def main():
 
     rng = random.Random(42)
     previous = None
+    allocation_rows = []
     for size in args.items:
         for kind in kinds:
             inputs, expected = build_operands(size, kind, args.dtype, cparams)
@@ -383,6 +410,11 @@ def main():
             engines = make_engines(inputs, kind, args.reduc, cparams=cparams)
             failures = {}
             times = benchmark(engines, expected, args.samples, args.warmups, rng, failures=failures)
+            if args.allocation_control and kind == "numpy":
+                controls = make_allocation_engines(inputs)
+                control_times = benchmark(controls, expected, args.samples, args.warmups, rng, failures={})
+                allocation_rows.append((size, tuple(controls), control_times))
+                del controls
             del inputs, engines, expected
             if previous is not None and size != previous:
                 print(table_separator(widths))
@@ -412,6 +444,14 @@ def main():
             "Menudet does so for Blosc2 inputs only."
         )
     print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
+    if allocation_rows:
+        print("\nAllocation control: resident inputs, NumPy outputs; warm medians in ms.")
+        print("Reused destinations are populated before timing; the main table above remains fresh-output.")
+        for size, names, times in allocation_rows:
+            figures = "; ".join(
+                f"{name} {times[name]:.3f}" if name in times else f"{name} N/A" for name in names
+            )
+            print(f"{human_items(size)}: {figures}")
 
 
 if __name__ == "__main__":

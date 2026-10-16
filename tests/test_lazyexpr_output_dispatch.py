@@ -111,6 +111,93 @@ def test_numpy_output_native_parallel_map(monkeypatch, parallel_threads, explici
     assert expr._native_execution_report["route"] == "portable-prefilter"
 
 
+@pytest.mark.parametrize("clevel", [0, 1])
+@pytest.mark.parametrize("explicit_out", [False, True])
+def test_resident_inputs_use_stored_prefilter(monkeypatch, parallel_threads, clevel, explicit_out):
+    bounds = np.iinfo("int64")
+    values = np.resize(np.array([bounds.min, bounds.max, 0, 1], dtype="int64"), 1027)
+    other = values[::-1].copy()
+    expected = values + (other - 1)
+    inputs = {"x": values, "y": other}
+    expr = blosc2.lazyexpr("x + (y - 1)", inputs)
+    options = {"chunks": (256,), "blocks": (64,), "cparams": {"clevel": clevel, "nthreads": 2}}
+    output = blosc2.uninit(values.shape, dtype=values.dtype, **options) if explicit_out else None
+    forbid_fallback(monkeypatch)
+    result = expr.compute(out=output) if explicit_out else expr.compute(**options)
+    assert isinstance(result, blosc2.NDArray)
+    if explicit_out:
+        assert result is output
+    assert result.chunks == (256,)
+    assert result.blocks == (64,)
+    assert result.cparams.clevel == clevel
+    np.testing.assert_array_equal(result[:], expected)
+    report = expr._native_execution_report
+    assert report["route"] == "portable-prefilter"
+    assert report["input_buffer_allocations"] == report["native_decoder_contexts"] == 0
+    assert report["input_materialization_bytes"] == report["output_copy_bytes"] == 0
+    tail = np.frombuffer(result.schunk.decompress_chunk(result.schunk.nchunks - 1), dtype=values.dtype)
+    np.testing.assert_array_equal(tail[3:], 0)
+
+
+def test_resident_stored_prefilter_failure_is_not_replayed(monkeypatch):
+    values = np.arange(257.0)
+    expr = blosc2.lazyexpr("x + 1", {"x": values})
+    forbid_fallback(monkeypatch)
+
+    def failure(*args, **kwargs):
+        raise OSError("Stored prefilter failed")
+
+    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", failure)
+    with pytest.raises(OSError, match="Stored prefilter failed"):
+        expr.compute()
+
+
+def test_resident_stored_prefilter_options_and_rebinding(monkeypatch, tmp_path):
+    values = np.arange(1027.0)
+    expr = blosc2.lazyexpr("x + 1", {"x": values})
+    params = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=1, nthreads=2)
+    path = tmp_path / "resident-prefilter.b2nd"
+    forbid_fallback(monkeypatch)
+    first = expr.compute(
+        chunks=(256,), blocks=(64,), cparams=params, urlpath=path, meta={"sink": "resident"}
+    )
+    assert params.clevel == 1
+    assert params.nthreads == 2
+    assert first.schunk.meta["sink"] == "resident"
+    np.testing.assert_array_equal(blosc2.open(path)[:], values + 1)
+    values += 10
+    second = expr.compute(chunks=(256,), blocks=(64,), cparams=params)
+    np.testing.assert_array_equal(second[:], values + 1)
+    np.testing.assert_array_equal(first[:], values - 9)
+
+
+def test_resident_numpy_out_avoids_full_result_allocation(monkeypatch, parallel_threads):
+    values = np.arange(300003, dtype="int64")
+    inputs = {"x": values, "y": values[::-1].copy()}
+    expected = values + (inputs["y"] - 1)
+    output = np.empty_like(values)
+    expr = blosc2.lazyexpr("x + (y - 1)", inputs)
+    expr.compute(out=output)  # Prepare artifacts and workers before instrumentation.
+    original_empty = np.empty
+
+    def bounded_empty(shape, *args, **kwargs):
+        dtype = np.dtype(kwargs.get("dtype", args[0] if args else "float64"))
+        if shape == values.shape and dtype.itemsize:
+            pytest.fail("Explicit resident out allocated a full-size temporary")
+        return original_empty(shape, *args, **kwargs)
+
+    def forbidden_copy(*args, **kwargs):
+        pytest.fail("Explicit resident out copied a full-size result")
+
+    monkeypatch.setattr(np, "empty", bounded_empty)
+    monkeypatch.setattr(np, "copyto", forbidden_copy)
+    assert expr.compute(out=output) is output
+    np.testing.assert_array_equal(output, expected)
+    assert expr._native_execution_report["output_copy_bytes"] == 0
+    assert blosc2.evaluate("x + (y - 1)", local_dict=inputs, out=output) is output
+    np.testing.assert_array_equal(output, expected)
+
+
 def test_native_prefilter_storage_options_and_rebinding(tmp_path):
     inputs, expected = operands()
     expr = blosc2.lazyexpr("x + (y - 1)", inputs)
