@@ -158,7 +158,7 @@ def test_old_runtime_retains_existing_path(monkeypatch):
 def test_weak_intermediates_keep_original_error_domain(storage_runtime):
     kernel = make_kernel("def k(x):\n    return x + (2 * 3)\n", {"x": "float64"})
     assert not storage_reader_eligible(kernel)
-    kernel = make_kernel("def k(x):\n    return x + 1\n", {"x": "int64"}, "int64")
+    kernel = make_kernel("def k(x):\n    return x + (1 + 2)\n", {"x": "int64"}, "int64")
     assert not storage_reader_eligible(kernel)
 
 
@@ -224,6 +224,32 @@ def test_compute_returns_prefilter_output_without_numpy_staging(
     tail = np.frombuffer(result.schunk.decompress_chunk(result.schunk.nchunks - 1), dtype=result.dtype)
     live_items = size - (result.schunk.nchunks - 1) * result.chunks[0]
     np.testing.assert_array_equal(tail[live_items:], 0)
+
+
+@pytest.mark.parametrize("dtype", ["int16", "uint64"])
+def test_integer_literal_compute_uses_prefilter(prefilter_runtime, monkeypatch, dtype):
+    values = np.arange(1027, dtype=dtype)
+    if dtype == "int16":
+        values = values + np.int16(32000)
+    x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
+    native = make_kernel(inputs={"x": dtype, "y": dtype}, output=dtype)
+    assert storage_reader_eligible(native)
+    lazy = native.lazy({"x": x, "y": x})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Integer compute replayed a logical group or staged NumPy input")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lazy, "_values", forbidden)
+        patch.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        result = lazy.compute(cparams={"codec": blosc2.Codec.LZ4, "clevel": 3, "nthreads": 2})
+    np.testing.assert_array_equal(result[:], values + (values - 1))
+    assert result.cparams.codec == blosc2.Codec.LZ4
+    assert result.cparams.clevel == 3
+    report = lazy._source_execution_report
+    assert report["route"] == "portable-prefilter"
+    assert report["evaluated_blocks"] == (values.size + 63) // 64
+    assert report["input_chunk_fetches"] == x.schunk.nchunks * 2
 
 
 def test_compute_prefilter_preserves_storage_options(prefilter_runtime, tmp_path):

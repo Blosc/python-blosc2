@@ -5823,6 +5823,25 @@ cdef class NDArray:
                 raise RuntimeError("Cannot restore portable chunk decoder floating environment")
         return buffer[:self.array.shape[0]]
 
+    def _portable_chunk_span(self, np.ndarray buffer, int64_t chunk):
+        """Decode a bounded chunk into worker-owned scratch with an isolated decoder."""
+        cdef fenv_t environment
+        cdef int64_t count = min(self.array.chunkshape[0],
+                                self.array.shape[0] - chunk * self.array.chunkshape[0])
+        if self.ndim != 1 or chunk < 0 or count <= 0:
+            raise ValueError("Invalid portable chunk span")
+        if (buffer.dtype != self.dtype or buffer.ndim != 1
+                or not buffer.flags.c_contiguous or not buffer.flags.writeable):
+            raise ValueError("Portable chunk scratch must match input dtype and layout")
+        if feholdexcept(&environment):
+            raise RuntimeError("Cannot isolate portable chunk decoder floating environment")
+        try:
+            self.get_1d_span_numpy(buffer, chunk, 0, count, nthreads=1)
+        finally:
+            if fesetenv(&environment):
+                raise RuntimeError("Cannot restore portable chunk decoder floating environment")
+        return buffer[:count]
+
     def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs, materialize=True):
         cdef portable_prefilter_state state
         cdef portable_prefilter_worker *worker
@@ -6399,7 +6418,7 @@ def portable_prefilter_inputs_eligible(inputs):
         value = source
         if source.shape != first.shape or source.chunks != first.chunks or source.blocks != first.blocks:
             return False
-        if source.dtype.kind != "f" or not source.dtype.isnative:
+        if source.dtype.kind not in "biuf" or not source.dtype.isnative:
             return False
         if value.array.sc.storage.urlpath != NULL or value.array.sc.storage.dparams.postfilter != NULL:
             return False

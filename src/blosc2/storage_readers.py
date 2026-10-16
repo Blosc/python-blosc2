@@ -20,6 +20,13 @@ def storage_reader_eligible(kernel):
         return False
     if any(dtype.kind not in "biuf" for dtype in kernel.input_dtypes.values()):
         return False
+    if any(dtype.kind in "iu" for dtype in kernel.input_dtypes.values()):
+        from .resident_execution import resident_integer_operations_safe
+
+        # Same-width modular integer recipes (including in-range literal leaves)
+        # cannot fail or observe group membership. Reuse the resident proof rather
+        # than replay whole logical groups for every compressed output tile.
+        return _source_is_lane_local(kernel) or resident_integer_operations_safe(kernel)
     return _source_is_lane_local(kernel)
 
 
@@ -296,7 +303,7 @@ def _dense_compressed_eligible(lazy):
     values = tuple(lazy.inputs.values())
     if not values or any(type(value) is not blosc2.NDArray for value in values):
         return False
-    if any(dtype.kind != "f" for dtype in lazy.kernel.input_dtypes.values()):
+    if any(dtype.kind not in "biuf" for dtype in lazy.kernel.input_dtypes.values()):
         return False
     first = values[0]
     if first.ndim != 1 or not first.size or tuple(first.shape) != lazy._domain:

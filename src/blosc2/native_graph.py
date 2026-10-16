@@ -24,6 +24,85 @@ PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
 TRUTH_GRAPH_REDUCERS = {"any", "all"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 MINIMUM_COMPRESSED_MAP_ITEMS = 2_000_000
+NATIVE_ELEMENTWISE_CALLS = {
+    **dict.fromkeys(
+        (
+            "abs",
+            "fabs",
+            "sqrt",
+            "cbrt",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "arcsin",
+            "arccos",
+            "arctan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "arcsinh",
+            "arccosh",
+            "arctanh",
+            "exp",
+            "exp2",
+            "expm1",
+            "exp10",
+            "log",
+            "log2",
+            "log10",
+            "log1p",
+            "erf",
+            "erfc",
+            "lgamma",
+            "tgamma",
+            "ceil",
+            "floor",
+            "trunc",
+            "round",
+            "rint",
+            "square",
+            "sign",
+            "real",
+            "imag",
+            "conj",
+            "sinpi",
+            "cospi",
+            "isfinite",
+            "isinf",
+            "isnan",
+            "signbit",
+        ),
+        1,
+    ),
+    **dict.fromkeys(
+        (
+            "atan2",
+            "arctan2",
+            "copysign",
+            "fdim",
+            "hypot",
+            "nextafter",
+            "fmod",
+            "remainder",
+            "pow",
+            "power",
+            "minimum",
+            "maximum",
+            "fmin",
+            "fmax",
+            "logaddexp",
+            "ldexp",
+        ),
+        2,
+    ),
+    "fma": 3,
+}
 
 
 def _native_first_operand(value):
@@ -50,9 +129,9 @@ def _native_first_operand(value):
     return True
 
 
-def _native_first_syntax(expression, *, reduction_only=False):
-    # Deliberately exclude general calls, nested reductions, powers, division, indexing and
-    # Python short-circuit expressions until their legacy contracts are gated.
+def _native_first_syntax(expression, *, reduction_only=False):  # noqa: C901 -- explicit syntax/arity admission
+    # Deliberately exclude arbitrary calls, nested reductions, indexing and
+    # Python short-circuit expressions. Numeric inference remains native-owned.
     allowed = (
         ast.Expression,
         ast.Name,
@@ -64,6 +143,12 @@ def _native_first_syntax(expression, *, reduction_only=False):
         ast.Add,
         ast.Sub,
         ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.LShift,
+        ast.RShift,
         ast.UAdd,
         ast.USub,
         ast.Invert,
@@ -88,6 +173,12 @@ def _native_first_syntax(expression, *, reduction_only=False):
             value = call.args[0]
         elif isinstance(call.func, ast.Attribute) and call.func.attr in reducers and not call.args:
             value = call.func.value
+        elif (
+            isinstance(call.func, ast.Name)
+            and call.func.id in NATIVE_ELEMENTWISE_CALLS
+            and not reduction_only
+        ):
+            value = None
         else:
             return False
         seen = set()
@@ -99,10 +190,20 @@ def _native_first_syntax(expression, *, reduction_only=False):
                 ast.literal_eval(keyword.value)
             except (ValueError, TypeError):
                 return False
-        tree = ast.Expression(body=value)
+        if value is not None:
+            tree = ast.Expression(body=value)
     elif reduction_only:
         return False
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in NATIVE_ELEMENTWISE_CALLS
+                or node.keywords
+                or len(node.args) != NATIVE_ELEMENTWISE_CALLS[node.func.id]
+            ):
+                return False
+            continue
         if not isinstance(node, allowed):
             return False
         if isinstance(node, ast.Compare) and len(node.ops) != 1:
@@ -160,7 +261,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     if not all(_native_first_operand(value) for value in expr.operands.values()):
         return None
     compressed = any(type(value) is blosc2.NDArray for value in expr.operands.values())
-    if output is not None and (not compressed or explicit is not None):
+    if output is not None and explicit is not None:
         return None
     if compressed and not getattr(blosc2.blosc2_ext, "native_graph_sources_available", lambda: False)():
         return None
@@ -183,7 +284,10 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     if not _native_first_syntax(expr.expression):
         return None
     if any(
-        isinstance(node, ast.Name) and node.id not in expr.operands and node.id not in REDUCERS
+        isinstance(node, ast.Name)
+        and node.id not in expr.operands
+        and node.id not in REDUCERS
+        and node.id not in NATIVE_ELEMENTWISE_CALLS
         for node in ast.walk(ast.parse(expr.expression, mode="eval"))
     ):
         return None
@@ -287,11 +391,25 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     selection = item if isinstance(item, tuple) else (item,)
     if any(not isinstance(s, slice) or s != slice(None) for s in selection):
         return None
+    if output is not None and not all(
+        output.ndim == 1
+        and type(value) is blosc2.NDArray
+        and value.dtype.kind in "biuf"
+        and value.shape == output.shape
+        and value.chunks == output.chunks
+        and value.blocks == output.blocks
+        for value in expr.operands.values()
+    ):
+        stored = _compute_native_stored_output(expr, output, options)
+        if stored is not None:
+            return stored
     # The first implementation deliberately excludes mixed storage, broadcasting
     # and scalar operands. Admission must remain metadata-only.
     values = tuple(expr.operands.values())
     if not values or any(
-        type(value) is not blosc2.NDArray or value.dtype.kind != "f" or not _native_first_operand(value)
+        type(value) is not blosc2.NDArray
+        or value.dtype.kind not in "biuf"
+        or not _native_first_operand(value)
         for value in values
     ):
         return None
@@ -308,7 +426,9 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     if not _native_first_syntax(expr.expression):
         return None
     if any(
-        isinstance(node, ast.Name) and node.id not in expr.operands
+        isinstance(node, ast.Name)
+        and node.id not in expr.operands
+        and node.id not in NATIVE_ELEMENTWISE_CALLS
         for node in ast.walk(ast.parse(expr.expression, mode="eval"))
     ):
         return None
@@ -341,6 +461,88 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         "input_materialization_bytes": 0,
         "output_copy_bytes": 0,
     }
+    return output
+
+
+def _compute_native_stored_output(expr, output, options):
+    """Bounded native elementwise tiles for an explicit Blosc2 destination.
+
+    This also covers mixed NumPy/compressed operands and storage layouts that
+    compression-prefilter admission excludes. Preparation completes
+    before reads/writes; numerical or storage failures are never replayed.
+    """
+    import blosc2
+
+    if options.keys() - {"out"} or not output.ndim or not output.size:
+        return None
+    if not _native_first_syntax(expr.expression) or not all(
+        _native_first_operand(value) for value in expr.operands.values()
+    ):
+        return None
+    if any(
+        type(value) is blosc2.NDArray
+        and (
+            value is output
+            or value.schunk is output.schunk
+            or (value.urlpath is not None and value.urlpath == output.urlpath)
+        )
+        for value in expr.operands.values()
+    ):
+        return None
+    try:
+        plan, inputs, reduction = lower_native_graph(expr, jit=True, allow_output=True)
+        if reduction or not plan.has_jit or plan.info()["stages"] != 1:
+            return None
+        schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})
+        if schedule.info()["shape"] != output.shape or schedule.info()["dtype"] != output.dtype:
+            return None
+    except NotImplementedError:
+        return None
+    except blosc2.PortableArtifactError as error:
+        if error.status not in {"invalid_signature", "unsupported"}:
+            raise
+        return None
+    report = {
+        "route": "bounded-stored-map",
+        "backend": "portable-jit",
+        "fp_flags": 0,
+        "fp_supported": True,
+        "maximum_input_items": 0,
+        "output_copy_bytes": output.nbytes,
+    }
+    tile_shape = list(output.chunks)
+    while math.prod(tile_shape) > 262144:
+        axis = max(range(output.ndim), key=tile_shape.__getitem__)
+        tile_shape[axis] = max(1, tile_shape[axis] // 2)
+    grid = tuple((size + tile - 1) // tile for size, tile in zip(output.shape, tile_shape, strict=True))
+    for index in np.ndindex(grid):
+        selection = tuple(
+            slice(i * tile, min((i + 1) * tile, size))
+            for i, tile, size in zip(index, tile_shape, output.shape, strict=True)
+        )
+        arrays = {}
+        for name, value in inputs.items():
+            source_item = (
+                tuple(
+                    slice(None) if size == 1 else part
+                    for size, part in zip(value.shape, selection[output.ndim - value.ndim :], strict=True)
+                )
+                if value.ndim
+                else ()
+            )
+            arrays[name] = value[source_item]
+        # A length-one compressed operand still has to be read, not passed to
+        # the resident schedule as an opaque storage object.
+        arrays = {
+            name: value[:] if type(value) is blosc2.NDArray else value for name, value in arrays.items()
+        }
+        tile = plan.specialize({name: (value.dtype, value.shape) for name, value in arrays.items()})
+        values, status = tile.execute(arrays)
+        output[selection] = values
+        report["fp_flags"] |= status["fp_flags"]
+        report["fp_supported"] &= status["fp_supported"]
+        report["maximum_input_items"] = max(report["maximum_input_items"], values.size)
+    expr._native_execution_report = report
     return output
 
 
@@ -596,6 +798,99 @@ def _compressed_map_schedules(plan, shape, workers, chunk, block, units, worker_
     return tuple(schedules)
 
 
+def _parallel_integer_chunk_map(plan, inputs, shape, workers, out):
+    """Skip gather-index traffic for large, proven integer maps; bound scratch.
+
+    Smaller maps retain the block reader whose scratch stays cache-resident.
+    Never retile checked scalar expressions, conversions, reductions or context.
+    """
+    from concurrent.futures import wait
+
+    import blosc2
+
+    from .resident_execution import resident_integer_operations_safe, resident_pool
+    from .storage_readers import DENSE_MATERIALIZATION_BUDGET
+
+    kernel = _resident_map_kernel(plan)
+    if kernel is None or not resident_integer_operations_safe(kernel):
+        return None
+    if math.prod(shape) * kernel.output_dtype.itemsize <= DENSE_MATERIALIZATION_BUDGET:
+        return None
+    compressed = {name: value for name, value in inputs.items() if type(value) is blosc2.NDArray}
+    first = next(iter(compressed.values()))
+    chunk_items = first.chunks[0]
+    if chunk_items % first.blocks[0] or not all(
+        hasattr(value, "_portable_chunk_span") for value in compressed.values()
+    ):
+        return None
+    scratch_per_worker = chunk_items * sum(value.dtype.itemsize for value in compressed.values())
+    workers = min(workers, first.schunk.nchunks, DENSE_MATERIALIZATION_BUDGET // scratch_per_worker)
+    if workers < 2:
+        return None
+    if out is not None:
+        if type(out) is not np.ndarray or out.shape != shape or out.dtype != kernel.output_dtype:
+            raise ValueError("Native map output shape/dtype disagree with the expression")
+        if not out.flags.c_contiguous or not out.flags.aligned or not out.flags.writeable:
+            raise ValueError("Native map output must be writable, aligned and C-contiguous")
+        if any(type(value) is np.ndarray and np.shares_memory(out, value) for value in inputs.values()):
+            raise ValueError("Native map output must not overlap an input")
+    output = np.empty(shape, dtype=kernel.output_dtype) if out is None else out
+
+    def execute(worker):
+        buffers = {name: np.empty(chunk_items, dtype=value.dtype) for name, value in compressed.items()}
+        begin = first.schunk.nchunks * worker // workers
+        end = first.schunk.nchunks * (worker + 1) // workers
+        flags, supported = 0, True
+        for chunk in range(begin, end):
+            start = chunk * chunk_items
+            stop = min(start + chunk_items, shape[0])
+            operands = {
+                name: value._portable_chunk_span(buffers[name], chunk)
+                if name in compressed
+                else value[start:stop]
+                for name, value in inputs.items()
+            }
+            _, status = kernel._handle.evaluate_block(
+                operands, (stop - start,), return_status=True, _output=output[start:stop]
+            )
+            flags |= status["flags"]
+            supported &= status["supported"]
+        return flags, supported
+
+    futures = []
+    try:
+        for worker in range(workers):
+            futures.append(resident_pool().submit(execute, worker))
+    finally:
+        wait(futures)
+    statuses = [future.result() for future in futures]
+    flags = 0
+    for status, _ in statuses:
+        flags |= status
+    return output, {
+        "route": "parallel-graph-chunk-map",
+        "threads": workers,
+        "fp_flags": flags,
+        "fp_supported": all(status[1] for status in statuses),
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "temporary_bytes": workers * scratch_per_worker,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": sum(value.nbytes for value in compressed.values()),
+        "input_materialization_bytes": 0,
+        "input_buffer_bytes": workers * scratch_per_worker,
+        "tile_items": chunk_items,
+        "maximum_reader_items": min(chunk_items, shape[0]),
+        "evaluated_tiles": first.schunk.nchunks,
+        "native_decoder_contexts": first.schunk.nchunks * len(compressed),
+        "output_copy_bytes": 0,
+        "output_zero_fill_bytes": 0,
+    }
+
+
 def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
     """One whole-domain job; worker-private decoders write disjoint output regions.
 
@@ -613,6 +908,10 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
     if layout is None:
         return None
     first, workers, _, _ = layout
+    if tile_items == 1024:
+        direct = _parallel_integer_chunk_map(plan, inputs, shape, workers, out)
+        if direct is not None:
+            return direct
     block = first.blocks[0]
     # Match ordinary tiles to one block; group tiny blocks so graph/kernel
     # dispatch is still amortized. The reader decodes each block directly into
@@ -1179,8 +1478,6 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
                 "frontend": getattr(plan, "_frontend", "declarative-json"),
             }
             return result
-    if output is not None:
-        raise ValueError("Explicit native output requires an eligible compressed parallel map")
     arrays = {}
     for name, value in inputs.items():
         if selection:
@@ -1201,6 +1498,12 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
     if reduction and parallel_reductions:
         parallel = _parallel_resident_reduction(plan, arrays, shape, tile_items)
     result, report = schedule.execute(arrays) if parallel is None else parallel
+    if output is not None:
+        # Admission checked shape/dtype/layout and aliasing before any execution.
+        # Preserve the existing destination identity, without replaying kernels.
+        np.copyto(output, result, casting="no")
+        report = {**report, "output_copy_bytes": result.nbytes}
+        result = output
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-1.0",

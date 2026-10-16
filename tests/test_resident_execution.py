@@ -210,6 +210,39 @@ def test_boolean_output():
     assert lazy._source_execution_report["route"] == "parallel-resident"
 
 
+@pytest.mark.parametrize("dtype", ["int64", "float64"])
+def test_selected_resident_views(dtype, monkeypatch):
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 16)
+    values = np.arange(513, dtype=dtype).reshape(3, 171)[:, ::-1]
+    other = np.array([2], dtype=dtype)
+    native = kernel(dtype=dtype)
+    lazy = native.lazy({"x": values, "y": other}, partitions=(1, 57))
+    expected = values + (other - 1)
+    for selection in (
+        (slice(None), slice(2, 160, 2)),
+        (1, slice(None, None, -2)),
+        (slice(None), slice(0, 0)),
+        (-1, -1),
+    ):
+        np.testing.assert_array_equal(lazy[selection], expected[selection])
+        assert lazy._source_execution_report["route"] in (
+            "resident-selection",
+            "parallel-resident-selection",
+        )
+
+
+def test_integer_comparison_parallel_and_selected(monkeypatch):
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 64)
+    values = np.arange(1027, dtype="int64")
+    lazy = kernel("def k(x, y):\n    return x < y\n", dtype="int64", output="bool").lazy(
+        {"x": values, "y": values[::-1].copy()}
+    )
+    np.testing.assert_array_equal(lazy[:], values < values[::-1])
+    assert lazy._source_execution_report["route"] == "parallel-resident"
+    np.testing.assert_array_equal(lazy[::2], (values < values[::-1])[::2])
+    assert lazy._source_execution_report["route"] == "parallel-resident-selection"
+
+
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Worker joining requires host threads")
 def test_failures_join_and_never_replay():
     import threading

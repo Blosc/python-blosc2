@@ -145,8 +145,15 @@ class PortableLazyArray(LazyArray):
         if streamed is not None:
             values, self._source_execution_report = streamed
             return values
-        from .resident_execution import evaluate_resident_if_eligible
+        from .resident_execution import (
+            evaluate_resident_if_eligible,
+            evaluate_resident_selection_if_eligible,
+        )
 
+        selected = evaluate_resident_selection_if_eligible(self, selection)
+        if selected is not None:
+            values, self._source_execution_report = selected
+            return values
         resident = evaluate_resident_if_eligible(self, selection)
         if resident is not None:
             values, self._source_execution_report = resident
@@ -232,8 +239,8 @@ class PortableLazyArray(LazyArray):
     def compute(self, item=None, **kwargs):
         """Materialize into Blosc2 storage, honoring output storage options.
 
-        Eligible full-domain, lane-local kernels over matching compressed 1-D
-        inputs write directly through a native prefilter. Omitted chunks/blocks
+        Eligible lane-local float or proven modular integer kernels over matching
+        compressed 1-D inputs write directly through a native prefilter. Omitted chunks/blocks
         retain the input grid on this path. Partial selections and different
         output grids keep the general partition-preserving implementation.
         """

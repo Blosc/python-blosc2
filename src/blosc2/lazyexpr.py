@@ -6194,6 +6194,12 @@ def evaluate(
     inputs are rebound on every call and the NumPy output is freshly allocated;
     neither operand arrays nor numerical results are retained in the cache.
 
+    Eligible numeric arithmetic and elementwise math calls use the native
+    Menudet kernels, including explicit NumPy or Blosc2 destinations. Compressed
+    destinations retain bounded input tiles; matching floating storage grids use
+    the compression prefilter. Unsupported signatures, aliasing and explicit
+    backend/accuracy policies retain the existing dispatch rules.
+
     Parameters
     ----------
     ex: str

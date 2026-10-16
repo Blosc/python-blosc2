@@ -2,8 +2,8 @@
 
 A single human-readable table reports warm medians for the same expression
 evaluated by NumPy, numexpr, both LazyExpr output paths, blosc2.evaluate and a Menudet kernel -- on
-resident NumPy operands and on compressed Blosc2 operands (both filled with
-``numpy.linspace``). The fastest figure of every row is highlighted in green.
+resident NumPy operands and on compressed Blosc2 operands (built with their
+respective ``arange`` constructors). The fastest figure of every row is highlighted in green.
 
 For Blosc2 operands, NumPy and numexpr must first materialize (decompress) the
 inputs, and that cost is included in their timings. Blosc2-output rows exercise
@@ -13,9 +13,11 @@ The evaluate column calls ``blosc2.evaluate`` afresh each time. Repeated
 preparation uses an operand-free recipe cache; input rebinding and fresh NumPy
 output allocation are timed, and no result buffer is reused. The evaluate column
 always returns NumPy output for elementwise expressions, as do NumPy, numexpr
-and LazyExpr-NumPy. LazyExpr always returns uncompressed Blosc2 output. Menudet
-returns uncompressed Blosc2 output for Blosc2 inputs and NumPy output for NumPy
-inputs. Blosc2 outputs use the input chunk/block layout for Blosc2 inputs.
+and LazyExpr-NumPy. LazyExpr always returns Blosc2 output. Menudet returns Blosc2
+output for Blosc2 inputs and NumPy output for NumPy inputs. ``--codec`` and
+``--clevel`` configure compressed inputs and outputs (defaults: zstd, 5).
+Blosc2 outputs use the input chunk/block layout for Blosc2 inputs.
+Engines with unsupported dtypes or different numerical results are reported as N/A.
 
 With ``--reduc``, each engine returns a scalar. Menudet uses a native block
 reduction, which requires resident operands (decompression is timed for Blosc2).
@@ -28,6 +30,7 @@ Usage::
     python bench/menudet-engines.py --items 100000 1000000 8000000
     python bench/menudet-engines.py --reduc sum
     python bench/menudet-engines.py --jit cc
+    python bench/menudet-engines.py --dtype int16 --codec lz4 --clevel 3
 
 ``--jit tcc|cc`` selects miniexpr's JIT compiler backend. With ``cc``, the
 ``CC`` environment variable selects the system compiler. Omitting ``--jit``
@@ -96,22 +99,31 @@ def adjusted_all(x, y):
     return block_all(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
 
 
-def build_operands(size, kind):
+def build_operands(size, kind, dtype="float64", cparams=None):
     """Return the ``x``/``y`` operands and the expected result for one storage kind."""
-    x = np.linspace(0, 1, size)
-    y = np.linspace(1, 2, size)
+    x = np.arange(size, dtype=dtype)
+    y = np.arange(1, size + 1, dtype=dtype)
     expected = x + (y - 1)
     if kind == "numpy":
         return {"x": x, "y": y}, expected
     layout = {} if size <= 1_000_000 else {"chunks": (1_000_000,), "blocks": (15625,)}
-    inputs = {name: blosc2.asarray(value, **layout) for name, value in {"x": x, "y": y}.items()}
+    cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5) if cparams is None else cparams
+    if size == 1:
+        # The DSL-backed Blosc2 constructor rejects scalar-like domains.
+        return {
+            name: blosc2.asarray(value, cparams=cparams) for name, value in {"x": x, "y": y}.items()
+        }, expected
+    inputs = {
+        "x": blosc2.arange(size, dtype=dtype, cparams=cparams, **layout),
+        "y": blosc2.arange(1, size + 1, dtype=dtype, cparams=cparams, **layout),
+    }
     return inputs, expected
 
 
-def make_engines(inputs, kind, reduc=None):
+def make_engines(inputs, kind, reduc=None, cparams=None):
     """Return an ordered mapping of engine name to a callable producing a result.
 
-    LazyExpr returns uncompressed Blosc2 output; LazyExpr-NumPy, NumPy, numexpr
+    LazyExpr returns compressed Blosc2 output; LazyExpr-NumPy, NumPy, numexpr
     and evaluate always return NumPy. Menudet preserves the input storage kind.
     """
     numpy_reduce = getattr(np, reduc) if reduc else None
@@ -177,7 +189,9 @@ def make_engines(inputs, kind, reduc=None):
             "Menudet": menudet_reduce,
         }
     menudet = adjusted(**inputs)
-    output_options = {"cparams": blosc2.CParams(clevel=0)}
+    output_options = {
+        "cparams": blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5) if cparams is None else cparams
+    }
     if kind == "blosc2":
         first = inputs["x"]
         output_options.update(chunks=first.chunks, blocks=first.blocks)
@@ -191,20 +205,34 @@ def make_engines(inputs, kind, reduc=None):
     }
 
 
-def benchmark(engines, expected, samples, warmups, rng):
+def benchmark(engines, expected, samples, warmups, rng, failures=None):
     """Correctness-check once, warm up, then time interleaved shuffled samples."""
-    for operation in engines.values():
-        result = operation()
-        if isinstance(result, blosc2.NDArray):
-            result = result[:]
-        if np.ndim(expected) == 0:
-            if np.ndim(result) != 0:
-                raise AssertionError("Reduction must return a scalar")
-            # Native/parallel summation can group floating additions differently.
-            np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+    qualified = {}
+    for name, operation in engines.items():
+        try:
+            result = operation()
+            if isinstance(result, blosc2.NDArray):
+                result = result[:]
+            if np.ndim(expected) == 0:
+                if np.ndim(result) != 0:
+                    raise AssertionError("Reduction must return a scalar")
+                # Native/parallel summation can group floating additions differently.
+                np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+            else:
+                np.testing.assert_array_equal(result, expected)
+            del result
+        except Exception as error:
+            if failures is None:
+                raise
+            message = str(error).strip().splitlines()
+            failures[name] = (
+                "different numerical results"
+                if isinstance(error, AssertionError)
+                else f"{type(error).__name__}: {message[0] if message else 'unsupported execution'}"
+            )
         else:
-            np.testing.assert_array_equal(result, expected)
-        del result
+            qualified[name] = operation
+    engines = qualified
     for _ in range(warmups):
         for operation in engines.values():
             result = operation()
@@ -249,9 +277,12 @@ def result_row(row, widths, use_color):
     """Format one (items, operands) row, highlighting its fastest engine."""
     item_width, operand_width, engine_width = widths
     times = row["times"]
-    winner = min(times.values())
+    winner = min(times.values(), default=None)
     cells = [human_items(row["items"]).rjust(item_width), row["operands"].ljust(operand_width)]
     for name in ENGINES:
+        if name not in times:
+            cells.append("N/A".rjust(engine_width))
+            continue
         text = f"{times[name]:.3f}".rjust(engine_width)
         if use_color and times[name] == winner:
             text = f"{GREEN}{text}{RESET}"
@@ -271,6 +302,33 @@ def main():
         "--warmups", type=int, default=3, help="untimed repetitions run before timing each row"
     )
     parser.add_argument("--threads", type=int, default=12)
+    parser.add_argument(
+        "--dtype",
+        default="float64",
+        choices=(
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int32",
+            "uint32",
+            "int64",
+            "uint64",
+            "float32",
+            "float64",
+        ),
+        help="operand dtype (default: float64)",
+    )
+    parser.add_argument(
+        "--codec",
+        type=str.lower,
+        choices=tuple(codec.name.lower() for codec in blosc2.Codec),
+        default="zstd",
+        help="codec for Blosc2 inputs and outputs (default: zstd)",
+    )
+    parser.add_argument(
+        "--clevel", type=int, choices=range(10), default=5, help="compression level (default: 5)"
+    )
     parser.add_argument(
         "--jit",
         choices=("tcc", "cc"),
@@ -299,14 +357,16 @@ def main():
     blosc2.set_nthreads(args.threads)
     ne.set_num_threads(args.threads)
     kinds = ("numpy", "blosc2") if args.operands == "both" else (args.operands,)
+    cparams = blosc2.CParams(codec=blosc2.Codec[args.codec.upper()], clevel=args.clevel)
 
     expression = f"{args.reduc}({EXPRESSION})" if args.reduc else EXPRESSION
     print(f"Expression: {expression}")
     print("Warm medians in milliseconds (lower is better); fastest figure per row in green.")
     print(
         f"blosc2 {blosc2.__version__} | numpy {np.__version__} | numexpr {ne.__version__}"
-        f" | dtype float64 | threads {args.threads} | samples {args.samples}"
+        f" | dtype {args.dtype} | threads {args.threads} | samples {args.samples}"
     )
+    print(f"Blosc2 compression: codec {args.codec} | clevel {args.clevel}")
     print(f"Miniexpr JIT backend request: {os.environ.get('ME_DSL_JIT_COMPILER', 'runtime default')}")
     print()
     widths = column_widths(args.items)
@@ -317,11 +377,12 @@ def main():
     previous = None
     for size in args.items:
         for kind in kinds:
-            inputs, expected = build_operands(size, kind)
+            inputs, expected = build_operands(size, kind, args.dtype, cparams)
             if args.reduc:
                 expected = getattr(np, args.reduc)(expected)
-            engines = make_engines(inputs, kind, args.reduc)
-            times = benchmark(engines, expected, args.samples, args.warmups, rng)
+            engines = make_engines(inputs, kind, args.reduc, cparams=cparams)
+            failures = {}
+            times = benchmark(engines, expected, args.samples, args.warmups, rng, failures=failures)
             del inputs, engines, expected
             if previous is not None and size != previous:
                 print(table_separator(widths))
@@ -347,7 +408,8 @@ def main():
         )
         print(
             "NumPy, numexpr, LazyExpr-NumPy and evaluate return NumPy outputs. "
-            "LazyExpr returns Blosc2 output (clevel=0); Menudet does so for Blosc2 inputs only."
+            f"LazyExpr returns Blosc2 output ({args.codec}, clevel={args.clevel}); "
+            "Menudet does so for Blosc2 inputs only."
         )
     print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
 

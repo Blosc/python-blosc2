@@ -35,7 +35,7 @@ def test_engine_results(engine_benchmark, size, kind, reduc):
         else:
             if name == "LazyExpr" or (kind == "blosc2" and name == "Menudet"):
                 assert isinstance(result, blosc2.NDArray), name
-                assert result.cparams.clevel == 0, name
+                assert result.cparams.clevel == 5, name
                 if kind == "blosc2":
                     assert result.chunks == inputs["x"].chunks, name
                     assert result.blocks == inputs["x"].blocks, name
@@ -68,12 +68,16 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     namespace = main.__globals__
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
     argv = ["menudet-engines.py", "--items", "1", "--samples", "1", "--warmups", "0"]
+    argv += ["--dtype", "uint64", "--codec", "LZ4", "--clevel", "3"]
     if backend:
         argv += ["--jit", backend]
     monkeypatch.setattr(sys, "argv", argv)
     observed = []
 
-    def make_engines(inputs, kind, reduc):
+    def make_engines(inputs, kind, reduc, cparams=None):
+        assert inputs["x"].dtype == np.dtype("uint64")
+        assert cparams.codec == blosc2.Codec.LZ4
+        assert cparams.clevel == 3
         observed.append((kind, os.environ["ME_DSL_JIT_COMPILER"]))
         return {name: lambda: np.zeros(1) for name in namespace["ENGINES"]}
 
@@ -84,3 +88,44 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     expected = backend or "tcc"
     assert observed == [("numpy", expected), ("blosc2", expected)]
     assert f"Miniexpr JIT backend request: {expected}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("dtype", ["int16", "uint64", "float32"])
+@pytest.mark.parametrize("kind", ["numpy", "blosc2"])
+def test_arange_operands_and_compression(engine_benchmark, dtype, kind):
+    cparams = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=3)
+    # Cross a narrow-integer wrap boundary without relying on Python scalar casts.
+    size = 40003 if dtype == "int16" else 257
+    inputs, expected = engine_benchmark["build_operands"](size, kind, dtype, cparams)
+    x, y = np.arange(size, dtype=dtype), np.arange(1, size + 1, dtype=dtype)
+    for name, values in (("x", x), ("y", y)):
+        operand = inputs[name]
+        assert operand.dtype == np.dtype(dtype)
+        if kind == "blosc2":
+            assert operand.cparams.codec == blosc2.Codec.LZ4
+            assert operand.cparams.clevel == 3
+            operand = operand[:]
+        np.testing.assert_array_equal(operand, values)
+    np.testing.assert_array_equal(expected, x + (y - 1))
+    for name in ("LazyExpr", "Menudet"):
+        if kind == "numpy" and name == "Menudet":
+            continue
+        result = engine_benchmark["make_engines"](inputs, kind, cparams=cparams)[name]()
+        assert result.cparams.codec == blosc2.Codec.LZ4
+        assert result.cparams.clevel == 3
+        np.testing.assert_array_equal(result[:], expected)
+
+
+def test_benchmark_reports_nonparity(engine_benchmark):
+    import random
+
+    engines = {
+        "NumPy": lambda: np.array([1], dtype="int16"),
+        "numexpr": lambda: np.array([2], dtype="int32"),
+    }
+    failures = {}
+    times = engine_benchmark["benchmark"](
+        engines, np.array([1], dtype="int16"), 1, 0, random.Random(42), failures=failures
+    )
+    assert set(times) == {"NumPy"}
+    assert failures == {"numexpr": "different numerical results"}

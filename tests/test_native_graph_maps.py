@@ -71,6 +71,78 @@ def test_parallel_map_persisted_sources(tmp_path):
     assert expression._native_execution_report["route"] == "parallel-graph-bounded-map"
 
 
+@pytest.mark.parametrize("mixed", [False, True])
+def test_integer_chunk_map_avoids_gather_indices(monkeypatch, mixed):
+    if not hasattr(blosc2.NDArray, "_portable_chunk_span"):
+        pytest.skip("Requires the bounded chunk decoder binding")
+    monkeypatch.setattr("blosc2.storage_readers.DENSE_MATERIALIZATION_BUDGET", 2048)
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 64)
+    monkeypatch.setattr("blosc2.native_graph.MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
+    values = np.arange(1027, dtype="int16") + np.int16(32000)
+    x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
+    y = values if mixed else blosc2.asarray(values, chunks=x.chunks, blocks=x.blocks)
+    expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Chunk map used a gather schedule or materialized compressed inputs")
+
+    monkeypatch.setattr(blosc2.NDArray, "__getitem__", forbidden)
+    monkeypatch.setattr("blosc2.native_graph._compressed_map_schedules", forbidden)
+    expected = values + (values - 1)
+    np.testing.assert_array_equal(expr[:], expected)
+    output = np.empty_like(values)
+    assert blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}, out=output) is output
+    np.testing.assert_array_equal(output, expected)
+    report = expr._native_execution_report
+    assert report["route"] == "parallel-graph-chunk-map"
+    assert report["gathered_bytes"] == report["output_copy_bytes"] == 0
+    assert report["temporary_bytes"] <= 2048
+    assert report["evaluated_tiles"] == x.schunk.nchunks
+    assert report["reader_bytes"] == values.nbytes * (1 if mixed else 2)
+
+
+def test_integer_chunk_map_joins_decoder_failures(monkeypatch):
+    if not hasattr(blosc2.NDArray, "_portable_chunk_span"):
+        pytest.skip("Requires the bounded chunk decoder binding")
+    monkeypatch.setattr("blosc2.storage_readers.DENSE_MATERIALIZATION_BUDGET", 4096)
+    monkeypatch.setattr("blosc2.resident_execution.MINIMUM_WORKER_ITEMS", 64)
+    monkeypatch.setattr("blosc2.native_graph.MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
+    values = np.arange(4099, dtype="int16")
+    x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    original = blosc2.NDArray._portable_chunk_span
+    completed = []
+
+    def decode(self, buffer, chunk):
+        if chunk == 0:
+            raise OSError("decoder failure")
+        result = original(self, buffer, chunk)
+        completed.append(chunk)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(blosc2.NDArray, "_portable_chunk_span", decode)
+        with pytest.raises(OSError, match="decoder failure"):
+            _ = expr[:]
+        # The second worker has finished all its writes before the error escapes.
+        assert max(completed) == x.schunk.nchunks - 1
+    np.testing.assert_array_equal(expr[:], values + 1)
+
+
+def test_portable_chunk_span_checks_scratch():
+    if not hasattr(blosc2.NDArray, "_portable_chunk_span"):
+        pytest.skip("Requires the bounded chunk decoder binding")
+    values = np.arange(9, dtype="int16")
+    x = blosc2.asarray(values, chunks=(4,), blocks=(2,))
+    scratch = np.empty(4, dtype="int16")
+    np.testing.assert_array_equal(x._portable_chunk_span(scratch, 2), values[-1:])
+    scratch.flags.writeable = False
+    with pytest.raises(ValueError, match="scratch"):
+        x._portable_chunk_span(scratch, 0)
+    with pytest.raises(ValueError, match="scratch"):
+        x._portable_chunk_span(np.empty(4, dtype="int32"), 0)
+
+
 def test_parallel_map_padded_chunk_layout():
     values = np.arange(4 * 65536 + 19, dtype=np.float64)
     x = blosc2.asarray(values, chunks=(60000,), blocks=(4096,))

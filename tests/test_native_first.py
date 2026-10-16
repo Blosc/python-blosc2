@@ -36,20 +36,11 @@ def test_native_first_arithmetic(dtype, safe, native_first_runtime, monkeypatch)
     np.testing.assert_array_equal(expr[:], expected)
 
 
-@pytest.mark.parametrize("expression", ["x / 2", "x ** 2", "sqrt(x)", "sum(sqrt(x))"])
-def test_native_first_excluded_syntax(expression, monkeypatch):
-    expr = blosc2.lazyexpr(expression, {"x": np.arange(1, 7.0)}, evaluation="safe")
-    assert prepare_native_first(expr, ()) is None
-    called = []
-    original = blosc2.LazyExpr._compute_expr
+@pytest.mark.parametrize("expression", ["x[1:3]", "sum(sum(x))", "x and y", "unknown(x)"])
+def test_native_first_excluded_syntax(expression):
+    from blosc2.native_graph import _native_first_syntax
 
-    def legacy(self, *args, **kwargs):
-        called.append(True)
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", legacy)
-    expr.compute()
-    assert called
+    assert not _native_first_syntax(expression)
 
 
 @pytest.mark.parametrize("kind", ["compressed", "float16", "complex", "empty", "non_native"])
