@@ -143,6 +143,11 @@ are decorator options for explicit portable block/context contracts. Default
 partitions cover the whole logical domain; eligible compressed inputs use native
 storage dispatch as described below.
 
+Eligible ordinary libm calls bind dtype-specific scalar callbacks during native
+JIT preparation, avoiding per-element operation-name dispatch. This does not
+enable fast-math or substitute vector math libraries. Operations with special
+Menudet numerical rules retain their semantic bridges.
+
 Existing ``@blosc2.dsl_kernel`` authoring/export and legacy UDF calling conventions
 are unchanged. See ``examples/menudet_decorator.py`` and ``bench/menudet-engines.py``.
 

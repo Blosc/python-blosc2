@@ -71,6 +71,20 @@ def test_default_jit(native_graph_runtime):
     np.testing.assert_array_equal(k(x)[:], x + 1)
 
 
+def test_libm_kernel_roundtrip(native_graph_runtime):
+    # Numerical/operator matrices live in miniexpr. Check decorator binding,
+    # lazy reads and native artifact reconstruction with the resolved callbacks.
+    @blosc2.menudet
+    def trig(x):
+        return np.sin(x) + np.cos(x) + 1
+
+    x = np.linspace(-np.pi, np.pi, 257)
+    expected = np.sin(x) + np.cos(x) + 1
+    np.testing.assert_allclose(trig(x)[:], expected, rtol=1e-14, atol=1e-14)
+    kernel = blosc2.PortableKernel.from_json(trig.specialize(x).to_json())
+    np.testing.assert_allclose(kernel.evaluate({"x": x}), expected, rtol=1e-14, atol=1e-14)
+
+
 def test_binding_defaults_and_scalars(native_graph_runtime):
     @blosc2.menudet(jit=False)
     def k(x, y: np.float64 = 2.0):
