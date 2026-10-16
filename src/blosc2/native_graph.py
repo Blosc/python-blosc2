@@ -645,11 +645,18 @@ def _combine_graph_reductions(document, root, results, reports):
 
 
 def _compressed_map_minimum(inputs):
-    """Lower the crossover only for the measured wide-float/high-thread case."""
+    """Lower the crossover for measured high-thread float64/prefilter maps."""
     import blosc2
 
     arrays = [value for value in inputs.values() if type(value) in (np.ndarray, blosc2.NDArray)]
     if blosc2.nthreads >= 8 and arrays and all(value.dtype == np.dtype("float64") for value in arrays):
+        return MINIMUM_COMPRESSED_MAP_ITEMS
+    if (
+        blosc2.nthreads >= 8
+        and arrays
+        and all(value.dtype in (np.dtype("int32"), np.dtype("int64")) for value in arrays)
+        and blosc2.blosc2_ext.portable_prefilter_inputs_eligible(inputs, allow_numpy=True)
+    ):
         return MINIMUM_COMPRESSED_MAP_ITEMS
     return MINIMUM_COMPRESSED_GRAPH_ITEMS
 
@@ -798,122 +805,24 @@ def _compressed_map_schedules(plan, shape, workers, chunk, block, units, worker_
     return tuple(schedules)
 
 
-def _parallel_integer_chunk_map(plan, inputs, shape, workers, out):
-    """Skip gather-index traffic for large, proven integer maps; bound scratch.
-
-    Smaller maps retain the block reader whose scratch stays cache-resident.
-    Never retile checked scalar expressions, conversions, reductions or context.
-    """
-    from concurrent.futures import wait
-
+def _prefilter_compressed_map(plan, inputs, workers, out):
     import blosc2
 
-    from .resident_execution import resident_integer_operations_safe, resident_pool
-    from .storage_readers import DENSE_MATERIALIZATION_BUDGET
+    from .storage_readers import evaluate_prefilter_numpy, storage_reader_eligible
 
     kernel = _resident_map_kernel(plan)
-    if kernel is None or not resident_integer_operations_safe(kernel):
-        return None
-    if math.prod(shape) * kernel.output_dtype.itemsize <= DENSE_MATERIALIZATION_BUDGET:
-        return None
-    compressed = {name: value for name, value in inputs.items() if type(value) is blosc2.NDArray}
-    first = next(iter(compressed.values()))
-    chunk_items = first.chunks[0]
-    if chunk_items % first.blocks[0] or not all(
-        hasattr(value, "_portable_chunk_span") for value in compressed.values()
+    if (
+        kernel is not None
+        and storage_reader_eligible(kernel)
+        and blosc2.blosc2_ext.portable_prefilter_available()
+        and blosc2.blosc2_ext.portable_prefilter_inputs_eligible(inputs, allow_numpy=True)
     ):
-        return None
-    input_width = sum(value.dtype.itemsize for value in compressed.values())
-    block_items = first.blocks[0]
-    # Budget one physical block per worker first, then choose a block-aligned
-    # batch. Whole-chunk scratch would reduce int64 maps to two workers with
-    # common 1M-item chunks, although smaller batches fit all workers safely.
-    workers = min(
-        workers,
-        first.schunk.nchunks,
-        DENSE_MATERIALIZATION_BUDGET // (block_items * input_width),
-    )
-    if workers < 2:
-        return None
-    batch_items = min(
-        chunk_items,
-        (DENSE_MATERIALIZATION_BUDGET // workers // input_width // block_items) * block_items,
-    )
-    scratch_per_worker = batch_items * input_width
-    if out is not None:
-        if type(out) is not np.ndarray or out.shape != shape or out.dtype != kernel.output_dtype:
-            raise ValueError("Native map output shape/dtype disagree with the expression")
-        if not out.flags.c_contiguous or not out.flags.aligned or not out.flags.writeable:
-            raise ValueError("Native map output must be writable, aligned and C-contiguous")
-        if any(type(value) is np.ndarray and np.shares_memory(out, value) for value in inputs.values()):
-            raise ValueError("Native map output must not overlap an input")
-    output = np.empty(shape, dtype=kernel.output_dtype) if out is None else out
-
-    def execute(worker):
-        buffers = {name: np.empty(batch_items, dtype=value.dtype) for name, value in compressed.items()}
-        begin = first.schunk.nchunks * worker // workers
-        end = first.schunk.nchunks * (worker + 1) // workers
-        flags, supported, tiles = 0, True, 0
-        for chunk in range(begin, end):
-            origin = chunk * chunk_items
-            live_items = min(chunk_items, shape[0] - origin)
-            for offset in range(0, live_items, batch_items):
-                count = min(batch_items, live_items - offset)
-                start, stop = origin + offset, origin + offset + count
-                operands = {
-                    name: value._portable_chunk_span(buffers[name], chunk, offset, count)
-                    if name in compressed
-                    else value[start:stop]
-                    for name, value in inputs.items()
-                }
-                _, status = kernel._handle.evaluate_block(
-                    operands, (count,), return_status=True, _output=output[start:stop]
-                )
-                flags |= status["flags"]
-                supported &= status["supported"]
-                tiles += 1
-        return flags, supported, tiles
-
-    futures = []
-    try:
-        for worker in range(workers):
-            futures.append(resident_pool().submit(execute, worker))
-    finally:
-        wait(futures)
-    statuses = [future.result() for future in futures]
-    flags = 0
-    for status, _, _ in statuses:
-        flags |= status
-    return output, {
-        "route": "parallel-graph-chunk-map",
-        "threads": workers,
-        "fp_flags": flags,
-        "fp_supported": all(status[1] for status in statuses),
-        "stages": 1,
-        "jit_stages": 1,
-        "interpreter_stages": 0,
-        "intermediate_bytes": 0,
-        "temporary_bytes": workers * scratch_per_worker,
-        "gathered_bytes": 0,
-        "normalization_bytes": 0,
-        "reader_bytes": sum(value.nbytes for value in compressed.values()),
-        "input_materialization_bytes": 0,
-        "input_buffer_bytes": workers * scratch_per_worker,
-        "tile_items": batch_items,
-        "maximum_reader_items": min(batch_items, shape[0]),
-        "evaluated_tiles": sum(status[2] for status in statuses),
-        "native_decoder_contexts": sum(status[2] for status in statuses) * len(compressed),
-        "output_copy_bytes": 0,
-        "output_zero_fill_bytes": 0,
-    }
+        return evaluate_prefilter_numpy(kernel, inputs, out=out, workers=workers)
+    return None
 
 
 def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
-    """One whole-domain job; worker-private decoders write disjoint output regions.
-
-    Native source iterators reuse bounded input/map scratch throughout a region.
-    No compression prefilter is involved, so output is not cleared before stores.
-    """
+    """Prefer shared native prefilters; retain bounded readers for other layouts."""
     from concurrent.futures import wait
 
     import blosc2
@@ -926,9 +835,9 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
         return None
     first, workers, _, _ = layout
     if tile_items == 1024:
-        direct = _parallel_integer_chunk_map(plan, inputs, shape, workers, out)
-        if direct is not None:
-            return direct
+        result = _prefilter_compressed_map(plan, inputs, workers, out)
+        if result is not None:
+            return result
     block = first.blocks[0]
     # Match ordinary tiles to one block; group tiny blocks so graph/kernel
     # dispatch is still amortized. The reader decodes each block directly into

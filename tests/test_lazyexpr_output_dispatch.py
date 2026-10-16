@@ -108,7 +108,7 @@ def test_numpy_output_native_parallel_map(monkeypatch, parallel_threads, explici
         result = expr[:]
         assert isinstance(result, np.ndarray)
     np.testing.assert_array_equal(result, expected)
-    assert expr._native_execution_report["route"] == "parallel-graph-bounded-map"
+    assert expr._native_execution_report["route"] == "portable-prefilter"
 
 
 def test_native_prefilter_storage_options_and_rebinding(tmp_path):

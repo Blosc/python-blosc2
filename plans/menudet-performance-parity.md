@@ -232,3 +232,174 @@ Menudet returns compressed output in these rows; the other two return NumPy.
 The reproduced wide-integer worker-cap regression is removed without raising
 scratch memory limits. A companion int16/cc 100M compressed-input run remained
 fast (LazyExpr-NumPy 10.285 ms, evaluate 10.136 ms, compressed Menudet 15.496 ms).
+
+### Compression-driven direct NumPy sink investigation
+
+An opt-in prototype extends `PortableArtifactHandle.evaluate_prefilter` with
+`numpy_out=`. The existing compression workers, input decoders, artifact call,
+FP isolation, and error merge are reused. The callback evaluates straight into
+the final NumPy slice. Disposable-output callbacks return nonzero to skip the
+filter pipeline; C-Blosc2's existing clevel>0 disposable shortcut emits tiny
+zero-run placeholder chunks instead of compressing or retaining result bytes.
+No C-Blosc2 changes are required. Blosc2 output keeps its original fused
+evaluate/filter/compress path. At this initial stage production dispatch was
+unchanged; the coarse-worker implementation below supersedes this prototype.
+
+This removes the old temporary-uncompressed-Blosc2-result/materialization path,
+but still uses a small scheduling container and a chunk-sized dummy input
+allocation. It is not literally free of all temporary storage. Report fields
+identify the destination and placeholder storage size. Integration tests cover
+interpreter/JIT execution, reversed binding order, int64 wraparound, output
+identity/reuse, canaries around a partial tail, no Blosc2 materialization, no
+output zero-fill, and destination validation.
+
+Correctness-gated `bench/menudet-engines.py` measurements (LZ4 level 1, cc JIT,
+12 threads, five warm samples; experimental dispatch installed only by the
+local `opencode/bench_numpy_prefilter.py` wrapper):
+
+| dtype/items | current LazyExpr-NumPy/evaluate ms | prototype LazyExpr-NumPy/evaluate ms |
+|---|---:|---:|
+| int64 / 8M | 5.039 / 4.807 | 4.032 / 4.084 |
+| int64 / 100M | 33.942 / 35.384 | 62.906 / 62.498 |
+| int16 / 100M | earlier 10.285 / 10.136 | 19.500 / 19.884 |
+
+A separate same-input, shuffled-order diagnostic (100M int64 arange, seven
+samples, cc JIT) measured direct prefilter fresh output 66.75 ms, reused output
+28.19 ms, and the old prefilter/materialization route 112.74 ms. Its current
+LazyExpr path measured 48.57 ms; this diagnostic retains more large buffers and
+is not interchangeable with the benchmark above. Fresh allocation/first-touch
+is a major sensitivity, not yet a proven sole cause. The compression driver
+also joins workers once per input chunk, unlike the current coarse partition
+of the whole domain; scheduling/locality needs further investigation before
+switching dispatch or removing either existing route.
+
+Validation: 136 tests passed across storage readers, Menudet dispatch, native
+graph maps, and LazyExpr output dispatch. Builds/imports used the isolated test
+package, not the shared editable extension.
+
+### Shared prefilter with coarse chunk workers
+
+The direct NumPy sink now uses the production prefilter callback for eligible
+native-first elementwise maps, including mixed NumPy/Blosc2 inputs. NumPy
+operands are borrowed directly; compressed operands use the same reusable
+decoders and bounded scratch as compressed-output execution. The standalone
+integer chunk-map evaluator and its `_portable_chunk_span` binding are removed.
+The old temporary-uncompressed-result/materialization branch is also removed.
+Persisted, padded-grid, postfiltered, context-dependent, reduction, and other
+unsupported cases retain their general bounded-reader/semantic fallbacks.
+
+For sufficient chunk counts, persistent outer workers own contiguous chunk
+ranges and private single-threaded compression contexts. Few large chunks
+instead use the same callback with C-Blosc2's internal block workers. A nominal
+read-only input buffer is shared across outer workers; the prefilter does not
+read it. Each private scheduling container has only one chunk, irrespective of
+the source domain. Result chunks are not stored: the driver's tiny disposable
+chunks are discarded immediately. Compressed output keeps its original tightly
+fused evaluate/filter/compress pipeline and requested output block grid.
+
+The first coarse-worker attempt serialized at the Python GIL because
+`SChunk.update_data` does not release it by default. NumPy scheduling now uses
+the existing GIL-releasing `_prefilter_data` adapter. No global GIL-release
+setting is changed and no C-Blosc2 modification is needed. All submitted workers
+are joined before returning or raising; errors are inspected in range order.
+
+Tiny source blocks can be grouped into aligned prefilter batches up to 4096
+items, respecting chunk divisibility and the shared application-buffer budget.
+The callback validates the original input block headers and decodes each batch
+as an aligned span. This avoids a per-physical-block callback/placeholder cost
+without duplicating decoding or kernel execution. NumPy output padding is never
+written. Compressed-output block sizes and padding behavior remain unchanged.
+
+Final correctness-gated benchmark (LZ4 level 1, cc JIT, 12 threads, seven warm
+samples, fresh output allocation included):
+
+| items / compressed int64 inputs | LazyExpr-NumPy ms | evaluate ms | compressed Menudet ms |
+|---|---:|---:|---:|
+| 2M | 1.246 | 1.214 | 1.058 |
+| 8M | 3.123 | 3.119 | 3.704 |
+| 100M | 23.132 | 23.576 | 31.071 |
+
+The preceding separate-path 100M baseline was 33.942/35.384 ms for
+LazyExpr-NumPy/evaluate. These are separate benchmark invocations, not an
+interleaved same-buffer microbenchmark. Reported 100M int64 application-owned
+temporary buffers are 11,028,032 bytes: 8,000,000 shared driver bytes,
+3,000,000 reusable input bytes, and 28,032 private placeholder-buffer bytes.
+This excludes the required 800 MB final output and native context internals;
+the application buffers remain within the unchanged 32 MiB cap. Each invocation
+fetches 200 input chunks and reuses 24 decoders, with no gather indices, output
+copying, or output zero-fill.
+
+Companion measurements:
+
+- int16/cc, LZ4 level 1, 100M: 9.912/10.534 ms for LazyExpr-NumPy/evaluate,
+  versus the prior roughly 10 ms path; no wide-integer improvement is claimed
+  for this already-fast narrow-integer case.
+- float64/cc, LZ4 level 1, 100M: 25.123/23.908 ms.
+- int16/TCC, LZ4 level 1, 100M: 20.241/20.405 ms; correctness passed.
+- int32/cc, Zstd level 5, 100M: 16.519/16.414 ms. Extending the measured
+  high-thread crossover to eligible int32/int64 maps also reduces 8M int32
+  from 9.016/9.380 to 2.101/2.316 ms; reductions keep their previous floor.
+- A probe overriding source blocks to 128 items and chunks to 1,048,576 items
+  at 8M float64 measured 112.136/112.670 ms before grouping, then
+  5.359/5.539 ms after grouping. The retained bounded-reader baseline measured
+  45.454/44.446 ms. This is an opt-in layout probe, not the standard benchmark
+  layout; compressed output intentionally retains its tiny block grid.
+
+Diagnostics and reproduction drivers are retained under `opencode/`:
+`prefilter-coarse-int64-cc.txt`, `prefilter-coarse-int32-zstd-cc.txt`,
+`prefilter-coarse-report.txt`, and `bench_prefilter_layout.py`.
+
+Validation: 840 targeted tests passed across native graph lowering, sources,
+stages, math/weak-capture semantics, storage readers, resident execution,
+Menudet/public evaluate dispatch, output binding, caching, and benchmarks.
+Binding coverage includes mixed source order, NumPy output alias rejection,
+tail canaries, tiny chunks, interpreter/JIT operation, failure recovery, and
+joining outstanding workers. Ruff lint/format and diff whitespace checks pass.
+Builds/imports use the isolated test package; the shared editable installation
+has not been overwritten and must be rebuilt before testing this implementation.
+
+### Resident inputs / uncompressed stored-output allocation profile
+
+The reproducible 100M int64 NumPy-input to Blosc2-output anomaly (LZ4 level 0
+around 63 ms versus level 1 around 33 ms) was profiled separately. This default
+implicit stored-output route still uses `slices_eval` and 50 NumExpr calls;
+it does not enter the shared native prefilter. Both levels choose identical
+2,000,000-item chunks and 16,000-item blocks. Their output payload/storage sizes
+are 800,003,200 bytes at level 0 and 5,673,032 bytes at level 1.
+
+Shuffled warm timings on the same operands reproduce 62.27 versus 33.56 ms.
+The Python profile misleadingly charges the excess to NumExpr `re_evaluate`
+(roughly 49 versus 16 ms), while chunk assignment takes roughly 10--14 ms.
+Per-phase `getrusage(RUSAGE_SELF).ru_minflt` counters establish the actual
+allocation/first-touch sensitivity:
+
+| control | level 0 warm total | level 1 warm total | level 0 minor faults |
+|---|---:|---:|---:|
+| fresh output, ordinary NumExpr buffers | 63.5--64.0 ms | 34.3--34.5 ms | about 34,200, in evaluation |
+| fresh output, one reused NumExpr buffer | 60.8--61.3 ms | 34.9--35.9 ms | about 33,200, in chunk storage |
+| reused Blosc2 destination, original fallback held constant | 31.5--33.1 ms | 33.0--33.5 ms | 0--1 |
+
+Level 1 incurs fewer than 100 warm faults in these runs. NumExpr result pointers
+cycle through 50 distinct buffers per level-0 invocation versus two at level 1;
+with explicit scratch reuse both levels use one buffer. Reusing only that
+scratch moves the page faults and timing to the storage phase, rather than
+eliminating them. Reusing the stored destination recycles already-backed raw
+output pages and eliminates the warm allocation penalty. The latter control
+explicitly disables native stored-output admission to avoid comparing different
+evaluators when an `out=` argument is supplied.
+
+This is a real fresh-output allocation cost, not slower int64 arithmetic, a
+chunk-size change, or a compression-backend regression. Compression keeps this
+particular output about 141 times smaller and avoids most of the physical-page
+commit/first-touch work and allocator pressure. Once the destination's pages
+are reusable, level 0 is slightly faster or comparable, as expected. Merely
+reusing a temporary buffer is therefore not a fix. Extending prefilter-driven
+stored-output execution to all-resident implicit destinations is a separate
+dispatch opportunity; it was not changed during this profiling task.
+
+Diagnostics under `opencode/`: `profile_numpy_stored_levels.py`,
+`profile_numpy_stored_levels.out`, `profile_stored_faults.py`,
+`stored-faults-fresh.txt`, `stored-faults-reuse-result.txt`, and
+`stored-faults-reuse-output.txt`. Initial qualification checked the complete
+result at both levels; phase-counter runs check sampled values without creating
+an additional full-size NumPy expected result between timed invocations.

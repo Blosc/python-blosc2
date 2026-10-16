@@ -50,7 +50,7 @@ def test_multichunk_uses_portable_prefilter(dense_dispatch_runtime, monkeypatch,
     np.testing.assert_array_equal(lazy[:], values + (values - 1))
     report = lazy._source_execution_report
     assert report["route"] == "portable-prefilter"
-    assert report["evaluated_blocks"] == 21
+    assert report["evaluated_blocks"] == 3  # Tiny source blocks share one batch per chunk.
     assert report["input_buffer_bytes"] <= 32 * 1024**2
 
 
@@ -61,7 +61,7 @@ def test_prefilter_output_dtype_and_padding(dense_dispatch_runtime):
     y = blosc2.asarray(np.zeros_like(values), chunks=(1000,), blocks=(100,))
     lazy = native.lazy({"x": x, "y": y})
     np.testing.assert_array_equal(lazy[:], values > 0)
-    assert lazy._source_execution_report["evaluated_blocks"] == 21
+    assert lazy._source_execution_report["evaluated_blocks"] == 3
 
 
 def test_partial_read_stays_bounded(dispatch_runtime, monkeypatch):

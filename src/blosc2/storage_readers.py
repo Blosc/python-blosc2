@@ -267,6 +267,120 @@ def compute_storage_if_eligible(lazy, kwargs):
     return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
 
 
+def evaluate_prefilter_numpy(kernel, inputs, out=None, workers=None):
+    """Drive the shared prefilter over coarse ranges into a direct NumPy sink.
+
+    Each outer worker owns a single-threaded compression context and reusable
+    block decoders. Only the final output and a read-only dummy driver buffer
+    are shared; no result chunks are stored or materialized.
+    """
+    from concurrent.futures import wait
+
+    import blosc2
+
+    from .resident_execution import resident_pool
+
+    first = next(value for value in inputs.values() if type(value) is blosc2.NDArray)
+    dtype = np.dtype(kernel.output_dtype)
+    driver_bytes = first.chunks[0] * dtype.itemsize
+    compressed = [value for value in inputs.values() if type(value) is blosc2.NDArray]
+    workers = blosc2.nthreads if workers is None else workers
+    input_width = sum(value.dtype.itemsize for value in compressed)
+    # Amortize tiny physical blocks without changing the source layout. The
+    # same prefilter reads block-aligned spans; its output blocks can group
+    # several source blocks when no compressed result needs that block grid.
+    for factor in range(min(first.chunks[0] // first.blocks[0], max(1, 4096 // first.blocks[0])), 0, -1):
+        if first.chunks[0] // first.blocks[0] % factor:
+            continue
+        block_items = factor * first.blocks[0]
+        placeholder_bytes = blosc2.MAX_OVERHEAD + max(
+            128, (first.chunks[0] // block_items) * (4 + 4 * dtype.itemsize)
+        )
+        available = (DENSE_MATERIALIZATION_BUDGET - driver_bytes) // (
+            block_items * input_width + placeholder_bytes
+        )
+        if available >= workers:
+            break
+    workers = min(workers, available)
+    if workers < 1:
+        return None
+    output = np.empty(first.shape, dtype=dtype) if out is None else out
+    if type(output) is not np.ndarray or output.shape != first.shape or output.dtype != dtype:
+        raise ValueError("Native map output shape/dtype disagree with the expression")
+    if not output.flags.c_contiguous or not output.flags.aligned or not output.flags.writeable:
+        raise ValueError("Native map output must be writable, aligned and C-contiguous")
+    if any(type(value) is np.ndarray and np.shares_memory(output, value) for value in inputs.values()):
+        raise ValueError("Native map output must not overlap an input")
+    driver = np.empty(driver_bytes, dtype=np.uint8)
+    driver.flags.writeable = False  # The callback ignores its nominal input.
+    if first.schunk.nchunks < max(2, (workers + 1) // 2):
+        # Few large chunks need block-level parallelism, not one outer worker
+        # per chunk. Both policies invoke the identical native prefilter.
+        reports = [
+            kernel._handle.evaluate_prefilter(
+                inputs, numpy_out=output, _driver_input=driver, _nthreads=workers, _block_items=block_items
+            )[1]
+        ]
+        scheduling = "block-workers"
+    else:
+        workers = min(workers, first.schunk.nchunks)
+        futures = []
+        try:
+            for worker in range(workers):
+                begin = first.schunk.nchunks * worker // workers
+                end = first.schunk.nchunks * (worker + 1) // workers
+                futures.append(
+                    resident_pool().submit(
+                        kernel._handle.evaluate_prefilter,
+                        inputs,
+                        numpy_out=output,
+                        _chunk_range=(begin, end),
+                        _driver_input=driver,
+                        _block_items=block_items,
+                    )
+                )
+        finally:
+            wait(futures)  # Keep buffers and sources alive through every worker join.
+        reports = [future.result()[1] for future in futures]
+        scheduling = "chunk-ranges"
+    report = dict(reports[0])
+    for name in (
+        "evaluated_blocks",
+        "native_decoder_contexts",
+        "input_buffer_allocations",
+        "input_chunk_fetches",
+        "input_buffer_bytes",
+        "output_chunk_buffer_bytes",
+        "discarded_output_bytes",
+        "output_zero_fill_bytes",
+    ):
+        report[name] = sum(part[name] for part in reports)
+    report["fp_flags"] = 0
+    for part in reports:
+        report["fp_flags"] |= part["fp_flags"]
+    report.update(
+        route="portable-prefilter",
+        scheduling=scheduling,
+        threads=workers,
+        fp_supported=all(part["fp_supported"] for part in reports),
+        stages=1,
+        jit_stages=int(kernel._handle.info()["jit"]),
+        interpreter_stages=int(not kernel._handle.info()["jit"]),
+        intermediate_bytes=0,
+        gathered_bytes=0,
+        normalization_bytes=0,
+        reader_bytes=sum(value.nbytes for value in compressed),
+        input_materialization_bytes=0,
+        driver_buffer_bytes=driver_bytes,
+        temporary_bytes=driver_bytes + report["input_buffer_bytes"] + report["output_chunk_buffer_bytes"],
+        tile_items=block_items,
+        maximum_reader_items=min(block_items, first.shape[0]),
+        evaluated_tiles=report["evaluated_blocks"],
+        output_copy_bytes=0,
+    )
+    return output, report
+
+
 def _evaluate_dense_compressed(lazy):
     import blosc2
 
@@ -294,7 +408,10 @@ def _evaluate_dense_compressed(lazy):
             "fp_flags": status["flags"],
             "fp_supported": status["supported"],
         }
-    return lazy.kernel._handle.evaluate_prefilter(lazy.inputs)
+    result = evaluate_prefilter_numpy(lazy.kernel, lazy.inputs)
+    if result is not None:
+        return result
+    return lazy.kernel.evaluate_sources(lazy.inputs, shape=lazy._domain, return_report=True)
 
 
 def _dense_compressed_eligible(lazy):

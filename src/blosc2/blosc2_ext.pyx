@@ -1162,6 +1162,8 @@ cdef struct portable_prefilter_worker:
 
 cdef struct portable_prefilter_state:
     const void *artifact
+    uint8_t *numpy_output
+    const uint8_t *numpy_inputs[128]
     b2nd_array_t *inputs[128]
     b2_artifact_buffer signature[128]
     uint8_t *chunks[128]
@@ -1222,12 +1224,17 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
     cdef int64_t count = min(state.block_items, state.size - origin)
     cdef int64_t block_id = origin // state.block_items
     cdef size_t written_bytes = max(count, 0) * params.output_typesize
+    cdef void *destination = params.output
     cdef fenv_t environment
     memset(&error, 0, sizeof(error))
     memset(&fp, 0, sizeof(fp))
+    if state.numpy_output != NULL and count <= 0:
+        return 1
     # Elementwise evaluation overwrites all live lanes. Only padded lanes in
     # the final physical chunk must be cleared before storing/compressing them.
-    if not params.output_is_disposable:
+    if state.numpy_output != NULL:
+        destination = state.numpy_output + origin * params.output_typesize
+    elif not params.output_is_disposable:
         # C-Blosc2 itself clears non-disposable prefilter outputs.
         worker.output_zero_fill_bytes += params.output_size
     elif written_bytes < <size_t>params.output_size:
@@ -1242,6 +1249,10 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         strcpy(worker.error.message, "Cannot isolate portable prefilter floating environment")
         return -1
     for i in range(state.ninputs):
+        if state.numpy_inputs[i] != NULL:
+            worker.bindings[i].data = state.numpy_inputs[i] + origin * worker.bindings[i].itemsize
+            worker.bindings[i].capacity = count * worker.bindings[i].itemsize
+            continue
         block_bytes = state.block_items * worker.bindings[i].itemsize
         # Allocate lazily: small chunks may use only a subset of the configured
         # compression workers. Each active worker reuses these across chunks.
@@ -1277,7 +1288,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         descriptor.output_capacity = count * params.output_typesize
         # Decoder/postfilter work must not contribute to numerical FP flags.
         rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
-                                    params.output, &descriptor, 0, &fp, &error)
+                                    destination, &descriptor, 0, &fp, &error)
     if fesetenv(&environment):
         rc = -5
         strcpy(error.message, "Cannot restore portable prefilter floating environment")
@@ -1293,7 +1304,9 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         worker.fp_flags |= fp.flags
         worker.fp_supported &= fp.supported
         worker.evaluated_blocks += 1
-    return -1 if rc else 0
+    # External destinations need no filter/compressor work. With disposable
+    # output this return value skips filters; Blosc2 emits a tiny zero-run chunk.
+    return -1 if rc else (1 if state.numpy_output != NULL else 0)
 
 
 def portable_prefilter_available():
@@ -2050,9 +2063,10 @@ cdef class PortableArtifactHandle:
         finally:
             free(views)
 
-    def evaluate_prefilter(self, inputs, out=None):
-        """Run an already-prepared portable artifact through C-Blosc2 scheduling."""
-        if not portable_prefilter_inputs_eligible(inputs):
+    def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
+                           _driver_input=None, _nthreads=None, _block_items=None):
+        """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
+        if not portable_prefilter_inputs_eligible(inputs, allow_numpy=numpy_out is not None):
             raise NotImplementedError("Inputs are not eligible for portable prefilter execution")
         signature = self.descriptor_info()
         if set(inputs) != set(signature["inputs"]):
@@ -2061,13 +2075,55 @@ cdef class PortableArtifactHandle:
             raise ValueError("Portable prefilters require context-free elementwise kernels")
         if any(value.dtype != signature["inputs"][name] for name, value in inputs.items()):
             raise TypeError("Portable prefilter input dtype disagrees with signature")
-        first = next(iter(inputs.values()))
-        block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in inputs.values())
+        first = next(value for value in inputs.values() if isinstance(value, NDArray))
+        block_items = first.blocks[0]
+        if _block_items is not None:
+            if (numpy_out is None or out is not None or _block_items <= 0
+                    or first.chunks[0] % _block_items or _block_items % block_items):
+                raise ValueError("Invalid NumPy prefilter batch layout")
+            block_items = _block_items
+        block_bytes = sum(block_items * value.dtype.itemsize for value in inputs.values()
+                          if isinstance(value, NDArray))
         threads = max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
+        if _nthreads is not None:
+            if numpy_out is None or not 1 <= _nthreads <= threads:
+                raise ValueError("Invalid NumPy prefilter thread count")
+            threads = _nthreads
+        if _chunk_range is not None:
+            if numpy_out is None or out is not None:
+                raise ValueError("Prefilter chunk ranges require a direct NumPy output")
+            begin, end = _chunk_range
+            if not 0 <= begin < end <= first.schunk.nchunks:
+                raise ValueError("Invalid prefilter chunk range")
+            threads = 1
+        if out is None and numpy_out is None:
+            numpy_out = np.empty(first.shape, dtype=self.signature_dtype(-1))
+        if numpy_out is not None:
+            if out is not None:
+                raise ValueError("Cannot specify both Blosc2 and NumPy prefilter outputs")
+            if (type(numpy_out) is not np.ndarray or numpy_out.shape != first.shape
+                    or numpy_out.dtype != self.signature_dtype(-1)):
+                raise ValueError("NumPy prefilter output must match the input shape and result dtype")
+            if (not numpy_out.flags.c_contiguous or not numpy_out.flags.aligned
+                    or not numpy_out.flags.writeable):
+                raise ValueError("NumPy prefilter output must be writable, aligned and C-contiguous")
+            if any(type(value) is np.ndarray and np.shares_memory(numpy_out, value)
+                   for value in inputs.values()):
+                raise ValueError("NumPy prefilter output must not overlap an input")
+        if _driver_input is not None:
+            if (numpy_out is None or type(_driver_input) is not np.ndarray
+                    or _driver_input.dtype != np.dtype("uint8")
+                    or not _driver_input.flags.c_contiguous
+                    or _driver_input.nbytes != first.chunks[0] * self.signature_dtype(-1).itemsize):
+                raise ValueError("Invalid shared prefilter driver buffer")
         if out is None:
-            output = blosc2.uninit(first.shape, dtype=self.signature_dtype(-1),
-                                  chunks=first.chunks, blocks=first.blocks,
-                                  cparams=blosc2.CParams(clevel=0, nthreads=threads))
+            # Only a scheduling context is needed: no full-domain placeholder
+            # container and no result chunks are stored for a NumPy sink.
+            output = blosc2.uninit(first.chunks, dtype=self.signature_dtype(-1),
+                                  chunks=first.chunks, blocks=(block_items,),
+                                  cparams=blosc2.CParams(clevel=1, nthreads=threads))
+            if _chunk_range is None:
+                _chunk_range = (0, first.schunk.nchunks)
         else:
             if (type(out) is not blosc2.NDArray or out.shape != first.shape
                     or out.dtype != self.signature_dtype(-1)
@@ -2076,7 +2132,8 @@ cdef class PortableArtifactHandle:
             if any(out is source for source in inputs.values()):
                 raise ValueError("Portable prefilter output must not alias an input")
             output = out
-        return output._execute_portable_prefilter(self, inputs, materialize=out is None)
+        return output._execute_portable_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
+                                                 driver_input=_driver_input)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -5823,34 +5880,8 @@ cdef class NDArray:
                 raise RuntimeError("Cannot restore portable chunk decoder floating environment")
         return buffer[:self.array.shape[0]]
 
-    def _portable_chunk_span(self, np.ndarray buffer, int64_t chunk,
-                             int64_t start=0, int64_t nitems=-1):
-        """Decode a block-aligned chunk span into isolated worker-owned scratch."""
-        cdef fenv_t environment
-        cdef int64_t count = min(self.array.chunkshape[0],
-                                self.array.shape[0] - chunk * self.array.chunkshape[0])
-        if self.ndim != 1 or chunk < 0 or count <= 0:
-            raise ValueError("Invalid portable chunk span")
-        if start < 0 or start >= count or nitems < -1 or nitems > count - start:
-            raise ValueError("Invalid portable chunk span bounds")
-        if start % self.array.blockshape[0]:
-            raise ValueError("Portable chunk spans must be block-aligned")
-        count = count - start if nitems == -1 else nitems
-        if count <= 0:
-            raise ValueError("Invalid portable chunk span size")
-        if (buffer.dtype != self.dtype or buffer.ndim != 1
-                or not buffer.flags.c_contiguous or not buffer.flags.writeable):
-            raise ValueError("Portable chunk scratch must match input dtype and layout")
-        if feholdexcept(&environment):
-            raise RuntimeError("Cannot isolate portable chunk decoder floating environment")
-        try:
-            self.get_1d_span_numpy(buffer, chunk, start, count, nthreads=1)
-        finally:
-            if fesetenv(&environment):
-                raise RuntimeError("Cannot restore portable chunk decoder floating environment")
-        return buffer[:count]
-
-    def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs, materialize=True):
+    def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs,
+                                    np.ndarray numpy_out=None, chunk_range=None, driver_input=None):
         cdef portable_prefilter_state state
         cdef portable_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -5859,20 +5890,29 @@ cdef class NDArray:
         cdef int i, tid, rc
         cdef int32_t decoded_bytes, encoded_bytes, block_bytes
         cdef size_t decoder_contexts = 0, input_buffer_allocations = 0, input_chunk_fetches = 0
+        cdef size_t placeholder_bytes = 0
         cdef int64_t chunk
+        cdef int64_t begin = 0, end = self.array.sc.nchunks
+        if chunk_range is not None:
+            begin, end = chunk_range
         memset(&state, 0, sizeof(state))
         memset(&parameters, 0, sizeof(parameters))
         state.artifact = kernel._handle
         state.ninputs = len(inputs)
-        state.size = self.array.shape[0]
+        state.size = numpy_out.shape[0] if numpy_out is not None else self.array.shape[0]
         state.chunk_items = self.array.chunkshape[0]
         state.block_items = self.array.blockshape[0]
         state.fp_supported = 1
+        if numpy_out is not None:
+            state.numpy_output = <uint8_t *>numpy_out.data
         # All names and source arrays stay owned by kernel/inputs until the
         # synchronous compression workers have joined and the context is freed.
         for i, (name, source) in enumerate(inputs.items()):
-            value = source
-            state.inputs[i] = value.array
+            if type(source) is np.ndarray:
+                state.numpy_inputs[i] = <const uint8_t *>(<np.ndarray>source).data
+            else:
+                value = source
+                state.inputs[i] = value.array
             state.signature[i].name = b2_artifact_name(kernel._handle, i)
             # Mapping order may differ from the artifact's signature order.
             encoded_name = name.encode("utf-8")
@@ -5882,7 +5922,15 @@ cdef class NDArray:
                     state.signature[i].dtype = b2_artifact_dtype(kernel._handle, j)
                     state.signature[i].itemsize = b2_artifact_width(kernel._handle, j)
                     break
-        data = np.empty(self.array.sc.chunksize, dtype=np.uint8)
+        data = (np.empty(self.array.sc.chunksize, dtype=np.uint8)
+                if driver_input is None else driver_input)
+        # One block offset plus one zero-run marker per byte stream. Small
+        # chunks can take Blosc2's memcpy shortcut, so retain at least 128 bytes.
+        placeholder_capacity = BLOSC2_MAX_OVERHEAD + max(
+            128, ((self.array.sc.chunksize + self.array.sc.blocksize - 1)
+                  // self.array.sc.blocksize) * (4 + 4 * self.array.sc.typesize))
+        chunk_buffer = (np.empty(placeholder_capacity, dtype=np.uint8)
+                        if numpy_out is not None else None)
         state.nworkers = cparams.nthreads
         # One compact allocation holds worker records and only the bindings
         # actually used by this signature, rather than 128 slots per worker.
@@ -5891,10 +5939,11 @@ cdef class NDArray:
         if state.workers == NULL:
             raise MemoryError()
         parameters.user_data = &state
-        # With clevel=0 C-Blosc2 keeps the prefilter's memcpy payload, but the
-        # disposable flag skips its unconditional prefilter memset. Never use
-        # this for compressed outputs: it would substitute zero-run streams.
-        parameters.output_is_disposable = cparams.clevel == 0
+        # With clevel=0 keep the memcpy payload without a prefilter memset.
+        # External NumPy output instead uses clevel=1 and disposable zero-run
+        # placeholders: the callback skips filters and writes the real sink.
+        # Never discard the payload of a caller's Blosc2 output.
+        parameters.output_is_disposable = numpy_out is not None or cparams.clevel == 0
         cparams.prefilter = portable_menudet_prefilter
         cparams.preparams = &parameters
         try:
@@ -5913,11 +5962,13 @@ cdef class NDArray:
             if self.array.sc.cctx == NULL:
                 raise MemoryError("Cannot create portable prefilter compression context")
             try:
-                for chunk in range(self.array.sc.nchunks):
+                for chunk in range(begin, end):
                     # Fetch/validate each compressed input chunk once. The
                     # synchronous update joins all workers before these shared
                     # read-only pointers advance to the next chunk.
                     for i in range(state.ninputs):
+                        if state.numpy_inputs[i] != NULL:
+                            continue
                         if state.chunk_owned[i]:
                             free(state.chunks[i])
                         state.chunks[i] = NULL
@@ -5931,12 +5982,17 @@ cdef class NDArray:
                             strcpy(state.error.message, "Portable prefilter could not read an input chunk")
                             raise_artifact_error(state.status, &state.error)
                         rc = blosc2_cbuffer_sizes(state.chunks[i], &decoded_bytes, &encoded_bytes, &block_bytes)
-                        if rc < 0 or block_bytes != state.block_items * state.signature[i].itemsize:
+                        if rc < 0 or block_bytes != state.inputs[i].blockshape[0] * state.signature[i].itemsize:
                             state.status = -5
                             state.error.native_status = rc
                             strcpy(state.error.message, "Portable prefilter input block layout mismatch")
                             raise_artifact_error(state.status, &state.error)
-                    self.schunk.update_data(chunk, data, copy=False)
+                    if numpy_out is not None:
+                        # Always releases the GIL, including single-threaded
+                        # contexts driven by independent coarse workers.
+                        placeholder_bytes += self.schunk._prefilter_data(chunk, data, chunk_buffer)
+                    else:
+                        self.schunk.update_data(chunk, data, copy=False)
                     # In the uncompressed/disposable route callback failures
                     # are captured locally rather than propagated by Blosc2.
                     for tid in range(state.nworkers):
@@ -5960,6 +6016,8 @@ cdef class NDArray:
             for tid in range(state.nworkers):
                 worker = &state.workers[tid]
                 for i in range(state.ninputs):
+                    if state.numpy_inputs[i] != NULL:
+                        continue
                     if worker.decoders[i] != NULL:
                         decoder_contexts += 1
                         blosc2_free_ctx(worker.decoders[i])
@@ -5970,17 +6028,21 @@ cdef class NDArray:
             for i in range(state.ninputs):
                 if state.chunk_owned[i]:
                     free(state.chunks[i])
-        result = self[()] if materialize else self
+        result = numpy_out if numpy_out is not None else self
         return result, {"route": "portable-prefilter", "evaluated_blocks": state.evaluated_blocks,
+                         "output_destination": "numpy" if numpy_out is not None else "blosc2",
+                         "discarded_output_bytes": placeholder_bytes,
                         "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
                          "threads": cparams.nthreads,
                          "native_decoder_contexts": decoder_contexts,
                          "input_buffer_allocations": input_buffer_allocations,
                          "input_chunk_fetches": input_chunk_fetches,
                          "output_zero_fill_bytes": state.output_zero_fill_bytes,
-                        "output_chunk_buffer_bytes": self.array.sc.chunksize,
-                        "input_buffer_bytes": cparams.nthreads * sum(
-                            source.blocks[0] * source.dtype.itemsize for source in inputs.values())}
+                         "output_chunk_buffer_bytes": (chunk_buffer.nbytes if numpy_out is not None
+                                                       else self.array.sc.chunksize),
+                         "input_buffer_bytes": cparams.nthreads * sum(
+                             state.block_items * source.dtype.itemsize for source in inputs.values()
+                             if isinstance(source, NDArray))}
 
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
@@ -6405,13 +6467,13 @@ def get_loaded_matmul_cblas_library():
     return path.decode("utf-8")
 
 
-def portable_prefilter_inputs_eligible(inputs):
+def portable_prefilter_inputs_eligible(inputs, allow_numpy=False):
     """Metadata-only gate for bounded resident 1-D portable prefilters."""
     cdef NDArray value
     if not b2_artifact_descriptor_available() or blosc2.IS_WASM or not 0 < len(inputs) <= 128:
         return False
-    first = next(iter(inputs.values()))
-    if not isinstance(first, NDArray) or first.ndim != 1 or not first.size:
+    first = next((source for source in inputs.values() if isinstance(source, NDArray)), None)
+    if first is None or first.ndim != 1 or not first.size:
         return False
     if first.chunks[0] % first.blocks[0]:
         return False
@@ -6421,6 +6483,11 @@ def portable_prefilter_inputs_eligible(inputs):
         return False
     block_bytes = 0
     for source in inputs.values():
+        if allow_numpy and type(source) is np.ndarray:
+            if (source.shape != first.shape or source.dtype.kind not in "biuf" or not source.dtype.isnative
+                    or not source.flags.c_contiguous or not source.flags.aligned):
+                return False
+            continue
         if not isinstance(source, NDArray):
             return False
         value = source

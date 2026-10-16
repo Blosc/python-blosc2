@@ -252,6 +252,79 @@ def test_integer_literal_compute_uses_prefilter(prefilter_runtime, monkeypatch, 
     assert report["input_chunk_fetches"] == x.schunk.nchunks * 2
 
 
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_prefilter_direct_numpy_sink(prefilter_runtime, monkeypatch, jit, mixed):
+    bounds = np.iinfo("int64")
+    values = np.resize(np.array([bounds.min, bounds.max, 0, 1], dtype="int64"), 1027)
+    other = values[::-1].copy()
+    x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
+    y = other if mixed else blosc2.asarray(other, chunks=x.chunks, blocks=x.blocks)
+    native = make_kernel(inputs={"x": "int64", "y": "int64"}, output="int64", jit=jit)
+    guarded = np.full(values.size + 2, 123, dtype="int64")
+    output = guarded[1:-1]
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Direct NumPy prefilter sink materialized a Blosc2 result")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        for _ in range(2):
+            result, report = native._handle.evaluate_prefilter({"y": y, "x": x}, numpy_out=output)
+            assert result is output
+            np.testing.assert_array_equal(result, values + (other - 1))
+    np.testing.assert_array_equal(guarded[[0, -1]], 123)
+    assert report["output_destination"] == "numpy"
+    assert report["output_zero_fill_bytes"] == 0
+    assert report["evaluated_blocks"] == 17
+    assert report["input_chunk_fetches"] == (5 if mixed else 10)
+    assert report["discarded_output_bytes"] < output.nbytes
+
+
+def test_prefilter_numpy_sink_contract(prefilter_runtime):
+    values = np.arange(257.0)
+    x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
+    handle = make_kernel()._handle
+    inputs = {"x": x, "y": x}
+    with pytest.raises(ValueError, match="both"):
+        handle.evaluate_prefilter(inputs, out=x, numpy_out=values)
+    with pytest.raises(ValueError, match="shape and result dtype"):
+        handle.evaluate_prefilter(inputs, numpy_out=np.empty(257, dtype="int64"))
+    with pytest.raises(ValueError, match="shape and result dtype"):
+        handle.evaluate_prefilter(inputs, numpy_out=np.empty(256))
+    for output in (np.empty(514)[::2], np.empty(257)):
+        output.flags.writeable = False
+        with pytest.raises(ValueError, match="writable, aligned and C-contiguous"):
+            handle.evaluate_prefilter(inputs, numpy_out=output)
+    with pytest.raises(ValueError, match="overlap"):
+        handle.evaluate_prefilter({"x": x, "y": values}, numpy_out=values)
+    assert not blosc2.blosc2_ext.portable_prefilter_inputs_eligible({"x": x, "y": values})
+
+
+def test_prefilter_numpy_small_chunks_and_failure_recovery(prefilter_runtime, monkeypatch):
+    values = np.arange(9.0)
+    x = blosc2.asarray(values, chunks=(4,), blocks=(2,))
+    guarded = np.full(11, 123.0)
+    output = guarded[1:-1]
+    failing = make_kernel("def k(x):\n    return x + (1 // 0)\n", {"x": "float64"})
+    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        failing._handle.evaluate_prefilter({"x": x}, numpy_out=output)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Small NumPy sink staged a Blosc2 result")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        native = make_kernel()
+        result, report = native._handle.evaluate_prefilter({"x": x, "y": x}, numpy_out=output)
+        fresh, _ = native._handle.evaluate_prefilter({"x": x, "y": x})
+    assert result is output
+    np.testing.assert_array_equal(result, values * 2 - 1)
+    np.testing.assert_array_equal(fresh, result)
+    np.testing.assert_array_equal(guarded[[0, -1]], 123)
+    assert report["output_zero_fill_bytes"] == 0
+
+
 def test_compute_prefilter_preserves_storage_options(prefilter_runtime, tmp_path):
     values = np.arange(257.0)
     x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
