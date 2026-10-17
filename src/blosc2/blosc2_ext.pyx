@@ -1514,30 +1514,71 @@ cdef void raise_graph_error(int rc, b2_graph_error *error, b2_array_report *repo
     raise exception
 
 
-def _execute_graph_host_task(uintptr_t callback, uintptr_t invocation, size_t index):
+cdef class _GraphHostInvocation:
+    cdef bint closed
+    cdef size_t active
+    cdef object waiter
+
+
+def _execute_graph_host_task(uintptr_t callback, uintptr_t invocation, size_t index,
+                             _GraphHostInvocation state):
     cdef b2_graph_task_fn task = <b2_graph_task_fn>callback
-    with nogil:
-        task(<void *>invocation,index)
+    if state.closed:
+        return
+    state.active += 1
+    try:
+        with nogil:
+            task(<void *>invocation,index)
+    finally:
+        state.active -= 1
+        if not state.active and state.closed:
+            state.waiter.set()
 
 
 cdef int graph_host_fork_join(void *host, size_t count, b2_graph_task_fn task, void *invocation) noexcept with gil:
-    from concurrent.futures import wait
-    from .resident_execution import resident_pool
+    cdef _GraphHostInvocation state = None
     futures = []
     try:
-        try:
-            for index in range(count):
-                futures.append(resident_pool().submit(_execute_graph_host_task,
-                    <uintptr_t>task,<uintptr_t>invocation,index))
-        finally:
-            if futures:
-                wait(futures)
-        for future in futures:
-            future.result()
+        from threading import Event
+        state = _GraphHostInvocation()
+        state.waiter = Event()  # Allocate join state before any job can be enqueued.
+        from .resident_execution import resident_pool
+        for index in range(count - 1):
+            futures.append(resident_pool().submit(_execute_graph_host_task,
+                <uintptr_t>task,<uintptr_t>invocation,index,state))
+        # The synchronous caller is a worker too. This removes one pool
+        # submission and avoids idling it while short native tasks run.
+        with nogil:
+            task(invocation,count - 1)
     except BaseException as error:
+        if state is not None:
+            state.closed = True
         (<object>host).append(error)
-        return 1
-    return 0
+    finally:
+        # result() is an inexpensive join when caller work let the future finish.
+        # Join every started task even after submission/worker failures or an
+        # interrupted wait: native invocation pointers must not outlive this call.
+        for future in futures:
+            while True:
+                try:
+                    future.result()
+                    break
+                except BaseException as error:
+                    state.closed = True
+                    (<object>host).append(error)
+                    if future.done():
+                        break
+        # submit() can enqueue work and THEN fail while starting a thread. Such
+        # a task has no returned Future. Close its gate before freeing native
+        # state; join any native calls already entered, and let late jobs skip.
+        if state is not None:
+            state.closed = True
+            while state.active:
+                try:
+                    state.waiter.wait()
+                except BaseException as error:
+                    (<object>host).append(error)
+    return 1 if <object>host else 0
 
 
 def native_graph_output_available():

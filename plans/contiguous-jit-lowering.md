@@ -1,5 +1,9 @@
 # Contiguous JIT lowering: first implementation pass
 
+Follow-up: [no-jit-and-small-math.md](no-jit-and-small-math.md) records the new
+bounded vector interpreter and small-math scheduling results. The no-JIT and
+small-workload limitations below describe this earlier pass.
+
 This pass targets regular contiguous numerical maps, not strided-store tuning or
 unchecked numerical transformations. Explicit `jit=False` still means no JIT;
 the large no-JIT arithmetic gap is not fixed by secretly compiling that mode.

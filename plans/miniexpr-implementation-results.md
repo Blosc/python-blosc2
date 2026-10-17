@@ -1,5 +1,9 @@
 # Native execution and NumExpr-removal evaluation
 
+Latest follow-up: [no-jit-and-small-math.md](no-jit-and-small-math.md) substantially
+reduces the interpreter-only gap and improves small transcendental scheduling.
+The original no-JIT timings and release tradeoffs below are historical snapshots.
+
 Follow-up contiguous-kernel JIT lowering and its measurements are tracked in
 [contiguous-jit-lowering.md](contiguous-jit-lowering.md). That pass removes more
 per-operation interpreter callbacks and the chunk path's forced no-JIT policy;

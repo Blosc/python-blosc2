@@ -166,6 +166,11 @@ usual evaluation policies.
     described below. Depending on the expression, the non-JIT route can be the
     miniexpr interpreter or another existing compute engine.
 
+    Native interpretation can use bounded vector arithmetic primitives already
+    compiled into miniexpr. This does not generate or compile code at runtime.
+    Unsupported or checked recipes retain scalar interpretation, preserving
+    their validation, masking and error behavior.
+
 ``jit_backend=None`` (default)
     Use the default backend: TCC on supported native targets. Under
     WebAssembly/Pyodide, eligible floating-point DSL kernels prefer the JavaScript
