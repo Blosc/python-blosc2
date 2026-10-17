@@ -1,8 +1,36 @@
 # Remove NumExpr from Python-Blosc2
 
-Status: proposal for later consideration; not an implementation authorization.
+Status: runtime removal implemented on `improved-miniexpr`; performance and
+platform qualification remain release decision points. See
+[miniexpr-implementation-results.md](miniexpr-implementation-results.md).
+
+### Implemented removal
+
+- Removed the runtime import, required dependency, NumExpr program cache,
+  initialization/thread coupling and version diagnostics.
+- Internal chunk evaluation now selects native graph execution or approved
+  NumPy evaluation before execution; numerical failures are not replayed.
+- Native interpreter admission no longer requires JIT. Native destination
+  descriptors and host task partitioning are integrated into Python-Blosc2.
+- Complex construction can fill an existing NumPy complex destination directly;
+  unsupported operations retain explicit NumPy semantics rather than NumExpr.
+- Compatibility keyword spellings remain validated, but `optimization` does not
+  reproduce NumExpr algebraic rewrites. Nullable `numexpr=None` attributes and
+  the legacy `ne_evaluate` helper name remain non-executing compatibility surfaces.
+- Added an isolated subprocess that rejects NumExpr imports and qualifies
+  resident, compressed, complex, prepared and repeated evaluation. Full-suite
+  absence qualification is performed with a NumExpr import blocker as well.
+
+Functional independence is not universal performance parity: genuine no-JIT
+arithmetic is substantially slower than the previous NumExpr fallback. Windows
+and remote exact-revision evidence are also not yet qualified. These must remain
+explicit when deciding whether to release the removal.
 
 ### Allocation-policy prerequisite implemented
+
+This subsection records the earlier prerequisite. Native destination descriptors
+now replace the resident NumPy layout fallback for admitted numerical graphs;
+unsupported operations still have explicit NumPy fallbacks.
 
 `evaluate()` now consumes `order` as a Blosc2 allocation policy instead of
 forwarding it in NumExpr options. Explicit `order="C"` therefore no longer blocks

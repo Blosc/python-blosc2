@@ -1,5 +1,12 @@
 # NumPy-input / explicit-NumPy-output evaluate parity
 
+Current implementation status: the later `improved-miniexpr` work removes
+NumExpr's runtime role and adds native strided destinations, host executors and
+safe promoted-integer parallelism. See
+[miniexpr-implementation-results.md](miniexpr-implementation-results.md) for
+current results and the significant interpreter-only performance limitation.
+The initial timings and NumExpr-backed fallback notes below are historical.
+
 Scope: compare the public `numexpr.evaluate()` and `blosc2.evaluate()` APIs with
 resident NumPy operands and an explicit NumPy `out`. No compression or fresh
 full-result allocation is intentionally included in the performance comparison.

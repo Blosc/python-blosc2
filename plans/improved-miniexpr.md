@@ -1,7 +1,62 @@
 # A reusable native execution layer for miniexpr
 
-Status: implementation proposal for review. This document does not authorize
-implementation or native API changes.
+Status: core implementation completed on the `improved-miniexpr` branches;
+release qualification and remaining performance work are described below.
+
+## Implementation outcome
+
+Native changes are in `../miniexpr`:
+
+- `7d8d5e1`: versioned writable destinations, checked bounds/alignment/injectivity,
+  bounded scatter, serial reduction stores, ordinary/source-backed graph outputs,
+  final conversions and staged final destinations. Old contiguous APIs remain.
+- `f9ea92c`: conservative native-IR partition capabilities and a synchronous host
+  fork/join API with task ownership, preflight, deterministic status aggregation,
+  workspace admission and serial fallback.
+- `a3aba8c`: destination-aware axis partitioning/traversal, bounded automatic
+  executor tiles, and direct identity copies (including matching dense F/reversed
+  layouts) without interpreter or JIT kernel execution.
+- `92caba9`: safe integer-input real-math/true-division partitioning, keeping
+  checked casts, integer division/power and scalar-only checked subtrees serial.
+
+Python-Blosc2 binds destination allocation bounds, including buffer-backed NumPy
+arrays, and supplies a host adapter over its existing worker pool. Native graph
+maps now use miniexpr's safety metadata and partitioning instead of Python AST
+proofs/partitioning. Both JIT and interpreter graph dispatch are supported.
+Source-backed descriptor outputs use bounded native readers. Existing fused
+compression-prefilter execution remains caller-driven.
+
+NumExpr's runtime import, calls, program cache, thread setup and required package
+dependency have been removed. The old `ne_evaluate` helper name and nullable
+`blosc2.numexpr`/`lazyexpr.numexpr` attributes remain compatibility spellings only;
+they do not import or select NumExpr. Comparison benchmarks still use NumExpr
+as an optional external reference. See `native-execution.md` in miniexpr for the
+public C contract and `miniexpr-implementation-results.md` here for qualification.
+
+### Deliberate limits and remaining work
+
+This does **not** mean every aspiration in the original plan below is complete:
+
+- The generic executor handles resident maps, not concurrent storage callbacks.
+  Existing reader contracts are serial; compression hosts retain outer ownership.
+- C-Blosc2's available general-job launcher is private, not a public embedding
+  contract. No miniexpr dependency on that private interface was introduced.
+  Python-Blosc2 currently supplies the executor using its existing host pool.
+- Existing automatic parallel-reduction policy and non-graph portable-DSL safety
+  proofs still have Python adapters. Native graph maps no longer depend on those
+  proofs; strict native reductions retain their serial numerical contract.
+- Complex/string operations outside native numerical coverage use NumPy.
+- Actual Windows execution/CI and remote exact-revision qualification are not
+  established by local macOS/WASM tests. No evidence gate has been relaxed.
+- Most importantly, genuine interpreter-only arithmetic is much slower than
+  NumExpr in local measurements (approximately 30–90x for sampled 8M real maps).
+  The portable interpreter still evaluates scalar expression trees; a profiled
+  vector/bytecode execution project is needed before claiming no-JIT performance
+  parity. Native identity copies are fast independently of JIT.
+
+The functional removal and reusable C execution layer are available for evaluation.
+The interpreter regression is a release decision point, not hidden behind a
+NumExpr fallback or a claim that all performance exit gates have passed.
 
 ## 1. Objective
 
