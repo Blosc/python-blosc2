@@ -1286,11 +1286,9 @@ def set_nthreads(nthreads: int) -> int:
     Notes
     -----
     The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
-    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set
-    ``NUMEXPR_NUM_THREADS`` (e.g., ``export NUMEXPR_NUM_THREADS=1``) as well since
-    numexpr is used under the hood when performing some operations.  Note that
-    this function only sets the number of threads used by Blosc, not the number
-    of threads used by numexpr.
+    variable (e.g., ``export BLOSC_NTHREADS=1``). Expression execution uses native
+    miniexpr scheduling or explicit NumPy fallbacks; NumExpr thread settings do
+    not affect Blosc2.
 
     The maximum number of threads for Blosc is :math:`2^{31} - 1`. In some
     cases, Blosc gets better results if you set the number of threads
@@ -1511,9 +1509,7 @@ def print_versions():
         print(f"  {clib}: {clib_versions[clib]}")
     print(f"NumPy version: {np.__version__}")
     if not blosc2.IS_WASM:
-        print(
-            f"numexpr version: {blosc2.numexpr.__version__ if blosc2.numexpr is not None else 'unavailable'}"
-        )
+        print("expression engines: miniexpr (interpreter/JIT), NumPy fallback")
     import httpx
 
     print(f"httpx version: {httpx.__version__}")

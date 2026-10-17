@@ -289,12 +289,12 @@ constructors = [
 constructors += ["reshape"]
 
 
-def _complex_from_parts(real, imag):
+def _complex_from_parts(real, imag, *, out=None):
     """NumExpr's two-real-array complex constructor, without inf * 1j artifacts."""
     real, imag = np.broadcast_arrays(real, imag)
     if np.iscomplexobj(real) or np.iscomplexobj(imag):
         raise TypeError("complex() real and imaginary parts must be real")
-    result = np.empty(real.shape, dtype="complex128")
+    result = np.empty(real.shape, dtype="complex128") if out is None else out
     result.real = real
     result.imag = imag
     return result

@@ -113,20 +113,19 @@ def test_order_with_nonbroadcastable_reduction_inputs():
 
 
 @pytest.mark.parametrize("mode", ["full", "safe"])
-def test_disable_cache_bypasses_resident_preparation(mode, monkeypatch, numexpr):
+def test_disable_cache_bypasses_resident_preparation(mode, monkeypatch):
     import importlib
 
     module = importlib.import_module("blosc2.lazyexpr")
     module._evaluate_recipe_cache.clear()
-    module._resident_numexpr_program.cache_clear()
-    original = module._resident_numexpr_program.__wrapped__
+    original = module.lazyexpr
     calls = []
 
-    def prepare(*args):
+    def prepare(*args, **kwargs):
         calls.append(args)
-        return original(*args)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(module._resident_numexpr_program, "__wrapped__", prepare)
+    monkeypatch.setattr(module, "lazyexpr", prepare)
     x = np.arange(17.0)
     output = np.empty_like(x)
     with blosc2.expression_evaluation(mode):
@@ -134,7 +133,6 @@ def test_disable_cache_bypasses_resident_preparation(mode, monkeypatch, numexpr)
             assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=output, disable_cache=True) is output
     assert len(calls) == 2
     assert not module._evaluate_recipe_cache
-    assert module._resident_numexpr_program.cache_info().currsize == 0
     np.testing.assert_array_equal(output, x + 1)
 
 
@@ -237,14 +235,13 @@ def test_root_math_call_is_not_a_native_reduction(expression):
     assert not reduction
 
 
-def test_resident_compatibility_program_rebinds_without_retaining_arrays(numexpr):
+def test_numpy_fallback_rebinds_without_retaining_arrays():
     import gc
     import importlib
     import weakref
     from concurrent.futures import ThreadPoolExecutor
 
     module = importlib.import_module("blosc2.lazyexpr")
-    module._resident_numexpr_program.cache_clear()
 
     def run(index):
         x = np.full(257, index + 0.5)
@@ -260,7 +257,7 @@ def test_resident_compatibility_program_rebinds_without_retaining_arrays(numexpr
     with ThreadPoolExecutor(max_workers=4) as pool:
         references = list(pool.map(run, range(12)))
     gc.collect()
-    assert module._resident_numexpr_program.cache_info().currsize
+    assert module._evaluate_recipe_cache
     assert all(reference() is None for group in references for reference in group)
 
 

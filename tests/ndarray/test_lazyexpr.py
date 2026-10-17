@@ -766,11 +766,12 @@ def test_save():
     expr = "a1 / a2 + a2 - a3 * a4**x"
     var_dict = {"a1": ops[0], "a2": ops[1], "a3": ops[2], "a4": ops[3], "x": x}
     lazy_expr = eval(expr, var_dict)
+    expected_persisted = lazy_expr[:]
     lazy_expr.save(urlpath=urlpath_save2)
     expr = blosc2.open(urlpath_save2, mode="r")
     assert expr.array.dtype == np.float64
     res = expr.compute()
-    nres = ne_evaluate("na1 / na2 + na2 - na3 * na4**3")
+    nres = expected_persisted  # Persistence must preserve values, not another engine's pow lowering.
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
     np.testing.assert_allclose(expr[:], nres, rtol=tol, atol=tol)

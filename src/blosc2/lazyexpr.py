@@ -90,10 +90,7 @@ from .utils import (
     try_miniexpr,
 )
 
-numexpr = blosc2.numexpr
-
-global safe_blosc2_globals
-safe_blosc2_globals = {}
+numexpr = None  # Compatibility placeholder; no runtime import or backend selection.
 
 
 def _int64_datetime_operands(local_dict):
@@ -149,171 +146,75 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
         return res
 
 
-def ne_evaluate(expression, local_dict=None, **kwargs):  # noqa: C901
-    """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
-    global safe_numpy_globals
-    if local_dict is None:
-        local_dict = {}
-    if evaluation_mode() == "safe":
-        graph = parse_expression(expression)
-        # Only explicit operand names may be discovered; no callable namespace.
-        missing = graph.names - local_dict.keys()
-        if missing:
-            _depth = kwargs.get("_frame_depth", 1)
-            frame = sys._getframe(_depth)
-            local_dict = dict(local_dict)
-            for name in missing:
-                if name in frame.f_locals:
-                    local_dict[name] = frame.f_locals[name]
-                elif name in frame.f_globals:
-                    local_dict[name] = frame.f_globals[name]
-        validate_operands(local_dict)
-        expression = graph.text
-        kwargs.pop("_frame_depth", None)
-        if not blosc2.IS_WASM and numexpr is not None:
-            error = numexpr.validate(expression, local_dict=local_dict, global_dict={})
-            if error is None:
-                return numexpr.evaluate(expression, local_dict=local_dict, global_dict={}, **kwargs)
-        result = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
-        if "out" in kwargs:
-            kwargs["out"][...] = result
-            return kwargs["out"]
-        return result
-    # Get local vars dict from the stack frame
-    _frame_depth = kwargs.pop("_frame_depth", 1)
-    local_dict |= {
-        k: v
-        for k, v in dict(sys._getframe(_frame_depth).f_locals).items()
-        if (
-            (hasattr(v, "shape") or np.isscalar(v))
-            and
-            # Do not overwrite the local_dict with the expression variables
-            not (k in local_dict or k in ("_where_x", "_where_y"))
-        )
-    }
-    if blosc2.IS_WASM or numexpr is None:
-        populate_safe_numpy_globals(expression)
-        if "out" in kwargs:
-            out = kwargs.pop("out")
-            out[...] = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
-            return out
-        res = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
-        return np.asarray(res) if not hasattr(res, "shape") else res
-    try:
-        return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
-    except ValueError as e:
-        msg = e.args[0] if e.args else ""
-        if msg == "NumExpr 2 does not support Unicode as a dtype.":
-            pass
-        elif msg.startswith(("unknown type datetime64", "unknown type timedelta64")):
-            int_dict = _int64_datetime_operands(local_dict)
-            if int_dict is not None:
-                with contextlib.suppress(Exception):
-                    result = numexpr.evaluate(expression, local_dict=int_dict, **kwargs)
-                    if result.dtype == np.bool_:
-                        return result
-            # Only comparisons are exact as raw int64 counts; arithmetic
-            # (datetime64 - datetime64 -> timedelta64) needs NumPy's own type
-            # rules, so let it reach the fallback below.
-        else:
-            raise  # unsafe expression
-    except Exception:
-        pass
-    # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
-    # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp,
-    # startswith, matmul) that are implemented incompletely in numexpr/miniexpr or not implemented at all
-    global safe_blosc2_globals
-    if len(safe_blosc2_globals) == 0:
-        # First eval call, fill blosc2_safe_globals
-        safe_blosc2_globals = {"blosc2": blosc2}
-        # Add all first-level blosc2 functions
-        safe_blosc2_globals.update(
-            {
-                name: getattr(blosc2, name)
-                for name in dir(blosc2)
-                if callable(getattr(blosc2, name)) and not name.startswith("_")
-            }
-        )
-        # Expression strings can carry non-finite float literals ("nan",
-        # "inf" — the repr of such scalars, or typed by the user); numexpr
-        # has no such constants, so this python-eval fallback must.
-        safe_blosc2_globals.update({"nan": math.nan, "inf": math.inf})
-    res = evaluate_expression(expression, safe_blosc2_globals, local_dict)
-    if "out" in kwargs:
-        out = kwargs.pop("out")
-        out[...] = res  # will handle calc/decomp if res is lazyarray
-        return out
-    return res[()] if isinstance(res, blosc2.Operand) else res
+def ne_evaluate(expression, local_dict=None, **kwargs):
+    """Legacy internal name for native/NumPy chunk evaluation; no NumExpr usage."""
+    return evaluate_chunk(expression, local_dict, **kwargs)
 
 
-@lru_cache(maxsize=128)
-def _resident_numexpr_program(expression, signature, options):
-    """Cache an unbound compatibility program, never NumExpr's last-array state."""
-    options = dict(options)
-    sanitize = options.pop("sanitize", None)
-    context = numexpr.necompiler.getContext(options)
-    _, uses_vml = numexpr.necompiler.getExprNames(expression, context, sanitize=sanitize)
-    program = numexpr.NumExpr(expression, signature=signature, sanitize=sanitize, **options)
-    # NumExpr programs reuse internal buffers, especially for byte strings.
-    # Do not share one mutable program concurrently across Python callers.
-    return program, uses_vml, threading.Lock()
+def evaluate_chunk(expression, local_dict=None, **kwargs):
+    """Evaluate an invocation-local chunk with native numerical or NumPy semantics.
 
-
-def _resident_numexpr_output(expr, item, kwargs):
-    """Avoid chunk temporaries for resident expressions lacking a native route.
-
-    This is the existing optional NumExpr compatibility backend, not native
-    execution. Preparation failures may decline; execution failures never replay.
+    Native admission is metadata-only. Unsupported signatures decline before
+    execution; runtime failures are never replayed through NumPy.
     """
-    output = kwargs.get("_output")
+    from .native_graph import _native_first_syntax, lower_native_graph
+
+    operands = {} if local_dict is None else dict(local_dict)
+    depth = kwargs.pop("_frame_depth", 1)
+    graph = parse_expression(expression)
+    if graph.names - operands.keys():
+        frame = sys._getframe(depth + 1)
+        try:
+            for name in graph.names - operands.keys():
+                if name in frame.f_locals:
+                    operands[name] = frame.f_locals[name]
+                elif name in frame.f_globals:
+                    operands[name] = frame.f_globals[name]
+        finally:
+            del frame
+    validate_operands(operands)
+    output = kwargs.pop("out", None)
+    validate_evaluate_options(kwargs)
+    native = None
     if (
-        numexpr is None
-        or blosc2.IS_WASM
-        or type(output) is not np.ndarray
-        or type(item) is not tuple
-        or item
-        or any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
-        or kwargs.get("jit_backend") is not None
-        or kwargs.get("fp_accuracy") is not None
-        or not expr.operands
-        or any(type(value) is not np.ndarray for value in expr.operands.values())
+        operands
+        and _native_first_syntax(expression)
+        and all(type(value) is np.ndarray and value.dtype.kind in "biuf" for value in operands.values())
+        and not kwargs.get("disable_cache")
+        and not (output is not None and any(np.shares_memory(output, value) for value in operands.values()))
     ):
-        return None
-    options = dict(kwargs.get("_ne_args") or {})
-    if options.keys() - {"order", "casting", "optimization", "truediv", "sanitize", "disable_cache"}:
-        return None
-    try:
-        parse_expression(expr.expression)
-        signature = tuple(
-            (name, numexpr.necompiler.getType(value)) for name, value in sorted(expr.operands.items())
+        stub = LazyExpr(None)
+        stub.expression, stub.operands = expression, operands
+        try:
+            native = lower_native_graph(stub, jit=False, allow_output=True)
+        except (NotImplementedError, ValueError, TypeError):
+            native = None
+        except blosc2.PortableArtifactError as error:
+            if error.status not in {"invalid_signature", "unsupported"}:
+                raise
+    if native is not None:
+        plan, arrays, _ = native
+        schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in arrays.items()})
+        info = schedule.info()
+        direct = (
+            output is not None
+            and type(output) is np.ndarray
+            and output.shape == info["shape"]
+            and output.dtype == info["dtype"]
+            and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
         )
-        compile_options = tuple(
-            sorted(
-                (key, value)
-                for key, value in options.items()
-                if key in {"optimization", "truediv", "sanitize"}
-            )
-        )
-        prepare = (
-            _resident_numexpr_program.__wrapped__
-            if options.get("disable_cache")
-            else _resident_numexpr_program
-        )
-        program, uses_vml, lock = prepare(expr.expression, signature, compile_options)
-    except (exceptions.UnsafeDeserializationError, TypeError, ValueError, NotImplementedError):
-        return None
-    except RuntimeError as error:
-        if str(error) != "invalid program: reduction operations must occur last":
-            raise
-        return None  # NumExpr cannot prepare nested reductions; use the existing evaluator.
-    with lock:
-        return program(
-            *(expr.operands[name] for name in program.input_names),
-            out=output,
-            order=options.get("order", "K"),
-            casting=options.get("casting", "same_kind"),
-            ex_uses_vml=uses_vml,
-        )
+        result, _ = schedule.execute(arrays, out=output) if direct else schedule.execute(arrays)
+    else:
+        # Native chunk execution collects FP status without emitting Python
+        # warnings by default. Preserve that policy in the explicit fallback.
+        with np.errstate(all="ignore"):
+            result = _numpy_eval_datetime_aware(expression, safe_numpy_globals, operands)
+    result = np.asarray(result)
+    if output is not None:
+        if result is not output:
+            np.copyto(output, result, casting=kwargs.get("casting", "same_kind"))
+        return output
+    return result
 
 
 def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
@@ -323,13 +224,13 @@ def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _
     if where is not None and len(where) == 2:
         # x = chunk_operands["_where_x"]
         # y = chunk_operands["_where_y"]
-        # numexpr is a bit faster than np.where, and we can fuse operations in this case
+        # Preserve a fused native select when the expression is supported.
         new_expr = f"where({expression}, _where_x, _where_y)"
         return ne_evaluate(new_expr, chunk_operands, **ne_args), None
 
     # If the expression is a simple operand reference (e.g. "key", "o0"),
     # grab it directly from chunk_operands instead of calling ne_evaluate.
-    # This avoids ~150 µs of numexpr parsing/setup overhead per chunk.
+    # This avoids unnecessary expression preparation for identity chunks.
     _expr = expression.strip("()")
     if _expr in chunk_operands:
         result = chunk_operands[_expr]
@@ -3482,7 +3383,7 @@ def chunked_eval(  # noqa: C901
         _output: blosc2.Array, optional
             The output array to store the result.
         _ne_args: dict, optional
-            Additional arguments to be passed to `numexpr.evaluate()` function.
+            Compatibility expression options, validated independently of backend.
         _where_args: dict, optional
             Additional arguments for conditional evaluation.
     """
@@ -4773,6 +4674,26 @@ class LazyExpr(LazyArray):
     def _compute_expr(self, item, kwargs):  # noqa: C901
         output = kwargs.get("_output")
         if (
+            type(output) is np.ndarray
+            and output.dtype.kind == "c"
+            and type(item) is tuple
+            and not item
+            and not any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
+        ):
+            root = parse_expression(self.expression).root
+            if (
+                root[0] == "call"
+                and root[1] == "complex"
+                and not root[3]
+                and all(node[0] == "name" for node in root[2])
+            ):
+                casting = (kwargs.get("_ne_args") or {}).get("casting", "same_kind")
+                if not np.can_cast(np.dtype("complex128"), output.dtype, casting=casting):
+                    raise TypeError("Cannot cast complex construction into destination")
+                return safe_numpy_globals["complex"](
+                    *(self.operands[node[1]] for node in root[2]), out=output
+                )
+        if (
             (
                 (type(output) is np.ndarray and not output.flags.c_contiguous)
                 or any(type(value) is np.ndarray and value.size == 0 for value in self.operands.values())
@@ -4791,9 +4712,6 @@ class LazyExpr(LazyArray):
                 return np.asarray(result)
             np.copyto(output, result, casting=(kwargs.get("_ne_args") or {}).get("casting", "same_kind"))
             return output
-        resident = _resident_numexpr_output(self, item, kwargs)
-        if resident is not None:
-            return resident
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
@@ -5738,7 +5656,7 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             _out = _numpy_eval_datetime_aware(expression, _globals, ops)
     except RuntimeWarning:
         # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
-        # with synthetic operands (1's). Let's try with numexpr, which is not so picky
+        # with synthetic operands (1's). Try the native/NumPy chunk evaluator.
         # about this.
         ops = npops if blosc2.IS_WASM else ops
         _out = ne_evaluate(expression, local_dict=ops)
@@ -5920,8 +5838,8 @@ def lazyexpr(
     Parameters
     ----------
     expression: str or bytes or LazyExpr or NDArray
-        The expression to evaluate. This can be any valid expression that numexpr
-        can ingest. If a LazyExpr is passed, the expression will be
+        The expression to evaluate, using supported numerical and array operations.
+        If a LazyExpr is passed, the expression will be
         updated with the new operands.
     operands: dict[blosc2.Array], optional
         The dictionary with operands. Supported values are Python scalars,
@@ -5943,7 +5861,7 @@ def lazyexpr(
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
     ne_args: dict, optional
-        Additional arguments to be passed to `numexpr.evaluate()` function.
+        Compatibility expression options, validated independently of backend.
     _frame_depth: int, optional
         The depth of the frame to use when looking for operands in the expression.
         The default value is 2.
@@ -6140,7 +6058,7 @@ def open_lazyarray(array):
     return new_expr
 
 
-# Mimim numexpr's evaluate function
+# NumExpr-style convenience interface with backend-independent contracts.
 @dataclass(frozen=True, slots=True)
 class _EvaluateRecipe:
     """Operand-free construction metadata; each invocation owns a new LazyExpr."""
@@ -6340,6 +6258,12 @@ def _evaluate_ordered_output(expr, order):
     return np.empty(expr.shape, dtype=expr.dtype, order="F" if fortran else "C")
 
 
+def _array_owner(value):
+    while getattr(value, "base", None) is not None:
+        value = value.base
+    return value
+
+
 @remember_evaluation
 def evaluate(
     ex: str,
@@ -6351,10 +6275,10 @@ def evaluate(
     """
     Evaluate a string expression using the Blosc2 compute engine.
 
-    This is a drop-in replacement for `numexpr.evaluate()`, but using the
-    Blosc2 compute engine.  This allows for:
+    This provides a NumExpr-style expression interface using native miniexpr
+    execution and explicit NumPy fallbacks, without importing NumExpr. It allows:
 
-    1) Use more functionality (e.g. reductions) than numexpr.
+    1) Use additional NumPy/Blosc2 expression functionality.
     2) Follow casting rules of NumPy more closely.
     3) Use both NumPy arrays and Blosc2 NDArrays in the same expression.
 
@@ -6387,14 +6311,16 @@ def evaluate(
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     kwargs: Any, optional
-        Additional arguments to be passed to `numexpr.evaluate()` function.
+        Backend-independent compatibility expression options. ``optimization``
+        is accepted as a hint; no NumExpr algebraic transformations are applied.
         ``order`` controls newly allocated NumPy output: ``"C"`` or ``"F"``
         requests contiguous row-major or column-major storage, ``"A"`` follows
         Fortran-contiguous operands when possible, and ``"K"`` (default)
         follows operand iteration order. An explicit output retains its layout
         and identity, including when it is empty. Blosc2 consumes ``order`` as
         an allocation policy; it is not forwarded to NumExpr. Resident strided
-        outputs currently use a NumPy fallback when native execution is ineligible.
+        outputs use native destination descriptors when supported. Unsupported
+        operations use an explicit NumPy fallback.
 
     Returns
     -------
@@ -6421,6 +6347,10 @@ def evaluate(
     validate_evaluate_options(kwargs)
     if kwargs.get("sanitize") is True:
         parse_expression(ex)
+    # Compatibility hints have no backend-specific numerical transformation.
+    # Consume them here rather than blocking native/JIT admission accidentally.
+    for name in ("optimization", "truediv", "sanitize"):
+        kwargs.pop(name, None)
     order = kwargs.pop("order", "K")
     order = order.upper()
     lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
@@ -6458,7 +6388,10 @@ def evaluate(
             # Snapshot overlapping inputs before any writes, including shifted
             # views. NumExpr's copy opcode itself is not overlap-safe.
             lexpr.operands = {
-                name: value.copy() if type(value) is np.ndarray and np.shares_memory(value, out) else value
+                name: value.copy()
+                if type(value) is np.ndarray
+                and (_array_owner(value) is _array_owner(out) or np.shares_memory(value, out))
+                else value
                 for name, value in lexpr.operands.items()
             }
         lexpr._output = out

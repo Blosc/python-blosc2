@@ -106,7 +106,7 @@ def test_evaluate_without_options_preserves_native_eligibility(monkeypatch):
     np.testing.assert_array_equal(
         blosc2.evaluate("x + 1", local_dict={"x": values}, optimization="moderate"), values + 1
     )
-    assert observed[-1] == {"optimization": "moderate"}
+    assert observed == [None]  # Compatibility hints no longer select another engine.
 
 
 @pytest.mark.parametrize(("size", "chunks", "blocks"), [(100, 9, 1), (257, 128, 32)])

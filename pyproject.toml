@@ -35,7 +35,6 @@ dependencies = [
     "numpy>=1.26",
     "ndindex",
     "msgpack",
-    "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "pydantic",
     "httpx[http2]",
     "rich",

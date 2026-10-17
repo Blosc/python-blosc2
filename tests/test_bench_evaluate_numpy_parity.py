@@ -65,5 +65,5 @@ def test_benchmark_cli_qualifies_explicit_outputs(benchmark, monkeypatch, tmp_pa
     assert len(results) == 2
     assert all(result["status"] == "qualified" for result in results)
     assert all(result["numexpr"] > 0 and result["blosc2"] > 0 for result in results)
-    assert results[-1]["route"] == "numexpr-fallback"
+    assert results[-1]["route"] == "numpy/eager"
     assert "shared warmed NumPy out" in capsys.readouterr().out

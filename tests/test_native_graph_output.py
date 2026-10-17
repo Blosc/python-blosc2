@@ -186,3 +186,17 @@ def test_native_staged_final_conversion_into_fortran_output():
     result = plan.evaluate({"x": x}, out=output)
     assert result is output
     np.testing.assert_array_equal(result, (x - x.sum()).astype("float32"))
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["sin(x) + cos(x)", "sqrt(x * x)", "x / (x + 1)", "where(x > 0.5, x + 1, x - 1)", "fmod(x, x + 0.1)"],
+)
+def test_promoted_integer_math_is_native_partitionable(expression):
+    x = np.arange(1, 600_004, dtype="int64") % 97
+    plan = blosc2.NativeGraph.from_expression(expression, {"x": x.dtype}, jit=True)
+    assert plan.info()["partitionable"]
+    expected = plan.evaluate({"x": x})
+    result, report = plan.evaluate({"x": x}, workers=4, return_report=True)
+    np.testing.assert_array_equal(result, expected)
+    assert report["tasks"] == 4

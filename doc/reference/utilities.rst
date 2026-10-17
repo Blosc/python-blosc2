@@ -62,22 +62,23 @@ and empty inputs. Unknown keywords and invalid values raise an error before
 destination writes.
 
 * ``order`` and ``casting`` describe destination allocation/conversion.
-* ``optimization`` accepts ``none``, ``moderate`` and ``aggressive``. It is a
-  compatibility-backend optimization request, not a guarantee of identical
-  compiler transformations across engines. The NumPy fallback evaluates the
-  approved expression without NumExpr algebraic rewrites.
+* ``optimization`` accepts ``none``, ``moderate`` and ``aggressive`` as compatibility
+  hints. Neither native execution nor the NumPy fallback reproduces NumExpr's
+  algebraic rewrites; NumPy-style numerical semantics remain authoritative.
 * ``truediv`` accepts booleans or ``"auto"``; ordinary division retains Python 3 /
   NumPy semantics. Use ``//`` to request floor division explicitly.
 * ``sanitize`` accepts a boolean or ``None``. ``True`` validates the approved
   expression grammar; ``False`` never disables safe-mode validation.
-* ``disable_cache=True`` bypasses evaluate recipe reuse and resident compatibility
-  program reuse. It does not flush shared parser caches or global native caches.
+* ``disable_cache=True`` bypasses evaluate recipe reuse and native chunk
+  preparation. It does not flush shared parser caches or global native caches.
 
 Overlapping NumPy inputs are snapshotted before writing an explicit output;
 this may require temporary memory proportional to the overlapping operands.
 Empty sums/products use NumPy identities, and empty extrema raise without an
-explicit identity. Strided resident outputs use NumPy when native execution
-cannot bind their layout.
+explicit identity. Native output descriptors support validated Fortran, transposed,
+stepped and reversed destinations with bounded scratch. Unsupported operations
+retain explicit NumPy fallbacks. NumExpr is not a runtime dependency;
+``blosc2.numexpr`` remains a compatibility placeholder equal to ``None``.
 
 Decorators
 ----------

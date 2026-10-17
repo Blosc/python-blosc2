@@ -27,12 +27,6 @@ Flag for WebAssembly platform.
 """
 
 numexpr = None
-if not IS_WASM:
-    try:
-        import numexpr
-    except ModuleNotFoundError as error:
-        if error.name != "numexpr":
-            raise
 
 from .version import __array_api_version__, __version__
 
@@ -520,14 +514,6 @@ else:
     # Experiments say that, when using a large number of threads, it is better to not use them all
     if nthreads > 16:
         nthreads -= nthreads // 8
-    # Only call set_num_threads if within NUMEXPR_MAX_THREADS limit to avoid warning
-    numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
-    numexpr_max: int | None = None
-    if numexpr_max_env is not None:
-        with contextlib.suppress(ValueError):
-            numexpr_max = int(numexpr_max_env)
-    if numexpr is not None and (numexpr_max is None or nthreads <= numexpr_max):
-        numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
