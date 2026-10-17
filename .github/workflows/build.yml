@@ -20,6 +20,9 @@ jobs:
         python-version: ["3.12"]
         numpy-version: [null]
         include:
+          - os: ubuntu-24.04-arm
+            python-version: "3.12"
+            numpy-version: null
           - os: ubuntu-latest
             python-version: "3.12"
             numpy-version: "1.26"
