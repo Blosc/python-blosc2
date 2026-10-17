@@ -55,8 +55,24 @@ total); Ruff lint/formatting and whitespace checks passed.
   compatibility preparation on each call and populates neither the evaluate
   recipe cache nor the resident NumExpr program cache. This does not promise
   removal of parser caches or every lower-level library cache.
-- A separate prepared-evaluator API remains a proposal. Broader option semantics
-  with NumExpr absent are covered by `remove-numexpr.md`.
+- `prepare_evaluate()` now provides an immutable operand-free evaluator with
+  explicit per-call bindings, output rebinding, option overrides and lazy
+  signature preparation. It reuses the existing bounded preparation caches;
+  there is no global last-expression state. See the expression utilities docs.
+- `re_evaluate()` additionally offers thread-local last-expression convenience
+  after a successful public `evaluate()`. It rebinds operands from explicit
+  dictionaries or caller scope, reuses only a still-live explicit output through
+  a weak reference, and retains validation. Failed/nested evaluations and explicit
+  prepared calls do not overwrite the saved expression. This is not a claim of
+  matching NumExpr's unchecked-loop performance.
+- Public option validation is now backend-independent, including invalid options
+  on NumPy strided-output paths. Optimization is a backend request, not a promise
+  of identical algebraic rewrites. Cache bypass scope and sanitize policy are
+  documented explicitly.
+- Overlapping NumPy operands are snapshotted before destination writes. Empty
+  resident reductions use NumPy identities/errors, including axis reductions.
+  This fixes empty sums/products incorrectly returning empty arrays and shifted
+  copy destinations overwriting unread inputs.
 
 ### Initial parity improvements
 

@@ -66,6 +66,7 @@ from .expression_graph import (
     record_expression_metadata,
     validate_operands,
 )
+from .prepared_evaluate import remember_evaluation
 from .proxy_source import convert_dtype
 from .utils import (
     check_smaller_shape,
@@ -4772,8 +4773,11 @@ class LazyExpr(LazyArray):
     def _compute_expr(self, item, kwargs):  # noqa: C901
         output = kwargs.get("_output")
         if (
-            type(output) is np.ndarray
-            and not output.flags.c_contiguous
+            (
+                (type(output) is np.ndarray and not output.flags.c_contiguous)
+                or any(type(value) is np.ndarray and value.size == 0 for value in self.operands.values())
+            )
+            and (output is None or type(output) is np.ndarray)
             and type(item) is tuple
             and not item
             and not any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
@@ -4783,6 +4787,8 @@ class LazyExpr(LazyArray):
             # Until native sinks support strided writes, the approved NumPy graph
             # supplies semantics; copyto preserves the caller's layout and identity.
             result = parse_expression(self.expression).evaluate(self.operands, prefer_blosc=False)
+            if output is None:
+                return np.asarray(result)
             np.copyto(output, result, casting=(kwargs.get("_ne_args") or {}).get("casting", "same_kind"))
             return output
         resident = _resident_numexpr_output(self, item, kwargs)
@@ -6287,6 +6293,30 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
     return expr
 
 
+def validate_evaluate_options(options):
+    """Validate public options before choosing a numerical backend."""
+    unknown = options.keys() - {"order", "casting", "optimization", "truediv", "sanitize", "disable_cache"}
+    if unknown:
+        raise ValueError(f"Unknown keyword argument {sorted(unknown)[0]!r}")
+    order = options.get("order", "K")
+    if not isinstance(order, str) or order.upper() not in {"C", "F", "A", "K"}:
+        raise ValueError("order must be one of 'C', 'F', 'A', or 'K'")
+    if options.get("optimization", "aggressive") not in ("none", "moderate", "aggressive"):
+        raise ValueError("optimization must be 'none', 'moderate', or 'aggressive'")
+    for name in ("sanitize", "disable_cache"):
+        if (
+            name in options
+            and type(options[name]) is not bool
+            and not (name == "sanitize" and options[name] is None)
+        ):
+            raise TypeError(f"{name} must be a bool" + (" or None" if name == "sanitize" else ""))
+    truediv = options.get("truediv", "auto")
+    if type(truediv) is not bool and truediv != "auto":
+        raise ValueError("truediv must be True, False, or 'auto'")
+    # Ask NumPy to validate the casting spelling even when no output was supplied.
+    np.can_cast(np.dtype("float64"), np.dtype("float64"), casting=options.get("casting", "same_kind"))
+
+
 def _evaluate_ordered_output(expr, order):
     """Allocate using NumPy's broadcast iteration order without reading operands."""
     arrays = [value for value in expr.operands.values() if type(value) is np.ndarray]
@@ -6310,6 +6340,7 @@ def _evaluate_ordered_output(expr, order):
     return np.empty(expr.shape, dtype=expr.dtype, order="F" if fortran else "C")
 
 
+@remember_evaluation
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
@@ -6387,10 +6418,10 @@ def evaluate(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    validate_evaluate_options(kwargs)
+    if kwargs.get("sanitize") is True:
+        parse_expression(ex)
     order = kwargs.pop("order", "K")
-    # Validate even when an explicit destination makes allocation unnecessary.
-    if not isinstance(order, str) or order.upper() not in {"C", "F", "A", "K"}:
-        raise ValueError("order must be one of 'C', 'F', 'A', or 'K'")
     order = order.upper()
     lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
     if lexpr is None:
@@ -6422,6 +6453,14 @@ def evaluate(
                 raise TypeError(
                     f"Cannot cast result from {lexpr.dtype} to {out.dtype} with casting={casting!r}"
                 )
+            if np.broadcast_shapes(lexpr.shape, out.shape) != out.shape:
+                raise ValueError("output shape cannot hold the expression result")
+            # Snapshot overlapping inputs before any writes, including shifted
+            # views. NumExpr's copy opcode itself is not overlap-safe.
+            lexpr.operands = {
+                name: value.copy() if type(value) is np.ndarray and np.shares_memory(value, out) else value
+                for name, value in lexpr.operands.items()
+            }
         lexpr._output = out
         # The user specified an output array
         result = lexpr.compute()

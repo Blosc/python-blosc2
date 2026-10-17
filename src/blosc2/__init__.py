@@ -616,6 +616,7 @@ from .lazyexpr import (
     result_type,
     can_cast,
 )
+from .prepared_evaluate import PreparedEvaluator, prepare_evaluate, re_evaluate
 from .proxy_source import (
     ProxySource,
     ProxyNDSource,
@@ -931,6 +932,9 @@ __all__ = [  # noqa : RUF022
     "PortableArtifactError",
     "DSLSyntaxError",
     "LazyExpr",
+    "PreparedEvaluator",
+    "prepare_evaluate",
+    "re_evaluate",
     "LazyUDF",
     "ListArray",
     "NullPolicy",
