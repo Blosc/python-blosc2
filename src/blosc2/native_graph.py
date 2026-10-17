@@ -225,7 +225,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     """
     import blosc2
 
-    if not jit or jit_backend is not None or fp_accuracy is not None:
+    if jit_backend is not None or fp_accuracy is not None:
         return None
     if type(expr) is not blosc2.LazyExpr or any(
         hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
@@ -309,8 +309,6 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             return None
         if compressed and not prepared[2] and not options.get("_getitem", False):
             return None  # Compressed-result compute() keeps its prefilter route.
-        if not prepared[0].has_jit:
-            return None
         # Native preparation and specialization own dtype/broadcast validation.
         # Neither phase evaluates operands or creates an output destination.
         schedule = prepared[0].specialize(
@@ -319,7 +317,10 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         if output is not None and (
             output.shape != schedule.info()["shape"]
             or output.dtype != schedule.info()["dtype"]
-            or not output.flags.c_contiguous
+            or (
+                not output.flags.c_contiguous
+                and not getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+            )
             or not output.flags.aligned
             or not output.flags.writeable
             or any(
@@ -357,7 +358,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
 
     from .storage_readers import compute_storage_if_eligible
 
-    if not jit or jit_backend is not None or fp_accuracy is not None:
+    if jit_backend is not None or fp_accuracy is not None:
         return None
     if type(expr) is not blosc2.LazyExpr or any(
         hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
@@ -415,7 +416,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
             for value in expr.operands.values()
         )
     ):
-        stored = _compute_native_stored_output(expr, output, options)
+        stored = _compute_native_stored_output(expr, output, options, jit=jit)
         if stored is not None:
             return stored
     # Mixed storage, broadcasting and scalar operands retain their existing
@@ -448,7 +449,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     ):
         return None
     try:
-        plan, inputs, reduction = lower_native_graph(expr, jit=True, allow_output=True)
+        plan, inputs, reduction = lower_native_graph(expr, jit=jit, allow_output=True)
         if reduction or plan.info()["stages"] != 1:
             return None
         kernel = _resident_map_kernel(plan)
@@ -466,13 +467,13 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     result = compute_storage_if_eligible(lazy, options)
     if result is None:
         if output is not None:
-            return _compute_native_stored_output(expr, output, options)
+            return _compute_native_stored_output(expr, output, options, jit=jit)
         return None
     output, report = result
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-1.0",
-        "backend": "portable-jit",
+        "backend": "portable-jit" if plan.has_jit else "portable-interpreter",
         "frontend": getattr(plan, "_frontend", "declarative-json"),
         "plan_cache": compile_plan.cache_info()._asdict(),
         "input_materialization_bytes": 0,
@@ -481,7 +482,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     return output
 
 
-def _compute_native_stored_output(expr, output, options):
+def _compute_native_stored_output(expr, output, options, *, jit=True):
     """Bounded native elementwise tiles for an explicit Blosc2 destination.
 
     This also covers mixed NumPy/compressed operands and storage layouts that
@@ -507,7 +508,7 @@ def _compute_native_stored_output(expr, output, options):
     ):
         return None
     try:
-        plan, inputs, reduction = lower_native_graph(expr, jit=True, allow_output=True)
+        plan, inputs, reduction = lower_native_graph(expr, jit=jit, allow_output=True)
         if reduction or not plan.has_jit or plan.info()["stages"] != 1:
             return None
         schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})
@@ -521,7 +522,7 @@ def _compute_native_stored_output(expr, output, options):
         return None
     report = {
         "route": "bounded-stored-map",
-        "backend": "portable-jit",
+        "backend": "portable-jit" if plan.has_jit else "portable-interpreter",
         "fp_flags": 0,
         "fp_supported": True,
         "maximum_input_items": 0,
@@ -997,7 +998,7 @@ def _graph_configuration(jit):
     )
 
 
-def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0):
+def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0, out=None):
     """Single-region native graph reader bindings; metadata validation precedes IO."""
     import blosc2
 
@@ -1018,7 +1019,7 @@ def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0):
         for name, value in inputs.items()
         if type(value) is blosc2.NDArray
     }
-    result, report = schedule.execute_sources(inputs, readers, raise_mask)
+    result, report = schedule.execute_sources(inputs, readers, raise_mask, out=out)
     report.update(route="graph-bounded-readers", tile_items=tile_items)
     return result, report
 
@@ -1032,8 +1033,6 @@ def _resident_map_kernel(plan):
     if handle is None:
         return None
     info = handle.info()
-    if not info["jit"]:
-        return None
     descriptor = handle.descriptor_info()
     captures = {}
     for constant in json.loads(plan.map_json()).get("constants", []):
@@ -1064,6 +1063,7 @@ def _resident_map_kernel(plan):
         inferred_dtype=descriptor["inferred_dtype"],
         result_cardinality=descriptor["cardinality"],
         context_ndim=descriptor["ndim"],
+        native_partitionable=bool(plan.info().get("partitionable", False)),
     )
 
 
@@ -1074,6 +1074,29 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
 
     from .resident_execution import MINIMUM_WORKER_ITEMS, evaluate_resident_if_eligible
 
+    if (
+        not reduction
+        and not selection
+        and all(type(value) is np.ndarray for value in inputs.values())
+        and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+    ):
+        schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})
+        workers = (
+            min(blosc2.nthreads, 32)
+            if (
+                not blosc2.IS_WASM
+                and getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+            )
+            else 1
+        )
+        values, report = schedule.execute(inputs, out=out, workers=workers)
+        return values, {
+            **report,
+            "route": "parallel-resident" if report["tasks"] > 1 else "native-resident",
+            "threads": report["tasks"],
+            "normalization_bytes": report.get("normalization_bytes", 0),
+            "output_copy_bytes": 0,
+        }
     if reduction or not plan.has_jit or plan.info()["stages"] != 1:
         return None
     if blosc2.nthreads < 2 or math.prod(shape) < 2 * MINIMUM_WORKER_ITEMS:
@@ -1457,7 +1480,16 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
     )
     if reduction and parallel_reductions:
         parallel = _parallel_resident_reduction(plan, arrays, shape, tile_items)
-    result, report = schedule.execute(arrays) if parallel is None else parallel
+    if parallel is None:
+        if (
+            output is not None
+            and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+        ):
+            result, report = schedule.execute(arrays, out=output)
+        else:
+            result, report = schedule.execute(arrays)
+    else:
+        result, report = parallel
     if output is not None and result is not output:
         # Admission checked shape/dtype/layout and aliasing before any execution.
         # Preserve the existing destination identity, without replaying kernels.

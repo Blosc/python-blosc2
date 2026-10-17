@@ -20,6 +20,8 @@ def storage_reader_eligible(kernel):
         return False
     if any(dtype.kind not in "biuf" for dtype in kernel.input_dtypes.values()):
         return False
+    if hasattr(kernel, "native_partitionable"):
+        return kernel.native_partitionable
     if any(dtype.kind in "iu" for dtype in kernel.input_dtypes.values()):
         from .resident_execution import resident_integer_operations_safe
 

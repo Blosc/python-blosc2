@@ -1418,7 +1418,13 @@ cdef object array_view_binding(np.ndarray array, b2_array_view *view):
     # as_strided view's possibly fictitious logical byte extent.
     while getattr(owner, "base", None) is not None:
         owner = owner.base
-    if not isinstance(owner, np.ndarray) or not owner.flags.owndata or not (owner.flags.c_contiguous or owner.flags.f_contiguous):
+    if not isinstance(owner, np.ndarray):
+        try:
+            owner = np.frombuffer(owner, dtype=np.uint8)
+        except (TypeError, ValueError, BufferError):
+            array = np.array(array, copy=True, order="K")
+            owner = array
+    elif not owner.flags.owndata:
         array = np.array(array, copy=True, order="K")
         owner = array
     root = owner
@@ -1439,6 +1445,15 @@ cdef object array_view_binding(np.ndarray array, b2_array_view *view):
 
 
 cdef extern from "dsl_graph_bridge.h":
+    ctypedef void (*b2_graph_task_fn)(void *, size_t) noexcept nogil
+    ctypedef int (*b2_graph_fork_join_fn)(void *, size_t, b2_graph_task_fn, void *) noexcept nogil
+    unsigned b2_graph_execution_capabilities(const void *) nogil
+    int b2_graph_execute_parallel_into(const void *, const b2_array_view *, int,
+        const b2_array_view *, unsigned, size_t, b2_graph_fork_join_fn, void *,
+        b2_graph_report *, b2_graph_error *) nogil
+    int b2_graph_output_available() nogil
+    int b2_graph_execute_into(const void *, const b2_array_view *, const b2_array_source *, int,
+                             const b2_array_view *, unsigned, b2_graph_report *, b2_graph_error *) nogil
     ctypedef struct b2_graph_metadata:
         const char *name
         me_dtype dtype
@@ -1453,6 +1468,7 @@ cdef extern from "dsl_graph_bridge.h":
         size_t stages
         size_t jit_stages
         size_t interpreter_stages
+        size_t tasks
     int b2_graph_prepare(const char *, size_t, int, int, void **, b2_graph_error *) nogil
     int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, void **, b2_graph_error *) nogil
     int b2_graph_specialize(const void *, const b2_graph_metadata *, int, size_t, size_t, void **, b2_graph_error *) nogil
@@ -1498,6 +1514,36 @@ cdef void raise_graph_error(int rc, b2_graph_error *error, b2_array_report *repo
     raise exception
 
 
+def _execute_graph_host_task(uintptr_t callback, uintptr_t invocation, size_t index):
+    cdef b2_graph_task_fn task = <b2_graph_task_fn>callback
+    with nogil:
+        task(<void *>invocation,index)
+
+
+cdef int graph_host_fork_join(void *host, size_t count, b2_graph_task_fn task, void *invocation) noexcept with gil:
+    from concurrent.futures import wait
+    from .resident_execution import resident_pool
+    futures = []
+    try:
+        try:
+            for index in range(count):
+                futures.append(resident_pool().submit(_execute_graph_host_task,
+                    <uintptr_t>task,<uintptr_t>invocation,index))
+        finally:
+            if futures:
+                wait(futures)
+        for future in futures:
+            future.result()
+    except BaseException as error:
+        (<object>host).append(error)
+        return 1
+    return 0
+
+
+def native_graph_output_available():
+    return bool(b2_graph_output_available())
+
+
 def native_graph_sources_available():
     return bool(b2_graph_sources_available())
 
@@ -1534,7 +1580,8 @@ cdef class NativeGraphHandle:
                            for i in range(b2_graph_ninputs(self._handle))},
                 "inferred_dtype": _numpy_dtype_from_me_dtype(b2_graph_inferred(self._handle)),
                 "has_jit": bool(b2_graph_jit(self._handle)), "stages": b2_graph_stages(self._handle),
-                "plan_metadata_bytes": b2_graph_plan_bytes(self._handle)}
+                "plan_metadata_bytes": b2_graph_plan_bytes(self._handle),
+                "partitionable": bool(b2_graph_execution_capabilities(self._handle) & 1)}
 
     def to_json(self):
         if self._handle == NULL:
@@ -1649,21 +1696,34 @@ cdef class NativeGraphSchedule:
         return {"shape": tuple(shape[i] for i in range(rank)), "dtype": _numpy_dtype_from_me_dtype(dtype),
                 "bytes": capacity, "last_consumer": last}
 
-    def execute(self, inputs, unsigned raise_mask=0):
+    def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1):
         cdef b2_array_view views[128]
+        cdef b2_array_view destination
         cdef b2_graph_report report
         cdef b2_graph_error error
         cdef int n = len(inputs), i, rc
         cdef list names = [key.encode('utf-8') for key in inputs]
         cdef list owned = []
+        cdef list executor_errors = []
         cdef bytes name
         cdef np.ndarray array, bound, output
         cdef size_t normalized = 0, capacity
         if n > 128:
             raise ValueError("Native graph binding limit exceeded")
         memset(views, 0, sizeof(views))
+        memset(&report,0,sizeof(report))
         info = self.info()
-        output = np.empty(info['shape'], dtype=info['dtype'])
+        output = np.empty(info['shape'], dtype=info['dtype']) if out is None else out
+        if (<object>output).shape != info['shape'] or output.dtype != info['dtype']:
+            raise ValueError("Graph output shape/dtype disagree with schedule")
+        if not output.flags.writeable or not output.flags.aligned or not output.dtype.isnative:
+            raise ValueError("Graph output must be writable, aligned and native-endian")
+        if out is not None or workers > 1:
+            if not b2_graph_output_available():
+                raise NotImplementedError("Build with native destination descriptor support")
+            memset(&destination,0,sizeof(destination))
+            if array_view_binding(output,&destination) is not output:
+                raise ValueError("Cannot establish output allocation bounds")
         capacity = output.nbytes
         for i, value in enumerate(inputs.values()):
             if not isinstance(value, np.ndarray):
@@ -1678,8 +1738,16 @@ cdef class NativeGraphSchedule:
                 raise ValueError("Input names cannot contain NUL")
             views[i].name = name
         with nogil:
-            rc = b2_graph_execute(self._handle, views, n, np.PyArray_DATA(output), capacity,
-                                  raise_mask, &report, &error)
+            if workers > 1:
+                rc = b2_graph_execute_parallel_into(self._handle,views,n,&destination,raise_mask,workers,
+                    graph_host_fork_join,<void *>executor_errors,&report,&error)
+            elif out is None:
+                rc = b2_graph_execute(self._handle, views, n, np.PyArray_DATA(output), capacity,
+                                      raise_mask, &report, &error)
+            else:
+                rc = b2_graph_execute_into(self._handle,views,NULL,n,&destination,raise_mask,&report,&error)
+        if executor_errors:
+            raise executor_errors[0]
         if rc:
             raise_graph_error(rc, &error, &report.array)
         return output, {"temporary_bytes": report.array.temporary_bytes, "gathered_bytes": report.array.gathered_bytes,
@@ -1687,7 +1755,8 @@ cdef class NativeGraphSchedule:
                         "evaluated_tiles": report.array.evaluated_tiles, "fp_flags": report.array.fp_flags,
                         "fp_supported": bool(report.array.fp_supported), "stages": report.stages,
                         "jit_stages": report.jit_stages, "interpreter_stages": report.interpreter_stages,
-                        "intermediate_bytes": b2_graph_intermediate(self._handle)}
+                        "intermediate_bytes": b2_graph_intermediate(self._handle),
+                        "tasks": report.tasks or 1}
 
     def execute_sources(self, inputs, readers, unsigned raise_mask=0, *, bint native_spans=False, out=None):
         """Bind invocation-local metadata readers; native traversal owns all requests."""
@@ -1712,8 +1781,9 @@ cdef class NativeGraphSchedule:
             output = out
             if out.shape != info['shape'] or out.dtype != info['dtype']:
                 raise ValueError("Graph output shape/dtype disagree with schedule")
-            if not output.flags.c_contiguous or not output.flags.aligned or not output.flags.writeable:
-                raise ValueError("Graph output must be writable, aligned and C-contiguous")
+            if (not output.flags.aligned or not output.flags.writeable or not output.dtype.isnative
+                    or (not output.flags.c_contiguous and not b2_graph_output_available())):
+                raise ValueError("Graph output must be writable, aligned and supported by the runtime")
             if any(isinstance(value, np.ndarray) and np.shares_memory(output, value) for value in inputs.values()):
                 raise ValueError("Graph output must not overlap resident inputs")
         try:
@@ -1733,12 +1803,16 @@ cdef class NativeGraphSchedule:
         cdef b2_graph_report report
         cdef b2_graph_error error
         cdef int n = len(inputs), i, j, rc
+        cdef b2_array_view destination
         cdef bytes name
         cdef object state, value
         cdef np.ndarray array, bound
         cdef size_t normalized = 0, capacity = output.nbytes
         cdef blosc2_dparams dparams
         cdef NDArray compressed
+        memset(&destination,0,sizeof(destination))
+        if b2_graph_output_available() and array_view_binding(output,&destination) is not output:
+            raise ValueError("Cannot establish output allocation bounds")
         for i, (key, value) in enumerate(inputs.items()):
             name = names[i]
             if b'\x00' in name:
@@ -1784,8 +1858,11 @@ cdef class NativeGraphSchedule:
                 owned.append(bound)
             sources[i].view.name = name
         with nogil:
-            rc = b2_graph_execute_sources(self._handle, sources, n, np.PyArray_DATA(output), capacity,
-                                          raise_mask, &report, &error)
+            if b2_graph_output_available():
+                rc = b2_graph_execute_into(self._handle,NULL,sources,n,&destination,raise_mask,&report,&error)
+            else:
+                rc = b2_graph_execute_sources(self._handle, sources, n, np.PyArray_DATA(output), capacity,
+                                              raise_mask, &report, &error)
         for state in states:
             if state.error is not None:
                 raise state.error

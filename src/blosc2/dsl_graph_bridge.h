@@ -14,7 +14,10 @@ typedef struct {
 typedef struct {
     b2_array_report array;
     size_t stages, jit_stages, interpreter_stages;
+    size_t tasks;
 } b2_graph_report;
+typedef void (*b2_graph_task_fn)(void *, size_t);
+typedef int (*b2_graph_fork_join_fn)(void *, size_t, b2_graph_task_fn, void *);
 #ifdef B2_HAVE_NATIVE_GRAPH
 #include "miniexpr_graph.h"
 static int b2_graph_prepare(const char *json, size_t n, int jit, int required, void **out, b2_graph_error *e) {
@@ -153,6 +156,69 @@ static int b2_graph_stage_info(const void *s, int stage, int64_t *shape, me_dtyp
 static int b2_graph_shape(const void *s, int64_t *shape, me_dtype *dtype) { (void)s; (void)shape; *dtype = ME_AUTO; return -1; }
 static int b2_graph_map_shape(const void *s, int64_t *shape) { (void)s; (void)shape; return -1; }
 #endif
+/* New destination contracts are capability-gated for independently installed
+ * older miniexpr runtimes. The view carries allocation bounds, not logical bytes. */
+static int b2_graph_output_available(void) {
+#if defined(B2_HAVE_NATIVE_GRAPH) && defined(ME_ARRAY_OUTPUT_VERSION)
+    return 1;
+#else
+    return 0;
+#endif
+}
+static int b2_graph_execute_into(const void *s, const b2_array_view *inputs,
+    const b2_array_source *sources, int n, const b2_array_view *out,
+    unsigned raise_mask, b2_graph_report *report, b2_graph_error *e) {
+#if defined(B2_HAVE_NATIVE_GRAPH) && defined(ME_ARRAY_OUTPUT_VERSION)
+    me_array_output destination = {0};
+    destination.struct_size = sizeof(destination); destination.version = ME_ARRAY_OUTPUT_VERSION;
+    destination.dtype = out->dtype; destination.base = (void *)out->base;
+    destination.capacity = out->capacity; destination.offset = out->offset; destination.rank = out->rank;
+    memcpy(destination.shape,out->shape,sizeof(destination.shape));
+    memcpy(destination.strides,out->strides,sizeof(destination.strides));
+    me_graph_execute_options options = {sizeof(options), ME_GRAPH_VERSION, raise_mask};
+    me_graph_report result = {0}; me_graph_error error = {0};
+    int rc = sources ? me_graph_execute_sources_into(s,sources,n,&destination,&options,&result,&error) :
+        me_graph_execute_into(s,inputs,n,&destination,&options,&result,&error);
+    report->array = result.array; report->stages = result.stages;
+    report->jit_stages = result.jit_stages; report->interpreter_stages = result.interpreter_stages;
+    e->node = error.node; e->stage = error.stage; e->native = error.native;
+    return rc;
+#else
+    (void)s; (void)inputs; (void)sources; (void)n; (void)out; (void)raise_mask; (void)report; (void)e;
+    return -100;
+#endif
+}
+static unsigned b2_graph_execution_capabilities(const void *p) {
+#if defined(B2_HAVE_NATIVE_GRAPH) && defined(ME_GRAPH_EXECUTOR_VERSION)
+    return me_graph_execution_capabilities(p);
+#else
+    (void)p; return 0;
+#endif
+}
+static int b2_graph_execute_parallel_into(const void *s, const b2_array_view *inputs,
+    int n, const b2_array_view *out, unsigned raise_mask, size_t workers,
+    b2_graph_fork_join_fn fork_join, void *host, b2_graph_report *report, b2_graph_error *e) {
+#if defined(B2_HAVE_NATIVE_GRAPH) && defined(ME_GRAPH_EXECUTOR_VERSION)
+    me_array_output destination = {0};
+    destination.struct_size=sizeof(destination); destination.version=ME_ARRAY_OUTPUT_VERSION;
+    destination.dtype=out->dtype; destination.base=(void *)out->base;
+    destination.capacity=out->capacity; destination.offset=out->offset; destination.rank=out->rank;
+    memcpy(destination.shape,out->shape,sizeof(destination.shape));
+    memcpy(destination.strides,out->strides,sizeof(destination.strides));
+    me_graph_execute_options options={sizeof(options),ME_GRAPH_VERSION,raise_mask};
+    me_graph_executor executor={sizeof(executor),ME_GRAPH_EXECUTOR_VERSION,workers,0,fork_join,host,0,0};
+    me_graph_parallel_report result={0}; me_graph_error error={0};
+    int rc=me_graph_execute_parallel_into(s,inputs,n,&destination,&options,&executor,&result,&error);
+    report->array=result.execution.array; report->stages=result.execution.stages;
+    report->jit_stages=result.execution.jit_stages; report->interpreter_stages=result.execution.interpreter_stages;
+    report->tasks=result.tasks;
+    e->node=error.node; e->stage=error.stage; e->native=error.native;
+    return rc;
+#else
+    (void)workers; (void)fork_join; (void)host;
+    return b2_graph_execute_into(s,inputs,NULL,n,out,raise_mask,report,e);
+#endif
+}
 static int b2_graph_sources_available(void) {
 #ifdef B2_HAVE_GRAPH_SOURCES
     return 1;

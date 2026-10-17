@@ -208,7 +208,7 @@ def test_native_first_jit_request(native_first_runtime):
     assert expr._native_execution_report["backend"] == "portable-jit"
 
 
-def test_native_first_unavailable_jit_retains_legacy(native_graph_runtime, monkeypatch):
+def test_native_first_unavailable_jit_uses_interpreter(native_graph_runtime, monkeypatch):
     import blosc2.native_graph as native
 
     original = native.lower_native_graph
@@ -219,18 +219,25 @@ def test_native_first_unavailable_jit_retains_legacy(native_graph_runtime, monke
     monkeypatch.setattr(native, "lower_native_graph", interpreted)
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
     np.testing.assert_array_equal(expr[:], np.arange(4.0) + 1)
-    assert not hasattr(expr, "_native_execution_report")
+    assert expr._native_execution_report["backend"] == "portable-interpreter"
 
 
-def test_native_first_jit_false_retains_legacy(monkeypatch):
+def test_native_first_jit_false_uses_interpreter(native_graph_runtime, monkeypatch):
     import blosc2.native_graph as native
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("jit=False attempted native compilation")
+    original = native.lower_native_graph
+    calls = []
 
-    monkeypatch.setattr(native, "lower_native_graph", forbidden)
+    def interpreted(*args, **kwargs):
+        calls.append(kwargs.get("jit"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(native, "lower_native_graph", interpreted)
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
     np.testing.assert_array_equal(expr.compute(jit=False)[:], np.arange(4.0) + 1)
+    assert calls
+    assert not any(calls)
+    assert expr._native_execution_report["backend"] == "portable-interpreter"
 
 
 @pytest.mark.parametrize("compressed", [False, True])
@@ -247,10 +254,14 @@ def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, s
     operand = blosc2.asarray(values) if compressed else values
     expr = blosc2.lazyexpr("x + 1", {"x": operand})
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("Inherited JIT/backend/accuracy policy attempted native graph compilation")
+    original = native.lower_native_graph
+    calls = []
 
-    monkeypatch.setattr(native, "lower_native_graph", forbidden)
+    def record(*args, **kwargs):
+        calls.append(kwargs.get("jit"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(native, "lower_native_graph", record)
     previous = blosc2.get_jit_options()
     try:
         if scoped:
@@ -260,7 +271,10 @@ def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, s
             blosc2.set_jit_options(**policy)
             result = expr.compute()
         np.testing.assert_array_equal(result[:], values + 1)
-        assert not hasattr(expr, "_native_execution_report")
+        if policy == {"jit": False} and hasattr(expr, "_native_execution_report"):
+            assert expr._native_execution_report["backend"] == "portable-interpreter"
+        elif policy != {"jit": False}:
+            assert not hasattr(expr, "_native_execution_report")
     finally:
         blosc2.set_jit_options(**previous)
 

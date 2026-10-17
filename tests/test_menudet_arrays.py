@@ -146,7 +146,7 @@ def test_normalization_allocations_and_masked_status():
     x = np.frombuffer(source, dtype="float64")
     result, report = kernel().evaluate_array({"x": x}, return_report=True)
     np.testing.assert_array_equal(result, x)
-    assert report["normalization_bytes"] == x.nbytes
+    assert report["normalization_bytes"] == 0  # Read-only buffer owners now expose checked native bounds.
     k = kernel("sqrt(x)")
     result, report = k.evaluate_array(
         {"x": np.array([-1.0, 4.0])}, reduction="sum", where=np.array([False, True]), return_report=True

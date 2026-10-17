@@ -60,7 +60,8 @@ def test_original_graph_execution_retained(case):
         kwargs["_native_tile_items"] = 64
     result = expr.compute(item=item, **kwargs)
     np.testing.assert_array_equal(result, (x + (y - 1))[item])
-    assert expr._native_execution_report.get("route") != "parallel-resident"
+    if case not in {"strided", "broadcast"}:
+        assert expr._native_execution_report.get("route") != "parallel-resident"
 
 
 def test_reduction_and_staged_graph_retained():
@@ -112,7 +113,7 @@ def test_graph_execution_failure_never_replays(parallel_runtime, monkeypatch):
     def fail(*args, **kwargs):
         raise ArithmeticError("Parallel graph failed")
 
-    monkeypatch.setattr("blosc2.resident_execution.evaluate_resident", fail)
+    monkeypatch.setattr("blosc2.native_graph._parallel_resident_graph", fail)
     x = np.ones(600_003)
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     with pytest.raises(ArithmeticError, match="Parallel graph failed"):

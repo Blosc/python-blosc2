@@ -239,7 +239,15 @@ def test_graph_sources_explicit_output_validation():
     result, _ = schedule.execute_sources({"x": values}, {}, out=out)
     assert result is out
     np.testing.assert_array_equal(out, values + 1)
-    for invalid in (np.empty(15), np.empty(16, dtype=np.float32), np.empty(32)[::2]):
+    strided = np.empty(32)[::2]
+    if getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)():
+        result, _ = schedule.execute_sources({"x": values}, {}, out=strided)
+        assert result is strided
+        np.testing.assert_array_equal(result, values + 1)
+    else:
+        with pytest.raises(ValueError):
+            schedule.execute_sources({"x": values}, {}, out=strided)
+    for invalid in (np.empty(15), np.empty(16, dtype=np.float32)):
         with pytest.raises(ValueError):
             schedule.execute_sources({"x": values}, {}, out=invalid)
     out.flags.writeable = False

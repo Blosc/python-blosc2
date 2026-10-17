@@ -71,7 +71,17 @@ class NativeGraph:
         """
         return self._handle.specialize(inputs, tile_items, intermediate_budget)
 
-    def evaluate(self, inputs, *, tile_items=1024, intermediate_budget=0, raise_mask=0, return_report=False):
+    def evaluate(
+        self,
+        inputs,
+        *,
+        tile_items=1024,
+        intermediate_budget=0,
+        raise_mask=0,
+        return_report=False,
+        out=None,
+        workers=1,
+    ):
         if any(not isinstance(value, np.ndarray) for value in inputs.values()):
             raise TypeError("Native graph evaluation requires explicit NumPy array buffers")
         schedule = self.specialize(
@@ -79,14 +89,18 @@ class NativeGraph:
             tile_items,
             intermediate_budget=intermediate_budget,
         )
-        result, report = schedule.execute(inputs, raise_mask)
+        result, report = (
+            schedule.execute(inputs, raise_mask)
+            if out is None and workers == 1
+            else schedule.execute(inputs, raise_mask, out=out, workers=workers)
+        )
         return (result, report) if return_report else result
 
     def map_json(self):
         """Export an eligible elementwise graph as a Menudet 1.0 artifact."""
         return self._handle.map_json()
 
-    def evaluate_sources(self, inputs, *, tile_items=65536, raise_mask=0, return_report=False):
+    def evaluate_sources(self, inputs, *, tile_items=65536, raise_mask=0, return_report=False, out=None):
         """Stream a single-region graph from NumPy/Blosc2 inputs with bounded scratch.
 
         Native traversal owns broadcasting, axes and serial reduction order.
@@ -95,5 +109,7 @@ class NativeGraph:
         """
         from .native_graph import evaluate_graph_sources
 
-        result, report = evaluate_graph_sources(self, inputs, tile_items=tile_items, raise_mask=raise_mask)
+        result, report = evaluate_graph_sources(
+            self, inputs, tile_items=tile_items, raise_mask=raise_mask, out=out
+        )
         return (result, report) if return_report else result
