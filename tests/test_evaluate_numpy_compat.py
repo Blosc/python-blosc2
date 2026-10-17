@@ -10,6 +10,141 @@ import pytest
 import blosc2
 
 
+@pytest.mark.parametrize("shape", [(0,), (2, 0, 3)])
+@pytest.mark.parametrize("expression", ["x", "x + 1", "copy(x)", "ones_like(x)", "where(x > 0, x, -x)"])
+def test_empty_destination_identity(shape, expression):
+    x = np.empty(shape)
+    output = np.empty(shape)
+    assert blosc2.evaluate(expression, local_dict={"x": x}, out=output) is output
+
+
+@pytest.mark.parametrize("order", ["C", "F", "A", "K"])
+@pytest.mark.parametrize("layout", ["C", "F", "permuted"])
+def test_numpy_output_order(order, layout):
+    x = np.arange(24.0).reshape(2, 3, 4)
+    if layout == "F":
+        x = np.asfortranarray(x)
+    elif layout == "permuted":
+        x = x.transpose(1, 2, 0)
+    expected = np.add(x, 1, order=order)
+    result = blosc2.evaluate("x + 1", local_dict={"x": x}, order=order)
+    np.testing.assert_array_equal(result, expected)
+    assert result.strides == expected.strides
+    assert not np.shares_memory(result, x)
+
+
+def test_default_order_preserves_fortran_layout():
+    x = np.asfortranarray(np.arange(12.0).reshape(3, 4))
+    result = blosc2.evaluate("x + 1", local_dict={"x": x})
+    assert result.flags.f_contiguous
+    np.testing.assert_array_equal(result, x + 1)
+
+
+@pytest.mark.parametrize("mode", ["full", "safe"])
+@pytest.mark.parametrize("order", ["C", "F", "A", "K"])
+def test_layout_does_not_select_numexpr(mode, order, monkeypatch):
+    import importlib
+
+    module = importlib.import_module("blosc2.lazyexpr")
+    x = np.asfortranarray(np.arange(24.0).reshape(2, 3, 4))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Output order selected the NumExpr backend")
+
+    if module.numexpr is not None:
+        for name in ("evaluate", "validate", "NumExpr"):
+            monkeypatch.setattr(module.numexpr, name, forbidden)
+    with blosc2.expression_evaluation(mode):
+        result = blosc2.evaluate("x + 1", local_dict={"x": x}, order=order)
+    expected = np.add(x, 1, order=order)
+    np.testing.assert_array_equal(result, expected)
+    assert result.strides == expected.strides
+
+
+def test_explicit_c_order_retains_native_admission(monkeypatch, native_graph_runtime):
+    import blosc2.native_graph as native
+
+    if blosc2.IS_WASM:
+        pytest.skip("Native-first dispatch requires host JIT")
+    probe = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    if not probe.has_jit:
+        pytest.skip("Native-first dispatch requires JIT")
+    original = native.compute_native_graph
+    calls = []
+
+    def record(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(native, "compute_native_graph", record)
+    x = np.arange(24.0).reshape(2, 3, 4)
+    result = blosc2.evaluate("x + 1", local_dict={"x": x}, order="C")
+    np.testing.assert_array_equal(result, x + 1)
+    assert calls
+
+
+@pytest.mark.parametrize("order", ["C", "F", "A", "K"])
+def test_broadcast_output_order(order):
+    x = np.asfortranarray(np.arange(12.0).reshape(3, 4))
+    y = np.arange(3.0).reshape(3, 1)
+    expected = np.add(x, y, order=order)
+    result = blosc2.evaluate("x + y", local_dict={"x": x, "y": y}, order=order)
+    np.testing.assert_array_equal(result, expected)
+    assert result.strides == expected.strides
+
+
+def test_fortran_reduction_and_explicit_destination():
+    x = np.arange(24.0).reshape(2, 3, 4)
+    result = blosc2.evaluate("sum(x, axis=0)", local_dict={"x": x}, order="F")
+    assert result.flags.f_contiguous
+    np.testing.assert_array_equal(result, x.sum(axis=0))
+    output = np.empty_like(x, order="C")
+    assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=output, order="F") is output
+    assert output.flags.c_contiguous
+    np.testing.assert_array_equal(output, x + 1)
+
+
+def test_order_with_nonbroadcastable_reduction_inputs():
+    x = np.arange(12.0).reshape(3, 4)
+    y = np.arange(10.0).reshape(2, 5)
+    result = blosc2.evaluate("sum(x) + y", local_dict={"x": x, "y": y}, order="F")
+    assert result.flags.f_contiguous
+    np.testing.assert_array_equal(result, x.sum() + y)
+
+
+@pytest.mark.parametrize("mode", ["full", "safe"])
+def test_disable_cache_bypasses_resident_preparation(mode, monkeypatch, numexpr):
+    import importlib
+
+    module = importlib.import_module("blosc2.lazyexpr")
+    module._evaluate_recipe_cache.clear()
+    module._resident_numexpr_program.cache_clear()
+    original = module._resident_numexpr_program.__wrapped__
+    calls = []
+
+    def prepare(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(module._resident_numexpr_program, "__wrapped__", prepare)
+    x = np.arange(17.0)
+    output = np.empty_like(x)
+    with blosc2.expression_evaluation(mode):
+        for _ in range(2):
+            assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=output, disable_cache=True) is output
+    assert len(calls) == 2
+    assert not module._evaluate_recipe_cache
+    assert module._resident_numexpr_program.cache_info().currsize == 0
+    np.testing.assert_array_equal(output, x + 1)
+
+
+@pytest.mark.parametrize("order", ["invalid", "", None, 1])
+def test_invalid_output_order(order):
+    x = np.arange(12.0)
+    with pytest.raises(ValueError, match="order"):
+        blosc2.evaluate("x + 1", local_dict={"x": x}, order=order)
+
+
 @pytest.fixture
 def numexpr():
     return pytest.importorskip("numexpr")

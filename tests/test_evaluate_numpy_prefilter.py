@@ -102,7 +102,11 @@ def test_evaluate_without_options_preserves_native_eligibility(monkeypatch):
     np.testing.assert_array_equal(blosc2.evaluate("x + 1", local_dict={"x": values}), values + 1)
     assert observed == [None]
     np.testing.assert_array_equal(blosc2.evaluate("x + 1", local_dict={"x": values}, order="C"), values + 1)
-    assert observed[-1] == {"order": "C"}
+    assert observed == [None]  # Allocation policy reuses the native-eligible recipe.
+    np.testing.assert_array_equal(
+        blosc2.evaluate("x + 1", local_dict={"x": values}, optimization="moderate"), values + 1
+    )
+    assert observed[-1] == {"optimization": "moderate"}
 
 
 @pytest.mark.parametrize(("size", "chunks", "blocks"), [(100, 9, 1), (257, 128, 32)])

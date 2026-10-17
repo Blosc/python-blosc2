@@ -32,6 +32,34 @@ total); Ruff lint/formatting and whitespace checks passed.
 
 ## Dispatch/performance changes
 
+### Follow-up: output identity, layout and keyword audit
+
+- Empty explicit NumPy destinations now retain their identity, including shapes
+  such as `(2, 0, 3)`. Evaluation still runs its normal validation path.
+- Newly allocated results honor `order="F"`, `"A"` and `"K"`, including the
+  default `"K"` with Fortran inputs. Elementwise allocation uses NumPy's broadcast
+  iterator to choose layout, including permuted axes, without reading input data.
+  Explicit destinations keep their existing layout. Invalid orders are rejected.
+- `order` is consumed by Blosc2 rather than forwarded to NumExpr. Explicit C
+  order retains native-first admission. Resident non-C-contiguous destinations
+  use the approved NumPy graph fallback, followed by `np.copyto`; layout alone
+  does not select NumExpr. This can allocate full-size intermediates and remains
+  a performance opportunity for native strided-output support. Compressed/mixed
+  fallback migration remains part of the removal plan.
+- Probed `optimization="moderate"`/`"aggressive"`, `truediv=True`,
+  `sanitize=True` and `disable_cache=True` in safe/full modes with fresh and
+  supplied outputs. Invalid optimization and unknown keywords were rejected.
+  These explicit options decline automatic native-first dispatch and reach the
+  compatibility backend; accepting them does not mean native support.
+- A regression test verifies that `disable_cache=True` rebuilds resident
+  compatibility preparation on each call and populates neither the evaluate
+  recipe cache nor the resident NumExpr program cache. This does not promise
+  removal of parser caches or every lower-level library cache.
+- A separate prepared-evaluator API remains a proposal. Broader option semantics
+  with NumExpr absent are covered by `remove-numexpr.md`.
+
+### Initial parity improvements
+
 - Fix native text ingestion's reduction flag: a root call is not necessarily a
   reduction. Previously `sqrt`, `hypot`, `fmod`, and `where` were misclassified.
 - Extend the conservative lane-local floating-function admission list, including

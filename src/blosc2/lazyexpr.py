@@ -301,6 +301,10 @@ def _resident_numexpr_output(expr, item, kwargs):
         program, uses_vml, lock = prepare(expr.expression, signature, compile_options)
     except (exceptions.UnsafeDeserializationError, TypeError, ValueError, NotImplementedError):
         return None
+    except RuntimeError as error:
+        if str(error) != "invalid program: reduction operations must occur last":
+            raise
+        return None  # NumExpr cannot prepare nested reductions; use the existing evaluator.
     with lock:
         return program(
             *(expr.operands[name] for name in program.input_names),
@@ -4766,6 +4770,21 @@ class LazyExpr(LazyArray):
         return indexing.evaluate_full_query(self._where_args, plan)
 
     def _compute_expr(self, item, kwargs):  # noqa: C901
+        output = kwargs.get("_output")
+        if (
+            type(output) is np.ndarray
+            and not output.flags.c_contiguous
+            and type(item) is tuple
+            and not item
+            and not any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
+            and all(type(value) is np.ndarray or np.isscalar(value) for value in self.operands.values())
+        ):
+            # Layout is a destination contract, not a reason to select NumExpr.
+            # Until native sinks support strided writes, the approved NumPy graph
+            # supplies semantics; copyto preserves the caller's layout and identity.
+            result = parse_expression(self.expression).evaluate(self.operands, prefer_blosc=False)
+            np.copyto(output, result, casting=(kwargs.get("_ne_args") or {}).get("casting", "same_kind"))
+            return output
         resident = _resident_numexpr_output(self, item, kwargs)
         if resident is not None:
             return resident
@@ -6268,6 +6287,29 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
     return expr
 
 
+def _evaluate_ordered_output(expr, order):
+    """Allocate using NumPy's broadcast iteration order without reading operands."""
+    arrays = [value for value in expr.operands.values() if type(value) is np.ndarray]
+    if order == "C" or not arrays:
+        return np.empty(expr.shape, dtype=expr.dtype, order="F" if order == "F" else "C")
+    try:
+        broadcast_shape = np.broadcast_shapes(*(value.shape for value in arrays))
+    except ValueError:
+        broadcast_shape = None  # Reduced intermediates may broadcast even when inputs do not.
+    if broadcast_shape == expr.shape:
+        with np.nditer(
+            [*arrays, None],
+            flags=["zerosize_ok", "refs_ok"],
+            op_flags=[["readonly"] for _ in arrays] + [["writeonly", "allocate"]],
+            op_dtypes=[None for _ in arrays] + [expr.dtype],
+            order=order,
+        ) as iterator:
+            return iterator.operands[-1]
+    # Reductions/shape-changing expressions do not share the input iteration domain.
+    fortran = order == "F" or (order in {"A", "K"} and all(a.flags.f_contiguous for a in arrays))
+    return np.empty(expr.shape, dtype=expr.dtype, order="F" if fortran else "C")
+
+
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
@@ -6315,6 +6357,13 @@ def evaluate(
         a new NumPy array will be created and returned.
     kwargs: Any, optional
         Additional arguments to be passed to `numexpr.evaluate()` function.
+        ``order`` controls newly allocated NumPy output: ``"C"`` or ``"F"``
+        requests contiguous row-major or column-major storage, ``"A"`` follows
+        Fortran-contiguous operands when possible, and ``"K"`` (default)
+        follows operand iteration order. An explicit output retains its layout
+        and identity, including when it is empty. Blosc2 consumes ``order`` as
+        an allocation policy; it is not forwarded to NumExpr. Resident strided
+        outputs currently use a NumPy fallback when native execution is ineligible.
 
     Returns
     -------
@@ -6338,6 +6387,11 @@ def evaluate(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    order = kwargs.pop("order", "K")
+    # Validate even when an explicit destination makes allocation unnecessary.
+    if not isinstance(order, str) or order.upper() not in {"C", "F", "A", "K"}:
+        raise ValueError("order must be one of 'C', 'F', 'A', or 'K'")
+    order = order.upper()
     lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
     if lexpr is None:
         lexpr = lazyexpr(
@@ -6348,6 +6402,17 @@ def evaluate(
             ne_args=kwargs or None,
             _frame_depth=3,
         )
+    if out is None and (
+        order == "F"
+        or (
+            order in {"A", "K"}
+            and any(
+                type(value) is np.ndarray and not value.flags.c_contiguous
+                for value in lexpr.operands.values()
+            )
+        )
+    ):
+        out = _evaluate_ordered_output(lexpr, order)
     if out is not None:
         if type(out) is np.ndarray:
             if not out.flags.writeable:
@@ -6359,7 +6424,10 @@ def evaluate(
                 )
         lexpr._output = out
         # The user specified an output array
-        return lexpr.compute()
+        result = lexpr.compute()
+        if type(out) is np.ndarray and out.size == 0 and np.shape(result) == out.shape:
+            return out
+        return result
     # The user did not specify an output array, so return a NumPy array
     return lexpr[()]
 

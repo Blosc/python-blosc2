@@ -2,6 +2,24 @@
 
 Status: proposal for later consideration; not an implementation authorization.
 
+### Allocation-policy prerequisite implemented
+
+`evaluate()` now consumes `order` as a Blosc2 allocation policy instead of
+forwarding it in NumExpr options. Explicit `order="C"` therefore no longer blocks
+native-first admission. `A`/`K` follow the allocated destination's actual layout;
+an explicit destination retains its own layout regardless of `order`.
+
+For resident expressions with non-C-contiguous NumPy destinations, the fallback
+evaluates the approved expression graph with NumPy and copies into the supplied
+output. It does not select NumExpr because of layout. This supports Fortran and
+strided outputs, but may allocate a full intermediate result and is not native
+strided-output acceleration. Compressed/mixed inputs still need the bounded
+fallback migration described below. NumExpr remains in other runtime paths.
+
+Tests block NumExpr entry points for representative layout cases and verify that
+explicit C order retains native admission. Future interpreter/JIT strided sinks
+should replace this NumPy fallback without changing the allocation contract.
+
 ## 1. Goal and definition of completion
 
 Remove NumExpr completely from Python-Blosc2's runtime implementation and required
@@ -116,6 +134,10 @@ public expression / LazyExpr / internal chunk evaluation
 
 - Extend existing graph/artifact APIs as needed so interpreter and JIT can bind
   an external NumPy destination, including a serial direct-output path.
+- Keep allocation policies such as `order` separate from execution-engine
+  options. Preserve the implemented native-eligible C / NumPy strided fallback
+  split until native strided sinks qualify; never restore layout-driven NumExpr
+  dispatch. Account for the NumPy fallback's intermediates in performance reports.
 - Verify whether borrowed interpreter artifacts support the same binding and
   lifetime contracts; do not assume the current JIT-only resident helper does.
 - Reuse existing resident worker and prefilter machinery. Compressed output must
