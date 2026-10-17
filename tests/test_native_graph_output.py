@@ -118,6 +118,15 @@ def test_buffer_backed_destination():
     np.testing.assert_array_equal(output, x + 1)
 
 
+def test_disjoint_views_from_same_buffer_owner():
+    buffer = bytearray(np.arange(48.0).tobytes())
+    x = np.frombuffer(buffer, dtype="float64")[:24]
+    output = np.frombuffer(buffer, dtype="float64")[24:]
+    expected = x + 1
+    assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=output) is output
+    np.testing.assert_array_equal(output, expected)
+
+
 def test_public_native_sources_preserve_strided_output():
     x = np.arange(24.0).reshape(4, 6)
     stored = blosc2.asarray(x, chunks=(2, 3), blocks=(1, 3))

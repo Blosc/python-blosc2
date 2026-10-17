@@ -6259,9 +6259,11 @@ def _evaluate_ordered_output(expr, order):
 
 
 def _array_owner(value):
-    while getattr(value, "base", None) is not None:
-        value = value.base
-    return value
+    while True:
+        base = value.obj if isinstance(value, memoryview) else getattr(value, "base", None)
+        if base is None:
+            return value
+        value = base
 
 
 @remember_evaluation
