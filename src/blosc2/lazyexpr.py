@@ -175,6 +175,7 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
     validate_operands(operands)
     output = kwargs.pop("out", None)
     validate_evaluate_options(kwargs)
+    policy = blosc2.jit_config.execution_options()
     native = None
     if (
         operands
@@ -186,7 +187,16 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
         stub = LazyExpr(None)
         stub.expression, stub.operands = expression, operands
         try:
-            native = lower_native_graph(stub, jit=False, allow_output=True)
+            # Chunk fallback must not silently force the scalar interpreter for
+            # numerical graphs that already have qualified native C lowering.
+            # Explicit no-JIT policy still wins; native compilation remains
+            # best effort and cached by expression/signature, never by arrays.
+            graph_jit = (
+                policy["jit"] is not False
+                and policy["jit_backend"] is None
+                and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+            )
+            native = lower_native_graph(stub, jit=graph_jit, allow_output=True)
         except (NotImplementedError, ValueError, TypeError):
             native = None
         except blosc2.PortableArtifactError as error:
@@ -194,7 +204,13 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
                 raise
     if native is not None:
         plan, arrays, _ = native
-        schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in arrays.items()})
+        # Match the native executor's bounded map tiles without starting another
+        # pool inside a caller-owned chunk/compression worker. Checked recipes
+        # and reductions retain their existing numerical traversal.
+        tile_items = 65536 if plan.info().get("partitionable", False) else 1024
+        schedule = plan.specialize(
+            {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items=tile_items
+        )
         info = schedule.info()
         direct = (
             output is not None

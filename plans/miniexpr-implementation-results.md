@@ -1,5 +1,10 @@
 # Native execution and NumExpr-removal evaluation
 
+Follow-up contiguous-kernel JIT lowering and its measurements are tracked in
+[contiguous-jit-lowering.md](contiguous-jit-lowering.md). That pass removes more
+per-operation interpreter callbacks and the chunk path's forced no-JIT policy;
+it does not eliminate the explicit no-JIT interpreter gap documented here.
+
 Implementation branches: `improved-miniexpr` in Python-Blosc2 and miniexpr.
 
 Implementation boundaries: Python-Blosc2 `69930b98` (native integration),

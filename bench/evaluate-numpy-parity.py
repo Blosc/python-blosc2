@@ -33,6 +33,9 @@ RECIPES = {
     "round": "floor(x * 3) + ceil(y)",
     "predicate": "isfinite(x) & (x < y)",
     "where": "where(x > 0.5, x + y, x - y)",
+    "minimum": "minimum(x, y)",
+    "maximum": "maximum(x, y)",
+    "extrema-chain": "minimum(maximum(x, y), x + 2)",
     "copy": "copy(x)",
     "sum": "sum(x * y)",
     "complex": "complex(x, y)",
@@ -70,6 +73,12 @@ def execution_route(operation):
 def compare_case(expression, inputs, samples, warmups, rng, order="K"):
     options = {} if order == "K" else {"order": order}
     reference = ne.evaluate(expression, local_dict=inputs, **options)
+    # Numerical values alone cannot qualify a timing with different result
+    # promotion: e.g. NumExpr's integral minimum returns float64, whereas NumPy
+    # and Blosc2 keep integers. Do not time an extra Blosc2 conversion as a JIT gap.
+    native_dtype = blosc2.evaluate(expression, local_dict=inputs).dtype
+    if native_dtype != reference.dtype:
+        raise TypeError(f"result dtype differs: Blosc2 {native_dtype}, NumExpr {reference.dtype}")
     output = np.empty_like(reference, order=order)
     operations = {
         "numexpr": lambda: ne.evaluate(expression, local_dict=inputs, out=output, **options),

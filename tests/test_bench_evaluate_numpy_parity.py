@@ -21,13 +21,21 @@ def benchmark():
 def test_benchmark_rejects_wrong_integer_values_before_timing(benchmark, monkeypatch):
     inputs = {"x": np.array([2**60], dtype="int64")}
 
-    def wrong_result(expression, local_dict, out):
+    def wrong_result(expression, local_dict, out=None):
+        if out is None:
+            out = np.empty_like(local_dict["x"])
         out[...] = local_dict["x"] + 1
         return out
 
     monkeypatch.setattr(blosc2, "evaluate", wrong_result)
     with pytest.raises(AssertionError):
         benchmark["compare_case"]("x", inputs, 1, 0, random.Random(42))
+
+
+def test_benchmark_rejects_engine_promotion_differences(benchmark):
+    x = np.arange(17, dtype="int64")
+    with pytest.raises(TypeError, match="result dtype differs"):
+        benchmark["compare_case"]("minimum(x,y)", {"x": x, "y": x + 1}, 1, 0, random.Random(42))
 
 
 def test_benchmark_cli_qualifies_explicit_outputs(benchmark, monkeypatch, tmp_path, capsys):
