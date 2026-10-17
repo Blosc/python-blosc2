@@ -194,7 +194,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):  # noqa: C901
         populate_safe_numpy_globals(expression)
         if "out" in kwargs:
             out = kwargs.pop("out")
-            out[:] = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
+            out[...] = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
             return out
         res = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
         return np.asarray(res) if not hasattr(res, "shape") else res
@@ -240,9 +240,75 @@ def ne_evaluate(expression, local_dict=None, **kwargs):  # noqa: C901
     res = evaluate_expression(expression, safe_blosc2_globals, local_dict)
     if "out" in kwargs:
         out = kwargs.pop("out")
-        out[:] = res  # will handle calc/decomp if res is lazyarray
+        out[...] = res  # will handle calc/decomp if res is lazyarray
         return out
     return res[()] if isinstance(res, blosc2.Operand) else res
+
+
+@lru_cache(maxsize=128)
+def _resident_numexpr_program(expression, signature, options):
+    """Cache an unbound compatibility program, never NumExpr's last-array state."""
+    options = dict(options)
+    sanitize = options.pop("sanitize", None)
+    context = numexpr.necompiler.getContext(options)
+    _, uses_vml = numexpr.necompiler.getExprNames(expression, context, sanitize=sanitize)
+    program = numexpr.NumExpr(expression, signature=signature, sanitize=sanitize, **options)
+    # NumExpr programs reuse internal buffers, especially for byte strings.
+    # Do not share one mutable program concurrently across Python callers.
+    return program, uses_vml, threading.Lock()
+
+
+def _resident_numexpr_output(expr, item, kwargs):
+    """Avoid chunk temporaries for resident expressions lacking a native route.
+
+    This is the existing optional NumExpr compatibility backend, not native
+    execution. Preparation failures may decline; execution failures never replay.
+    """
+    output = kwargs.get("_output")
+    if (
+        numexpr is None
+        or blosc2.IS_WASM
+        or type(output) is not np.ndarray
+        or type(item) is not tuple
+        or item
+        or any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
+        or kwargs.get("jit_backend") is not None
+        or kwargs.get("fp_accuracy") is not None
+        or not expr.operands
+        or any(type(value) is not np.ndarray for value in expr.operands.values())
+    ):
+        return None
+    options = dict(kwargs.get("_ne_args") or {})
+    if options.keys() - {"order", "casting", "optimization", "truediv", "sanitize", "disable_cache"}:
+        return None
+    try:
+        parse_expression(expr.expression)
+        signature = tuple(
+            (name, numexpr.necompiler.getType(value)) for name, value in sorted(expr.operands.items())
+        )
+        compile_options = tuple(
+            sorted(
+                (key, value)
+                for key, value in options.items()
+                if key in {"optimization", "truediv", "sanitize"}
+            )
+        )
+        prepare = (
+            _resident_numexpr_program.__wrapped__
+            if options.get("disable_cache")
+            else _resident_numexpr_program
+        )
+        program, uses_vml, lock = prepare(expr.expression, signature, compile_options)
+    except (exceptions.UnsafeDeserializationError, TypeError, ValueError, NotImplementedError):
+        return None
+    with lock:
+        return program(
+            *(expr.operands[name] for name in program.input_names),
+            out=output,
+            order=options.get("order", "K"),
+            casting=options.get("casting", "same_kind"),
+            ex_uses_vml=uses_vml,
+        )
 
 
 def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
@@ -4700,6 +4766,9 @@ class LazyExpr(LazyArray):
         return indexing.evaluate_full_query(self._where_args, plan)
 
     def _compute_expr(self, item, kwargs):  # noqa: C901
+        resident = _resident_numexpr_output(self, item, kwargs)
+        if resident is not None:
+            return resident
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
@@ -4743,7 +4812,7 @@ class LazyExpr(LazyArray):
                 out = kwargs.get("_output", None)
                 if out is not None:
                     # This is not exactly optimized, but it works for now
-                    out[:] = lazy_expr[key]
+                    out[...] = lazy_expr[key]
                     return out
                 arr = lazy_expr[key]
                 if builtins.sum(mask) > 0:
@@ -4775,7 +4844,7 @@ class LazyExpr(LazyArray):
 
             _globals = get_expr_globals(newexpr)
             lazy_expr = evaluate_expression(newexpr, _globals, newops)
-            if isinstance(lazy_expr, blosc2.NDArray):
+            if isinstance(lazy_expr, blosc2.NDArray | np.ndarray):
                 # Almost done (probably the expression is made of only constructors)
                 # We only have to define the trivial expression ("o0")
                 lazy_expr = blosc2.LazyExpr(new_op=(lazy_expr, None, None))
@@ -5631,6 +5700,10 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     if prefer_blosc:
         _globals = get_expr_globals(expression)
         _globals |= dtype_symbols
+        if all(type(value) is np.ndarray or np.isscalar(value) for value in ops.values()):
+            # Blosc2's bare where/copy expect lazy or stored receivers, while
+            # these synthetic operands represent ordinary resident NumPy values.
+            _globals.update(where=np.where, copy=np.copy)
     else:
         _globals = safe_numpy_globals
     try:
@@ -5936,7 +6009,9 @@ def lazyexpr(
         else:
             # No operands found in the expression. Maybe a constructor?
             constructor = any(_has_constructor_call(expression, constructor) for constructor in constructors)
-            if not constructor:
+            if not constructor and parse_expression(expression).names:
+                # Approved constant-only numerical expressions are valid too;
+                # parsing, rather than Python eval, decides whether to admit them.
                 raise ValueError("No operands nor constructors found in the expression")
             # _new_expr will take care of the constructor, but needs an empty dict in operands
             operands = {}
@@ -6079,6 +6154,12 @@ def _evaluate_recipe_names(expression):
         ast.Add,
         ast.Sub,
         ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.LShift,
+        ast.RShift,
         ast.UAdd,
         ast.USub,
         ast.Invert,
@@ -6092,8 +6173,26 @@ def _evaluate_recipe_names(expression):
         ast.Gt,
         ast.GtE,
     )
-    if any(not isinstance(node, allowed) for node in ast.walk(tree)):
-        return None
+    from .native_graph import NATIVE_ELEMENTWISE_CALLS, REDUCERS
+
+    calls = {
+        **NATIVE_ELEMENTWISE_CALLS,
+        **dict.fromkeys(REDUCERS, 1),
+        "complex": 2,
+        "ones_like": 1,
+        "contains": 2,
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in calls
+                or node.keywords
+                or len(node.args) != calls[node.func.id]
+            ):
+                return None
+        elif not isinstance(node, allowed):
+            return None
     return tuple(sorted(graph.names)) or None
 
 
@@ -6108,7 +6207,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
     inputs = seek_operands(names, local_dict, global_dict, _frame_depth=3)
     if any(
         type(value) not in (np.ndarray, blosc2.NDArray)
-        or value.dtype.kind not in "biuf"
+        or value.dtype.kind not in "biufcS"
         or not value.dtype.isnative
         or value.dtype.metadata is not None
         for value in inputs.values()
@@ -6189,10 +6288,11 @@ def evaluate(
     As NDArrays can be on-disk, the expression can be evaluated without loading
     the whole array into memory (i.e. using an out-of-core approach).
 
-    Repeated array-only basic arithmetic/comparison expressions without ``out``
-    or extra options reuse a bounded, operand-free preparation recipe. Current
-    inputs are rebound on every call and the NumPy output is freshly allocated;
-    neither operand arrays nor numerical results are retained in the cache.
+    Repeated array-only reviewed arithmetic, math and reduction expressions
+    without extra options reuse a bounded, operand-free preparation recipe.
+    Current inputs and any supplied output are rebound on every call; otherwise
+    a fresh NumPy output is allocated. Neither operand/output arrays nor numerical
+    results are retained in the cache.
 
     Eligible numeric arithmetic and elementwise math calls use the native
     Menudet kernels, including explicit NumPy or Blosc2 destinations. Compressed
@@ -6238,7 +6338,7 @@ def evaluate(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
-    lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if out is None and not kwargs else None
+    lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
     if lexpr is None:
         lexpr = lazyexpr(
             ex,
@@ -6249,6 +6349,15 @@ def evaluate(
             _frame_depth=3,
         )
     if out is not None:
+        if type(out) is np.ndarray:
+            if not out.flags.writeable:
+                raise ValueError("output array is read-only")
+            casting = kwargs.get("casting", "same_kind")
+            if not np.can_cast(lexpr.dtype, out.dtype, casting=casting):
+                raise TypeError(
+                    f"Cannot cast result from {lexpr.dtype} to {out.dtype} with casting={casting!r}"
+                )
+        lexpr._output = out
         # The user specified an output array
         return lexpr.compute()
     # The user did not specify an output array, so return a NumPy array

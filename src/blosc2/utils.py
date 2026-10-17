@@ -169,6 +169,7 @@ elementwise_funcs = [
     "broadcast_to",
     "ceil",
     "clip",
+    "complex",
     "conj",
     "contains",
     "copysign",
@@ -181,6 +182,7 @@ elementwise_funcs = [
     "expm1",
     "floor",
     "floor_divide",
+    "fmod",
     "greater",
     "greater_equal",
     "hypot",
@@ -287,6 +289,17 @@ constructors = [
 constructors += ["reshape"]
 
 
+def _complex_from_parts(real, imag):
+    """NumExpr's two-real-array complex constructor, without inf * 1j artifacts."""
+    real, imag = np.broadcast_arrays(real, imag)
+    if np.iscomplexobj(real) or np.iscomplexobj(imag):
+        raise TypeError("complex() real and imaginary parts must be real")
+    result = np.empty(real.shape, dtype="complex128")
+    result.real = real
+    result.imag = imag
+    return result
+
+
 _NUMPY_ALIASES = {
     "acos": np.arccos,
     "acosh": np.arccosh,
@@ -296,6 +309,7 @@ _NUMPY_ALIASES = {
     "atanh": np.arctanh,
     "atan2": np.arctan2,
     "concat": getattr(np, "concat", np.concatenate),
+    "complex": _complex_from_parts,
     "contains": _string_contains,
     "cumulative_prod": npcumprod,
     "cumulative_sum": npcumsum,
@@ -657,6 +671,8 @@ class ShapeInferencer(ast.NodeVisitor):
             return slice_shape(obj_shape, slices)
 
         # --- Handle common chained methods on array objects ---
+        if base_name == "copy":
+            return obj_shape if obj_shape is not None else args[0]
         if attr_name in ("astype", "copy"):
             return obj_shape
         elif attr_name in ("flatten", "ravel"):

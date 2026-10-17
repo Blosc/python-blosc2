@@ -234,6 +234,7 @@ _ELEMENTWISE = frozenset(
         "broadcast_to",
         "ceil",
         "clip",
+        "complex",
         "conj",
         "contains",
         "copysign",
@@ -246,6 +247,7 @@ _ELEMENTWISE = frozenset(
         "expm1",
         "floor",
         "floor_divide",
+        "fmod",
         "greater",
         "greater_equal",
         "hypot",
@@ -459,10 +461,12 @@ _BINARY_CALLS = frozenset(
         "bitwise_right_shift",
         "bitwise_xor",
         "copysign",
+        "complex",
         "divide",
         "endswith",
         "equal",
         "floor_divide",
+        "fmod",
         "greater",
         "greater_equal",
         "hypot",
@@ -1950,6 +1954,8 @@ def _dispatch(name, values, kwargs, prefer_blosc, *, method=False):
         return len(values[0])
     if name in _DTYPES:
         return np.dtype(name).type(*values, **kwargs)
+    if name in {"where", "copy"} and values and type(values[0]) is np.ndarray:
+        return getattr(np, name)(*values, **kwargs)
     if prefer_blosc and hasattr(blosc2, name):
         return getattr(blosc2, name)(*values, **kwargs)
     func = _NUMPY_ALIASES.get(name) or getattr(np, name, None)

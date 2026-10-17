@@ -28,6 +28,7 @@ NATIVE_ELEMENTWISE_CALLS = {
     **dict.fromkeys(
         (
             "abs",
+            "copy",
             "fabs",
             "sqrt",
             "cbrt",
@@ -102,6 +103,7 @@ NATIVE_ELEMENTWISE_CALLS = {
         2,
     ),
     "fma": 3,
+    "where": 3,
 }
 
 
@@ -301,7 +303,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         )
         if prepared[2] and selection:
             return None
-        if output is not None and prepared[2]:
+        if output is not None and prepared[2] and compressed:
             return None
         if compressed and prepared[0].info()["stages"] != 1:
             return None
@@ -960,6 +962,8 @@ def _native_text_expression(expression):
         return None
     tree = ast.parse(expression, mode="eval")
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "copy":
+            return None  # The declarative adapter elides this pure value-copy node.
         if isinstance(node, ast.Attribute) or (isinstance(node, ast.keyword) and node.arg == "dtype"):
             return None
         if isinstance(node, ast.Name) and (
@@ -968,7 +972,12 @@ def _native_text_expression(expression):
             return None
     # Normalize Python numeric spelling (hex, underscores) without constructing
     # graph nodes. The accepted operators share the native parser's precedence.
-    return ast.unparse(tree), isinstance(tree.body, ast.Call)
+    reduction = (
+        isinstance(tree.body, ast.Call)
+        and isinstance(tree.body.func, ast.Name)
+        and tree.body.func.id in REDUCERS
+    )
+    return ast.unparse(tree), reduction
 
 
 def _graph_configuration(jit):
@@ -1240,6 +1249,10 @@ class GraphAdapter:
             if node.keywords:
                 raise ValueError("Native elementwise functions do not accept keywords")
             args = [self.visit(arg) for arg in node.args]
+            if name == "copy":
+                if len(args) != 1:
+                    raise ValueError("Native copy requires exactly one value")
+                return args[0]
             if name == "where":
                 return self.add("select", args=args)
             if name in {
@@ -1342,8 +1355,12 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
     )
     getitem = kwargs.pop("_getitem", False)
     output = kwargs.pop("out", None)
-    if output is not None and (reduction or not getitem or not parallel_reductions):
-        raise ValueError("Explicit native output requires an eligible compressed parallel map")
+    if output is not None and (
+        not getitem
+        or not parallel_reductions
+        or (reduction and any(type(value) is blosc2.NDArray for value in inputs.values()))
+    ):
+        raise ValueError("Explicit native output requires an eligible map or resident reduction")
     for key in ("_output", "out", "_ne_args", "ne_args", "_where_args", "_indices", "_order"):
         if key in kwargs:
             raise ValueError(f"{key} is not native-graph eligible")

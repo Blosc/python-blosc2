@@ -122,10 +122,11 @@ def test_evaluate_cache_excludes_captures_options_and_aliases():
     np.testing.assert_array_equal(blosc2.evaluate("x + c", local_dict={"x": x, "c": 2}), x + 2)
     np.testing.assert_array_equal(blosc2.evaluate("x + c", local_dict={"x": x, "c": 3}), x + 3)
     np.testing.assert_array_equal(blosc2.evaluate("x + y", local_dict={"x": x, "y": x}), x + x)
+    assert not module._evaluate_recipe_cache
     out = np.empty_like(x)
     assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=out) is out
     np.testing.assert_array_equal(blosc2.evaluate("x + 1", local_dict={"x": x}, order="C"), x + 1)
-    assert not module._evaluate_recipe_cache
+    assert len(module._evaluate_recipe_cache) == 1  # Explicit output is rebound, not cached.
 
 
 def test_evaluate_cache_checks_current_array_layout():
