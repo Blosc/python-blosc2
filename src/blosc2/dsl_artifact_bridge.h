@@ -83,6 +83,15 @@ static size_t b2_artifact_width(const void *handle, int index) {
 }
 static int b2_artifact_rank(const void *handle) { return me_artifact_context_ndim(handle); }
 static const char *b2_artifact_version(const void *handle) { return me_artifact_schema_version(handle); }
+#ifdef ME_ARTIFACT_MATH_POLICY_VERSION
+static const char *b2_artifact_math(const void *handle) { return me_artifact_math_backend(handle); }
+static const char *b2_artifact_math_ulp(const void *handle) { return me_artifact_sleef_accuracy(handle); }
+static const char *b2_artifact_fp(const void *handle) { return me_artifact_fp_mode(handle); }
+#else
+static const char *b2_artifact_math(const void *handle) { (void)handle; return "unknown"; }
+static const char *b2_artifact_math_ulp(const void *handle) { (void)handle; return ""; }
+static const char *b2_artifact_fp(const void *handle) { (void)handle; return "unknown"; }
+#endif
 static int b2_artifact_eval_ex(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
                              void *output, const b2_artifact_descriptor *descriptor, b2_artifact_error *error) {
     return me_artifact_eval_ex(handle, inputs, ninputs, output, descriptor, error);
@@ -112,6 +121,9 @@ static int b2_artifact_cardinality(const void *handle) { (void)handle; return 0;
 static size_t b2_artifact_width(const void *handle, int index) { (void)handle; (void)index; return 0; }
 static int b2_artifact_rank(const void *handle) { (void)handle; return 0; }
 static const char *b2_artifact_version(const void *handle) { (void)handle; return "unsupported"; }
+static const char *b2_artifact_math(const void *handle) { (void)handle; return "unknown"; }
+static const char *b2_artifact_math_ulp(const void *handle) { (void)handle; return ""; }
+static const char *b2_artifact_fp(const void *handle) { (void)handle; return "unknown"; }
 static int b2_artifact_eval_ex(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
                              void *output, const b2_artifact_descriptor *descriptor, b2_artifact_error *error) {
     (void)handle; (void)inputs; (void)ninputs; (void)output; (void)descriptor;

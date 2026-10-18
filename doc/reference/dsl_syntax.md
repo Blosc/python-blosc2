@@ -180,12 +180,30 @@ Supported file-header pragmas:
 
 - `# me:fp=strict|contract|fast`
 - `# me:compiler=tcc|cc`
+- `# me:math=auto|system|sleef|accelerate`
+- `# me:ulp=u10|u35`
 
 Notes:
 
 - Pragma keys must be unique.
 - Unknown `me:*` pragmas are errors.
 - Malformed pragma values are errors.
+- `auto` and `system` both select system math; `auto` is the default and does
+  not consult `ME_SIMD_MATH_BACKEND`. Explicit `sleef`/`accelerate` requests fail
+  during preparation when unavailable.
+- `me:ulp` is valid only with SLEEF; omitted accuracy is `u35`.
+- `contract` and `fast` require the `cc` backend (TCC supports strict only).
+- An explicit pragma overrides the matching environment setting
+  (`ME_DSL_FP_MODE`, `ME_SIMD_MATH_BACKEND`) for that prepared kernel.
+
+```python
+# me:compiler=cc
+# me:fp=fast
+# me:math=sleef
+# me:ulp=u35
+def kernel(x):
+    return sin(x) + cos(x)
+```
 
 ## Function signature and inputs
 

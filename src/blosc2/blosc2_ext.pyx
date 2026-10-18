@@ -1106,6 +1106,9 @@ cdef extern from "dsl_artifact_bridge.h":
     size_t b2_artifact_width(const void *, int)
     int b2_artifact_rank(const void *)
     const char *b2_artifact_version(const void *)
+    const char *b2_artifact_math(const void *)
+    const char *b2_artifact_math_ulp(const void *)
+    const char *b2_artifact_fp(const void *)
     int b2_artifact_eval_ex(const void *, const b2_artifact_buffer *, int, void *,
                           const b2_artifact_descriptor *, b2_artifact_error *) nogil
 
@@ -1980,6 +1983,9 @@ cdef class PortableArtifactHandle:
                        for i in range(b2_artifact_ninputs(self._handle))},
             "output_dtype": _numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)),
             "jit": bool(b2_artifact_jit(self._handle)),
+            "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
+            "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
+            "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
         }
 
     cdef object signature_dtype(self, int index):
@@ -2004,6 +2010,9 @@ cdef class PortableArtifactHandle:
                                _numpy_dtype_from_me_dtype(b2_artifact_inferred(self._handle))),
             "cardinality": "block_scalar" if b2_artifact_cardinality(self._handle) == 1 else "elementwise",
             "ndim": b2_artifact_rank(self._handle),
+            "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
+            "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
+            "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
         }
 
     def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None,

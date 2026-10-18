@@ -240,6 +240,41 @@ def _export_captures(func, source, names, capture_dtypes, version="1.0"):
     )
 
 
+def _header_pragmas(source):
+    """Return recognized header pragmas without inventing environment defaults."""
+    values = {}
+    for line in source.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("#"):
+            break
+        body = stripped[1:].strip()
+        if not body.startswith("me:"):
+            continue
+        key, separator, value = body[3:].partition("=")
+        key, value = key.strip(), value.strip()
+        if separator and key in {"fp", "math", "ulp"}:
+            values[key] = value
+    return values
+
+
+def _artifact_semantics(source, version, casting):
+    """Build validated semantic fields while leaving omissions as inheritance."""
+    pragmas = _header_pragmas(source)
+    semantics = {**({"numeric": "numpy-2.5", "casting": casting} if version == "1.0" else {})}
+    requires = ["numeric", "control-flow", "block-reductions", "fixed-strings", "nd-context"]
+    if "fp" in pragmas:
+        semantics["fp"] = pragmas["fp"]
+    if "math" in pragmas:
+        semantics["math"] = pragmas["math"]
+    if "ulp" in pragmas:
+        semantics["ulp"] = pragmas["ulp"]
+    if "math" in pragmas or "ulp" in pragmas or semantics.get("fp", "strict") != "strict":
+        requires.append("flexible-math")
+    return semantics, requires
+
+
 def export_portable_kernel(
     kernel,
     input_dtypes,
@@ -291,10 +326,11 @@ def export_portable_kernel(
         raise TypeError("metadata must be a mapping")
     # This finite superset grants no unsupported operations: native typed import
     # validates the entire normalized source before this export can succeed.
+    semantics, requires = _artifact_semantics(source, version, casting)
     manifest = {
         "schema_version": version,
         "language": {"name": "miniexpr", "version": version},
-        "requires": ["numeric", "control-flow", "block-reductions", "fixed-strings", "nd-context"],
+        "requires": requires,
         "source": source,
         "entry_point": kernel.__name__,
         "inputs": [
@@ -302,10 +338,7 @@ def export_portable_kernel(
         ],
         "constants": sorted(encoded, key=lambda item: item["name"]),
         "output": {**portable_dtype_descriptor(output_dtype), "contract": cardinality},
-        "semantics": {
-            "fp": "strict",
-            **({"numeric": "numpy-2.5", "casting": casting} if version == "1.0" else {}),
-        },
+        "semantics": semantics,
         "context": {"ndim": ndim},
         "metadata": dict(metadata or {}),
     }

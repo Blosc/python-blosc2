@@ -282,6 +282,14 @@ controls have different scopes; neither is an indication that JIT actually ran.
       - Advanced miniexpr-wide compiler default, ``tcc`` or ``cc``. It overrides
         Python's ``jit_backend`` selection, but an explicit author-written
         ``# me:compiler=tcc|cc`` pragma remains authoritative.
+    * - ``ME_SIMD_MATH_BACKEND``
+      - Default math library, ``auto|system|sleef|accelerate|scalar``. ``auto``
+        and ``system`` select system math; ``scalar`` forces system scalar math.
+        Explicit ``sleef``/``accelerate`` requests fail when unavailable.
+    * - ``ME_DSL_FP_MODE``
+      - Default floating-point mode, ``strict|contract|fast`` (``relaxed`` is an
+        alias of ``fast``). An explicit ``# me:fp=...`` pragma remains
+        authoritative. ``contract``/``fast`` require the ``cc`` backend.
 
 Tracing and restricted environments
 -----------------------------------

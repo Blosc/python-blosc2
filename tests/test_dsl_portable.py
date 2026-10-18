@@ -1,5 +1,6 @@
 """Representative Python host conformance; exhaustive fixtures belong to miniexpr."""
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -271,3 +272,113 @@ def test_portable_integer_literal_bound_is_exact(portable_validator, literal):
             kernel.evaluate({"x": np.array([np.iinfo("int64").max], dtype="int64")}),
             np.array([np.iinfo("int64").max], dtype="int64") + (2**53 + 1),
         )
+
+
+def test_portable_export_preserves_math_policy():
+    source = "# me:math=sleef\n# me:ulp=u35\n# me:compiler=cc\ndef k(x):\n    return sin(x) + cos(x)\n"
+    kernel = DSLKernel.from_source(source)
+    try:
+        artifact = kernel.export({"x": "float64"}, "float64")
+    except blosc2.PortableArtifactError as error:
+        pytest.skip(f"SLEEF unavailable on this host: {error}")
+    manifest = json.loads(artifact)
+    assert manifest["semantics"]["math"] == "sleef"
+    assert manifest["semantics"]["ulp"] == "u35"
+    assert "flexible-math" in manifest["requires"]
+    loaded = blosc2.PortableKernel.from_json(artifact, jit=False)
+    assert loaded._info["math_backend"] == "sleef"
+    assert loaded._info["sleef_accuracy"] == "u35"
+    x = np.linspace(-2, 2, 257)
+    result = loaded.evaluate({"x": x})
+    np.testing.assert_allclose(result, np.sin(x) + np.cos(x), rtol=1e-6, atol=1e-6)
+
+
+def test_portable_export_fast_requires_cc_and_round_trips(monkeypatch):
+    source = "# me:fp=fast\ndef k(x):\n    return sin(x) + 1\n"
+    kernel = DSLKernel.from_source(source)
+    with pytest.raises(blosc2.PortableArtifactError, match="TCC"):
+        kernel.export({"x": "float64"}, "float64")
+
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc")
+    inherited = kernel.export({"x": "float64"}, "float64")
+    assert blosc2.PortableKernel.from_json(inherited, jit=False)._info["fp_mode"] == "fast"
+
+    source = "# me:compiler=cc\n# me:fp=fast\ndef k(x):\n    return sin(x) + 1\n"
+    kernel = DSLKernel.from_source(source)
+    artifact = kernel.export({"x": "float64"}, "float64")
+    manifest = json.loads(artifact)
+    assert manifest["semantics"]["fp"] == "fast"
+    assert "flexible-math" in manifest["requires"]
+    loaded = blosc2.PortableKernel.from_json(artifact, jit=False)
+    assert loaded._info["fp_mode"] == "fast"
+
+
+def test_portable_artifact_math_policy_conflict_and_capability():
+    source = "# me:math=system\ndef k(x):\n    return sin(x)\n"
+    manifest = json.loads(DSLKernel.from_source(source).export({"x": "float64"}, "float64"))
+    manifest["semantics"]["math"] = "sleef"
+    with pytest.raises(blosc2.PortableArtifactError, match="conflict"):
+        blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+    manifest["source"] = "# me:math=sleef\n# me:compiler=cc\ndef k(x):\n    return sin(x)\n"
+    manifest["requires"].remove("flexible-math")
+    with pytest.raises(blosc2.PortableArtifactError, match="flexible-math"):
+        blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+
+    manifest["semantics"].pop("math")
+    manifest["source"] = source
+    with pytest.raises(blosc2.PortableArtifactError, match="flexible-math"):
+        blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+
+
+def test_portable_math_environment_inheritance_and_source_override(monkeypatch):
+    plain = "def k(x):\n    return sin(x)\n"
+    manifest = json.loads(DSLKernel.from_source(plain).export({"x": "float64"}, "float64"))
+    assert "math" not in manifest["semantics"]
+    assert "flexible-math" not in manifest["requires"]
+    monkeypatch.setenv("ME_SIMD_MATH_BACKEND", "sleef")
+    try:
+        loaded = blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+    except blosc2.PortableArtifactError as error:
+        if "unavailable" in str(error):
+            pytest.skip(f"SLEEF unavailable on this host: {error}")
+        raise
+    assert loaded._info["math_backend"] == "sleef"
+    assert loaded._info["sleef_accuracy"] == "u35"
+
+    source = "# me:math=system\ndef k(x):\n    return sin(x)\n"
+    explicit = json.loads(DSLKernel.from_source(source).export({"x": "float64"}, "float64"))
+    loaded = blosc2.PortableKernel.from_json(json.dumps(explicit), jit=False)
+    assert loaded._info["math_backend"] == "system"
+
+
+def test_portable_concurrent_math_backends_are_kernel_local():
+    from concurrent.futures import ThreadPoolExecutor
+
+    x = np.linspace(-2, 2, 200_003)
+    reference = np.sin(x) + np.cos(x)
+    system = blosc2.PortableKernel.from_json(
+        DSLKernel.from_source("# me:math=system\ndef k(x):\n    return sin(x) + cos(x)\n").export(
+            {"x": "float64"}, "float64"
+        ),
+        jit=False,
+    )
+    try:
+        sleef = blosc2.PortableKernel.from_json(
+            DSLKernel.from_source(
+                "# me:math=sleef\n# me:ulp=u35\ndef k(x):\n    return sin(x) + cos(x)\n"
+            ).export({"x": "float64"}, "float64"),
+            jit=False,
+        )
+    except blosc2.PortableArtifactError as error:
+        if "unavailable" in str(error):
+            pytest.skip(f"SLEEF unavailable on this host: {error}")
+        raise
+    kernels = [system, sleef] * 4
+
+    def run(kernel):
+        return kernel.evaluate({"x": x})
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(run, kernels))
+    for result in results:
+        np.testing.assert_allclose(result, reference, rtol=1e-6, atol=1e-6)

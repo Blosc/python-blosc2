@@ -973,8 +973,12 @@ class DSLKernel:
         ``capture_dtypes`` are strong typed scalars.
         Menudet supports mixed numeric types and fixed byte/Unicode snapshots;
         ``cardinality`` is ``elementwise`` or ``block_scalar``, and ``ndim``
-        declares the required logical coordinate rank. The native loader
-        validates normalized source, widths and cardinality before export succeeds.
+        declares the required logical coordinate rank. Source header pragmas
+        (``me:fp``, ``me:compiler``, ``me:math``, ``me:ulp``) are preserved in the
+        artifact. Omitted policy fields stay inheritance requests resolved by the
+        importer's environment; environment-derived choices are never baked into
+        exported source. The native loader validates normalized source, widths,
+        policy and cardinality before export succeeds.
         """
         from .portable_kernel import export_portable_kernel
 

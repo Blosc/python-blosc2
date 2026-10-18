@@ -6,6 +6,13 @@
 
 **Menudet — a little language for portable computation on arrays and tables.**
 
+- Menudet source pragmas now select math libraries and floating-point modes:
+  `me:math=auto|system|sleef|accelerate`, `me:ulp=u10|u35`, and
+  `me:fp=strict|contract|fast` (with `me:compiler=cc`). Exported artifacts
+  preserve explicit policy through JSON round trips; omitted fields inherit
+  `ME_SIMD_MATH_BACKEND`/`ME_DSL_FP_MODE` at preparation. Unavailable explicit
+  backends fail before execution, and `auto` now follows system math instead of
+  preferring SLEEF.
 - Export normalized `DSLKernel` authoring as validated, standalone JSON artifacts
   with typed signatures and exact captured constants. Native miniexpr executes
   imports without reconstructing Python functions or falling back to Python.
