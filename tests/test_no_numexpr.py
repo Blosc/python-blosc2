@@ -5,7 +5,12 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
 
+import blosc2
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Subprocess isolation is unavailable on WASM")
 def test_runtime_never_imports_numexpr():
     source = textwrap.dedent("""
         import sys, json, importlib.abc

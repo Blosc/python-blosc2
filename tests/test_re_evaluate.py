@@ -91,6 +91,7 @@ def test_rebinding_is_checked_and_failure_does_not_destroy_state():
     np.testing.assert_array_equal(out, x + 1)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Host thread pools are unavailable on WASM")
 def test_thread_isolation():
     barrier = threading.Barrier(2)
 

@@ -235,6 +235,7 @@ def test_root_math_call_is_not_a_native_reduction(expression):
     assert not reduction
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Host thread pools are unavailable on WASM")
 def test_numpy_fallback_rebinds_without_retaining_arrays():
     import gc
     import importlib

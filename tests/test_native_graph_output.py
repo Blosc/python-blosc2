@@ -5,6 +5,8 @@ import pytest
 
 import blosc2
 
+pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unavailable on WASM")
+
 
 @pytest.fixture(autouse=True)
 def output_runtime(native_graph_runtime):

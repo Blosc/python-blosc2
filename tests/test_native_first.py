@@ -7,11 +7,14 @@ import blosc2
 from blosc2.native_graph import prepare_native_first
 from conftest import orthogonal_cases
 
+pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unavailable on WASM")
+
 
 @pytest.fixture
 def native_first_runtime(native_graph_runtime):
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
-    if prepare_native_first(expr, ()) is None:
+    plan = prepare_native_first(expr, ())
+    if plan is None or not plan[0].has_jit:
         pytest.skip("Automatic native execution requires an available graph JIT")
 
 

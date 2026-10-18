@@ -7,6 +7,10 @@ import pytest
 
 import blosc2
 
+pytestmark = pytest.mark.skipif(
+    blosc2.IS_WASM, reason="Native graph JIT and host threads are unavailable on WASM"
+)
+
 
 @pytest.mark.parametrize("jit", [False, True])
 def test_chunk_lowering_respects_jit_policy(native_graph_runtime, monkeypatch, jit):

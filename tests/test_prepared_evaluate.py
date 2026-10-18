@@ -24,6 +24,7 @@ def test_rebind_shape_dtype_output_and_release():
         assert all(ref() is None for ref in refs)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Host thread pools are unavailable on WASM")
 def test_concurrent_rebinding():
     evaluator = blosc2.prepare_evaluate("x * 2")
 
