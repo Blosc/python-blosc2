@@ -33,7 +33,7 @@ def test_runtime_never_imports_numexpr():
         assert "numexpr" not in sys.modules
     """)
     result = subprocess.run(
-        [sys.executable, "-S", "-c", source, json.dumps(sys.path)],
+        [sys.executable, "-c", source, json.dumps(sys.path)],
         capture_output=True,
         text=True,
         timeout=60,

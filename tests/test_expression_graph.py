@@ -1051,6 +1051,8 @@ def test_binary_dtype_inference_is_data_free_and_retains_backend_difference(monk
 
 
 def test_numpy_weak_integer_range_contract_matches_runtime():
+    if np.lib.NumpyVersion(np.__version__) < "2.0.0":
+        pytest.skip("Menudet follows NumPy 2 weak-scalar overflow diagnostics, not NumPy 1 wrapping")
     source = np.ones(3, dtype="int8")
     try:
         expected = source + 1000
