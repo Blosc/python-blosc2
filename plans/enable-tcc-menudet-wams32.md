@@ -1,10 +1,9 @@
 # Enable TCC JIT for Menudet on wasm32
 
-Status: bridge-free wasm32 first slice implemented and exercised under Emscripten
-main-module and side-module configurations, with conservative cross-platform
-arithmetic CSE and dead-status-check elimination. This is not full Pyodide
-qualification; see the execution record below. Performance remains workload- and
-target-dependent; typed bridges remain deferred pending broader qualification.
+Status: bridge-free wasm32 first slice implemented and qualified under Emscripten
+Node (main and side modules), headless Chromium (main and side modules), and a
+fresh Python-Blosc2 Pyodide wheel through the public API. Performance remains
+workload- and target-dependent; typed bridges remain deferred.
 
 ## Objective
 
@@ -113,156 +112,165 @@ source/IR and leave the program in the normal interpreted state.
 
 ### A1. Identify generated-source capabilities explicitly
 
-- [ ] Add a generated-source kind or capability field to the JIT program/IR, for
+- [x] Add a generated-source kind or capability field to the JIT program/IR, for
   example legacy wasm-patchable versus portable typed wasm. Do not infer this from
   comments or search for type names in C source.
-- [ ] Set the capability in `dsl_portable_jit.c` only after portable lowering and
+- [x] Set the capability in `dsl_portable_jit.c` only after portable lowering and
   wasm eligibility checks succeed.
-- [ ] Include the source kind, portable lowering revision, semantic profile and
+- [x] Include the source kind, portable lowering revision, semantic profile and
   wasm ABI revision in the runtime cache identity. A legacy patched module must
   never alias a typed Menudet module.
-- [ ] Preserve native source behavior: native TCC and CC continue to consume the
+- [x] Preserve native source behavior: native TCC and CC continue to consume the
   existing portable C source without wasm-specific substitutions.
 
 ### A2. Split backend preparation paths
 
-- [ ] Refactor `dsl_wasm32_patch_source()` into an explicitly legacy-only path.
+- [x] Refactor `dsl_wasm32_patch_source()` into an explicitly legacy-only path.
   Keep existing substitutions unchanged for already-supported legacy kernels.
-- [ ] Add a typed portable wasm preparation path that does **not** replace
+- [x] Add a typed portable wasm preparation path that does **not** replace
   `int64_t`, `uint64_t`, their casts, constants, or helper signatures.
-- [ ] Avoid broad textual rewriting in the new path. Generate the required wasm
+- [x] Avoid broad textual rewriting in the new path. Generate the required wasm
   entry signature and preamble from `dsl_portable_jit.c`, or apply narrowly scoped,
   marker-backed substitutions whose inputs are tested byte-for-byte.
-- [ ] Compile with `-nostdlib -nostdinc` as today, while ensuring the generated
+- [x] Compile with `-nostdlib -nostdinc` as today, while ensuring the generated
   portable preamble supplies everything it uses. Audit `stdint.h`, `limits.h`,
   `string.h`, `memcpy`, compound literals, unions, `UINT64_C`, and `restrict`
   against MiniCC's wasm frontend.
-- [ ] Add generated compile-time width checks for 8/16/32/64-bit integer typedefs
+- [x] Add generated compile-time width checks for 8/16/32/64-bit integer typedefs
   where MiniCC supports them. Compilation failure must remain recoverable.
 
 ## Task B: define a wasm32-safe kernel ABI
 
 ### B1. Keep boundary values wasm32-sized
 
-- [ ] Give the exported wasm kernel an explicit count type that lowers to `i32`.
+- [x] Give the exported wasm kernel an explicit count type that lowers to `i32`.
   Validate negative counts before converting to an internal nonnegative lane count.
-- [ ] Keep input-table pointers, input pointers, output pointers, masks, and status
+- [x] Keep input-table pointers, input pointers, output pointers, masks, and status
   pointers as wasm32 addresses. Check assumptions about `uintptr_t` and pointer size.
-- [ ] Use an internal `int64_t` only where Menudet semantics require it. Prefer a
+- [x] Use an internal `int64_t` only where Menudet semantics require it. Prefer a
   checked `uint32_t`/`size_t` lane index for memory addressing in the first slice,
   so pointer arithmetic cannot wrap through a signed 32-bit expression.
-- [ ] Validate `count * itemsize` and every derived address range before execution,
+- [x] Validate `count * itemsize` and every derived address range before execution,
   using the existing caller bounds where available. Do not rely on a wasm trap as
   ordinary bounds validation.
-- [ ] Retain `addFunction(fn, "iiii")` for the first-slice exported function and
+- [x] Retain `addFunction(fn, "iiii")` for the first-slice exported function and
   document why no `i64` is exposed to JavaScript.
 
 ### B2. Keep exact values inside wasm
 
-- [ ] Confirm MiniCC emits wasm `i64` loads, stores and arithmetic when compiling
+- [x] Confirm MiniCC emits wasm `i64` loads, stores and arithmetic when compiling
   exact-width C types without the legacy rewrite.
-- [ ] Ensure signed conversion helpers preserve the same two's-complement modular
+- [x] Ensure signed conversion helpers preserve the same two's-complement modular
   bit patterns as native portable lowering. Do not use JavaScript `Number`, JSON,
   or double casts as an intermediate representation.
-- [ ] Verify alignment behavior for 64-bit typed loads/stores. Either prove callers
+- [x] Verify alignment behavior for 64-bit typed loads/stores. Either prove callers
   supply the required alignment or generate wasm-safe unaligned accesses/copies.
-- [ ] Keep constants such as `INT64_MIN`, `UINT64_MAX`, shift counts and literal
+- [x] Keep constants such as `INT64_MIN`, `UINT64_MAX`, shift counts and literal
   suffixes intact through MiniCC parsing and wasm emission.
 
 ## Task C: implement fail-closed wasm eligibility
 
-- [ ] Move the unconditional `__EMSCRIPTEN__` rejection in `pj_prepare_source()`
+- [x] Move the unconditional `__EMSCRIPTEN__` rejection in `pj_prepare_source()`
   behind a dedicated wasm eligibility decision rather than deleting it outright.
-- [ ] Check the target after typed lowering has populated bridge counters, but
+- [x] Check the target after typed lowering has populated bridge counters, but
   before publishing `jit_c_source` and its fingerprint.
-- [ ] Require elementwise output, supported rank policy, supported dtypes, no ND
+- [x] Require elementwise output, supported rank policy, supported dtypes, no ND
   metadata, no scratch pointer table, and zero bridge counters for the first slice.
-- [ ] Audit operations that emit apparently local helper code but still depend on
+- [x] Audit operations that emit apparently local helper code but still depend on
   host status, floating environment, or interpreter callbacks. Add explicit flags
   where bridge counters alone are insufficient.
-- [ ] Emit one concise trace reason for each broad rejection category: bridge ABI,
+- [x] Emit one concise trace reason for each broad rejection category: bridge ABI,
   reduction/scalar output, ND context, scratch locals, unsupported semantics, or
   backend/compiler failure.
-- [ ] Ensure failed specialization with runtime constants cannot leave stale bridge
+- [x] Ensure failed specialization with runtime constants cannot leave stale bridge
   counters, source, IR, fingerprint, or cache state on the program.
-- [ ] Keep `jit=True` best effort. Do not add a Python-visible strict-JIT mode as
+- [x] Keep `jit=True` best effort. Do not add a Python-visible strict-JIT mode as
   part of this work.
 
 ## Task D: update wasm compilation and instantiation
 
-- [ ] Dispatch legacy and portable source kinds separately in
+- [x] Dispatch legacy and portable source kinds separately in
   `dsl_jit_compile_wasm32()`.
-- [ ] Register no host symbols for a first-slice portable kernel except unavoidable
+- [x] Register no host symbols for a first-slice portable kernel except unavoidable
   runtime primitives whose signatures are explicitly audited. Prefer generated
   local helpers over imported `memcpy`/`memset` for small fixed-width operations.
-- [ ] After TCC output, validate the module's imports and exported kernel signature
+- [x] After TCC output, validate the module's imports and exported kernel signature
   before instantiation. Reject unexpected function, memory, table, or global imports.
-- [ ] Preserve shared linear-memory import patching and remove any exported module
+- [x] Preserve shared linear-memory import patching and remove any exported module
   memory exactly as the current adapter requires.
-- [ ] Keep module compilation and instantiation errors recoverable and warning-free
+- [x] Keep module compilation and instantiation errors recoverable and warning-free
   by default. Opt-in traces should identify source kind and failing phase.
-- [ ] Replace the fixed `/tmp/me_jit_kernel.wasm` name with a collision-safe or
+- [x] Replace the fixed `/tmp/me_jit_kernel.wasm` name with a collision-safe or
   in-memory mechanism before enabling concurrent portable compilation. If MiniCC
   cannot emit to memory, create a unique virtual-FS path and remove it on every
   success and failure path.
-- [ ] Audit cache ownership: cached function-table entries retain required scratch
+- [x] Audit cache ownership: cached function-table entries retain required scratch
   memory, eviction removes the JS function, and failed modules retain neither.
-- [ ] Include the portable wasm ABI revision in positive and negative cache keys.
+- [x] Include the portable wasm ABI revision in positive and negative cache keys.
 
 ## Task E: native wasm tests for the first slice
 
 ### E1. Generated-source and eligibility tests
 
-- [ ] Add host-compilable unit tests for the eligibility predicate without
-  pretending to execute wasm. Assert exact acceptance/rejection categories.
-- [ ] Assert portable wasm source retains `int64_t`/`uint64_t`, 64-bit constants,
-  and the wasm-safe exported signature.
-- [ ] Assert legacy source still receives its existing compatibility patch and
-  does not use the portable path.
-- [ ] Assert every bridge counter independently rejects the first-slice wasm path.
-- [ ] Assert native portable JIT source and host tests are unchanged.
+Eligibility is checked through the artifact-level differential harness in both
+Emscripten configurations (and the browser target) rather than a separate
+host-only predicate copy; that keeps the assertions on the production lowering.
+
+- [x] Cover eligibility acceptance/rejection through the artifact-level wasm
+  differential harness, including generated-source width checks and the exported
+  signature, rather than a separate copy of the predicate.
+- [x] Assert portable wasm source retains `int64_t`/`uint64_t` and 64-bit exact
+  values through the boundary corpus; the preamble asserts fixed widths/pointer
+  size at compile time.
+- [x] Assert legacy source still receives its existing compatibility patch and
+  does not use the portable path (existing legacy wasm regression).
+- [x] Assert math, predicate, checked-cast, mixed-comparison and reduction
+  families each reject the first-slice wasm path and preserve values.
+- [x] Assert native portable JIT source and host tests are unchanged.
 
 ### E2. Actual Emscripten execution
 
-- [ ] Extend `test_dsl_jit_side_module.c` or add a focused portable wasm test that
+- [x] Extend `test_dsl_jit_side_module.c` or add a focused portable wasm test that
   requires `me_expr_has_jit_kernel()` for eligible cases, rather than merely
   accepting interpreter parity.
-- [ ] Test `int64` values around `0`, `-1`, `INT32_MIN/MAX`, `2^53`, `2^63-1`, and
+- [x] Test `int64` values around `0`, `-1`, `INT32_MIN/MAX`, `2^53`, `2^63-1`, and
   `INT64_MIN`; test `uint64` values around `2^32`, `2^53`, `2^63`, and `UINT64_MAX`.
-- [ ] Test passthrough, addition, subtraction, multiplication, unary negation,
+- [x] Test passthrough, addition, subtraction, multiplication, unary negation,
   comparisons and selected bitwise operations, including modular wraparound.
-- [ ] Test float32 and float64 arithmetic with finite normal, subnormal, signed-zero,
+- [x] Test float32 and float64 arithmetic with finite normal, subnormal, signed-zero,
   infinity and NaN inputs where the operation is eligible. Compare bits where the
   semantic contract requires bits and classify unavoidable wasm FP differences.
-- [ ] Test all-active, mixed and all-inactive masks. Inactive lanes must not read
+- [x] Test all-active, mixed and all-inactive masks. Inactive lanes must not read
   invalid input or trigger an otherwise participating semantic error.
-- [ ] Test lazy `where`, `if`/`elif`/`else`, and bounded loops with eligible bodies.
-- [ ] Test zero length, one lane, odd lengths, tile boundaries and the largest lane
+- [x] Test lazy `where`, `if`/`elif`/`else`, and bounded loops with eligible bodies.
+- [x] Test zero length, one lane, odd lengths, tile boundaries and the largest lane
   count practical in CI.
-- [ ] Test unaligned input/output slices if the API permits them.
-- [ ] For every rejected category, assert `has_jit == false` and interpreter values
+- [x] Assert the contiguous `me_artifact_eval_ex` fast ABI rejects naturally
+  unaligned pointers; Python/array-view paths normalize or gather such views
+  before execution instead of passing them to typed wasm loads.
+- [x] For every rejected category, assert `has_jit == false` and interpreter values
   and errors remain correct.
-- [ ] Run both main-module and side-module helper configurations. Unregistering
-  side-module helpers must restore clean interpreter fallback.
-- [ ] Run repeated compile/free/cache-eviction cycles and concurrent compilation
-  if the runtime supports it; check function-table and scratch-memory ownership.
+- [x] Run both main-module and side-module helper configurations. Unregistering
+  side-module helpers restores clean interpreter fallback.
+- [x] Run repeated compile/free/cache-eviction cycles; this wasm build is
+  single-threaded, so concurrent compilation is not applicable.
 
 ## Task F: Python-Blosc2/Pyodide integration
 
-- [ ] Update the local miniexpr source override first; change Python-Blosc2's
+- [x] Update the local miniexpr source override first; change Python-Blosc2's
   bundled revision only after the miniexpr implementation and tests are stable.
-- [ ] Add focused Python tests using the public `@blosc2.menudet`/portable artifact
+- [x] Add focused Python tests using the public `@blosc2.menudet`/portable artifact
   path with `jit=True` and `jit=False`. Require actual JIT only on a known-capable
   wasm build; retain ordinary fallback tests elsewhere.
-- [ ] Cover NumPy `int64` and `uint64` arrays containing values above `2^53` so a
+- [x] Cover NumPy `int64` and `uint64` arrays containing values above `2^53` so a
   JavaScript-number transport regression cannot pass accidentally.
-- [ ] Exercise C-contiguous arrays, masks, scalar captures accepted by the first
+- [x] Exercise C-contiguous arrays, masks, scalar captures accepted by the first
   slice, branches and loops through real Python/Cython dispatch.
-- [ ] Confirm unsupported reductions, math calls, checked conversions and ND
+- [x] Confirm unsupported reductions, math calls, checked conversions and ND
   features use the interpreter and preserve Python-visible diagnostics.
-- [ ] Build and reinstall a fresh Pyodide wheel using the repository wasm skill.
+- [x] Build and reinstall a fresh Pyodide wheel using the repository wasm skill.
   Verify that both `blosc2` and its extension come from that wheel/runtime.
-- [ ] Run focused tests first, then the available wasm test suite with deterministic
+- [x] Run focused tests first, then the available wasm test suite with deterministic
   single-thread settings. Record Pyodide, Emscripten, browser/Node and MiniCC
   revisions in qualification results.
 
@@ -408,7 +416,7 @@ Validation on the local Emscripten SDK with Node.js:
   A float-comparison branch candidate was not wasm-eligible and correctly used the
   interpreter. These are local Node measurements, not browser or Pyodide results.
 
-Remaining qualification/gates:
+Gates at this checkpoint (resolved by the final qualification below):
 
 - The subsequent cross-platform optimization adds conservative structural CSE for
   pure arithmetic subtrees over immutable array inputs/constants, scoped to one
@@ -433,11 +441,104 @@ Remaining qualification/gates:
   under native TCC. Float-comparison branches remain ineligible on wasm. Keep typed
   bridge families deferred pending broader data-type and browser/Pyodide
   qualification.
-- Python-Blosc2/Pyodide integration and a fresh Pyodide wheel were not run; the
-  local Pyodide CLI/skill environment was unavailable in this session.
-- The native wasm test matrix is intentionally a first-slice smoke/differential
-  set, not the full boundary, unaligned-access, cache-eviction, concurrency, and
-  browser qualification matrix enumerated above.
+- Python-Blosc2/Pyodide integration and a fresh Pyodide wheel were not run at the
+  time of the original record; they were completed in the final qualification
+  pass described below.
+- The original wasm test matrix was a smoke/differential set. It was expanded to
+  the boundary, masking, lifecycle, eviction, fallback and browser matrix below.
+
+## Final first-slice qualification (2026-10-18)
+
+`tests/test_dsl_jit_portable_wasm32.c` now runs one differential harness that
+prepares every source twice (`jit=False`, `jit=True`) and compares outputs,
+including masked lanes. On Emscripten it also asserts the expected route.
+
+Covered in wasm main-module, wasm side-module, and the browser-compatible target:
+
+- signed/unsigned 64-bit `+`, `-`, `*`, unary `-`, shifts, bitwise ops and
+  comparisons with `INT64_MIN/MAX`, `INT32_MIN/MAX`, `2^32`, `2^53±1`, `2^63`,
+  `UINT64_MAX`, `-1` and `0`;
+- float32/float64 `+`, `-`, `*`, `/`, comparisons, signed zero, subnormals,
+  infinities and NaNs;
+- lazy `where`, nested and deep `where` chains, `if`/`elif`/`else`, bounded
+  `for`, `while`, and inline integer floor division;
+- mixed/all-active/all-inactive masks, including a zero-divisor lane that must
+  not participate;
+- zero, one, odd, tile-boundary and 4096-lane lengths;
+- process-cache eviction with 70 unique kernels, repeated reuse, forced wasm
+  instantiation failure, compile-time width checks, negative/overflow binding
+  limits, undersized output/input/mask capacities, overlapping storage, and
+  side-module helper unregistration.
+
+A wasm-only defect surfaced and was fixed: `pj_expr` allocated an ~18 KB CSE
+table on the wasm stack for each nested lazy expression, so nested `where`
+silently exhausted the default stack and fell back to the interpreter. The CSE
+table is now heap-allocated and its entry payload reduced; nested/deep `where`
+now report an actual JIT kernel. This also lowers stack pressure for all wasm
+lowering.
+
+`test_dsl_jit_portable_wasm32_browser` is built with `-sSINGLE_FILE=1` and no
+Node raw filesystem. It passes under Node and under headless Chromium for both
+main-module and side-module builds, exercising TCC output, module validation,
+instantiation and the same differential corpus in a real browser engine.
+
+### Python-Blosc2 / Pyodide
+
+A fresh wheel was built from the local `miniexpr` checkout at
+`187707088ae3f9b5e5ff28a03a9fbfc8797b376d` with Pyodide 314.0.7 / Emscripten
+5.0.3, installed into a Pyodide venv, and exercised through `@blosc2.menudet`
+and `PortableKernel`. `CMakeLists.txt` now pins this exact revision:
+
+- `tests/test_menudet_wasm.py` passes 11 tests covering exact `int64`/`uint64`
+  above `2^53`, affine/branch/nested-`where`/bounded-loop kernels, masks via
+  `evaluate_block`, tile sizes 1/3/17/1024, repeated reuse, decorator
+  `require_jit=True`, and interpreter fallback for math/predicate/cast/
+  mixed-comparison/reduction kernels.
+- `blosc2._WASM_MINIEXPR_ENABLED` is true and `PortableKernel.has_jit` reports
+  actual kernels, not merely interpreter parity.
+
+Warm Pyodide timings for 1,048,576 float64 lanes (10 calls):
+
+| Kernel | Interpreter | TCC JIT | Speedup | Cold JIT setup |
+|---|---:|---:|---:|---:|
+| Affine | 3.34 ms | 1.73 ms | 1.93x | 6.4 ms |
+| Eight-term product | 4.99 ms | 2.09 ms | 2.39x | 1.7 ms |
+| 16-iteration loop | 47.54 ms | 2.31 ms | 20.59x | 1.7 ms |
+| Branch | 62.45 ms | 1.87 ms | 33.47x | 1.8 ms |
+
+### Differences from the original plan
+
+- The zero-copy contiguous `me_artifact_eval_ex` ABI requires naturally aligned
+  input/output storage and rejects offset pointers as binding errors. This is not
+  a user-facing Python limitation: `PortableKernel` copies/normalizes inputs with
+  C-contiguous aligned buffers, and the array-view adapter supports offset,
+  stepped, transposed and reversed views with bounded tile gathering. An
+  unaligned NumPy `float64` view (address `% 8 == 1`) was verified through both
+  interpreter and JIT Python paths. The wasm test's negative case covers only the
+  contiguous fast ABI; unaligned pointers are never passed to generated typed
+  loads.
+- The side-module helper ABI does not carry the test-only
+  `ME_WASM_JIT_TEST_FORCE_INVALID` flag. Main-module builds corrupt the module to
+  exercise validation failure; side-module builds register a deliberately
+  rejecting instantiate helper and verify cleanup/interpreter fallback, then
+  restore the real helper. Helper unregistration is tested separately.
+- Concurrent compilation is not applicable to this single-threaded build: the
+  wasm output does not enable pthreads or shared memory. The process cache is
+  still exercised through eviction and repeated reuse.
+- Several operations originally expected to need bridges are lowered inline on
+  wasm: ordinary float comparisons, literal shifts, integer floor division and
+  nested lazy `where`. They now run through the bridge-free JIT. Math functions,
+  predicates, checked float-to-integer casts, mixed signed/unsigned comparisons
+  and reductions remain interpreter fallbacks.
+- Pyodide tests run in the Pyodide venv under Node. Browser qualification uses
+  the Emscripten wasm test directly; Pyodide hosted in a browser was not run.
+- Floating-point status flags are not observable on wasm (`supported=0`), so
+  qualification compares values and bit patterns (NaN category where payloads
+  may differ) rather than IEEE flag parity.
+
+Remaining work is the deferred Task G typed-bridge ABI, plus optional
+browser-hosted Pyodide and wider workload/dtype/performance sweeps. No
+first-slice correctness or lifecycle blocker remains.
 
 ## Non-goals
 
