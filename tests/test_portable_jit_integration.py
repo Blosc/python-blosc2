@@ -111,3 +111,26 @@ def test_system_compiler_binding_smoke(monkeypatch):
     values, status = kernel.evaluate_block({"x": np.array([1.0, 2.0])}, return_status=True)
     np.testing.assert_array_equal(values, [2, 3])
     assert status["flags"] == 0
+
+
+def test_tcc_arithmetic_bridge_binding(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("Host arithmetic callbacks are unavailable on WASM")
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
+    x = np.arange(513, dtype=np.float64)
+    y = np.arange(513, dtype=np.float64) + 1
+    kernel = make_kernel(
+        "def k(x, y):\n    return x + (y - 1)\n",
+        {"x": "float64", "y": "float64"},
+        "float64",
+    )
+    if not kernel.has_jit:
+        pytest.skip("Native TCC JIT unavailable")
+    expected = x + (y - 1)
+    actual, status = kernel.evaluate_block({"x": x, "y": y}, return_status=True)
+    np.testing.assert_array_equal(actual, expected)
+    assert status["flags"] == 0
+
+    monkeypatch.setenv("ME_DSL_JIT_ARITH_BRIDGE", "0")
+    scalar = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
+    np.testing.assert_array_equal(scalar.evaluate_block({"x": x, "y": y}), expected)
