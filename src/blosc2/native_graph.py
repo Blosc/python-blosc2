@@ -1026,16 +1026,12 @@ def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0, out=
 
 @lru_cache(maxsize=128)
 def _resident_map_kernel(plan):
-    from types import SimpleNamespace
+    from .portable_kernel import PortableArtifactError, PortableKernel
 
-    borrow = getattr(plan._handle, "resident_artifact", None)
-    handle = borrow() if borrow is not None else None
-    if handle is None:
-        return None
-    info = handle.info()
-    descriptor = handle.descriptor_info()
+    artifact = plan.map_json()
     captures = {}
-    for constant in json.loads(plan.map_json()).get("constants", []):
+    specialize_captures = True
+    for constant in json.loads(artifact).get("constants", []):
         if constant["category"] != "weak":
             return None
         if constant["encoding"] == "decimal" and constant["dtype"] == "int64":
@@ -1044,6 +1040,7 @@ def _resident_map_kernel(plan):
             value = constant["value"]
         elif constant["encoding"] == "ieee754-hex" and constant["dtype"] == "float64":
             value = struct.unpack(">d", bytes.fromhex(constant["value"]))[0]
+            specialize_captures = False
         else:
             return None
         captures[constant["name"]] = value
@@ -1052,19 +1049,36 @@ def _resident_map_kernel(plan):
         def visit_Name(self, node):
             return ast.copy_location(ast.Constant(captures[node.id]), node) if node.id in captures else node
 
-    # Metadata-only proof substitutes immutable native captures with literals.
-    # Actual execution still borrows the already-compiled original artifact.
-    proof_source = ast.unparse(CaptureProof().visit(ast.parse(info["source"])))
-    return SimpleNamespace(
-        _handle=handle,
-        source=proof_source,
-        input_dtypes=descriptor["inputs"],
-        output_dtype=descriptor["output_dtype"],
-        inferred_dtype=descriptor["inferred_dtype"],
-        result_cardinality=descriptor["cardinality"],
-        context_ndim=descriptor["ndim"],
-        native_partitionable=bool(plan.info().get("partitionable", False)),
-    )
+        def visit_FunctionDef(self, node):
+            node = self.generic_visit(node)
+            node.args.args = [arg for arg in node.args.args if arg.arg not in captures]
+            return node
+
+    manifest = json.loads(artifact)
+    if specialize_captures:
+        # Integer and boolean weak captures can be represented exactly as source
+        # literals, giving graph maps the same arithmetic shape as direct kernels.
+        tree = ast.fix_missing_locations(CaptureProof().visit(ast.parse(manifest["source"])))
+        manifest["source"] = ast.unparse(tree) + "\n"
+        manifest["constants"] = []
+    try:
+        kernel = PortableKernel.from_json(
+            json.dumps(manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+            jit=plan.has_jit,
+        )
+    except PortableArtifactError as error:
+        if not specialize_captures or error.status not in {"invalid_source", "invalid_signature"}:
+            raise
+        # Literal specialization is an optimization only. Keep the original,
+        # already-validated artifact for source forms that cannot be re-imported.
+        specialize_captures = False
+        kernel = PortableKernel.from_json(artifact, jit=plan.has_jit)
+    if not specialize_captures:
+        # Keep IEEE payload bits in the executable artifact; the substituted
+        # source is used only by metadata-only storage eligibility checks.
+        kernel._info["source"] = ast.unparse(CaptureProof().visit(ast.parse(kernel.source)))
+    kernel.native_partitionable = bool(plan.info().get("partitionable", False))
+    return kernel
 
 
 def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None):
@@ -1072,7 +1086,52 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
 
     import blosc2
 
-    from .resident_execution import MINIMUM_WORKER_ITEMS, evaluate_resident_if_eligible
+    from .resident_execution import MINIMUM_WORKER_ITEMS, evaluate_resident, evaluate_resident_if_eligible
+
+    full_selection = not selection or all(
+        isinstance(part, slice) and part.indices(size) == (0, size, 1)
+        for part, size in zip(selection, shape, strict=True)
+    )
+    count = math.prod(shape)
+    workers = min(blosc2.nthreads, 32, count // MINIMUM_WORKER_ITEMS)
+    if (
+        not reduction
+        and full_selection
+        and not blosc2.IS_WASM
+        and workers >= 2
+        and plan.has_jit
+        and plan.info()["stages"] == 1
+        and plan.info().get("partitionable", False)
+        and all(
+            type(value) is np.ndarray
+            and value.shape == shape
+            and value.flags.c_contiguous
+            and value.flags.aligned
+            for value in inputs.values()
+        )
+        and getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+        and (
+            out is None
+            or (
+                type(out) is np.ndarray
+                and out.flags.c_contiguous
+                and out.flags.aligned
+                and out.flags.writeable
+            )
+        )
+    ):
+        kernel = _resident_map_kernel(plan)
+        if kernel is not None:
+            values, report = evaluate_resident(kernel, inputs, shape, workers, out=out)
+            return values, {
+                **report,
+                "route": "parallel-resident",
+                "stages": 1,
+                "jit_stages": 1,
+                "interpreter_stages": 0,
+                "intermediate_bytes": 0,
+                "normalization_bytes": 0,
+            }
 
     if (
         not reduction
@@ -1103,10 +1162,7 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
         return None
     if any(type(value) is not np.ndarray for value in inputs.values()):
         return None
-    if selection and not all(
-        isinstance(part, slice) and part.indices(size) == (0, size, 1)
-        for part, size in zip(selection, shape, strict=True)
-    ):
+    if not full_selection:
         return None
     kernel = _resident_map_kernel(plan)
     if kernel is None:

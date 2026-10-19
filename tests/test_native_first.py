@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.native_graph import prepare_native_first
+from blosc2.native_graph import _resident_map_kernel, prepare_native_first
 from conftest import orthogonal_cases
 
 pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unavailable on WASM")
@@ -37,6 +37,24 @@ def test_native_first_arithmetic(dtype, safe, native_first_runtime, monkeypatch)
     x[:] = 0
     expected = x == y if dtype == "bool" else x + (y - 1)
     np.testing.assert_array_equal(expr[:], expected)
+
+
+def test_native_first_reimports_specialized_portable_map(native_first_runtime, monkeypatch):
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
+    x = np.arange(300_000, dtype=np.float64)
+    y = x + 1
+    expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+    prepared = prepare_native_first(expr, (slice(None),), jit=True, options={"_getitem": True})
+    assert prepared is not None
+
+    kernel = _resident_map_kernel(prepared[0])
+    assert kernel.has_jit
+    assert "_me_capture_" not in kernel.source
+    assert "return o0 + (o1 - 1)" in kernel.source
+
+    np.testing.assert_array_equal(expr[:], x + (y - 1))
+    assert expr._native_execution_report["route"] == "parallel-resident"
+    assert expr._native_execution_report["backend"] == "portable-jit"
 
 
 @pytest.mark.parametrize("expression", ["x[1:3]", "sum(sum(x))", "x and y", "unknown(x)"])

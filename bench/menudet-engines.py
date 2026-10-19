@@ -378,6 +378,9 @@ def main():
     # native compilation paths consume this environment override.
     if args.jit is not None:
         os.environ["ME_DSL_JIT_COMPILER"] = args.jit
+        # Enable JIT globally while leaving the Python backend override unset;
+        # native-first routes consume ME_DSL_JIT_COMPILER directly.
+        os.environ["BLOSC_ME_JIT"] = "true"
 
     use_color = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
     blosc2.set_nthreads(args.threads)
