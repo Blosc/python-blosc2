@@ -1337,7 +1337,10 @@ class NullableBoolExpr(blosc2.LazyExpr):
 
     def __invert__(self):
         na = self._null
-        return self._wrap(~self._true & ~na, na)
+        # These predicates may be backed by widened uint8 channels.  Unary
+        # invert is then bitwise (1 -> 254), not logical negation; compare to
+        # zero so interpreter and JIT routes preserve boolean semantics.
+        return self._wrap((self._true == 0) & (na == 0), na)
 
     # ------------------------------------------------------------------
     # Reading the third value
