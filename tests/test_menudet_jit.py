@@ -120,6 +120,9 @@ def test_bitwise_values_and_status(backend, dtype, expression, boolean):
         np.testing.assert_array_equal(values, expected[::-1])
 
 
+@pytest.mark.skipif(
+    sys.platform == "emscripten", reason="Pyodide lacks the required FP status and threading support"
+)
 def test_lazy_mask_raise_recovery_and_threads(backend):
     k = make("where(x != 0, y / x, y)", "float64", jit=True)
     assert k.has_jit
@@ -142,6 +145,9 @@ def test_lazy_mask_raise_recovery_and_threads(backend):
     assert all(status["flags"] == 0 for _, status in results)
 
 
+@pytest.mark.skipif(
+    sys.platform == "emscripten", reason="mixed-domain TCC comparison lowering is unavailable on wasm32"
+)
 def test_fail_closed_and_casts(backend, monkeypatch):
     for expression in ("x == -1", "x < -1"):
         k = make(expression, "uint64", jit=True, output="bool")
