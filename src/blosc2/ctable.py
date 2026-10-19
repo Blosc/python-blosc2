@@ -2556,6 +2556,10 @@ class Column:
             # would otherwise say True for it: the mask one holds the ``False``
             # fill, and the sentinel one holds 255, which is neither 0 nor 1.
             return ~kleene
+        if self.dtype == np.dtype(np.bool_):
+            # Some native routes widen boolean storage before evaluating
+            # unary invert, which would make this a bitwise operation.
+            return self._raw_col == 0
         return ~self._raw_col
 
     def __lt__(self, other):
