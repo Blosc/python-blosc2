@@ -1152,6 +1152,7 @@ cdef extern from "dsl_array_bridge.h":
 
 
 cdef struct portable_prefilter_worker:
+    void *edge_output
     b2_artifact_buffer *bindings
     blosc2_context **decoders
     int status
@@ -1165,6 +1166,15 @@ cdef struct portable_prefilter_worker:
 
 cdef struct portable_prefilter_state:
     const void *artifact
+    int ndim
+    int grid_ndim
+    bint diagonal_enabled
+    int64_t diagonal
+    int64_t shape[16]
+    int64_t chunkshape[16]
+    int64_t blockshape[16]
+    int64_t chunkgrid[16]
+    int64_t blockgrid[16]
     uint8_t *numpy_output
     const uint8_t *numpy_inputs[128]
     b2nd_array_t *inputs[128]
@@ -1226,9 +1236,98 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
     cdef int64_t origin = params.nchunk * state.chunk_items + params.nblock * state.block_items
     cdef int64_t count = min(state.block_items, state.size - origin)
     cdef int64_t block_id = origin // state.block_items
+    cdef int64_t logical_shape = state.size
+    cdef int64_t block_origin = origin
+    cdef int64_t block_extent = count
     cdef size_t written_bytes = max(count, 0) * params.output_typesize
     cdef void *destination = params.output
     cdef fenv_t environment
+    cdef int d
+    cdef int64_t chunk_index, block_index, lane, offset, physical, stride, relative
+    cdef int64_t origins[16]
+    cdef int64_t extents[16]
+    cdef bint edge = False
+    if state.grid_ndim > 1:
+        chunk_index = params.nchunk
+        block_index = params.nblock
+        count = 1
+        block_id = params.nchunk * (state.chunk_items // state.block_items) + params.nblock
+        for d in range(state.grid_ndim - 1, -1, -1):
+            origins[d] = (chunk_index % state.chunkgrid[d]) * state.chunkshape[d]
+            chunk_index //= state.chunkgrid[d]
+            relative = (block_index % state.blockgrid[d]) * state.blockshape[d]
+            origins[d] += relative
+            block_index //= state.blockgrid[d]
+            extents[d] = max(0, min(state.blockshape[d], state.shape[d] - origins[d],
+                                    state.chunkshape[d] - relative))
+            count *= extents[d]
+            edge |= extents[d] != state.blockshape[d]
+        if not params.output_is_disposable:
+            worker.output_zero_fill_bytes += params.output_size
+        elif edge:
+            memset(params.output, 0, params.output_size)
+            worker.output_zero_fill_bytes += params.output_size
+        if not count:
+            return 0
+        # An eye constructor owns this scheduling hint: blocks outside its
+        # diagonal contain only zeros and need no artifact evaluation.
+        if state.diagonal_enabled and (state.diagonal < origins[1] - origins[0] - extents[0] + 1
+                or state.diagonal > origins[1] + extents[1] - 1 - origins[0]):
+            if params.output_is_disposable:
+                memset(params.output, 0, params.output_size)
+            return 0
+        destination = params.output
+        if edge:
+            if worker.edge_output == NULL:
+                worker.edge_output = malloc(state.block_items * params.output_typesize)
+            if worker.edge_output == NULL:
+                worker.status = -6
+                worker.error_block = block_id
+                strcpy(worker.error.message, "Cannot allocate portable prefilter edge output")
+                return -1
+            destination = worker.edge_output
+        memset(&descriptor, 0, sizeof(descriptor))
+        memset(&error, 0, sizeof(error))
+        memset(&fp, 0, sizeof(fp))
+        descriptor.struct_size = sizeof(descriptor)
+        descriptor.version = 1
+        descriptor.nitems = count
+        descriptor.output_capacity = count * params.output_typesize
+        descriptor.ndim = state.ndim
+        if state.ndim:
+            descriptor.logical_shape = state.shape
+            descriptor.block_origin = origins
+            descriptor.block_extent = extents
+        if feholdexcept(&environment):
+            worker.status = -5
+            strcpy(worker.error.message, "Cannot isolate portable prefilter floating environment")
+            return -1
+        rc = b2_artifact_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
+        if fesetenv(&environment):
+            rc = -5
+            strcpy(error.message, "Cannot restore portable prefilter floating environment")
+        if rc:
+            worker.status = rc
+            worker.error = error
+            worker.error_block = block_id
+            memset(params.output, 0, params.output_size)
+            return -1
+        if edge:
+            for lane in range(count):
+                offset = lane
+                physical = 0
+                stride = 1
+                for d in range(state.grid_ndim - 1, -1, -1):
+                    relative = offset % extents[d]
+                    offset //= extents[d]
+                    physical += relative * stride
+                    stride *= state.blockshape[d]
+                memcpy(params.output + physical * params.output_typesize,
+                       <uint8_t *>destination + lane * params.output_typesize, params.output_typesize)
+        worker.fp_flags |= fp.flags
+        worker.fp_supported &= fp.supported
+        worker.evaluated_blocks += 1
+        return 0
     memset(&error, 0, sizeof(error))
     memset(&fp, 0, sizeof(fp))
     if state.numpy_output != NULL and count <= 0:
@@ -1289,6 +1388,11 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         descriptor.version = 1
         descriptor.nitems = count
         descriptor.output_capacity = count * params.output_typesize
+        if state.ndim:
+            descriptor.ndim = 1
+            descriptor.logical_shape = &logical_shape
+            descriptor.block_origin = &block_origin
+            descriptor.block_extent = &block_extent
         # Decoder/postfilter work must not contribute to numerical FP flags.
         rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
                                     destination, &descriptor, 0, &fp, &error)
@@ -2191,7 +2295,7 @@ cdef class PortableArtifactHandle:
             free(views)
 
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
-                           _driver_input=None, _nthreads=None, _block_items=None):
+                           _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not portable_prefilter_inputs_eligible(
                 inputs, allow_numpy=numpy_out is not None or out is not None, output=out):
@@ -2199,11 +2303,18 @@ cdef class PortableArtifactHandle:
         signature = self.descriptor_info()
         if set(inputs) != set(signature["inputs"]):
             raise ValueError("Portable prefilter input names disagree with signature")
-        if signature["cardinality"] != "elementwise" or signature["ndim"]:
-            raise ValueError("Portable prefilters require context-free elementwise kernels")
+        if (signature["cardinality"] != "elementwise"
+                or signature["ndim"] not in (0, (out.ndim if not inputs and out is not None else 1))):
+            raise ValueError("Portable prefilters require matching-rank elementwise kernels")
         if any(value.dtype != signature["inputs"][name] for name, value in inputs.items()):
             raise TypeError("Portable prefilter input dtype disagrees with signature")
         first = next((value for value in inputs.values() if isinstance(value, NDArray)), out)
+        if first is None:
+            raise ValueError("An output NDArray is required to schedule an input-free prefilter")
+        if first.ndim > 1 and numpy_out is not None:
+            raise ValueError("N-D portable prefilters require an NDArray output")
+        if _diagonal is not None and (inputs or first.ndim != 2 or out is None):
+            raise ValueError("Diagonal scheduling requires input-free 2-D NDArray output")
         block_items = first.blocks[0]
         if _block_items is not None:
             if (numpy_out is None or out is not None or _block_items <= 0
@@ -2262,7 +2373,7 @@ cdef class PortableArtifactHandle:
                 raise ValueError("Portable prefilter output must not alias an input")
             output = out
         return output._execute_portable_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
-                                                 driver_input=_driver_input)
+                                                 driver_input=_driver_input, diagonal=_diagonal)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -6010,7 +6121,8 @@ cdef class NDArray:
         return buffer[:self.array.shape[0]]
 
     def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs,
-                                    np.ndarray numpy_out=None, chunk_range=None, driver_input=None):
+                                    np.ndarray numpy_out=None, chunk_range=None, driver_input=None,
+                                    diagonal=None):
         cdef portable_prefilter_state state
         cdef portable_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -6027,10 +6139,28 @@ cdef class NDArray:
         memset(&state, 0, sizeof(state))
         memset(&parameters, 0, sizeof(parameters))
         state.artifact = kernel._handle
+        state.ndim = b2_artifact_rank(kernel._handle)
+        if diagonal is not None:
+            state.diagonal_enabled = True
+            state.diagonal = diagonal
         state.ninputs = len(inputs)
         state.size = numpy_out.shape[0] if numpy_out is not None else self.array.shape[0]
         state.chunk_items = self.array.chunkshape[0]
         state.block_items = self.array.blockshape[0]
+        state.grid_ndim = self.array.ndim
+        if state.grid_ndim > 1:
+            state.size = 1
+            state.chunk_items = 1
+            state.block_items = 1
+            for i in range(state.grid_ndim):
+                state.shape[i] = self.array.shape[i]
+                state.chunkshape[i] = self.array.chunkshape[i]
+                state.blockshape[i] = self.array.blockshape[i]
+                state.chunkgrid[i] = (state.shape[i] + state.chunkshape[i] - 1) // state.chunkshape[i]
+                state.blockgrid[i] = (state.chunkshape[i] + state.blockshape[i] - 1) // state.blockshape[i]
+                state.size *= state.shape[i]
+                state.chunk_items *= state.blockgrid[i] * state.blockshape[i]
+                state.block_items *= state.blockshape[i]
         state.fp_supported = 1
         if numpy_out is not None:
             state.numpy_output = <uint8_t *>numpy_out.data
@@ -6144,6 +6274,7 @@ cdef class NDArray:
             self.array.sc.cctx = blosc2_create_cctx(cparams[0])
             for tid in range(state.nworkers):
                 worker = &state.workers[tid]
+                free(worker.edge_output)
                 for i in range(state.ninputs):
                     if state.numpy_inputs[i] != NULL:
                         continue
@@ -6599,12 +6730,18 @@ def get_loaded_matmul_cblas_library():
 def portable_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
     """Metadata-only gate for bounded resident 1-D portable prefilters."""
     cdef NDArray value
-    if not b2_artifact_descriptor_available() or blosc2.IS_WASM or not 0 < len(inputs) <= 128:
+    if not b2_artifact_descriptor_available() or blosc2.IS_WASM or len(inputs) > 128:
+        return False
+    if not inputs and not isinstance(output, NDArray):
         return False
     first = next((source for source in inputs.values() if isinstance(source, NDArray)), None)
-    if first is None and allow_numpy:
+    if first is None and (allow_numpy or not inputs):
         first = output
-    if not isinstance(first, NDArray) or first.ndim != 1 or not first.size:
+    if not isinstance(first, NDArray) or not first.size:
+        return False
+    if not inputs and first.ndim > 1:
+        return (first.ndim <= 16 and first.schunk.chunksize <= 32 * 1024**2)
+    if first.ndim != 1:
         return False
     if first.chunks[0] % first.blocks[0]:
         return False

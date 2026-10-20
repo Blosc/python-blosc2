@@ -316,6 +316,89 @@ def test_arange_empty(start, stop, step):
     np.testing.assert_array_equal(a[:], b)
 
 
+def test_ramp_lazy_constructors():
+    cases = [
+        (
+            blosc2.arange(-7, 31, 3, dtype=np.int64, lazy=True, jit=False),
+            np.arange(-7, 31, 3, dtype=np.int64),
+        ),
+        (
+            blosc2.linspace(-1.0, 2.0, num=19, dtype=np.float64, lazy=True, jit=False),
+            np.linspace(-1.0, 2.0, num=19, dtype=np.float64),
+        ),
+    ]
+    for lazy, expected in cases:
+        assert isinstance(lazy, blosc2.LazyArray)
+        result = lazy.compute(chunks=(8,), blocks=(4,))
+        assert isinstance(result, blosc2.NDArray)
+        np.testing.assert_array_equal(result[:], expected)
+
+
+def test_ramp_lazy_constructor_validation():
+    with pytest.raises(NotImplementedError, match="C-order"):
+        blosc2.arange(10, lazy=True, c_order=False)
+    with pytest.raises(NotImplementedError, match="int64, float32, or float64"):
+        blosc2.arange(10, dtype=np.int32, lazy=True)
+    with pytest.raises(TypeError, match=r"compute\(\)"):
+        blosc2.arange(10, lazy=True, chunks=(4,))
+
+
+def test_large_arange_menudet_eager_parity():
+    size = 4_000_000
+    actual = blosc2.arange(-17, size * 3 - 17, 3, dtype=np.int64, chunks=(1_000_000,), blocks=(15_625,))
+    expected = np.arange(-17, size * 3 - 17, 3, dtype=np.int64)
+    assert actual.shape == (size,)
+    np.testing.assert_array_equal(actual[:], expected)
+
+    # 2D int64 eager ramp
+    shape = (2000, 2000)
+    actual_2d = blosc2.arange(0, 4_000_000, shape=shape, dtype=np.int64)
+    assert actual_2d.shape == shape
+    np.testing.assert_array_equal(actual_2d[:], np.arange(4_000_000, dtype=np.int64).reshape(shape))
+
+    # Float64 eager ramp
+    actual_f64 = blosc2.arange(0.0, 4_000_000.0, 1.0, dtype=np.float64)
+    np.testing.assert_array_equal(actual_f64[:], np.arange(4_000_000, dtype=np.float64))
+
+    # Float32 eager ramp
+    actual_f32 = blosc2.arange(0.0, 4_000_000.0, 1.0, dtype=np.float32)
+    np.testing.assert_allclose(actual_f32[:], np.arange(4_000_000, dtype=np.float32))
+
+
+def test_large_linspace_menudet_eager_parity():
+    size = 4_000_000
+    actual = blosc2.linspace(0.0, 1.0, size, dtype=np.float64)
+    expected = np.linspace(0.0, 1.0, size, dtype=np.float64)
+    assert actual.shape == (size,)
+    np.testing.assert_allclose(actual[:], expected)
+
+    # 2D linspace
+    shape = (2000, 2000)
+    actual_2d = blosc2.linspace(0.0, 1.0, size, shape=shape, dtype=np.float64)
+    assert actual_2d.shape == shape
+    np.testing.assert_allclose(actual_2d[:], expected.reshape(shape))
+
+
+def test_lazy_arange_and_linspace():
+    for dt in [np.int64, np.float64, np.float32]:
+        a1 = blosc2.arange(100, dtype=dt, lazy=True)
+        assert isinstance(a1, blosc2.portable_lazy.PortableLazyArray)
+        np.testing.assert_allclose(a1[:], np.arange(100, dtype=dt))
+
+        a2 = blosc2.arange(0, 100, shape=(10, 10), dtype=dt, lazy=True)
+        assert a2.shape == (10, 10)
+        np.testing.assert_allclose(a2[:], np.arange(100, dtype=dt).reshape(10, 10))
+
+    for dt in [np.float64, np.float32]:
+        l1 = blosc2.linspace(0.0, 1.0, 100, dtype=dt, lazy=True)
+        assert isinstance(l1, blosc2.portable_lazy.PortableLazyArray)
+        np.testing.assert_allclose(l1[:], np.linspace(0.0, 1.0, 100, dtype=dt))
+
+        l2 = blosc2.linspace(0.0, 1.0, 100, shape=(10, 10), dtype=dt, lazy=True)
+        assert l2.shape == (10, 10)
+        np.testing.assert_allclose(l2[:], np.linspace(0.0, 1.0, 100, dtype=dt).reshape(10, 10))
+
+
 @pytest.mark.parametrize(
     ("ss", "shape", "dtype", "chunks", "blocks"),
     [
@@ -372,6 +455,38 @@ def test_eye(k, N, M, dtype, chunks):
     assert a.shape == b.shape
     assert a.dtype == b.dtype
     np.testing.assert_allclose(a, b[:])
+
+
+@pytest.mark.parametrize("jit", [False, True])
+@pytest.mark.parametrize("clevel", [0, 5])
+def test_eye_portable_edges_and_storage(jit, clevel, tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Numeric eye must not use the Python LazyUDF callback")
+
+    monkeypatch.setattr(blosc2, "lazyudf", forbidden)
+    for k in (-21, -3, 0, 4, 30):
+        path = tmp_path / f"eye-{k}.b2nd"
+        result = blosc2.eye(
+            17,
+            23,
+            k=k,
+            dtype="int16",
+            chunks=(7, 9),
+            blocks=(4, 5),
+            jit=jit,
+            urlpath=path,
+            cparams={"nthreads": 2, "clevel": clevel},
+        )
+        np.testing.assert_array_equal(result[:], np.eye(17, 23, k=k, dtype="int16"))
+        np.testing.assert_array_equal(blosc2.open(path)[:], result[:])
+
+
+@pytest.mark.parametrize("dtype", ["bool", "uint8", "float32", "complex128"])
+def test_eye_dtype_and_empty(dtype):
+    for shape in ((0, 3), (3, 0), (9, 13)):
+        result = blosc2.eye(*shape, dtype=dtype, jit=False)
+        assert result.dtype == np.dtype(dtype)
+        np.testing.assert_array_equal(result[:], np.eye(*shape, dtype=dtype))
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from functools import reduce
 from itertools import islice, product
+from operator import index
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 from numpy.exceptions import ComplexWarning
@@ -6174,15 +6175,85 @@ def ones(
     return full(shape, 1, dtype, **kwargs)
 
 
-def arange(
+def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
+    """Build an input-free Menudet ramp and bind it to a logical shape."""
+
+    if (
+        dtype == np.dtype(np.int64)
+        and isinstance(start, (int, np.integer))
+        and isinstance(step, (int, np.integer))
+    ):
+        start = int(start)
+        step = int(step)
+    elif dtype == np.dtype(np.float32):
+        start = np.float32(start)
+        step = np.float32(step)
+    else:
+        start = float(start)
+        step = float(step)
+
+    @blosc2.dsl_kernel
+    def ramp(start, step):
+        return start + _flat_idx * step  # noqa: F821
+
+    backend = execution.get("jit_backend")
+    if backend in {"tcc", "cc"}:
+        ramp.dsl_source = f"# me:compiler={backend}\n" + ramp.dsl_source
+    artifact = ramp.export({}, dtype, constants={"start": start, "step": step}, ndim=len(shape))
+    jit_option = execution.get("jit")
+    jit_mode = True if jit_option is None else bool(jit_option)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit_mode)
+    return kernel.lazy({}, shape=shape, partitions=partitions)
+
+
+def _menudet_ramp_supported(dtype, execution):
+    """Return whether portable ramp semantics/options match this constructor call."""
+    if dtype not in (np.dtype(np.int64), np.dtype(np.float32), np.dtype(np.float64)):
+        return False
+    if execution.get("jit_backend") == "js":
+        return False
+    # PortableKernel currently consumes compiler policy from the artifact pragma,
+    # not every task-local C compiler/cache override.
+    if builtins.any(execution.get(name) for name in ("compiler", "cflags", "cache_dir", "compiler_output")):
+        return False
+    return execution.get("fp_accuracy", blosc2.FPAccuracy.DEFAULT) == blosc2.FPAccuracy.DEFAULT
+
+
+def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs):
+    """Evaluate a Menudet ramp and materialize it into Blosc2 storage."""
+    storage_kwargs = {key: value for key, value in kwargs.items() if key not in execution}
+    output = blosc2.empty(shape, dtype=dtype, **storage_kwargs)
+    kernel_lazy = _menudet_ramp(
+        start,
+        step,
+        dtype,
+        shape,
+        execution=execution,
+        partitions=output.chunks,
+    )
+    if blosc2.blosc2_ext.portable_prefilter_inputs_eligible({}, output=output):
+        kernel_lazy.kernel._handle.evaluate_prefilter({}, out=output)
+        return output
+    for origin in itertools.product(*(range(0, n, c) for n, c in zip(shape, output.chunks, strict=True))):
+        extent = tuple(builtins.min(c, n - o) for o, c, n in zip(origin, output.chunks, shape, strict=True))
+        item = tuple(slice(o, o + e) for o, e in zip(origin, extent, strict=True))
+        values = kernel_lazy.kernel.evaluate_block(
+            {}, block_shape=extent, logical_shape=shape, block_origin=origin
+        )
+        output[item] = values
+    return output
+
+
+def arange(  # noqa: C901
     start: int | float,
     stop: int | float | None = None,
     step: int | float | None = 1,
     dtype: np.dtype | str = None,
     shape: int | tuple | list | None = None,
     c_order: bool = True,
+    lazy: bool = False,
     **kwargs: Any,
-) -> NDArray:
+) -> NDArray | blosc2.LazyArray:
     """
     Return evenly spaced values within a given interval.
     Due to rounding errors for chunkwise filling, may differ
@@ -6210,12 +6281,16 @@ def arange(
         following the order of chunks in the array; this is more memory
         efficient, as it does not require an intermediate copy of the array.
         Default is C order.
+    lazy: bool
+        If True, return a deferred Menudet-backed :ref:`LazyArray` instead of
+        materializing it. Storage options are supplied later to ``compute()``.
+        The lazy route supports int64, float32 and float64, and requires C order.
 
     Other Parameters
     ----------------
     jit: bool or None, optional
-        Execution policy for the DSL-backed ramp: None (default) inherits the
-        configured JIT policy (tries JIT with built-in defaults); True tries JIT,
+        Execution policy for the ramp: None (default) inherits the
+        configured JIT policy; portable ramps try JIT when unset. True tries JIT,
         and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
@@ -6227,8 +6302,9 @@ def arange(
 
     Returns
     -------
-    out: :ref:`NDArray`
-        A :ref:`NDArray` is returned.
+    out: :ref:`NDArray` or :ref:`LazyArray`
+        Returns an :ref:`NDArray` by default or a deferred :ref:`LazyArray` when
+        ``lazy=True``.
 
     Examples
     --------
@@ -6277,10 +6353,45 @@ def arange(
         )
     dtype = _check_dtype(dtype)
 
+    if type(lazy) is not bool:
+        raise TypeError("lazy must be a bool")
+
+    execution = blosc2.jit_config.execution_options()
+    execution.update(blosc2.jit_config.pop_execution_options(kwargs))
+    storage_kwargs = kwargs.copy()
+    if lazy:
+        if storage_kwargs:
+            raise TypeError("Storage options for a lazy arange belong on the returned array's compute()")
+        if not c_order:
+            raise NotImplementedError("lazy=True currently requires C-order arange traversal")
+        if is_inside_new_expr():
+            raise ValueError("lazy=True cannot be used while building another lazy expression")
+        if blosc2.isdtype(dtype, "complex floating"):
+            raise NotImplementedError("lazy=True is not supported for complex arange")
+        if not _menudet_ramp_supported(dtype, execution):
+            raise NotImplementedError("lazy=True requires an int64, float32, or float64 Menudet ramp")
+        return _menudet_ramp(start, step, dtype, tuple(shape), execution=execution)
+
     if is_inside_new_expr() or NUM == 0:
         # We already have the dtype and shape, so return immediately
-        blosc2.jit_config.pop_execution_options(kwargs)
-        return blosc2.zeros(shape, dtype=dtype, **kwargs)
+        return blosc2.zeros(shape, dtype=dtype, **storage_kwargs)
+
+    kwargs.update(execution)
+
+    # Keep the regular fused constructor for small arrays; larger ramps use
+    # portable JIT by default, with interpretation available via jit=False.
+    if c_order and NUM >= 4_000_000 and _menudet_ramp_supported(dtype, execution):
+        if dtype == np.dtype(np.int64):
+            valid_int = (
+                isinstance(start, (int, np.integer))
+                and isinstance(step, (int, np.integer))
+                and np.iinfo(np.int64).min <= start <= np.iinfo(np.int64).max
+                and np.iinfo(np.int64).min <= step <= np.iinfo(np.int64).max
+            )
+            if valid_int:
+                return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
+        else:
+            return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
 
     # Windows and wasm32 does not support complex numbers in DSL
     if blosc2.isdtype(dtype, "complex floating"):
@@ -6291,14 +6402,14 @@ def arange(
             # C order is guaranteed, and no reshape is needed
             return lazyarr.compute(**kwargs)
 
-        return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+        return reshape(lazyarr, shape, c_order=c_order, **storage_kwargs)
     else:
         lazyarr = blosc2.lazyudf(ramp_arange, (start, step), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
 
 
 # Define a numpy linspace-like function
-def linspace(
+def linspace(  # noqa: C901
     start: int | float | complex,
     stop: int | float | complex,
     num: int | None = None,
@@ -6306,8 +6417,9 @@ def linspace(
     endpoint: bool = True,
     shape=None,
     c_order: bool = True,
+    lazy: bool = False,
     **kwargs: Any,
-) -> NDArray:
+) -> NDArray | blosc2.LazyArray:
     """Return evenly spaced numbers over a specified interval.
 
     This is similar to `numpy.linspace` but it returns a `NDArray`
@@ -6335,14 +6447,18 @@ def linspace(
         following the order of chunks in the array; this is more memory
         efficient, as it does not require an intermediate copy of the array.
         Default is True.
+    lazy: bool
+        If True, return a deferred Menudet-backed :ref:`LazyArray` instead of
+        materializing it. Storage options are supplied later to ``compute()``.
+        The lazy route supports int64, float32 and float64, and requires C order.
     **kwargs: Any
         Storage arguments accepted by :func:`empty`, plus the execution options below.
 
     Other Parameters
     ----------------
     jit: bool or None, optional
-        Execution policy for the DSL-backed ramp: None (default) inherits the
-        configured JIT policy (tries JIT with built-in defaults); True tries JIT,
+        Execution policy for the ramp: None (default) inherits the
+        configured JIT policy; portable ramps try JIT when unset. True tries JIT,
         and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
@@ -6352,8 +6468,9 @@ def linspace(
 
     Returns
     -------
-    out: :ref:`NDArray`
-        A :ref:`NDArray` is returned.
+    out: :ref:`NDArray` or :ref:`LazyArray`
+        Returns an :ref:`NDArray` by default or a deferred :ref:`LazyArray` when
+        ``lazy=True``.
     """
 
     def linspace_fill(inputs, output, offset):
@@ -6399,10 +6516,38 @@ def linspace(
 
     dtype = _check_dtype(dtype)
 
+    if type(lazy) is not bool:
+        raise TypeError("lazy must be a bool")
+
+    nitems = num - 1 if endpoint else num
+    step = (float(stop) - float(start)) / float(nitems) if nitems > 0 and dtype.kind != "c" else 0.0
+
+    execution = blosc2.jit_config.execution_options()
+    execution.update(blosc2.jit_config.pop_execution_options(kwargs))
+    storage_kwargs = kwargs.copy()
+    if lazy:
+        if storage_kwargs:
+            raise TypeError("Storage options for a lazy linspace belong on the returned array's compute()")
+        if not c_order:
+            raise NotImplementedError("lazy=True currently requires C-order linspace traversal")
+        if is_inside_new_expr():
+            raise ValueError("lazy=True cannot be used while building another lazy expression")
+        if blosc2.isdtype(dtype, "complex floating"):
+            raise NotImplementedError("lazy=True is not supported for complex linspace")
+        if dtype not in (np.dtype(np.float32), np.dtype(np.float64)) or not _menudet_ramp_supported(
+            dtype, execution
+        ):
+            raise NotImplementedError("lazy=True requires a float32 or float64 Menudet ramp for linspace")
+        return _menudet_ramp(start, step, dtype, tuple(shape), execution=execution)
+
     if is_inside_new_expr() or num == 0:
         # We already have the dtype and shape, so return immediately
-        blosc2.jit_config.pop_execution_options(kwargs)
-        return blosc2.zeros(shape, dtype=dtype, **kwargs)  # will return empty array for num == 0
+        return blosc2.zeros(shape, dtype=dtype, **storage_kwargs)  # will return empty array for num == 0
+
+    kwargs.update(execution)
+
+    if c_order and num >= 4_000_000 and _menudet_ramp_supported(dtype, execution):
+        return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
 
     # Windows and wasm32 does not support complex numbers in DSL
     if blosc2.isdtype(dtype, "complex floating"):
@@ -6412,10 +6557,8 @@ def linspace(
             # C order is guaranteed, and no reshape is needed
             return lazyarr.compute(**kwargs)
 
-        return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+        return reshape(lazyarr, shape, c_order=c_order, **storage_kwargs)
     else:
-        nitems = num - 1 if endpoint else num
-        step = (float(stop) - float(start)) / float(nitems) if nitems > 0 else 0.0
         inputs = (start, step)
         lazyarr = blosc2.lazyudf(ramp_linspace, inputs, dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
@@ -6436,6 +6579,18 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
         to a lower diagonal.
     dtype: np.dtype or list str
         The data type of the array elements in NumPy format. Default is `np.float64`.
+
+    Other Parameters
+    ----------------
+    jit: bool or None, optional
+        For portable numeric kernels, try JIT by default; False selects the
+        interpreter. Compilation failure falls back to interpretation.
+    jit_backend: str or None, optional
+        Select the native compiler ("tcc" or "cc").
+    **kwargs: Any
+        Storage arguments accepted by :func:`empty`. Default chunk and block
+        shapes localize the diagonal so zero-only blocks skip kernel evaluation.
+        Complex output and WebAssembly retain the chunkwise NumPy callback.
 
     Returns
     -------
@@ -6458,15 +6613,59 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
 
     if M is None:
         M = N
-    shape = (N, M)
+    shape = (index(N), index(M))
+    k = index(k)
     dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype)
 
-    lazyarr = blosc2.lazyudf(fill_eye, (k,), dtype=dtype, shape=shape)
-    return lazyarr.compute(**kwargs)
+    execution = blosc2.jit_config.execution_options()
+    execution.update(blosc2.jit_config.pop_execution_options(kwargs))
+    # Portable numeric kernels do not yet support complex output.
+    if 0 in shape:
+        return blosc2.empty(shape, dtype=dtype, **kwargs)
+    if k >= shape[1] or k <= -shape[0]:
+        return blosc2.zeros(shape, dtype=dtype, **kwargs)
+    if (
+        dtype.kind not in "biuf"
+        or not dtype.isnative
+        or (dtype.kind == "f" and dtype.itemsize not in (4, 8))
+        or blosc2.IS_WASM
+        or execution.get("jit_backend") == "js"
+    ):
+        lazyarr = blosc2.lazyudf(fill_eye, (k,), dtype=dtype, shape=shape)
+        return lazyarr.compute(**kwargs)
+
+    @blosc2.dsl_kernel
+    def diagonal(k):
+        return _i1 - _i0 == k  # noqa: F821
+
+    backend = execution.get("jit_backend")
+    if backend in {"tcc", "cc"}:
+        diagonal.dsl_source = f"# me:compiler={backend}\n" + diagonal.dsl_source
+    artifact = diagonal.export({}, dtype, constants={"k": k}, ndim=2)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=execution.get("jit") is not False)
+    # Square blocks localize the diagonal. Row-wide default blocks would all
+    # intersect it, preventing the scheduler from skipping zero-only blocks.
+    if kwargs.get("chunks") is None:
+        kwargs["chunks"] = tuple(builtins.min(1024, builtins.max(1, n)) for n in shape)
+    if kwargs.get("blocks") is None:
+        kwargs["blocks"] = tuple(builtins.min(128, c) for c in kwargs["chunks"])
+    output = blosc2.empty(shape, dtype=dtype, **kwargs)
+    if not output.size:
+        return output
+    if blosc2.blosc2_ext.portable_prefilter_inputs_eligible({}, output=output):
+        kernel._handle.evaluate_prefilter({}, out=output, _diagonal=k)
+        return output
+    for origin in itertools.product(*(range(0, n, c) for n, c in zip(shape, output.chunks, strict=True))):
+        extent = tuple(builtins.min(c, n - o) for o, c, n in zip(origin, output.chunks, shape, strict=True))
+        item = tuple(slice(o, o + e) for o, e in zip(origin, extent, strict=True))
+        output[item] = kernel.evaluate_block(
+            {}, block_shape=extent, logical_shape=shape, block_origin=origin
+        )
+    return output
 
 
 def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:

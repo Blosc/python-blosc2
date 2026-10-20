@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pytest
 
+import blosc2
 from blosc2 import blosc2_ext
 
 pytestmark = pytest.mark.skipif(
@@ -139,3 +140,61 @@ def test_descriptor_logical_coordinates():
     np.testing.assert_array_equal(result, [[13, 14], [18, 19]])
     with pytest.raises(ValueError, match="Explicit logical"):
         artifact.evaluate_block({}, (2, 2))
+
+
+def test_input_free_prefilter_ramp():
+    artifact = blosc2_ext.PortableArtifactHandle(
+        manifest(
+            "def k():\n    return _flat_idx\n",
+            [],
+            {"dtype": "int64", "contract": "elementwise"},
+            requires=["numeric", "nd-context"],
+            ndim=1,
+        ),
+        0,
+    )
+    output = blosc2.empty((19,), dtype="int64", chunks=(8,), blocks=(4,))
+    assert blosc2_ext.portable_prefilter_inputs_eligible({}, output=output)
+    result, report = artifact.evaluate_prefilter({}, out=output)
+    assert result is output
+    np.testing.assert_array_equal(result[:], np.arange(19))
+    assert report["evaluated_blocks"] > 0
+    with pytest.raises(NotImplementedError, match="eligible"):
+        artifact.evaluate_prefilter({})
+
+
+def test_constructor_ramp_explicit_interpreter():
+    from importlib import import_module
+
+    ndarray = import_module("blosc2.ndarray")
+    lazy = ndarray._menudet_ramp(0, 1, np.dtype("int64"), (19,), execution={"jit": False})
+    assert not lazy.kernel.has_jit
+    np.testing.assert_array_equal(lazy[:], np.arange(19))
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        ((11, 13), (6, 8), (4, 3)),
+        ((9, 11, 13), (5, 6, 8), (3, 4, 3)),
+    ],
+)
+@pytest.mark.parametrize("clevel", [0, 5])
+@pytest.mark.parametrize("jit", [0, 1])
+def test_input_free_prefilter_nd_edges(shape, chunks, blocks, clevel, jit):
+    artifact = blosc2_ext.PortableArtifactHandle(
+        manifest(
+            "def k():\n    return _flat_idx\n",
+            [],
+            {"dtype": "int64", "contract": "elementwise"},
+            requires=["numeric", "nd-context"],
+            ndim=len(shape),
+        ),
+        jit,
+    )
+    output = blosc2.empty(
+        shape, dtype="int64", chunks=chunks, blocks=blocks, cparams={"clevel": clevel, "nthreads": 2}
+    )
+    for _ in range(2):
+        artifact.evaluate_prefilter({}, out=output)
+        np.testing.assert_array_equal(output[:], np.arange(np.prod(shape)).reshape(shape))
