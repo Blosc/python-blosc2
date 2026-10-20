@@ -142,6 +142,7 @@ def test_descriptor_logical_coordinates():
         artifact.evaluate_block({}, (2, 2))
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
 def test_input_free_prefilter_ramp():
     artifact = blosc2_ext.PortableArtifactHandle(
         manifest(
@@ -181,6 +182,7 @@ def test_constructor_ramp_explicit_interpreter():
 )
 @pytest.mark.parametrize("clevel", [0, 5])
 @pytest.mark.parametrize("jit", [0, 1])
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
 def test_input_free_prefilter_nd_edges(shape, chunks, blocks, clevel, jit):
     artifact = blosc2_ext.PortableArtifactHandle(
         manifest(

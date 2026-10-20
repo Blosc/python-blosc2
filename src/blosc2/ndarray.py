@@ -6185,9 +6185,6 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
     ):
         start = int(start)
         step = int(step)
-    elif dtype == np.dtype(np.float32):
-        start = np.float32(start)
-        step = np.float32(step)
     else:
         start = float(start)
         step = float(step)
@@ -6196,12 +6193,17 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
     def ramp(start, step):
         return start + _flat_idx * step  # noqa: F821
 
+    if dtype.kind == "f":
+        ramp = blosc2.DSLKernel.from_source(
+            "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
+        )
+
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
         ramp.dsl_source = f"# me:compiler={backend}\n" + ramp.dsl_source
     artifact = ramp.export({}, dtype, constants={"start": start, "step": step}, ndim=len(shape))
     jit_option = execution.get("jit")
-    jit_mode = True if jit_option is None else bool(jit_option)
+    jit_mode = math.prod(shape) >= 4_000_000 if jit_option is None else bool(jit_option)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit_mode)
     return kernel.lazy({}, shape=shape, partitions=partitions)
 
@@ -6290,7 +6292,8 @@ def arange(  # noqa: C901
     ----------------
     jit: bool or None, optional
         Execution policy for the ramp: None (default) inherits the
-        configured JIT policy; portable ramps try JIT when unset. True tries JIT,
+        configured JIT policy; unset uses interpretation below 4 million elements
+        and tries JIT for larger portable ramps. True tries JIT,
         and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
@@ -6378,9 +6381,10 @@ def arange(  # noqa: C901
 
     kwargs.update(execution)
 
-    # Keep the regular fused constructor for small arrays; larger ramps use
-    # portable JIT by default, with interpretation available via jit=False.
-    if c_order and NUM >= 4_000_000 and _menudet_ramp_supported(dtype, execution):
+    # Avoid compilation latency for small one-shot ramps unless explicitly requested.
+    if execution["jit"] is None:
+        execution["jit"] = NUM >= 4_000_000
+    if c_order and _menudet_ramp_supported(dtype, execution):
         if dtype == np.dtype(np.int64):
             valid_int = (
                 isinstance(start, (int, np.integer))
@@ -6458,7 +6462,8 @@ def linspace(  # noqa: C901
     ----------------
     jit: bool or None, optional
         Execution policy for the ramp: None (default) inherits the
-        configured JIT policy; portable ramps try JIT when unset. True tries JIT,
+        configured JIT policy; unset uses interpretation below 4 million elements
+        and tries JIT for larger portable ramps. True tries JIT,
         and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
@@ -6546,7 +6551,9 @@ def linspace(  # noqa: C901
 
     kwargs.update(execution)
 
-    if c_order and num >= 4_000_000 and _menudet_ramp_supported(dtype, execution):
+    if execution["jit"] is None:
+        execution["jit"] = num >= 4_000_000
+    if c_order and _menudet_ramp_supported(dtype, execution):
         return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
 
     # Windows and wasm32 does not support complex numbers in DSL

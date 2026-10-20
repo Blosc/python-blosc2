@@ -43,6 +43,7 @@ def _jit_backend_available():
 
 
 JIT_AVAILABLE = _jit_backend_available()
+native_portable = pytest.mark.skipif(blosc2.IS_WASM, reason="Tests native Menudet dispatch")
 
 
 def _expect_jit(status):
@@ -260,6 +261,7 @@ def test_kernel_integer_ops_kept_as_dsl():
         np.testing.assert_equal(res[...], expected)
 
 
+@native_portable
 def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
     assert kernel_index_ramp.dsl_source is not None
     assert "def kernel_index_ramp(x):" in kernel_index_ramp.dsl_source
@@ -279,11 +281,9 @@ def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
     expr = blosc2.lazyudf(kernel_index_ramp, (x2,), dtype=np.float32)
     res = expr[:]
 
-    assert captured["calls"] >= 1
-    assert "def kernel_index_ramp(x):" in captured["expr"]
-    assert "_i0" in captured["expr"]
-    assert "_n1" in captured["expr"]
-    assert "_i1" in captured["expr"]
+    assert captured["calls"] == 0
+    assert expr._native_execution_report["route"] == "menudet-lazyudf"
+    np.testing.assert_array_equal(res, np.arange(100).reshape(shape))
     assert res.shape == shape
 
 
@@ -336,6 +336,7 @@ def test_kernel_index_float_cast_matches_ramp():
     np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
 
 
+@native_portable
 def test_kernel_index_float_cast_fast_path(monkeypatch):
     original_set_pref_expr = blosc2.NDArray._set_pref_expr
     captured = {"calls": 0, "expr": None}
@@ -354,11 +355,8 @@ def test_kernel_index_float_cast_fast_path(monkeypatch):
     expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
 
     np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
-    assert captured["calls"] >= 1
-    assert "def kernel_index_ramp_float_cast(x):" in captured["expr"]
-    assert "float(_i0)" in captured["expr"]
-    assert "_n1" in captured["expr"]
-    assert "_i1" in captured["expr"]
+    assert captured["calls"] == 0
+    assert expr._native_execution_report["route"] == "menudet-lazyudf"
     # ...and it JIT-compiles rather than silently running on the interpreter.
     _expect_jit(
         blosc2.validate_dsl_jit(kernel_index_ramp_float_cast, {"x": np.float32}, np.float32, shape=shape)
@@ -454,6 +452,7 @@ def test_dsl_kernel_accepts_scalar_param_per_call():
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
 
 
+@native_portable
 def test_kernel_scalar_param_keeps_fast_path(monkeypatch):
     import importlib
 
@@ -484,14 +483,8 @@ def test_kernel_scalar_param_keeps_fast_path(monkeypatch):
         expected = kernel_loop_param.func(a, b, niter)
 
         np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
-        assert captured["calls"] >= 1
-        assert captured["keys"] == ("x", "y")
-        assert "def kernel_loop_param(x, y):" in captured["expr"]
-        assert "for it in range(3):" not in captured["expr"]
-        assert "for _i in range(3):" in captured["expr"]
-        assert "# loop count comes from scalar niter" in captured["expr"]
-        assert "range(niter)" not in captured["expr"]
-        assert "float(niter)" not in captured["expr"]
+        assert captured["calls"] == 0
+        assert expr._native_execution_report["route"] == "menudet-lazyudf"
         # ...and the loop+scalar kernel JIT-compiles (the original G3 fallback shape).
         _expect_jit(
             blosc2.validate_dsl_jit(
@@ -502,6 +495,7 @@ def test_kernel_scalar_param_keeps_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@native_portable
 def test_kernel_scalar_float_cast_inlined(monkeypatch):
     import importlib
 
@@ -528,15 +522,13 @@ def test_kernel_scalar_float_cast_inlined(monkeypatch):
         expected = kernel_scalar_float_cast.func(a, niter)
 
         np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
-        assert captured["calls"] >= 1
-        assert captured["keys"] == ("x",)
-        assert "def kernel_scalar_float_cast(x):" in captured["expr"]
-        assert "offset = 3.0" in captured["expr"]
-        assert "float(3)" not in captured["expr"]
+        assert captured["calls"] == 0
+        assert expr._native_execution_report["route"] == "menudet-lazyudf"
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@native_portable
 def test_kernel_scalar_only_via_fast_eval(monkeypatch):
     import importlib
 
@@ -563,14 +555,15 @@ def test_kernel_scalar_only_via_fast_eval(monkeypatch):
     expr = blosc2.lazyudf(kernel_scalar_only, (3,), dtype=np.float32, shape=shape)
     res = expr.compute()
 
-    assert captured["fast_calls"] == 1
+    assert captured["fast_calls"] == 0
     assert captured["slices_calls"] == 0
-    assert captured["operands"] == {"start": 3}
-    np.testing.assert_equal(res[...], np.zeros(shape, dtype=np.float32))
+    assert captured["operands"] is None
+    np.testing.assert_equal(res[...], np.full(shape, 4, dtype=np.float32))
 
 
-def test_kernel_scalar_only_injects_dummy(monkeypatch):
-    """Scalar-only inputs specialize to a kernel with a dummy operand injected."""
+@native_portable
+def test_kernel_scalar_only_needs_no_dummy(monkeypatch):
+    """Portable scalar-only recipes need no dummy input or legacy compiler."""
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -590,14 +583,8 @@ def test_kernel_scalar_only_injects_dummy(monkeypatch):
     try:
         shape = (8, 8)
         expr = blosc2.lazyudf(kernel_scalar_only, (3,), dtype=np.float32, shape=shape)
-        with pytest.raises(
-            RuntimeError, match="miniexpr compilation or execution failed for this DSL kernel"
-        ):
-            expr.compute()
-        assert captured["calls"] >= 1
-        assert captured["keys"] == ("__me_dummy0",)
-        assert "def kernel_scalar_only(__me_dummy0):" in captured["expr"]
-        assert "return 3 + 1" in captured["expr"]
+        np.testing.assert_array_equal(expr.compute()[:], np.full(shape, 4, dtype=np.float32))
+        assert captured["calls"] == 0
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
@@ -711,6 +698,7 @@ print("ok")
     assert "ok" in result.stdout
 
 
+@native_portable
 def test_kernel_failure_raises_strict_off(monkeypatch):
     import importlib
 
@@ -718,26 +706,23 @@ def test_kernel_failure_raises_strict_off(monkeypatch):
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
 
-    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
-        raise ValueError("forced miniexpr failure")
+    def failing_export(*args, **kwargs):
+        raise blosc2.PortableArtifactError("forced miniexpr failure", status="invalid_source")
 
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+    monkeypatch.setattr(blosc2.DSLKernel, "export", failing_export)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
         expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
-        with pytest.raises(
-            RuntimeError, match="miniexpr compilation or execution failed for this DSL kernel"
-        ):
+        with pytest.raises(RuntimeError, match="Menudet compilation failed for DSL kernel"):
             _ = expr.compute()
-        with pytest.raises(
-            RuntimeError, match="miniexpr compilation or execution failed for this DSL kernel"
-        ):
+        with pytest.raises(RuntimeError, match="Menudet compilation failed for DSL kernel"):
             _ = expr.compute(strict_miniexpr=False)
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@native_portable
 def test_kernel_failure_includes_backend_error(monkeypatch):
     import importlib
 
@@ -745,24 +730,25 @@ def test_kernel_failure_includes_backend_error(monkeypatch):
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
 
-    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
-        raise ValueError("forced miniexpr backend failure details")
+    def failing_export(*args, **kwargs):
+        raise blosc2.PortableArtifactError(
+            "forced miniexpr backend failure details", status="invalid_source"
+        )
 
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+    monkeypatch.setattr(blosc2.DSLKernel, "export", failing_export)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
         expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
-        with pytest.raises(
-            RuntimeError, match="miniexpr compilation or execution failed for this DSL kernel"
-        ) as excinfo:
+        with pytest.raises(RuntimeError, match="Menudet compilation failed for DSL kernel") as excinfo:
             _ = expr.compute()
         msg = str(excinfo.value)
-        assert "Backend error: forced miniexpr backend failure details" in msg
+        assert "forced miniexpr backend failure details" in msg
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@native_portable
 def test_kernel_failure_prefers_validate_error(monkeypatch):
     import importlib
 
@@ -770,8 +756,10 @@ def test_kernel_failure_prefers_validate_error(monkeypatch):
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
 
-    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
-        raise ValueError("forced backend failure hidden by validate_dsl message")
+    def failing_export(*args, **kwargs):
+        raise blosc2.PortableArtifactError(
+            "forced backend failure hidden by validate_dsl message", status="invalid_source"
+        )
 
     def fake_validate_dsl(_func):
         return {
@@ -781,23 +769,22 @@ def test_kernel_failure_prefers_validate_error(monkeypatch):
             "error": "synthetic validate_dsl diagnostics",
         }
 
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+    monkeypatch.setattr(blosc2.DSLKernel, "export", failing_export)
     monkeypatch.setattr(lazyexpr_mod, "validate_dsl", fake_validate_dsl, raising=False)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
         expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
-        with pytest.raises(
-            RuntimeError, match="miniexpr compilation or execution failed for this DSL kernel"
-        ) as excinfo:
+        with pytest.raises(RuntimeError, match="Menudet compilation failed for DSL kernel") as excinfo:
             _ = expr.compute()
         msg = str(excinfo.value)
-        assert "Backend error: forced backend failure hidden by validate_dsl message" in msg
+        assert "forced backend failure hidden by validate_dsl message" in msg
         assert "synthetic validate_dsl diagnostics" not in msg
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@native_portable
 def test_lazyudf_jit_policy_forwarding(monkeypatch):
     import importlib
 
@@ -805,22 +792,23 @@ def test_lazyudf_jit_policy_forwarding(monkeypatch):
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
 
-    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    original_from_json = blosc2.PortableKernel.from_json
     seen = []
 
-    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+    def wrapped_from_json(artifact, *, jit=None):
         seen.append(jit)
-        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+        return original_from_json(artifact, jit=jit)
 
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+    monkeypatch.setattr(blosc2.PortableKernel, "from_json", wrapped_from_json)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
         expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype, jit=False)
         _ = expr.compute(strict_miniexpr=False)
+        assert seen[-1] is False
+        seen.clear()
         _ = expr.compute(jit=True, strict_miniexpr=False)
-        assert seen[0] is False
-        assert seen[1] is True
+        assert seen[-1] is True
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
@@ -1226,6 +1214,7 @@ def test_dsl_kernel_reassigning_input_param_rejected():
     assert "input parameter 'a'" in result["error"]
 
 
+@native_portable
 def test_dsl_kernel_variable_named_out_compiles(monkeypatch):
     # G3: 'out' collides with the codegen output pointer -> used to silently fall
     # back to the interpreter.  miniexpr now namespaces its codegen identifiers
@@ -1264,9 +1253,8 @@ def test_dsl_kernel_variable_named_out_compiles(monkeypatch):
     a2 = blosc2.asarray(a, chunks=(4, 4), blocks=(2, 2))
     res = blosc2.lazyudf(k, (a2, a2, 32), dtype=np.float64, jit=True)[:]
 
-    # Bare 'out' was handed to miniexpr and the result matches the interpreter.
-    assert captured["expr"] is not None
-    assert any(line.strip().startswith("out =") for line in captured["expr"].splitlines())
+    # Portable code generation handles the reserved local without legacy compilation.
+    assert captured["expr"] is None
     expected = blosc2.lazyudf(k, (a2, a2, 32), dtype=np.float64, jit=False)[:]
     np.testing.assert_allclose(res, expected)
 
@@ -1384,11 +1372,12 @@ def test_kernel_numpy_f_ordered_and_strided():
     np.testing.assert_array_equal(res_strided, ref_strided)
 
 
-def test_kernel_non_native_endian_needs_miniexpr():
+@native_portable
+def test_kernel_non_native_endian_portable_conversion():
     a = np.arange(100, dtype=">f8").reshape(10, 10)
     b = np.arange(100, dtype=np.float64).reshape(10, 10)
-    with pytest.raises(RuntimeError, match="NDArray or NumPy inputs"):
-        blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
+    result = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
+    np.testing.assert_array_equal(result, _dsl_reference(_numpy_operand_kernel, (a.astype("float64"), b)))
 
 
 def test_kernel_zero_input_dummy_injection():

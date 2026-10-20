@@ -5547,9 +5547,19 @@ class LazyUDF(LazyArray):
         aux_kwargs.update(kwargs)
 
         # aux_kwargs includes self.shape and self.dtype
+        from .dsl_execution import evaluate_dsl_udf
+
+        handled, result = evaluate_dsl_udf(self, item, getitem=False, options=aux_kwargs)
+        if handled:
+            return result
         return chunked_eval(self.func, self.inputs_dict, item, _getitem=False, **aux_kwargs)
 
     def __getitem__(self, item):
+        from .dsl_execution import evaluate_dsl_udf
+
+        handled, result = evaluate_dsl_udf(self, item, getitem=True, options=self.kwargs)
+        if handled:
+            return result
         result = chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
         return _drop_indexed_axes(result, self.shape, item)
 

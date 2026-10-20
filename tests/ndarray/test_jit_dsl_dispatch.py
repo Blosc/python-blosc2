@@ -55,7 +55,7 @@ def test_control_flow_dispatches_to_dsl(monkeypatch, capsys):
     captured = capsys.readouterr()
     # Under WebAssembly this kernel is transpiled to the JS bridge instead of
     # going through miniexpr (see _maybe_js_backend); both engines trace.
-    assert f"engine={'js' if blosc2.IS_WASM else 'miniexpr'}" in captured.out
+    assert f"engine={'js' if blosc2.IS_WASM else 'menudet'}" in captured.out
     assert "def mandel" in captured.out
     np.testing.assert_array_equal(res, _mandel_numpy(cr, ci, 30))
 

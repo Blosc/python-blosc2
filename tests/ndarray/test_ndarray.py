@@ -459,6 +459,7 @@ def test_eye(k, N, M, dtype, chunks):
 
 @pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.parametrize("clevel", [0, 5])
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
 def test_eye_portable_edges_and_storage(jit, clevel, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Numeric eye must not use the Python LazyUDF callback")

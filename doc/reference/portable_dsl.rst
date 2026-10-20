@@ -29,6 +29,25 @@ and API identifiers. They do not name another language.
 Artifacts are standalone UTF-8 JSON, executable through native miniexpr in C or
 Python, without reconstructing or executing Python functions on import.
 
+Source-authored execution
+-------------------------
+
+Supported ``lazyudf(DSLKernel, ...)`` calls now execute through Menudet, including
+the control-flow route of ``@blosc2.jit``. The ``LazyUDF`` API and storage options
+remain unchanged; kernels are exported without calling their Python bodies.
+Evaluation-time JIT settings still override construction-time settings.
+
+Compatibility execution remains for trusted legacy recipes, scalar-return
+broadcasting, chunk boundaries that split the logical block grid, in-place
+execution, unsupported dtypes, WebAssembly/JS, and custom compiler/cache/trace
+settings not exposed by the portable loader. These are explicit dispatch gates;
+portable compilation errors do not silently retry legacy execution.
+
+Eligible C-order ``arange()`` and ``linspace()`` calls use Menudet at every size.
+Unless explicitly overridden, fewer than 4 million elements use interpretation
+to avoid compilation latency; larger ramps try JIT. Unsupported constructor
+dtypes/options and non-C-order traversal retain compatibility execution.
+
 Menudet 1.0 numerical semantics
 ------------------------------
 

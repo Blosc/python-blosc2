@@ -13143,6 +13143,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return blosc2.asarray(output)
         if cc.get("kind") == "dsl":
             operands = tuple(self._cols[d] for d in cc["col_deps"])
+            cc["kernel"]._legacy_source_recipe = True
             return blosc2.lazyudf(
                 cc["kernel"],
                 operands,
@@ -13168,6 +13169,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             from blosc2.dsl_kernel import kernel_from_source
 
             kernel = kernel_from_source(meta["dsl_source"])
+            kernel._legacy_source_recipe = True
             meta["_kernel"] = kernel  # not serialized (schema dump emits known keys only)
         return kernel
 
