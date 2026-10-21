@@ -70,3 +70,40 @@ def test_small_constructors_use_menudet_without_jit(monkeypatch):
     assert observed[-1] is False
     blosc2.arange(31, jit=True)
     assert observed[-1] is True
+
+
+@pytest.mark.parametrize("scalar_return", [False, True])
+def test_padded_groups_and_scalar_broadcast(forbid_legacy, scalar_return):
+    values = np.arange(11 * 13, dtype="float64").reshape(11, 13)
+    x = blosc2.asarray(values, chunks=(6, 8), blocks=(4, 3))
+    body = "block_sum(x)" if scalar_return else "x + block_sum(x) + _i0"
+    kernel = blosc2.DSLKernel.from_source(f"def k(x):\n    return {body}\n")
+    lazy = blosc2.lazyudf(kernel, (x,), dtype="float64", jit=False, in_place=True)
+    expected = np.empty_like(values)
+    for row in range(0, 11, 6):
+        for col in range(0, 13, 8):
+            for r in range(row, min(row + 6, 11), 4):
+                for c in range(col, min(col + 8, 13), 3):
+                    item = (slice(r, min(r + 4, row + 6, 11)), slice(c, min(c + 3, col + 8, 13)))
+                    block = values[item]
+                    expected[item] = (
+                        block.sum()
+                        if scalar_return
+                        else block + block.sum() + np.arange(r, item[0].stop)[:, None]
+                    )
+    np.testing.assert_array_equal(lazy[:], expected)
+    np.testing.assert_array_equal(lazy[1:10:2, 2:12:3], expected[1:10:2, 2:12:3])
+    np.testing.assert_array_equal(lazy.compute(chunks=(5, 5), blocks=(2, 2))[:], expected)
+
+
+def test_portable_loader_options(forbid_legacy, tmp_path, capfd):
+    if not blosc2.blosc2_ext.portable_artifact_options_available():
+        pytest.skip("Requires the native artifact options API")
+    kernel = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
+    lazy = blosc2.lazyudf(kernel, (np.arange(31.0),), dtype="float64")
+    with blosc2.jit_options(jit_backend="cc", compiler="/no/compiler", cache_dir=tmp_path, trace=True):
+        np.testing.assert_array_equal(lazy[:], np.arange(31.0) + 1)
+    assert "compiler unavailable" in capfd.readouterr().err
+    assert lazy._native_execution_report["route"] == "menudet-lazyudf"
+    assert not lazy._native_execution_report["jit"]
+    assert not blosc2.get_jit_options()["trace"]

@@ -2163,6 +2163,8 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
         }
         storage_kwargs = {k: v for k, v in decorator_kwargs.items() if k not in _JIT_EXECUTION_TUNING_KWARGS}
         lexpr = blosc2.lazyudf(kernel, values, dtype=None, shape=shape, **exec_kwargs)
+        # Native control-flow wrappers must not silently select full/legacy DSL.
+        lexpr._require_menudet = not blosc2.IS_WASM
 
         if out is not None:
             if isinstance(out, blosc2.NDArray):

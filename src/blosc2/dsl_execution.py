@@ -3,10 +3,90 @@
 import copy
 import os
 import re
+from itertools import product
 
 import numpy as np
 
 import blosc2
+
+from .portable_lazy import PortableLazyArray
+
+
+def _compatibility_result(udf):
+    if getattr(udf, "_require_menudet", False):
+        raise NotImplementedError("This @blosc2.jit kernel requires unsupported Menudet functionality")
+    return False, None
+
+
+class _PartitionedDSL(PortableLazyArray):
+    """Keep original chunk-local groups and broadcast scalar returns like LazyUDF."""
+
+    def __init__(self, kernel, inputs, shape, chunks, blocks):
+        super().__init__(kernel, inputs, shape=shape, partitions=blocks)
+        self._shape = shape
+        self._chunks = chunks
+
+    def _values(self, selection=None):
+        if selection is None or selection is Ellipsis:
+            selection = ()
+        if not isinstance(selection, tuple):
+            selection = (selection,)
+        if Ellipsis in selection:
+            pos = selection.index(Ellipsis)
+            selection = (
+                selection[:pos]
+                + (slice(None),) * (len(self.shape) - len(selection) + 1)
+                + selection[pos + 1 :]
+            )
+        selection += (slice(None),) * (len(self.shape) - len(selection))
+        if len(selection) != len(self.shape):
+            raise IndexError("Too many indices")
+        indices, squeeze, groups = [], [], []
+        for axis, (part, size, chunk, block) in enumerate(
+            zip(selection, self.shape, self._chunks, self.partitions, strict=True)
+        ):
+            if isinstance(part, int):
+                part = part + size if part < 0 else part
+                if not 0 <= part < size:
+                    raise IndexError("Index out of range")
+                selected = np.array([part], dtype=np.intp)
+                squeeze.append(axis)
+            else:
+                selected = np.arange(*part.indices(size), dtype=np.intp)
+            indices.append(selected)
+            intervals = []
+            for c in range(0, size, chunk):
+                for origin in range(c, min(c + chunk, size), block):
+                    end = min(origin + block, c + chunk, size)
+                    positions = np.flatnonzero((selected >= origin) & (selected < end))
+                    if positions.size:
+                        intervals.append((origin, end, positions))
+            groups.append(intervals)
+        result = np.empty(tuple(len(i) for i in indices), dtype=self.dtype)
+        for group in product(*groups):
+            origin = tuple(g[0] for g in group)
+            extent = tuple(g[1] - g[0] for g in group)
+            item = tuple(slice(g[0], g[1]) for g in group)
+            operands = {}
+            for name, value in self.inputs.items():
+                rank = len(value.shape)
+                source_item = (
+                    tuple(
+                        slice(0, 1) if size == 1 else part
+                        for size, part in zip(value.shape, item[len(item) - rank :], strict=True)
+                    )
+                    if rank
+                    else ()
+                )
+                operands[name] = np.broadcast_to(np.asarray(value[source_item]), extent)
+            context = (
+                {"logical_shape": self.shape, "block_origin": origin} if self.kernel.context_ndim else {}
+            )
+            values = self.kernel.evaluate_block(operands, block_shape=extent, **context)
+            positions = tuple(g[2] for g in group)
+            local = tuple(i[p] - o for i, p, o in zip(indices, positions, origin, strict=True))
+            result[np.ix_(*positions)] = values if np.ndim(values) == 0 else values[np.ix_(*local)]
+        return np.squeeze(result, axis=tuple(squeeze)) if squeeze else result
 
 
 def evaluate_dsl_udf(udf, item, *, getitem, options):
@@ -19,7 +99,7 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):
         or getattr(udf, "_legacy_source_recipe", False)
         or getattr(udf.func, "_legacy_source_recipe", False)
     ):
-        return False, None
+        return _compatibility_result(udf)
     storage = dict(options)
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(storage))
@@ -27,15 +107,15 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):
         blosc2.IS_WASM
         or execution["jit_backend"] == "js"
         or not blosc2.blosc2_ext.portable_descriptor_available()
-        or storage.get("in_place", False)
-        or any(execution[name] for name in ("compiler", "cflags", "cache_dir", "compiler_output", "trace"))
+        or (
+            any(execution[name] for name in ("compiler", "cflags", "cache_dir", "compiler_output", "trace"))
+            and not blosc2.blosc2_ext.portable_artifact_options_available()
+        )
         or np.dtype(udf.dtype).kind not in "biufSU"
         or (np.dtype(udf.dtype).kind == "f" and np.dtype(udf.dtype).itemsize not in (4, 8))
     ):
-        return False, None
+        return _compatibility_result(udf)
     chunks, blocks = tuple(udf.chunks), tuple(udf.blocks)
-    if any(c % b for c, b in zip(chunks, blocks, strict=True)):
-        return False, None
     inputs, constants = {}, {}
     for name, value in zip(udf.func.input_names, udf.inputs, strict=True):
         if np.isscalar(value):
@@ -49,21 +129,40 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):
         lambda match: f"def {match[1]}({', '.join(udf.func.input_names)}):",
         udf.func.dsl_source,
     )
-    prefix = f"# me:compiler={execution['jit_backend']}\n" if execution["jit_backend"] is not None else ""
-    text = prefix + text
+    from .lazyexpr import _apply_jit_backend_pragma
+
+    text = _apply_jit_backend_pragma(text, inputs, execution["jit_backend"])
     source = copy.copy(udf.func)
     source.dsl_source = text
     ndim = udf.ndim if re.search(r"\b(?:_flat_idx|_ndim|_[in]\d+)\b", text) else 0
     try:
-        artifact = source.export(
-            {name: value.dtype for name, value in inputs.items()}, udf.dtype, constants=constants, ndim=ndim
-        )
+        with blosc2.jit_options(**execution):
+            artifact = source.export(
+                {name: value.dtype for name, value in inputs.items()},
+                udf.dtype,
+                constants=constants,
+                ndim=ndim,
+            )
     except PortableArtifactError as error:
         if "return cardinality" in str(error):
-            return False, None
-        raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=execution["jit"] is not False)
-    portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
+            with blosc2.jit_options(**execution):
+                artifact = source.export(
+                    {name: value.dtype for name, value in inputs.items()},
+                    udf.dtype,
+                    constants=constants,
+                    ndim=ndim,
+                    cardinality="block_scalar",
+                )
+        else:
+            raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
+    with blosc2.jit_options(**execution):
+        kernel = blosc2.PortableKernel.from_json(artifact, jit=execution["jit"] is not False)
+    if kernel.result_cardinality == "block_scalar" or any(
+        c % b for c, b in zip(chunks, blocks, strict=True)
+    ):
+        portable = _PartitionedDSL(kernel, inputs, tuple(udf.shape), chunks, blocks)
+    else:
+        portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
     udf._native_execution_report = {"route": "menudet-lazyudf", "jit": kernel.has_jit}
     if os.environ.get("BLOSC_ME_JIT_TRACE") == "1":
         print(f"[blosc2] engine=menudet jit={execution['jit']} expr={text[:120]}")

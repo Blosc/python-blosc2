@@ -294,7 +294,7 @@ def test_evaluation_time_and_udf_policy(capfd):
         np.testing.assert_array_equal(expr.compute()[:], np.arange(32) + 1)
         assert "jit runtime built:" in capfd.readouterr().err
         np.testing.assert_array_equal(udf[:], np.arange(32) * 2 + 1)
-        assert "reason=jit_mode=off" in capfd.readouterr().err
+        assert "request=2" in capfd.readouterr().err
     assert blosc2.get_jit_options()["trace"] is False
 
 
@@ -419,7 +419,7 @@ def test_compiler_output(tmp_path, capfd):
     ("variable", "value", "reason"),
     [
         ("CC", "/no/env/compiler", "c compiler unavailable"),
-        ("CFLAGS", "-invalid-blosc2-option", "compilation failed"),
+        ("CFLAGS", "-invalid-blosc2-option", "explicit compiler flags"),
     ],
 )
 def test_cc_environment_precedence(tmp_path, capfd, monkeypatch, variable, value, reason):
@@ -430,5 +430,5 @@ def test_cc_environment_precedence(tmp_path, capfd, monkeypatch, variable, value
     ):
         blosc2.linspace(0, 11, 79)
     assert reason in capfd.readouterr().err
-    assert (tmp_path / "env-cache").exists()
+    assert (tmp_path / "env-cache").exists() == (variable == "CC")
     assert not (tmp_path / "python-cache").exists()

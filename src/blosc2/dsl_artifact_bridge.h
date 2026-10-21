@@ -10,6 +10,14 @@
 #ifdef B2_HAVE_PORTABLE_ARTIFACT
 #include "miniexpr_artifact.h"
 #endif
+
+static int b2_artifact_options_available(void) {
+#ifdef ME_ARTIFACT_LOAD_OPTIONS_VERSION
+    return 1;
+#else
+    return 0;
+#endif
+}
 #if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
 typedef me_artifact_input b2_artifact_input;
 typedef me_artifact_error b2_artifact_error;
@@ -73,6 +81,19 @@ static me_dtype b2_artifact_dtype(const void *handle, int index) { (void)handle;
 static me_dtype b2_artifact_output(const void *handle) { (void)handle; return ME_AUTO; }
 static int b2_artifact_jit(const void *handle) { (void)handle; return 0; }
 #endif
+
+static int b2_artifact_load_options(const char *json, size_t size, int jit,
+                                  const me_jit_options *options, void **out, b2_artifact_error *error) {
+#ifdef ME_ARTIFACT_LOAD_OPTIONS_VERSION
+    me_artifact *handle = NULL;
+    int rc = me_artifact_load_options(json, size, (me_jit_mode)jit, options, &handle, error);
+    *out = handle;
+    return rc;
+#else
+    (void)options;
+    return b2_artifact_load(json, size, jit, out, error);
+#endif
+}
 #if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
 typedef me_artifact_buffer b2_artifact_buffer;
 typedef me_artifact_eval_descriptor b2_artifact_descriptor;

@@ -37,10 +37,17 @@ the control-flow route of ``@blosc2.jit``. The ``LazyUDF`` API and storage optio
 remain unchanged; kernels are exported without calling their Python bodies.
 Evaluation-time JIT settings still override construction-time settings.
 
-Compatibility execution remains for trusted legacy recipes, scalar-return
-broadcasting, chunk boundaries that split the logical block grid, in-place
-execution, unsupported dtypes, WebAssembly/JS, and custom compiler/cache/trace
-settings not exposed by the portable loader. These are explicit dispatch gates;
+Scalar-return broadcasting and padded chunk-local block groups retain their
+original LazyUDF membership, even when slicing or rechunking output. Native
+compiler/cache/trace settings are scoped to artifact loading without changing
+environment variables. Strict portable JIT accepts optimization-level flags;
+other compiler flags conservatively select interpretation.
+
+Compatibility execution remains for trusted legacy recipes, unsupported dtypes,
+WebAssembly/JS, and custom compiler/cache/trace settings on older native runtimes
+without the artifact-options API. Native ``@blosc2.jit`` control-flow wrappers
+require Menudet and reject unsupported cases rather than silently using legacy
+DSL. These are explicit dispatch gates;
 portable compilation errors do not silently retry legacy execution.
 
 Eligible C-order ``arange()`` and ``linspace()`` calls use Menudet at every size.

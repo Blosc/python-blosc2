@@ -1068,6 +1068,8 @@ cdef extern from "dsl_artifact_bridge.h":
         char message[256]
     int b2_artifact_available()
     int b2_artifact_load(const char *, size_t, int, void **, b2_artifact_error *) nogil
+    int b2_artifact_load_options(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
+    int b2_artifact_options_available()
     int b2_artifact_eval(const void *, const b2_artifact_input *, int, void *, size_t,
                         b2_artifact_error *) nogil
     void b2_artifact_free(void *) noexcept nogil
@@ -2063,13 +2065,23 @@ cdef class PortableArtifactHandle:
         cdef int rc
         cdef const char *json
         cdef size_t size
+        cdef me_jit_options native_options
+        options = blosc2.jit_config.execution_options()
+        cdef bytes compiler = (options["compiler"] or "").encode()
+        cdef bytes flags = (options["cflags"] or "").encode()
+        cdef bytes cache = (options["cache_dir"] or "").encode()
+        native_options.compiler = <const char *>compiler if compiler else NULL
+        native_options.cflags = <const char *>flags if flags else NULL
+        native_options.cache_dir = <const char *>cache if cache else NULL
+        native_options.trace = int(options["trace"])
+        native_options.compiler_output = int(options["compiler_output"])
         self._handle = NULL
         if artifact is None:
             return
         json = artifact
         size = len(artifact)
         with nogil:
-            rc = b2_artifact_load(json, size, jit_mode, &self._handle, &error)
+            rc = b2_artifact_load_options(json, size, jit_mode, &native_options, &self._handle, &error)
         if rc:
             raise_artifact_error(rc, &error)
 
@@ -6725,6 +6737,10 @@ def get_loaded_matmul_cblas_library():
     if path == NULL:
         return None
     return path.decode("utf-8")
+
+
+def portable_artifact_options_available():
+    return bool(b2_artifact_options_available())
 
 
 def portable_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
