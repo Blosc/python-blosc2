@@ -328,6 +328,21 @@ def test_complex_evaluate(array_fixture):
         np.testing.assert_allclose(res[:], nres)
 
 
+@pytest.mark.parametrize("dtype", ["complex64", "complex128"])
+def test_complex_multiply_infinity(dtype):
+    values = np.array([complex(np.inf, -np.inf), complex(np.inf, 1), 1 + 2j, 0j], dtype=dtype)
+    array = blosc2.asarray(values, chunks=(4,), blocks=(2,))
+    with np.errstate(invalid="ignore"):
+        expected = values * 2 + 1
+        expr = array * 2 + 1
+        results = [expr[:], expr[::2], expr.compute(jit=False)[:]]
+    for actual, reference in zip(results, [expected, expected[::2], expected], strict=True):
+        # Compare components separately: complex NaN equality can hide an
+        # incorrect finite/infinite component when its other component is NaN.
+        np.testing.assert_equal(actual.real, reference.real)
+        np.testing.assert_equal(actual.imag, reference.imag)
+
+
 def test_complex_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)

@@ -150,11 +150,7 @@ def test_complex_real_results_constants_and_reductions(forbid_legacy):
         dtype=np.float64,
         jit=False,
     )
-    if not blosc2.IS_WASM:
-        # Known wasm32 follow-up: real-valued outputs from complex inputs return
-        # zeros through the Python block path, although the native contract
-        # (tests/test_portable_complex_wasm.c) executes this kernel correctly.
-        np.testing.assert_allclose(real[:], np.abs(z) + z.real - z.imag)
+    np.testing.assert_allclose(real[:], np.abs(z) + z.real - z.imag)
     shifted = blosc2.lazyudf(
         blosc2.DSLKernel.from_source("def k(z, c):\n    return z + c\n"),
         (z, 2 + 3j),
@@ -169,6 +165,25 @@ def test_complex_real_results_constants_and_reductions(forbid_legacy):
         jit=False,
     )
     np.testing.assert_allclose(summed[()], [z.sum()])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
+@pytest.mark.parametrize("dtype", ["complex64", "complex128"])
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("operation", ["real", "conj"])
+def test_complex_callback_identity(forbid_legacy, dtype, compressed, operation):
+    # Optimized WASM links must keep real and conj distinct despite their
+    # identical real-valued callbacks in the classic builtin registry.
+    z = np.array([1 + 2j, 3 - 4j, -2 + 0.5j, 0j], dtype=dtype)
+    values = blosc2.asarray(z, chunks=(2,), blocks=(1,)) if compressed else z
+    output_dtype = z.real.dtype if operation == "real" else z.dtype
+    source = blosc2.DSLKernel.from_source(f"def k(z):\n    return {operation}(z)\n")
+    lazy = blosc2.lazyudf(source, (values,), dtype=output_dtype, jit=False)
+    expected = z.real if operation == "real" else z.conj()
+    np.testing.assert_array_equal(lazy[:], expected)
+    np.testing.assert_array_equal(lazy[1::2], expected[1::2])
+    np.testing.assert_array_equal(lazy.compute(chunks=(2,), blocks=(1,))[:], expected)
+    assert lazy._native_execution_report["route"] == "menudet-lazyudf"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
