@@ -89,7 +89,7 @@ class _PartitionedDSL(PortableLazyArray):
         return np.squeeze(result, axis=tuple(squeeze)) if squeeze else result
 
 
-def evaluate_dsl_udf(udf, item, *, getitem, options):
+def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit compatibility gates
     """Return (handled, result), retaining explicit compatibility exclusions."""
     from .dsl_kernel import DSLKernel
     from .portable_kernel import PortableArtifactError
@@ -103,16 +103,21 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):
     storage = dict(options)
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(storage))
+    if blosc2.IS_WASM:
+        # Pyodide uses the typed interpreter: the wasm32 compiler path is not
+        # part of the Python wheel's qualified runtime.
+        execution["jit"] = False
+        execution["jit_backend"] = None
     if (
-        blosc2.IS_WASM
-        or execution["jit_backend"] == "js"
+        execution["jit_backend"] == "js"
         or not blosc2.blosc2_ext.portable_descriptor_available()
         or (
             any(execution[name] for name in ("compiler", "cflags", "cache_dir", "compiler_output", "trace"))
             and not blosc2.blosc2_ext.portable_artifact_options_available()
         )
-        or np.dtype(udf.dtype).kind not in "biufSU"
+        or np.dtype(udf.dtype).kind not in "biufcSU"
         or (np.dtype(udf.dtype).kind == "f" and np.dtype(udf.dtype).itemsize not in (4, 8))
+        or (np.dtype(udf.dtype).kind == "c" and np.dtype(udf.dtype).itemsize not in (8, 16))
     ):
         return _compatibility_result(udf)
     chunks, blocks = tuple(udf.chunks), tuple(udf.blocks)
@@ -157,9 +162,9 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):
             raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
     with blosc2.jit_options(**execution):
         kernel = blosc2.PortableKernel.from_json(artifact, jit=execution["jit"] is not False)
-    if kernel.result_cardinality == "block_scalar" or any(
-        c % b for c, b in zip(chunks, blocks, strict=True)
-    ):
+    if kernel.result_cardinality == "block_scalar":
+        portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
+    elif any(c % b for c, b in zip(chunks, blocks, strict=True)):
         portable = _PartitionedDSL(kernel, inputs, tuple(udf.shape), chunks, blocks)
     else:
         portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)

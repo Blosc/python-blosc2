@@ -44,16 +44,48 @@ environment variables. Strict portable JIT accepts optimization-level flags;
 other compiler flags conservatively select interpretation.
 
 Compatibility execution remains for trusted legacy recipes, unsupported dtypes,
-WebAssembly/JS, and custom compiler/cache/trace settings on older native runtimes
-without the artifact-options API. Native ``@blosc2.jit`` control-flow wrappers
-require Menudet and reject unsupported cases rather than silently using legacy
-DSL. These are explicit dispatch gates;
+the explicit JS backend, and custom compiler/cache/trace settings on older native
+runtimes without the artifact-options API. WebAssembly uses portable Menudet
+interpretation; its JIT selection is pinned off. Native ``@blosc2.jit``
+control-flow wrappers require Menudet and reject unsupported cases rather than
+silently using legacy DSL. These are explicit dispatch gates;
 portable compilation errors do not silently retry legacy execution.
 
 Eligible C-order ``arange()`` and ``linspace()`` calls use Menudet at every size.
 Unless explicitly overridden, fewer than 4 million elements use interpretation
 to avoid compilation latency; larger ramps try JIT. Unsupported constructor
 dtypes/options and non-C-order traversal retain compatibility execution.
+
+Complex support
+---------------
+
+Menudet supports ``complex64`` and ``complex128`` on macOS, Linux and WASM32.
+Complex kernels execute in the typed interpreter; complex JIT is not implemented,
+so a JIT request still uses interpretation. Windows rejects complex inputs,
+constants and intermediates explicitly and continues to execute real kernels.
+
+Complex storage is two interleaved components of the declared float width.
+Artifact constants use one ``ieee754-hex`` string: the big-endian real component
+followed by the big-endian imaginary component, each 8 hex digits for complex64
+and 16 for complex128. Source ``j`` literals are not part of the grammar; bind
+complex values as constants instead.
+
+Declared operation set:
+
+- Arithmetic ``+ - * / **``, unary negation, truth tests and ``where``.
+- ``abs``/``fabs``, ``real``, ``imag``, ``conj``, ``sign``, ``square`` and ``rint``.
+- ``sqrt``, ``exp``, ``exp2``, ``expm1``, ``log``, ``log1p``, ``log2``, ``log10``,
+  trigonometric/hyperbolic and inverse functions.
+- ``block_sum``, ``block_prod``, ``block_mean``, ``block_min``, ``block_max``,
+  ``block_any`` and ``block_all``.
+- Component-wise ``==``/``!=``; ``< <= > >=`` use NumPy's lexicographic
+  (real, imag) ordering with NaN unordered.
+
+Rejected explicitly: floor division, remainder, bitwise/shift operations,
+``ceil``/``floor``/``trunc``, ``logaddexp``, ``signbit``, and explicit complex to
+real/integer casts. Output casting may discard the imaginary component only under
+an ``unsafe`` artifact policy. Mixed promotion follows NumPy: 16-bit integers and
+bool fit complex64, wider integers promote the result to complex128.
 
 Menudet 1.0 numerical semantics
 ------------------------------

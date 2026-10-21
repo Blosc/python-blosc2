@@ -43,8 +43,9 @@ def portable_dtype_descriptor(value):
     if (
         dtype.fields
         or dtype.subdtype
-        or dtype.kind not in "biufSU"
+        or dtype.kind not in "biufcSU"
         or (dtype.kind == "f" and dtype.itemsize not in (4, 8))
+        or (dtype.kind == "c" and dtype.itemsize not in (8, 16))
     ):
         raise PortableArtifactError(f"Unsupported portable dtype {dtype}", status="unsupported_requirement")
     if dtype.kind in "SU":
@@ -54,7 +55,7 @@ def portable_dtype_descriptor(value):
     return {"dtype": dtype.name}
 
 
-def portable_scalar_descriptor(name, value, dtype=None):
+def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dtype encoding matrix
     numeric = (
         bool,
         int,
@@ -70,6 +71,9 @@ def portable_scalar_descriptor(name, value, dtype=None):
         np.uint64,
         np.float32,
         np.float64,
+        complex,
+        np.complex64,
+        np.complex128,
     )
     if type(value) not in numeric + (str, bytes, np.str_, np.bytes_):
         raise PortableArtifactError("Captures must be plain numeric/string scalars", status="binding_error")
@@ -108,6 +112,21 @@ def portable_scalar_descriptor(name, value, dtype=None):
         }
     if type(value) in (str, bytes, np.str_, np.bytes_):
         raise PortableArtifactError("Numeric capture family mismatch", status="binding_error")
+    if dtype.kind == "c":
+        if isinstance(value, np.complexfloating) and np.dtype(type(value)) != dtype:
+            raise PortableArtifactError(
+                "Complex capture dtype disagrees with its declaration", status="binding_error"
+            )
+        if not isinstance(value, int | float | complex | np.number) or isinstance(value, bool):
+            raise PortableArtifactError("Complex captures require numeric values", status="binding_error")
+        scalar = np.asarray(value, dtype=dtype)
+        # Two big-endian components: real then imaginary.
+        return {
+            "name": name,
+            **descriptor,
+            "encoding": "ieee754-hex",
+            "value": scalar.astype(dtype.newbyteorder(">"), copy=False).tobytes().hex(),
+        }
     integral = type(value) in (
         bool,
         int,

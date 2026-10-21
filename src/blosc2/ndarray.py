@@ -6177,6 +6177,8 @@ def ones(
 
 def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
     """Build an input-free Menudet ramp and bind it to a logical shape."""
+    if blosc2.IS_WASM:
+        execution = {**execution, "jit": False, "jit_backend": None}
 
     if (
         dtype == np.dtype(np.int64)

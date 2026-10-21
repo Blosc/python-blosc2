@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -72,10 +73,21 @@ def test_initial_array_inventory():
     np.testing.assert_array_equal(identity.evaluate({"x": view}), view)
 
 
-@pytest.mark.parametrize("dtype", ["float16", "complex64", "complex128"])
+@pytest.mark.parametrize("dtype", ["float16"])
 def test_inventory_unsupported_dtypes(dtype):
     with pytest.raises(blosc2.PortableArtifactError, match="unsupported_requirement"):
         blosc2.DSLKernel.from_source("def k(x):\n    return x\n").export({"x": dtype}, dtype)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
+@pytest.mark.parametrize("dtype", ["complex64", "complex128"])
+def test_inventory_complex_dtypes(dtype):
+    values = np.array([1 + 2j, -3 + 0.5j, 0 + 0j], dtype=dtype)
+    kernel = blosc2.PortableKernel.from_json(
+        blosc2.DSLKernel.from_source("def k(x):\n    return x * x + 1\n").export({"x": dtype}, dtype),
+        jit=False,
+    )
+    np.testing.assert_allclose(kernel.evaluate({"x": values}), values * values + 1)
 
 
 def test_shared_checkpoint_corpus(monkeypatch):
