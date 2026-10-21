@@ -141,7 +141,12 @@ class PortableLazyArray(LazyArray):
             raise IndexError("Too many indices")
         from .storage_readers import evaluate_storage_if_eligible
 
-        streamed = evaluate_storage_if_eligible(self, selection)
+        # Complex has no native storage shortcut yet. Use the general block
+        # path, which is also the portable-schedule fallback on wasm32.
+        complex_domain = self.kernel.output_dtype.kind == "c" or any(
+            dtype.kind == "c" for dtype in self.kernel.input_dtypes.values()
+        )
+        streamed = None if complex_domain else evaluate_storage_if_eligible(self, selection)
         if streamed is not None:
             values, self._source_execution_report = streamed
             return values
@@ -150,11 +155,11 @@ class PortableLazyArray(LazyArray):
             evaluate_resident_selection_if_eligible,
         )
 
-        selected = evaluate_resident_selection_if_eligible(self, selection)
+        selected = None if complex_domain else evaluate_resident_selection_if_eligible(self, selection)
         if selected is not None:
             values, self._source_execution_report = selected
             return values
-        resident = evaluate_resident_if_eligible(self, selection)
+        resident = None if complex_domain else evaluate_resident_if_eligible(self, selection)
         if resident is not None:
             values, self._source_execution_report = resident
             return values

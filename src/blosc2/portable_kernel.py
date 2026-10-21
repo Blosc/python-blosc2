@@ -213,7 +213,9 @@ def _export_captures(func, source, names, capture_dtypes, version="1.0"):
     if any(isinstance(n, (ast.Attribute, ast.Subscript, ast.Lambda)) for n in nodes):
         raise PortableArtifactError("Unsupported dynamic authoring syntax", status="unsupported_requirement")
     for call in calls:
-        allowed = (getattr(builtins, call, None), getattr(np, call, None), getattr(math, call, None))
+        # Module __getattr__ can warn for removed/renamed NumPy aliases (np.bool).
+        # Membership here must stay a quiet dictionary lookup.
+        allowed = (vars(builtins).get(call), vars(np).get(call), vars(math).get(call))
         if call in local or (call in scope and not any(v is not None and scope[call] is v for v in allowed)):
             raise PortableArtifactError(
                 f"External callback {call!r} cannot be exported", status="unsupported_requirement"
