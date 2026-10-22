@@ -61,14 +61,75 @@ def test_interpretation_and_python_never_called(native_graph_runtime, monkeypatc
     assert not k.specialize(x).has_jit
 
 
-def test_default_jit(native_graph_runtime):
+def test_default_expression_interpretation(native_graph_runtime):
     @blosc2.menudet
     def k(x):
         return x + 1
 
-    assert k._jit is True
+    assert k._jit is None
     x = np.arange(4.0)
+    assert k.specialize(x).execution_kind == "expression"
+    assert not k.specialize(x).has_jit
     np.testing.assert_array_equal(k(x)[:], x + 1)
+
+
+def test_automatic_program_and_explicit_overrides(native_graph_runtime, monkeypatch):
+    monkeypatch.delenv("ME_DSL_JIT", raising=False)
+
+    @blosc2.menudet
+    def program(x):
+        y = x * 2
+        return y + 1
+
+    @blosc2.menudet
+    def expression(x):
+        return x * 2 + 1
+
+    x = np.arange(7.0)
+    automatic = program.specialize(x)
+    assert automatic.execution_kind == "program"
+    forced = blosc2.PortableKernel.from_json(automatic.to_json(), jit=True)
+    assert automatic.has_jit == forced.has_jit
+    for author in (program, expression):
+        with blosc2.jit_options(jit=False):
+            interpreted = author.specialize(x)
+            assert not interpreted.has_jit
+        with blosc2.jit_options(jit=True):
+            compiled = author.specialize(x)
+            assert compiled is not interpreted
+            assert compiled.has_jit == blosc2.PortableKernel.from_json(compiled.to_json(), jit=True).has_jit
+        np.testing.assert_array_equal(author(x)[:], x * 2 + 1)
+
+
+@pytest.mark.parametrize("environment", ["ME_DSL_JIT", "BLOSC_ME_JIT"])
+def test_automatic_specialization_environment_override(native_graph_runtime, monkeypatch, environment):
+    @blosc2.menudet
+    def expression(x):
+        return x + 1
+
+    monkeypatch.delenv("ME_DSL_JIT", raising=False)
+    monkeypatch.delenv("BLOSC_ME_JIT", raising=False)
+    x = np.arange(7.0)
+    interpreted = expression.specialize(x)
+    assert not interpreted.has_jit
+    monkeypatch.setenv(environment, "1")
+    compiled = expression.specialize(x)
+    assert compiled is not interpreted
+    assert compiled.has_jit == blosc2.PortableKernel.from_json(compiled.to_json(), jit=True).has_jit
+
+
+@pytest.mark.parametrize("compiler", ["tcc", "cc"])
+def test_source_compiler_pragma_overrides_automatic_classification(native_graph_runtime, compiler):
+    import json
+
+    x = np.arange(7.0)
+    artifact = json.loads(inferred.specialize(x, x).to_json())
+    artifact["source"] = f"# me:compiler={compiler}\n" + artifact["source"]
+    automatic = blosc2.PortableKernel.from_json(json.dumps(artifact))
+    forced = blosc2.PortableKernel.from_json(json.dumps(artifact), jit=True)
+    assert automatic.execution_kind == "expression"
+    assert automatic.has_jit == forced.has_jit
+    assert not blosc2.PortableKernel.from_json(json.dumps(artifact), jit=False).has_jit
 
 
 def test_libm_kernel_roundtrip(native_graph_runtime):

@@ -13,9 +13,12 @@
     replaying a partially executed operation through NumPy.
   - Serial bounded stored-output maps accept interpreter artifacts as well as JIT.
   - CI requires NumExpr-free environments; comparison tooling treats it as optional.
-- Default `evaluate()` and its prepared/repeated evaluators to native interpretation
-  unless JIT is explicitly enabled through existing global/context settings or
-  `ME_DSL_JIT`. Other Menudet APIs retain their current defaults. Remove the legacy
+- Use native structural classification for automatic execution policy: interpret
+  single-return expressions and prefer JIT for multi-statement Menudet programs.
+  Explicit JIT settings and source compiler pragmas retain priority. Expose
+  `PortableKernel.execution_kind`; `evaluate()` no longer needs a special default
+  override. This requires the paired native classification API; older runtimes
+  retain their existing default behavior. Remove the legacy
   `truediv`, `sanitize` and `disable_cache` keywords; supplying them now raises an
   error. Keep `order`, `casting` and the `optimization` compatibility hint.
 - Enable complex64/complex128 miniexpr expressions and Menudet interpretation

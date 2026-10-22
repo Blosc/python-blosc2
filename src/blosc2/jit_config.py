@@ -161,23 +161,6 @@ def pop_execution_options(kwargs):
     return _validate(explicit, check_platform=False)
 
 
-def interpreted_evaluation(func):
-    """Default string evaluation to interpretation, preserving explicit policies."""
-
-    @functools.wraps(func)
-    def wrapped(*args, **kwargs):
-        options = execution_options()
-        if options["jit"] is None:
-            options["jit"] = os.environ.get("ME_DSL_JIT", "") not in ("", "0")
-        token = _execution.set((options, _context.get()))
-        try:
-            return func(*args, **kwargs)
-        finally:
-            _execution.reset(token)
-
-    return wrapped
-
-
 def jit_execution(func):
     """Resolve evaluation kwargs and strip non-storage execution options."""
 

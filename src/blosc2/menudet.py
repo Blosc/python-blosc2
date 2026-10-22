@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import functools
 import inspect
+import os
 from threading import RLock
 from types import CellType, FunctionType
 
@@ -38,7 +39,7 @@ class MenudetKernel:
         self,
         func,
         *,
-        jit=True,
+        jit=None,
         require_jit=False,
         partitions=None,
         cardinality="elementwise",
@@ -47,9 +48,9 @@ class MenudetKernel:
     ):
         if not inspect.isfunction(func):
             raise TypeError("@menudet requires an ordinary Python function")
-        if type(jit) is not bool or type(require_jit) is not bool:
-            raise TypeError("jit and require_jit must be bool")
-        if require_jit and not jit:
+        if (jit is not None and type(jit) is not bool) or type(require_jit) is not bool:
+            raise TypeError("jit must be bool or None; require_jit must be bool")
+        if require_jit and jit is False:
             raise ValueError("require_jit=True conflicts with jit=False")
         self._signature = inspect.signature(func)
         if any(
@@ -112,8 +113,27 @@ class MenudetKernel:
         return inputs
 
     def _specialize(self, inputs):
+        from . import jit_config
+
         dtypes = {name: np.dtype(value.dtype).newbyteorder("=") for name, value in inputs.items()}
-        key = tuple((name, dtype.str) for name, dtype in dtypes.items())
+        key = (
+            tuple((name, dtype.str) for name, dtype in dtypes.items()),
+            tuple(jit_config.execution_options().items()),
+            tuple(
+                (name, os.environ.get(name))
+                for name in (
+                    "ME_DSL_JIT",
+                    "BLOSC_ME_JIT",
+                    "ME_DSL_JIT_COMPILER",
+                    "ME_SIMD_MATH_BACKEND",
+                    "ME_DSL_FP_MODE",
+                    "CC",
+                    "CFLAGS",
+                    "ME_DSL_JIT_TCC_OPTIONS",
+                    "ME_DSL_JIT_LIBTCC_PATH",
+                )
+            ),
+        )
         with self._lock:
             if key not in self._kernels:
                 output = self._output_dtype
@@ -132,7 +152,8 @@ class MenudetKernel:
                         )
                     output = probe.inferred_dtype
                 kernel = PortableKernel.from_json(
-                    self._author.export(dtypes, output, **self._export_options), jit=self._jit
+                    self._author.export(dtypes, output, **self._export_options),
+                    jit=True if self._require_jit else self._jit,
                 )
                 if self._require_jit and not kernel.has_jit:
                     raise RuntimeError("Required Menudet JIT is unavailable for this signature")
@@ -151,7 +172,7 @@ class MenudetKernel:
 def menudet(
     func=None,
     *,
-    jit=True,
+    jit=None,
     require_jit=False,
     partitions=None,
     cardinality="elementwise",

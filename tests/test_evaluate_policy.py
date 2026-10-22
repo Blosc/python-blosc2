@@ -21,7 +21,7 @@ def policy_probe(monkeypatch, native_graph_runtime):
     def prepare(*args, **kwargs):
         requests.append(kwargs["jit"])
         result = original(*args, **kwargs)
-        if result is not None and not kwargs["jit"]:
+        if result is not None and kwargs["jit"] is False:
             assert not result[0].has_jit
         return result
 
@@ -37,13 +37,13 @@ def test_default_is_interpretation_only_for_evaluate(policy_probe, output):
     x = np.arange(32.0)
     out = np.empty_like(x) if output else None
     result = blosc2.evaluate("x + 1", local_dict={"x": x}, out=out)
-    assert policy_probe == [False]
+    assert policy_probe == [None]
     np.testing.assert_array_equal(result, x + 1)
     if output:
         assert result is out
     assert blosc2.jit_config.execution_options()["jit"] is None
     blosc2.lazyexpr("x + 1", local_dict={"x": x}).compute(out=np.empty_like(x))
-    assert policy_probe[-1] is True  # LazyExpr retains the existing default.
+    assert policy_probe[-1] is None  # Both entry points use native automatic policy.
 
 
 @pytest.mark.parametrize("jit", [False, True])
@@ -56,7 +56,7 @@ def test_explicit_policy_overrides_evaluate_default(policy_probe, monkeypatch, j
         blosc2.set_jit_options(jit=jit)
     with blosc2.jit_options(**({"jit": jit} if scope == "context" else {})):
         np.testing.assert_array_equal(blosc2.evaluate("x + 1", local_dict={"x": x}), x + 1)
-    assert policy_probe == [jit]
+    assert policy_probe == ([None] if scope == "environment" else [jit])
 
 
 def test_repeated_and_prepared_evaluators_use_current_policy(policy_probe):
@@ -69,7 +69,7 @@ def test_repeated_and_prepared_evaluators_use_current_policy(policy_probe):
             prepared({"x": x})
         assert policy_probe[-2:] == [jit, jit]
     prepared({"x": x})
-    assert policy_probe[-1] is False
+    assert policy_probe[-1] is None
 
 
 def test_failure_restores_execution_policy(policy_probe):

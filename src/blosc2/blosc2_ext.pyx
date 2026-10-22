@@ -1085,6 +1085,8 @@ cdef extern from "dsl_artifact_bridge.h":
     int b2_artifact_eval_status(const void *, const b2_artifact_buffer *, int, void *,
                                const b2_artifact_descriptor *, unsigned, b2_artifact_fp_status *, b2_artifact_error *) nogil
     int b2_artifact_jit(const void *)
+    int b2_artifact_auto_jit_mode()
+    const char *b2_artifact_execution_kind(const void *)
     ctypedef struct b2_artifact_buffer:
         const char *name
         me_dtype dtype
@@ -2035,6 +2037,10 @@ def portable_artifact_available():
     return bool(b2_artifact_available())
 
 
+def portable_auto_jit_mode():
+    return b2_artifact_auto_jit_mode()
+
+
 def portable_descriptor_available():
     return bool(b2_artifact_descriptor_available())
 
@@ -2098,6 +2104,7 @@ cdef class PortableArtifactHandle:
                        for i in range(b2_artifact_ninputs(self._handle))},
             "output_dtype": _numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)),
             "jit": bool(b2_artifact_jit(self._handle)),
+            "execution_kind": (<bytes>b2_artifact_execution_kind(self._handle)).decode("ascii"),
             "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
             "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
             "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
@@ -5852,7 +5859,7 @@ cdef class NDArray:
         eval_params.disable_simd = False
         eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1
         if jit is None:
-            eval_params.jit_mode = ME_JIT_DEFAULT
+            eval_params.jit_mode = <me_jit_mode>b2_artifact_auto_jit_mode()
         elif jit:
             eval_params.jit_mode = ME_JIT_ON
         else:
@@ -5916,7 +5923,7 @@ cdef class NDArray:
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        cdef int jit_mode = ME_JIT_DEFAULT
+        cdef int jit_mode = b2_artifact_auto_jit_mode()
         if jit is True:
             jit_mode = ME_JIT_ON
         elif jit is False:

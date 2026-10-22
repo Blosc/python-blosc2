@@ -18,6 +18,21 @@ static int b2_artifact_options_available(void) {
     return 0;
 #endif
 }
+static int b2_artifact_auto_jit_mode(void) {
+#ifdef ME_ARTIFACT_EXECUTION_KIND_VERSION
+    return 3;
+#else
+    return 0;
+#endif
+}
+static const char *b2_artifact_execution_kind(const void *handle) {
+#ifdef ME_ARTIFACT_EXECUTION_KIND_VERSION
+    return me_artifact_execution_kind((const me_artifact *)handle);
+#else
+    (void)handle;
+    return "unknown";
+#endif
+}
 #if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
 typedef me_artifact_input b2_artifact_input;
 typedef me_artifact_error b2_artifact_error;

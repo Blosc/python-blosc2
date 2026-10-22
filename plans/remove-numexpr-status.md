@@ -41,7 +41,7 @@ dependency removal have not been broadened or silently reclassified as native.
 | `ne_args` | Legacy internal compatibility container; not a public `evaluate` option or engine selector |
 | `blosc2.numexpr`, internal `lazyexpr.numexpr` | `None` placeholders, never a runtime import |
 | `NUMEXPR_*` | No effect on Blosc2 workers or native execution policy |
-| `evaluate` default | Native interpretation, also for prepared/repeated evaluators; explicit global/context/environment JIT policy remains available; other Menudet API defaults are unchanged |
+| Automatic execution | Shared native structure classification: single-return expressions interpret, multi-statement programs prefer JIT; explicit policies and source compiler pragmas take priority |
 | `jit=False` / unavailable compiler | Native interpretation where supported, not an unrelated expression engine |
 | Strict native / require-JIT | Unsupported native signatures reject; explicitly required JIT still rejects when unavailable |
 | Numerical/runtime errors | Propagate; preparation-only unsupported signatures may choose NumPy before execution |

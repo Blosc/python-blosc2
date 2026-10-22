@@ -246,7 +246,7 @@ def _native_plan_cache_key(expr, jit, options):
     return (
         expr.expression,
         tuple(signature),
-        bool(jit),
+        jit,
         _graph_configuration(jit),
         getattr(expr, "_evaluation", "full"),
         bool(options.get("_getitem", False)),
@@ -1073,7 +1073,7 @@ def _native_text_expression(expression):
 
 def _graph_configuration(jit):
     policy = tuple((key, os.environ.get(key)) for key in ("ME_SIMD_MATH_BACKEND", "ME_DSL_FP_MODE"))
-    if not jit:
+    if jit is False:
         return policy
     return policy + tuple(
         (key, os.environ.get(key))

@@ -10,6 +10,7 @@ import ast
 import builtins
 import json
 import math
+import os
 import tokenize
 from collections.abc import Mapping
 from io import StringIO
@@ -382,7 +383,7 @@ class PortableKernel:
 
     @classmethod
     def from_json(cls, artifact, *, jit=None):
-        from . import blosc2_ext
+        from . import blosc2_ext, jit_config
 
         if not isinstance(artifact, str | bytes):
             raise TypeError("artifact must be JSON text or UTF-8 bytes, not a path or decoded mapping")
@@ -397,7 +398,17 @@ class PortableKernel:
             raise PortableArtifactError(
                 "Artifact text must be valid UTF-8", status="invalid_artifact"
             ) from error
-        handle = handle_type(data, 0 if jit is None else 1 if jit else 2)
+        policy = jit_config.execution_options()["jit"] if jit is None else jit
+        if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in ("1", "true", "on", "tcc", "cc"):
+            policy = True
+        mode = (
+            getattr(blosc2_ext, "portable_auto_jit_mode", lambda: 0)()
+            if policy is None
+            else 1
+            if policy
+            else 2
+        )
+        handle = handle_type(data, mode)
         instance = cls.__new__(cls)
         instance._handle = handle
         instance._artifact = data
@@ -432,6 +443,11 @@ class PortableKernel:
     @property
     def has_jit(self):
         return self._info["jit"]
+
+    @property
+    def execution_kind(self):
+        """Native structural classification: expression, program, or unknown on older runtimes."""
+        return self._info.get("execution_kind", "unknown")
 
     @property
     def schema_version(self):

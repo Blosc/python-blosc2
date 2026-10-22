@@ -145,11 +145,19 @@ accept them through ``**kwargs``. Eligible lazy-expression reductions, such as
 settings tune execution rather than array storage; they are not options to
 :func:`blosc2.empty`.
 
-The string-expression API :func:`blosc2.evaluate` instead defaults to native
-interpretation, including calls through ``prepare_evaluate`` and ``re_evaluate``.
-It does not accept per-call JIT keywords; use ``blosc2.jit_options(jit=True)`` or
-``blosc2.set_jit_options(jit=True)`` to opt in. Existing environment overrides
-still apply. This API-specific default does not change other entry points.
+Automatic policy uses miniexpr's validated structural classification: a single
+``return <expression>`` defaults to interpretation, while programs with multiple
+statements, assignments, branches or loops prefer JIT. Physical source line count
+does not determine the classification. Explicit ``jit`` settings and source
+compiler pragmas retain priority. The policy is selected before compilation.
+This is a conservative structural heuristic, not a profitability guarantee;
+explicit overrides remain useful for unusual or repeatedly executed workloads.
+
+This applies consistently to eligible string expressions, graph-generated maps
+and Menudet artifacts. ``evaluate()`` does not accept per-call JIT keywords;
+use ``blosc2.jit_options(jit=True)`` or ``blosc2.set_jit_options(jit=True)`` to opt
+in. Native metadata is exposed as ``PortableKernel.execution_kind``. Older native
+runtimes report ``"unknown"`` and retain their existing native default behavior.
 
 Scalar miniexpr reductions currently use the native interpreter, even when JIT
 is requested. Elementwise DSL returns (including automatically lifted expressions)
@@ -158,9 +166,9 @@ Other execution options still apply, and non-scalar reduction paths retain their
 usual evaluation policies.
 
 ``jit=None`` (default)
-    Use the entry point's default policy. DSL kernels, including the real-valued
-    ramps used by ``arange`` and ``linspace``, try JIT. Plain expressions do not
-    automatically become DSL kernels unless JIT is requested. Ordinary Python
+    Select automatic structural policy: interpret single-return expressions and
+    prefer JIT for multi-statement programs. An explicit source compiler pragma
+    requests compilation even for a single-return expression. Ordinary Python
     callback UDFs are not compiled by TCC/CC through this option.
 
 ``jit=True``

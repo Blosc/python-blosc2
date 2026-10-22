@@ -34,7 +34,8 @@ def test_native_graph_parallel(parallel_runtime, dtype, expression):
     y = np.linspace(1, 2, 600_003, dtype=dtype)
     expr = blosc2.lazyexpr(expression, {"x": x, "y": y})
     expected = expr.compute(_require_native=True, jit=True, _native_tile_items=1023, _getitem=True)
-    np.testing.assert_array_equal(expr[:], expected)
+    with blosc2.jit_options(jit=True):
+        np.testing.assert_array_equal(expr[:], expected)
     report = expr._native_execution_report
     assert report["route"] == "parallel-resident"
     assert report["backend"] == "portable-jit"

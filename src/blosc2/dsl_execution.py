@@ -161,7 +161,7 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
         else:
             raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
     with blosc2.jit_options(**execution):
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=execution["jit"] is not False)
+        kernel = blosc2.PortableKernel.from_json(artifact, jit=execution["jit"])
     if kernel.result_cardinality == "block_scalar":
         portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
     elif any(c % b for c, b in zip(chunks, blocks, strict=True)):

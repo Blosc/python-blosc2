@@ -6,6 +6,7 @@ import json
 
 import numpy as np
 
+from . import blosc2_ext, jit_config
 from .blosc2_ext import NativeGraphHandle
 
 
@@ -17,28 +18,44 @@ class NativeGraph:
     Compressed storage is adapted through invocation-local native graph readers.
     """
 
-    def __init__(self, graph: str | bytes | dict, *, jit: bool = False, require_jit: bool = False):
+    def __init__(self, graph: str | bytes | dict, *, jit: bool | None = None, require_jit: bool = False):
+        jit = jit_config.execution_options()["jit"] if jit is None else jit
         if isinstance(graph, dict):
             graph = json.dumps(graph, separators=(",", ":"))
         if isinstance(graph, str):
             graph = graph.encode("utf-8")
         if not isinstance(graph, bytes):
             raise TypeError("Native graph must be declarative JSON")
-        self._handle = NativeGraphHandle(graph, 1 if jit or require_jit else 2, require_jit)
+        mode = (
+            1
+            if jit or require_jit
+            else getattr(blosc2_ext, "portable_auto_jit_mode", lambda: 0)()
+            if jit is None
+            else 2
+        )
+        self._handle = NativeGraphHandle(graph, mode, require_jit)
         self._info = self._handle.info()
 
     @classmethod
-    def from_json(cls, graph, *, jit=False, require_jit=False):
+    def from_json(cls, graph, *, jit=None, require_jit=False):
         return cls(graph, jit=jit, require_jit=require_jit)
 
     @classmethod
-    def from_expression(cls, expression, input_dtypes, *, jit=False, require_jit=False):
+    def from_expression(cls, expression, input_dtypes, *, jit=None, require_jit=False):
         """Native restricted grammar, not a Python expression evaluator."""
+        jit = jit_config.execution_options()["jit"] if jit is None else jit
         if not isinstance(expression, str):
             raise TypeError("Native expression must be text")
         result = cls.__new__(cls)
+        mode = (
+            1
+            if jit or require_jit
+            else getattr(blosc2_ext, "portable_auto_jit_mode", lambda: 0)()
+            if jit is None
+            else 2
+        )
         result._handle = NativeGraphHandle.from_expression(
-            expression.encode("utf-8"), input_dtypes, 1 if jit or require_jit else 2, require_jit
+            expression.encode("utf-8"), input_dtypes, mode, require_jit
         )
         result._info = result._handle.info()
         return result

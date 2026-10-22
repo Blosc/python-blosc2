@@ -18,6 +18,10 @@ output for Blosc2 inputs and NumPy output for NumPy inputs. ``--codec`` and
 ``--clevel`` configure compressed inputs and outputs (defaults: zstd, 5).
 Blosc2 outputs use the input chunk/block layout for Blosc2 inputs.
 Engines with unsupported dtypes or different numerical results are reported as N/A.
+``--warmups 0`` measures preparation-cold samples: expression and compiler caches
+are isolated before every sample, and engine construction/compilation is timed.
+Operand construction, imports and cache isolation are not timed; CPU/OS caches
+are not flushed. Positive warmup counts retain prepared-engine warm measurements.
 ``--allocation-control`` adds a separate resident-input comparison of numexpr
 and evaluate with fresh versus reused NumPy destinations. It does not change
 the fresh-output policy of the main table.
@@ -42,9 +46,12 @@ preserves the existing environment/default backend selection.
 """
 
 import argparse
+import importlib
 import os
 import random
 import sys
+import tempfile
+from contextlib import contextmanager
 from statistics import median
 from time import perf_counter
 
@@ -124,7 +131,7 @@ def build_operands(size, kind, dtype="float64", cparams=None):
     return inputs, expected
 
 
-def make_engines(inputs, kind, reduc=None, cparams=None):
+def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa: C901 -- explicit engine routes
     """Return an ordered mapping of engine name to a callable producing a result.
 
     LazyExpr returns compressed Blosc2 output; LazyExpr-NumPy, NumPy, numexpr
@@ -168,7 +175,17 @@ def make_engines(inputs, kind, reduc=None, cparams=None):
             resident = {name: value[:] for name, value in inputs.items()}
             return finish_numexpr(resident)
 
-    lazy = blosc2.lazyexpr(EXPRESSION, inputs)
+    if selected in ("NumPy", "numexpr", "evaluate"):
+        return {
+            selected: {
+                "NumPy": numpy_run,
+                "numexpr": numexpr_run,
+                "evaluate": lambda: blosc2.evaluate(
+                    f"{reduc}({EXPRESSION})" if reduc else EXPRESSION, local_dict=inputs
+                ),
+            }[selected]
+        }
+    lazy = blosc2.lazyexpr(EXPRESSION, inputs) if selected in (None, "LazyExpr", "LazyExpr-NumPy") else None
     if reduc:
         author = {
             "sum": adjusted_sum,
@@ -178,7 +195,7 @@ def make_engines(inputs, kind, reduc=None, cparams=None):
             "any": adjusted_any,
             "all": adjusted_all,
         }[reduc]
-        kernel = author.specialize(**inputs)
+        kernel = author.specialize(**inputs) if selected in (None, "Menudet") else None
 
         def menudet_reduce():
             resident = inputs if kind == "numpy" else {name: value[:] for name, value in inputs.items()}
@@ -187,12 +204,12 @@ def make_engines(inputs, kind, reduc=None, cparams=None):
         return {
             "NumPy": numpy_run,
             "numexpr": numexpr_run,
-            "LazyExpr-NumPy": getattr(lazy, reduc),
-            "LazyExpr": getattr(lazy, reduc),
+            "LazyExpr-NumPy": getattr(lazy, reduc) if lazy is not None else None,
+            "LazyExpr": getattr(lazy, reduc) if lazy is not None else None,
             "evaluate": lambda: blosc2.evaluate(f"{reduc}({EXPRESSION})", local_dict=inputs),
             "Menudet": menudet_reduce,
         }
-    menudet = adjusted(**inputs)
+    menudet = adjusted(**inputs) if selected in (None, "Menudet") else None
     output_options = {
         "cparams": blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5) if cparams is None else cparams
     }
@@ -224,7 +241,51 @@ def make_allocation_engines(inputs):
     }
 
 
-def benchmark(engines, expected, samples, warmups, rng, failures=None):
+@contextmanager
+def cold_preparation():
+    """Isolate expression/compiler caches, without flushing CPU or OS caches."""
+    native = importlib.import_module("blosc2.native_graph")
+    lazy = importlib.import_module("blosc2.lazyexpr")
+    graph = importlib.import_module("blosc2.expression_graph")
+    native._native_plan_cache.clear()
+    for function in (
+        native._native_first_syntax,
+        native._native_text_expression,
+        native.compile_plan,
+        native._resident_map_kernel,
+        lazy._evaluate_recipe_names,
+        graph.parse_expression,
+    ):
+        function.cache_clear()
+    lazy._evaluate_recipe_cache.clear()
+    for author in (
+        adjusted,
+        adjusted_sum,
+        adjusted_mean,
+        adjusted_min,
+        adjusted_max,
+        adjusted_any,
+        adjusted_all,
+    ):
+        author._kernels.clear()
+    for cache in (ne.necompiler._numexpr_cache, ne.necompiler._names_cache):
+        getattr(cache, "c", {}).clear()
+    keys = ("ME_DSL_JIT_CACHE_DIR", "ME_DSL_JIT_POS_CACHE")
+    previous = {key: os.environ.get(key) for key in keys}
+    with tempfile.TemporaryDirectory(prefix="menudet-cold-") as directory:
+        os.environ.update(ME_DSL_JIT_CACHE_DIR=directory, ME_DSL_JIT_POS_CACHE="0")
+        try:
+            with blosc2.jit_options(cache_dir=directory):
+                yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def benchmark(engines, expected, samples, warmups, rng, failures=None, cold_factory=None):
     """Correctness-check once, warm up, then time interleaved shuffled samples."""
     qualified = {}
     for name, operation in engines.items():
@@ -261,9 +322,16 @@ def benchmark(engines, expected, samples, warmups, rng, failures=None):
         order = list(engines)
         rng.shuffle(order)
         for name in order:
-            start = perf_counter()
-            result = engines[name]()
-            times[name].append((perf_counter() - start) * 1000)
+            if cold_factory is not None:
+                with cold_preparation():
+                    start = perf_counter()
+                    result = cold_factory(name)()
+                    elapsed = (perf_counter() - start) * 1000
+            else:
+                start = perf_counter()
+                result = engines[name]()
+                elapsed = (perf_counter() - start) * 1000
+            times[name].append(elapsed)
             del result
     return {name: median(values) for name, values in times.items()}
 
@@ -309,7 +377,7 @@ def result_row(row, widths, use_color):
     return "  ".join(cells)
 
 
-def main():
+def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -318,7 +386,10 @@ def main():
         "--samples", type=int, default=3, help="timed repetitions per row; the median is reported"
     )
     parser.add_argument(
-        "--warmups", type=int, default=3, help="untimed repetitions run before timing each row"
+        "--warmups",
+        type=int,
+        default=3,
+        help="untimed repetitions; 0 selects preparation-cold samples including compilation",
     )
     parser.add_argument("--threads", type=int, default=12)
     parser.add_argument(
@@ -373,6 +444,8 @@ def main():
         parser.error("threads must be positive")
     if args.allocation_control and (args.reduc or args.operands == "blosc2"):
         parser.error("--allocation-control requires elementwise NumPy operand rows")
+    if args.allocation_control and args.warmups == 0:
+        parser.error("--allocation-control requires warm measurements (--warmups > 0)")
 
     # Select before LazyExpr preparation or Menudet dtype specialization. Both
     # native compilation paths consume this environment override.
@@ -390,7 +463,12 @@ def main():
 
     expression = f"{args.reduc}({EXPRESSION})" if args.reduc else EXPRESSION
     print(f"Expression: {expression}")
-    print("Warm medians in milliseconds (lower is better); fastest figure per row in green.")
+    mode = "Preparation-cold" if args.warmups == 0 else "Warm"
+    print(f"{mode} medians in milliseconds (lower is better); fastest figure per row in green.")
+    if args.warmups == 0:
+        print(
+            "Cold samples include engine preparation/compilation; inputs are prebuilt; CPU/OS caches are not flushed."
+        )
     print(
         f"blosc2 {blosc2.__version__} | numpy {np.__version__} | numexpr {ne.__version__}"
         f" | dtype {args.dtype} | threads {args.threads} | samples {args.samples}"
@@ -412,7 +490,19 @@ def main():
                 expected = getattr(np, args.reduc)(expected)
             engines = make_engines(inputs, kind, args.reduc, cparams=cparams)
             failures = {}
-            times = benchmark(engines, expected, args.samples, args.warmups, rng, failures=failures)
+
+            def cold_factory(name, inputs=inputs, kind=kind):
+                return make_engines(inputs, kind, args.reduc, cparams=cparams, selected=name)[name]
+
+            times = benchmark(
+                engines,
+                expected,
+                args.samples,
+                args.warmups,
+                rng,
+                failures=failures,
+                cold_factory=cold_factory if args.warmups == 0 else None,
+            )
             if args.allocation_control and kind == "numpy":
                 controls = make_allocation_engines(inputs)
                 control_times = benchmark(controls, expected, args.samples, args.warmups, rng, failures={})
@@ -446,7 +536,10 @@ def main():
             f"LazyExpr returns Blosc2 output ({args.codec}, clevel={args.clevel}); "
             "Menudet does so for Blosc2 inputs only."
         )
-    print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
+    if args.warmups:
+        print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
+    else:
+        print("Each cold sample rebuilds its engine with empty preparation/compiler caches and fresh output.")
     if allocation_rows:
         print("\nAllocation control: resident inputs, NumPy outputs; warm medians in ms.")
         print("Reused destinations are populated before timing; the main table above remains fresh-output.")

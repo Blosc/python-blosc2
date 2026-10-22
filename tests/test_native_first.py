@@ -16,6 +16,10 @@ def native_first_runtime(native_graph_runtime):
     plan = prepare_native_first(expr, ())
     if plan is None or not plan[0].has_jit:
         pytest.skip("Automatic native execution requires an available graph JIT")
+    # These tests qualify the JIT route explicitly; automatic expression policy
+    # is covered separately and now selects interpretation.
+    with blosc2.jit_options(jit=True):
+        yield
 
 
 @pytest.mark.parametrize("dtype", ["int8", "uint64", "float32", "float64", "bool"])

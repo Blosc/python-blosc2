@@ -1,6 +1,7 @@
 """Scalar and elementwise correctness of the engine comparison benchmark."""
 
 import os
+import random
 import runpy
 import sys
 from pathlib import Path
@@ -9,6 +10,36 @@ import numpy as np
 import pytest
 
 import blosc2
+
+
+@pytest.mark.parametrize("reduc", [None, "sum"])
+def test_cold_selected_engine_results(engine_benchmark, reduc):
+    inputs, values = engine_benchmark["build_operands"](257, "numpy", "int64")
+    expected = values.sum() if reduc else values
+    for name in engine_benchmark["ENGINES"]:
+        with engine_benchmark["cold_preparation"]():
+            result = engine_benchmark["make_engines"](inputs, "numpy", reduc, selected=name)[name]()
+        if isinstance(result, blosc2.NDArray):
+            result = result[:]
+        np.testing.assert_array_equal(result, expected)
+
+
+def test_cold_samples_rebuild_after_qualification(engine_benchmark):
+    created = []
+    previous = os.environ.get("ME_DSL_JIT_CACHE_DIR")
+
+    def factory(name):
+        assert name == "probe"
+        created.append(os.environ["ME_DSL_JIT_CACHE_DIR"])
+        assert os.environ["ME_DSL_JIT_POS_CACHE"] == "0"
+        return lambda: np.arange(3)
+
+    times = engine_benchmark["benchmark"](
+        {"probe": lambda: np.arange(3)}, np.arange(3), 3, 0, random.Random(42), cold_factory=factory
+    )
+    assert times["probe"] > 0
+    assert len(set(created)) == 3
+    assert os.environ.get("ME_DSL_JIT_CACHE_DIR") == previous
 
 
 @pytest.fixture(scope="module")
@@ -87,7 +118,7 @@ def test_allocation_control_cli(engine_benchmark, monkeypatch, capsys):
             "--samples",
             "1",
             "--warmups",
-            "0",
+            "1",
             "--operands",
             "numpy",
             "--allocation-control",
@@ -105,7 +136,7 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     main = engine_benchmark["main"]
     namespace = main.__globals__
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
-    argv = ["menudet-engines.py", "--items", "1", "--samples", "1", "--warmups", "0"]
+    argv = ["menudet-engines.py", "--items", "1", "--samples", "1", "--warmups", "1"]
     argv += ["--dtype", "uint64", "--codec", "LZ4", "--clevel", "3"]
     if backend:
         argv += ["--jit", backend]

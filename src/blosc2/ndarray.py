@@ -6687,7 +6687,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
     if backend in {"tcc", "cc"}:
         diagonal.dsl_source = f"# me:compiler={backend}\n" + diagonal.dsl_source
     artifact = diagonal.export({}, dtype, constants={"k": k}, ndim=2)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=execution.get("jit") is not False)
+    kernel = blosc2.PortableKernel.from_json(artifact, jit=execution.get("jit"))
     # Square blocks localize the diagonal. Row-wide default blocks would all
     # intersect it, preventing the scheduler from skipping zero-only blocks.
     if kwargs.get("chunks") is None:

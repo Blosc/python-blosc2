@@ -71,9 +71,11 @@ by prepared evaluators. Division follows NumPy semantics (use ``//`` for floor
 division), validation follows the safe/full expression policy, and preparation
 caches are managed automatically.
 
-``evaluate()`` defaults to native interpretation, as do ``prepare_evaluate()``
-and ``re_evaluate()``. This does not change the JIT defaults of other Menudet
-APIs. Explicit global/context JIT settings and the ``ME_DSL_JIT`` environment
+Eligible ``evaluate()`` expressions default to native interpretation, as do
+``prepare_evaluate()`` and ``re_evaluate()``. This follows the shared native
+automatic policy, not an evaluator-specific override: single-return expressions
+are interpreted and multi-statement Menudet programs prefer JIT. Explicit
+global/context JIT settings and the ``ME_DSL_JIT`` environment
 override retain their existing precedence. To opt in for repeated computations::
 
     with blosc2.jit_options(jit=True):

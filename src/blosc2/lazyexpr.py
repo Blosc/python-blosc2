@@ -191,9 +191,9 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
             # Explicit no-JIT policy still wins; native compilation remains
             # best effort and cached by expression/signature, never by arrays.
             graph_jit = (
-                policy["jit"] is not False
-                and policy["jit_backend"] is None
-                and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+                policy["jit"]
+                if policy["jit_backend"] is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+                else False
             )
             native = lower_native_graph(stub, jit=graph_jit, allow_output=True)
         except (NotImplementedError, ValueError, TypeError):
@@ -4923,7 +4923,7 @@ class LazyExpr(LazyArray):
             stored = compute_native_prefilter_if_eligible(
                 self,
                 item,
-                jit=native_jit is not False,
+                jit=native_jit,
                 jit_backend=native_backend,
                 fp_accuracy=native_accuracy,
                 options=kwargs,
@@ -4940,7 +4940,7 @@ class LazyExpr(LazyArray):
             prepared = prepare_native_first(
                 self,
                 item,
-                jit=native_jit is not False,
+                jit=native_jit,
                 jit_backend=native_backend,
                 fp_accuracy=native_accuracy,
                 options=native_options,
@@ -6285,7 +6285,6 @@ def _array_owner(value):
 
 
 @remember_evaluation
-@blosc2.jit_config.interpreted_evaluation
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
@@ -6318,8 +6317,9 @@ def evaluate(
     the compression prefilter. Unsupported signatures, aliasing and explicit
     backend/accuracy policies retain the existing dispatch rules.
 
-    Native interpretation is the default for this API (and its prepared/repeated
-    evaluators), without changing other Menudet APIs. Explicit JIT settings from
+    Eligible expressions default to native interpretation through the shared
+    native structural policy (single-return expression versus program), also used
+    by Menudet kernels and graph-generated maps. Explicit JIT settings from
     :func:`blosc2.set_jit_options`, :func:`blosc2.jit_options` or ``ME_DSL_JIT``
     retain their existing precedence. For example, use
     ``with blosc2.jit_options(jit=True):`` to opt into best-effort JIT execution.
