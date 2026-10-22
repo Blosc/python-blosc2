@@ -9,6 +9,8 @@
 - Enable complex64/complex128 miniexpr expressions and Menudet interpretation
   on Windows (clang-cl), and remove the remaining WebAssembly complex expression
   and reduction exclusions. Complex Menudet kernels remain interpreter-only.
+  Scalar string-expression reductions on WASM retain the existing chunked
+  fallback for all dtypes; portable Menudet block reductions remain supported.
 - C-order `arange` with real bounds and complex output, and complex `linspace`,
   now use Menudet interpretation, including `lazy=True`. Complex `linspace`
   preserves the requested endpoint across slicing and rechunking.

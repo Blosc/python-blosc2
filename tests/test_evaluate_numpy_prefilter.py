@@ -65,19 +65,31 @@ def test_numpy_prefilter_output(dtype, mode, monkeypatch):
     assert calls[0][2] == 128 * np.dtype(dtype).itemsize + blosc2.MAX_OVERHEAD
 
 
-def test_complex_expression_reduction_uses_miniexpr(monkeypatch):
+@pytest.mark.parametrize("force_wasm", [False, True])
+def test_complex_expression_reduction_dispatch(monkeypatch, force_wasm):
     import importlib
 
+    if force_wasm:
+        monkeypatch.setattr(blosc2, "IS_WASM", True)
     module = importlib.import_module("blosc2.lazyexpr")
     values = np.arange(257, dtype=np.float64) + 1j * np.arange(257, dtype=np.float64)[::-1]
     x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
     expression = blosc2.lazyexpr("x * 2", {"x": x})
 
-    def no_fallback(*args, **kwargs):
-        pytest.fail("Complex expression reduction must use miniexpr")
+    original = module._get_result
+    calls = []
 
-    monkeypatch.setattr(module, "_get_result", no_fallback)
+    def fallback(*args, **kwargs):
+        if not blosc2.IS_WASM:
+            pytest.fail("Complex expression reduction must use miniexpr")
+        # WASM's scalar reduction prefilter is disabled for all dtypes in
+        # reduce_slices; complex arithmetic must still work via chunked evaluation.
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_get_result", fallback)
     np.testing.assert_allclose(expression.sum(), (values * 2).sum())
+    assert bool(calls) == blosc2.IS_WASM
 
 
 def test_numpy_prefilter_non_aligned_blocks_fall_back():
