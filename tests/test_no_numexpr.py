@@ -37,9 +37,10 @@ def test_package_has_no_numexpr_import_or_requirement():
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Subprocess isolation is unavailable on WASM")
 @pytest.mark.parametrize("installed", [False, True])
-def test_runtime_never_imports_numexpr(installed):
+@pytest.mark.parametrize("split_package", [False, True])
+def test_runtime_never_imports_numexpr(installed, split_package):
     source = textwrap.dedent("""
-        import sys, json, importlib.abc, types, os
+        import sys, json, importlib.abc, importlib.util, types, os
         sys.path[:] = json.loads(sys.argv[1])
         if sys.argv[2] == "installed":
             try:
@@ -64,7 +65,12 @@ def test_runtime_never_imports_numexpr(installed):
                     raise AssertionError("Unexpected NumExpr runtime import")
         sys.meta_path.insert(0, BlockNumExpr())
         import numpy as np
-        import blosc2
+        package = json.loads(sys.argv[3])
+        spec = importlib.util.spec_from_file_location(
+            "blosc2", package["origin"], submodule_search_locations=package["paths"])
+        blosc2 = importlib.util.module_from_spec(spec)
+        sys.modules["blosc2"] = blosc2
+        spec.loader.exec_module(blosc2)
         assert blosc2.numexpr is None
         x = np.arange(24.).reshape(4,6)
         for order in ("C", "F"):
@@ -99,8 +105,20 @@ def test_runtime_never_imports_numexpr(installed):
         if sys.argv[2] != "installed":
             assert "numexpr" not in sys.modules
     """)
+    package = {"origin": blosc2.__file__, "paths": list(blosc2.__path__)}
+    if split_package:
+        root = Path(__file__).resolve().parents[1] / "src/blosc2"
+        package = {"origin": str(root / "__init__.py"), "paths": [str(root), *blosc2.__path__]}
     result = subprocess.run(
-        [sys.executable, "-S", "-c", source, json.dumps(sys.path), "installed" if installed else "absent"],
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            source,
+            json.dumps(sys.path),
+            "installed" if installed else "absent",
+            json.dumps(package),
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -166,3 +184,12 @@ def test_external_backend_benchmark_without_numexpr(monkeypatch):
         unavailable = runpy.run_path(str(root / tool))["worker"](*args)
         assert unavailable["status"] == "unavailable"
     assert not blocker.runtime_imports
+
+
+def test_graph_benchmark_without_resource(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    worker = runpy.run_path(str(root / "tools/menudet_graph_bench.py"))["worker"]
+    monkeypatch.setitem(worker.__globals__, "resource", None)
+    result = worker(16, "float64", "numpy", "C", False)
+    assert result["warm_median_ms"] > 0
+    assert result["peak_rss_bytes"] is None

@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import platform
-import resource
 import statistics
 import subprocess
 import sys
@@ -18,6 +17,19 @@ import numpy as np
 
 import blosc2
 from blosc2.native_graph import compile_plan
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
+
+def peak_rss_bytes():
+    """Return peak resident memory, or None when the platform cannot report it."""
+    if resource is None:
+        return None
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss if sys.platform == "darwin" else rss * 1024
 
 
 def timed(call):
@@ -90,7 +102,6 @@ def worker(size, dtype, route, layout, reduction):  # noqa: C901 -- isolated ben
     values = first[0] if route == "native" else first
     reference = np.sum(x * 2 + 1) if reduction else x * 2 + 1
     np.testing.assert_allclose(values, reference, rtol=1e-3 if reduction else 1e-6)
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return {
         "route": route,
         "size": size,
@@ -101,7 +112,7 @@ def worker(size, dtype, route, layout, reduction):  # noqa: C901 -- isolated ben
         "setup_ms": setup_ms,
         "first_ms": first_ms,
         "warm_median_ms": statistics.median(warm),
-        "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+        "peak_rss_bytes": peak_rss_bytes(),
         "native_report": native_report,
         "shape": shape,
         "backend": "portable-interpreter" if route in {"native", "graph"} else route,
@@ -161,7 +172,6 @@ def supplement(scenario):
         np.testing.assert_array_equal(first, reference)
         if scenario == "threaded":
             pool.shutdown()
-        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         return {
             "scenario": scenario,
             "compile_ms": compile_ms,
@@ -170,7 +180,7 @@ def supplement(scenario):
             "load_ms": load_ms if scenario == "persisted" else None,
             "size": 8192,
             "threads": 4 if scenario == "threaded" else 1,
-            "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+            "peak_rss_bytes": peak_rss_bytes(),
             "native_report": getattr(expr, "_native_execution_report", None),
             "extension_sha256": hashlib.sha256(Path(blosc2.blosc2_ext.__file__).read_bytes()).hexdigest(),
             "python_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),

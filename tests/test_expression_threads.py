@@ -30,10 +30,16 @@ def test_numexpr_environment_does_not_control_blosc_threads():
             sys.executable,
             "-S",
             "-c",
-            "import sys,json; sys.path[:]=json.loads(sys.argv[1]); import blosc2; "
+            "import sys,json,importlib.util; sys.path[:]=json.loads(sys.argv[1]); "
+            "package=json.loads(sys.argv[2]); "
+            "spec=importlib.util.spec_from_file_location('blosc2',package['origin'], "
+            "submodule_search_locations=package['paths']); "
+            "blosc2=importlib.util.module_from_spec(spec); sys.modules['blosc2']=blosc2; "
+            "spec.loader.exec_module(blosc2); "
             "blosc2.set_nthreads(2); assert blosc2.nthreads==2; "
             "assert blosc2.numexpr is None; assert 'numexpr' not in sys.modules",
             json.dumps(sys.path),
+            json.dumps({"origin": blosc2.__file__, "paths": list(blosc2.__path__)}),
         ],
         capture_output=True,
         text=True,
