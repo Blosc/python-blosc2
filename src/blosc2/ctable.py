@@ -2655,7 +2655,7 @@ class Column:
 
     def _utf8_compare_column(self, numpy_op, other: Column):
         """Column-vs-Column comparison, evaluated chunk by chunk on decoded
-        ``StringDType`` values since numexpr/miniexpr cannot operate on them.
+        ``StringDType`` values since the expression engines do not operate on them.
         """
         other_arr = other._raw_col
         nv = self.null_value
@@ -16146,9 +16146,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             new_expr = re.sub(eq_pattern, eq_repl, rewritten)
             new_expr = re.sub(in_pattern, in_repl, new_expr)
             if new_expr != rewritten:
-                # numexpr needs all operands chunked alike; the codes array uses a
-                # different chunkshape than the regular columns, so when mixed with
-                # one (e.g. ``dictcol == "x" and other > y``) re-chunk it to match.
+                # Expression evaluation needs all operands chunked alike; the codes
+                # array uses a different chunkshape than the regular columns, so when
+                # mixed with one (e.g. ``dictcol == "x" and other > y``) re-chunk it.
                 codes = dc.codes
                 target = next(
                     (

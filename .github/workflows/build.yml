@@ -130,9 +130,14 @@ jobs:
       if: matrix.numpy-version
       run: python -c "import numpy as np; assert np.__version__.startswith('${{ matrix.numpy-version }}.'), np.__version__"
 
+    - name: Require a NumExpr-free runtime
+      run: |
+        python -m pip uninstall -y numexpr
+        python -c "import importlib.util, importlib.metadata; assert importlib.util.find_spec('numexpr') is None; assert not any(r.lower().startswith('numexpr') for r in importlib.metadata.requires('blosc2') or [])"
+
     - name: Test (Windows)
       if: runner.os == 'Windows'
-      run: python -m pytest -m "not heavy and not network and not tui" --durations=25
+      run: python scripts/qualify_without_numexpr.py --require-absent -- -m "not heavy and not network and not tui" --durations=25
       env:
         # A test over this many seconds is a deadlock, not a slow test (the
         # slowest is ~7 s): dump stacks and kill the worker so xdist names it
@@ -142,15 +147,20 @@ jobs:
         PYTEST_DEADMAN_SECONDS: "300"
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 #        BLOSC_NTHREADS: "1"
-#        NUMEXPR_NUM_THREADS: "1"
 #        OMP_NUM_THREADS: "1"
 
     - name: Test (non-Windows)
       if: runner.os != 'Windows'
-      run: python -m pytest -m "not heavy and not network and not tui" --durations=25
+      run: python scripts/qualify_without_numexpr.py --require-absent -- -m "not heavy and not network and not tui" --durations=25
       env:
         PYTEST_DEADMAN_SECONDS: "300"
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
+
+    - name: Verify independence with optional NumExpr installed
+      if: runner.os == 'Linux' && matrix.python-version == '3.12' && !matrix.numpy-version
+      run: |
+        python -m pip install numexpr
+        python -m pytest tests/test_no_numexpr.py -q -n 0
 
     - name: Verify experimental safe-graph corpus
       if: always() && (steps.build_windows.outcome == 'success' || steps.build_non_windows.outcome == 'success')

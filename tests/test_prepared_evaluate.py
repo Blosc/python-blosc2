@@ -103,12 +103,6 @@ def test_wrong_output_shape_rejected():
         {"optimization": "none"},
         {"optimization": "moderate"},
         {"optimization": "aggressive"},
-        {"truediv": True},
-        {"truediv": False},
-        {"truediv": "auto"},
-        {"sanitize": True},
-        {"sanitize": False},
-        {"disable_cache": True},
     ],
 )
 def test_keyword_behavior_across_layouts(mode, layout, options):
@@ -120,9 +114,9 @@ def test_keyword_behavior_across_layouts(mode, layout, options):
     np.testing.assert_array_equal(result, x / 2 + 1)
 
 
-def test_sanitize_false_cannot_disable_safe_mode():
+def test_safe_mode_rejects_unsafe_expression():
     with blosc2.expression_evaluation("safe"), pytest.raises(blosc2.exceptions.UnsafeDeserializationError):
-        blosc2.evaluate("__import__('os')", local_dict={}, sanitize=False)
+        blosc2.evaluate("__import__('os')", local_dict={})
 
 
 @pytest.mark.parametrize("out_provided", [False, True])
@@ -157,7 +151,7 @@ def test_numpy_fallback_options_without_numexpr(monkeypatch):
     module = importlib.import_module("blosc2.lazyexpr")
     monkeypatch.setattr(module, "numexpr", None)
     x = np.arange(12.0).reshape(3, 4)
-    evaluator = blosc2.prepare_evaluate("x / 2", order="F", sanitize=True, disable_cache=True)
+    evaluator = blosc2.prepare_evaluate("x / 2", order="F")
     result = evaluator({"x": x})
     assert result.flags.f_contiguous
     np.testing.assert_array_equal(result, x / 2)

@@ -145,6 +145,12 @@ accept them through ``**kwargs``. Eligible lazy-expression reductions, such as
 settings tune execution rather than array storage; they are not options to
 :func:`blosc2.empty`.
 
+The string-expression API :func:`blosc2.evaluate` instead defaults to native
+interpretation, including calls through ``prepare_evaluate`` and ``re_evaluate``.
+It does not accept per-call JIT keywords; use ``blosc2.jit_options(jit=True)`` or
+``blosc2.set_jit_options(jit=True)`` to opt in. Existing environment overrides
+still apply. This API-specific default does not change other entry points.
+
 Scalar miniexpr reductions currently use the native interpreter, even when JIT
 is requested. Elementwise DSL returns (including automatically lifted expressions)
 write a block of values and cannot safely target a single reduction accumulator.

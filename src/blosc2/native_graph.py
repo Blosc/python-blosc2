@@ -1,8 +1,8 @@
 """Native graph lowering; Python is metadata/storage frontend only.
 
-Plans own scalar captures, not operand results. No interpreter/NumExpr fallback
-exists in this module. Table selections, opaque operands and nested lazy values
-are deliberately outside the eligible subset.
+Plans own scalar captures, not operand results. This module contains no fallback
+to an unrelated expression engine. Table selections, opaque operands and nested
+lazy values are deliberately outside the eligible subset.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import math
 import os
 import struct
 import sys
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 
 import numpy as np
@@ -24,6 +26,10 @@ PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
 TRUTH_GRAPH_REDUCERS = {"any", "all"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 MINIMUM_COMPRESSED_MAP_ITEMS = 2_000_000
+_NATIVE_PLAN_CACHE_SIZE = 128
+_MINIMUM_PARALLEL_ITEMS = 2 * 128 * 1024
+_native_plan_cache = OrderedDict()
+_native_plan_cache_lock = threading.Lock()
 NATIVE_ELEMENTWISE_CALLS = {
     **dict.fromkeys(
         (
@@ -131,6 +137,7 @@ def _native_first_operand(value):
     return True
 
 
+@lru_cache(maxsize=256)
 def _native_first_syntax(expression, *, reduction_only=False):  # noqa: C901 -- explicit syntax/arity admission
     # Deliberately exclude arbitrary calls, nested reductions, indexing and
     # Python short-circuit expressions. Numeric inference remains native-owned.
@@ -215,6 +222,59 @@ def _native_first_syntax(expression, *, reduction_only=False):  # noqa: C901 -- 
     return True
 
 
+def _native_plan_cache_key(expr, jit, options):
+    """Metadata-only plan-cache key; never retains operand or output arrays."""
+    import blosc2
+
+    if type(expr.operands) is not dict or not expr.operands:
+        return None
+    signature = []
+    for name, value in sorted(expr.operands.items()):
+        if type(value) not in (np.ndarray, blosc2.NDArray):
+            return None
+        signature.append(
+            (
+                name,
+                type(value).__name__,
+                np.dtype(value.dtype).str,
+                repr(np.dtype(value.dtype).metadata),
+                tuple(value.shape),
+                getattr(value, "chunks", None),
+                getattr(value, "blocks", None),
+            )
+        )
+    return (
+        expr.expression,
+        tuple(signature),
+        bool(jit),
+        _graph_configuration(jit),
+        getattr(expr, "_evaluation", "full"),
+        bool(options.get("_getitem", False)),
+    )
+
+
+def _native_cached_output_ok(expr, schedule, output):
+    import blosc2
+
+    if output is None:
+        return True
+    if type(output) is not np.ndarray:
+        return False
+    info = schedule.info()
+    if output.shape != info["shape"] or output.dtype != info["dtype"]:
+        return False
+    if not output.flags.writeable or not output.flags.aligned or not output.dtype.isnative:
+        return False
+    if (
+        not output.flags.c_contiguous
+        and not getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+    ):
+        return False
+    return not any(
+        type(value) is np.ndarray and np.shares_memory(output, value) for value in expr.operands.values()
+    )
+
+
 def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):  # noqa: C901 -- conservative metadata-only admission gates
     """Prepare the conservative automatic subset, without reading array values.
 
@@ -255,6 +315,28 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         }
     if options.keys() - {"_getitem", "_reduce_args", "initial", "out"}:
         return None
+    cache_key = None
+    if isinstance(item, tuple) and not item and explicit is None and "initial" not in options:
+        cache_key = _native_plan_cache_key(expr, jit, options)
+        if cache_key is not None:
+            with _native_plan_cache_lock:
+                cached = _native_plan_cache.get(cache_key)
+                if cached is not None:
+                    _native_plan_cache.move_to_end(cache_key)
+            if cached is not None:
+                plan, input_names, reduction = cached
+                try:
+                    schedule = plan.specialize(
+                        {
+                            name: (expr.operands[name].dtype, expr.operands[name].shape)
+                            for name in input_names
+                        }
+                    )
+                except (ValueError, TypeError, blosc2.PortableArtifactError):
+                    return None
+                if not _native_cached_output_ok(expr, schedule, output):
+                    return None
+                return plan, {name: expr.operands[name] for name in input_names}, reduction
     # Only whole-domain reads: even a full slice of a staged graph is currently
     # treated as a partial read by the strict adapter.
     selection = item if isinstance(item, tuple) else (item,)
@@ -345,6 +427,12 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         if error.status not in {"invalid_signature", "unsupported"}:
             raise
         return None
+    if cache_key is not None and not prepared[2] and all(name in expr.operands for name in prepared[1]):
+        with _native_plan_cache_lock:
+            _native_plan_cache[cache_key] = (prepared[0], tuple(prepared[1]), False)
+            _native_plan_cache.move_to_end(cache_key)
+            while len(_native_plan_cache) > _NATIVE_PLAN_CACHE_SIZE:
+                _native_plan_cache.popitem(last=False)
     return prepared
 
 
@@ -509,7 +597,9 @@ def _compute_native_stored_output(expr, output, options, *, jit=True):
         return None
     try:
         plan, inputs, reduction = lower_native_graph(expr, jit=jit, allow_output=True)
-        if reduction or not plan.has_jit or plan.info()["stages"] != 1:
+        # This schedule runs serial, bounded native tiles; interpreter artifacts
+        # have the same binding/lifetime contract and do not require JIT.
+        if reduction or plan.info()["stages"] != 1:
             return None
         schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})
         if schedule.info()["shape"] != output.shape or schedule.info()["dtype"] != output.dtype:
@@ -982,9 +1072,10 @@ def _native_text_expression(expression):
 
 
 def _graph_configuration(jit):
+    policy = tuple((key, os.environ.get(key)) for key in ("ME_SIMD_MATH_BACKEND", "ME_DSL_FP_MODE"))
     if not jit:
-        return ()
-    return tuple(
+        return policy
+    return policy + tuple(
         (key, os.environ.get(key))
         for key in (
             "ME_DSL_JIT_COMPILER",
@@ -1088,6 +1179,8 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
 
     from .resident_execution import MINIMUM_WORKER_ITEMS, evaluate_resident, evaluate_resident_if_eligible
 
+    if not reduction and math.prod(shape) < 2 * MINIMUM_WORKER_ITEMS:
+        return None
     full_selection = not selection or all(
         isinstance(part, slice) and part.indices(size) == (0, size, 1)
         for part, size in zip(selection, shape, strict=True)
@@ -1531,7 +1624,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         )
     parallel = (
         _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=output)
-        if tile_items == 1024
+        if tile_items == 1024 and (reduction or math.prod(shape) >= _MINIMUM_PARALLEL_ITEMS)
         else None
     )
     if reduction and parallel_reductions:

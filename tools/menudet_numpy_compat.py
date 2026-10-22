@@ -279,7 +279,10 @@ def reference_drift(corpus):
 
 
 def benchmark():
-    import numexpr
+    try:
+        import numexpr
+    except ImportError:
+        numexpr = None
 
     import blosc2
 
@@ -296,8 +299,9 @@ def benchmark():
             engines = {
                 "portable": lambda x=x, kernel=kernel: kernel.evaluate({"x": x}),
                 "numpy": lambda x=x: x * 2 + 1,
-                "numexpr": lambda x=x: numexpr.evaluate("x * 2 + 1", local_dict={"x": x}),
             }
+            if numexpr is not None:
+                engines["numexpr"] = lambda x=x: numexpr.evaluate("x * 2 + 1", local_dict={"x": x})
             for name, engine in engines.items():
                 start = time.perf_counter_ns()
                 actual = engine()
@@ -316,15 +320,17 @@ def benchmark():
                         "compile_ns": compile_ns if name == "portable" else None,
                         "first_ns": first_ns,
                         "median_ns": int(np.median(samples)),
-                        "backend": "interpreter" if name == "portable" else name,
+                        "backend": ("jit" if kernel.has_jit else "interpreter")
+                        if name == "portable"
+                        else name,
                     }
                 )
     return {
         "platform": platform.platform(),
         "numpy": np.__version__,
-        "numexpr": numexpr.__version__,
+        "numexpr": numexpr.__version__ if numexpr is not None else None,
         "extension_sha256": hashlib.sha256(Path(blosc2.blosc2_ext.__file__).read_bytes()).hexdigest(),
-        "numexpr_threads": numexpr.get_num_threads(),
+        "numexpr_threads": numexpr.get_num_threads() if numexpr is not None else None,
         "samples": 7,
         "results": rows,
         "limitations": "Single process, fixed order, allocated output; no RSS or direct-native large-array timing.",

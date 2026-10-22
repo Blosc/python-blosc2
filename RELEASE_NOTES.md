@@ -6,6 +6,18 @@
 
 **Menudet — a little language for portable computation on arrays and tables.**
 
+- Strengthen NumExpr-removal qualification: runtime/install behavior is independent
+  of NumExpr, including native interpretation without JIT. Nullable
+  `blosc2.numexpr` remains a compatibility surface, not an engine selector.
+  - Native compression/reduction prefilter failures now propagate instead of
+    replaying a partially executed operation through NumPy.
+  - Serial bounded stored-output maps accept interpreter artifacts as well as JIT.
+  - CI requires NumExpr-free environments; comparison tooling treats it as optional.
+- Default `evaluate()` and its prepared/repeated evaluators to native interpretation
+  unless JIT is explicitly enabled through existing global/context settings or
+  `ME_DSL_JIT`. Other Menudet APIs retain their current defaults. Remove the legacy
+  `truediv`, `sanitize` and `disable_cache` keywords; supplying them now raises an
+  error. Keep `order`, `casting` and the `optimization` compatibility hint.
 - Enable complex64/complex128 miniexpr expressions and Menudet interpretation
   on Windows (clang-cl), and remove the remaining WebAssembly complex expression
   and reduction exclusions. Complex Menudet kernels remain interpreter-only.

@@ -113,27 +113,22 @@ def test_order_with_nonbroadcastable_reduction_inputs():
 
 
 @pytest.mark.parametrize("mode", ["full", "safe"])
-def test_disable_cache_bypasses_resident_preparation(mode, monkeypatch):
+@pytest.mark.parametrize("option", ["truediv", "sanitize", "disable_cache"])
+def test_removed_options_rejected_before_preparation(mode, option, monkeypatch):
     import importlib
 
     module = importlib.import_module("blosc2.lazyexpr")
-    module._evaluate_recipe_cache.clear()
-    original = module.lazyexpr
-    calls = []
 
     def prepare(*args, **kwargs):
-        calls.append(args)
-        return original(*args, **kwargs)
+        pytest.fail("Removed options must fail before preparing an expression")
 
     monkeypatch.setattr(module, "lazyexpr", prepare)
     x = np.arange(17.0)
-    output = np.empty_like(x)
+    output = np.full_like(x, -999)
     with blosc2.expression_evaluation(mode):
-        for _ in range(2):
-            assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=output, disable_cache=True) is output
-    assert len(calls) == 2
-    assert not module._evaluate_recipe_cache
-    np.testing.assert_array_equal(output, x + 1)
+        with pytest.raises(ValueError, match=option):
+            blosc2.evaluate("x + 1", local_dict={"x": x}, out=output, **{option: True})
+    np.testing.assert_array_equal(output, -999)
 
 
 @pytest.mark.parametrize("order", ["invalid", "", None, 1])

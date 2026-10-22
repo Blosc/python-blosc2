@@ -57,8 +57,8 @@ from .utils import (
 # instead of materializing a huge coordinate set.
 _SUBSAMPLE_GATHER_MAX_COORDS = 1_000_000
 
-# These functions in ufunc_map in ufunc_map_1param are implemented in numexpr and so we call
-# those instead (since numexpr uses multithreading it is faster)
+# These ufuncs have expression equivalents; use native evaluation where admitted
+# and explicit NumPy semantics otherwise.
 ufunc_map = {
     np.add: "+",
     np.subtract: "-",
@@ -87,7 +87,7 @@ ufunc_map = {
     np.minimum: "minimum",
 }
 
-# implemented in numexpr
+# represented by the expression function registry
 ufunc_map_1param = {
     np.sqrt: "sqrt",
     np.sin: "sin",
@@ -3373,7 +3373,7 @@ class Operand:
             _check_allowed_dtypes(value)
             return blosc2.LazyExpr(new_op=(value, ufunc_map_1param[ufunc], None))
 
-        return NotImplemented  # if not implemented in numexpr will default to NumPy
+        return NotImplemented  # Unsupported expression ufuncs defer to NumPy.
 
     def __add__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -4821,8 +4821,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
             try:
                 value = value.astype(self.dtype)
             except ComplexWarning:
-                # numexpr type inference can lead to unnecessary type promotions
-                # when using complex functions (e.g. conj) with real arrays
+                # Expression type inference can promote complex functions (e.g.
+                # conj) applied to real arrays; preserve the destination dtype.
                 value = value.real.astype(self.dtype)
 
         result = super().set_slice((start, stop), value)

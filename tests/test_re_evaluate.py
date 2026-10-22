@@ -65,7 +65,7 @@ def test_arrays_not_retained_and_dead_output_allocates_fresh():
 
 def test_fresh_output_and_option_reuse():
     x = np.arange(12.0).reshape(3, 4)
-    first = blosc2.evaluate("x + 1", local_dict={"x": x}, order="F", disable_cache=True)
+    first = blosc2.evaluate("x + 1", local_dict={"x": x}, order="F")
     second = blosc2.re_evaluate(local_dict={"x": x + 1}, global_dict={})
     assert second is not first
     assert second.flags.f_contiguous
@@ -132,7 +132,7 @@ def test_saved_safe_mode_is_preserved(monkeypatch):
     lazy = importlib.import_module("blosc2.lazyexpr")
     x = np.arange(5.0)
     with blosc2.expression_evaluation("safe"):
-        blosc2.evaluate("x + 1", local_dict={"x": x}, sanitize=False)
+        blosc2.evaluate("x + 1", local_dict={"x": x})
     original = lazy.evaluate
     modes = []
 

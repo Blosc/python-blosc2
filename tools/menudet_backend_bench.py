@@ -23,10 +23,19 @@ import numpy as np
 
 
 def worker(engine, dtype, count, repeats):
-    import numexpr
-
     import blosc2
 
+    numexpr = None
+    if engine == "numexpr":
+        try:
+            import numexpr
+        except ImportError:
+            return {
+                "requested": engine,
+                "backend": engine,
+                "status": "unavailable",
+                "reason": "NumExpr is optional",
+            }
     x = np.arange(count, dtype=dtype)
     compile_ns = 0
     if engine == "integrated":
@@ -77,7 +86,7 @@ def worker(engine, dtype, count, repeats):
         "compile_ns": compile_ns,
         "first_ns": samples[0],
         "warm_median_ns": int(np.median(samples[1:])),
-        "numexpr_threads": numexpr.get_num_threads(),
+        "numexpr_threads": numexpr.get_num_threads() if numexpr is not None else None,
         "extension_sha256": hashlib.sha256(Path(blosc2.blosc2_ext.__file__).read_bytes()).hexdigest(),
     }
 

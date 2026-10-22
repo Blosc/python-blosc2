@@ -12,16 +12,21 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import numexpr
 import numpy as np
 
 import blosc2
 from tools.menudet_jit_bench import EXPRESSIONS, timed
 
+try:
+    import numexpr
+except ImportError:
+    numexpr = None
+
 
 def worker():  # noqa: C901 -- independent compile, warm-up, validation and sampling phases
     """Compilation and correctness checks are outside all execution samples."""
-    numexpr.set_num_threads(1)
+    if numexpr is not None:
+        numexpr.set_num_threads(1)
     x = np.linspace(-2, 2, 262144, dtype="float64")
     y = np.linspace(1, 2, 262144, dtype="float64")
     bindings = {"x": x, "y": y}
@@ -63,7 +68,8 @@ def worker():  # noqa: C901 -- independent compile, warm-up, validation and samp
             backend: lambda k=kernel: k.evaluate(bindings) for backend, kernel in compiled[workload].items()
         }
         calls[workload]["numpy"] = lambda w=workload: numpy_call(w)
-        calls[workload]["numexpr"] = lambda e=expression: numexpr.evaluate(e, local_dict=bindings)
+        if numexpr is not None:
+            calls[workload]["numexpr"] = lambda e=expression: numexpr.evaluate(e, local_dict=bindings)
         expected = numpy_call(workload)
         # One untimed complete execution per backend warms code and engine caches.
         for call in calls[workload].values():
@@ -130,6 +136,8 @@ def main():
     summary = []
     for workload in EXPRESSIONS:
         for backend in ("interpreter", "tcc", "gcc", "clang", "numpy", "numexpr"):
+            if backend == "numexpr" and numexpr is None:
+                continue
             medians = [
                 statistics.median(
                     r["ms"] for r in p["samples"] if r["workload"] == workload and r["backend"] == backend
@@ -147,11 +155,11 @@ def main():
     report = {
         "platform": platform.platform(),
         "numpy": np.__version__,
-        "numexpr": numexpr.__version__,
+        "numexpr": numexpr.__version__ if numexpr is not None else None,
         "size": 262144,
         "dtype": "float64",
         "api": "flat",
-        "numexpr_threads": 1,
+        "numexpr_threads": 1 if numexpr is not None else None,
         "technique": "Rotating workload/backend order; untimed warm-up; identical shared buffers",
         "samples_per_process": {"interpreter": 3, "other_backends": 30},
         "compiler_versions": {

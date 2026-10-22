@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import sys
 import warnings
 
 import numpy as np
@@ -190,15 +189,6 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
                 dtype, "integral"
             ):  # overflow causes disagreement, no problem
                 assert True
-            elif np_func.__name__ in ("maximum", "minimum") and blosc2.isdtype(dtype, "real floating"):
-                warnings.showwarning(
-                    "minimum and maximum for numexpr do not match NaN behaviour for numpy",
-                    UserWarning,
-                    __file__,
-                    0,
-                    file=sys.stderr,
-                )
-                pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
                 raise
 
@@ -305,15 +295,6 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
                 dtype, "integral"
             ):  # overflow causes disagreement, no problem
                 assert True
-            elif np_func.__name__ in ("maximum", "minimum") and blosc2.isdtype(dtype, "real floating"):
-                warnings.showwarning(
-                    "minimum and maximum for numexpr do not match NaN behaviour for numpy",
-                    UserWarning,
-                    __file__,
-                    0,
-                    file=sys.stderr,
-                )
-                pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
                 raise
 

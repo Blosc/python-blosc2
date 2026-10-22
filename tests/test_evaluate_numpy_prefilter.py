@@ -101,6 +101,41 @@ def test_numpy_prefilter_non_aligned_blocks_fall_back():
     np.testing.assert_array_equal(result, values + 1)
 
 
+@pytest.mark.parametrize("reduction", [False, True])
+def test_prefilter_execution_error_is_not_replayed(monkeypatch, reduction):
+    import importlib
+
+    if reduction and blosc2.IS_WASM:
+        pytest.skip("WASM scalar reductions do not install a native prefilter")
+    module = importlib.import_module("blosc2.lazyexpr")
+    values = np.arange(257, dtype=np.float64)
+    inputs = {"x": blosc2.asarray(values, chunks=(128,), blocks=(32,))}
+    expression = blosc2.lazyexpr("x + 1", inputs)
+    calls = []
+    output = np.full_like(values, -999)
+
+    def execution_error(*args, **kwargs):
+        calls.append(True)
+        if not reduction:
+            output[0] = 12345  # Simulate a partial native destination write.
+        raise RuntimeError("injected native execution failure")
+
+    def no_replay(*args, **kwargs):
+        pytest.fail("Native execution errors must not be replayed through NumPy")
+
+    monkeypatch.setattr(blosc2.SChunk, "_prefilter_data", execution_error)
+    monkeypatch.setattr(module, "_get_result", no_replay)
+    operation = (
+        expression.sum if reduction else lambda: blosc2.evaluate("x + 1", local_dict=inputs, out=output)
+    )
+    with pytest.raises(RuntimeError, match="injected native execution failure"):
+        operation()
+    assert calls == [True]
+    if not reduction:
+        assert output[0] == 12345
+        np.testing.assert_array_equal(output[1:], -999)
+
+
 def test_numpy_prefilter_multidimensional_output_falls_back():
     values = np.arange(99, dtype=np.float64).reshape(9, 11)
     inputs = {"x": blosc2.asarray(values, chunks=(4, 6), blocks=(2, 3))}

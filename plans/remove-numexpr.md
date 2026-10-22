@@ -4,6 +4,11 @@ Status: runtime removal implemented on `improved-miniexpr`; performance and
 platform qualification remain release decision points. See
 [miniexpr-implementation-results.md](miniexpr-implementation-results.md).
 
+Current completion audit, compatibility/coverage inventory and follow-up
+qualification: [remove-numexpr-status.md](remove-numexpr-status.md). The earlier
+starting-point descriptions and timing snapshots below are historical, not a
+claim that the current package still imports NumExpr.
+
 ### Implemented removal
 
 - Removed the runtime import, required dependency, NumExpr program cache,
@@ -425,12 +430,12 @@ native complex/string acceleration is scheduled after dependency removal.
 
 ## 10. Final deliverables checklist
 
-- [ ] Complete runtime-call inventory and compatibility/coverage table.
-- [ ] Native interpreter direct-output and shared scheduling qualification.
-- [ ] Backend-neutral internal evaluator and metadata/scalar migration.
-- [ ] Explicit NumPy fallback contracts and representative tests.
-- [ ] Removal of NumExpr runtime helpers, imports, thread controls and dependency.
+- [x] Complete runtime-call inventory and compatibility/coverage table.
+- [x] Native interpreter direct-output and shared scheduling qualification (local).
+- [x] Backend-neutral internal evaluator and metadata/scalar migration.
+- [x] Explicit NumPy fallback contracts and representative tests.
+- [x] Removal of executable NumExpr integration, imports, thread controls and dependency; documented compatibility names remain.
 - [ ] Clean-environment and import-blocking CI; actual Windows/WASM results.
-- [ ] Updated API docs, diagnostics, examples and migration notes.
-- [ ] Reproducible interpreter/JIT/fallback performance and memory report.
-- [ ] Documented remaining gaps, intentional behavior changes and release decision.
+- [x] Updated API docs, diagnostics, examples and migration notes.
+- [x] Reproducible interpreter/JIT/fallback performance and bounded-memory report (local; release budgets still open).
+- [x] Documented remaining gaps, intentional behavior changes and release decision point.

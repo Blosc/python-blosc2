@@ -96,9 +96,8 @@ numexpr = None  # Compatibility placeholder; no runtime import or backend select
 def _int64_datetime_operands(local_dict):
     """Return `local_dict` with datetime64/timedelta64 values viewed as int64.
 
-    numexpr has no datetime types, but both are int64 counts underneath, so a
-    comparison is exact in that representation -- and much faster than the
-    NumPy fallback.  Returns None when the substitution would not be faithful:
+    Both are int64 counts underneath, so a comparison against a count is exact
+    in that representation. Returns None when the substitution would not be faithful:
 
     * mixed units, because the counts are then on different scales (NumPy
       promotes to the finer unit instead);
@@ -113,7 +112,7 @@ def _int64_datetime_operands(local_dict):
     for key, value in local_dict.items():
         dtype = getattr(value, "dtype", None)
         # Frame locals get merged in below, so `local_dict` also carries blosc2
-        # containers that numexpr could not consume in the first place; leave
+        # containers that cannot be reinterpreted as resident counts; leave
         # anything that is not a NumPy value alone.
         if dtype is None or dtype.kind not in "Mm" or not isinstance(value, np.ndarray | np.generic):
             converted[key] = value
@@ -148,6 +147,7 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Legacy internal name for native/NumPy chunk evaluation; no NumExpr usage."""
+    kwargs.setdefault("_frame_depth", 1)
     return evaluate_chunk(expression, local_dict, **kwargs)
 
 
@@ -160,7 +160,7 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
     from .native_graph import _native_first_syntax, lower_native_graph
 
     operands = {} if local_dict is None else dict(local_dict)
-    depth = kwargs.pop("_frame_depth", 1)
+    depth = kwargs.pop("_frame_depth", 0)
     graph = parse_expression(expression)
     if graph.names - operands.keys():
         frame = sys._getframe(depth + 1)
@@ -181,7 +181,6 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
         operands
         and _native_first_syntax(expression)
         and all(type(value) is np.ndarray and value.dtype.kind in "biuf" for value in operands.values())
-        and not kwargs.get("disable_cache")
         and not (output is not None and any(np.shares_memory(output, value) for value in operands.values()))
     ):
         stub = LazyExpr(None)
@@ -1916,8 +1915,8 @@ def fast_eval(  # noqa: C901
             if isinstance(op, np.ndarray):
                 # Raw NumPy operands are only miniexpr-eligible for DSL kernels (the
                 # jit control-flow dispatch route). Plain string expressions and traced
-                # `jit` calls keep the old NDArray-only gate, so their numeric behavior
-                # (e.g. transcendentals matching numexpr bit-for-bit) is unchanged.
+                # `jit` calls keep the established NDArray-only gate, preserving
+                # existing numerical and dtype behavior.
                 return (
                     is_dsl
                     and op.ndim > 0
@@ -2078,7 +2077,6 @@ def fast_eval(  # noqa: C901
             # is after the finally below removes the prefilter — so the buffer
             # safely outlives every prefilter dereference.
         except Exception as e:
-            use_miniexpr = False
             if is_dsl:
                 reason = (
                     f"miniexpr compilation or execution failed for this DSL kernel:\n{expression.dsl_source}"
@@ -2093,6 +2091,12 @@ def fast_eval(  # noqa: C901
                 raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
             if strict_miniexpr:
                 raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
+            # Only preparation may decline to NumPy. Once installed, the native
+            # prefilter may have written caller output or compressed chunks;
+            # replaying an execution failure would hide errors/partial writes.
+            if prefilter_set:
+                raise
+            use_miniexpr = False
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
@@ -2171,8 +2175,8 @@ def fast_eval(  # noqa: C901
             try:
                 out[cslice] = result
             except ComplexWarning:
-                # The result is a complex number, so we need to convert it to real.
-                # This is a workaround for rigidness of NumExpr with type casting.
+                # The result is complex while the destination is real; preserve
+                # the established explicit destination-conversion behavior.
                 result = result.real.astype(out.dtype)
                 out[cslice] = result
         else:
@@ -2621,8 +2625,8 @@ def slices_eval_getitem(
     # A UDF writes into an output of slice_shape, which keeps the integer-indexed
     # axes as length 1; slicing its operands with the raw index would drop those
     # axes and leave the kernel unable to write its result (e.g. `udf[:, 0]` on a
-    # 2-dim array: operand (10,) into output (10, 1)).  numexpr has no output
-    # buffer to agree with, so it keeps the raw index.
+    # 2-dim array: operand (10,) into output (10, 1)). Plain expressions keep
+    # the raw index; their result no longer carries an explicit UDF destination.
     op_slice = _slice_bcast if callable(expression) else _slice
 
     # Get the slice of each operand
@@ -3019,7 +3023,6 @@ def reduce_slices(  # noqa: C901
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
         except Exception as e:
-            use_miniexpr = False
             if callable(expression) and _is_dsl_kernel_expression(expression):
                 reason = "miniexpr compilation or execution failed for this DSL kernel."
                 backend_error = str(e)
@@ -3030,6 +3033,9 @@ def reduce_slices(  # noqa: C901
                 if parse_hint is not None:
                     reason = f"{reason}\n{parse_hint}"
                 raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
+            if prefilter_set:
+                raise
+            use_miniexpr = False
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
@@ -3730,7 +3736,8 @@ class LazyExpr(LazyArray):
 
         # Reset values represented as np.int64 etc. to be set as Python natives,
         # BUT preserve numpy integer scalars that require explicit typing (unsigned or
-        # 64-bit) so that dtype-sensitive backends (numexpr) don't downcast them to int32.
+        # 64-bit) so that expression preparation preserves their explicit dtype
+        # instead of normalizing them to a narrower Python integer.
         def _to_native_if_safe(v):
             if not (np.isscalar(v) and hasattr(v, "item")):
                 return v
@@ -6234,7 +6241,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
 
 def validate_evaluate_options(options):
     """Validate public options before choosing a numerical backend."""
-    unknown = options.keys() - {"order", "casting", "optimization", "truediv", "sanitize", "disable_cache"}
+    unknown = options.keys() - {"order", "casting", "optimization"}
     if unknown:
         raise ValueError(f"Unknown keyword argument {sorted(unknown)[0]!r}")
     order = options.get("order", "K")
@@ -6242,16 +6249,6 @@ def validate_evaluate_options(options):
         raise ValueError("order must be one of 'C', 'F', 'A', or 'K'")
     if options.get("optimization", "aggressive") not in ("none", "moderate", "aggressive"):
         raise ValueError("optimization must be 'none', 'moderate', or 'aggressive'")
-    for name in ("sanitize", "disable_cache"):
-        if (
-            name in options
-            and type(options[name]) is not bool
-            and not (name == "sanitize" and options[name] is None)
-        ):
-            raise TypeError(f"{name} must be a bool" + (" or None" if name == "sanitize" else ""))
-    truediv = options.get("truediv", "auto")
-    if type(truediv) is not bool and truediv != "auto":
-        raise ValueError("truediv must be True, False, or 'auto'")
     # Ask NumPy to validate the casting spelling even when no output was supplied.
     np.can_cast(np.dtype("float64"), np.dtype("float64"), casting=options.get("casting", "same_kind"))
 
@@ -6288,6 +6285,7 @@ def _array_owner(value):
 
 
 @remember_evaluation
+@blosc2.jit_config.interpreted_evaluation
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
@@ -6320,6 +6318,12 @@ def evaluate(
     the compression prefilter. Unsupported signatures, aliasing and explicit
     backend/accuracy policies retain the existing dispatch rules.
 
+    Native interpretation is the default for this API (and its prepared/repeated
+    evaluators), without changing other Menudet APIs. Explicit JIT settings from
+    :func:`blosc2.set_jit_options`, :func:`blosc2.jit_options` or ``ME_DSL_JIT``
+    retain their existing precedence. For example, use
+    ``with blosc2.jit_options(jit=True):`` to opt into best-effort JIT execution.
+
     Parameters
     ----------
     ex: str
@@ -6334,8 +6338,11 @@ def evaluate(
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     kwargs: Any, optional
-        Backend-independent compatibility expression options. ``optimization``
-        is accepted as a hint; no NumExpr algebraic transformations are applied.
+        Accepted options are ``order``, ``casting`` and ``optimization``.
+        ``optimization`` defaults to ``"aggressive"`` and is accepted as a hint;
+        no NumExpr algebraic transformations or relaxed math policies are applied.
+        ``casting`` defaults to ``"same_kind"`` and controls conversion into an
+        explicit destination, not arithmetic precision.
         ``order`` controls newly allocated NumPy output: ``"C"`` or ``"F"``
         requests contiguous row-major or column-major storage, ``"A"`` follows
         Fortran-contiguous operands when possible, and ``"K"`` (default)
@@ -6344,6 +6351,9 @@ def evaluate(
         an allocation policy; it is not forwarded to NumExpr. Resident strided
         outputs use native destination descriptors when supported. Unsupported
         operations use an explicit NumPy fallback.
+        The legacy ``truediv``, ``sanitize`` and ``disable_cache`` options are no
+        longer accepted. Division follows NumPy semantics, validation follows
+        the expression evaluation policy, and preparation caches are automatic.
 
     Returns
     -------
@@ -6367,13 +6377,11 @@ def evaluate(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
-    validate_evaluate_options(kwargs)
-    if kwargs.get("sanitize") is True:
-        parse_expression(ex)
-    # Compatibility hints have no backend-specific numerical transformation.
-    # Consume them here rather than blocking native/JIT admission accidentally.
-    for name in ("optimization", "truediv", "sanitize"):
-        kwargs.pop(name, None)
+    if kwargs:
+        validate_evaluate_options(kwargs)
+    # The optimization hint has no backend-specific numerical transformation.
+    # Consume it here rather than blocking native/JIT admission accidentally.
+    kwargs.pop("optimization", None)
     order = kwargs.pop("order", "K")
     order = order.upper()
     lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
@@ -6450,7 +6458,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
     nres = ne_evaluate("na1 + na2")
-    print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
+    print(f"Elapsed time (native/NumPy, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
     res = expr.compute(item=sl)
@@ -6473,7 +6481,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
     nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
-    print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
+    print(f"Elapsed time (native/NumPy, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
     res = expr.compute(sl)

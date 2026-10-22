@@ -290,7 +290,7 @@ constructors += ["reshape"]
 
 
 def _complex_from_parts(real, imag, *, out=None):
-    """NumExpr's two-real-array complex constructor, without inf * 1j artifacts."""
+    """Compatibility two-real-array complex constructor, without inf * 1j artifacts."""
     real, imag = np.broadcast_arrays(real, imag)
     if np.iscomplexobj(real) or np.iscomplexobj(imag):
         raise TypeError("complex() real and imaginary parts must be real")
@@ -1122,15 +1122,15 @@ def process_key(key, shape):
 
 def is_inside_ne_evaluate() -> bool:
     """
-    Whether the current code is being executed from an ne_evaluate call
+    Whether execution is inside the chunk evaluator (including its legacy alias).
     """
     # Get the current call stack
     stack = inspect.stack()
-    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
+    return builtins.any(frame_info.function in {"ne_evaluate", "evaluate_chunk"} for frame_info in stack)
 
 
 def incomplete_lazyfunc(func) -> None:
-    """Decorator for lazy functions with incomplete numexpr/miniexpr coverage.
+    """Decorator for lazy functions requiring explicit NumPy fallback coverage.
 
     This function will force eager execution when called from ne_evaluate.
 
@@ -1218,8 +1218,8 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
         # A length-1 axis broadcasts, so take its only entry whatever the
         # larger slice asked for -- but keep the entry's *kind*, because an
         # integer drops the axis and a slice keeps it.  Substituting a slice
-        # for an integer here left the operand one rank too high, and numexpr
-        # then broadcast that phantom axis back into the result.
+        # for an integer here left the operand one rank too high, and expression
+        # broadcasting then introduced a phantom axis into the result.
         if smaller_shape[j_small] != 1:
             smaller_slice.append(s)
         else:

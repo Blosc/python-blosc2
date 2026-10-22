@@ -14,7 +14,6 @@ import blosc2
 
 @pytest.fixture
 def benchmark():
-    pytest.importorskip("numexpr")
     return runpy.run_path(str(Path(__file__).resolve().parents[1] / "bench/evaluate-numpy-parity.py"))
 
 
@@ -32,14 +31,24 @@ def test_benchmark_rejects_wrong_integer_values_before_timing(benchmark, monkeyp
         benchmark["compare_case"]("x", inputs, 1, 0, random.Random(42))
 
 
-def test_benchmark_rejects_engine_promotion_differences(benchmark):
+def test_benchmark_rejects_engine_promotion_differences(benchmark, monkeypatch):
+    from types import SimpleNamespace
+
+    external = SimpleNamespace(evaluate=lambda *args, **kwargs: np.arange(17, dtype="float64"))
+    monkeypatch.setitem(benchmark["compare_case"].__globals__, "ne", external)
     x = np.arange(17, dtype="int64")
-    with pytest.raises(TypeError, match="result dtype differs"):
-        benchmark["compare_case"]("minimum(x,y)", {"x": x, "y": x + 1}, 1, 0, random.Random(42))
+    result = benchmark["compare_case"]("minimum(x,y)", {"x": x, "y": x + 1}, 1, 0, random.Random(42))
+    assert result["numexpr"] is None
+    assert "result dtype differs" in result["numexpr_error"]
+    assert result["numpy"] > 0
+    assert result["blosc2"] > 0
 
 
-def test_benchmark_cli_qualifies_explicit_outputs(benchmark, monkeypatch, tmp_path, capsys):
-    import numexpr
+@pytest.mark.parametrize("absent", [False, True])
+def test_benchmark_cli_qualifies_explicit_outputs(benchmark, monkeypatch, tmp_path, capsys, absent):
+    if absent:
+        monkeypatch.setitem(benchmark["main"].__globals__, "ne", None)
+    numexpr = benchmark["main"].__globals__["ne"]
 
     report = tmp_path / "parity.json"
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", os.environ.get("ME_DSL_JIT_COMPILER", "tcc"))
@@ -63,15 +72,19 @@ def test_benchmark_cli_qualifies_explicit_outputs(benchmark, monkeypatch, tmp_pa
         ],
     )
     previous = blosc2.nthreads
-    previous_ne = numexpr.get_num_threads()
+    previous_ne = numexpr.get_num_threads() if numexpr is not None else None
     try:
         benchmark["main"]()
     finally:
         blosc2.set_nthreads(previous)
-        numexpr.set_num_threads(previous_ne)
+        if numexpr is not None:
+            numexpr.set_num_threads(previous_ne)
     results = json.loads(report.read_text())["results"]
     assert len(results) == 2
     assert all(result["status"] == "qualified" for result in results)
-    assert all(result["numexpr"] > 0 and result["blosc2"] > 0 for result in results)
+    assert all(result["numpy"] > 0 and result["blosc2"] > 0 for result in results)
+    assert all(result["numexpr"] is None or result["numexpr"] > 0 for result in results)
+    if absent:
+        assert all(result["numexpr"] is None for result in results)
     assert results[-1]["route"] == "numpy/eager"
     assert "shared warmed NumPy out" in capsys.readouterr().out

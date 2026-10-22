@@ -26,7 +26,7 @@ def timed(call):
     return result, (time.perf_counter_ns() - start) / 1e6
 
 
-def worker(size, dtype, route, layout, reduction):
+def worker(size, dtype, route, layout, reduction):  # noqa: C901 -- isolated benchmark routes
     x = np.linspace(0, 1, size, dtype=dtype)
     if layout == "strided":
         x = np.repeat(x, 2)[::2]
@@ -64,7 +64,18 @@ def worker(size, dtype, route, layout, reduction):
         def call():
             return np.sum(x * 2 + 1) if reduction else x * 2 + 1
     elif route == "numexpr":
-        import numexpr
+        try:
+            import numexpr
+        except ImportError:
+            return {
+                "route": route,
+                "size": size,
+                "dtype": dtype,
+                "layout": layout,
+                "reduction": reduction,
+                "status": "unavailable",
+                "reason": "NumExpr is an optional external reference",
+            }
 
         numexpr.set_num_threads(1)
 

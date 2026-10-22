@@ -65,7 +65,18 @@ def worker(route, workload, dtype, size, api):
                 return (x + y) * (x - y)
             return np.where(x > 0, y / x, x * 2 + y)
     else:
-        import numexpr
+        try:
+            import numexpr
+        except ImportError:
+            return {
+                "route": route,
+                "workload": workload,
+                "dtype": dtype,
+                "size": size,
+                "api": api,
+                "status": "unavailable",
+                "reason": "NumExpr is an optional external reference",
+            }
 
         numexpr.set_num_threads(1)
 

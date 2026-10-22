@@ -65,12 +65,23 @@ destination writes.
 * ``optimization`` accepts ``none``, ``moderate`` and ``aggressive`` as compatibility
   hints. Neither native execution nor the NumPy fallback reproduces NumExpr's
   algebraic rewrites; NumPy-style numerical semantics remain authoritative.
-* ``truediv`` accepts booleans or ``"auto"``; ordinary division retains Python 3 /
-  NumPy semantics. Use ``//`` to request floor division explicitly.
-* ``sanitize`` accepts a boolean or ``None``. ``True`` validates the approved
-  expression grammar; ``False`` never disables safe-mode validation.
-* ``disable_cache=True`` bypasses evaluate recipe reuse and native chunk
-  preparation. It does not flush shared parser caches or global native caches.
+
+``truediv``, ``sanitize`` and ``disable_cache`` are no longer accepted, including
+by prepared evaluators. Division follows NumPy semantics (use ``//`` for floor
+division), validation follows the safe/full expression policy, and preparation
+caches are managed automatically.
+
+``evaluate()`` defaults to native interpretation, as do ``prepare_evaluate()``
+and ``re_evaluate()``. This does not change the JIT defaults of other Menudet
+APIs. Explicit global/context JIT settings and the ``ME_DSL_JIT`` environment
+override retain their existing precedence. To opt in for repeated computations::
+
+    with blosc2.jit_options(jit=True):
+        result = blosc2.evaluate("x + y * 2", local_dict={"x": x, "y": y})
+
+Set ``jit_backend="cc"`` in that context to request the system compiler instead
+of TCC. JIT remains best effort. Accelerate remains an explicit opt-in; the
+``optimization`` hint does not select it or relax numerical guarantees.
 
 Overlapping NumPy inputs are snapshotted before writing an explicit output;
 this may require temporary memory proportional to the overlapping operands.
@@ -79,6 +90,26 @@ explicit identity. Native output descriptors support validated Fortran, transpos
 stepped and reversed destinations with bounded scratch. Unsupported operations
 retain explicit NumPy fallbacks. NumExpr is not a runtime dependency;
 ``blosc2.numexpr`` remains a compatibility placeholder equal to ``None``.
+
+NumExpr migration
+-----------------
+
+Installing NumExpr does not enable another Blosc2 backend, and
+``NUMEXPR_NUM_THREADS`` / ``NUMEXPR_MAX_THREADS`` do not configure Blosc2 workers.
+Use ``blosc2.set_nthreads()`` and :ref:`JITOptions` for native execution policy.
+``jit=False`` requests native interpretation where supported, not NumExpr.
+Optional benchmark scripts may still use NumExpr as an independent reference.
+
+The legacy internal ``ne_evaluate`` spelling delegates to the backend-neutral
+chunk evaluator; it neither imports nor invokes NumExpr. Native preparation can
+decline an unsupported signature to explicit NumPy semantics. An error after
+native execution starts propagates instead of replaying the operation through
+another backend, including for compression prefilters and scalar reductions.
+
+NumPy fallbacks may create expression intermediates. Compressed/mixed inputs
+remain tile-local where the operation permits it; inherently global operations
+retain their documented materialization requirements. Interpreter performance
+is workload-dependent and is not claimed to match NumExpr universally.
 
 Decorators
 ----------

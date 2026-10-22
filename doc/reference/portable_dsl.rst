@@ -423,8 +423,9 @@ adapts syntax, explicit captures and storage owners; miniexpr owns numerical
 validation, type inference, broadcasting, reduction planning and execution.
 Python does not generate DSL/export twice or plan broadcasting on this route.
 Plans cache signatures/captures, never
-operand results. NumExpr is not needed for this subset, but its packaging dependency
-has not been relaxed. Explicit backend/accuracy policies retain existing dispatch
+operand results. NumExpr is not a runtime or installation dependency. Native
+interpretation remains available without JIT; unsupported operations use explicit
+NumPy fallbacks. Explicit backend/accuracy policies retain existing dispatch
 in automatic mode. In strict native-required mode, nested lazy/proxy/table
 operands, row filtering/ordering, output aliases, reduction partial reads and
 acceleration overrides reject. Basic elementwise slicing is supported.
