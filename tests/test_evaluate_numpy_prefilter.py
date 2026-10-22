@@ -1,7 +1,5 @@
 """NumPy output uses bounded prefilter scratch rather than a full stored result."""
 
-import sys
-
 import numpy as np
 import pytest
 
@@ -16,9 +14,9 @@ from conftest import orthogonal_cases
     ),
 )
 def test_numpy_prefilter_output(dtype, mode, monkeypatch):
-    if dtype == "complex128" and (blosc2.IS_WASM or sys.platform == "win32"):
-        pytest.skip("Complex prefilter execution is unavailable on this platform")
     values = np.arange(257, dtype=np.float64).astype(dtype)
+    if dtype == "complex128":
+        values += 1j * (values.real + 1)
     inputs = {
         "x": blosc2.asarray(values, chunks=(128,), blocks=(32,)),
         "y": blosc2.asarray(values + 1, chunks=(128,), blocks=(32,)),
@@ -65,6 +63,21 @@ def test_numpy_prefilter_output(dtype, mode, monkeypatch):
     else:
         assert np.shares_memory(result, buffers[0])
     assert calls[0][2] == 128 * np.dtype(dtype).itemsize + blosc2.MAX_OVERHEAD
+
+
+def test_complex_expression_reduction_uses_miniexpr(monkeypatch):
+    import importlib
+
+    module = importlib.import_module("blosc2.lazyexpr")
+    values = np.arange(257, dtype=np.float64) + 1j * np.arange(257, dtype=np.float64)[::-1]
+    x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
+    expression = blosc2.lazyexpr("x * 2", {"x": x})
+
+    def no_fallback(*args, **kwargs):
+        pytest.fail("Complex expression reduction must use miniexpr")
+
+    monkeypatch.setattr(module, "_get_result", no_fallback)
+    np.testing.assert_allclose(expression.sum(), (values * 2).sum())
 
 
 def test_numpy_prefilter_non_aligned_blocks_fall_back():

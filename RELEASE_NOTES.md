@@ -6,6 +6,12 @@
 
 **Menudet — a little language for portable computation on arrays and tables.**
 
+- Enable complex64/complex128 miniexpr expressions and Menudet interpretation
+  on Windows (clang-cl), and remove the remaining WebAssembly complex expression
+  and reduction exclusions. Complex Menudet kernels remain interpreter-only.
+- C-order `arange` with real bounds and complex output, and complex `linspace`,
+  now use Menudet interpretation, including `lazy=True`. Complex `linspace`
+  preserves the requested endpoint across slicing and rechunking.
 - Menudet source pragmas now select math libraries and floating-point modes:
   `me:math=auto|system|sleef|accelerate`, `me:ulp=u10|u35`, and
   `me:fp=strict|contract|fast` (with `me:compiler=cc`). Exported artifacts

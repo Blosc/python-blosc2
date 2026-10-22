@@ -6175,9 +6175,11 @@ def ones(
     return full(shape, 1, dtype, **kwargs)
 
 
-def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
+def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endpoint_stop=None):
     """Build an input-free Menudet ramp and bind it to a logical shape."""
-    if blosc2.IS_WASM:
+    # Complex kernels have no JIT backend; use portable interpretation even
+    # when the caller requests JIT, as for the existing WASM ramp path.
+    if blosc2.IS_WASM or dtype.kind == "c":
         execution = {**execution, "jit": False, "jit_backend": None}
 
     if (
@@ -6187,6 +6189,9 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
     ):
         start = int(start)
         step = int(step)
+    elif dtype.kind == "c":
+        start = complex(start)
+        step = complex(step)
     else:
         start = float(start)
         step = float(step)
@@ -6200,10 +6205,22 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
             "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
         )
 
+    constants = {"start": start, "step": step}
+    if endpoint_stop is not None:
+        # Avoid accumulated rounding at the endpoint, also for partial reads
+        # and rechunked materialization of a complex lazy linspace.
+        ramp = blosc2.DSLKernel.from_source(
+            "def ramp(start, step, stop, last):\n"
+            "    if _flat_idx == last:\n"
+            "        return stop\n"
+            "    return start + _flat_idx * step\n"
+        )
+        constants.update(stop=complex(endpoint_stop), last=math.prod(shape) - 1)
+
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
         ramp.dsl_source = f"# me:compiler={backend}\n" + ramp.dsl_source
-    artifact = ramp.export({}, dtype, constants={"start": start, "step": step}, ndim=len(shape))
+    artifact = ramp.export({}, dtype, constants=constants, ndim=len(shape))
     jit_option = execution.get("jit")
     jit_mode = math.prod(shape) >= 4_000_000 if jit_option is None else bool(jit_option)
     kernel = blosc2.PortableKernel.from_json(artifact, jit=jit_mode)
@@ -6212,7 +6229,13 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None):
 
 def _menudet_ramp_supported(dtype, execution):
     """Return whether portable ramp semantics/options match this constructor call."""
-    if dtype not in (np.dtype(np.int64), np.dtype(np.float32), np.dtype(np.float64)):
+    if dtype not in (
+        np.dtype(np.int64),
+        np.dtype(np.float32),
+        np.dtype(np.float64),
+        np.dtype(np.complex64),
+        np.dtype(np.complex128),
+    ):
         return False
     if execution.get("jit_backend") == "js":
         return False
@@ -6223,7 +6246,7 @@ def _menudet_ramp_supported(dtype, execution):
     return execution.get("fp_accuracy", blosc2.FPAccuracy.DEFAULT) == blosc2.FPAccuracy.DEFAULT
 
 
-def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs):
+def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs, *, endpoint_stop=None):
     """Evaluate a Menudet ramp and materialize it into Blosc2 storage."""
     storage_kwargs = {key: value for key, value in kwargs.items() if key not in execution}
     output = blosc2.empty(shape, dtype=dtype, **storage_kwargs)
@@ -6234,6 +6257,7 @@ def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs):
         shape,
         execution=execution,
         partitions=output.chunks,
+        endpoint_stop=endpoint_stop,
     )
     if blosc2.blosc2_ext.portable_prefilter_inputs_eligible({}, output=output):
         kernel_lazy.kernel._handle.evaluate_prefilter({}, out=output)
@@ -6288,7 +6312,8 @@ def arange(  # noqa: C901
     lazy: bool
         If True, return a deferred Menudet-backed :ref:`LazyArray` instead of
         materializing it. Storage options are supplied later to ``compute()``.
-        The lazy route supports int64, float32 and float64, and requires C order.
+        The lazy route supports int64, float32/64 and complex64/128, and requires
+        C order. Complex output requires real bounds and steps and is interpreter-only.
 
     Other Parameters
     ----------------
@@ -6371,10 +6396,10 @@ def arange(  # noqa: C901
             raise NotImplementedError("lazy=True currently requires C-order arange traversal")
         if is_inside_new_expr():
             raise ValueError("lazy=True cannot be used while building another lazy expression")
-        if blosc2.isdtype(dtype, "complex floating"):
-            raise NotImplementedError("lazy=True is not supported for complex arange")
         if not _menudet_ramp_supported(dtype, execution):
-            raise NotImplementedError("lazy=True requires an int64, float32, or float64 Menudet ramp")
+            raise NotImplementedError(
+                "lazy=True requires an int64, float32, or float64 Menudet ramp, or complex64/128"
+            )
         return _menudet_ramp(start, step, dtype, tuple(shape), execution=execution)
 
     if is_inside_new_expr() or NUM == 0:
@@ -6399,7 +6424,7 @@ def arange(  # noqa: C901
         else:
             return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
 
-    # Windows and wasm32 does not support complex numbers in DSL
+    # Retain the legacy path for insertion order or unsupported execution options.
     if blosc2.isdtype(dtype, "complex floating"):
         lshape = (math.prod(shape),)
         lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
@@ -6456,7 +6481,8 @@ def linspace(  # noqa: C901
     lazy: bool
         If True, return a deferred Menudet-backed :ref:`LazyArray` instead of
         materializing it. Storage options are supplied later to ``compute()``.
-        The lazy route supports int64, float32 and float64, and requires C order.
+        The lazy route supports float32/64 and complex64/128, and requires C order.
+        Complex ramps are interpreter-only, even when JIT is requested.
     **kwargs: Any
         Storage arguments accepted by :func:`empty`, plus the execution options below.
 
@@ -6527,7 +6553,11 @@ def linspace(  # noqa: C901
         raise TypeError("lazy must be a bool")
 
     nitems = num - 1 if endpoint else num
-    step = (float(stop) - float(start)) / float(nitems) if nitems > 0 and dtype.kind != "c" else 0.0
+    if dtype.kind == "c":
+        step = (complex(stop) - complex(start)) / nitems if nitems > 0 else 0j
+    else:
+        step = (float(stop) - float(start)) / float(nitems) if nitems > 0 else 0.0
+    endpoint_stop = stop if dtype.kind == "c" and endpoint and num > 1 else None
 
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(kwargs))
@@ -6539,13 +6569,13 @@ def linspace(  # noqa: C901
             raise NotImplementedError("lazy=True currently requires C-order linspace traversal")
         if is_inside_new_expr():
             raise ValueError("lazy=True cannot be used while building another lazy expression")
-        if blosc2.isdtype(dtype, "complex floating"):
-            raise NotImplementedError("lazy=True is not supported for complex linspace")
-        if dtype not in (np.dtype(np.float32), np.dtype(np.float64)) or not _menudet_ramp_supported(
-            dtype, execution
-        ):
-            raise NotImplementedError("lazy=True requires a float32 or float64 Menudet ramp for linspace")
-        return _menudet_ramp(start, step, dtype, tuple(shape), execution=execution)
+        if dtype.kind not in "fc" or not _menudet_ramp_supported(dtype, execution):
+            raise NotImplementedError(
+                "lazy=True requires a float32/64 or complex64/128 Menudet ramp for linspace"
+            )
+        return _menudet_ramp(
+            start, step, dtype, tuple(shape), execution=execution, endpoint_stop=endpoint_stop
+        )
 
     if is_inside_new_expr() or num == 0:
         # We already have the dtype and shape, so return immediately
@@ -6556,9 +6586,11 @@ def linspace(  # noqa: C901
     if execution["jit"] is None:
         execution["jit"] = num >= 4_000_000
     if c_order and _menudet_ramp_supported(dtype, execution):
-        return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
+        return _compute_menudet_ramp(
+            start, step, dtype, tuple(shape), execution, kwargs, endpoint_stop=endpoint_stop
+        )
 
-    # Windows and wasm32 does not support complex numbers in DSL
+    # Retain the legacy path for insertion order or unsupported execution options.
     if blosc2.isdtype(dtype, "complex floating"):
         inputs = (start, stop, num, endpoint)
         lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))

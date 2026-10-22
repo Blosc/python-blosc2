@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -217,10 +216,7 @@ def test_portable_profile_signature_and_version(portable_validator):
         portable_validator(source, inputs, "float64", language_version="0.1")["status"]
         == "unsupported_version"
     )
-    if sys.platform == "win32":
-        assert portable_validator(source, inputs, "complex128")["status"] == "unsupported_feature"
-    else:
-        assert portable_validator(source, inputs, "complex128")["status"] == "success"
+    assert portable_validator(source, inputs, "complex128")["status"] == "success"
 
 
 def test_portable_profile_never_executes_or_compiles_jit(portable_validator, monkeypatch, tmp_path):

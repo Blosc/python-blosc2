@@ -117,7 +117,6 @@ def test_portable_loader_options(forbid_legacy, tmp_path, capfd):
     assert not blosc2.get_jit_options()["trace"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
 @pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 def test_complex_kernels_use_menudet(forbid_legacy, dtype):
     z = np.array([1 + 2j, 3 - 4j, -2 + 0.5j, 0 + 0j], dtype=dtype)
@@ -141,7 +140,6 @@ def test_complex_kernels_use_menudet(forbid_legacy, dtype):
     np.testing.assert_allclose(result[:], expected, rtol=1e-6)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
 def test_complex_real_results_constants_and_reductions(forbid_legacy):
     z = np.array([1 + 2j, 3 - 4j, -2 + 0.5j, 0 + 0j], dtype=np.complex128)
     real = blosc2.lazyudf(
@@ -167,7 +165,6 @@ def test_complex_real_results_constants_and_reductions(forbid_legacy):
     np.testing.assert_allclose(summed[()], [z.sum()])
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
 @pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 @pytest.mark.parametrize("compressed", [False, True])
 @pytest.mark.parametrize("operation", ["real", "conj"])
@@ -186,7 +183,6 @@ def test_complex_callback_identity(forbid_legacy, dtype, compressed, operation):
     assert lazy._native_execution_report["route"] == "menudet-lazyudf"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
 def test_complex_comparisons_and_where(forbid_legacy):
     z = np.array([1 + 2j, 3 - 4j, -2 + 0.5j, 0 + 0j])
     comparisons = blosc2.lazyudf(

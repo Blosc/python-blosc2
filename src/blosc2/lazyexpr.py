@@ -1955,16 +1955,14 @@ def fast_eval(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands_miniexpr.values()
         )
-        if isinstance(expr_string_miniexpr, str) and has_complex:
-            if sys.platform == "win32" or blosc2.IS_WASM:
-                # On Windows and WebAssembly, miniexpr has issues with complex numbers
-                use_miniexpr = False
-                if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "complex DSL kernels are disabled on Windows and WebAssembly."
-            if any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">")):
-                use_miniexpr = False
-                if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "complex comparisons are not supported by miniexpr."
+        if (
+            isinstance(expr_string_miniexpr, str)
+            and has_complex
+            and any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">"))
+        ):
+            use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = "complex comparisons are not supported by miniexpr."
 
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
@@ -2964,9 +2962,6 @@ def reduce_slices(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
         )
-        if has_complex and (sys.platform == "win32" or blosc2.IS_WASM):
-            # On Windows and WebAssembly, miniexpr has issues with complex numbers
-            use_miniexpr = False
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
         if where is not None and len(where) != 2:

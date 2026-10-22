@@ -4,7 +4,6 @@ import importlib.util
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -79,7 +78,6 @@ def test_inventory_unsupported_dtypes(dtype):
         blosc2.DSLKernel.from_source("def k(x):\n    return x\n").export({"x": dtype}, dtype)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Complex Menudet is unsupported on Windows")
 @pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 def test_inventory_complex_dtypes(dtype):
     values = np.array([1 + 2j, -3 + 0.5j, 0 + 0j], dtype=dtype)
