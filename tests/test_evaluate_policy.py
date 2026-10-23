@@ -16,6 +16,7 @@ def policy_probe(monkeypatch, native_graph_runtime):
     previous = blosc2.set_jit_options(jit=None, jit_backend=None)
     native = importlib.import_module("blosc2.native_graph")
     original = native.prepare_native_first
+    original_resident = native.prepare_resident
     requests = []
 
     def prepare(*args, **kwargs):
@@ -25,7 +26,16 @@ def policy_probe(monkeypatch, native_graph_runtime):
             assert not result[0].has_jit
         return result
 
+    def resident(*args, **kwargs):
+        result = original_resident(*args, **kwargs)
+        if result is not None:
+            requests.append(kwargs["jit"])
+            if kwargs["jit"] is False:
+                assert not result[1].has_jit
+        return result
+
     monkeypatch.setattr(native, "prepare_native_first", prepare)
+    monkeypatch.setattr(native, "prepare_resident", resident)
     try:
         yield requests
     finally:

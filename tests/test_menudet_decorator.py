@@ -49,7 +49,8 @@ def test_specialization_cache_and_mutation(native_graph_runtime):
 @pytest.mark.parametrize(
     ("dtype", "jit", "annotate", "imports"),
     [
-        ("float64", None, False, 2),
+        ("float64", None, False, 1),
+        ("float64", True, False, 1),
         ("float64", False, False, 1),
         ("int32", False, False, 2),
         ("float64", None, True, 1),
@@ -208,13 +209,19 @@ def test_binding_defaults_and_scalars(native_graph_runtime):
         inferred(1, 2)
 
 
-def test_capture_snapshot(native_graph_runtime):
+def test_capture_snapshot(native_graph_runtime, monkeypatch):
+    import blosc2.portable_kernel as portable
+
     scale = 2
 
     @blosc2.menudet(jit=False)
     def k(x):
         return x * scale
 
+    def forbidden(*args, **kwargs):
+        pytest.fail("Specialization repeated fixed-source capture analysis")
+
+    monkeypatch.setattr(portable, "capture_analysis", forbidden)
     scale = 7
     for dtype in ("float32", "float64"):
         x = np.arange(4).astype(dtype)

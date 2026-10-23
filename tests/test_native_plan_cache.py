@@ -16,11 +16,25 @@ def _plan_cache():
     return native_graph._native_plan_cache
 
 
+def _compute_plan(expression, inputs, out=None):
+    """Exercise the graph adapter; evaluate can use the separate resident schedule cache."""
+    expr = blosc2.lazyexpr(expression, inputs)
+    options = {"_getitem": True}
+    if out is not None:
+        options["out"] = out
+    prepared = native_graph.prepare_native_first(expr, (), jit=False, options=options)
+    if prepared is None:
+        return None
+    return native_graph.compute_native_graph(
+        expr, prepared=prepared, jit=False, parallel_reductions=True, **options
+    )
+
+
 def test_plan_cache_rebinds_same_signature(native_graph_runtime):
     native_graph._native_plan_cache.clear()
     x = np.arange(1000, dtype="float64")
     out = np.empty_like(x)
-    blosc2.evaluate("x * 2 + 1", local_dict={"x": x}, out=out)
+    assert _compute_plan("x * 2 + 1", {"x": x}, out=out) is out
     np.testing.assert_array_equal(out, x * 2 + 1)
     assert len(_plan_cache()) == 1
     plan, names, reduction = next(iter(_plan_cache().values()))
@@ -28,7 +42,7 @@ def test_plan_cache_rebinds_same_signature(native_graph_runtime):
     assert not reduction
 
     y = x + 7
-    blosc2.evaluate("x * 2 + 1", local_dict={"x": y}, out=out)
+    assert _compute_plan("x * 2 + 1", {"x": y}, out=out) is out
     np.testing.assert_array_equal(out, y * 2 + 1)
     assert len(_plan_cache()) == 1
     assert next(iter(_plan_cache().values()))[0] is plan
@@ -41,7 +55,7 @@ def test_plan_cache_key_changes_with_dtype_and_shape(native_graph_runtime):
         np.arange(12, dtype="float32"),
         np.arange(13, dtype="float64"),
     ):
-        blosc2.evaluate("x + 1", local_dict={"x": value})
+        np.testing.assert_array_equal(_compute_plan("x + 1", {"x": value}), value + 1)
     assert len(_plan_cache()) == 3
 
 
@@ -49,7 +63,7 @@ def test_plan_cache_does_not_retain_operands(native_graph_runtime):
     native_graph._native_plan_cache.clear()
     x = np.arange(32, dtype="float64")
     reference = weakref.ref(x)
-    blosc2.evaluate("x + 1", local_dict={"x": x})
+    _compute_plan("x + 1", {"x": x})
     del x
     gc.collect()
     assert reference() is None
@@ -59,8 +73,9 @@ def test_plan_cache_does_not_retain_operands(native_graph_runtime):
 def test_cached_plan_rejects_aliased_output(native_graph_runtime):
     native_graph._native_plan_cache.clear()
     x = np.arange(32, dtype="float64")
-    blosc2.evaluate("x + 1", local_dict={"x": x})
+    _compute_plan("x + 1", {"x": x})
     assert len(_plan_cache()) == 1
+    assert _compute_plan("x + 1", {"x": x}, out=x) is None
     expected = x + 1
     blosc2.evaluate("x + 1", local_dict={"x": x}, out=x)
     np.testing.assert_array_equal(x, expected)
@@ -91,7 +106,7 @@ def test_cache_eviction_is_bounded(monkeypatch, native_graph_runtime):
     x = np.arange(32.0)
     inserted = []
     for constant in range(4):
-        np.testing.assert_array_equal(blosc2.evaluate(f"x + {constant}", local_dict={"x": x}), x + constant)
+        np.testing.assert_array_equal(_compute_plan(f"x + {constant}", {"x": x}), x + constant)
         assert len(_plan_cache()) <= 2
         inserted.append(next(reversed(_plan_cache())))
     assert list(_plan_cache()) == inserted[-2:]
@@ -102,7 +117,7 @@ def test_cached_plan_rebinds_strided_inputs_and_outputs(native_graph_runtime):
     base = np.arange(64.0)
     for x in (base[:32].copy(), base[::2], base[:32][::-1]):
         out = np.empty_like(x)[::-1]
-        assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=out) is out
+        assert _compute_plan("x + 1", {"x": x}, out=out) is out
         np.testing.assert_array_equal(out, x + 1)
     assert len(_plan_cache()) == 1
 
@@ -110,15 +125,14 @@ def test_cached_plan_rebinds_strided_inputs_and_outputs(native_graph_runtime):
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Host thread pools unavailable on WASM")
 def test_cached_plan_concurrent_bindings(native_graph_runtime):
     native_graph._native_plan_cache.clear()
-    blosc2.evaluate("x + 1", local_dict={"x": np.arange(4096.0)})
+    _compute_plan("x + 1", {"x": np.arange(4096.0)})
 
     def run(value):
         x = np.full(4096, value, dtype="float64")
         out = np.empty_like(x)
-        assert blosc2.evaluate("x + 1", local_dict={"x": x}, out=out) is out
+        assert _compute_plan("x + 1", {"x": x}, out=out) is out
         np.testing.assert_array_equal(out, value + 1)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(run, range(24)))
-    # Explicit output and allocating calls have separate invocation signatures.
-    assert len(_plan_cache()) <= 2
+    assert len(_plan_cache()) == 1

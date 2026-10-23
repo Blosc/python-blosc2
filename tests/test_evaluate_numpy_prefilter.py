@@ -145,28 +145,22 @@ def test_numpy_prefilter_multidimensional_output_falls_back():
     np.testing.assert_array_equal(result, values + 1)
 
 
-def test_evaluate_without_options_preserves_native_eligibility(monkeypatch):
+def test_evaluate_without_options_uses_resident_plan(monkeypatch):
     import importlib
 
     module = importlib.import_module("blosc2.lazyexpr")
     module._evaluate_recipe_cache.clear()
-    original = module.lazyexpr
-    observed = []
 
     def lazyexpr(*args, **kwargs):
-        observed.append(kwargs["ne_args"])
-        return original(*args, **kwargs)
+        pytest.fail("Resident evaluate constructed a general LazyExpr")
 
     monkeypatch.setattr(module, "lazyexpr", lazyexpr)
     values = np.arange(257, dtype=np.float64)
     np.testing.assert_array_equal(blosc2.evaluate("x + 1", local_dict={"x": values}), values + 1)
-    assert observed == [None]
     np.testing.assert_array_equal(blosc2.evaluate("x + 1", local_dict={"x": values}, order="C"), values + 1)
-    assert observed == [None]  # Allocation policy reuses the native-eligible recipe.
     np.testing.assert_array_equal(
         blosc2.evaluate("x + 1", local_dict={"x": values}, optimization="moderate"), values + 1
     )
-    assert observed == [None]  # Compatibility hints no longer select another engine.
 
 
 @pytest.mark.parametrize(("size", "chunks", "blocks"), [(100, 9, 1), (257, 128, 32)])

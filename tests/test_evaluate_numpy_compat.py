@@ -69,14 +69,16 @@ def test_explicit_c_order_retains_native_admission(monkeypatch, native_graph_run
     probe = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
     if not probe.has_jit:
         pytest.skip("Native-first dispatch requires JIT")
-    original = native.compute_native_graph
+    original = native.prepare_resident
     calls = []
 
     def record(*args, **kwargs):
-        calls.append(True)
-        return original(*args, **kwargs)
+        result = original(*args, **kwargs)
+        if result is not None:
+            calls.append(True)
+        return result
 
-    monkeypatch.setattr(native, "compute_native_graph", record)
+    monkeypatch.setattr(native, "prepare_resident", record)
     x = np.arange(24.0).reshape(2, 3, 4)
     result = blosc2.evaluate("x + 1", local_dict={"x": x}, order="C")
     np.testing.assert_array_equal(result, x + 1)

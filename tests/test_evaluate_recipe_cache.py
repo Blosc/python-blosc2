@@ -82,6 +82,17 @@ def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, native_
     np.testing.assert_array_equal(blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}), x + (y - 1))
 
 
+@pytest.mark.parametrize("names", [("x", "e3"), ("α", "β")])
+def test_numpy_rebasing_preserves_numeric_literals_and_aliases(names, native_graph_runtime):
+    x = np.arange(17.0)
+    left, right = names
+    expression = f"{left} + ({right} - 1.e+3)"
+    expr = blosc2.lazyexpr(expression, {left: x, right: x})
+    assert expr.expression == "(o0 + (o0 - 1000.0))"
+    assert tuple(expr.operands) == ("o0",)
+    np.testing.assert_array_equal(expr[:], x + (x - 1000.0))
+
+
 @pytest.mark.parametrize("engine", ["lazyexpr", "evaluate"])
 def test_numpy_preparation_shares_readonly_syntax(monkeypatch, native_graph_runtime, engine):
     import ast
@@ -163,6 +174,26 @@ def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, native_graph_r
 
     with blosc2.jit_options(jit=True):
         assert not hasattr(blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y}), "_prepared_native")
+
+
+def test_prepared_plan_without_destination_does_not_respecialize(monkeypatch, native_graph_runtime):
+    import blosc2.native_graph as native
+
+    monkeypatch.setenv("BLOSC_ME_JIT", "0")
+    x = np.arange(17.0)
+    with blosc2.jit_options(jit=None):
+        expr = blosc2.lazyexpr("x + 1", {"x": x})
+        plan = expr._prepared_native[1][0]
+        native._native_plan_cache.clear()
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("Metadata-identical plan specialized just for admission")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(plan, "specialize", forbidden)
+            prepared = native.prepare_native_first(expr, (), jit=None, options={"_getitem": True})
+        assert prepared[0] is plan
+        np.testing.assert_array_equal(expr[:], x + 1)
 
 
 def test_evaluate_cache_caller_and_explicit_namespace_resolution():
@@ -259,9 +290,10 @@ def test_evaluate_cache_does_not_retain_dtype_metadata_owners():
 def test_evaluate_recipe_has_no_mutable_execution_state():
     x = np.arange(257, dtype=np.float64)
     first = module._prepare_cached_evaluate("x + 1", {"x": x}, None)
-    first.compute(_getitem=True)
+    plan, inputs = first
+    plan[2].execute(inputs)
     second = module._prepare_cached_evaluate("x + 1", {"x": x + 10}, None)
     assert second is not first
-    assert second.operands is not first.operands
-    assert not hasattr(second, "_native_execution_report")
-    np.testing.assert_array_equal(second.compute(_getitem=True), x + 11)
+    assert second[1] is not first[1]
+    assert second[0] is first[0]
+    np.testing.assert_array_equal(second[0][2].execute(second[1])[0], x + 11)

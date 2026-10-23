@@ -156,6 +156,8 @@ def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dt
 
 def _parameterize_source(source, replacements, parameters):
     """Token edits retain comments/pragmas and never edit strings or substrings."""
+    if not replacements and not parameters:
+        return source
     tokens = list(tokenize.generate_tokens(StringIO(source).readline))
     starts = [0]
     for line in source.splitlines(keepends=True):
@@ -199,17 +201,24 @@ def _capture_scope(func):
     return scope
 
 
-def _export_captures(func, source, names, capture_dtypes, version="1.0"):
-    scope = _capture_scope(func)
+def capture_analysis(source, names):
+    """Analyze fixed author syntax without resolving or validating captures."""
     tree = ast.parse(source)
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
-    nodes = list(ast.walk(function))
+    nodes = tuple(ast.walk(function))
     local = set(names) | {
         node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
     }
     calls = {
         node.func.id for node in nodes if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
+    loads = {node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    return function, nodes, local, calls, loads
+
+
+def _export_captures(func, source, names, capture_dtypes, version="1.0", *, analysis=None):
+    scope = _capture_scope(func)
+    function, nodes, local, calls, loads = capture_analysis(source, names) if analysis is None else analysis
     # Native compilation owns builtin membership. Never export external callbacks.
     if any(isinstance(n, (ast.Attribute, ast.Subscript, ast.Lambda)) for n in nodes):
         raise PortableArtifactError("Unsupported dynamic authoring syntax", status="unsupported_requirement")
@@ -221,7 +230,6 @@ def _export_captures(func, source, names, capture_dtypes, version="1.0"):
             raise PortableArtifactError(
                 f"External callback {call!r} cannot be exported", status="unsupported_requirement"
             )
-    loads = {node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
     occupied = local | loads | {function.name}
     replacements = {}
     encoded = []
@@ -343,7 +351,14 @@ def prepare_portable_kernel(
                 )
     used = set(constants) & set(captures)
     if kernel.func is not None:
-        source, captured, extra = _export_captures(kernel.func, source, names, captures, version)
+        source, captured, extra = _export_captures(
+            kernel.func,
+            source,
+            names,
+            captures,
+            version,
+            analysis=getattr(kernel, "_capture_analysis", None),
+        )
         encoded.extend(captured)
         used |= extra
     if set(captures) - used:

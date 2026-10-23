@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.native_graph import compile_plan
 
 
 @pytest.fixture(autouse=True)
@@ -62,13 +61,13 @@ def test_blosc2_output_native_prefilter(monkeypatch, mode, dtype, explicit_grid)
     with monkeypatch.context() as patch:
         patch.setattr(blosc2.NDArray, "__getitem__", forbidden)
         first = expr.compute(**options)
-        hits = compile_plan.cache_info().hits
+        patch.setattr(blosc2.NativeGraph, "from_expression", forbidden)
+        patch.setattr(blosc2.NativeGraph, "__init__", forbidden)
         second = expr.compute(**options)
     assert first is not second
     assert first.chunks == (128,)
     assert first.blocks == (32,)
     assert first.cparams.clevel == 0
-    assert compile_plan.cache_info().hits > hits
     np.testing.assert_array_equal(first[:], expected)
     report = expr._native_execution_report
     assert report["route"] == "portable-prefilter"

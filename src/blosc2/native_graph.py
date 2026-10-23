@@ -254,6 +254,126 @@ def _native_plan_cache_key(expr, jit, options):
     )
 
 
+def _resident_signature(expression, inputs, jit):
+    import blosc2
+
+    if not inputs or any(
+        type(value) is not np.ndarray
+        or value.dtype.kind not in "biuf"
+        or value.dtype.itemsize > 8
+        or value.dtype == np.dtype("float16")
+        or not value.dtype.isnative
+        or value.dtype.metadata is not None
+        or not value.flags.c_contiguous
+        or not value.flags.aligned
+        for value in inputs.values()
+    ):
+        return None
+    first = next(iter(inputs.values()))
+    if not 0 < first.size < _MINIMUM_PARALLEL_ITEMS or any(
+        value.shape != first.shape for value in inputs.values()
+    ):
+        return None
+    configuration = _graph_configuration(jit) + tuple(blosc2.jit_config.execution_options().items())
+    return (
+        expression,
+        tuple((name, value.dtype.str) for name, value in inputs.items()),
+        first.shape,
+        jit,
+        configuration,
+    )
+
+
+def native_weak_scalars_eligible(plan, expression, inputs):
+    """Retain NumPy's preparation-time scalar range errors for checked native maps."""
+    return plan.info().get("partitionable", False) or (
+        parse_expression(expression).infer_dtype(inputs) is not None
+    )
+
+
+def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
+    """Prepare an admitted small resident map; retain metadata and native owners only."""
+    import blosc2
+
+    signature = _resident_signature(expression, inputs, jit)
+    if signature is None:
+        return None
+    if cached is not None and cached[0] == signature:
+        return cached
+    try:
+        if plan is None:
+            plan = compile_plan(
+                expression,
+                jit,
+                signature[-1],
+                input_dtypes=tuple((name, value.dtype.name) for name, value in inputs.items()),
+            )
+        # Serial whole-domain execution preserves checked conversions and mixed-type error ordering.
+        if plan.info()["stages"] != 1:
+            return None
+        schedule = plan.specialize(
+            {name: (value.dtype, value.shape) for name, value in inputs.items()}, 65536
+        )
+        info = schedule.info()
+        if info["shape"] != next(iter(inputs.values())).shape or info["dtype"].kind not in "biuf":
+            return None
+        if not native_weak_scalars_eligible(plan, expression, inputs):
+            return None
+    except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
+        return None
+    return signature, plan, schedule
+
+
+def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_accuracy=None, options=None):
+    """Bind current arrays to a prepared whole-domain map without general graph/storage dispatch."""
+    import blosc2
+
+    prepared = getattr(expr, "_resident_native", None)
+    if prepared is None or jit_backend is not None or fp_accuracy is not None:
+        return None
+    options = options or {}
+    output = options.get("out", getattr(expr, "_output", None))
+    if (
+        type(expr) is not blosc2.LazyExpr
+        or any(hasattr(expr, name) for name in ("_where_args", "_indices", "_order"))
+        or getattr(expr, "_ne_args", None) is not None
+        or options.keys() - {"_getitem", "out"}
+        or (not options.get("_getitem", False) and type(output) is not np.ndarray)
+        or ("out" in options and output is None)
+    ):
+        return None
+    selection = item if isinstance(item, tuple) else (item,)
+    if len(selection) > len(prepared[0][2]) or any(
+        not isinstance(part, slice) or part != slice(None) for part in selection
+    ):
+        return None
+    if prepared[0] != _resident_signature(expr.expression, expr.operands, jit):
+        return None
+    _, plan, schedule = prepared
+    if output is not None and (
+        type(output) is not np.ndarray
+        or not getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+        or not output.flags.c_contiguous
+        or not _native_cached_output_ok(expr, schedule, output)
+    ):
+        return None
+    # Once execution starts, errors propagate; no other route may replay a failed kernel.
+    result, report = (
+        schedule.execute(expr.operands) if output is None else schedule.execute(expr.operands, out=output)
+    )
+    expr._native_execution_report = {
+        **report,
+        "route": "native-resident",
+        "semantic_revision": "menudet-numpy-1.0",
+        "backend": "portable-jit" if report["jit_stages"] else "portable-interpreter",
+        "frontend": getattr(plan, "_frontend", "native-expression"),
+        "plan_cache": compile_plan.cache_info()._asdict(),
+        "input_materialization_bytes": 0,
+        "output_copy_bytes": 0,
+    }
+    return result
+
+
 def _native_cached_output_ok(expr, schedule, output):
     import blosc2
 
@@ -340,17 +460,19 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
                             _native_plan_cache.popitem(last=False)
             if cached is not None:
                 plan, input_names, reduction = cached
-                try:
-                    schedule = plan.specialize(
-                        {
-                            name: (expr.operands[name].dtype, expr.operands[name].shape)
-                            for name in input_names
-                        }
-                    )
-                except (ValueError, TypeError, blosc2.PortableArtifactError):
-                    return None
-                if not _native_cached_output_ok(expr, schedule, output):
-                    return None
+                # The cache key validates input metadata; only a destination needs another preflight.
+                if output is not None:
+                    try:
+                        schedule = plan.specialize(
+                            {
+                                name: (expr.operands[name].dtype, expr.operands[name].shape)
+                                for name in input_names
+                            }
+                        )
+                    except (ValueError, TypeError, blosc2.PortableArtifactError):
+                        return None
+                    if not _native_cached_output_ok(expr, schedule, output):
+                        return None
                 return plan, {name: expr.operands[name] for name in input_names}, reduction
     # Only whole-domain reads: even a full slice of a staged graph is currently
     # treated as a partial read by the strict adapter.
@@ -1132,8 +1254,20 @@ def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0, out=
 
 @lru_cache(maxsize=128)
 def _resident_map_kernel(plan):
+    from . import blosc2_ext
     from .portable_kernel import PortableArtifactError, PortableKernel
 
+    handle = getattr(plan._handle, "resident_artifact", lambda: None)()
+    if handle is not None:
+        # The borrowed handle retains the plan and its validated weak-capture semantics.
+        kernel = PortableKernel.__new__(PortableKernel)
+        kernel._handle = kernel._expression_handle = handle
+        kernel._artifact = kernel._expression_artifact = plan.map_json().encode("utf-8")
+        kernel._info = handle.info()
+        if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
+            kernel._info.update(handle.descriptor_info())
+        kernel.native_partitionable = bool(plan.info().get("partitionable", False))
+        return kernel
     artifact = plan.map_json()
     captures = {}
     specialize_captures = True
@@ -1470,7 +1604,7 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     ):
         raise ValueError("Table filtering, ordering and output aliases are not native-graph eligible")
     if not reduction_options and not root_options:
-        prepared = getattr(expr, "_prepared_native", None)
+        prepared = getattr(expr, "_prepared_native", getattr(expr, "_metadata_native", None))
         if prepared is not None and prepared[0] == _native_plan_cache_key(expr, jit, {"_getitem": True}):
             plan, names, reduction = prepared[1]
             return plan, {name: expr.operands[name] for name in names}, reduction

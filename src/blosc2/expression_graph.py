@@ -16,7 +16,7 @@ import math
 import operator
 import sys
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -1184,6 +1184,7 @@ class ExpressionGraph:
     root: tuple
     names: frozenset[str]
     text: str
+    arithmetic: bool = field(default=False, compare=False)
 
     def infer_shape(self, operands, *, prefer_blosc=True):
         """Propagate reviewed shape rules without fetching operand data."""
@@ -1305,10 +1306,19 @@ def parse_expression(text):  # noqa: C901
     if len(nodes) > 4096:
         _reject("expression exceeds 4096 AST nodes")
     names = set()
+    arithmetic = True
+    arithmetic_nodes = (ast.Constant, ast.Name, ast.BinOp, ast.UnaryOp, ast.Compare)
 
     def lower(node, depth=0):  # noqa: C901
+        nonlocal arithmetic
         if depth > 64:
             _reject("expression exceeds 64 levels", node)
+        if (
+            not isinstance(node, arithmetic_nodes)
+            or (isinstance(node, ast.Constant) and type(node.value) not in (bool, int, float))
+            or (isinstance(node, (ast.BinOp, ast.UnaryOp)) and isinstance(node.op, (ast.MatMult, ast.Not)))
+        ):
+            arithmetic = False
 
         def child(x):
             return lower(x, depth + 1)
@@ -1395,7 +1405,7 @@ def parse_expression(text):  # noqa: C901
         return _reject(f"unsupported syntax {type(node).__name__}", node)
 
     root = lower(tree.body)
-    return ExpressionGraph(root, frozenset(names), ast.unparse(tree.body))
+    return ExpressionGraph(root, frozenset(names), ast.unparse(tree.body), arithmetic)
 
 
 def validate_operand(value):  # noqa: C901

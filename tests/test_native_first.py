@@ -43,7 +43,7 @@ def test_native_first_arithmetic(dtype, safe, native_first_runtime, monkeypatch)
     np.testing.assert_array_equal(expr[:], expected)
 
 
-def test_native_first_reimports_specialized_portable_map(native_first_runtime, monkeypatch):
+def test_native_first_borrows_validated_portable_map(native_first_runtime, monkeypatch):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
     x = np.arange(300_000, dtype=np.float64)
     y = x + 1
@@ -51,10 +51,14 @@ def test_native_first_reimports_specialized_portable_map(native_first_runtime, m
     prepared = prepare_native_first(expr, (slice(None),), jit=True, options={"_getitem": True})
     assert prepared is not None
 
+    def forbidden(*args, **kwargs):
+        pytest.fail("Prepared graph map was exported and reimported")
+
+    monkeypatch.setattr(blosc2.PortableKernel, "from_json", forbidden)
     kernel = _resident_map_kernel(prepared[0])
     assert kernel.has_jit
-    assert "_me_capture_" not in kernel.source
-    assert "return o0 + (o1 - 1)" in kernel.source
+    assert kernel.to_json() == prepared[0].map_json()
+    np.testing.assert_array_equal(kernel.evaluate_block(prepared[1]), x + (y - 1))
 
     np.testing.assert_array_equal(expr[:], x + (y - 1))
     assert expr._native_execution_report["route"] == "parallel-resident"

@@ -13,7 +13,12 @@ from types import CellType, FunctionType
 import numpy as np
 
 from .dsl_kernel import DSLKernel
-from .portable_kernel import PortableKernel, portable_dtype_descriptor, prepare_portable_kernel
+from .portable_kernel import (
+    PortableKernel,
+    capture_analysis,
+    portable_dtype_descriptor,
+    prepare_portable_kernel,
+)
 
 
 def _dtype(annotation):
@@ -86,6 +91,8 @@ class MenudetKernel:
         author.func = FunctionType(
             func.__code__, func.__globals__.copy(), func.__name__, func.__defaults__, closure
         )
+        # Source structure is fixed; capture values and native validation retain their usual timing.
+        author._capture_analysis = capture_analysis(author.dsl_source, author.input_names)
         self._author = author
         self._jit, self._require_jit = jit, require_jit
         self._partitions = tuple(partitions) if partitions is not None else None
@@ -140,16 +147,18 @@ class MenudetKernel:
                 output = self._output_dtype
                 jit = True if self._require_jit else self._jit
                 if output is None:
-                    # Infer before float64 output conversion, without JIT or operand evaluation.
+                    # Infer before final conversion; reuse this import when its output already matches.
                     if any(dtype.kind not in "biuf" for dtype in dtypes.values()):
                         raise TypeError("Nonnumeric kernels require a return dtype annotation")
-                    probe = prepare_portable_kernel(self._author, dtypes, "float64", **self._export_options)
+                    probe = prepare_portable_kernel(
+                        self._author, dtypes, "float64", jit=jit, **self._export_options
+                    )
                     if probe.inferred_dtype is None:
                         raise TypeError(
                             "Native output inference is unavailable; add a return dtype annotation"
                         )
                     output = probe.inferred_dtype
-                    # Reuse source/captures; only a changed output or policy needs another import.
+                    # Reuse source/captures; only a changed output needs another import.
                     artifact = probe.to_json()
                     if output != probe.output_dtype:
                         manifest = json.loads(artifact)
@@ -166,7 +175,7 @@ class MenudetKernel:
                         )
                     kernel = (
                         probe
-                        if jit is False and output == probe.output_dtype
+                        if output == probe.output_dtype
                         else PortableKernel.from_json(artifact, jit=jit)
                     )
                 else:

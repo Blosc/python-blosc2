@@ -4920,6 +4920,7 @@ class LazyExpr(LazyArray):
             from .native_graph import (
                 compute_native_graph,
                 compute_native_prefilter_if_eligible,
+                compute_resident_if_eligible,
                 prepare_native_first,
             )
 
@@ -4933,6 +4934,21 @@ class LazyExpr(LazyArray):
             native_accuracy = fp_accuracy
             if native_accuracy is None and policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
                 native_accuracy = policy["fp_accuracy"]
+
+            resident = (
+                compute_resident_if_eligible(
+                    self,
+                    item,
+                    jit=native_jit,
+                    jit_backend=native_backend,
+                    fp_accuracy=native_accuracy,
+                    options=kwargs,
+                )
+                if _native_tile_items == 1024
+                else None
+            )
+            if resident is not None:
+                return resident
 
             stored = compute_native_prefilter_if_eligible(
                 self,
@@ -5161,14 +5177,44 @@ class LazyExpr(LazyArray):
             )
 
             if all(
-                type(value) is np.ndarray and _native_first_operand(value) for value in operands.values()
-            ) and _native_first_syntax(expression):
-                graph = parse_expression(expression)
-                if graph.names == operands.keys():
+                type(value) in (np.ndarray, blosc2.NDArray) and _native_first_operand(value)
+                for value in operands.values()
+            ):
+                try:
+                    graph = parse_expression(expression)
+                except (exceptions.UnsafeDeserializationError, ValueError):
+                    graph = None  # Trusted expressions outside the reviewed grammar keep legacy preparation.
+                if (
+                    graph is not None
+                    and graph.names == operands.keys()
+                    and (graph.arithmetic or _native_first_syntax(expression))
+                ):
                     validate_operands(operands)
-                    renamed, bindings = conserve_functions(
-                        expression, operands, dict(operands), tree=expression_syntax(expression)[0]
-                    )
+                    tree, nodes = expression_syntax(expression)
+                    if (
+                        graph.root[0] == "binary"
+                        and all(name.isascii() for name in graph.names)
+                        and not any(isinstance(node, ast.Call) for node in nodes)
+                    ):
+                        bindings, aliases = {}, {}
+
+                        def rebase(match):
+                            name = match[0]
+                            if name not in operands:
+                                return name
+                            value = operands[name]
+                            key = aliases.get(id(value))
+                            if key is None:
+                                key = aliases[id(value)] = f"o{len(bindings)}"
+                                bindings[key] = value
+                            return key
+
+                        # Canonical numeric text has no quoted strings or attribute names to rewrite.
+                        renamed = re.sub(r"\b[A-Za-z_]\w*\b", rebase, graph.text)
+                    else:
+                        renamed, bindings = conserve_functions(
+                            expression, operands, dict(operands), tree=tree
+                        )
                     result = cls(None)
                     result.expression = f"({renamed})"
                     result.operands = bindings
@@ -5179,33 +5225,47 @@ class LazyExpr(LazyArray):
                     policy = blosc2.jit_config.execution_options()
                     native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
                     if (
-                        native_jit is None
+                        native_jit is not True
                         and native_backend is None
                         and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
-                        and graph.root[0] == "binary"
+                        and graph.root[0] in {"binary", "unary", "compare"}
                         and not re.search(r"\bcopy\s*\(", expression)
-                        and all(value.dtype == np.dtype("float64") for value in operands.values())
                     ):
                         try:
                             from .graph_plan import NativeGraph
+                            from .native_graph import native_weak_scalars_eligible, prepare_resident
 
                             # The reviewed arithmetic subset can get metadata from its execution plan.
+                            inputs = result.operands
                             plan = NativeGraph.from_expression(
                                 result.expression,
-                                {name: value.dtype.name for name, value in result.operands.items()},
+                                {name: value.dtype.name for name, value in inputs.items()},
                                 jit=native_jit,
                             )
                             plan._frontend = "native-expression"
-                            inputs = result.operands
-                            schedule = plan.specialize(
-                                {name: (value.dtype, value.shape) for name, value in inputs.items()}
-                            )
+                            resident = prepare_resident(result.expression, inputs, jit=native_jit, plan=plan)
+                            if resident is not None:
+                                result._resident_native = resident
+                                _, plan, schedule = resident
+                            else:
+                                if not native_weak_scalars_eligible(plan, result.expression, inputs):
+                                    raise NotImplementedError(
+                                        "Checked scalar metadata requires legacy preparation"
+                                    )
+                                schedule = plan.specialize(
+                                    {name: (value.dtype, value.shape) for name, value in inputs.items()}
+                                )
                             info = schedule.info()
-                            if plan.info()["stages"] == 1 and info["dtype"] == np.dtype("float64"):
+                            if plan.info()["stages"] == 1 and info["dtype"].kind in "biuf":
                                 result._dtype = info["dtype"]
                                 result._shape = info["shape"]
                                 key = _native_plan_cache_key(result, native_jit, {"_getitem": True})
-                                result._prepared_native = (key, (plan, tuple(inputs), False))
+                                prepared = (key, (plan, tuple(inputs), False))
+                                if all(type(value) is np.ndarray for value in inputs.values()):
+                                    result._prepared_native = prepared
+                                else:
+                                    # Compressed inputs must still pass execution/layout admission before reuse.
+                                    result._metadata_native = prepared
                                 return result
                         except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
                             pass
@@ -6175,7 +6235,7 @@ def open_lazyarray(array):
 # NumExpr-style convenience interface with backend-independent contracts.
 @dataclass(frozen=True, slots=True)
 class _EvaluateRecipe:
-    """Operand-free construction metadata; each invocation owns a new LazyExpr."""
+    """Operand-free construction metadata and optional immutable resident schedule."""
 
     expression: str
     bindings: tuple
@@ -6183,6 +6243,7 @@ class _EvaluateRecipe:
     shape: tuple
     chunks: tuple | None
     blocks: tuple | None
+    resident: tuple | None = None
 
 
 _evaluate_recipe_cache = OrderedDict()
@@ -6197,6 +6258,8 @@ def _evaluate_recipe_names(expression):
         return None
     try:
         graph = parse_expression(expression)
+        if graph.arithmetic:
+            return tuple(sorted(graph.names)) or None
         tree, nodes = expression_syntax(expression)
     except (exceptions.UnsafeDeserializationError, ValueError, SyntaxError):
         return None
@@ -6289,7 +6352,38 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
         recipe = _evaluate_recipe_cache.get(key)
         if recipe is not None:
             _evaluate_recipe_cache.move_to_end(key)
-    if recipe is None:
+    from .native_graph import prepare_resident
+
+    policy = blosc2.jit_config.execution_options()
+    native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
+    resident = (
+        prepare_resident(
+            expression,
+            inputs,
+            jit=native_jit,
+            cached=recipe.resident if recipe is not None else None,
+        )
+        if native_backend is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+        else None
+    )
+    if resident is not None and (recipe is None or resident is not recipe.resident):
+        # Division, comparisons and mixed inputs can produce a different dtype from every operand.
+        info = resident[2].info()
+        recipe = _EvaluateRecipe(
+            expression,
+            tuple((name, name) for name in inputs),
+            info["dtype"],
+            info["shape"],
+            None,
+            None,
+            resident,
+        )
+        with _evaluate_recipe_lock:
+            _evaluate_recipe_cache[key] = recipe
+            _evaluate_recipe_cache.move_to_end(key)
+            while len(_evaluate_recipe_cache) > _EVALUATE_RECIPE_CACHE_SIZE:
+                _evaluate_recipe_cache.popitem(last=False)
+    elif recipe is None:
         expr = lazyexpr(expression, operands=inputs, ne_args=None)
         # Match constructor-renamed bindings to original names without retaining
         # arrays in either the cache key or recipe. Aliased inputs were excluded.
@@ -6310,6 +6404,8 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
             while len(_evaluate_recipe_cache) > _EVALUATE_RECIPE_CACHE_SIZE:
                 _evaluate_recipe_cache.popitem(last=False)
         return expr
+    if resident is not None:
+        return resident, inputs
     expr = LazyExpr(None)
     expr.expression = recipe.expression
     expr.operands = {name: inputs[source] for name, source in recipe.bindings}
@@ -6397,6 +6493,9 @@ def evaluate(
     a fresh NumPy output is allocated. Neither operand/output arrays nor numerical
     results are retained in the cache.
 
+    Small aligned C-contiguous native numeric maps with matching operand shapes bind
+    directly to immutable native schedules, avoiding general lazy/storage dispatch.
+
     Eligible numeric arithmetic and elementwise math calls use the native
     Menudet kernels, including explicit NumPy or Blosc2 destinations. Compressed
     destinations retain bounded input tiles; matching floating storage grids use
@@ -6471,6 +6570,22 @@ def evaluate(
     order = kwargs.pop("order", "K")
     order = order.upper()
     lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
+    if isinstance(lexpr, tuple):
+        resident, inputs = lexpr
+        if out is None and order in {"C", "A", "K"}:
+            # Admission and policy were resolved for these current arrays; execution never falls back.
+            return resident[2].execute(inputs)[0]
+        # Layout/casting/storage requests retain the public output preflight and the same native plan.
+        lexpr = LazyExpr(None)
+        lexpr.expression = ex
+        lexpr.operands = inputs
+        lexpr.expression_tosave, lexpr.operands_tosave = ex, dict(inputs)
+        info = resident[2].info()
+        lexpr._dtype, lexpr._shape = info["dtype"], info["shape"]
+        lexpr._ne_args, lexpr._evaluation = None, evaluation_mode()
+        lexpr._resident_native = resident
+        if lexpr._evaluation == "safe":
+            record_expression_metadata(lexpr)
     if lexpr is None:
         lexpr = lazyexpr(
             ex,
