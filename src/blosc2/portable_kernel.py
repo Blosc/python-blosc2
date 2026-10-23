@@ -297,7 +297,12 @@ def _artifact_semantics(source, version, casting):
     return semantics, requires
 
 
-def export_portable_kernel(
+def export_portable_kernel(kernel, input_dtypes, output_dtype, **options):
+    """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
+    return prepare_portable_kernel(kernel, input_dtypes, output_dtype, **options).to_json()
+
+
+def prepare_portable_kernel(
     kernel,
     input_dtypes,
     output_dtype,
@@ -309,8 +314,9 @@ def export_portable_kernel(
     casting="unsafe",
     cardinality="elementwise",
     ndim=0,
+    jit=False,
 ):
-    """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
+    """Build and import once, retaining native validation for export and specialization."""
     if version != "1.0":
         raise PortableArtifactError("Unsupported artifact version", status="unsupported_version")
     if casting not in {"safe", "same_kind", "unsafe"}:
@@ -368,8 +374,7 @@ def export_portable_kernel(
         json.dumps(manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         + "\n"
     )
-    PortableKernel.from_json(artifact, jit=False)
-    return artifact
+    return PortableKernel.from_json(artifact, jit=jit)
 
 
 class PortableKernel:

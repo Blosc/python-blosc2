@@ -46,6 +46,54 @@ def test_specialization_cache_and_mutation(native_graph_runtime):
     assert isinstance(kernel, blosc2.PortableKernel)
 
 
+@pytest.mark.parametrize(
+    ("dtype", "jit", "annotate", "imports"),
+    [
+        ("float64", None, False, 2),
+        ("float64", False, False, 1),
+        ("int32", False, False, 2),
+        ("float64", None, True, 1),
+        ("float64", True, True, 1),
+    ],
+)
+def test_specialization_reuses_validated_export(
+    native_graph_runtime, monkeypatch, dtype, jit, annotate, imports
+):
+    import blosc2.portable_kernel as portable
+
+    offset = 2
+
+    def function(x):
+        return x + offset
+
+    if annotate:
+        function.__annotations__["return"] = np.float64
+    author = blosc2.menudet(jit=jit)(function)
+    original_captures = portable._export_captures
+    original_import = blosc2.PortableKernel.from_json
+    captures, policies = [], []
+
+    def record_captures(*args, **kwargs):
+        captures.append(None)
+        return original_captures(*args, **kwargs)
+
+    def record_import(cls, artifact, *, jit=None):
+        policies.append(jit)
+        return original_import(artifact, jit=jit)
+
+    monkeypatch.setattr(portable, "_export_captures", record_captures)
+    monkeypatch.setattr(blosc2.PortableKernel, "from_json", classmethod(record_import))
+    x = np.arange(4, dtype=dtype)
+    kernel = author.specialize(x)
+    np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), x + offset)
+    assert kernel.output_dtype == x.dtype
+    assert len(captures) == 1
+    assert len(policies) == imports
+    assert policies[-1] is jit
+    assert kernel is author.specialize(x)
+    assert len(policies) == imports
+
+
 def test_interpretation_and_python_never_called(native_graph_runtime, monkeypatch):
     @blosc2.menudet(jit=False)
     def k(x: np.float64) -> np.float64:

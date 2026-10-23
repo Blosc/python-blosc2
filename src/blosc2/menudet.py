@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import functools
 import inspect
+import json
 import os
 from threading import RLock
 from types import CellType, FunctionType
@@ -12,7 +13,7 @@ from types import CellType, FunctionType
 import numpy as np
 
 from .dsl_kernel import DSLKernel
-from .portable_kernel import PortableKernel, portable_dtype_descriptor
+from .portable_kernel import PortableKernel, portable_dtype_descriptor, prepare_portable_kernel
 
 
 def _dtype(annotation):
@@ -137,24 +138,41 @@ class MenudetKernel:
         with self._lock:
             if key not in self._kernels:
                 output = self._output_dtype
+                jit = True if self._require_jit else self._jit
                 if output is None:
-                    # A metadata-only numeric probe: native compilation reports
-                    # the inferred type before final float64 output conversion.
-                    # This artifact is never evaluated or exposed to callers.
+                    # Infer before float64 output conversion, without JIT or operand evaluation.
                     if any(dtype.kind not in "biuf" for dtype in dtypes.values()):
                         raise TypeError("Nonnumeric kernels require a return dtype annotation")
-                    probe = PortableKernel.from_json(
-                        self._author.export(dtypes, "float64", **self._export_options), jit=False
-                    )
+                    probe = prepare_portable_kernel(self._author, dtypes, "float64", **self._export_options)
                     if probe.inferred_dtype is None:
                         raise TypeError(
                             "Native output inference is unavailable; add a return dtype annotation"
                         )
                     output = probe.inferred_dtype
-                kernel = PortableKernel.from_json(
-                    self._author.export(dtypes, output, **self._export_options),
-                    jit=True if self._require_jit else self._jit,
-                )
+                    # Reuse source/captures; only a changed output or policy needs another import.
+                    artifact = probe.to_json()
+                    if output != probe.output_dtype:
+                        manifest = json.loads(artifact)
+                        manifest["output"].update(portable_dtype_descriptor(output))
+                        artifact = (
+                            json.dumps(
+                                manifest,
+                                sort_keys=True,
+                                ensure_ascii=False,
+                                allow_nan=False,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        )
+                    kernel = (
+                        probe
+                        if jit is False and output == probe.output_dtype
+                        else PortableKernel.from_json(artifact, jit=jit)
+                    )
+                else:
+                    kernel = prepare_portable_kernel(
+                        self._author, dtypes, output, jit=jit, **self._export_options
+                    )
                 if self._require_jit and not kernel.has_jit:
                     raise RuntimeError("Required Menudet JIT is unavailable for this signature")
                 self._kernels[key] = kernel
