@@ -49,6 +49,41 @@ pre-commit install
 
 Pre-commit will now run automatically on `git commit`.
 
+### Using a dev container
+
+As an alternative to a local setup, the repository includes a
+[dev container](https://containers.dev) configuration in `.devcontainer/`.  It
+provides a Linux environment with Python 3.12 (to match the version used by the
+main CI test job), uv, and pandoc, and uses uv to install the `dev`, `test` and
+`doc` groups for you.
+
+You need Docker (or a compatible engine) and a client that supports dev
+containers, such as VS Code with the
+[Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+extension (or Cursor or a similar fork with a compatible extension), GitHub
+Codespaces, or the
+[`devcontainer` CLI](https://github.com/devcontainers/cli).  In VS Code, open the
+repository and run **Dev Containers: Reopen in Container**.  The first build
+compiles the C extension and takes a few minutes; later sessions reuse the
+container and so skip the compilation and launch faster.
+
+Things to know:
+
+- The virtual environment lives at `/home/vscode/.venv`, outside the checkout,
+  and is on `PATH`, so `pytest`, `python -m sphinx`, etc. work as shown in this
+  document.  A `.venv` created on the host is ignored.
+- The pre-commit hook is installed for you.  The `.git` directory is shared with
+  the host (i.e., your computer outside the container), which means the same hook
+  also runs for commits made on the host.  Be sure to run commits from inside the
+  container; committing from the host requires `pre-commit` to be installed there
+  as well.
+- After dependencies change in `pyproject.toml`, run
+  `uv sync --group dev --group test --group doc` again, or rebuild the container.
+- On Windows, clone the repository inside the WSL filesystem (or use **Dev
+  Containers: Clone Repository in Container Volume**).  A checkout on a Windows
+  drive (e.g., `C:\`) is mounted through a slow file-sharing layer, so avoid
+  opening the dev container straight from a Windows checkout, where you can.
+
 ### On Windows
 
 clang-cl is required.  Make sure LLVM is on `PATH` and build with Ninja:
