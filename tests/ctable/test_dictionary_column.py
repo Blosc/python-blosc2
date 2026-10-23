@@ -370,6 +370,24 @@ class TestArrowInterop:
         ct = CTable.from_arrow(at.schema, at.to_batches())
         assert ct["vendor"][:] == ["Uber", "Lyft", "Uber", None]
 
+    def test_import_dict_uint_exceeding_int32_raises(self):
+        import numpy as np
+
+        class MockCombined:
+            indices = pa.array([np.iinfo(np.int32).max + 1], type=pa.uint64())
+            dictionary = pa.array(["a"], type=pa.string())
+
+        class MockCol:
+            def combine_chunks(self):
+                return MockCombined()
+
+        with pytest.raises(ValueError, match=r"exceeding int32\.max"):
+            CTable._arrow_type_to_spec(
+                pa,
+                pa.dictionary(pa.uint64(), pa.string()),
+                MockCol(),
+            )
+
     def test_import_nulls_preserved(self):
         at = self._make_arrow_table(values=["A", None, "B", None])
         ct = CTable.from_arrow(at.schema, at.to_batches())

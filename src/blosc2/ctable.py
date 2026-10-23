@@ -8793,17 +8793,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         "expected an integer type."
                     )
                 if arrow_col is not None:
+                    combined = (
+                        arrow_col.combine_chunks() if hasattr(arrow_col, "combine_chunks") else arrow_col
+                    )
                     # Validate all indices fit in signed int32.
                     if pa.types.is_unsigned_integer(index_type):
-                        max_idx = arrow_col.combine_chunks().indices.to_pandas().max(skipna=True)
+                        import pyarrow.compute as pc
+
+                        max_idx = pc.max(combined.indices).as_py()
                         if max_idx is not None and max_idx > np.iinfo(np.int32).max:
                             raise ValueError(
                                 f"Arrow dictionary column has unsigned indices exceeding int32.max "
                                 f"(max={max_idx})."
                             )
-                    combined = (
-                        arrow_col.combine_chunks() if hasattr(arrow_col, "combine_chunks") else arrow_col
-                    )
                     n_cats = len(combined.dictionary)
                     if n_cats > np.iinfo(np.int32).max:
                         raise OverflowError(
