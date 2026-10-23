@@ -82,6 +82,49 @@ def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, native_
     np.testing.assert_array_equal(blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}), x + (y - 1))
 
 
+@pytest.mark.parametrize("engine", ["lazyexpr", "evaluate"])
+def test_numpy_preparation_shares_readonly_syntax(monkeypatch, native_graph_runtime, engine):
+    import ast
+
+    import blosc2.expression_graph as graph
+    import blosc2.native_graph as native
+
+    for function in (
+        graph.expression_syntax,
+        graph.parse_expression,
+        native._native_first_syntax,
+        module._evaluate_recipe_names,
+    ):
+        function.cache_clear()
+    module._evaluate_recipe_cache.clear()
+    native._native_plan_cache.clear()
+    monkeypatch.setenv("BLOSC_ME_JIT", "0")
+    original = ast.parse
+    parsed = []
+
+    def record(*args, **kwargs):
+        parsed.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", record)
+    text = "x + (y - 1)"
+    x = np.arange(1000, dtype="float64")
+    y = x + 1
+    with blosc2.jit_options(jit=None):
+        if engine == "lazyexpr":
+            result = blosc2.lazyexpr(text, {"x": x, "y": y})[:]
+        else:
+            result = blosc2.evaluate(text, local_dict={"x": x, "y": y})
+        np.testing.assert_array_equal(result, x + (y - 1))
+        assert parsed == [text]
+        syntax, nodes = graph.expression_syntax(text)
+        assert {node.id for node in nodes if isinstance(node, ast.Name)} == {"x", "y"}
+        snapshot = ast.dump(syntax, include_attributes=True)
+        # Aliases change renaming but must leave the cached source untouched.
+        np.testing.assert_array_equal(blosc2.lazyexpr(text, {"x": y, "y": y})[:], y + (y - 1))
+        assert ast.dump(syntax, include_attributes=True) == snapshot
+
+
 def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, native_graph_runtime):
     import blosc2.native_graph as native
 

@@ -1287,15 +1287,22 @@ class ExpressionGraph:
 
 
 @functools.lru_cache(maxsize=512)
+def expression_syntax(text):
+    """Share read-only syntax and its traversal; transformations must copy before editing."""
+    tree = ast.parse(text, mode="eval")
+    return tree, tuple(ast.walk(tree))
+
+
+@functools.lru_cache(maxsize=512)
 def parse_expression(text):  # noqa: C901
     """Compile a bounded expression to an immutable, explicitly registered graph."""
     if type(text) is not str or len(text) > 65536:
         _reject("expression must be text of at most 65536 characters")
     try:
-        tree = ast.parse(text, mode="eval")
+        tree, nodes = expression_syntax(text)
     except (SyntaxError, RecursionError) as exc:
         raise ValueError(f"Invalid numerical expression: {text!r}") from exc
-    if sum(1 for _ in ast.walk(tree)) > 4096:
+    if len(nodes) > 4096:
         _reject("expression exceeds 4096 AST nodes")
     names = set()
 

@@ -61,6 +61,7 @@ from .expression_graph import (
     expression_constructor,
     expression_evaluation,
     expression_method,
+    expression_syntax,
     normalize_operands,
     parse_expression,
     record_expression_metadata,
@@ -1059,6 +1060,8 @@ def conserve_functions(  # noqa: C901
     expression: str,
     operands_old: dict[str, blosc2.Array],
     operands_new: dict[str, blosc2.Array],
+    *,
+    tree=None,
 ) -> tuple[str, dict[str, blosc2.Array]]:
     """
     Given an expression in string form, return its operands.
@@ -1151,7 +1154,18 @@ def conserve_functions(  # noqa: C901
                 self.function_names.add(node.func.id)
             self.generic_visit(node)
 
-    tree = ast.parse(expression)
+    if tree is None:
+        tree = ast.parse(expression)
+    else:
+        # Renaming must not mutate syntax shared by other expressions or threads.
+        def clone(node):
+            if isinstance(node, ast.AST):
+                return type(node)(**{name: clone(value) for name, value in ast.iter_fields(node)})
+            if isinstance(node, list):
+                return [clone(value) for value in node]
+            return node
+
+        tree = clone(tree)
     visitor = OperandVisitor()
     visitor.visit(tree)
     newexpression, newoperands = ast.unparse(tree), visitor.operands
@@ -5152,7 +5166,9 @@ class LazyExpr(LazyArray):
                 graph = parse_expression(expression)
                 if graph.names == operands.keys():
                     validate_operands(operands)
-                    renamed, bindings = conserve_functions(expression, operands, dict(operands))
+                    renamed, bindings = conserve_functions(
+                        expression, operands, dict(operands), tree=expression_syntax(expression)[0]
+                    )
                     result = cls(None)
                     result.expression = f"({renamed})"
                     result.operands = bindings
@@ -6181,7 +6197,7 @@ def _evaluate_recipe_names(expression):
         return None
     try:
         graph = parse_expression(expression)
-        tree = ast.parse(expression, mode="eval")
+        tree, nodes = expression_syntax(expression)
     except (exceptions.UnsafeDeserializationError, ValueError, SyntaxError):
         return None
     allowed = (
@@ -6223,7 +6239,7 @@ def _evaluate_recipe_names(expression):
         "ones_like": 1,
         "contains": 2,
     }
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Call):
             if (
                 not isinstance(node.func, ast.Name)

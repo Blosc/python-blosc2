@@ -255,6 +255,7 @@ def cold_preparation():
         native._resident_map_kernel,
         lazy._evaluate_recipe_names,
         graph.parse_expression,
+        graph.expression_syntax,
     ):
         function.cache_clear()
     lazy._evaluate_recipe_cache.clear()
@@ -539,7 +540,9 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     if args.warmups:
         print("evaluate caches eligible preparation; input rebinding and fresh output allocation are timed.")
     else:
-        print("Each cold sample rebuilds its engine with empty preparation/compiler caches and fresh output.")
+        print(
+            "Each cold sample rebuilds its engine with empty preparation/compiler caches and fresh output."
+        )
     if allocation_rows:
         print("\nAllocation control: resident inputs, NumPy outputs; warm medians in ms.")
         print("Reused destinations are populated before timing; the main table above remains fresh-output.")

@@ -19,7 +19,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from .expression_graph import parse_expression, validate_operands
+from .expression_graph import expression_syntax, parse_expression, validate_operands
 
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
 PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
@@ -172,7 +172,7 @@ def _native_first_syntax(expression, *, reduction_only=False):  # noqa: C901 -- 
         ast.GtE,
     )
     try:
-        tree = ast.parse(expression, mode="eval")
+        tree, nodes = expression_syntax(expression)
     except SyntaxError:
         return False
     if isinstance(tree.body, ast.Call):
@@ -201,9 +201,10 @@ def _native_first_syntax(expression, *, reduction_only=False):  # noqa: C901 -- 
                 return False
         if value is not None:
             tree = ast.Expression(body=value)
+            nodes = ast.walk(tree)
     elif reduction_only:
         return False
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Call):
             if (
                 not isinstance(node.func, ast.Name)
@@ -1065,8 +1066,8 @@ def _native_text_expression(expression):
     """
     if not _native_first_syntax(expression):
         return None
-    tree = ast.parse(expression, mode="eval")
-    for node in ast.walk(tree):
+    tree, nodes = expression_syntax(expression)
+    for node in nodes:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "copy":
             return None  # The declarative adapter elides this pure value-copy node.
         if isinstance(node, ast.Attribute) or (isinstance(node, ast.keyword) and node.arg == "dtype"):
