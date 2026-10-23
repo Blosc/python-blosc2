@@ -8814,9 +8814,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     )
                     # Validate all indices fit in signed int32.
                     if pa.types.is_unsigned_integer(index_type):
-                        from pyarrow import compute as pc
+                        import pyarrow.compute as pc
 
-                        # Arrow import must not require the optional pandas dependency.
                         max_idx = pc.max(combined.indices).as_py()
                         if max_idx is not None and max_idx > np.iinfo(np.int32).max:
                             raise ValueError(

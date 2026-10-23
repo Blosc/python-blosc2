@@ -1,0 +1,33 @@
+{
+  "name": "python-blosc2",
+  "image": "mcr.microsoft.com/devcontainers/python:3-3.12",
+  "features": {
+    "ghcr.io/devcontainers-extra/features/uv:1": {},
+    // nbsphinx needs pandoc to render the notebooks in doc/
+    "ghcr.io/devcontainers-extra/features/pandoc:1": {}
+  },
+  // Already set by Microsoft's container, but more clear for /home below
+  "remoteUser": "vscode",
+  "containerEnv": {
+    // Keep the venv out of the bind-mounted checkout so it never collides with a host-side .venv
+    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv"
+  },
+  "remoteEnv": {
+    "PATH": "/home/vscode/.venv/bin:${containerEnv:PATH}"
+  },
+  "updateContentCommand": "uv sync --group dev --group test --group doc && pre-commit install",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      },
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
+}
