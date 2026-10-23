@@ -5127,9 +5127,79 @@ class LazyExpr(LazyArray):
         return array
 
     @classmethod
-    def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
+    def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):  # noqa: C901
         # Validate the expression
         validate_expr(expression)
+        if (
+            guess
+            and type(expression) is str
+            and type(operands) is dict
+            and operands
+            and out is None
+            and where is None
+            and ne_args is None
+            and evaluation_mode() == "full"
+        ):
+            from .native_graph import (
+                _native_first_operand,
+                _native_first_syntax,
+                _native_plan_cache_key,
+            )
+
+            if all(
+                type(value) is np.ndarray and _native_first_operand(value) for value in operands.values()
+            ) and _native_first_syntax(expression):
+                graph = parse_expression(expression)
+                if graph.names == operands.keys():
+                    validate_operands(operands)
+                    renamed, bindings = conserve_functions(expression, operands, dict(operands))
+                    result = cls(None)
+                    result.expression = f"({renamed})"
+                    result.operands = bindings
+                    result.expression_tosave = expression
+                    result.operands_tosave = operands
+                    result._ne_args = ne_args
+                    result._evaluation = "full"
+                    policy = blosc2.jit_config.execution_options()
+                    native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
+                    if (
+                        native_jit is None
+                        and native_backend is None
+                        and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+                        and graph.root[0] == "binary"
+                        and not re.search(r"\bcopy\s*\(", expression)
+                        and all(value.dtype == np.dtype("float64") for value in operands.values())
+                    ):
+                        try:
+                            from .graph_plan import NativeGraph
+
+                            # The reviewed arithmetic subset can get metadata from its execution plan.
+                            plan = NativeGraph.from_expression(
+                                result.expression,
+                                {name: value.dtype.name for name, value in result.operands.items()},
+                                jit=native_jit,
+                            )
+                            plan._frontend = "native-expression"
+                            inputs = result.operands
+                            schedule = plan.specialize(
+                                {name: (value.dtype, value.shape) for name, value in inputs.items()}
+                            )
+                            info = schedule.info()
+                            if plan.info()["stages"] == 1 and info["dtype"] == np.dtype("float64"):
+                                result._dtype = info["dtype"]
+                                result._shape = info["shape"]
+                                key = _native_plan_cache_key(result, native_jit, {"_getitem": True})
+                                result._prepared_native = (key, (plan, tuple(inputs), False))
+                                return result
+                        except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
+                            pass
+                    shape = graph.infer_shape(operands)
+                    dtype = graph.infer_dtype(operands)
+                    if shape is not None and dtype is not None:
+                        # Reviewed metadata avoids evaluating synthetic operands.
+                        result._dtype = dtype
+                        result._shape = shape
+                        return result
         graph_shape, graph_dtype = None, None
         if evaluation_mode() == "safe":
             graph = parse_expression(expression)

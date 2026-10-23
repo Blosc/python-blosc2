@@ -26,12 +26,12 @@ def test_plan_cache_rebinds_same_signature(native_graph_runtime):
     plan, names, reduction = next(iter(_plan_cache().values()))
     assert len(names) == 1
     assert not reduction
-    del plan
 
     y = x + 7
     blosc2.evaluate("x * 2 + 1", local_dict={"x": y}, out=out)
     np.testing.assert_array_equal(out, y * 2 + 1)
     assert len(_plan_cache()) == 1
+    assert next(iter(_plan_cache().values()))[0] is plan
 
 
 def test_plan_cache_key_changes_with_dtype_and_shape(native_graph_runtime):

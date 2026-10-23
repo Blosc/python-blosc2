@@ -316,13 +316,27 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     if options.keys() - {"_getitem", "_reduce_args", "initial", "out"}:
         return None
     cache_key = None
-    if isinstance(item, tuple) and not item and explicit is None and "initial" not in options:
+    if (
+        ((isinstance(item, tuple) and not item) or (isinstance(item, slice) and item == slice(None)))
+        and explicit is None
+        and "initial" not in options
+    ):
         cache_key = _native_plan_cache_key(expr, jit, options)
         if cache_key is not None:
             with _native_plan_cache_lock:
                 cached = _native_plan_cache.get(cache_key)
                 if cached is not None:
                     _native_plan_cache.move_to_end(cache_key)
+            if cached is None:
+                prepared = getattr(expr, "_prepared_native", None)
+                if prepared is not None and prepared[0] == cache_key:
+                    cached = prepared[1]
+                    # Locally prepared plans also participate in shared reuse and eviction.
+                    with _native_plan_cache_lock:
+                        _native_plan_cache[cache_key] = cached
+                        _native_plan_cache.move_to_end(cache_key)
+                        while len(_native_plan_cache) > _NATIVE_PLAN_CACHE_SIZE:
+                            _native_plan_cache.popitem(last=False)
             if cached is not None:
                 plan, input_names, reduction = cached
                 try:
@@ -1454,6 +1468,11 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
         not allow_output and hasattr(expr, "_output")
     ):
         raise ValueError("Table filtering, ordering and output aliases are not native-graph eligible")
+    if not reduction_options and not root_options:
+        prepared = getattr(expr, "_prepared_native", None)
+        if prepared is not None and prepared[0] == _native_plan_cache_key(expr, jit, {"_getitem": True}):
+            plan, names, reduction = prepared[1]
+            return plan, {name: expr.operands[name] for name in names}, reduction
     graph = parse_expression(expr.expression)
     operands = dict(expr.operands)
     validate_operands(operands)
@@ -1539,6 +1558,14 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
     kwargs.pop("_use_index", None)
     if reduction and kwargs:
         raise ValueError("Native reductions do not accept output/storage/backend overrides")
+    if (
+        tile_items == 1024
+        and not reduction
+        and all(type(value) is np.ndarray for value in inputs.values())
+        and math.prod(expr.shape) < _MINIMUM_PARALLEL_ITEMS
+    ):
+        # Small resident maps avoid parallel scheduling; use fewer native tiles.
+        tile_items = 65536
     schedule = plan.specialize(
         {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
     )

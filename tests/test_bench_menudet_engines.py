@@ -136,6 +136,7 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     main = engine_benchmark["main"]
     namespace = main.__globals__
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
+    monkeypatch.setenv("BLOSC_ME_JIT", "0")
     argv = ["menudet-engines.py", "--items", "1", "--samples", "1", "--warmups", "1"]
     argv += ["--dtype", "uint64", "--codec", "LZ4", "--clevel", "3"]
     if backend:

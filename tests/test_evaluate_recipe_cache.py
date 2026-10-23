@@ -67,6 +67,61 @@ def test_evaluate_cache_signature_and_policy_changes():
     assert len(module._evaluate_recipe_cache) == 4
 
 
+def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, native_graph_runtime):
+    x = np.arange(100_000, dtype="float64")
+    y = x + 1
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Simple NumPy map evaluated synthetic operands")
+
+    monkeypatch.setattr(module, "_numpy_eval_expr", forbidden)
+    expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+    assert expr.expression == "(o0 + (o1 - 1))"
+    np.testing.assert_array_equal(expr[:], x + (y - 1))
+    assert expr._native_execution_report["evaluated_tiles"] == 2
+    np.testing.assert_array_equal(blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}), x + (y - 1))
+
+
+def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, native_graph_runtime):
+    import blosc2.native_graph as native
+
+    monkeypatch.setenv("BLOSC_ME_JIT", "0")
+    x = np.arange(100_000, dtype="float64")
+    y = x + 1
+    with blosc2.jit_options(jit=None):
+        expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+        assert hasattr(expr, "_prepared_native")
+        native._native_plan_cache.clear()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(native, "lower_native_graph", lambda *args, **kwargs: pytest.fail("Plan rebuilt"))
+            expr.operands["o0"] = x + 10
+            np.testing.assert_array_equal(expr[:], x + 10 + (y - 1))
+
+        original = native.lower_native_graph
+        calls = []
+
+        def record(*args, **kwargs):
+            calls.append(None)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(native, "lower_native_graph", record)
+        expr.operands["o0"] = x.astype("float32")
+        expr.operands["o1"] = y.astype("float32")
+        native._native_plan_cache.clear()
+        np.testing.assert_array_equal(expr[:], x.astype("float32") + (y.astype("float32") - 1))
+        assert calls
+
+        calls.clear()
+        native._native_plan_cache.clear()
+        with blosc2.jit_options(jit=False):
+            np.testing.assert_array_equal(expr[:], x.astype("float32") + (y.astype("float32") - 1))
+        assert calls
+
+    with blosc2.jit_options(jit=True):
+        assert not hasattr(blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y}), "_prepared_native")
+
+
 def test_evaluate_cache_caller_and_explicit_namespace_resolution():
     x = np.arange(12, dtype=np.float64)
     np.testing.assert_array_equal(blosc2.evaluate("x + 1"), x + 1)
