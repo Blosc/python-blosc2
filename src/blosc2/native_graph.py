@@ -223,7 +223,25 @@ def _native_first_syntax(expression, *, reduction_only=False):  # noqa: C901 -- 
     return True
 
 
-def _native_plan_cache_key(expr, jit, options):
+def _native_first_array(value):
+    """Exact array operand for automatic ingestion; rejects object/exotic dtypes cheaply."""
+    import blosc2
+
+    if type(value) not in (np.ndarray, blosc2.NDArray):
+        return False
+    dtype = value.dtype
+    if (
+        dtype.kind not in "biuf"
+        or dtype.itemsize > 8
+        or not dtype.isnative
+        or dtype.metadata is not None
+        or (dtype.kind == "f" and dtype.itemsize == 2)
+    ):
+        return False
+    return bool(value.size)
+
+
+def _native_plan_cache_key(expr, jit, options, configuration=None):
     """Metadata-only plan-cache key; never retains operand or output arrays."""
     import blosc2
 
@@ -233,22 +251,23 @@ def _native_plan_cache_key(expr, jit, options):
     for name, value in sorted(expr.operands.items()):
         if type(value) not in (np.ndarray, blosc2.NDArray):
             return None
+        compressed = type(value) is blosc2.NDArray
         signature.append(
             (
                 name,
                 type(value).__name__,
-                np.dtype(value.dtype).str,
-                repr(np.dtype(value.dtype).metadata),
+                value.dtype.str,
+                repr(value.dtype.metadata),
                 tuple(value.shape),
-                getattr(value, "chunks", None),
-                getattr(value, "blocks", None),
+                getattr(value, "chunks", None) if compressed else None,
+                getattr(value, "blocks", None) if compressed else None,
             )
         )
     return (
         expr.expression,
         tuple(signature),
         jit,
-        _graph_configuration(jit),
+        _graph_configuration(jit) if configuration is None else configuration,
         getattr(expr, "_evaluation", "full"),
         bool(options.get("_getitem", False)),
     )
@@ -257,38 +276,38 @@ def _native_plan_cache_key(expr, jit, options):
 def _resident_signature(expression, inputs, jit):
     import blosc2
 
-    if not inputs or any(
-        type(value) is not np.ndarray
-        or value.dtype.kind not in "biuf"
-        or value.dtype.itemsize > 8
-        or value.dtype == np.dtype("float16")
-        or not value.dtype.isnative
-        or value.dtype.metadata is not None
-        or not value.flags.c_contiguous
-        or not value.flags.aligned
-        for value in inputs.values()
-    ):
+    if not inputs:
         return None
-    first = next(iter(inputs.values()))
-    if not 0 < first.size < _MINIMUM_PARALLEL_ITEMS or any(
-        value.shape != first.shape for value in inputs.values()
-    ):
-        return None
-    configuration = _graph_configuration(jit) + tuple(blosc2.jit_config.execution_options().items())
-    return (
-        expression,
-        tuple((name, value.dtype.str) for name, value in inputs.items()),
-        first.shape,
-        jit,
-        configuration,
-    )
+    first = None
+    dtypes = []
+    for name, value in inputs.items():
+        if type(value) is not np.ndarray:
+            return None
+        dtype = value.dtype
+        if (
+            dtype.kind not in "biuf"
+            or dtype.itemsize > 8
+            or not dtype.isnative
+            or dtype.metadata is not None
+            or (dtype.kind == "f" and dtype.itemsize == 2)
+            or not value.flags.c_contiguous
+            or not value.flags.aligned
+        ):
+            return None
+        if first is None:
+            first = value
+            if not 0 < value.size < _MINIMUM_PARALLEL_ITEMS:
+                return None
+        elif value.shape != first.shape:
+            return None
+        dtypes.append((name, dtype.str))
+    configuration = (_graph_configuration(jit), tuple(blosc2.jit_config.execution_options().items()))
+    return (expression, tuple(dtypes), first.shape, jit, configuration)
 
 
 def native_weak_scalars_eligible(plan, expression, inputs):
     """Retain NumPy's preparation-time scalar range errors for checked native maps."""
-    return plan.info().get("partitionable", False) or (
-        parse_expression(expression).infer_dtype(inputs) is not None
-    )
+    return plan.partitionable or (parse_expression(expression).infer_dtype(inputs) is not None)
 
 
 def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
@@ -306,10 +325,10 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
                 expression,
                 jit,
                 signature[-1],
-                input_dtypes=tuple((name, value.dtype.name) for name, value in inputs.items()),
+                input_dtypes=tuple((name, value.dtype) for name, value in inputs.items()),
             )
         # Serial whole-domain execution preserves checked conversions and mixed-type error ordering.
-        if plan.info()["stages"] != 1:
+        if plan.stages != 1:
             return None
         schedule = plan.specialize(
             {name: (value.dtype, value.shape) for name, value in inputs.items()}, 65536

@@ -31,6 +31,27 @@ class PortableArtifactError(ValueError):
         super().__init__(f"{status}{location}: {message}")
 
 
+# Native numeric byte orders key the common dtype descriptor without dtype.name.
+_NATIVE_DTYPE_NAMES = {
+    np.dtype(name).str: name
+    for name in (
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+    )
+}
+
+
 def _mapping(value, label):
     if not isinstance(value, Mapping):
         raise TypeError(f"{label} must be a mapping")
@@ -40,7 +61,15 @@ def _mapping(value, label):
 
 
 def portable_dtype_descriptor(value):
-    dtype = np.dtype(value).newbyteorder("=")
+    if type(value) is np.dtype:
+        dtype = value
+    else:
+        dtype = np.dtype(value)
+    if dtype.isnative and dtype.metadata is None:
+        name = _NATIVE_DTYPE_NAMES.get(dtype.str)
+        if name is not None:
+            return {"dtype": name}
+    dtype = dtype.newbyteorder("=")
     if (
         dtype.fields
         or dtype.subdtype
@@ -543,6 +572,7 @@ class PortableKernel:
         valid_mask=None,
         return_status=False,
         fp_errors="ignore",
+        _validated=False,
     ):
         """Evaluate one explicit draft 1.0 block, returning its declared cardinality.
 
@@ -554,6 +584,18 @@ class PortableKernel:
         """
         if self.schema_version != "1.0":
             raise NotImplementedError("Explicit descriptor blocks require an installed draft 1.0 runtime")
+        if _validated:
+            # Callers with exact resident buffers keep native validation and
+            # allocation but skip repeated Python-side binding checks.
+            return self._handle.evaluate_block(
+                inputs,
+                block_shape,
+                logical_shape=logical_shape,
+                block_origin=block_origin,
+                valid_mask=valid_mask,
+                return_status=return_status,
+                fp_raise=15 if fp_errors == "raise" else 0,
+            )
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
             raise PortableArtifactError("Missing or extra runtime inputs", status="binding_error")

@@ -67,6 +67,18 @@ class MenudetKernel:
                 "Menudet functions require positional parameters; no *args/**kwargs/keyword-only args"
             )
         annotations = inspect.get_annotations(func, eval_str=True)
+        self._parameters = self._signature.parameters
+        self._names = tuple(self._parameters)
+        self._positional_only = frozenset(
+            name
+            for name, parameter in self._parameters.items()
+            if parameter.kind is parameter.POSITIONAL_ONLY
+        )
+        self._defaults = {
+            name: parameter.default
+            for name, parameter in self._parameters.items()
+            if parameter.default is not parameter.empty
+        }
         self._input_dtypes = {
             name: _dtype(annotations[name]) for name in self._signature.parameters if name in annotations
         }
@@ -104,10 +116,24 @@ class MenudetKernel:
     def _bind(self, args, kwargs):
         import blosc2
 
-        bound = self._signature.bind(*args, **kwargs)
-        bound.apply_defaults()
+        names = self._names
+        if len(args) > len(names):
+            raise TypeError("too many positional arguments")
+        supplied = dict(zip(names, args, strict=False))
+        for name, value in kwargs.items():
+            if name not in self._parameters or name in self._positional_only:
+                raise TypeError(f"got an unexpected keyword argument {name!r}")
+            if name in supplied:
+                raise TypeError(f"multiple values for argument {name!r}")
+            supplied[name] = value
         inputs = {}
-        for name, value in bound.arguments.items():
+        for name in names:
+            try:
+                value = supplied[name]
+            except KeyError:
+                if name not in self._defaults:
+                    raise TypeError(f"missing a required argument: {name!r}") from None
+                value = self._defaults[name]
             if type(value) not in (np.ndarray, blosc2.NDArray):
                 if name not in self._input_dtypes or not np.isscalar(value):
                     raise TypeError(f"{name}: unannotated inputs must be NumPy or Blosc2 arrays")

@@ -1294,6 +1294,55 @@ def expression_syntax(text):
     return tree, tuple(ast.walk(tree))
 
 
+def arithmetic_names(text):  # noqa: C901 -- explicit arithmetic node admission
+    """Names of an expression whose graph is plain arithmetic, else ``None``.
+
+    A conservative fast path for :func:`parse_expression` that shares its cached
+    syntax and skips graph lowering plus canonical unparsing. It reports names
+    only when every node is an arithmetic literal, name, binary/unary operation
+    or single comparison; everything else returns ``None`` so the caller retains
+    the full parser as the authority.
+    """
+    try:
+        tree, _ = expression_syntax(text)
+    except (SyntaxError, RecursionError):
+        return None
+    names = set()
+    count = 0
+    stack = [(tree.body, 0)]
+    while stack:
+        node, depth = stack.pop()
+        count += 1
+        if depth > 64 or count > 4096:
+            return None
+        if isinstance(node, ast.Constant):
+            if type(node.value) not in (bool, int, float):
+                return None
+        elif isinstance(node, ast.Name):
+            if node.id in ("nan", "inf") or node.id in _DTYPES:
+                continue
+            if node.id in ("np", "numpy", "blosc2"):
+                return None
+            names.add(node.id)
+        elif isinstance(node, ast.BinOp):
+            if type(node.op) not in _BINARY or isinstance(node.op, ast.MatMult):
+                return None
+            stack.append((node.left, depth + 1))
+            stack.append((node.right, depth + 1))
+        elif isinstance(node, ast.UnaryOp):
+            if type(node.op) not in _UNARY or isinstance(node.op, ast.Not):
+                return None
+            stack.append((node.operand, depth + 1))
+        elif isinstance(node, ast.Compare):
+            if len(node.ops) != 1 or type(node.ops[0]) not in _COMPARE:
+                return None
+            stack.append((node.left, depth + 1))
+            stack.append((node.comparators[0], depth + 1))
+        else:
+            return None
+    return tuple(sorted(names))
+
+
 @functools.lru_cache(maxsize=512)
 def parse_expression(text):  # noqa: C901
     """Compile a bounded expression to an immutable, explicitly registered graph."""

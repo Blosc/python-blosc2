@@ -56,6 +56,7 @@ from .b2objects import (
 )
 from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
 from .expression_graph import (
+    arithmetic_names,
     evaluate_expression,
     evaluation_mode,
     expression_constructor,
@@ -92,6 +93,9 @@ from .utils import (
 )
 
 numexpr = None  # Compatibility placeholder; no runtime import or backend selection.
+
+# Canonical expression text has no quoted strings or attribute names to rewrite.
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
 
 
 def _int64_datetime_operands(local_dict):
@@ -3678,6 +3682,27 @@ def result_type(
     return np.result_type(*arrs)
 
 
+def _arithmetic_recipe_text(expression, operands):
+    """Canonical operand text for an eligible binary arithmetic expression.
+
+    Returns ``None`` unless every operand is an exact expression name and the
+    graph is plain binary arithmetic with ASCII names. Canonical text comes from
+    the shared syntax tree, so no graph lowering is needed.
+    """
+    names = arithmetic_names(expression)
+    if (
+        names is None
+        or len(names) != len(operands)
+        or not all(type(name) is str for name in operands)
+        or names != tuple(sorted(operands))
+    ):
+        return None
+    tree, _ = expression_syntax(expression)
+    if not isinstance(tree.body, ast.BinOp) or not all(name.isascii() for name in names):
+        return None
+    return ast.unparse(tree.body)
+
+
 def can_cast(from_: blosc2.dtype | blosc2.NDArray, to: blosc2.dtype) -> bool:
     """
     Determines if one data type can be cast to another data type according to (NumPy) type promotion rules.
@@ -5171,50 +5196,56 @@ class LazyExpr(LazyArray):
             and evaluation_mode() == "full"
         ):
             from .native_graph import (
-                _native_first_operand,
+                _native_first_array,
                 _native_first_syntax,
                 _native_plan_cache_key,
             )
 
-            if all(
-                type(value) in (np.ndarray, blosc2.NDArray) and _native_first_operand(value)
-                for value in operands.values()
-            ):
-                try:
-                    graph = parse_expression(expression)
-                except (exceptions.UnsafeDeserializationError, ValueError):
-                    graph = None  # Trusted expressions outside the reviewed grammar keep legacy preparation.
-                if (
-                    graph is not None
-                    and graph.names == operands.keys()
-                    and (graph.arithmetic or _native_first_syntax(expression))
-                ):
-                    validate_operands(operands)
-                    tree, nodes = expression_syntax(expression)
-                    if (
-                        graph.root[0] == "binary"
-                        and all(name.isascii() for name in graph.names)
-                        and not any(isinstance(node, ast.Call) for node in nodes)
-                    ):
-                        bindings, aliases = {}, {}
-
-                        def rebase(match):
-                            name = match[0]
-                            if name not in operands:
-                                return name
-                            value = operands[name]
-                            key = aliases.get(id(value))
-                            if key is None:
-                                key = aliases[id(value)] = f"o{len(bindings)}"
-                                bindings[key] = value
-                            return key
-
-                        # Canonical numeric text has no quoted strings or attribute names to rewrite.
-                        renamed = re.sub(r"\b[A-Za-z_]\w*\b", rebase, graph.text)
-                    else:
-                        renamed, bindings = conserve_functions(
-                            expression, operands, dict(operands), tree=tree
+            if all(_native_first_array(value) for value in operands.values()):
+                graph = None
+                renamed = bindings = None
+                text = _arithmetic_recipe_text(expression, operands)
+                if text is None:
+                    try:
+                        graph = parse_expression(expression)
+                    except (exceptions.UnsafeDeserializationError, ValueError):
+                        graph = (
+                            None  # Trusted expressions outside the reviewed grammar keep legacy preparation.
                         )
+                    if (
+                        graph is not None
+                        and graph.names == operands.keys()
+                        and (graph.arithmetic or _native_first_syntax(expression))
+                    ):
+                        tree, nodes = expression_syntax(expression)
+                        if (
+                            graph.root[0] == "binary"
+                            and all(name.isascii() for name in graph.names)
+                            and (graph.arithmetic or not any(isinstance(node, ast.Call) for node in nodes))
+                        ):
+                            text = graph.text
+                        else:
+                            renamed, bindings = conserve_functions(
+                                expression, operands, dict(operands), tree=tree
+                            )
+                if text is not None:
+                    bindings, aliases = {}, {}
+
+                    def rebase(match):
+                        name = match[0]
+                        if name not in operands:
+                            return name
+                        value = operands[name]
+                        key = aliases.get(id(value))
+                        if key is None:
+                            key = aliases[id(value)] = f"o{len(bindings)}"
+                            bindings[key] = value
+                        return key
+
+                    # Canonical numeric text has no quoted strings or attribute names to rewrite.
+                    renamed = _IDENTIFIER_RE.sub(rebase, text)
+                if renamed is not None:
+                    root_kind = "binary" if text is not None else graph.root[0]
                     result = cls(None)
                     result.expression = f"({renamed})"
                     result.operands = bindings
@@ -5228,7 +5259,7 @@ class LazyExpr(LazyArray):
                         native_jit is not True
                         and native_backend is None
                         and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
-                        and graph.root[0] in {"binary", "unary", "compare"}
+                        and root_kind in {"binary", "unary", "compare"}
                         and not re.search(r"\bcopy\s*\(", expression)
                     ):
                         try:
@@ -5256,10 +5287,15 @@ class LazyExpr(LazyArray):
                                     {name: (value.dtype, value.shape) for name, value in inputs.items()}
                                 )
                             info = schedule.info()
-                            if plan.info()["stages"] == 1 and info["dtype"].kind in "biuf":
+                            if plan.stages == 1 and info["dtype"].kind in "biuf":
                                 result._dtype = info["dtype"]
                                 result._shape = info["shape"]
-                                key = _native_plan_cache_key(result, native_jit, {"_getitem": True})
+                                key = _native_plan_cache_key(
+                                    result,
+                                    native_jit,
+                                    {"_getitem": True},
+                                    configuration=None if resident is None else resident[0][-1][0],
+                                )
                                 prepared = (key, (plan, tuple(inputs), False))
                                 if all(type(value) is np.ndarray for value in inputs.values()):
                                     result._prepared_native = prepared
@@ -5269,6 +5305,8 @@ class LazyExpr(LazyArray):
                                 return result
                         except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
                             pass
+                    if graph is None:
+                        graph = parse_expression(expression)
                     shape = graph.infer_shape(operands)
                     dtype = graph.infer_dtype(operands)
                     if shape is not None and dtype is not None:
@@ -6256,6 +6294,9 @@ def _evaluate_recipe_names(expression):
     """Restrict caching to reviewed elementwise syntax with literal constants."""
     if type(expression) is not str:
         return None
+    names = arithmetic_names(expression)
+    if names is not None:
+        return names or None
     try:
         graph = parse_expression(expression)
         if graph.arithmetic:

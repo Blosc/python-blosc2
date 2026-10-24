@@ -72,6 +72,14 @@ class NativeGraph:
     def has_jit(self):
         return self._info["has_jit"]
 
+    @property
+    def stages(self):
+        return self._info["stages"]
+
+    @property
+    def partitionable(self):
+        return bool(self._info.get("partitionable", False))
+
     def to_json(self):
         """Canonical graph/captures only; importing always revalidates."""
         return self._handle.to_json()

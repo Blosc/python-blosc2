@@ -174,10 +174,22 @@ class PortableLazyArray(LazyArray):
             # One complete original group needs neither coordinate index arrays
             # nor advanced-index copies. Keep evaluate_block (not evaluate_array):
             # block reductions and native coordinates must see that entire group.
-            operands = {
-                name: np.broadcast_to(np.asarray(value[()]), self._domain)
-                for name, value in self.inputs.items()
-            }
+            domain = self._domain
+            dtypes = self.kernel.input_dtypes
+            operands = {}
+            exact = not self.kernel.context_ndim
+            for name, value in self.inputs.items():
+                array = np.asarray(value[()])
+                if type(array) is np.ndarray and array.shape == domain and array.dtype == dtypes.get(name):
+                    operands[name] = array
+                else:
+                    exact = False
+                    operands[name] = np.broadcast_to(array, domain)
+            if exact and all(
+                value.dtype.isnative and value.flags.c_contiguous and value.flags.aligned
+                for value in operands.values()
+            ):
+                return self.kernel.evaluate_block(operands, block_shape=domain, _validated=True)
             context = (
                 {"logical_shape": self._domain, "block_origin": (0,) * len(self._domain)}
                 if self.kernel.context_ndim
