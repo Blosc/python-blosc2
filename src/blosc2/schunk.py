@@ -1976,7 +1976,9 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
             return proxy
 
     if "b2o" in meta:
-        if deserialize is DeserializeMode.SAFE:
+        if deserialize is DeserializeMode.SAFE and (
+            not isinstance(meta["b2o"], dict) or meta["b2o"].get("kind") not in {"portable", "lazyexpr"}
+        ):
             marker = meta["b2o"]
             kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"
             raise UnsafeDeserializationError(str(kind))

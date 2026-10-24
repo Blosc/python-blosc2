@@ -10,6 +10,18 @@ independently; rows are never materialised in their entirety unless you
 explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
 :meth:`~blosc2.CTable.__iter__`.
 
+.. note::
+
+   **Sharing a table between threads:** concurrent reads and writes to the
+   same underlying storage are unsupported. If a shared table can be modified
+   or closed, use one application lock around complete reads, writes, appends
+   and close operations. Views and column handles sharing that storage must
+   use the same lock. For lazy or computed columns, hold the lock while
+   evaluating the result, not just while creating the expression.
+
+   Safe expression evaluation does not make table storage thread-safe or
+   provide a consistent snapshot across reads.
+
 Source-bound columns
 --------------------
 

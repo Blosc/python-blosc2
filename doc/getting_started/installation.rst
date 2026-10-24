@@ -33,13 +33,13 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
      - The :doc:`b2view <../guides/b2view>` terminal browser (``textual``,
        ``textual-plotext``), including its in-terminal braille plot (the
        ``p`` key).  Required by the ``b2view`` command.
-    * - ``hires``
+   * - ``hires``
      - The high-resolution image view in b2view (the ``h`` key), which
        renders a real ``matplotlib`` image in the terminal
-        (``textual-image``, ``matplotlib``).  Includes ``tui``.
-    * - ``images``
-      - JPEG/PNG ordinary-file previews in b2view (``Pillow``, ``textual-image``).
-        Includes ``tui`` without requiring matplotlib. ``hires`` includes this extra.
+       (``textual-image``, ``matplotlib``).  Includes ``tui``.
+   * - ``images``
+     - JPEG/PNG ordinary-file previews in b2view (``Pillow``, ``textual-image``).
+       Includes ``tui`` without requiring matplotlib. ``hires`` includes this extra.
    * - ``parquet``
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
        :doc:`../guides/parquet_to_blosc2`.

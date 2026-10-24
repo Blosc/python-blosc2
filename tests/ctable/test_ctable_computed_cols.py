@@ -10,13 +10,52 @@
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from threading import Event
 
 import numpy as np
 import pytest
 
 import blosc2
 from blosc2 import CTable
+
+
+@pytest.mark.skipif(sys.platform in {"emscripten", "wasi"}, reason="Runtime does not provide Python threads")
+@pytest.mark.parametrize("computed", [False, True])
+def test_safe_column_graph_observes_update_at_controlled_read_boundary(monkeypatch, computed):
+    from blosc2.ctable import Column
+
+    table = _make_invoice_table(8)
+    if computed:
+        with blosc2.expression_evaluation("safe"):
+            table.add_computed_column("adjusted", lambda cols: cols["qty"] + 1)
+    name = "adjusted" if computed else "qty"
+    expr = blosc2.lazyexpr("x * 2", {"x": table[name]}, evaluation="safe")
+    entered, resume = Event(), Event()
+    original = Column._values_from_key
+
+    def paused_read(self, key):
+        if self._table_ref is table and self._col_name == name and not resume.is_set():
+            entered.set()
+            assert resume.wait(10)
+        return original(self, key)
+
+    monkeypatch.setattr(Column, "_values_from_key", paused_read)
+    # The read pauses BEFORE any native access. This exercises a permitted
+    # between-read change, not simultaneous native writes or snapshot isolation.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        read = pool.submit(lambda: expr[:])
+        try:
+            assert entered.wait(10)
+            update = pool.submit(lambda: table["qty"].__setitem__(slice(None), np.arange(11, 19)))
+            update.result(timeout=10)
+        finally:
+            resume.set()
+        expected = (np.arange(11, 19) + int(computed)) * 2
+        np.testing.assert_array_equal(read.result(timeout=10), expected)
+    np.testing.assert_array_equal(expr[:], expected)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures / row types
@@ -70,6 +109,174 @@ def test_computed_column_dtype_override():
     t = _make_invoice_table()
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"], dtype=np.float32)
     assert t._computed_cols["total"]["dtype"] == np.dtype(np.float32)
+
+
+def test_safe_column_admission_checks_cached_expression_before_dtype():
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+
+    class HostileCachedExpression:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted computed-column metadata")
+
+    t._computed_cols["total"]["lazy"] = HostileCachedExpression()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="cached computed-column"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+def test_safe_column_admission_rejects_unknown_recipe_kind():
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+    t._computed_cols["total"]["kind"] = "unregistered"
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="recipe kind"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+@pytest.mark.parametrize("mutation", ["expression", "dependencies", "cached_operand"])
+def test_safe_column_admission_rejects_recipe_cache_mismatch(mutation):
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+    recipe = t._computed_cols["total"]
+    if mutation == "expression":
+        recipe["expression"] = "o0 + o1"
+    elif mutation == "dependencies":
+        recipe["col_deps"] = list(reversed(recipe["col_deps"]))
+    else:
+        cached = recipe["lazy"]
+        name = next(iter(cached.operands))
+        cached.operands[name] = blosc2.asarray(cached.operands[name][:])
+    with pytest.raises(ValueError, match="recipe/cache mismatch"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+def test_safe_computed_column_graph_tracks_append_and_delete():
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", "price * qty")
+    expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], [2, 5, 10])
+    t.append((4.0, 4, 0.1))
+    assert expr.shape == (4,)
+    np.testing.assert_array_equal(expr[:], [2, 5, 10, 17])
+    t.delete(0)
+    assert expr.shape == (3,)
+    np.testing.assert_array_equal(expr[:], [5, 10, 17])
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    reason="Installed runtime has no draft descriptor ABI",
+)
+@pytest.mark.parametrize(
+    "mutation", ["hostile", "kernel_replacement", "artifact_replacement", "bindings", "dtype", "row_shape"]
+)
+def test_safe_portable_column_checks_cached_kernel_before_dtype(monkeypatch, mutation):
+    from test_portable_lazy import kernel
+
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
+    expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+
+    class Hostile:
+        @property
+        def input_dtypes(self):
+            pytest.fail("Read hostile portable column kernel")
+
+        def items(self):
+            pytest.fail("Read hostile portable column bindings")
+
+        def __index__(self):
+            pytest.fail("Coerced hostile portable row extent")
+
+    recipe = t._computed_cols["total"]
+    replacement = kernel("def k(x):\n    return x + 2\n")
+    if mutation == "hostile":
+        monkeypatch.setitem(recipe, "kernel", Hostile())
+    elif mutation == "kernel_replacement":
+        monkeypatch.setitem(recipe, "kernel", replacement)
+    elif mutation == "artifact_replacement":
+        monkeypatch.setitem(recipe, "artifact", replacement.to_json())
+    elif mutation == "bindings":
+        monkeypatch.setitem(recipe, "bindings", Hostile())
+    elif mutation == "dtype":
+        monkeypatch.setitem(recipe, "dtype", Hostile())
+    else:
+        monkeypatch.setitem(recipe, "row_shape", (Hostile(),))
+    with pytest.raises((blosc2.UnsafeDeserializationError, ValueError)):
+        expr.compute()
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    reason="Installed runtime has no draft descriptor ABI",
+)
+def test_safe_portable_column_reuses_validated_native_handle(monkeypatch):
+    from test_portable_lazy import kernel
+
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
+    monkeypatch.setattr(
+        blosc2.PortableKernel,
+        "from_json",
+        lambda *a, **k: pytest.fail("Recompiled admitted cached artifact"),
+    )
+    expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    reason="Installed runtime has no draft descriptor ABI",
+)
+def test_safe_portable_column_metadata_does_not_evaluate_rows(monkeypatch):
+    from test_portable_lazy import kernel
+
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
+    with monkeypatch.context() as patch:
+        patch.setattr(type(t), "_evaluate_portable_rows", lambda *a, **k: pytest.fail("Evaluated metadata"))
+        assert t["total"].dtype == np.dtype("int64")
+        expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+        assert expr.shape == (3,)
+        assert expr.dtype == np.dtype("int64")
+    np.testing.assert_array_equal(expr[:], [3, 4, 5])
+
+
+def test_safe_column_admission_checks_cached_expression_operand_closure():
+    t = _make_invoice_table()
+    t.add_computed_column("total", "price * qty")
+
+    class HostileInput:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted computed-column input metadata")
+
+    cached = t._computed_cols["total"]["lazy"]
+    cached.operands[next(iter(cached.operands))] = HostileInput()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="HostileInput"):
+        blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
+
+
+@pytest.mark.parametrize("dependency", ["validity", "mask"])
+def test_safe_column_admission_checks_visibility_dependencies(dependency):
+    from blosc2.ctable import Column
+
+    t = _make_invoice_table()
+
+    class HostileVisibility:
+        @property
+        def dtype(self):
+            pytest.fail("Read unadmitted visibility metadata")
+
+    column = Column(t, "price")
+    if dependency == "validity":
+        t._valid_rows = HostileVisibility()
+    else:
+        column._mask = HostileVisibility()
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="HostileVisibility"):
+        blosc2.lazyexpr("x + 1", {"x": column}, evaluation="safe")
 
 
 def test_computed_column_expression_string():
@@ -719,6 +926,23 @@ def test_computed_column_open(tmp_path):
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0, 25.0])
 
 
+def test_loaded_expression_recipes_keep_safe_boundary(tmp_path, monkeypatch):
+    import importlib
+
+    path = str(tmp_path / "safe_recipes")
+    t = CTable(Invoice, [(2.0, 3, 0.1), (4.0, 5, 0.1)], urlpath=path, mode="w")
+    t.add_computed_column("total", "price * qty")
+    t.materialize_computed_column("total", new_name="stored")
+    module = importlib.import_module("blosc2.expression_graph")
+    monkeypatch.setattr(module, "eval", lambda *a: pytest.fail("Loaded recipe used eval"), raising=False)
+    loaded = CTable.open(path, mode="a")
+    assert loaded._computed_cols["total"]["lazy"]._evaluation == "safe"
+    assert loaded._materialized_cols["stored"]["_evaluation"] == "safe"
+    np.testing.assert_allclose(loaded["total"][:], [6.0, 20.0])
+    loaded.append((6.0, 7, 0.1))
+    np.testing.assert_allclose(loaded["stored"][:], [6.0, 20.0, 42.0])
+
+
 def test_computed_column_open_append(tmp_path):
     path = str(tmp_path / "tbl")
     t = CTable(Invoice, [(float(i + 1), i + 1, 0.1) for i in range(3)], urlpath=path, mode="w")
@@ -876,16 +1100,13 @@ def test_dsl_computed_column_no_storage():
 
 
 def test_dsl_computed_column_persistence(tmp_path):
-    """DSL kernel source is persisted and the column is available after open."""
+    """Authored computed columns persist with an explicit row-domain contract."""
     t = _make_invoice_table(5)
-    t.add_computed_column("total", total, inputs=["price", "qty"])
+    t.add_computed_column("total", total, inputs={"price": "price", "qty": "qty"}, dtype="float64")
     path = str(tmp_path / "tbl")
     t.save(path)
-
-    t2 = blosc2.open(path)
-    assert "total" in t2._computed_cols
-    assert t2._computed_cols["total"]["kind"] == "dsl"
-    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+    restored = blosc2.CTable.open(path)
+    np.testing.assert_allclose(restored["total"][:], [1, 4, 9, 16, 25])
 
 
 def test_dsl_computed_column_inputs_mismatch_raises():
@@ -982,17 +1203,14 @@ def test_dsl_generated_column_autofill_append():
 
 
 def test_dsl_generated_column_persistence_and_append(tmp_path):
-    """DSL generated column survives save/open and auto-fills after reload."""
+    """Authored row transformers persist and refill appended rows natively."""
     t = _make_invoice_table(3)
-    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    t.add_generated_column("total", values=total, inputs={"price": "price", "qty": "qty"}, dtype="float64")
     path = str(tmp_path / "tbl")
     t.save(path)
-
-    t2 = blosc2.open(path, mode="a")
-    assert "total" in t2._materialized_cols
-    assert t2._materialized_cols["total"]["transformer_kind"] == "dsl"
-    t2.append((4.0, 4, 0.1))
-    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0])
+    restored = blosc2.CTable.open(path, mode="a")
+    restored.append((4.0, 4, 0.1))
+    np.testing.assert_allclose(restored["total"][:], [1.0, 4.0, 9.0, 16.0])
 
 
 def test_dsl_generated_column_refresh(tmp_path):
@@ -1011,8 +1229,8 @@ def test_dsl_generated_column_refresh(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
-def test_dsl_jit_backend_persisted_in_schema():
-    """jit_backend set via lazyudf() is stored in the column schema."""
+def test_dsl_jit_backend_not_persisted_in_portable_schema():
+    """A local JIT preference does not become a portable execution requirement."""
     t = _make_invoice_table(3)
     t.add_generated_column(
         "total",
@@ -1020,12 +1238,14 @@ def test_dsl_jit_backend_persisted_in_schema():
     )
     schema = t._schema_dict_with_computed()
     mat = {m["name"]: m for m in schema["materialized_columns"]}
-    assert mat["total"]["jit_backend"] == "cc"
+    assert mat["total"]["transformer_kind"] == "portable"
+    assert "jit_backend" not in mat["total"]
+    assert "dsl_source" not in mat["total"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
-def test_dsl_jit_backend_restored_after_open(tmp_path):
-    """jit_backend is restored from schema on open and used for auto-fill."""
+def test_dsl_jit_backend_falls_back_after_portable_open(tmp_path):
+    """A local backend preference allows native portable persistence/fallback."""
     t = _make_invoice_table(3)
     t.add_generated_column(
         "total",
@@ -1033,11 +1253,10 @@ def test_dsl_jit_backend_restored_after_open(tmp_path):
     )
     path = str(tmp_path / "tbl")
     t.save(path)
-
-    t2 = blosc2.open(path, mode="a")
-    assert t2._materialized_cols["total"].get("jit_backend") == "cc"
-    t2.append((4.0, 4, 0.1))
-    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0])
+    restored = blosc2.CTable.open(path, mode="a")
+    restored.append({"price": 4.0, "qty": 4})
+    np.testing.assert_allclose(restored["total"][:], [1.0, 4.0, 9.0, 16.0])
+    restored.close()
 
 
 def test_dsl_no_jit_backend_not_in_schema():

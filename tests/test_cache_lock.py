@@ -22,5 +22,7 @@ def test_windows_cache_lock_does_not_initialize_byte(tmp_path, monkeypatch, bloc
     with path.open("a+b") as file:
         cache.lock_cache_file(file, blocking=blocking)
         assert file.tell() == 0
-        assert calls == [(file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)]
+        # Blocking mode retries LK_NBLCK explicitly rather than using LK_LOCK's
+        # fixed ten-second wait budget. The uncontended attempt is identical.
+        assert calls == [(file.fileno(), msvcrt.LK_NBLCK, 1)]
     assert path.read_bytes() == b""

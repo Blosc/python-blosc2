@@ -32,7 +32,10 @@ if blosc2._HAS_NUMBA:
     @numba.jit(nopython=True)
     def udf1p_numba(inputs_tuple, output, offset):
         x = inputs_tuple[0]
-        output[:] = x + 1
+        # The persistence test needs a compiled UDF, not NumPy temporary/broadcast
+        # lowering; scalar writes compile faster and exercise the same callback.
+        for i in range(x.size):
+            output[i] = x[i] + 1
 
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
@@ -469,38 +472,33 @@ def test_clip_logaddexp(shape, chunks, blocks, slices):
     np.testing.assert_allclose(expr, np.clip(np.logaddexp(npb, npa), 6, 12))
 
 
-def test_save_ludf():
+def test_save_ludf(tmp_path):
     shape = (23,)
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
-    blosc2.remove_urlpath("a.b2nd")
-    array = blosc2.asarray(npa, urlpath="a.b2nd")
+    array = blosc2.asarray(npa, urlpath=str(tmp_path / "a.b2nd"))
 
     # Assert that shape is computed correctly
     npc = npa + 1
     cparams = {"nthreads": 4}
-    urlpath = "lazyarray.b2nd"
-    blosc2.remove_urlpath(urlpath)
+    urlpath = str(tmp_path / "lazyarray.b2nd")
 
     expr = blosc2.lazyudf(udf1p, (array,), np.float64, cparams=cparams)
 
-    expr.save(urlpath=urlpath)
-    del expr
-    expr = blosc2.open(urlpath, mode="r", deserialize="full")
+    with pytest.raises(TypeError, match="PortableKernel"):
+        expr.save(urlpath=urlpath)
+    assert not (tmp_path / "lazyarray.b2nd").exists()
     assert isinstance(expr, blosc2.LazyUDF)
     res_lazyexpr = expr.compute()
     np.testing.assert_array_equal(res_lazyexpr[:], npc)
-    blosc2.remove_urlpath(urlpath)
 
     if blosc2._HAS_NUMBA:
         expr = blosc2.lazyudf(udf1p_numba, (array,), np.float64)
-        expr.save(urlpath=urlpath)
-        del expr
-        expr = blosc2.open(urlpath, mode="r", deserialize="full")
+        with pytest.raises(TypeError, match="PortableKernel"):
+            expr.save(urlpath=urlpath)
+        assert not (tmp_path / "lazyarray.b2nd").exists()
         assert isinstance(expr, blosc2.LazyUDF)
         res_lazyexpr = expr.compute()
         np.testing.assert_array_equal(res_lazyexpr[:], npc)
-
-    blosc2.remove_urlpath(urlpath)
 
 
 def test_lazyudf_vlmeta_roundtrip(tmp_path):
@@ -511,18 +509,11 @@ def test_lazyudf_vlmeta_roundtrip(tmp_path):
 
     expr.vlmeta["name"] = "increment"
     expr.vlmeta["attrs"] = {"version": 1}
-    expr.save(urlpath=str(expr_path))
-
-    restored = blosc2.open(str(expr_path), mode="r", deserialize="full")
-
-    assert isinstance(restored, blosc2.LazyUDF)
-    assert restored.vlmeta["name"] == "increment"
-    assert restored.vlmeta["attrs"] == {"version": 1}
-
-    with blosc2.open(str(expr_path), mode="r", deserialize="full") as restored_ctx:
-        assert isinstance(restored_ctx, blosc2.LazyUDF)
-        assert restored_ctx.vlmeta["name"] == "increment"
-        assert restored_ctx.vlmeta["attrs"] == {"version": 1}
+    with pytest.raises(TypeError, match="PortableKernel"):
+        expr.save(urlpath=str(expr_path))
+    assert not expr_path.exists()
+    assert expr.vlmeta["name"] == "increment"
+    assert expr.vlmeta["attrs"] == {"version": 1}
 
 
 # Test get_chunk method

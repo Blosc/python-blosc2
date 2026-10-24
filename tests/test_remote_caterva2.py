@@ -26,15 +26,6 @@ class ReadingBig:
     value: int = blosc2.field(blosc2.int32(), chunks=(256,), blocks=(64,))
 
 
-@dataclasses.dataclass
-class ReadingRich:
-    ident: int = blosc2.field(blosc2.int64())
-    text: str = blosc2.field(blosc2.utf8(null_storage="mask"))
-    category: str = blosc2.field(blosc2.dictionary(nullable=True))
-    tags: list[int] = blosc2.field(blosc2.list(blosc2.int32(), nullable=True, batch_rows=128))  # noqa: RUF009
-    when: object = blosc2.field(blosc2.timestamp(unit="ns", null_storage="mask"))
-
-
 def safe(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return safe(dataclasses.asdict(value))
@@ -56,6 +47,17 @@ def caterva2_source(request):
     array = blosc2.asarray(np.arange(60, dtype=np.int32).reshape(6, 10), chunks=(3, 5), blocks=(1, 5))
     nrows = getattr(request, "param", 12)
     if nrows in ("rich", "rich-large"):
+        if not hasattr(np.dtypes, "StringDType"):
+            pytest.skip("Rich Caterva2 schemas require NumPy >= 2.0 (StringDType)")
+
+        @dataclasses.dataclass
+        class ReadingRich:
+            ident: int = blosc2.field(blosc2.int64())
+            text: str = blosc2.field(blosc2.utf8(null_storage="mask"))
+            category: str = blosc2.field(blosc2.dictionary(nullable=True))
+            tags: list[int] = blosc2.field(blosc2.list(blosc2.int32(), nullable=True, batch_rows=128))  # noqa: RUF009
+            when: object = blosc2.field(blosc2.timestamp(unit="ns", null_storage="mask"))
+
         rich_rows = 31 if nrows == "rich" else 1031
         category_boundary = 16 if nrows == "rich" else 1024
         table = blosc2.CTable(

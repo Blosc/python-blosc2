@@ -267,9 +267,8 @@ def test_msgpack_supports_lazyudf_dslkernel(tmp_path):
     oarr = blosc2.ObjectArray()
     oarr.append(udf)
     restored = oarr[0]
-
-    assert isinstance(restored, blosc2.LazyUDF)
-    np.testing.assert_allclose(restored[:], expected)
+    np.testing.assert_array_equal(restored[:], expected)
+    assert restored.kernel.schema_version == "1.0"
 
 
 def test_msgpack_rejects_in_memory_lazyexpr():
@@ -284,7 +283,7 @@ def test_msgpack_rejects_plain_python_lazyudf(tmp_path):
     udf = _make_persistent_python_lazyudf(tmp_path)
 
     oarr = blosc2.ObjectArray()
-    with pytest.raises(TypeError, match="DSLKernel"):
+    with pytest.raises(TypeError, match="PortableKernel"):
         oarr.append(udf)
 
 

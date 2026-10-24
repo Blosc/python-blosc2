@@ -7,7 +7,10 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
 
 .. autodata:: cpu_info
 
-.. autoclass:: finfo
+.. py:class:: finfo(dtype)
+
+   Return floating-point limits for ``dtype``. This is an alias for
+   :class:`numpy.finfo`; see NumPy's reference for its attributes and examples.
 
 .. autoclass:: iinfo
 

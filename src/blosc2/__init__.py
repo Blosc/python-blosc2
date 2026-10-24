@@ -26,8 +26,7 @@ IS_WASM = platform.machine() == "wasm32"
 Flag for WebAssembly platform.
 """
 
-if not IS_WASM:
-    import numexpr
+numexpr = None
 
 from .version import __array_api_version__, __version__
 
@@ -515,14 +514,6 @@ else:
     # Experiments say that, when using a large number of threads, it is better to not use them all
     if nthreads > 16:
         nthreads -= nthreads // 8
-    # Only call set_num_threads if within NUMEXPR_MAX_THREADS limit to avoid warning
-    numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
-    numexpr_max: int | None = None
-    if numexpr_max_env is not None:
-        with contextlib.suppress(ValueError):
-            numexpr_max = int(numexpr_max_env)
-    if numexpr_max is None or nthreads <= numexpr_max:
-        numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
@@ -586,8 +577,18 @@ from .exceptions import UnsafeDeserializationError
 
 from .c2array import c2context, C2Array, C2NDSource, ChunkAlreadyWritten, URLPath
 
-from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl, validate_dsl_jit
+from .dsl_kernel import (
+    DSLSyntaxError,
+    DSLKernel,
+    dsl_kernel,
+    validate_dsl,
+    validate_dsl_jit,
+    validate_portable_dsl,
+)
+from .portable_kernel import PortableArtifactError, PortableKernel
+from .graph_plan import NativeGraph
 from .jit_config import get_jit_options, jit_options, set_jit_options
+from .expression_graph import expression_evaluation
 from .lazyexpr import (
     LazyExpr,
     lazyudf,
@@ -601,6 +602,7 @@ from .lazyexpr import (
     result_type,
     can_cast,
 )
+from .prepared_evaluate import PreparedEvaluator, prepare_evaluate, re_evaluate
 from .proxy_source import (
     ProxySource,
     ProxyNDSource,
@@ -825,6 +827,8 @@ from .schema import (
 ndarray.NDArray = NDArray
 ndarray.NDField = NDField
 
+from .menudet import MenudetKernel, menudet
+
 __all__ = [  # noqa : RUF022
     # Constants
     "EXTENDED_HEADER_LENGTH",
@@ -908,8 +912,15 @@ __all__ = [  # noqa : RUF022
     "Index",
     "LazyArray",
     "DSLKernel",
+    "validate_portable_dsl",
+    "PortableKernel",
+    "NativeGraph",
+    "PortableArtifactError",
     "DSLSyntaxError",
     "LazyExpr",
+    "PreparedEvaluator",
+    "prepare_evaluate",
+    "re_evaluate",
     "LazyUDF",
     "ListArray",
     "NullPolicy",
@@ -1052,6 +1063,8 @@ __all__ = [  # noqa : RUF022
     "jit",
     "lazyexpr",
     "dsl_kernel",
+    "menudet",
+    "MenudetKernel",
     "validate_dsl",
     "validate_dsl_jit",
     "lazyudf",

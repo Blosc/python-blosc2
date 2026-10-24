@@ -16,9 +16,16 @@ def kernel(x):
 
 
 def main():
-    backend, mode = sys.argv[1:]
+    backend, mode = sys.argv[1:3]
+    workload = sys.argv[3] if len(sys.argv) > 3 else "all"
     jit = mode != "off"
     kwargs = {"jit": jit, "jit_backend": backend}
+    if workload == "cache":
+        x = np.arange(16, dtype=np.float64)
+        arr = blosc2.asarray(x)
+        result = (arr * 2 + 1).compute(**kwargs)
+        np.testing.assert_array_equal(result[:], x * 2 + 1)
+        return
     a = blosc2.arange(0, 128, **kwargs)
     np.testing.assert_array_equal(a[:], np.arange(128))
     a = blosc2.linspace(0, 10, 128, **kwargs)

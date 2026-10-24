@@ -18,12 +18,14 @@ class MissingOperands(ValueError):
 class UnsafeDeserializationError(ValueError):
     """Raised when safe deserialization encounters an active serialized value."""
 
-    def __init__(self, kind: str, *, location: str | None = None):
+    def __init__(self, kind: str, *, location: str | None = None, hint: str | None = None):
         where = f" in {location}" if location else ""
-        super().__init__(
-            f"Encountered active serialized value {kind!r}{where} while using "
-            "deserialize='safe'. Reopen with deserialize='full' only if you trust "
+        advice = hint or (
+            "Reopen with deserialize='full' only if you trust "
             "this data and intend to allow reference resolution and lazy-object reconstruction."
+        )
+        super().__init__(
+            f"Encountered active serialized value {kind!r}{where} while using deserialize='safe'. {advice}"
         )
         self.kind = kind
         self.location = location
