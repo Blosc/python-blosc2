@@ -274,15 +274,71 @@ def test_unsupported_annotations():
             return x
 
 
-def test_native_execution_error_not_replayed(native_graph_runtime, monkeypatch):
+@pytest.mark.parametrize("route", ["resident", "block"])
+def test_native_execution_error_not_replayed(native_graph_runtime, monkeypatch, route):
     lazy = inferred(np.arange(4.0), np.ones(4))
 
     def failed(*args, **kwargs):
         raise blosc2.PortableArtifactError("Invocation failed", status="evaluation_error")
 
-    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", failed)
+    if route == "resident":
+        monkeypatch.setattr("blosc2.native_graph.execute_resident", failed)
+    else:
+        monkeypatch.delattr(lazy.kernel, "_resident_plan")
+        monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", failed)
     with pytest.raises(blosc2.PortableArtifactError, match="Invocation failed"):
         lazy[:]
+
+
+def test_arithmetic_specialization_borrows_native_inference(native_graph_runtime, monkeypatch):
+    author = blosc2.menudet(inferred.__wrapped__)
+    x = np.arange(1000, dtype="int64")
+    y = x + 1
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Arithmetic specialization re-imported a portable artifact")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(blosc2.PortableKernel, "from_json", forbidden)
+        kernel = author.specialize(x, y)
+        assert kernel.output_dtype == x.dtype
+        assert kernel.inferred_dtype == x.dtype
+        assert kernel is author.specialize(x, y)
+        np.testing.assert_array_equal(kernel.lazy({"x": x, "y": y})[:], x + (y - 1))
+    restored = blosc2.PortableKernel.from_json(kernel.to_json())
+    np.testing.assert_array_equal(restored.evaluate({"x": x, "y": y}), x + (y - 1))
+
+
+def test_arithmetic_resident_rebinds_and_reuses_schedule(native_graph_runtime, monkeypatch):
+    author = blosc2.menudet(inferred.__wrapped__)
+    x = np.arange(1_000_000, dtype="int64")
+    y = x + 1
+    lazy = author(x, y)
+    monkeypatch.setattr(blosc2, "nthreads", 2)
+    first = lazy[:]
+    schedule = lazy._resident_native[2]
+    lazy.inputs["x"] = x + 10
+    monkeypatch.setattr(blosc2, "nthreads", 4)
+    second = lazy[:]
+    assert lazy._resident_native[2] is schedule
+    assert lazy._source_execution_report["threads"] == 4
+    assert not np.shares_memory(first, second)
+    np.testing.assert_array_equal(first, x + (y - 1))
+    np.testing.assert_array_equal(second, x + 10 + (y - 1))
+
+
+@pytest.mark.parametrize("options", [{"cflags": "-O1"}, {"jit": True, "cache_dir": "cache"}])
+def test_arithmetic_retains_explicit_compiler_options(native_graph_runtime, monkeypatch, tmp_path, options):
+    author = blosc2.menudet(inferred.__wrapped__)
+    x = np.arange(17, dtype="int64")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Arithmetic graph preparation bypassed explicit compiler options")
+
+    monkeypatch.setattr(blosc2.NativeGraph, "from_expression", forbidden)
+    options = {**options, "cache_dir": tmp_path}
+    with blosc2.jit_options(**options):
+        np.testing.assert_array_equal(author(x, x)[:], x + (x - 1))
 
 
 def test_unavailable_return_inference(native_graph_runtime, monkeypatch):

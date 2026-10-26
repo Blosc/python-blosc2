@@ -710,7 +710,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         plan, inputs, reduction = lower_native_graph(expr, jit=jit, allow_output=True)
         if reduction or plan.info()["stages"] != 1:
             return None
-        kernel = _resident_map_kernel(plan)
+        kernel = resident_map_kernel(plan)
     except NotImplementedError:
         return None
     except blosc2.PortableArtifactError as error:
@@ -1088,7 +1088,7 @@ def _prefilter_compressed_map(plan, inputs, workers, out):
 
     from .storage_readers import evaluate_prefilter_numpy, storage_reader_eligible
 
-    kernel = _resident_map_kernel(plan)
+    kernel = resident_map_kernel(plan)
     if (
         kernel is not None
         and storage_reader_eligible(kernel)
@@ -1286,7 +1286,7 @@ def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0, out=
 
 
 @lru_cache(maxsize=128)
-def _resident_map_kernel(plan):
+def resident_map_kernel(plan):
     from . import blosc2_ext
     from .portable_kernel import PortableArtifactError, PortableKernel
 
@@ -1395,7 +1395,7 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
             )
         )
     ):
-        kernel = _resident_map_kernel(plan)
+        kernel = resident_map_kernel(plan)
         if kernel is not None:
             values, report = evaluate_resident(kernel, inputs, shape, workers, out=out)
             return values, {
@@ -1439,7 +1439,7 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
         return None
     if not full_selection:
         return None
-    kernel = _resident_map_kernel(plan)
+    kernel = resident_map_kernel(plan)
     if kernel is None:
         return None
     lazy = SimpleNamespace(kernel=kernel, inputs=inputs, _domain=shape)

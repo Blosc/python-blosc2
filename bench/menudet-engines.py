@@ -252,7 +252,7 @@ def cold_preparation():
         native._native_first_syntax,
         native._native_text_expression,
         native.compile_plan,
-        native._resident_map_kernel,
+        native.resident_map_kernel,
         lazy._evaluate_recipe_names,
         graph.parse_expression,
         graph.expression_syntax,

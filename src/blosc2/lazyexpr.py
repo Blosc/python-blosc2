@@ -5183,9 +5183,7 @@ class LazyExpr(LazyArray):
 
     @classmethod
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):  # noqa: C901
-        # Validate the expression
-        validate_expr(expression)
-        if (
+        native_metadata = (
             guess
             and type(expression) is str
             and type(operands) is dict
@@ -5194,7 +5192,11 @@ class LazyExpr(LazyArray):
             and where is None
             and ne_args is None
             and evaluation_mode() == "full"
-        ):
+        )
+        text = _arithmetic_recipe_text(expression, operands) if native_metadata else None
+        if text is None or "#" in expression or _blacklist_re.search(expression):
+            validate_expr(expression)
+        if native_metadata:
             from .native_graph import (
                 _native_first_array,
                 _native_first_syntax,
@@ -5204,7 +5206,6 @@ class LazyExpr(LazyArray):
             if all(_native_first_array(value) for value in operands.values()):
                 graph = None
                 renamed = bindings = None
-                text = _arithmetic_recipe_text(expression, operands)
                 if text is None:
                     try:
                         graph = parse_expression(expression)
@@ -5268,17 +5269,18 @@ class LazyExpr(LazyArray):
 
                             # The reviewed arithmetic subset can get metadata from its execution plan.
                             inputs = result.operands
-                            plan = NativeGraph.from_expression(
-                                result.expression,
-                                {name: value.dtype.name for name, value in inputs.items()},
-                                jit=native_jit,
-                            )
-                            plan._frontend = "native-expression"
-                            resident = prepare_resident(result.expression, inputs, jit=native_jit, plan=plan)
+                            resident = prepare_resident(result.expression, inputs, jit=native_jit)
                             if resident is not None:
                                 result._resident_native = resident
                                 _, plan, schedule = resident
+                                info = {"dtype": plan.inferred_dtype, "shape": resident[0][2]}
                             else:
+                                plan = NativeGraph.from_expression(
+                                    result.expression,
+                                    {name: value.dtype.name for name, value in inputs.items()},
+                                    jit=native_jit,
+                                )
+                                plan._frontend = "native-expression"
                                 if not native_weak_scalars_eligible(plan, result.expression, inputs):
                                     raise NotImplementedError(
                                         "Checked scalar metadata requires legacy preparation"
@@ -5286,7 +5288,7 @@ class LazyExpr(LazyArray):
                                 schedule = plan.specialize(
                                     {name: (value.dtype, value.shape) for name, value in inputs.items()}
                                 )
-                            info = schedule.info()
+                                info = schedule.info()
                             if plan.stages == 1 and info["dtype"].kind in "biuf":
                                 result._dtype = info["dtype"]
                                 result._shape = info["shape"]

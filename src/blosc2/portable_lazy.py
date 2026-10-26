@@ -139,6 +139,32 @@ class PortableLazyArray(LazyArray):
         selection += (slice(None),) * (len(self.shape) - len(selection))
         if len(selection) != len(self.shape):
             raise IndexError("Too many indices")
+        plan = getattr(self.kernel, "_resident_plan", None)
+        if (
+            plan is not None
+            and all(part == slice(None) for part in selection)
+            and all(value.shape == self._domain for value in self.inputs.values())
+        ):
+            from .native_graph import execute_resident, prepare_resident
+
+            prepared = prepare_resident(
+                self.kernel._resident_expression,
+                self.inputs,
+                jit=self.kernel.has_jit,
+                cached=getattr(self, "_resident_native", None),
+                plan=plan,
+            )
+            if prepared is not None:
+                self._resident_native = prepared
+                values, report = execute_resident(prepared, self.inputs)
+                self._source_execution_report = {
+                    **report,
+                    "route": "parallel-resident" if report["tasks"] > 1 else "native-resident",
+                    "threads": report["tasks"],
+                    "input_buffer_bytes": 0,
+                    "output_copy_bytes": 0,
+                }
+                return values
         from .storage_readers import evaluate_storage_if_eligible
 
         # Complex has no native storage shortcut yet. Use the general block

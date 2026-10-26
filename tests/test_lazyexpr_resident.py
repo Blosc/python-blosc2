@@ -138,7 +138,7 @@ def test_borrowed_artifact_retains_native_owner(parallel_runtime):
 
 
 def test_resident_kernel_retains_plan_without_reimport(runtime, monkeypatch):
-    from blosc2.native_graph import _resident_map_kernel
+    from blosc2.native_graph import resident_map_kernel
 
     plan = blosc2.NativeGraph.from_expression("x + (y - 1)", {"x": "float64", "y": "float64"})
 
@@ -146,9 +146,9 @@ def test_resident_kernel_retains_plan_without_reimport(runtime, monkeypatch):
         pytest.fail("Resident map reimported a validated graph artifact")
 
     monkeypatch.setattr(blosc2.PortableKernel, "from_json", forbidden)
-    kernel = _resident_map_kernel(plan)
+    kernel = resident_map_kernel(plan)
     assert kernel.to_json() == plan.map_json()
-    _resident_map_kernel.cache_clear()
+    resident_map_kernel.cache_clear()
     del plan
     gc.collect()
     x = np.arange(17.0)

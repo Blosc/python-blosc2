@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.native_graph import _resident_map_kernel, prepare_native_first
+from blosc2.native_graph import prepare_native_first, resident_map_kernel
 from conftest import orthogonal_cases
 
 pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unavailable on WASM")
@@ -55,7 +55,7 @@ def test_native_first_borrows_validated_portable_map(native_first_runtime, monke
         pytest.fail("Prepared graph map was exported and reimported")
 
     monkeypatch.setattr(blosc2.PortableKernel, "from_json", forbidden)
-    kernel = _resident_map_kernel(prepared[0])
+    kernel = resident_map_kernel(prepared[0])
     assert kernel.has_jit
     assert kernel.to_json() == prepared[0].map_json()
     np.testing.assert_array_equal(kernel.evaluate_block(prepared[1]), x + (y - 1))

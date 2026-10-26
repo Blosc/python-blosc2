@@ -105,6 +105,17 @@ class MenudetKernel:
         )
         # Source structure is fixed; capture values and native validation retain their usual timing.
         author._capture_analysis = capture_analysis(author.dsl_source, author.input_names)
+        self._expression = None
+        if (
+            len(function.body) == 1
+            and isinstance(function.body[0], ast.Return)
+            and function.body[0].value is not None
+        ):
+            from .expression_graph import arithmetic_names
+
+            expression = ast.unparse(function.body[0].value)
+            if arithmetic_names(expression) == tuple(sorted(self._names)):
+                self._expression = expression
         self._author = author
         self._jit, self._require_jit = jit, require_jit
         self._partitions = tuple(partitions) if partitions is not None else None
@@ -147,7 +158,7 @@ class MenudetKernel:
         return inputs
 
     def _specialize(self, inputs):
-        from . import jit_config
+        from . import FPAccuracy, jit_config
 
         dtypes = {name: np.dtype(value.dtype).newbyteorder("=") for name, value in inputs.items()}
         key = (
@@ -172,6 +183,56 @@ class MenudetKernel:
             if key not in self._kernels:
                 output = self._output_dtype
                 jit = True if self._require_jit else self._jit
+                options = jit_config.execution_options()
+                policy = options["jit"] if jit is None else jit
+                if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in (
+                    "1",
+                    "true",
+                    "on",
+                    "tcc",
+                    "cc",
+                ):
+                    policy = True
+                compiled = policy is True or (
+                    policy is None
+                    and os.environ.get("ME_DSL_JIT", "").lower() not in ("", "0", "false", "off")
+                )
+                configured = any(
+                    options[name]
+                    for name in ("compiler", "cflags", "trace", "compiler_output", "jit_backend")
+                ) or (compiled and options["cache_dir"] is not None)
+                kernel = None
+                if (
+                    output is None
+                    and self._expression is not None
+                    and self._export_options["cardinality"] == "elementwise"
+                    and self._export_options["ndim"] == 0
+                    and self._export_options["casting"] == "unsafe"
+                    and not configured
+                    and options["fp_accuracy"] == FPAccuracy.DEFAULT
+                    and all(dtype.kind in "biuf" for dtype in dtypes.values())
+                ):
+                    from .graph_plan import NativeGraph
+                    from .native_graph import resident_map_kernel
+                    from .portable_kernel import PortableArtifactError
+
+                    try:
+                        plan = NativeGraph.from_expression(
+                            self._expression, dtypes, jit=policy, require_jit=self._require_jit
+                        )
+                        kernel = resident_map_kernel(plan)
+                    except (NotImplementedError, PortableArtifactError, TypeError, ValueError):
+                        pass
+                    if kernel is not None:
+                        kernel._resident_plan = plan
+                        kernel._resident_expression = self._expression
+                        if kernel.inferred_dtype is None:
+                            raise TypeError(
+                                "Native output inference is unavailable; add a return dtype annotation"
+                            )
+                if kernel is not None:
+                    self._kernels[key] = kernel
+                    return kernel
                 if output is None:
                     # Infer before final conversion; reuse this import when its output already matches.
                     if any(dtype.kind not in "biuf" for dtype in dtypes.values()):

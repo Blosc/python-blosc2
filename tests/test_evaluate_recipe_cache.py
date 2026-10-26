@@ -82,6 +82,22 @@ def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, native_
     np.testing.assert_array_equal(blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}), x + (y - 1))
 
 
+def test_plain_arithmetic_shares_preparation(monkeypatch, native_graph_runtime):
+    x = np.arange(1000, dtype="int64")
+    y = x + 1
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Reviewed arithmetic preparation repeated legacy validation")
+
+    monkeypatch.setattr(module, "validate_expr", forbidden)
+    np.testing.assert_array_equal(blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})[:], x + (y - 1))
+
+    first = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+    second = blosc2.lazyexpr("x + (y - 1)", {"x": x + 10, "y": y})
+    assert first._resident_native[1] is second._resident_native[1]
+    np.testing.assert_array_equal(second[:], x + 10 + (y - 1))
+
+
 @pytest.mark.parametrize("names", [("x", "e3"), ("α", "β")])
 def test_numpy_rebasing_preserves_numeric_literals_and_aliases(names, native_graph_runtime):
     x = np.arange(17.0)
