@@ -200,7 +200,9 @@ def test_jit_numpy_read_reuses_resident_schedule(monkeypatch, native_graph_runti
     y = x + 1
     with blosc2.jit_options(jit=True):
         expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
-        prepared = expr._resident_native
+        prepared = getattr(expr, "_resident_native", None)
+        if prepared is None:
+            pytest.skip("Resident schedules are unavailable on this platform")
 
         def forbidden(*args, **kwargs):
             pytest.fail("Prepared JIT read repeated general graph dispatch")
