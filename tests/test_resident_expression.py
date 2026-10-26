@@ -20,6 +20,8 @@ def runtime(native_graph_runtime):
 
 @pytest.mark.parametrize("size", [100_000, 1_000_000])
 def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch, size):
+    if blosc2.IS_WASM and size >= native._MINIMUM_PARALLEL_ITEMS:
+        pytest.skip("Large resident fast path requires host threads")
     x = np.arange(size, dtype="int64")
     y = x + 1
     expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
@@ -42,6 +44,7 @@ def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch, size):
 
 
 @pytest.mark.parametrize("mode", ["full", "safe"])
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident preparation requires host threads")
 def test_parallel_evaluate_reuses_schedule_without_lazy_dispatch(monkeypatch, mode):
     x = np.arange(1_000_000, dtype="int64")
     y = x + 1
@@ -68,6 +71,7 @@ def test_parallel_evaluate_reuses_schedule_without_lazy_dispatch(monkeypatch, mo
     np.testing.assert_array_equal(second, x + 10 + (y - 1))
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
 def test_parallel_resident_uses_current_thread_count(monkeypatch):
     x = np.arange(1_000_000, dtype="int64")
     expr = blosc2.lazyexpr("x + 1", {"x": x})
@@ -89,6 +93,8 @@ def test_large_checked_map_retains_general_dispatch():
 
 
 def test_large_weak_scalar_overflow_does_not_write():
+    if np.lib.NumpyVersion(np.__version__) < "2.0.0":
+        pytest.skip("NumPy 2 weak-scalar overflow diagnostics")
     x = np.zeros(300_000, dtype="int8")
     out = np.full_like(x, -1)
     with pytest.raises(OverflowError):
@@ -121,6 +127,8 @@ def test_resident_schedule_tracks_compilation_options():
 @pytest.mark.parametrize("engine", ["evaluate", "lazyexpr"])
 @pytest.mark.parametrize("size", [17, 1_000_000])
 def test_resident_execution_failure_never_replays(engine, monkeypatch, size):
+    if blosc2.IS_WASM and size >= native._MINIMUM_PARALLEL_ITEMS:
+        pytest.skip("Large resident fast path requires host threads")
     x = np.arange(size, dtype="int64")
     original = native.prepare_resident
     executed = []

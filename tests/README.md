@@ -72,6 +72,7 @@ Unhandled request errors from the standard-library test servers print the
 exception type/message first, followed by the current test and complete
 traceback. The same details are saved under
 `.pytest_cache/d/http-server-errors/<worker>.log` (`master.log` without xdist).
+With `-p no:cacheprovider`, logs go into a pytest temporary directory instead.
 Each worker resets its log at session startup. Request errors are still logged,
 not suppressed or automatically turned into test failures; inspect these files
 if parallel progress output obscures a traceback from an otherwise passing run.

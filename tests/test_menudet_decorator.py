@@ -309,6 +309,7 @@ def test_arithmetic_specialization_borrows_native_inference(native_graph_runtime
     np.testing.assert_array_equal(restored.evaluate({"x": x, "y": y}), x + (y - 1))
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
 def test_arithmetic_resident_rebinds_and_reuses_schedule(native_graph_runtime, monkeypatch):
     author = blosc2.menudet(inferred.__wrapped__)
     x = np.arange(1_000_000, dtype="int64")
@@ -325,6 +326,18 @@ def test_arithmetic_resident_rebinds_and_reuses_schedule(native_graph_runtime, m
     assert not np.shares_memory(first, second)
     np.testing.assert_array_equal(first, x + (y - 1))
     np.testing.assert_array_equal(second, x + 10 + (y - 1))
+
+
+def test_arithmetic_threadless_large_read(native_graph_runtime, monkeypatch):
+    x = np.arange(300_003, dtype="int64")
+    author = blosc2.menudet(inferred.__wrapped__)
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Threadless arithmetic scheduled host workers")
+
+    monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
+    np.testing.assert_array_equal(author(x, x)[:], x + (x - 1))
 
 
 @pytest.mark.parametrize("options", [{"cflags": "-O1"}, {"jit": True, "cache_dir": "cache"}])

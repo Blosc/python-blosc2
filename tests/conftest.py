@@ -96,9 +96,15 @@ def report_http_server_error(log_path, client_address):
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _http_server_diagnostics(pytestconfig):
+def _http_server_diagnostics(pytestconfig, tmp_path_factory):
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
-    log_path = pytestconfig.cache.mkdir("http-server-errors") / f"{worker}.log"
+    cache = getattr(pytestconfig, "cache", None)
+    log_dir = (
+        cache.mkdir("http-server-errors")
+        if cache is not None
+        else tmp_path_factory.mktemp("http-server-errors")
+    )
+    log_path = log_dir / f"{worker}.log"
     log_path.write_text("", encoding="utf-8")
     lock = threading.Lock()
 
