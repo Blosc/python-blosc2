@@ -115,6 +115,7 @@ def test_graph_execution_failure_never_replays(parallel_runtime, monkeypatch):
         raise ArithmeticError("Parallel graph failed")
 
     monkeypatch.setattr("blosc2.native_graph._parallel_resident_graph", fail)
+    monkeypatch.setattr("blosc2.native_graph.prepare_resident", lambda *args, **kwargs: None)
     x = np.ones(600_003)
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     with pytest.raises(ArithmeticError, match="Parallel graph failed"):

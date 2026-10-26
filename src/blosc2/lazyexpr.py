@@ -6534,8 +6534,9 @@ def evaluate(
     a fresh NumPy output is allocated. Neither operand/output arrays nor numerical
     results are retained in the cache.
 
-    Small aligned C-contiguous native numeric maps with matching operand shapes bind
+    Aligned C-contiguous native numeric maps with matching operand shapes bind
     directly to immutable native schedules, avoiding general lazy/storage dispatch.
+    Large partitionable maps retain parallel execution with the current thread count.
 
     Eligible numeric arithmetic and elementwise math calls use the native
     Menudet kernels, including explicit NumPy or Blosc2 destinations. Compressed
@@ -6614,8 +6615,10 @@ def evaluate(
     if isinstance(lexpr, tuple):
         resident, inputs = lexpr
         if out is None and order in {"C", "A", "K"}:
+            from .native_graph import execute_resident
+
             # Admission and policy were resolved for these current arrays; execution never falls back.
-            return resident[2].execute(inputs)[0]
+            return execute_resident(resident, inputs)[0]
         # Layout/casting/storage requests retain the public output preflight and the same native plan.
         lexpr = LazyExpr(None)
         lexpr.expression = ex

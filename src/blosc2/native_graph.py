@@ -296,7 +296,7 @@ def _resident_signature(expression, inputs, jit):
             return None
         if first is None:
             first = value
-            if not 0 < value.size < _MINIMUM_PARALLEL_ITEMS:
+            if not value.size:
                 return None
         elif value.shape != first.shape:
             return None
@@ -311,11 +311,18 @@ def native_weak_scalars_eligible(plan, expression, inputs):
 
 
 def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
-    """Prepare an admitted small resident map; retain metadata and native owners only."""
+    """Prepare an admitted resident map; retain metadata and native owners only."""
     import blosc2
 
     signature = _resident_signature(expression, inputs, jit)
     if signature is None:
+        return None
+    parallel = math.prod(signature[2]) >= _MINIMUM_PARALLEL_ITEMS
+    if parallel and (
+        blosc2.IS_WASM
+        or not getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+        or not getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+    ):
         return None
     if cached is not None and cached[0] == signature:
         return cached
@@ -327,8 +334,8 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
                 signature[-1],
                 input_dtypes=tuple((name, value.dtype) for name, value in inputs.items()),
             )
-        # Serial whole-domain execution preserves checked conversions and mixed-type error ordering.
-        if plan.stages != 1:
+        # Checked conversions and mixed-type errors retain their whole-domain execution order.
+        if plan.stages != 1 or (parallel and not plan.partitionable):
             return None
         schedule = plan.specialize(
             {name: (value.dtype, value.shape) for name, value in inputs.items()}, 65536
@@ -341,6 +348,14 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
     except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
         return None
     return signature, plan, schedule
+
+
+def execute_resident(prepared, inputs, *, out=None):
+    """Bind current arrays and thread count to an admitted native schedule."""
+    import blosc2
+
+    workers = min(blosc2.nthreads, 32) if math.prod(prepared[0][2]) >= _MINIMUM_PARALLEL_ITEMS else 1
+    return prepared[2].execute(inputs, out=out, workers=workers)
 
 
 def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_accuracy=None, options=None):
@@ -377,12 +392,11 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
     ):
         return None
     # Once execution starts, errors propagate; no other route may replay a failed kernel.
-    result, report = (
-        schedule.execute(expr.operands) if output is None else schedule.execute(expr.operands, out=output)
-    )
+    result, report = execute_resident(prepared, expr.operands, out=output)
     expr._native_execution_report = {
         **report,
-        "route": "native-resident",
+        "route": "parallel-resident" if report["tasks"] > 1 else "native-resident",
+        "threads": report["tasks"],
         "semantic_revision": "menudet-numpy-1.0",
         "backend": "portable-jit" if report["jit_stages"] else "portable-interpreter",
         "frontend": getattr(plan, "_frontend", "native-expression"),

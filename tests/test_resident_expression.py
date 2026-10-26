@@ -18,8 +18,9 @@ def runtime(native_graph_runtime):
     lazy._evaluate_recipe_cache.clear()
 
 
-def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch):
-    x = np.arange(100_000.0)
+@pytest.mark.parametrize("size", [100_000, 1_000_000])
+def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch, size):
+    x = np.arange(size, dtype="int64")
     y = x + 1
     expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
     schedule = expr._resident_native[2]
@@ -36,7 +37,63 @@ def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch):
     assert not np.shares_memory(first, second)
     np.testing.assert_array_equal(first, x + (y - 1))
     np.testing.assert_array_equal(second, x + 10 + (y - 1))
-    assert expr._native_execution_report["route"] == "native-resident"
+    report = expr._native_execution_report
+    assert report["route"] == ("parallel-resident" if report["tasks"] > 1 else "native-resident")
+
+
+@pytest.mark.parametrize("mode", ["full", "safe"])
+def test_parallel_evaluate_reuses_schedule_without_lazy_dispatch(monkeypatch, mode):
+    x = np.arange(1_000_000, dtype="int64")
+    y = x + 1
+    schedules = []
+    original = native.prepare_resident
+
+    def prepare(*args, **kwargs):
+        result = original(*args, **kwargs)
+        assert result is not None
+        schedules.append(result[2])
+        return result
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Parallel resident evaluate entered lazy preparation")
+
+    monkeypatch.setattr(native, "prepare_resident", prepare)
+    monkeypatch.setattr(lazy, "lazyexpr", forbidden)
+    with blosc2.expression_evaluation(mode):
+        first = blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y})
+        second = blosc2.evaluate("x + (y - 1)", local_dict={"x": x + 10, "y": y})
+    assert schedules[0] is schedules[1]
+    assert not np.shares_memory(first, second)
+    np.testing.assert_array_equal(first, x + (y - 1))
+    np.testing.assert_array_equal(second, x + 10 + (y - 1))
+
+
+def test_parallel_resident_uses_current_thread_count(monkeypatch):
+    x = np.arange(1_000_000, dtype="int64")
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    schedule = expr._resident_native[2]
+    for threads in (2, 4, 1):
+        monkeypatch.setattr(blosc2, "nthreads", threads)
+        np.testing.assert_array_equal(expr[:], x + 1)
+        assert expr._resident_native[2] is schedule
+        assert expr._native_execution_report["tasks"] == threads
+
+
+def test_large_checked_map_retains_general_dispatch():
+    x = np.arange(300_000, dtype="int64")
+    y = x.astype("uint64")
+    assert native.prepare_resident("x + y", {"x": x, "y": y}) is None
+    actual = blosc2.evaluate("x + y", local_dict={"x": x, "y": y})
+    assert actual.dtype == (x + y).dtype
+    np.testing.assert_array_equal(actual, x + y)
+
+
+def test_large_weak_scalar_overflow_does_not_write():
+    x = np.zeros(300_000, dtype="int8")
+    out = np.full_like(x, -1)
+    with pytest.raises(OverflowError):
+        blosc2.evaluate("x + 128", local_dict={"x": x}, out=out)
+    np.testing.assert_array_equal(out, -1)
 
 
 def test_resident_expression_mutation_invalidates_plan():
@@ -62,8 +119,9 @@ def test_resident_schedule_tracks_compilation_options():
 
 
 @pytest.mark.parametrize("engine", ["evaluate", "lazyexpr"])
-def test_resident_execution_failure_never_replays(engine, monkeypatch):
-    x = np.arange(17.0)
+@pytest.mark.parametrize("size", [17, 1_000_000])
+def test_resident_execution_failure_never_replays(engine, monkeypatch, size):
+    x = np.arange(size, dtype="int64")
     original = native.prepare_resident
     executed = []
 
@@ -97,12 +155,13 @@ def test_resident_execution_failure_never_replays(engine, monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["overlap", "strided", "cast", "fortran"])
-def test_resident_explicit_output_preserves_contract(kind):
-    x = np.arange(24.0).reshape(4, 6)
+@pytest.mark.parametrize("shape", [(4, 6), (1000, 1000)])
+def test_resident_explicit_output_preserves_contract(kind, shape):
+    x = np.arange(np.prod(shape), dtype="float64").reshape(shape)
     if kind == "overlap":
         out = x
     elif kind == "strided":
-        out = np.empty((4, 12))[:, ::2]
+        out = np.empty((shape[0], shape[1] * 2))[:, ::2]
     elif kind == "cast":
         out = np.empty_like(x, dtype="float32")
     else:
