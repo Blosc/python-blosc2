@@ -83,6 +83,7 @@ def test_native_host_executor_partitions_strided_output(jit):
 def test_native_executor_joins_on_submission_failure(monkeypatch):
     import blosc2.resident_execution as resident
 
+    monkeypatch.setattr(blosc2.blosc2_ext, "native_graph_executor_available", lambda: False, raising=False)
     pool = resident.resident_pool()
     futures = []
 
@@ -102,6 +103,32 @@ def test_native_executor_joins_on_submission_failure(monkeypatch):
         schedule.execute({"x": x}, workers=4)
     assert futures
     assert all(future.done() for future in futures)
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_native_executor_reuses_schedule_concurrently(monkeypatch, jit):
+    from concurrent.futures import ThreadPoolExecutor
+
+    available = getattr(blosc2.blosc2_ext, "native_graph_executor_available", lambda: False)
+    if not available():
+        pytest.skip("Requires a native host executor")
+
+    def forbidden():
+        pytest.fail("Native tasks entered the Python executor")
+
+    monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
+    x = np.arange(600_003.0)
+    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype}, jit=jit)
+    schedule = plan.specialize({"x": (x.dtype, x.shape)})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(schedule.execute, {"x": x + offset}, workers=workers)
+            for offset, workers in ((0, 2), (10, 4))
+        ]
+        for future, (offset, workers) in zip(futures, ((0, 2), (10, 4)), strict=True):
+            result, report = future.result()
+            np.testing.assert_array_equal(result, x + offset + 1)
+            assert report["tasks"] == workers
 
 
 def test_public_disjoint_views_of_same_allocation():

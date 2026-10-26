@@ -1557,6 +1557,8 @@ cdef object array_view_binding(np.ndarray array, b2_array_view *view):
 cdef extern from "dsl_graph_bridge.h":
     ctypedef void (*b2_graph_task_fn)(void *, size_t) noexcept nogil
     ctypedef int (*b2_graph_fork_join_fn)(void *, size_t, b2_graph_task_fn, void *) noexcept nogil
+    int b2_graph_native_executor_available()
+    int b2_graph_native_fork_join(void *, size_t, b2_graph_task_fn, void *) noexcept nogil
     unsigned b2_graph_execution_capabilities(const void *) nogil
     int b2_graph_execute_parallel_into(const void *, const b2_array_view *, int,
         const b2_array_view *, unsigned, size_t, b2_graph_fork_join_fn, void *,
@@ -1693,6 +1695,10 @@ cdef int graph_host_fork_join(void *host, size_t count, b2_graph_task_fn task, v
 
 def native_graph_output_available():
     return bool(b2_graph_output_available())
+
+
+def native_graph_executor_available():
+    return bool(b2_graph_native_executor_available())
 
 
 def native_graph_sources_available():
@@ -1859,6 +1865,9 @@ cdef class NativeGraphSchedule:
         cdef bytes name
         cdef np.ndarray array, bound, output
         cdef size_t normalized = 0, capacity
+        cdef b2_graph_fork_join_fn executor = graph_host_fork_join
+        if workers > 1 and native_graph_executor_available():
+            executor = b2_graph_native_fork_join
         if n > 128:
             raise ValueError("Native graph binding limit exceeded")
         memset(views, 0, sizeof(views))
@@ -1891,7 +1900,7 @@ cdef class NativeGraphSchedule:
         with nogil:
             if workers > 1:
                 rc = b2_graph_execute_parallel_into(self._handle,views,n,&destination,raise_mask,workers,
-                    graph_host_fork_join,<void *>executor_errors,&report,&error)
+                    executor,<void *>executor_errors,&report,&error)
             elif out is None:
                 rc = b2_graph_execute(self._handle, views, n, np.PyArray_DATA(output), capacity,
                                       raise_mask, &report, &error)

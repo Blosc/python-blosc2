@@ -233,6 +233,10 @@ or error propagation. Floating flags are aggregated, execution errors are never
 replayed, and standalone ``kernel.evaluate_block(...)`` remains a single logical
 invocation. Callers must not mutate inputs during a read.
 
+On macOS, native graph schedules use the system's synchronous dispatch executor,
+avoiding Python task submission for these resident maps. Other platforms retain
+the Python host executor. Both routes join all tasks before returning.
+
 Eligible single-stage portable-JIT ``LazyExpr`` graphs use this scheduler too.
 Their prepared native map artifact is borrowed with its owner retained, rather
 than recompiled. Immutable weak scalar captures are substituted only in the

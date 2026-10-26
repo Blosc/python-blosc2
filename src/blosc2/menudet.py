@@ -161,9 +161,10 @@ class MenudetKernel:
         from . import FPAccuracy, jit_config
 
         dtypes = {name: np.dtype(value.dtype).newbyteorder("=") for name, value in inputs.items()}
+        options = jit_config.execution_options()
         key = (
             tuple((name, dtype.str) for name, dtype in dtypes.items()),
-            tuple(jit_config.execution_options().items()),
+            tuple(options.items()),
             tuple(
                 (name, os.environ.get(name))
                 for name in (
@@ -183,7 +184,6 @@ class MenudetKernel:
             if key not in self._kernels:
                 output = self._output_dtype
                 jit = True if self._require_jit else self._jit
-                options = jit_config.execution_options()
                 policy = options["jit"] if jit is None else jit
                 if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in (
                     "1",

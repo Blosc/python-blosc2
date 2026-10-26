@@ -64,7 +64,8 @@ class PortableLazyArray(LazyArray):
     def __init__(self, kernel, inputs, *, shape=None, partitions=None):
         self.kernel = kernel
         self.inputs = dict(inputs)
-        if set(self.inputs) != set(kernel.input_dtypes):
+        input_dtypes = kernel.input_dtypes
+        if self.inputs.keys() != input_dtypes.keys():
             raise ValueError("Portable input names disagree with native signature")
         if shape is None:
             if not self.inputs:
@@ -77,9 +78,9 @@ class PortableLazyArray(LazyArray):
             raise ValueError("Artifact context rank disagrees with logical domain")
         for name, value in self.inputs.items():
             if (
-                np.broadcast_shapes(tuple(value.shape), self._domain) != self._domain
-                or np.dtype(value.dtype).newbyteorder("=") != kernel.input_dtypes[name]
-            ):
+                value.shape != self._domain
+                and np.broadcast_shapes(value.shape, self._domain) != self._domain
+            ) or np.dtype(value.dtype).newbyteorder("=") != input_dtypes[name]:
                 raise ValueError(
                     "Portable operands must broadcast to the logical domain and match native dtype"
                 )

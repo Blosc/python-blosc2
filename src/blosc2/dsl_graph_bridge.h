@@ -18,6 +18,37 @@ typedef struct {
 } b2_graph_report;
 typedef void (*b2_graph_task_fn)(void *, size_t);
 typedef int (*b2_graph_fork_join_fn)(void *, size_t, b2_graph_task_fn, void *);
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#include <dispatch/dispatch.h>
+typedef struct {
+    b2_graph_task_fn task;
+    void *invocation;
+} b2_graph_dispatch_state;
+static void b2_graph_dispatch_task(void *context, size_t index) {
+    b2_graph_dispatch_state *state = context;
+    state->task(state->invocation,index);
+}
+#endif
+static int b2_graph_native_executor_available(void) {
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+static int b2_graph_native_fork_join(void *host, size_t count, b2_graph_task_fn task, void *invocation) {
+    (void)host;
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+    b2_graph_dispatch_state state = {task,invocation};
+    /* dispatch_apply_f joins every native task before its invocation state expires. */
+    dispatch_apply_f(count,dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,0),
+        &state,b2_graph_dispatch_task);
+    return 0;
+#else
+    (void)count; (void)task; (void)invocation;
+    return 1;
+#endif
+}
 #ifdef B2_HAVE_NATIVE_GRAPH
 #include "miniexpr_graph.h"
 static int b2_graph_prepare(const char *json, size_t n, int jit, int required, void **out, b2_graph_error *e) {
