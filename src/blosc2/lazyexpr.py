@@ -5257,8 +5257,7 @@ class LazyExpr(LazyArray):
                     policy = blosc2.jit_config.execution_options()
                     native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
                     if (
-                        native_jit is not True
-                        and native_backend is None
+                        native_backend is None
                         and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
                         and root_kind in {"binary", "unary", "compare"}
                         and not re.search(r"\bcopy\s*\(", expression)

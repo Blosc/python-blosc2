@@ -189,7 +189,37 @@ def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, native_graph_r
         assert calls
 
     with blosc2.jit_options(jit=True):
-        assert not hasattr(blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y}), "_prepared_native")
+        assert hasattr(blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y}), "_prepared_native")
+
+
+def test_jit_numpy_read_reuses_resident_schedule(monkeypatch, native_graph_runtime):
+    import blosc2.native_graph as native
+
+    monkeypatch.delenv("BLOSC_ME_JIT", raising=False)
+    x = np.arange(300_000, dtype="float64")
+    y = x + 1
+    with blosc2.jit_options(jit=True):
+        expr = blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y})
+        prepared = expr._resident_native
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("Prepared JIT read repeated general graph dispatch")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(native, "prepare_native_first", forbidden)
+            patch.setattr(prepared[1], "specialize", forbidden)
+            first = expr[:]
+            expr.operands["o0"] = x + 10
+            second = expr[:]
+        assert expr._resident_native is prepared
+        assert not np.shares_memory(first, second)
+        np.testing.assert_array_equal(first, x + (y - 1))
+        np.testing.assert_array_equal(second, x + 10 + (y - 1))
+
+        # A schedule prepared under JIT must not survive a policy change.
+        with blosc2.jit_options(jit=False):
+            np.testing.assert_array_equal(expr[:], x + 10 + (y - 1))
+            assert expr._native_execution_report["backend"] == "portable-interpreter"
 
 
 def test_prepared_plan_without_destination_does_not_respecialize(monkeypatch, native_graph_runtime):
