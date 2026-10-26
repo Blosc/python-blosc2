@@ -95,6 +95,7 @@ def test_integral_math_uses_native_parallel_tasks(native_graph_runtime):
 def test_small_transcendental_map_uses_caller_and_workers(native_graph_runtime, monkeypatch):
     import blosc2.resident_execution as resident
 
+    monkeypatch.setattr(blosc2.blosc2_ext, "native_graph_executor_available", lambda: False)
     pool = resident.resident_pool()
     submissions = []
 
@@ -119,6 +120,7 @@ def test_small_transcendental_map_uses_caller_and_workers(native_graph_runtime, 
 def test_native_executor_joins_after_interrupted_wait(native_graph_runtime, monkeypatch):
     import blosc2.resident_execution as resident
 
+    monkeypatch.setattr(blosc2.blosc2_ext, "native_graph_executor_available", lambda: False)
     pool = resident.resident_pool()
     submitted = []
 
@@ -156,6 +158,7 @@ def test_native_executor_rejects_late_job_after_enqueue_failure(native_graph_run
 
     import blosc2.resident_execution as resident
 
+    monkeypatch.setattr(blosc2.blosc2_ext, "native_graph_executor_available", lambda: False)
     pool = resident.resident_pool()
     release = Event()
     submitted = []

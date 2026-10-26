@@ -135,7 +135,7 @@ def test_native_first_execution_failure_is_not_replayed(native_first_runtime, mo
         pytest.fail("Native execution failure was replayed")
 
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
-    monkeypatch.setattr(native, "compute_native_graph", failure)
+    monkeypatch.setattr(native, "execute_resident", failure)
     monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
     with pytest.raises(FloatingPointError, match="Invocation failed"):
         expr[:]
