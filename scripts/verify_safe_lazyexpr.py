@@ -52,7 +52,7 @@ def main():
         "test_expression_graph_lifetime.py",
         "test_menudet_lazy.py",
         "ctable/test_ctable_computed_cols.py::test_safe_column_graph_observes_update_at_controlled_read_boundary",
-        "ctable/test_ctable_computed_cols.py::test_safe_portable_column_metadata_does_not_evaluate_rows",
+        "ctable/test_ctable_computed_cols.py::test_safe_menudet_column_metadata_does_not_evaluate_rows",
     ]
     parquet = "ctable/test_remote_parquet.py"
     if all(importlib.util.find_spec(name) is not None for name in ("pyarrow", "fsspec")):
