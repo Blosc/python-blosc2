@@ -26,7 +26,7 @@ Implemented in Python-Blosc2 and the sibling miniexpr checkout:
 - The user guide is now `doc/reference/menudet.rst`; syntax, accuracy, API,
   release notes, examples, tools and native specification links are aligned.
 - `CMakeLists.txt` pins the published native revision
-  `d8b01fb0f8db817b7b4b8929cb03cfb1c13e98e5`, including the beta renaming and
+  `d92c29e157bd7ae5196008b17f7a4606b16cabcb`, including the beta renaming and
   captured-scalar reduction fix. Source overrides must supply the same contract.
 
 Validation on macOS ARM64:

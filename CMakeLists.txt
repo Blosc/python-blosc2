@@ -143,7 +143,7 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG d8b01fb0f8db817b7b4b8929cb03cfb1c13e98e5
+    GIT_TAG d92c29e157bd7ae5196008b17f7a4606b16cabcb
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
