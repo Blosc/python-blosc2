@@ -1068,6 +1068,8 @@ cdef extern from "dsl_artifact_bridge.h":
     int b2_artifact_available()
     int b2_artifact_load(const char *, size_t, int, void **, b2_artifact_error *) nogil
     int b2_artifact_load_options(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
+    int b2_artifact_load_inferred(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
+    int b2_artifact_load_inferred_available()
     int b2_artifact_options_available()
     int b2_artifact_eval(const void *, const b2_artifact_input *, int, void *, size_t,
                         b2_artifact_error *) nogil
@@ -1594,6 +1596,12 @@ cdef extern from "dsl_graph_bridge.h":
     me_dtype b2_graph_dtype(const void *, int)
     me_dtype b2_graph_inferred(const void *)
     int b2_graph_jit(const void *)
+    const char *b2_graph_reduction_op(const void *)
+    int b2_graph_reduction_axis_count(const void *)
+    int b2_graph_reduction_axis(const void *, int)
+    int b2_graph_reduction_keepdims(const void *)
+    int b2_graph_reduction_has_initial(const void *)
+    int b2_graph_reduction_has_where(const void *)
     const char *b2_graph_json(const void *)
     const char *b2_graph_map_json(const void *)
     const void *b2_graph_map_artifact(const void *)
@@ -1739,6 +1747,27 @@ cdef class NativeGraphHandle:
                 "has_jit": bool(b2_graph_jit(self._handle)), "stages": b2_graph_stages(self._handle),
                 "plan_metadata_bytes": b2_graph_plan_bytes(self._handle),
                 "partitionable": bool(b2_graph_execution_capabilities(self._handle) & 1)}
+
+    def reduction_info(self):
+        """Borrowed root-reduction metadata; None for non-reduction graphs."""
+        cdef const char *op
+        cdef int count, i
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        op = b2_graph_reduction_op(self._handle)
+        if op == NULL:
+            return None
+        count = b2_graph_reduction_axis_count(self._handle)
+        axes = None if count < 0 else tuple(
+            b2_graph_reduction_axis(self._handle, i) for i in range(count)
+        )
+        return {
+            "op": (<bytes>op).decode("ascii"),
+            "axes": axes,
+            "keepdims": bool(b2_graph_reduction_keepdims(self._handle)),
+            "initial": bool(b2_graph_reduction_has_initial(self._handle)),
+            "where": bool(b2_graph_reduction_has_where(self._handle)),
+        }
 
     def to_json(self):
         if self._handle == NULL:
@@ -2074,7 +2103,7 @@ cdef class PortableArtifactHandle:
     cdef void *_handle
     cdef object _owner
 
-    def __cinit__(self, bytes artifact=None, int jit_mode=0):
+    def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
         cdef b2_artifact_error error
         cdef int rc
         cdef const char *json
@@ -2094,8 +2123,15 @@ cdef class PortableArtifactHandle:
             return
         json = artifact
         size = len(artifact)
+        if infer_output and not b2_artifact_load_inferred_available():
+            raise NotImplementedError(
+                "Build with miniexpr inferred-output artifact support"
+            )
         with nogil:
-            rc = b2_artifact_load_options(json, size, jit_mode, &native_options, &self._handle, &error)
+            if infer_output:
+                rc = b2_artifact_load_inferred(json, size, jit_mode, &native_options, &self._handle, &error)
+            else:
+                rc = b2_artifact_load_options(json, size, jit_mode, &native_options, &self._handle, &error)
         if rc:
             raise_artifact_error(rc, &error)
 

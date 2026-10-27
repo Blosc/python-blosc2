@@ -116,6 +116,12 @@ static const char *b2_graph_name(const void *p, int i) { return me_graph_input_n
 static me_dtype b2_graph_dtype(const void *p, int i) { return me_graph_input_dtype(p, i); }
 static me_dtype b2_graph_inferred(const void *p) { return me_graph_inferred_dtype(p); }
 static int b2_graph_jit(const void *p) { return me_graph_has_jit(p); }
+static const char *b2_graph_reduction_op(const void *p) { return me_graph_reduction_op(p); }
+static int b2_graph_reduction_axis_count(const void *p) { return me_graph_reduction_axis_count(p); }
+static int b2_graph_reduction_axis(const void *p, int index) { return me_graph_reduction_axis(p, index); }
+static int b2_graph_reduction_keepdims(const void *p) { return me_graph_reduction_keepdims(p); }
+static int b2_graph_reduction_has_initial(const void *p) { return me_graph_reduction_has_initial(p); }
+static int b2_graph_reduction_has_where(const void *p) { return me_graph_reduction_has_where(p); }
 static const char *b2_graph_json(const void *p) { return me_graph_export_json(p, NULL); }
 static const char *b2_graph_map_json(const void *p) { return me_graph_export_map_json(p); }
 static const void *b2_graph_map_artifact(const void *p) { return me_graph_map_artifact(p); }
@@ -172,6 +178,12 @@ static const char *b2_graph_name(const void *p, int i) { (void)p; (void)i; retur
 static me_dtype b2_graph_dtype(const void *p, int i) { (void)p; (void)i; return ME_AUTO; }
 static me_dtype b2_graph_inferred(const void *p) { (void)p; return ME_AUTO; }
 static int b2_graph_jit(const void *p) { (void)p; return 0; }
+static const char *b2_graph_reduction_op(const void *p) { (void)p; return NULL; }
+static int b2_graph_reduction_axis_count(const void *p) { (void)p; return 0; }
+static int b2_graph_reduction_axis(const void *p, int index) { (void)p; (void)index; return 0; }
+static int b2_graph_reduction_keepdims(const void *p) { (void)p; return 0; }
+static int b2_graph_reduction_has_initial(const void *p) { (void)p; return 0; }
+static int b2_graph_reduction_has_where(const void *p) { (void)p; return 0; }
 static const char *b2_graph_json(const void *p) { (void)p; return NULL; }
 static const char *b2_graph_map_json(const void *p) { (void)p; return NULL; }
 static const void *b2_graph_map_artifact(const void *p) { (void)p; return NULL; }

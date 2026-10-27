@@ -112,6 +112,20 @@ def native_artifacts():
         pytest.skip("Rebuild with miniexpr artifact support enabled")
 
 
+def test_prepare_infers_output_without_probe_artifact(native_artifacts):
+    from blosc2.portable_kernel import prepare_portable_kernel
+
+    kernel = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
+    prepared = prepare_portable_kernel(kernel, {"x": np.dtype("float32")}, None)
+    assert prepared.output_dtype == np.dtype("float32")
+    assert prepared.inferred_dtype == np.dtype("float32")
+    decoded = json.loads(prepared.to_json())
+    assert decoded["output"] == {"contract": "elementwise", "dtype": "float32"}
+    np.testing.assert_array_equal(
+        prepared.evaluate({"x": np.arange(4, dtype="float32")}), np.arange(1, 5, dtype="float32")
+    )
+
+
 def test_export_capture_snapshot(native_artifacts, monkeypatch):
     artifact = affine.export({"x": "float64"}, "float64", metadata={"producer": "test"})
     assert artifact == affine.export({"x": "float64"}, "float64", metadata={"producer": "test"})

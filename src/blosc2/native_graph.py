@@ -836,15 +836,14 @@ def _parallel_resident_reduction(plan, inputs, shape, tile_items):
     workers = min(blosc2.nthreads, MAXIMUM_WORKERS, count // MINIMUM_WORKER_ITEMS)
     if workers < 2 or blosc2.IS_WASM or plan.info()["stages"] != 1 or not inputs:
         return None
-    document = json.loads(plan.to_json())
-    root = document["nodes"][document["root"]]
-    if root["op"] not in PARALLEL_GRAPH_REDUCERS or root["initial"] is not None or root["where"] is not None:
+    info = plan.reduction_info()
+    if info is None or info["op"] not in PARALLEL_GRAPH_REDUCERS or info["initial"] or info["where"]:
         return None
-    axes = root["axes"]
+    axes = info["axes"]
     if axes is not None and {a % len(shape) for a in axes} != set(range(len(shape))):
         return None
-    input_kinds = "biuf" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
-    output_kind = "b" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
+    input_kinds = "biuf" if info["op"] in TRUTH_GRAPH_REDUCERS else "f"
+    output_kind = "b" if info["op"] in TRUTH_GRAPH_REDUCERS else "f"
     if any(
         type(value) is not np.ndarray
         or value.shape != shape
@@ -880,28 +879,36 @@ def _parallel_resident_reduction(plan, inputs, shape, tile_items):
         # Never replay failures; join all workers before releasing their inputs.
         wait(futures)
     results, reports = zip(*(future.result() for future in futures), strict=True)
-    result, report = _combine_graph_reductions(document, root, results, reports)
+    result, report = _combine_graph_reductions(info["op"], results, reports)
     report.update(route="parallel-resident-reduction", threads=workers)
     return result, report
 
 
-def _combine_graph_reductions(document, root, results, reports):
+def _combine_graph_reductions(op, results, reports):
     # Combine in logical region order through the same native reducer. Extrema
     # retain first-NaN payload selection and their deterministic signed-zero rule;
     # NumPy's minimum/maximum reductions have a different zero-selection policy.
     partials = np.stack(results)
-    document["nodes"] = [
-        {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
-        {
-            **root,
-            "id": 1,
-            "args": [0],
-            "axes": [0],
-            "keepdims": False,
-            "dtype": "auto" if root["op"] in TRUTH_GRAPH_REDUCERS else partials.dtype.name,
-        },
-    ]
-    document["root"] = 1
+    document = {
+        "format": "menudet-graph-1",
+        "semantics": "menudet-numpy-1.0",
+        "requires": ["numeric"],
+        "nodes": [
+            {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
+            {
+                "id": 1,
+                "op": op,
+                "args": [0],
+                "axes": [0],
+                "keepdims": False,
+                "dtype": "auto" if op in TRUTH_GRAPH_REDUCERS else partials.dtype.name,
+                "initial": None,
+                "where": None,
+            },
+        ],
+        "root": 1,
+        "output": {"dtype": "auto", "casting": "unsafe"},
+    }
     combine = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")))
     result, combined_report = combine.evaluate({"partials": partials}, return_report=True)
     report = dict(reports[0])
@@ -965,16 +972,21 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     workers = min(blosc2.nthreads, MAXIMUM_WORKERS, shape[0] // MINIMUM_WORKER_ITEMS, units)
     if workers < 2:
         return None
-    document = json.loads(plan.to_json())
-    root = document["nodes"][document["root"]]
-    if reduction and (
-        root["op"] not in PARALLEL_GRAPH_REDUCERS
-        or root["axes"] not in (None, [0], [-1])
-        or root["initial"] is not None
-        or root["where"] is not None
-    ):
-        return None
-    input_kinds = "biuf" if not reduction or root["op"] in TRUTH_GRAPH_REDUCERS else "f"
+    if reduction:
+        info = plan.reduction_info()
+        if (
+            info is None
+            or info["op"] not in PARALLEL_GRAPH_REDUCERS
+            or info["axes"] not in (None, (0,), (-1,))
+            or info["initial"]
+            or info["where"]
+        ):
+            return None
+        op = info["op"]
+        input_kinds = "biuf" if op in TRUTH_GRAPH_REDUCERS else "f"
+    else:
+        op = None
+        input_kinds = "biuf"
     if any(
         type(value) not in (np.ndarray, blosc2.NDArray)
         or value.shape != shape
@@ -988,7 +1000,7 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
         return None
     if first.blocks[0] > 65536:
         return None
-    return first, workers, document, root
+    return first, workers, op
 
 
 def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
@@ -1003,8 +1015,8 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     layout = _compressed_execution_layout(plan, inputs, shape)
     if layout is None:
         return None
-    first, workers, document, root = layout
-    output_kind = "b" if root["op"] in TRUTH_GRAPH_REDUCERS else "f"
+    first, workers, op = layout
+    output_kind = "b" if op in TRUTH_GRAPH_REDUCERS else "f"
 
     class SpanReader(StorageReader):
         def __init__(self, value, start, stop):
@@ -1047,7 +1059,7 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     finally:
         wait(futures)
     results, reports = zip(*(future.result() for future in futures), strict=True)
-    result, report = _combine_graph_reductions(document, root, results, reports)
+    result, report = _combine_graph_reductions(op, results, reports)
     report.update(
         route="parallel-graph-bounded-readers",
         threads=workers,
@@ -1111,7 +1123,7 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
     layout = _compressed_execution_layout(plan, inputs, shape, reduction=False)
     if layout is None:
         return None
-    first, workers, _, _ = layout
+    first, workers, _ = layout
     if tile_items == 1024:
         result = _prefilter_compressed_map(plan, inputs, workers, out)
         if result is not None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import functools
 import inspect
-import json
 import os
 from threading import RLock
 from types import CellType, FunctionType
@@ -13,12 +12,7 @@ from types import CellType, FunctionType
 import numpy as np
 
 from .dsl_kernel import DSLKernel
-from .portable_kernel import (
-    PortableKernel,
-    capture_analysis,
-    portable_dtype_descriptor,
-    prepare_portable_kernel,
-)
+from .portable_kernel import capture_analysis, portable_dtype_descriptor, prepare_portable_kernel
 
 
 def _dtype(annotation):
@@ -234,36 +228,10 @@ class MenudetKernel:
                     self._kernels[key] = kernel
                     return kernel
                 if output is None:
-                    # Infer before final conversion; reuse this import when its output already matches.
                     if any(dtype.kind not in "biuf" for dtype in dtypes.values()):
                         raise TypeError("Nonnumeric kernels require a return dtype annotation")
-                    probe = prepare_portable_kernel(
-                        self._author, dtypes, "float64", jit=jit, **self._export_options
-                    )
-                    if probe.inferred_dtype is None:
-                        raise TypeError(
-                            "Native output inference is unavailable; add a return dtype annotation"
-                        )
-                    output = probe.inferred_dtype
-                    # Reuse source/captures; only a changed output needs another import.
-                    artifact = probe.to_json()
-                    if output != probe.output_dtype:
-                        manifest = json.loads(artifact)
-                        manifest["output"].update(portable_dtype_descriptor(output))
-                        artifact = (
-                            json.dumps(
-                                manifest,
-                                sort_keys=True,
-                                ensure_ascii=False,
-                                allow_nan=False,
-                                separators=(",", ":"),
-                            )
-                            + "\n"
-                        )
-                    kernel = (
-                        probe
-                        if output == probe.output_dtype
-                        else PortableKernel.from_json(artifact, jit=jit)
+                    kernel = prepare_portable_kernel(
+                        self._author, dtypes, None, jit=jit, **self._export_options
                     )
                 else:
                     kernel = prepare_portable_kernel(

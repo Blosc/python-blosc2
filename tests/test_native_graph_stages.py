@@ -13,6 +13,19 @@ from conftest import orthogonal_cases
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
+def test_reduction_metadata_avoids_graph_json():
+    plan = blosc2.NativeGraph.from_expression("sum(x, axis=-1, keepdims=True)", {"x": "float64"})
+    assert plan.reduction_info() == {
+        "op": "sum",
+        "axes": (-1,),
+        "keepdims": True,
+        "initial": False,
+        "where": False,
+    }
+    mapped = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"})
+    assert mapped.reduction_info() is None
+
+
 @pytest.mark.parametrize(
     "expression", ["x - sum(x, axis=0)", "sum(sum(x, axis=0))", "sum(x, axis=0) + max(x, axis=0)"]
 )

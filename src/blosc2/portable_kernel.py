@@ -342,7 +342,7 @@ def export_portable_kernel(kernel, input_dtypes, output_dtype, **options):
 def prepare_portable_kernel(
     kernel,
     input_dtypes,
-    output_dtype,
+    output_dtype=None,
     *,
     capture_dtypes=None,
     constants=None,
@@ -353,7 +353,12 @@ def prepare_portable_kernel(
     ndim=0,
     jit=False,
 ):
-    """Build and import once, retaining native validation for export and specialization."""
+    """Build and import once, retaining native validation for export and specialization.
+
+    ``output_dtype=None`` requests metadata-only native result inference under the
+    declared input signatures and casting policy. The returned kernel retains an
+    artifact text with the inferred concrete output dtype.
+    """
     if version != "1.0":
         raise PortableArtifactError("Unsupported artifact version", status="unsupported_version")
     if casting not in {"safe", "same_kind", "unsafe"}:
@@ -409,7 +414,11 @@ def prepare_portable_kernel(
             {"name": name, **portable_dtype_descriptor(inputs[name])} for name in names if name in inputs
         ],
         "constants": sorted(encoded, key=lambda item: item["name"]),
-        "output": {**portable_dtype_descriptor(output_dtype), "contract": cardinality},
+        "output": (
+            {**portable_dtype_descriptor(output_dtype), "contract": cardinality}
+            if output_dtype is not None
+            else {"dtype": "auto", "contract": cardinality}
+        ),
         "semantics": semantics,
         "context": {"ndim": ndim},
         "metadata": dict(metadata or {}),
@@ -418,7 +427,70 @@ def prepare_portable_kernel(
         json.dumps(manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         + "\n"
     )
-    return PortableKernel.from_json(artifact, jit=jit)
+    if output_dtype is not None:
+        return PortableKernel.from_json(artifact, jit=jit)
+    try:
+        return PortableKernel.from_json(artifact, jit=jit, infer_output=True)
+    except NotImplementedError:
+        return _prepare_inferred_fallback(
+            kernel,
+            input_dtypes,
+            capture_dtypes=capture_dtypes,
+            constants=constants,
+            metadata=metadata,
+            version=version,
+            casting=casting,
+            cardinality=cardinality,
+            ndim=ndim,
+            jit=jit,
+        )
+
+
+def _prepare_inferred_fallback(
+    kernel,
+    input_dtypes,
+    *,
+    capture_dtypes,
+    constants,
+    metadata,
+    version,
+    casting,
+    cardinality,
+    ndim,
+    jit,
+):
+    """Infer through a float64 probe when the native auto-output loader is absent."""
+    probe = prepare_portable_kernel(
+        kernel,
+        input_dtypes,
+        "float64",
+        capture_dtypes=capture_dtypes,
+        constants=constants,
+        metadata=metadata,
+        version=version,
+        casting=casting,
+        cardinality=cardinality,
+        ndim=ndim,
+        jit=jit,
+    )
+    output = probe.inferred_dtype
+    if output is None:
+        raise PortableArtifactError(
+            "Native output inference is unavailable", status="unsupported_requirement"
+        ) from None
+    if output == probe.output_dtype:
+        return probe
+    return PortableKernel.from_json(_artifact_with_output(probe.to_json(), output), jit=jit)
+
+
+def _artifact_with_output(artifact, output_dtype):
+    """Resolve an inferred output dtype in retained artifact text without reimport."""
+    manifest = json.loads(artifact)
+    manifest["output"].update(portable_dtype_descriptor(output_dtype))
+    encoded = json.dumps(
+        manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    )
+    return (encoded + "\n").encode("utf-8")
 
 
 class PortableKernel:
@@ -431,13 +503,15 @@ class PortableKernel:
     """
 
     @classmethod
-    def from_json(cls, artifact, *, jit=None):
+    def from_json(cls, artifact, *, jit=None, infer_output=False):
         from . import blosc2_ext, jit_config
 
         if not isinstance(artifact, str | bytes):
             raise TypeError("artifact must be JSON text or UTF-8 bytes, not a path or decoded mapping")
         if jit is not None and type(jit) is not bool:
             raise TypeError("jit must be True, False, or None")
+        if type(infer_output) is not bool:
+            raise TypeError("infer_output must be a bool")
         handle_type = getattr(blosc2_ext, "PortableArtifactHandle", None)
         if handle_type is None:
             raise NotImplementedError("Build with miniexpr portable artifact support")
@@ -457,15 +531,20 @@ class PortableKernel:
             if policy
             else 2
         )
-        handle = handle_type(data, mode)
+        if infer_output:
+            handle = handle_type(data, mode, True)
+        else:
+            handle = handle_type(data, mode)
         instance = cls.__new__(cls)
         instance._handle = handle
-        instance._artifact = data
         instance._expression_handle = handle
-        instance._expression_artifact = data
         instance._info = handle.info()
         if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
             instance._info.update(handle.descriptor_info())
+        if infer_output:
+            data = _artifact_with_output(data, instance._info["output_dtype"])
+        instance._artifact = data
+        instance._expression_artifact = data
         return instance
 
     @property

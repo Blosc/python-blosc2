@@ -52,7 +52,7 @@ def test_specialization_cache_and_mutation(native_graph_runtime):
         ("float64", None, False, 1),
         ("float64", True, False, 1),
         ("float64", False, False, 1),
-        ("int32", False, False, 2),
+        ("int32", False, False, 1),
         ("float64", None, True, 1),
         ("float64", True, True, 1),
     ],
@@ -78,9 +78,9 @@ def test_specialization_reuses_validated_export(
         captures.append(None)
         return original_captures(*args, **kwargs)
 
-    def record_import(cls, artifact, *, jit=None):
+    def record_import(cls, artifact, *, jit=None, infer_output=False):
         policies.append(jit)
-        return original_import(artifact, jit=jit)
+        return original_import(artifact, jit=jit, infer_output=infer_output)
 
     monkeypatch.setattr(portable, "_export_captures", record_captures)
     monkeypatch.setattr(blosc2.PortableKernel, "from_json", classmethod(record_import))

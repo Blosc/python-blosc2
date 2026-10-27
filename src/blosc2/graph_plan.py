@@ -87,6 +87,10 @@ class NativeGraph:
     def info(self):
         return {**self._info, "inputs": self.input_dtypes}
 
+    def reduction_info(self):
+        """Borrowed root-reduction metadata; None for non-reduction graphs."""
+        return self._handle.reduction_info()
+
     def specialize(self, inputs, tile_items=1024, *, intermediate_budget=0):
         """Bind names to ``(dtype, shape)``; return an immutable owned schedule.
 
