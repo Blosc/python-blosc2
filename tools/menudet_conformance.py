@@ -229,8 +229,8 @@ def make_case(
 ):
     names = ["x", "y", "z"][: len(arrays)]
     artifact = {
-        "schema_version": "1.0",
-        "language": {"name": "miniexpr", "version": "1.0"},
+        "schema_version": "0.1",
+        "language": {"name": "menudet", "version": "0.1"},
         "requires": ["numeric"],
         "source": f"def k({', '.join(names)}):\n    return {expression}\n",
         "entry_point": "k",
@@ -516,7 +516,7 @@ def integrate(corpus, jit=False):  # noqa: C901 -- paired execution, diagnostics
         actual = None
         recovery_ok = True
         try:
-            kernel = blosc2.PortableKernel.from_json(case["artifact"], jit=jit)
+            kernel = blosc2.MenudetKernel.from_json(case["artifact"], jit=jit)
             for _ in range(3):
                 current = kernel.evaluate(
                     {item["name"]: decode(item) for item in case["inputs"]},
@@ -533,14 +533,14 @@ def integrate(corpus, jit=False):  # noqa: C901 -- paired execution, diagnostics
             result = {"id": case["id"], "status": 0, "category": "success", "output": describe(actual)}
             if case.get("inferred_dtype"):
                 assert kernel.inferred_dtype == np.dtype(case["inferred_dtype"]), case["id"]
-        except blosc2.PortableArtifactError as error:
+        except blosc2.MenudetError as error:
             status = next(code for code, category in STATUS.items() if category == error.status)
             # Replay the failure through the same owned handle when one was loaded.
             if kernel is not None:
                 for _ in range(2):
                     try:
                         kernel.evaluate({item["name"]: decode(item) for item in case["inputs"]})
-                    except blosc2.PortableArtifactError as again:
+                    except blosc2.MenudetError as again:
                         if again.status != error.status or again.native_status != error.native_status:
                             raise AssertionError("Repeated diagnostic changed") from again
                     else:
@@ -651,7 +651,7 @@ def paired(corpus, runner, work_dir, observe=False):
             "generator_revision": corpus["generator_revision"],
             "corpus_sha256": hashlib.sha256(json.dumps(corpus, sort_keys=True).encode()).hexdigest(),
             "semantic_revisions": sorted({case["semantic_revision"] for case in corpus["cases"]}),
-            "local_changes": "Menudet 1.0 NumPy arithmetic, signatures, floating status and optional JIT",
+            "local_changes": "Menudet 0.1 beta NumPy arithmetic, signatures, floating status and optional JIT",
         },
         "reference_numpy": corpus["reference"]["numpy"],
         "installed_numpy": np.__version__,
@@ -710,7 +710,7 @@ def property_cases(seed, count=48):
         "x + y",
         [np.array([0, 127, 2], dtype="int8"), np.array([0, 1, 2], dtype="int8")],
     )
-    # Strong int8 addition wraps in Menudet 1.0, just as in NumPy. This is a
+    # Strong int8 addition wraps in Menudet 0.1 beta, just as in NumPy. This is a
     # boundary regression, not a known checked-arithmetic divergence.
     boundary["seed"] = seed
     result.append(boundary)

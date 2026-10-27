@@ -9,8 +9,8 @@ import pytest
 import blosc2
 
 pytestmark = pytest.mark.skipif(
-    not blosc2.blosc2_ext.portable_descriptor_available(),
-    reason="Portable runtime required",
+    not blosc2.blosc2_ext.menudet_descriptor_available(),
+    reason="Menudet runtime required",
 )
 
 
@@ -57,14 +57,14 @@ def test_small_constructors_use_menudet_without_jit(monkeypatch):
         pytest.fail("Supported small ramps must not create a legacy LazyUDF")
 
     monkeypatch.setattr(blosc2, "lazyudf", forbidden)
-    original = blosc2.PortableKernel.from_json
+    original = blosc2.MenudetKernel.from_json
     observed = []
 
     def load(artifact, *, jit=None):
         observed.append(jit)
         return original(artifact, jit=jit)
 
-    monkeypatch.setattr(blosc2.PortableKernel, "from_json", load)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", load)
     np.testing.assert_array_equal(blosc2.arange(31)[:], np.arange(31))
     assert observed[-1] is False
     np.testing.assert_allclose(blosc2.linspace(0, 1, 31)[:], np.linspace(0, 1, 31))
@@ -102,10 +102,10 @@ def test_padded_groups_and_scalar_broadcast(forbid_legacy, scalar_return):
     np.testing.assert_array_equal(lazy.compute(chunks=(5, 5), blocks=(2, 2))[:], expected)
 
 
-def test_portable_loader_options(forbid_legacy, tmp_path, capfd):
+def test_menudet_loader_options(forbid_legacy, tmp_path, capfd):
     if blosc2.IS_WASM or sys.platform == "win32":
         pytest.skip("No host compiler backend on WASM/Windows")
-    if not blosc2.blosc2_ext.portable_artifact_options_available():
+    if not blosc2.blosc2_ext.menudet_artifact_options_available():
         pytest.skip("Requires the native artifact options API")
     kernel = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
     lazy = blosc2.lazyudf(kernel, (np.arange(31.0),), dtype="float64")

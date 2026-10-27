@@ -140,7 +140,7 @@ def test_interpreter_bounded_stored_output(native_graph_runtime):
     assert result is out
     np.testing.assert_array_equal(out[:], values + inputs["y"])
     report = expression._native_execution_report
-    assert report["backend"] == "portable-interpreter"
+    assert report["backend"] == "menudet-interpreter"
     assert report["route"] == "bounded-stored-map"
     assert report["maximum_input_items"] <= 262144
 

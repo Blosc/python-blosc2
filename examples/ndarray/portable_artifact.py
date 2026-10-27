@@ -19,7 +19,7 @@ def scaled(x):
 if __name__ == "__main__":
     artifact = scaled.export({"x": "float64"}, "float64")
     SCALE = 99.0
-    imported = blosc2.PortableKernel.from_json(artifact, jit=False)
+    imported = blosc2.MenudetKernel.from_json(artifact, jit=False)
     values = imported.evaluate({"x": np.arange(4, dtype=np.float64)})
     np.testing.assert_array_equal(values, [0, 2, 4, 6])
     print(values)

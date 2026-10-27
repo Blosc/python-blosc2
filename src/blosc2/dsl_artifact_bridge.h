@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef B2_HAVE_PORTABLE_ARTIFACT
+#ifdef B2_HAVE_MENUDET_ARTIFACT
 #include "miniexpr_artifact.h"
 #endif
 
@@ -33,15 +33,15 @@ static const char *b2_artifact_execution_kind(const void *handle) {
     return "unknown";
 #endif
 }
-#if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
+#if defined(B2_HAVE_MENUDET_ARTIFACT) && defined(ME_ARTIFACT_MENUDET_SCHEMA_VERSION)
 typedef me_artifact_input b2_artifact_input;
 typedef me_artifact_error b2_artifact_error;
-static int b2_artifact_available(void) { return !strcmp(ME_ARTIFACT_SCHEMA_VERSION, "1.0"); }
+static int b2_artifact_available(void) { return !strcmp(ME_ARTIFACT_SCHEMA_VERSION, "0.1"); }
 static int b2_artifact_load(const char *json, size_t size, int jit, void **out, b2_artifact_error *error) {
     if (!b2_artifact_available()) {
         *out = NULL;
         memset(error, 0, sizeof(*error));
-        snprintf(error->message, sizeof(error->message), "Build with miniexpr draft 1.0 artifact support");
+        snprintf(error->message, sizeof(error->message), "Build with miniexpr Menudet 0.1 beta artifact support");
         return -100;
     }
     me_artifact *handle = NULL;
@@ -79,7 +79,7 @@ static int b2_artifact_load(const char *json, size_t size, int jit, void **out, 
     (void)json; (void)size; (void)jit;
     *out = NULL;
     memset(error, 0, sizeof(*error));
-    snprintf(error->message, sizeof(error->message), "Build with miniexpr portable artifact support");
+    snprintf(error->message, sizeof(error->message), "Build with miniexpr Menudet artifact support");
     return -100;
 }
 static int b2_artifact_eval(const void *handle, const b2_artifact_input *inputs, int ninputs,
@@ -129,7 +129,7 @@ static int b2_artifact_load_inferred(const char *json, size_t size, int jit,
     return b2_artifact_load(json, size, jit, out, error);
 #endif
 }
-#if defined(B2_HAVE_PORTABLE_ARTIFACT) && defined(ME_ARTIFACT_DRAFT_SCHEMA_VERSION)
+#if defined(B2_HAVE_MENUDET_ARTIFACT) && defined(ME_ARTIFACT_MENUDET_SCHEMA_VERSION)
 typedef me_artifact_buffer b2_artifact_buffer;
 typedef me_artifact_eval_descriptor b2_artifact_descriptor;
 static int b2_artifact_descriptor_available(void) { return b2_artifact_available(); }
@@ -184,7 +184,7 @@ static int b2_artifact_eval_ex(const void *handle, const b2_artifact_buffer *inp
                              void *output, const b2_artifact_descriptor *descriptor, b2_artifact_error *error) {
     (void)handle; (void)inputs; (void)ninputs; (void)output; (void)descriptor;
     memset(error, 0, sizeof(*error));
-    snprintf(error->message, sizeof(error->message), "Build with draft miniexpr 1.0 descriptor support");
+    snprintf(error->message, sizeof(error->message), "Build with Menudet 0.1 beta descriptor support");
     return -2;
 }
 #endif

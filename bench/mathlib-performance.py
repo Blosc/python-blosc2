@@ -60,7 +60,7 @@ def main():
         for name, expression in EXPRESSIONS.items():
             for math, ulp, fp in configurations:
                 try:
-                    kernel = blosc2.PortableKernel.from_json(
+                    kernel = blosc2.MenudetKernel.from_json(
                         DSLKernel.from_source(
                             f"# me:compiler=cc\n# me:math={math}\n# me:fp={fp}\n"
                             + (f"# me:ulp={ulp}\n" if ulp else "")
@@ -68,7 +68,7 @@ def main():
                         ).export({"x": "float64"}, "float64"),
                         jit=jit == "on",
                     )
-                except blosc2.PortableArtifactError as error:
+                except blosc2.MenudetError as error:
                     rows.append(
                         {
                             "jit": jit,

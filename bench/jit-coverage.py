@@ -11,7 +11,7 @@ Run from an environment built with the experimental Menudet native revision::
     python bench/jit-coverage.py --case 'loop/*' --backends tcc clang
     python bench/jit-coverage.py --json results.json --require-jit
 
-This benchmarks production PortableKernel artifacts on NumPy buffers, not
+This benchmarks production MenudetKernel artifacts on NumPy buffers, not
 compression, lazy scheduling or legacy @blosc2.jit dispatch. Cases intentionally
 include safe fallbacks. Cold timing includes artifact load/JIT preparation, not
 source export; existing compiler caches can make it a cached load, not a fresh
@@ -376,11 +376,11 @@ def benchmark_reference(case, arrays, mask, repeat):
         case.inputs,
         case.output,
         constants=case.constants,
-        version="1.0",
+        version="0.1",
         cardinality=case.cardinality,
     )
     start = time.perf_counter_ns()
-    reference = blosc2.PortableKernel.from_json(artifact, jit=False)
+    reference = blosc2.MenudetKernel.from_json(artifact, jit=False)
     cold = (time.perf_counter_ns() - start) / 1e6
     expected, status = reference.evaluate_block(arrays, valid_mask=mask, return_status=True)
     return (
@@ -402,7 +402,7 @@ def benchmark_backend(case, artifact, arrays, mask, expected, expected_status, b
     try:
         with backend_environment(backend, compiler):
             start = time.perf_counter_ns()
-            kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+            kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
             cold = (time.perf_counter_ns() - start) / 1e6
             actual, status = kernel.evaluate_block(arrays, valid_mask=mask, return_status=True)
             check_result(actual, expected, mask, case.cardinality)

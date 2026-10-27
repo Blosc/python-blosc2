@@ -1,6 +1,6 @@
-# Menudet draft: numeric certification
+# Menudet 0.1 beta: numeric certification
 
-Menudet 1.0 requires its specified wrapping/checked integer results and the stated floating-point type,
+Menudet 0.1 beta requires its specified wrapping/checked integer results and the stated floating-point type,
 domain, NaN, infinity, signed-zero and rounding rules. It does **not** promise
 bit-identical transcendental results across host math libraries or a universal
 ULP error bound. Native exact-anchor and exceptional-value tests remain separate

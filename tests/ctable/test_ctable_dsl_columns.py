@@ -86,10 +86,10 @@ def test_dsl_computed_callable_lazyudf_form():
     np.testing.assert_array_equal(np.asarray(t["r"][:]), np.arange(20) + 20)
 
 
-def test_assign_dsl_lazyudf_uses_portable_rows():
+def test_assign_dsl_lazyudf_uses_menudet_rows():
     t = _make_table()
     view = t.assign(r=blosc2.lazyudf(k_loop, (t.a, t.b), dtype=np.int64))
-    assert view._computed_cols["r"]["kind"] == "portable"
+    assert view._computed_cols["r"]["kind"] == "menudet"
     np.testing.assert_array_equal(view["r"][:], np.arange(20) + 20)
 
 
@@ -165,7 +165,7 @@ def test_dsl_computed_roundtrip(tmp_path):
     # New registration stores an artifact rather than Python source.
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    assert sd["computed_columns"][0]["kind"] == "portable"
+    assert sd["computed_columns"][0]["kind"] == "menudet"
     assert "dsl_source" not in sd["computed_columns"][0]
 
     t2 = blosc2.open(path)
@@ -236,7 +236,7 @@ def test_dsl_generated_roundtrip(tmp_path):
 
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    assert sd["materialized_columns"][0]["transformer_kind"] == "portable"
+    assert sd["materialized_columns"][0]["transformer_kind"] == "menudet"
     assert "dsl_source" not in sd["materialized_columns"][0]
 
     t2 = blosc2.open(path)

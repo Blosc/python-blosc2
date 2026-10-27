@@ -38,7 +38,7 @@ def main():
                     begin = perf_counter()
                     try:
                         lazy.kernel._handle.evaluate_prefilter({}, out=output)
-                    except blosc2.PortableArtifactError as error:
+                    except blosc2.MenudetError as error:
                         print(shape, dtype, backend, "FAILED:", error, flush=True)
                         break
                     evaluation_time = perf_counter() - begin

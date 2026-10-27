@@ -6223,12 +6223,12 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
     artifact = ramp.export({}, dtype, constants=constants, ndim=len(shape))
     jit_option = execution.get("jit")
     jit_mode = math.prod(shape) >= 4_000_000 if jit_option is None else bool(jit_option)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit_mode)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit_mode)
     return kernel.lazy({}, shape=shape, partitions=partitions)
 
 
 def _menudet_ramp_supported(dtype, execution):
-    """Return whether portable ramp semantics/options match this constructor call."""
+    """Return whether Menudet ramp semantics/options match this constructor call."""
     if dtype not in (
         np.dtype(np.int64),
         np.dtype(np.float32),
@@ -6239,7 +6239,7 @@ def _menudet_ramp_supported(dtype, execution):
         return False
     if execution.get("jit_backend") == "js":
         return False
-    # PortableKernel currently consumes compiler policy from the artifact pragma,
+    # MenudetKernel currently consumes compiler policy from the artifact pragma,
     # not every task-local C compiler/cache override.
     if builtins.any(execution.get(name) for name in ("compiler", "cflags", "cache_dir", "compiler_output")):
         return False
@@ -6259,7 +6259,7 @@ def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs, *, endpo
         partitions=output.chunks,
         endpoint_stop=endpoint_stop,
     )
-    if blosc2.blosc2_ext.portable_prefilter_inputs_eligible({}, output=output):
+    if blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({}, output=output):
         kernel_lazy.kernel._handle.evaluate_prefilter({}, out=output)
         return output
     for origin in itertools.product(*(range(0, n, c) for n, c in zip(shape, output.chunks, strict=True))):
@@ -6320,7 +6320,7 @@ def arange(  # noqa: C901
     jit: bool or None, optional
         Execution policy for the ramp: None (default) inherits the
         configured JIT policy; unset uses interpretation below 4 million elements
-        and tries JIT for larger portable ramps. True tries JIT,
+        and tries JIT for larger Menudet ramps. True tries JIT,
         and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
@@ -6491,7 +6491,7 @@ def linspace(  # noqa: C901
     jit: bool or None, optional
         Execution policy for the ramp: None (default) inherits the
         configured JIT policy; unset uses interpretation below 4 million elements
-        and tries JIT for larger portable ramps. True tries JIT,
+        and tries JIT for larger Menudet ramps. True tries JIT,
         and False disables it. Native compilation or allocation failure falls
         back quietly to the interpreter. See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
@@ -6624,7 +6624,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
     Other Parameters
     ----------------
     jit: bool or None, optional
-        For portable numeric kernels, try JIT by default; False selects the
+        For Menudet numeric kernels, try JIT by default; False selects the
         interpreter. Compilation failure falls back to interpretation.
     jit_backend: str or None, optional
         Select the native compiler ("tcc" or "cc").
@@ -6664,7 +6664,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
 
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(kwargs))
-    # Portable numeric kernels do not yet support complex output.
+    # This constructor route do not yet support complex output.
     if 0 in shape:
         return blosc2.empty(shape, dtype=dtype, **kwargs)
     if k >= shape[1] or k <= -shape[0]:
@@ -6687,7 +6687,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
     if backend in {"tcc", "cc"}:
         diagonal.dsl_source = f"# me:compiler={backend}\n" + diagonal.dsl_source
     artifact = diagonal.export({}, dtype, constants={"k": k}, ndim=2)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=execution.get("jit"))
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=execution.get("jit"))
     # Square blocks localize the diagonal. Row-wide default blocks would all
     # intersect it, preventing the scheduler from skipping zero-only blocks.
     if kwargs.get("chunks") is None:
@@ -6697,7 +6697,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
     output = blosc2.empty(shape, dtype=dtype, **kwargs)
     if not output.size:
         return output
-    if blosc2.blosc2_ext.portable_prefilter_inputs_eligible({}, output=output):
+    if blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({}, output=output):
         kernel._handle.evaluate_prefilter({}, out=output, _diagonal=k)
         return output
     for origin in itertools.product(*(range(0, n, c) for n, c in zip(shape, output.chunks, strict=True))):

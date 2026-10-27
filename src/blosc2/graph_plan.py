@@ -13,7 +13,7 @@ from .blosc2_ext import NativeGraphHandle
 class NativeGraph:
     """Immutable native graph/capture ownership, with no operand or result cache.
 
-    This format is separate from portable elementwise artifact persistence.
+    This format is separate from Menudet elementwise artifact persistence.
     Preparation and specialization require only explicit numerical metadata.
     Compressed storage is adapted through invocation-local native graph readers.
     """
@@ -29,7 +29,7 @@ class NativeGraph:
         mode = (
             1
             if jit or require_jit
-            else getattr(blosc2_ext, "portable_auto_jit_mode", lambda: 0)()
+            else getattr(blosc2_ext, "menudet_auto_jit_mode", lambda: 0)()
             if jit is None
             else 2
         )
@@ -50,7 +50,7 @@ class NativeGraph:
         mode = (
             1
             if jit or require_jit
-            else getattr(blosc2_ext, "portable_auto_jit_mode", lambda: 0)()
+            else getattr(blosc2_ext, "menudet_auto_jit_mode", lambda: 0)()
             if jit is None
             else 2
         )
@@ -126,7 +126,7 @@ class NativeGraph:
         return (result, report) if return_report else result
 
     def map_json(self):
-        """Export an eligible elementwise graph as a Menudet 1.0 artifact."""
+        """Export an eligible elementwise graph as a Menudet 0.1 beta artifact."""
         return self._handle.map_json()
 
     def evaluate_sources(self, inputs, *, tile_items=65536, raise_mask=0, return_report=False, out=None):

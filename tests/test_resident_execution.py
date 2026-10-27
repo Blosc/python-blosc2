@@ -11,7 +11,7 @@ from blosc2.resident_execution import (
 
 @pytest.fixture(autouse=True)
 def runtime():
-    if not getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)():
+    if not getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)():
         pytest.skip("Requires rebuilt parallel resident binding")
     previous = blosc2.nthreads
     blosc2.set_nthreads(4)
@@ -21,7 +21,7 @@ def runtime():
 
 def kernel(source="def k(x, y):\n    return x + (y - 1)\n", dtype="float64", output=None, jit=True):
     author = blosc2.DSLKernel.from_source(source)
-    return blosc2.PortableKernel.from_json(author.export({"x": dtype, "y": dtype}, output or dtype), jit=jit)
+    return blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, output or dtype), jit=jit)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
@@ -129,7 +129,7 @@ def test_integer_conservative_fallback(case, monkeypatch):
     elif case == "weak":
         expression = "x + (1 + 2)"
     author = blosc2.DSLKernel.from_source(f"def k(x, y):\n    return {expression}\n")
-    native = blosc2.PortableKernel.from_json(author.export({"x": values.dtype, "y": other.dtype}, output))
+    native = blosc2.MenudetKernel.from_json(author.export({"x": values.dtype, "y": other.dtype}, output))
     lazy = native.lazy({"x": values, "y": other})
 
     def forbidden(*args, **kwargs):

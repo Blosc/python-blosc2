@@ -12,13 +12,13 @@ import blosc2
 from blosc2.dsl_kernel import DSLKernel
 
 # External conformance is opt-in; never infer an unrelated sibling checkout.
-# Selected historical fixtures also cover behavior shared by public Menudet 1.0.
-CORPUS = Path(os.environ["MINIEXPR_PORTABLE_CORPUS"]) if os.environ.get("MINIEXPR_PORTABLE_CORPUS") else None
+# Selected historical fixtures also cover behavior shared by public Menudet 0.1 beta.
+CORPUS = Path(os.environ["MINIEXPR_MENUDET_CORPUS"]) if os.environ.get("MINIEXPR_MENUDET_CORPUS") else None
 
 
 # Native CTest runs every fixture under its supported execution engines. Python
 # tests only distinct host boundaries here and representative output conversions;
-# numerical/JIT scenarios are covered separately by test_portable_artifact.py.
+# numerical/JIT scenarios are covered separately by test_menudet_artifact.py.
 CASES = [
     "affine",
     "special_floats",
@@ -67,18 +67,18 @@ def assert_typed_result(actual, expected, *, exact=False):
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_native_source_corpus(case, portable_validator, monkeypatch):
+def test_native_source_corpus(case, menudet_validator, monkeypatch):
     if case.startswith("while_cap_"):
         monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
     if CORPUS is None:
-        pytest.skip("Set MINIEXPR_PORTABLE_CORPUS to the native miniexpr fixture directory")
+        pytest.skip("Set MINIEXPR_MENUDET_CORPUS to the native miniexpr fixture directory")
     # These selected cases share their values with the historical checked corpus.
     source = corpus_source(case).read_text()
     words = (CORPUS / f"{case}.txt").read_text().split()
     outcome, input_type, output_type = words[:3]
     count, nvars = map(int, words[3:5])
     names = words[5 : 5 + nvars]
-    info = portable_validator(source, dict.fromkeys(names, input_type), output_type)
+    info = menudet_validator(source, dict.fromkeys(names, input_type), output_type)
     assert info["valid"] == (outcome != "compile_error"), info
     rows = np.array(words[5 + nvars :]).reshape(count, nvars + 1)
     input_dtype, output_dtype = np.dtype(input_type), np.dtype(output_type)
@@ -87,22 +87,22 @@ def test_native_source_corpus(case, portable_validator, monkeypatch):
     by_name = {name: typed_values(rows[:, index], input_dtype) for index, name in enumerate(names)}
     if outcome in {"ok", "ok_exact"}:
         artifact = kernel.export(dict.fromkeys(names, input_type), output_type)
-        loaded = blosc2.PortableKernel.from_json(artifact, jit=False)
+        loaded = blosc2.MenudetKernel.from_json(artifact, jit=False)
         assert not loaded.has_jit
         result = loaded.evaluate(by_name)
         assert_typed_result(result, expected, exact=outcome == "ok_exact")
     elif outcome == "compile_error":
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.export(dict.fromkeys(names, input_type), output_type)
     else:
         artifact = kernel.export(dict.fromkeys(names, input_type), output_type)
-        loaded = blosc2.PortableKernel.from_json(artifact, jit=False)
-        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        loaded = blosc2.MenudetKernel.from_json(artifact, jit=False)
+        with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
             loaded.evaluate(by_name)
     assert kernel.dsl_source == source
     assert kernel.func is None
 
-    runner = os.environ.get("MINIEXPR_PORTABLE_RUNNER")
+    runner = os.environ.get("MINIEXPR_MENUDET_RUNNER")
     if runner:
         completed = subprocess.run(
             [
@@ -169,12 +169,12 @@ def test_from_source_invalid_native_body():
 
 
 @pytest.fixture
-def portable_validator():
-    info = blosc2.validate_portable_dsl("def k(x):\n    return x\n", {"x": "float64"}, "float64")
+def menudet_validator():
+    info = blosc2.validate_menudet("def k(x):\n    return x\n", {"x": "float64"}, "float64")
     if info["status"] == "runtime_unsupported":
         pytest.skip("Rebuild with miniexpr portable validation support")
     assert info == {"valid": True, "status": "success", "line": 0, "column": 0, "error": None}
-    return blosc2.validate_portable_dsl
+    return blosc2.validate_menudet
 
 
 @pytest.mark.parametrize(
@@ -190,8 +190,8 @@ def portable_validator():
         ("return sin()", "invalid_source"),
     ],
 )
-def test_portable_profile_rejections(portable_validator, body, status):
-    info = portable_validator(f"def k(x):\n    {body}\n", {"x": "float64"}, "float64")
+def test_menudet_profile_rejections(menudet_validator, body, status):
+    info = menudet_validator(f"def k(x):\n    {body}\n", {"x": "float64"}, "float64")
     assert not info["valid"]
     assert info["status"] == status
     assert info["error"]
@@ -203,23 +203,23 @@ def test_portable_profile_rejections(portable_validator, body, status):
         assert info["column"] > 0
 
 
-def test_portable_profile_signature_and_version(portable_validator):
+def test_menudet_profile_signature_and_version(menudet_validator):
     source = "def k(x, y):\n    return x + y\n"
     inputs = {"y": "float64", "x": "float64"}
-    assert portable_validator(source, inputs, "float64")["valid"]
-    assert portable_validator(source, inputs, "float64", language_version="99")["status"] == (
+    assert menudet_validator(source, inputs, "float64")["valid"]
+    assert menudet_validator(source, inputs, "float64", language_version="99")["status"] == (
         "unsupported_version"
     )
-    assert portable_validator(source, {"x": "float64"}, "float64")["status"] == "invalid_signature"
-    assert portable_validator(source, {"x": "float64", "y": "int32"}, "float64")["valid"]
+    assert menudet_validator(source, {"x": "float64"}, "float64")["status"] == "invalid_signature"
+    assert menudet_validator(source, {"x": "float64", "y": "int32"}, "float64")["valid"]
     assert (
-        portable_validator(source, inputs, "float64", language_version="0.1")["status"]
+        menudet_validator(source, inputs, "float64", language_version="1.0")["status"]
         == "unsupported_version"
     )
-    assert portable_validator(source, inputs, "complex128")["status"] == "success"
+    assert menudet_validator(source, inputs, "complex128")["status"] == "success"
 
 
-def test_portable_profile_never_executes_or_compiles_jit(portable_validator, monkeypatch, tmp_path):
+def test_menudet_profile_never_executes_or_compiles_jit(menudet_validator, monkeypatch, tmp_path):
     cache = tmp_path / "jit-cache"
     target = tmp_path / "executed"
     monkeypatch.setenv("CC", "/no/compiler")
@@ -229,18 +229,18 @@ def test_portable_profile_never_executes_or_compiles_jit(portable_validator, mon
     monkeypatch.setenv("ME_DSL_JIT_CACHE_DIR", str(cache))
     # This would reach the iteration cap if executed. Validation must still succeed.
     source = "# me:compiler=cc\ndef k(x):\n    while 1:\n        pass\n    return x\n"
-    assert portable_validator(source, {"x": "float64"}, "float64")["valid"]
+    assert menudet_validator(source, {"x": "float64"}, "float64")["valid"]
     source = f"def k(x):\n    return open({str(target)!r}, 'w')\n"
-    assert not portable_validator(source, {"x": "float64"}, "float64")["valid"]
+    assert not menudet_validator(source, {"x": "float64"}, "float64")["valid"]
     assert not target.exists()
     assert not cache.exists()
 
 
-def test_portable_profile_missing_native_support(monkeypatch):
+def test_menudet_profile_missing_native_support(monkeypatch):
     from blosc2 import blosc2_ext
 
-    monkeypatch.delattr(blosc2_ext, "validate_portable_dsl_source", raising=False)
-    info = blosc2.validate_portable_dsl("def k(x):\n    return x\n", {"x": "float64"}, "float64")
+    monkeypatch.delattr(blosc2_ext, "validate_menudet_source", raising=False)
+    info = blosc2.validate_menudet("def k(x):\n    return x\n", {"x": "float64"}, "float64")
     assert not info["valid"]
     assert info["status"] == "runtime_unsupported"
 
@@ -248,22 +248,22 @@ def test_portable_profile_missing_native_support(monkeypatch):
 @pytest.mark.parametrize(
     ("source", "inputs", "version"),
     [
-        ("def k(x):\n    return x\n\x00", {"x": "float64"}, "1.0"),
-        ("def k(x):\n    return x\n", {"x\x00": "float64"}, "1.0"),
+        ("def k(x):\n    return x\n\x00", {"x": "float64"}, "0.1"),
+        ("def k(x):\n    return x\n", {"x\x00": "float64"}, "0.1"),
         ("def k(x):\n    return x\n", {"x": "float64"}, "1.0\x00"),
     ],
 )
-def test_portable_profile_rejects_nul(source, inputs, version):
+def test_menudet_profile_rejects_nul(source, inputs, version):
     with pytest.raises(ValueError, match="NUL"):
-        blosc2.validate_portable_dsl(source, inputs, "float64", language_version=version)
+        blosc2.validate_menudet(source, inputs, "float64", language_version=version)
 
 
 @pytest.mark.parametrize("literal", ["9007199254740993", "9_007_199_254_740_993", "0x20000000000001"])
-def test_portable_integer_literal_bound_is_exact(portable_validator, literal):
-    info = portable_validator(f"def k(x):\n    return x + {literal}\n", {"x": "int64"}, "int64")
+def test_menudet_integer_literal_bound_is_exact(menudet_validator, literal):
+    info = menudet_validator(f"def k(x):\n    return x + {literal}\n", {"x": "int64"}, "int64")
     assert info["valid"], info
     author = DSLKernel.from_source(f"def k(x):\n    return x + {literal}\n")
-    kernel = blosc2.PortableKernel.from_json(author.export({"x": "int64"}, "int64"))
+    kernel = blosc2.MenudetKernel.from_json(author.export({"x": "int64"}, "int64"))
     np.testing.assert_array_equal(
         kernel.evaluate({"x": np.array([0, 1], dtype="int64")}), [2**53 + 1, 2**53 + 2]
     )
@@ -274,18 +274,18 @@ def test_portable_integer_literal_bound_is_exact(portable_validator, literal):
         )
 
 
-def test_portable_export_preserves_math_policy():
+def test_menudet_export_preserves_math_policy():
     source = "# me:math=sleef\n# me:ulp=u35\n# me:compiler=cc\ndef k(x):\n    return sin(x) + cos(x)\n"
     kernel = DSLKernel.from_source(source)
     try:
         artifact = kernel.export({"x": "float64"}, "float64")
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         pytest.skip(f"SLEEF unavailable on this host: {error}")
     manifest = json.loads(artifact)
     assert manifest["semantics"]["math"] == "sleef"
     assert manifest["semantics"]["ulp"] == "u35"
     assert "flexible-math" in manifest["requires"]
-    loaded = blosc2.PortableKernel.from_json(artifact, jit=False)
+    loaded = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert loaded._info["math_backend"] == "sleef"
     assert loaded._info["sleef_accuracy"] == "u35"
     x = np.linspace(-2, 2, 257)
@@ -293,15 +293,15 @@ def test_portable_export_preserves_math_policy():
     np.testing.assert_allclose(result, np.sin(x) + np.cos(x), rtol=1e-6, atol=1e-6)
 
 
-def test_portable_export_fast_requires_cc_and_round_trips(monkeypatch):
+def test_menudet_export_fast_requires_cc_and_round_trips(monkeypatch):
     source = "# me:fp=fast\ndef k(x):\n    return sin(x) + 1\n"
     kernel = DSLKernel.from_source(source)
-    with pytest.raises(blosc2.PortableArtifactError, match="TCC"):
+    with pytest.raises(blosc2.MenudetError, match="TCC"):
         kernel.export({"x": "float64"}, "float64")
 
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "cc")
     inherited = kernel.export({"x": "float64"}, "float64")
-    assert blosc2.PortableKernel.from_json(inherited, jit=False)._info["fp_mode"] == "fast"
+    assert blosc2.MenudetKernel.from_json(inherited, jit=False)._info["fp_mode"] == "fast"
 
     source = "# me:compiler=cc\n# me:fp=fast\ndef k(x):\n    return sin(x) + 1\n"
     kernel = DSLKernel.from_source(source)
@@ -309,36 +309,36 @@ def test_portable_export_fast_requires_cc_and_round_trips(monkeypatch):
     manifest = json.loads(artifact)
     assert manifest["semantics"]["fp"] == "fast"
     assert "flexible-math" in manifest["requires"]
-    loaded = blosc2.PortableKernel.from_json(artifact, jit=False)
+    loaded = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert loaded._info["fp_mode"] == "fast"
 
 
-def test_portable_artifact_math_policy_conflict_and_capability():
+def test_menudet_artifact_math_policy_conflict_and_capability():
     source = "# me:math=system\ndef k(x):\n    return sin(x)\n"
     manifest = json.loads(DSLKernel.from_source(source).export({"x": "float64"}, "float64"))
     manifest["semantics"]["math"] = "sleef"
-    with pytest.raises(blosc2.PortableArtifactError, match="conflict"):
-        blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+    with pytest.raises(blosc2.MenudetError, match="conflict"):
+        blosc2.MenudetKernel.from_json(json.dumps(manifest), jit=False)
     manifest["source"] = "# me:math=sleef\n# me:compiler=cc\ndef k(x):\n    return sin(x)\n"
     manifest["requires"].remove("flexible-math")
-    with pytest.raises(blosc2.PortableArtifactError, match="flexible-math"):
-        blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+    with pytest.raises(blosc2.MenudetError, match="flexible-math"):
+        blosc2.MenudetKernel.from_json(json.dumps(manifest), jit=False)
 
     manifest["semantics"].pop("math")
     manifest["source"] = source
-    with pytest.raises(blosc2.PortableArtifactError, match="flexible-math"):
-        blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
+    with pytest.raises(blosc2.MenudetError, match="flexible-math"):
+        blosc2.MenudetKernel.from_json(json.dumps(manifest), jit=False)
 
 
-def test_portable_math_environment_inheritance_and_source_override(monkeypatch):
+def test_menudet_math_environment_inheritance_and_source_override(monkeypatch):
     plain = "def k(x):\n    return sin(x)\n"
     manifest = json.loads(DSLKernel.from_source(plain).export({"x": "float64"}, "float64"))
     assert "math" not in manifest["semantics"]
     assert "flexible-math" not in manifest["requires"]
     monkeypatch.setenv("ME_SIMD_MATH_BACKEND", "sleef")
     try:
-        loaded = blosc2.PortableKernel.from_json(json.dumps(manifest), jit=False)
-    except blosc2.PortableArtifactError as error:
+        loaded = blosc2.MenudetKernel.from_json(json.dumps(manifest), jit=False)
+    except blosc2.MenudetError as error:
         if "unavailable" in str(error):
             pytest.skip(f"SLEEF unavailable on this host: {error}")
         raise
@@ -347,29 +347,29 @@ def test_portable_math_environment_inheritance_and_source_override(monkeypatch):
 
     source = "# me:math=system\ndef k(x):\n    return sin(x)\n"
     explicit = json.loads(DSLKernel.from_source(source).export({"x": "float64"}, "float64"))
-    loaded = blosc2.PortableKernel.from_json(json.dumps(explicit), jit=False)
+    loaded = blosc2.MenudetKernel.from_json(json.dumps(explicit), jit=False)
     assert loaded._info["math_backend"] == "system"
 
 
-def test_portable_concurrent_math_backends_are_kernel_local():
+def test_menudet_concurrent_math_backends_are_kernel_local():
     from concurrent.futures import ThreadPoolExecutor
 
     x = np.linspace(-2, 2, 200_003)
     reference = np.sin(x) + np.cos(x)
-    system = blosc2.PortableKernel.from_json(
+    system = blosc2.MenudetKernel.from_json(
         DSLKernel.from_source("# me:math=system\ndef k(x):\n    return sin(x) + cos(x)\n").export(
             {"x": "float64"}, "float64"
         ),
         jit=False,
     )
     try:
-        sleef = blosc2.PortableKernel.from_json(
+        sleef = blosc2.MenudetKernel.from_json(
             DSLKernel.from_source(
                 "# me:math=sleef\n# me:ulp=u35\ndef k(x):\n    return sin(x) + cos(x)\n"
             ).export({"x": "float64"}, "float64"),
             jit=False,
         )
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if "unavailable" in str(error):
             pytest.skip(f"SLEEF unavailable on this host: {error}")
         raise

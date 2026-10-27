@@ -88,7 +88,7 @@ def execution_route(operation, *, return_report=False):
         elif report.get("interpreter_stages", 0):
             observed.add("native-interpreter")
         elif report.get("backend"):
-            observed.add("native-jit" if report["backend"] == "portable-jit" else "native-interpreter")
+            observed.add("native-jit" if report["backend"] == "menudet-jit" else "native-interpreter")
         else:
             observed.add("native-copy")
 

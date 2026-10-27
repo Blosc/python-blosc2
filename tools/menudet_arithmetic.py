@@ -132,8 +132,8 @@ def make_case(
     artifact = json.loads(case["artifact"])
     names = [item["name"] for item in case["inputs"]]
     artifact.update(
-        schema_version="1.0",
-        language={"name": "miniexpr", "version": "1.0"},
+        schema_version="0.1",
+        language={"name": "menudet", "version": "0.1"},
         source=f"def k({', '.join(names)}):\n    return {expression}\n",
         semantics={"fp": "strict", "numeric": "numpy-2.5", "casting": casting},
     )
@@ -371,7 +371,7 @@ def generate():  # noqa: C901 -- explicit finite operator/promotion/cast matrix,
             a = np.array([2**63 - 1], dtype=left)
             b = np.array([2**63 - 2], dtype=right)
             cases.append(make_case(f"comparison-rounded-{left}-{right}", [a, b], "x == y", np.equal(a, b)))
-        from blosc2.portable_kernel import portable_scalar_descriptor
+        from blosc2.menudet_kernel import menudet_scalar_descriptor
 
         for dtype in ("int8", "float32", "float64"):
             a = np.array([0, 1, 2], dtype=dtype)
@@ -387,7 +387,7 @@ def generate():  # noqa: C901 -- explicit finite operator/promotion/cast matrix,
                 artifact = json.loads(case["artifact"])
                 category = "weak" if label.startswith("weak") else "typed_scalar"
                 artifact["source"] = "def k(x, c):\n    return x + c\n"
-                artifact["constants"] = [{**portable_scalar_descriptor("c", scalar), "category": category}]
+                artifact["constants"] = [{**menudet_scalar_descriptor("c", scalar), "category": category}]
                 case["artifact"] = json.dumps(artifact, sort_keys=True)
                 case["scalar_operands"] = [compat.describe(np.asarray(scalar))]
                 case["numpy_recipe"] = {"operation": "add", "cast_to": None, "captured_category": category}

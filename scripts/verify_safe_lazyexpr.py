@@ -50,7 +50,7 @@ def main():
         "test_expression_graph.py",
         "test_expression_graph_properties.py",
         "test_expression_graph_lifetime.py",
-        "test_portable_lazy.py",
+        "test_menudet_lazy.py",
         "ctable/test_ctable_computed_cols.py::test_safe_column_graph_observes_update_at_controlled_read_boundary",
         "ctable/test_ctable_computed_cols.py::test_safe_portable_column_metadata_does_not_evaluate_rows",
     ]

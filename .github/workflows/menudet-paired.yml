@@ -85,7 +85,7 @@ jobs:
             export PATH="$PWD/native-build:$PATH"
           fi
           python -c 'import blosc2; assert blosc2.NativeGraph.from_expression("x - sum(x)", {"x": "float32"}).info()["stages"] == 2'
-          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_portable.py tests/test_portable_artifact.py tests/test_portable_lazy.py tests/test_portable_table_export.py tests/test_portable_policy.py tests/test_portable_descriptor.py tests/test_native_graph_weak_captures.py tests/test_dsl_scalar_dispatch.py -q -n 0
+          python -m pytest tests/test_menudet_arrays.py tests/test_menudet_native_graph.py tests/test_native_graph_preparation.py tests/test_native_graph_stages.py tests/test_menudet_functions.py tests/test_menudet_arithmetic.py tests/test_menudet_conformance.py tests/test_dsl_menudet.py tests/test_menudet_artifact.py tests/test_menudet_lazy.py tests/test_menudet_table_export.py tests/test_menudet_policy.py tests/test_menudet_descriptor.py tests/test_native_graph_weak_captures.py tests/test_dsl_scalar_dispatch.py -q -n 0
       - name: Build exact-pair distribution wheel
         env:
           ME_DSL_JIT_COMPILER: tcc
@@ -97,7 +97,7 @@ jobs:
           fi
           python -m pip wheel . --no-deps --wheel-dir graph-wheels --config-settings="cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=$native_source"
           python -m pip install --force-reinstall --no-deps graph-wheels/*.whl
-          python -m pytest tests/test_portable_jit_integration.py tests/test_menudet_jit.py -q -n 0
+          python -m pytest tests/test_menudet_jit_integration.py tests/test_menudet_jit.py -q -n 0
       - name: Record exact paired revisions
         if: always()
         run: |

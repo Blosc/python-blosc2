@@ -10,7 +10,7 @@ import blosc2
 
 @pytest.fixture(autouse=True)
 def prefilter_runtime(native_graph_runtime):
-    if blosc2.IS_WASM or not blosc2.blosc2_ext.portable_prefilter_available():
+    if blosc2.IS_WASM or not blosc2.blosc2_ext.menudet_prefilter_available():
         pytest.skip("Native compressed prefilters require a host runtime")
     from blosc2.graph_plan import NativeGraph
 
@@ -70,7 +70,7 @@ def test_blosc2_output_native_prefilter(monkeypatch, mode, dtype, explicit_grid)
     assert first.cparams.clevel == 0
     np.testing.assert_array_equal(first[:], expected)
     report = expr._native_execution_report
-    assert report["route"] == "portable-prefilter"
+    assert report["route"] == "menudet-prefilter"
     assert report["input_materialization_bytes"] == 0
     assert report["output_copy_bytes"] == 0
 
@@ -83,7 +83,7 @@ def test_matching_blosc2_out_and_evaluate(monkeypatch, bound):
     forbid_fallback(monkeypatch)
     result = expr.compute(**({} if bound else {"out": output}))
     assert result is output
-    assert expr._native_execution_report["route"] == "portable-prefilter"
+    assert expr._native_execution_report["route"] == "menudet-prefilter"
     np.testing.assert_array_equal(result[:], expected)
     assert blosc2.evaluate("x + (y - 1)", local_dict=inputs, out=output) is output
 
@@ -107,7 +107,7 @@ def test_numpy_output_native_parallel_map(monkeypatch, parallel_threads, explici
         result = expr[:]
         assert isinstance(result, np.ndarray)
     np.testing.assert_array_equal(result, expected)
-    assert expr._native_execution_report["route"] == "portable-prefilter"
+    assert expr._native_execution_report["route"] == "menudet-prefilter"
 
 
 @pytest.mark.parametrize("clevel", [0, 1])
@@ -131,7 +131,7 @@ def test_resident_inputs_use_stored_prefilter(monkeypatch, parallel_threads, cle
     assert result.cparams.clevel == clevel
     np.testing.assert_array_equal(result[:], expected)
     report = expr._native_execution_report
-    assert report["route"] == "portable-prefilter"
+    assert report["route"] == "menudet-prefilter"
     assert report["input_buffer_allocations"] == report["native_decoder_contexts"] == 0
     assert report["input_materialization_bytes"] == report["output_copy_bytes"] == 0
     tail = np.frombuffer(result.schunk.decompress_chunk(result.schunk.nchunks - 1), dtype=values.dtype)
@@ -146,7 +146,7 @@ def test_resident_stored_prefilter_failure_is_not_replayed(monkeypatch):
     def failure(*args, **kwargs):
         raise OSError("Stored prefilter failed")
 
-    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", failure)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", failure)
     with pytest.raises(OSError, match="Stored prefilter failed"):
         expr.compute()
 
@@ -232,7 +232,7 @@ def test_native_prefilter_error_is_not_replayed(monkeypatch):
         calls.append(True)
         raise RuntimeError("Injected native prefilter failure")
 
-    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", failing)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", failing)
     with pytest.raises(RuntimeError, match="Injected native"):
         expr.compute(cparams={"clevel": 0})
     assert len(calls) == 1
@@ -246,7 +246,7 @@ def test_matching_grid_with_out_and_comparison_output(monkeypatch):
     forbid_fallback(monkeypatch)
     assert expr.compute(out=output, chunks=(128,), blocks=(32,)) is output
     np.testing.assert_array_equal(output[:], expected)
-    assert expr._native_execution_report["route"] == "portable-prefilter"
+    assert expr._native_execution_report["route"] == "menudet-prefilter"
 
 
 def test_input_output_alias_retains_fallback():

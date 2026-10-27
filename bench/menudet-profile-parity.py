@@ -71,7 +71,7 @@ def main():  # noqa: C901 -- explicit serial benchmark matrix
                         continue
                     source = f"def k(x, y):\n    return {expression}\n"
                     author = blosc2.DSLKernel.from_source(source)
-                    kernel = blosc2.PortableKernel.from_json(author.export({"x": dtype, "y": dtype}, output), jit=True)
+                    kernel = blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, output), jit=True)
                     for count in args.items:
                         x = (np.arange(count) % 3 + 1).astype(dtype)
                         y = (np.arange(count) % 2 + 1).astype(dtype)
@@ -107,10 +107,10 @@ def main():  # noqa: C901 -- explicit serial benchmark matrix
                                 for mode in modes:
                                     row = {"name": name, "dtype": dtype, "output_dtype": output, "items": count,
                                            "threads": threads, "backend": backend, "layout": layout,
-                                           "output": mode, "portable_jit": kernel.has_jit}
+                                           "output": mode, "menudet_jit": kernel.has_jit}
                                     valid_engines = []
                                     row["status"] = "ok"
-                                    for label, lazy in (("portable", modern), ("legacy", old)):
+                                    for label, lazy in (("menudet", modern), ("legacy", old)):
                                         try:
                                             actual = read_result(lazy, mode, selection, count)
                                             values = actual[:] if isinstance(actual, blosc2.NDArray) else actual
@@ -122,7 +122,7 @@ def main():  # noqa: C901 -- explicit serial benchmark matrix
                                             row["status"] = f"{label}_error"
                                             row["error"] = f"{type(error).__name__}: {error}"
                                     if valid_engines:
-                                        times = {"portable": [], "legacy": []}
+                                        times = {"menudet": [], "legacy": []}
                                         for repeat in range(args.repeat):
                                             engines = valid_engines.copy()
                                             if repeat % 2:
@@ -138,7 +138,7 @@ def main():  # noqa: C901 -- explicit serial benchmark matrix
                                             if samples:
                                                 row[f"{label}_s"] = median(samples)
                                         if all(times.values()):
-                                            row["ratio"] = row["portable_s"] / row["legacy_s"]
+                                            row["ratio"] = row["menudet_s"] / row["legacy_s"]
                                         row["source_report"] = getattr(modern, "_source_execution_report", None)
                                     stream.write(json.dumps(row) + "\n")
                                     stream.flush()

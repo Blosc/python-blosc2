@@ -9,7 +9,7 @@ import blosc2
 from blosc2 import blosc2_ext
 
 pytestmark = pytest.mark.skipif(
-    not getattr(blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    not getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)(),
     reason="Installed native runtime has no draft 1.0 descriptor ABI",
 )
 
@@ -17,8 +17,8 @@ pytestmark = pytest.mark.skipif(
 def manifest(source, inputs, output, *, requires, ndim=0):
     return json.dumps(
         {
-            "schema_version": "1.0",
-            "language": {"name": "miniexpr", "version": "1.0"},
+            "schema_version": "0.1",
+            "language": {"name": "menudet", "version": "0.1"},
             "requires": requires,
             "source": source,
             "entry_point": "k",
@@ -33,7 +33,7 @@ def manifest(source, inputs, output, *, requires, ndim=0):
 
 
 def test_descriptor_scalar_mask_empty():
-    artifact = blosc2_ext.PortableArtifactHandle(
+    artifact = blosc2_ext.MenudetArtifactHandle(
         manifest(
             "def k(x):\n    return block_sum(x)\n",
             [{"name": "x", "dtype": "int64"}],
@@ -67,7 +67,7 @@ def test_descriptor_scalar_mask_empty():
             requires=["numeric", "block-reductions"],
         )
     )
-    local = blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
+    local = blosc2_ext.MenudetArtifactHandle(json.dumps(record).encode(), 0)
     assert (
         local.evaluate_block(
             {"x": np.array([99, 2, 3], dtype="int64")}, (3,), valid_mask=np.array([False, True, True])
@@ -76,7 +76,7 @@ def test_descriptor_scalar_mask_empty():
     )
     record["output"]["contract"] = "elementwise"
     with pytest.raises(ValueError, match="cardinality"):
-        blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
+        blosc2_ext.MenudetArtifactHandle(json.dumps(record).encode(), 0)
     record["output"]["contract"] = "block_scalar"
     record["requires"].append("control-flow")
     for body in (
@@ -89,7 +89,7 @@ def test_descriptor_scalar_mask_empty():
     ):
         record["source"] = "def k(x):\n    s = block_sum(x)\n" + body
         with pytest.raises(ValueError, match="ambiguous block-scalar"):
-            blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
+            blosc2_ext.MenudetArtifactHandle(json.dumps(record).encode(), 0)
     for body in (
         "    if block_all(x > 0):\n        return s + 1\n    return s\n",
         "    for i in range(3):\n        if s > 0:\n            return s + i\n    return s\n",
@@ -97,12 +97,12 @@ def test_descriptor_scalar_mask_empty():
         "    while block_all(x > 0):\n        return s + 1\n    return s\n",
     ):
         record["source"] = "def k(x):\n    s = block_sum(x)\n" + body
-        coherent = blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
+        coherent = blosc2_ext.MenudetArtifactHandle(json.dumps(record).encode(), 0)
         assert coherent.evaluate_block({"x": np.array([-1, 2], dtype="int64")}, (2,)) == 1
 
 
 def test_descriptor_fixed_unicode():
-    artifact = blosc2_ext.PortableArtifactHandle(
+    artifact = blosc2_ext.MenudetArtifactHandle(
         manifest(
             "def k(x):\n    return upper(x)\n",
             [{"name": "x", "dtype": "unicode32", "itemsize": 16}],
@@ -122,11 +122,11 @@ def test_descriptor_fixed_unicode():
         )
     )
     with pytest.raises(ValueError, match="width"):
-        blosc2_ext.PortableArtifactHandle(json.dumps(record).encode(), 0)
+        blosc2_ext.MenudetArtifactHandle(json.dumps(record).encode(), 0)
 
 
 def test_descriptor_logical_coordinates():
-    artifact = blosc2_ext.PortableArtifactHandle(
+    artifact = blosc2_ext.MenudetArtifactHandle(
         manifest(
             "def k():\n    return _flat_idx\n",
             [],
@@ -144,7 +144,7 @@ def test_descriptor_logical_coordinates():
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
 def test_input_free_prefilter_ramp():
-    artifact = blosc2_ext.PortableArtifactHandle(
+    artifact = blosc2_ext.MenudetArtifactHandle(
         manifest(
             "def k():\n    return _flat_idx\n",
             [],
@@ -155,7 +155,7 @@ def test_input_free_prefilter_ramp():
         0,
     )
     output = blosc2.empty((19,), dtype="int64", chunks=(8,), blocks=(4,))
-    assert blosc2_ext.portable_prefilter_inputs_eligible({}, output=output)
+    assert blosc2_ext.menudet_prefilter_inputs_eligible({}, output=output)
     result, report = artifact.evaluate_prefilter({}, out=output)
     assert result is output
     np.testing.assert_array_equal(result[:], np.arange(19))
@@ -184,7 +184,7 @@ def test_constructor_ramp_explicit_interpreter():
 @pytest.mark.parametrize("jit", [0, 1])
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
 def test_input_free_prefilter_nd_edges(shape, chunks, blocks, clevel, jit):
-    artifact = blosc2_ext.PortableArtifactHandle(
+    artifact = blosc2_ext.MenudetArtifactHandle(
         manifest(
             "def k():\n    return _flat_idx\n",
             [],

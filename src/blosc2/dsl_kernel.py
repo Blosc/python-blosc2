@@ -703,7 +703,7 @@ class DSLKernel:
         header is inspected here; miniexpr validates the body when compiling with
         the input and output dtypes supplied to :func:`blosc2.lazyudf`.
         No frontend rewriting, captured globals, or Python fallback is provided.
-        This accepts native DSL source, not a portable-profile certification.
+        This accepts native DSL source, not a Menudet-profile certification.
         """
         if not isinstance(source, str):
             raise TypeError("DSL source must be a string")
@@ -950,7 +950,7 @@ class DSLKernel:
         capture_dtypes=None,
         constants=None,
         metadata=None,
-        version="1.0",
+        version="0.1",
         casting="unsafe",
         cardinality="elementwise",
         ndim=0,
@@ -963,9 +963,9 @@ class DSLKernel:
         collision-free parameters. ``capture_dtypes`` overrides scalar type
         inference (Python bool/int/float infer bool/int64/float64 respectively;
         supported NumPy scalars retain their dtype). Arrays, objects, and external
-        callbacks cannot be captures. Import via :meth:`blosc2.PortableKernel.from_json`.
+        callbacks cannot be captures. Import via :meth:`blosc2.MenudetKernel.from_json`.
 
-        Menudet ``version="1.0"`` is an experimental implementation draft with
+        Menudet ``version="0.1"`` is an beta specification with
         NumPy-style arithmetic and optional JIT. Final output supports
         ``casting="safe"``, ``"same_kind"`` or ``"unsafe"``. Numeric captures follow
         the declared scalar category:
@@ -980,9 +980,9 @@ class DSLKernel:
         exported source. The native loader validates normalized source, widths,
         policy and cardinality before export succeeds.
         """
-        from .portable_kernel import export_portable_kernel
+        from .menudet_kernel import export_menudet_kernel
 
-        return export_portable_kernel(
+        return export_menudet_kernel(
             self,
             input_dtypes,
             output_dtype,
@@ -1087,10 +1087,10 @@ def validate_dsl(func):
     }
 
 
-def validate_portable_dsl(
-    source, input_dtypes, output_dtype, *, language_version="1.0", ndim=0, cardinality=None
+def validate_menudet(
+    source, input_dtypes, output_dtype, *, language_version="0.1", ndim=0, cardinality=None
 ):
-    """Check raw native source and an exact typed signature against the Menudet 1.0 profile.
+    """Check raw native source and an exact typed signature against the Menudet 0.1 beta profile.
 
     Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
     ``error``. Validation neither executes a kernel nor invokes a JIT compiler.
@@ -1101,8 +1101,7 @@ def validate_portable_dsl(
     ``input_dtypes`` maps parameter names to explicit dtype descriptions. Parameter
     binding is by name; mapping order may differ from source order. Dtypes describe
     logical values, not the storage layout of any actual input arrays.
-    The default ``language_version="1.0"`` is an experimental implementation
-    draft admitting mixed numeric and fixed-width ``S``/``U``
+    The default ``language_version="0.1"`` is an beta specification admitting mixed numeric and fixed-width ``S``/``U``
     signatures. ``ndim`` declares the logical rank for reserved ND symbols;
     missing or insufficient context rejects explicitly. ``cardinality`` may be
     ``elementwise`` or ``block_scalar`` to assert the native return contract;
@@ -1119,13 +1118,13 @@ def validate_portable_dsl(
         raise TypeError("input_dtypes must map parameter names to explicit dtypes")
     if "\x00" in source or "\x00" in language_version:
         raise ValueError("Menudet source and version must not contain NUL characters")
-    if language_version != "1.0":
+    if language_version != "0.1":
         return {
             "valid": False,
             "status": "unsupported_version",
             "line": 0,
             "column": 0,
-            "error": "Unsupported Menudet version; expected draft 1.0",
+            "error": "Unsupported Menudet version; expected Menudet 0.1 beta",
         }
     if any(not isinstance(name, str) or "\x00" in name for name in input_dtypes):
         raise ValueError("Menudet input names must be strings without NUL characters")
@@ -1134,7 +1133,7 @@ def validate_portable_dsl(
     contracts = {None: 0, "elementwise": 1, "block_scalar": 2}
     if cardinality not in contracts:
         raise ValueError("cardinality must be None, 'elementwise' or 'block_scalar'")
-    validator = getattr(blosc2_ext, "validate_portable_dsl_source", None)
+    validator = getattr(blosc2_ext, "validate_menudet_source", None)
     if validator is None:
         return {
             "valid": False,

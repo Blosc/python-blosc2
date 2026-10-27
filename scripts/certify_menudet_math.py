@@ -73,7 +73,7 @@ def reference_cases(mp):
         "fmax": (max, [(-8, 0.125), (0.125, 8)], 0),
         "copysign": (lambda x, y: abs(x) * mp.sign(y), [(0.125, -8), (-8, 0.125)], 0),
         "fmod": (lambda x, y: x - int(x / y) * y, [(-8.125, 2), (8.125, 2)], 0),
-        # Menudet 1.0 remainder follows floor division (divisor sign), not
+        # Menudet 0.1 beta remainder follows floor division (divisor sign), not
         # the legacy IEEE remainder operation's nearest-integer quotient.
         "remainder": (lambda x, y: x - mp.floor(x / y) * y, [(-7, 2), (7, 2), (-7, -2), (7, -2)], 0),
         "ldexp": (lambda x, y: x * mp.power(2, int(y)), [(0.125, -8), (1.5, 8)], 0),
@@ -127,7 +127,7 @@ def check(record):
             signature["y"] = "int64"
         source = f"def k({', '.join(names)}):\n    return {name}({', '.join(names)})\n"
         artifact = blosc2.DSLKernel.from_source(source).export(signature, dtype)
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
         inputs = {
             key: np.array([float.fromhex(value)], dtype=signature[key])
             for key, value in zip(names, case["inputs"], strict=True)

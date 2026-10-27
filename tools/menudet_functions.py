@@ -225,8 +225,8 @@ def make_case(identifier, name, arrays, expected=None, diagnostic=None):
     )
     artifact = json.loads(case["artifact"])
     artifact.update(
-        schema_version="1.0",
-        language={"name": "miniexpr", "version": "1.0"},
+        schema_version="0.1",
+        language={"name": "menudet", "version": "0.1"},
         source=f"def k({', '.join(x['name'] for x in case['inputs'])}):\n    return {expression}\n",
         semantics={"fp": "strict", "numeric": "numpy-2.5", "casting": "unsafe"},
     )

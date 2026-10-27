@@ -43,7 +43,7 @@ def _jit_backend_available():
 
 
 JIT_AVAILABLE = _jit_backend_available()
-native_portable = pytest.mark.skipif(blosc2.IS_WASM, reason="Tests native Menudet dispatch")
+native_menudet = pytest.mark.skipif(blosc2.IS_WASM, reason="Tests native Menudet dispatch")
 
 
 def _expect_jit(status):
@@ -261,7 +261,7 @@ def test_kernel_integer_ops_kept_as_dsl():
         np.testing.assert_equal(res[...], expected)
 
 
-@native_portable
+@native_menudet
 def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
     assert kernel_index_ramp.dsl_source is not None
     assert "def kernel_index_ramp(x):" in kernel_index_ramp.dsl_source
@@ -336,7 +336,7 @@ def test_kernel_index_float_cast_matches_ramp():
     np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
 
 
-@native_portable
+@native_menudet
 def test_kernel_index_float_cast_fast_path(monkeypatch):
     original_set_pref_expr = blosc2.NDArray._set_pref_expr
     captured = {"calls": 0, "expr": None}
@@ -452,7 +452,7 @@ def test_dsl_kernel_accepts_scalar_param_per_call():
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
 
 
-@native_portable
+@native_menudet
 def test_kernel_scalar_param_keeps_fast_path(monkeypatch):
     import importlib
 
@@ -495,7 +495,7 @@ def test_kernel_scalar_param_keeps_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@native_portable
+@native_menudet
 def test_kernel_scalar_float_cast_inlined(monkeypatch):
     import importlib
 
@@ -528,7 +528,7 @@ def test_kernel_scalar_float_cast_inlined(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@native_portable
+@native_menudet
 def test_kernel_scalar_only_via_fast_eval(monkeypatch):
     import importlib
 
@@ -561,7 +561,7 @@ def test_kernel_scalar_only_via_fast_eval(monkeypatch):
     np.testing.assert_equal(res[...], np.full(shape, 4, dtype=np.float32))
 
 
-@native_portable
+@native_menudet
 def test_kernel_scalar_only_needs_no_dummy(monkeypatch):
     """Portable scalar-only recipes need no dummy input or legacy compiler."""
     import importlib
@@ -698,7 +698,7 @@ print("ok")
     assert "ok" in result.stdout
 
 
-@native_portable
+@native_menudet
 def test_kernel_failure_raises_strict_off(monkeypatch):
     import importlib
 
@@ -707,7 +707,7 @@ def test_kernel_failure_raises_strict_off(monkeypatch):
     lazyexpr_mod.try_miniexpr = True
 
     def failing_export(*args, **kwargs):
-        raise blosc2.PortableArtifactError("forced miniexpr failure", status="invalid_source")
+        raise blosc2.MenudetError("forced miniexpr failure", status="invalid_source")
 
     monkeypatch.setattr(blosc2.DSLKernel, "export", failing_export)
 
@@ -722,7 +722,7 @@ def test_kernel_failure_raises_strict_off(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@native_portable
+@native_menudet
 def test_kernel_failure_includes_backend_error(monkeypatch):
     import importlib
 
@@ -731,9 +731,7 @@ def test_kernel_failure_includes_backend_error(monkeypatch):
     lazyexpr_mod.try_miniexpr = True
 
     def failing_export(*args, **kwargs):
-        raise blosc2.PortableArtifactError(
-            "forced miniexpr backend failure details", status="invalid_source"
-        )
+        raise blosc2.MenudetError("forced miniexpr backend failure details", status="invalid_source")
 
     monkeypatch.setattr(blosc2.DSLKernel, "export", failing_export)
 
@@ -748,7 +746,7 @@ def test_kernel_failure_includes_backend_error(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@native_portable
+@native_menudet
 def test_kernel_failure_prefers_validate_error(monkeypatch):
     import importlib
 
@@ -757,7 +755,7 @@ def test_kernel_failure_prefers_validate_error(monkeypatch):
     lazyexpr_mod.try_miniexpr = True
 
     def failing_export(*args, **kwargs):
-        raise blosc2.PortableArtifactError(
+        raise blosc2.MenudetError(
             "forced backend failure hidden by validate_dsl message", status="invalid_source"
         )
 
@@ -784,7 +782,7 @@ def test_kernel_failure_prefers_validate_error(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@native_portable
+@native_menudet
 def test_lazyudf_jit_policy_forwarding(monkeypatch):
     import importlib
 
@@ -792,14 +790,14 @@ def test_lazyudf_jit_policy_forwarding(monkeypatch):
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
 
-    original_from_json = blosc2.PortableKernel.from_json
+    original_from_json = blosc2.MenudetKernel.from_json
     seen = []
 
     def wrapped_from_json(artifact, *, jit=None):
         seen.append(jit)
         return original_from_json(artifact, jit=jit)
 
-    monkeypatch.setattr(blosc2.PortableKernel, "from_json", wrapped_from_json)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", wrapped_from_json)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
@@ -914,7 +912,7 @@ def _save_compute(kernel, inputs_b2, dtype, urlpaths, extra_kwargs=None):
     lazy.save(urlpath=urlpaths["lazy"])
     restored = blosc2.open(urlpaths["lazy"])
     assert restored.partitions == lazy.blocks
-    assert restored.kernel.schema_version == "1.0"
+    assert restored.kernel.schema_version == "0.1"
     return restored, restored.compute()
 
 
@@ -929,7 +927,7 @@ def test_dsl_save_simple(tmp_path):
 
     urlpaths = {"lazy": str(tmp_path / "lazy.b2nd")}
     reloaded, result = _save_compute(kernel_save_simple, (a, b), np.float64, urlpaths)
-    assert isinstance(reloaded.kernel, blosc2.PortableKernel)
+    assert isinstance(reloaded.kernel, blosc2.MenudetKernel)
 
     expected = (na + nb) ** 2  # (x+y)^2 == x^2 + y^2 + 2xy
     np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
@@ -946,7 +944,7 @@ def test_dsl_save_clamp(tmp_path):
 
     urlpaths = {"lazy": str(tmp_path / "lazy.b2nd")}
     reloaded, result = _save_compute(kernel_save_clamp, (a, b), np.float64, urlpaths)
-    assert isinstance(reloaded.kernel, blosc2.PortableKernel)
+    assert isinstance(reloaded.kernel, blosc2.MenudetKernel)
 
     expected = np.where(na + nb > 1.5, na + nb, 1.5)
     np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
@@ -963,7 +961,7 @@ def test_dsl_save_loop(tmp_path):
 
     urlpaths = {"lazy": str(tmp_path / "lazy.b2nd")}
     reloaded, result = _save_compute(kernel_save_loop, (a, b), np.float64, urlpaths)
-    assert isinstance(reloaded.kernel, blosc2.PortableKernel)
+    assert isinstance(reloaded.kernel, blosc2.MenudetKernel)
 
     expected = kernel_save_loop.func(na, nb)
     np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
@@ -1214,7 +1212,7 @@ def test_dsl_kernel_reassigning_input_param_rejected():
     assert "input parameter 'a'" in result["error"]
 
 
-@native_portable
+@native_menudet
 def test_dsl_kernel_variable_named_out_compiles(monkeypatch):
     # G3: 'out' collides with the codegen output pointer -> used to silently fall
     # back to the interpreter.  miniexpr now namespaces its codegen identifiers
@@ -1372,8 +1370,8 @@ def test_kernel_numpy_f_ordered_and_strided():
     np.testing.assert_array_equal(res_strided, ref_strided)
 
 
-@native_portable
-def test_kernel_non_native_endian_portable_conversion():
+@native_menudet
+def test_kernel_non_native_endian_menudet_conversion():
     a = np.arange(100, dtype=">f8").reshape(10, 10)
     b = np.arange(100, dtype=np.float64).reshape(10, 10)
     result = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]

@@ -49,7 +49,7 @@ def test_parallel_compressed_map(backend, dtype, mixed, comparison, monkeypatch)
     result = expression[:]
     np.testing.assert_array_equal(result, expected)
     report = expression._native_execution_report
-    assert report["route"] == "portable-prefilter"
+    assert report["route"] == "menudet-prefilter"
     assert report["threads"] == 2
     assert report["native_decoder_contexts"] == (2 if mixed else 4)
     assert report["reader_bytes"] == values.nbytes * (1 if mixed else 2)
@@ -95,7 +95,7 @@ def test_integer_prefilter_avoids_gather_indices(monkeypatch, mixed):
     assert blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}, out=output) is output
     np.testing.assert_array_equal(output, expected)
     report = expr._native_execution_report
-    assert report["route"] == "portable-prefilter"
+    assert report["route"] == "menudet-prefilter"
     assert report["gathered_bytes"] == report["output_copy_bytes"] == 0
     assert report["temporary_bytes"] <= 2048
     assert report["evaluated_tiles"] == 4 * (256 // report["tile_items"]) + 1
@@ -110,7 +110,7 @@ def test_prefilter_workers_join_failures(monkeypatch):
     values = np.arange(4099, dtype="int16")
     x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
     author = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
-    native = blosc2.PortableKernel.from_json(author.export({"x": "int16"}, "int16"), jit=True)
+    native = blosc2.MenudetKernel.from_json(author.export({"x": "int16"}, "int16"), jit=True)
     output = np.empty_like(values)
     completed = []
 
@@ -155,7 +155,7 @@ def test_integer_prefilter_keeps_wide_inputs_parallel(monkeypatch):
     monkeypatch.setattr("blosc2.native_graph._compressed_map_schedules", forbidden)
     np.testing.assert_array_equal(expr[:], values + (values - 1))
     report = expr._native_execution_report
-    assert report["route"] == "portable-prefilter"
+    assert report["route"] == "menudet-prefilter"
     assert report["threads"] == 2
     assert report["tile_items"] == 64
     assert report["temporary_bytes"] <= 4608
@@ -328,5 +328,5 @@ def test_map_groups_tiny_blocks_to_amortize_dispatch(padded):
     np.testing.assert_array_equal(expr[:], values + 1)
     assert expr._native_execution_report["tile_items"] == 4096
     assert expr._native_execution_report["route"] == (
-        "parallel-graph-bounded-map" if padded else "portable-prefilter"
+        "parallel-graph-bounded-map" if padded else "menudet-prefilter"
     )

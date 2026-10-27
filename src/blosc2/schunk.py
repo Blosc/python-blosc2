@@ -1977,7 +1977,7 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
 
     if "b2o" in meta:
         if deserialize is DeserializeMode.SAFE and (
-            not isinstance(meta["b2o"], dict) or meta["b2o"].get("kind") not in {"portable", "lazyexpr"}
+            not isinstance(meta["b2o"], dict) or meta["b2o"].get("kind") not in {"menudet", "lazyexpr"}
         ):
             marker = meta["b2o"]
             kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"

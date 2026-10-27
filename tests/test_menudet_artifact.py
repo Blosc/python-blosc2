@@ -25,7 +25,7 @@ SCALE = 2.0
 BIAS = -1.0
 
 
-@pytest.mark.parametrize("version", ["1.0"])
+@pytest.mark.parametrize("version", ["0.1"])
 @pytest.mark.parametrize("operation", ["sum", "prod", "min", "max", "mean", "any", "all"])
 def test_explicit_block_reduction_names(version, operation):
     output = "bool" if operation in {"any", "all"} else "float64"
@@ -33,23 +33,23 @@ def test_explicit_block_reduction_names(version, operation):
     artifact = blosc2.DSLKernel.from_source(source).export(
         {"x": "float64"}, output, version=version, cardinality="block_scalar"
     )
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     x = np.array([1.0, 2.0, 3.0])
     np.testing.assert_array_equal(kernel.evaluate({"x": x}), getattr(np, operation)(x))
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         blosc2.DSLKernel.from_source(f"def k(x):\n    return {operation}(x)\n").export(
             {"x": "float64"}, output, version=version, cardinality="block_scalar"
         )
 
 
-@pytest.mark.parametrize("version", ["1.0"])
+@pytest.mark.parametrize("version", ["0.1"])
 @pytest.mark.parametrize("dtype", ["bool", "int64", "uint64", "float32", "float64"])
 def test_block_mean_dtype_and_participation(version, dtype):
     output = dtype if dtype.startswith("float") else "float64"
     artifact = blosc2.DSLKernel.from_source("def k(x):\n    return block_mean(x)\n").export(
         {"x": dtype}, output, version=version, cardinality="block_scalar"
     )
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     x = np.array([1, 0, 3], dtype=dtype)
     mask = np.array([False, True, True])
     actual = kernel.evaluate_block({"x": x}, valid_mask=mask)
@@ -58,13 +58,13 @@ def test_block_mean_dtype_and_participation(version, dtype):
     assert np.isnan(kernel.evaluate_block({"x": x}, valid_mask=np.zeros(3, dtype=bool)))
     assert np.isnan(kernel.evaluate_block({"x": x[:0]}))
     if dtype in {"int64", "uint64"}:
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block({"x": np.array([np.iinfo(dtype).max, 1], dtype=dtype)})
 
 
 def assert_execution_mode(kernel, jit):
-    # Menudet 1.0 may accelerate eligible kernels when explicitly requested.
-    assert kernel.schema_version == "1.0"
+    # Menudet 0.1 beta may accelerate eligible kernels when explicitly requested.
+    assert kernel.schema_version == "0.1"
     if not jit:
         assert not kernel.has_jit
 
@@ -90,9 +90,9 @@ def assert_execution_mode(kernel, jit):
 )
 def test_typed_arithmetic_without_corpus(native_artifacts, expression, input_dtype, output_dtype, expected):
     source = f"def k(x):\n    return {expression}\n"
-    assert blosc2.validate_portable_dsl(source, {"x": input_dtype}, output_dtype)["valid"]
+    assert blosc2.validate_menudet(source, {"x": input_dtype}, output_dtype)["valid"]
     artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
     assert_execution_mode(kernel, True)
     actual = kernel.evaluate({"x": np.array([-2, 0, 2], dtype=input_dtype)})
     np.testing.assert_allclose(actual, np.array(expected, dtype=output_dtype), rtol=1e-6)
@@ -107,16 +107,16 @@ def affine(x):
 def native_artifacts():
     from blosc2 import blosc2_ext
 
-    available = getattr(blosc2_ext, "portable_artifact_available", lambda: False)
+    available = getattr(blosc2_ext, "menudet_artifact_available", lambda: False)
     if not available():
         pytest.skip("Rebuild with miniexpr artifact support enabled")
 
 
 def test_prepare_infers_output_without_probe_artifact(native_artifacts):
-    from blosc2.portable_kernel import prepare_portable_kernel
+    from blosc2.menudet_kernel import prepare_menudet_kernel
 
     kernel = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
-    prepared = prepare_portable_kernel(kernel, {"x": np.dtype("float32")}, None)
+    prepared = prepare_menudet_kernel(kernel, {"x": np.dtype("float32")}, None)
     assert prepared.output_dtype == np.dtype("float32")
     assert prepared.inferred_dtype == np.dtype("float32")
     decoded = json.loads(prepared.to_json())
@@ -135,7 +135,7 @@ def test_export_capture_snapshot(native_artifacts, monkeypatch):
     assert len(decoded["constants"]) == 2
     monkeypatch.setitem(affine.func.__globals__, "SCALE", 99.0)
     monkeypatch.setitem(affine.func.__globals__, "BIAS", 10.0)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     x = np.arange(600, dtype=np.float64).reshape(20, 30)
     np.testing.assert_array_equal(kernel.evaluate({"x": x}), 2 * x - 1)
     assert not kernel.has_jit
@@ -154,7 +154,7 @@ def test_capture_closure_and_frontend_sugar(native_artifacts):
     def trig(x):
         return np.sin(x) * scale
 
-    kernel = blosc2.PortableKernel.from_json(trig.export({"x": "float32"}, "float32"), jit=False)
+    kernel = blosc2.MenudetKernel.from_json(trig.export({"x": "float32"}, "float32"), jit=False)
     values = np.array([0, 1, 2], dtype="float32")
     np.testing.assert_allclose(kernel.evaluate({"x": values}), np.sin(values) * scale, rtol=1e-6)
 
@@ -173,7 +173,7 @@ def test_capture_collision_and_comments(native_artifacts):
     assert decoded["constants"][0]["name"] == "_capture_1"
     assert "# scale stays in this comment" in decoded["source"]
     assert '"""scale must not be rewritten in strings."""' in decoded["source"]
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     np.testing.assert_array_equal(kernel.evaluate({"x": np.arange(3, dtype=np.float64)}), [0, 2, 4])
 
 
@@ -201,7 +201,7 @@ def test_constant_encodings(native_artifacts, dtype, value, encoding, encoded):
         "value": encoded,
         "category": "typed_scalar" if isinstance(value, np.generic) else "weak",
     }
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert kernel.source == source
     result = kernel.evaluate({}, shape=(600,))
     assert result.dtype == np.dtype(dtype)
@@ -224,9 +224,9 @@ def test_explicit_capture_dtype(native_artifacts):
     assert inferred["constants"][0]["dtype"] == "int64"
     artifact = k.export({"x": "float64"}, "float64", capture_dtypes={"integer": "float64"})
     np.testing.assert_array_equal(
-        blosc2.PortableKernel.from_json(artifact, jit=False).evaluate({"x": np.array([3.0])}), [6.0]
+        blosc2.MenudetKernel.from_json(artifact, jit=False).evaluate({"x": np.array([3.0])}), [6.0]
     )
-    with pytest.raises(blosc2.PortableArtifactError, match="Unused capture dtype"):
+    with pytest.raises(blosc2.MenudetError, match="Unused capture dtype"):
         k.export({"x": "float64"}, "float64", capture_dtypes={"unused": "float64"})
 
 
@@ -245,7 +245,7 @@ def test_capture_value_types(native_artifacts, value):
         assert constant["dtype"] == "unicode32"
         assert constant["encoding"] == "unicode32be-hex"
         np.testing.assert_array_equal(
-            blosc2.PortableKernel.from_json(artifact).evaluate({"x": np.zeros(2)}), ["hello", "hello"]
+            blosc2.MenudetKernel.from_json(artifact).evaluate({"x": np.zeros(2)}), ["hello", "hello"]
         )
         return
 
@@ -253,7 +253,7 @@ def test_capture_value_types(native_artifacts, value):
     def k(x):
         return x + capture
 
-    with pytest.raises(blosc2.PortableArtifactError, match="Captures"):
+    with pytest.raises(blosc2.MenudetError, match="Captures"):
         k.export({"x": "float64"}, "float64")
 
 
@@ -271,7 +271,7 @@ def test_never_calls_capture_hooks_or_functions(native_artifacts):
     def k(x):
         return x + capture
 
-    with pytest.raises(blosc2.PortableArtifactError, match="Captures"):
+    with pytest.raises(blosc2.MenudetError, match="Captures"):
         k.export({"x": "float64"}, "float64", capture_dtypes={"capture": "float64"})
 
     def callback(x):
@@ -281,7 +281,7 @@ def test_never_calls_capture_hooks_or_functions(native_artifacts):
     def external(x):
         return callback(x)
 
-    with pytest.raises(blosc2.PortableArtifactError, match="callback"):
+    with pytest.raises(blosc2.MenudetError, match="callback"):
         external.export({"x": "float64"}, "float64")
 
 
@@ -292,7 +292,7 @@ def test_shadowed_numpy_alias_is_not_rewritten(native_artifacts):
         return np.sin(x)
 
     assert "np.sin" in local_alias.dsl_source
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         local_alias.export({"x": "float64"}, "float64")
 
 
@@ -301,7 +301,7 @@ def test_artifact_backend_and_repeated_calls(native_artifacts, jit):
     from concurrent.futures import ThreadPoolExecutor
 
     artifact = affine.export({"x": "float64"}, "float64")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     arrays = [np.arange(600, dtype=np.float64) + i for i in range(4)]
     if blosc2.IS_WASM:
@@ -318,11 +318,11 @@ def test_artifact_backend_and_repeated_calls(native_artifacts, jit):
 def test_capture_range_checks(native_artifacts):
     kernel = blosc2.DSLKernel.from_source("def k(c):\n    return c\n")
     for value, dtype in [(2**63, "int64"), (2**31, "int32"), (1e100, "float32")]:
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.export({}, dtype, constants={"c": value}, capture_dtypes={"c": dtype})
     # Explicit float conversion rounds to nearest, rather than rejecting precision loss.
     rounded = kernel.export({}, "float64", constants={"c": 2**53 + 1}, capture_dtypes={"c": "float64"})
-    assert blosc2.PortableKernel.from_json(rounded).evaluate({}, shape=())[()] == float(2**53)
+    assert blosc2.MenudetKernel.from_json(rounded).evaluate({}, shape=())[()] == float(2**53)
 
 
 def test_nan_payload_and_explicit_float_narrowing(native_artifacts):
@@ -332,35 +332,35 @@ def test_nan_payload_and_explicit_float_narrowing(native_artifacts):
     assert json.loads(artifact)["constants"][0]["value"] == "7ff8000000000042"
     value = 1.1
     artifact = author.export({}, "float32", constants={"c": value}, capture_dtypes={"c": "float32"})
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert kernel.evaluate({}, shape=())[()] == np.float32(value)
 
 
 def test_export_bindings_and_metadata_rejections(native_artifacts):
     author = blosc2.DSLKernel.from_source("def k(x):\n    return x\n")
-    with pytest.raises(blosc2.PortableArtifactError, match="exactly one"):
+    with pytest.raises(blosc2.MenudetError, match="exactly one"):
         author.export({}, "float64")
-    with pytest.raises(blosc2.PortableArtifactError, match="exactly one"):
+    with pytest.raises(blosc2.MenudetError, match="exactly one"):
         author.export({"x": "float64"}, "float64", constants={"x": 1.0})
-    with pytest.raises(blosc2.PortableArtifactError) as error:
+    with pytest.raises(blosc2.MenudetError) as error:
         author.export({"x": "float64"}, "float64", metadata={"bad": "\x00"})
     assert error.value.status == "invalid_artifact"
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        blosc2.PortableKernel.from_json(b"{\xff}")
+    with pytest.raises(blosc2.MenudetError) as error:
+        blosc2.MenudetKernel.from_json(b"{\xff}")
     assert error.value.status == "invalid_artifact"
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        blosc2.PortableKernel.from_json("{\ud800}")
+    with pytest.raises(blosc2.MenudetError) as error:
+        blosc2.MenudetKernel.from_json("{\ud800}")
     assert error.value.status == "invalid_artifact"
 
 
 def test_unresolved_capture_has_location(native_artifacts):
     @blosc2.dsl_kernel
     def k(x):
-        return x + MISSING_PORTABLE_CAPTURE  # noqa: F821
+        return x + MISSING_MENUDET_CAPTURE  # noqa: F821
 
-    with pytest.raises(blosc2.PortableArtifactError) as error:
+    with pytest.raises(blosc2.MenudetError) as error:
         k.export({"x": "float64"}, "float64")
-    assert "MISSING_PORTABLE_CAPTURE" in str(error.value)
+    assert "MISSING_MENUDET_CAPTURE" in str(error.value)
     assert error.value.status == "invalid_source"
     assert error.value.line > 0
     assert error.value.column > 0
@@ -369,16 +369,16 @@ def test_unresolved_capture_has_location(native_artifacts):
 def test_binding_shapes_and_storage_adaptation(native_artifacts):
     source = "def subtract(x, y):\n    return x - y\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"y": "float64", "x": "float64"}, "float64")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     x = np.arange(12, dtype=np.float64).reshape(3, 4)[:, ::2]
     y = np.zeros((3, 2), dtype=">f8")
     np.testing.assert_array_equal(kernel.evaluate({"y": y, "x": x}), x)
     np.testing.assert_array_equal(kernel.evaluate({"y": y, "x": blosc2.asarray(x)}), x)
-    with pytest.raises(blosc2.PortableArtifactError, match="dtype"):
+    with pytest.raises(blosc2.MenudetError, match="dtype"):
         kernel.evaluate({"x": x.astype(np.float32), "y": y})
-    with pytest.raises(blosc2.PortableArtifactError, match="shapes"):
+    with pytest.raises(blosc2.MenudetError, match="shapes"):
         kernel.evaluate({"x": x, "y": y.ravel()})
-    with pytest.raises(blosc2.PortableArtifactError, match="Missing or extra"):
+    with pytest.raises(blosc2.MenudetError, match="Missing or extra"):
         kernel.evaluate({"x": x})
     empty = np.empty((0, 3), dtype=np.float64)
     assert kernel.evaluate({"y": empty, "x": empty}).shape == (0, 3)
@@ -393,7 +393,7 @@ def test_import_is_native_only(native_artifacts, monkeypatch):
     with monkeypatch.context() as context:
         context.setattr(ast, "parse", forbidden)
         context.setattr(json, "loads", forbidden)
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
         result = kernel.evaluate({"x": np.array([0.0, 1.0, 2.0, 3.0])})
     np.testing.assert_array_equal(result, [-1, 1, 3, 5])
 
@@ -412,7 +412,7 @@ def test_export_runs_in_standalone_c(native_artifacts, tmp_path):
     # A fresh interpreter imports only blosc2, never this authoring test module.
     program = "import pathlib, blosc2, numpy as np; "
     program += (
-        f"k = blosc2.PortableKernel.from_json(pathlib.Path({str(artifact)!r}).read_bytes(), jit=False); "
+        f"k = blosc2.MenudetKernel.from_json(pathlib.Path({str(artifact)!r}).read_bytes(), jit=False); "
     )
     program += "print(k.evaluate({'x': np.array([0., 1., 2., 3.])}).tolist())"
     result = subprocess.run([sys.executable, "-c", program], check=True, capture_output=True, text=True)
@@ -421,32 +421,38 @@ def test_export_runs_in_standalone_c(native_artifacts, tmp_path):
 
 def test_native_diagnostics_and_runtime_errors(native_artifacts):
     artifact = affine.export({"x": "float64"}, "float64")
-    changed = artifact.replace('"schema_version":"1.0"', '"schema_version":"99"')
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        blosc2.PortableKernel.from_json(changed, jit=False)
+    manifest = json.loads(artifact)
+    assert manifest["schema_version"] == "0.1"
+    assert manifest["language"] == {"name": "menudet", "version": "0.1"}
+    legacy_language = {**manifest, "language": {"name": "miniexpr", "version": "0.1"}}
+    with pytest.raises(blosc2.MenudetError):
+        blosc2.MenudetKernel.from_json(json.dumps(legacy_language))
+    changed = artifact.replace('"schema_version":"0.1"', '"schema_version":"99"')
+    with pytest.raises(blosc2.MenudetError) as error:
+        blosc2.MenudetKernel.from_json(changed, jit=False)
     assert error.value.status == "unsupported_requirement"
-    for field in ('"schema_version":"1.0"', '"version":"1.0"'):
-        with pytest.raises(blosc2.PortableArtifactError, match=r"unsupported.*version"):
-            blosc2.PortableKernel.from_json(artifact.replace(field, field.replace("1.0", "0.1")))
+    for field in ('"schema_version":"0.1"', '"version":"0.1"'):
+        with pytest.raises(blosc2.MenudetError, match=r"unsupported.*version"):
+            blosc2.MenudetKernel.from_json(artifact.replace(field, field.replace("0.1", "1.0")))
     retired_manifest = json.loads(artifact)
-    retired_manifest["schema_version"] = retired_manifest["language"]["version"] = "0.1"
+    retired_manifest["schema_version"] = retired_manifest["language"]["version"] = "1.0"
     retired_manifest["requires"] = ["core-scalar"]
     retired_manifest["output"]["contract"] = "scalar-per-element"
     retired_manifest.pop("context")
-    # Reject the actual retired envelope before applying 1.0's required fields.
-    with pytest.raises(blosc2.PortableArtifactError, match=r"unsupported.*version"):
-        blosc2.PortableKernel.from_json(json.dumps(retired_manifest))
-    with pytest.raises(blosc2.PortableArtifactError) as retired:
-        affine.export({"x": "float64"}, "float64", version="0.1")
+    # Reject the retired draft before applying the beta's required fields.
+    with pytest.raises(blosc2.MenudetError, match=r"unsupported.*version"):
+        blosc2.MenudetKernel.from_json(json.dumps(retired_manifest))
+    with pytest.raises(blosc2.MenudetError) as retired:
+        affine.export({"x": "float64"}, "float64", version="1.0")
     assert retired.value.status == "unsupported_version"
     changed = artifact.replace('"schema_version":', '"schema_version":"0.1","schema_version":')
-    with pytest.raises(blosc2.PortableArtifactError) as error:
-        blosc2.PortableKernel.from_json(changed, jit=False)
+    with pytest.raises(blosc2.MenudetError) as error:
+        blosc2.MenudetKernel.from_json(changed, jit=False)
     assert error.value.status == "invalid_artifact"
     source = "def partial(x):\n    if x > 0:\n        return x\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "float64")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
-    with pytest.raises(blosc2.PortableArtifactError) as error:
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
+    with pytest.raises(blosc2.MenudetError) as error:
         kernel.evaluate({"x": np.array([-1.0])})
     assert error.value.status == "evaluation_error"
     assert error.value.native_status != 0
@@ -456,21 +462,21 @@ def test_native_diagnostics_and_runtime_errors(native_artifacts):
 def test_import_missing_native_support(monkeypatch):
     from blosc2 import blosc2_ext
 
-    monkeypatch.delattr(blosc2_ext, "PortableArtifactHandle", raising=False)
+    monkeypatch.delattr(blosc2_ext, "MenudetArtifactHandle", raising=False)
     with pytest.raises(NotImplementedError, match="artifact support"):
-        blosc2.PortableKernel.from_json("{}")
+        blosc2.MenudetKernel.from_json("{}")
 
 
 def test_optional_adapter_availability():
     from blosc2 import blosc2_ext
 
-    available = getattr(blosc2_ext, "portable_artifact_available", lambda: False)()
+    available = getattr(blosc2_ext, "menudet_artifact_available", lambda: False)()
     if available:
-        with pytest.raises(blosc2.PortableArtifactError, match="invalid_artifact"):
-            blosc2.PortableKernel.from_json("{}", jit=False)
+        with pytest.raises(blosc2.MenudetError, match="invalid_artifact"):
+            blosc2.MenudetKernel.from_json("{}", jit=False)
     else:
         with pytest.raises(NotImplementedError, match="artifact support"):
-            blosc2.PortableKernel.from_json("{}", jit=False)
+            blosc2.MenudetKernel.from_json("{}", jit=False)
 
 
 # Execution engines and sizes are independent of the numeric scenario matrix.
@@ -503,7 +509,7 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
     for input_dtype, output_dtype, body, samples, expected in cases:
         source = f"# me:compiler={compiler}\ndef k(x):\n{body}"
         artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
         assert_execution_mode(kernel, jit)
         for _ in range(2):
             actual = kernel.evaluate({"x": np.resize(np.array(samples, dtype=input_dtype), count)})
@@ -535,7 +541,7 @@ def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
     artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
         {"x": "bool"}, "bool"
     )
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.resize(np.array([False, True]), count)
     expected = np.resize(np.array(samples), count)
@@ -582,7 +588,7 @@ def test_bool_cast_floating_arithmetic(
         body = "    truth = bool(x)\n"
     source = f"# me:compiler={compiler}\ndef k(x):\n{body}    return {expression}\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     samples = [0, 1, -1, 2]
     if input_dtype == "int64":
@@ -609,7 +615,7 @@ def test_float_cast_arithmetic_rounding(native_artifacts, output_dtype):
     compiler, jit, count = "tcc", False, 257
     source = f"# me:compiler={compiler}\ndef k(x):\n    return (float(x) + 0.1) - float(x)\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     samples = np.array(
         [
@@ -649,7 +655,7 @@ def test_float_arithmetic_constant_rounding(native_artifacts, output_dtype, oper
     }
     source = f"# me:compiler={compiler}\n# me:fp=strict\ndef k(x):\n    return {expressions[operation]}\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0.1, -1, 0, 1, 16777216], dtype="float32"), count)
     # Operand-driven float32 computation precedes the output conversion.
@@ -672,12 +678,12 @@ def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, cap):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", cap)
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     for target in [0, 2, 3, 4]:
         values = np.full(count, target, dtype="int64")
         if cap == "3" and target == 4:
-            with pytest.raises(blosc2.PortableArtifactError) as error:
+            with pytest.raises(blosc2.MenudetError) as error:
                 kernel.evaluate({"x": values})
             assert error.value.status == "evaluation_error"
         else:
@@ -694,21 +700,21 @@ def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler,
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", compile_cap)
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.array([4], dtype="int64")
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "2")
-    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+    with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
         kernel.evaluate({"x": values})
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "4")
     np.testing.assert_array_equal(kernel.evaluate({"x": values}), values)
     # The identical source loaded under a different cap must not reuse code
     # compiled with the old cap from the shared JIT cache.
-    new_kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    new_kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(new_kernel, jit)
     np.testing.assert_array_equal(new_kernel.evaluate({"x": values}), values)
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
-    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+    with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
         kernel.evaluate({"x": values})
 
 
@@ -723,7 +729,7 @@ def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dt
         "    n = 0\n    while 0 <= n < x:\n        n = n + 1\n    return n\n"
     )
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     # Lane ordering is the actual regression boundary, not every size/backend
     # combination. Keep both first-lane states in each dtype scenario.
@@ -750,7 +756,7 @@ def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, cas
     }
     source = f"# me:compiler={compiler}\ndef {case}(x):\n{bodies[case]}"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, "bool")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0, 1, 2, -1], dtype=dtype), count)
     expected = np.resize(np.array([False, True, True, case == "masked_bool_chain"]), count)
@@ -798,7 +804,7 @@ def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, bo
     artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
         {"x": "int64"}, "int64"
     )
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     np.testing.assert_array_equal(
         kernel.evaluate({"x": np.ones(5, dtype="int64")}), np.full(5, expected, dtype="int64")
@@ -811,7 +817,7 @@ def test_value_cast_large_integer(native_artifacts, jit, expression):
     source = f"# me:compiler=tcc\ndef k(x):\n    return {expression}\n"
     output_dtype = "int64" if expression == "int(x)" else "bool"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, output_dtype)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     values = np.array([-(2**53 + 1), 0, 2**53 + 1, 2**63 - 1], dtype="int64")
     np.testing.assert_array_equal(kernel.evaluate({"x": values}), values.astype(output_dtype))
 
@@ -820,6 +826,6 @@ def test_value_cast_large_integer(native_artifacts, jit, expression):
 def test_value_cast_nonfinite_truth(native_artifacts, jit):
     source = "# me:compiler=tcc\ndef k(x):\n    return bool(x)\n"
     artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "bool")
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     values = np.array([-0.0, 0.0, np.nan, np.inf, -np.inf, 5e-324])
     np.testing.assert_array_equal(kernel.evaluate({"x": values}), values.astype("bool"))

@@ -12,7 +12,7 @@ from types import CellType, FunctionType
 import numpy as np
 
 from .dsl_kernel import DSLKernel
-from .portable_kernel import capture_analysis, portable_dtype_descriptor, prepare_portable_kernel
+from .menudet_kernel import capture_analysis, menudet_dtype_descriptor, prepare_menudet_kernel
 
 
 def _dtype(annotation):
@@ -20,14 +20,14 @@ def _dtype(annotation):
         raise TypeError("Unsupported Menudet dtype annotation: None")
     try:
         dtype = np.dtype(annotation)
-        portable_dtype_descriptor(dtype)
+        menudet_dtype_descriptor(dtype)
     except (TypeError, ValueError) as error:
         raise TypeError(f"Unsupported Menudet dtype annotation: {annotation!r}") from error
     return dtype.newbyteorder("=")
 
 
-class MenudetKernel:
-    """Callable Menudet author; dtype specializations own portable native kernels.
+class MenudetFunction:
+    """Callable Menudet author; dtype specializations own Menudet native kernels.
 
     Calls bind arrays and return a lazy result. Annotations specify element dtypes,
     not array shapes. Missing input annotations use array dtypes; missing output
@@ -147,7 +147,7 @@ class MenudetKernel:
             declared = self._input_dtypes.get(name)
             if declared is not None and actual != declared:
                 raise TypeError(f"{name}: expected dtype {declared}, got {actual}; cast explicitly")
-            portable_dtype_descriptor(actual)
+            menudet_dtype_descriptor(actual)
             inputs[name] = value
         return inputs
 
@@ -207,15 +207,15 @@ class MenudetKernel:
                     and all(dtype.kind in "biuf" for dtype in dtypes.values())
                 ):
                     from .graph_plan import NativeGraph
+                    from .menudet_kernel import MenudetError
                     from .native_graph import resident_map_kernel
-                    from .portable_kernel import PortableArtifactError
 
                     try:
                         plan = NativeGraph.from_expression(
                             self._expression, dtypes, jit=policy, require_jit=self._require_jit
                         )
                         kernel = resident_map_kernel(plan)
-                    except (NotImplementedError, PortableArtifactError, TypeError, ValueError):
+                    except (NotImplementedError, MenudetError, TypeError, ValueError):
                         pass
                     if kernel is not None:
                         kernel._resident_plan = plan
@@ -230,11 +230,11 @@ class MenudetKernel:
                 if output is None:
                     if any(dtype.kind not in "biuf" for dtype in dtypes.values()):
                         raise TypeError("Nonnumeric kernels require a return dtype annotation")
-                    kernel = prepare_portable_kernel(
+                    kernel = prepare_menudet_kernel(
                         self._author, dtypes, None, jit=jit, **self._export_options
                     )
                 else:
-                    kernel = prepare_portable_kernel(
+                    kernel = prepare_menudet_kernel(
                         self._author, dtypes, output, jit=jit, **self._export_options
                     )
                 if self._require_jit and not kernel.has_jit:
@@ -243,7 +243,7 @@ class MenudetKernel:
             return self._kernels[key]
 
     def specialize(self, *args, **kwargs):
-        """Return the cached PortableKernel for these arguments without evaluating them."""
+        """Return the cached MenudetKernel for these arguments without evaluating them."""
         return self._specialize(self._bind(args, kwargs))
 
     def __call__(self, *args, **kwargs):
@@ -261,7 +261,7 @@ def menudet(
     ndim=0,
     casting="unsafe",
 ):
-    """Decorate a function as a lazy, typed Menudet kernel (JIT preferred by default).
+    """Decorate a function as a lazy, typed Menudet function (automatic execution policy).
 
     Use ``@menudet`` or ``@menudet(jit=False)``. Supported dtype annotations
     declare element types; unannotated NumPy/Blosc2 arrays supply their dtypes.
@@ -269,11 +269,11 @@ def menudet(
     inference uses native metadata. Scalar arguments require dtype annotations.
     Native interpreter fallback is allowed unless ``require_jit=True``; the
     original Python function is never executed, including after native errors.
-    ``partitions`` and ``cardinality`` retain PortableKernel.lazy block semantics.
+    ``partitions`` and ``cardinality`` retain MenudetKernel.lazy block semantics.
     """
 
     def decorate(function):
-        return MenudetKernel(
+        return MenudetFunction(
             function,
             jit=jit,
             require_jit=require_jit,

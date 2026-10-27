@@ -133,7 +133,7 @@ def test_computed_reduction_float_edge_parity(dtype, op, case):
         actual, report = plan.evaluate(inputs, tile_items=tile, return_report=True)
         expected, reference = generic.evaluate(masked_inputs, tile_items=tile, return_report=True)
         assert actual.dtype == expected.dtype
-        # Portable arithmetic does not specify NaN payload/sign. Preserve exact
+        # Menudet arithmetic does not specify NaN payload/sign. Preserve exact
         # bits for all other results, especially signed-zero selection.
         if np.isnan(expected).all():
             assert np.isnan(actual).all()
@@ -142,11 +142,11 @@ def test_computed_reduction_float_edge_parity(dtype, op, case):
         assert report["fp_flags"] == reference["fp_flags"]
 
 
-def make_portable_sum(dtype, body="return block_sum(x)", cardinality="block_scalar", *, output_dtype=None):
+def make_menudet_sum(dtype, body="return block_sum(x)", cardinality="block_scalar", *, output_dtype=None):
     artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
-        {"x": dtype}, output_dtype or dtype, version="1.0", cardinality=cardinality
+        {"x": dtype}, output_dtype or dtype, version="0.1", cardinality=cardinality
     )
-    return blosc2.PortableKernel.from_json(artifact, jit=False)
+    return blosc2.MenudetKernel.from_json(artifact, jit=False)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +177,7 @@ def test_typed_reductions_match_generic(dtype, op):
         if op == "prod" and dtype not in ("float32", "float64")
         else dtype
     )
-    kernel = make_portable_sum(dtype, f"return block_{op}(x)", output_dtype=output_dtype)
+    kernel = make_menudet_sum(dtype, f"return block_{op}(x)", output_dtype=output_dtype)
     actual, status = kernel.evaluate_block({"x": x}, return_status=True)
     # A partial mask forces the original reducer, without altering input values.
     padded = np.append(x, np.array([0], dtype=dtype))
@@ -234,13 +234,13 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
         x.view("uint32" if dtype == "float32" else "uint64")[1] = (
             0x7F800001 if dtype == "float32" else 0x7FF0000000000001
         )
-    kernel = make_portable_sum(
+    kernel = make_menudet_sum(
         dtype, f"return block_{op}(x)", output_dtype="bool" if op in ("any", "all") else dtype
     )
     padded = np.append(x, np.array([0], dtype=dtype))
     mask = np.arange(padded.size) < x.size
     if not x.size and op in ("min", "max"):
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block({"x": x})
         return
     actual, status = kernel.evaluate_block({"x": x}, return_status=True)
@@ -270,12 +270,12 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
 )
 def test_typed_product_prefix_overflow(dtype, values):
     x = np.array(values, dtype=dtype)
-    kernel = make_portable_sum(dtype, "return block_prod(x)")
+    kernel = make_menudet_sum(dtype, "return block_prod(x)")
     for data, mask in (
         (x, None),
         (np.append(x, np.array([1], dtype=dtype)), np.array([True, True, True, False])),
     ):
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block({"x": data}, valid_mask=mask)
     assert kernel.evaluate_block({"x": np.array([2, 3], dtype=dtype)}) == 6
     plan = blosc2.NativeGraph.from_expression("prod(x)", {"x": dtype})
@@ -288,7 +288,7 @@ def test_typed_product_prefix_overflow(dtype, values):
 def test_typed_integer_extrema_bounds(dtype, op):
     limits = np.iinfo(dtype)
     x = np.array([limits.max, 0, limits.min, 1], dtype=dtype)
-    kernel = make_portable_sum(dtype, f"return block_{op}(x)")
+    kernel = make_menudet_sum(dtype, f"return block_{op}(x)")
     assert kernel.evaluate_block({"x": x}) == getattr(np, op)(x)
     plan = blosc2.NativeGraph.from_expression(f"{op}(x, initial=1)", {"x": dtype})
     for tile in (1, 64):
@@ -300,7 +300,7 @@ def test_typed_integer_extrema_bounds(dtype, op):
 def test_typed_reductions_initialized_locals_and_masks(dtype, op):
     output_dtype = "bool" if op in ("any", "all") else dtype
     x = np.array([-2, 0, 3, 4], dtype=dtype)
-    local = make_portable_sum(dtype, f"y = x\n    return block_{op}(y)", output_dtype=output_dtype)
+    local = make_menudet_sum(dtype, f"y = x\n    return block_{op}(y)", output_dtype=output_dtype)
     assert local.evaluate_block({"x": x}) == getattr(np, op)(x)
     mask = np.array([False, False, True, True])
     assert local.evaluate_block({"x": x}, valid_mask=mask) == getattr(np, op)(x[mask])
@@ -333,8 +333,8 @@ def test_integer_bool_direct_sums(dtype, tile):
         values[2] = -3
         values[3] = -7
     x = np.array(values, dtype=dtype)
-    direct = make_portable_sum(dtype, output_dtype=output_dtype)
-    generic = make_portable_sum(dtype, "return block_sum(x + 0)", output_dtype=output_dtype)
+    direct = make_menudet_sum(dtype, output_dtype=output_dtype)
+    generic = make_menudet_sum(dtype, "return block_sum(x + 0)", output_dtype=output_dtype)
     graph_plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
     expected = np.sum(x, dtype=output_dtype)
     for kernel in (direct, generic):
@@ -363,8 +363,8 @@ def test_integer_bool_direct_sums(dtype, tile):
 def test_direct_integer_sum_preserves_route_overflow(dtype, values, expected):
     x = np.array(values, dtype=dtype)
     for body in ("return block_sum(x)", "return block_sum(x + 0)"):
-        kernel = make_portable_sum(dtype, body)
-        with pytest.raises(blosc2.PortableArtifactError):
+        kernel = make_menudet_sum(dtype, body)
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block({"x": x})
         # Failure must not poison subsequent use of the same immutable kernel.
         assert kernel.evaluate_block({"x": np.array([1, 2], dtype=dtype)}) == 3
@@ -397,9 +397,9 @@ def test_dsl_direct_sum_matches_generic(dtype, case):
         "empty": [],
     }
     x = np.array(cases[case], dtype=dtype)
-    direct = make_portable_sum(dtype)
+    direct = make_menudet_sum(dtype)
     # Computed operands still execute the generic expression reduction loop.
-    generic = make_portable_sum(dtype, "return block_sum(x * 1)")
+    generic = make_menudet_sum(dtype, "return block_sum(x * 1)")
     actual, status = direct.evaluate_block({"x": x}, return_status=True)
     expected, reference = generic.evaluate_block({"x": x}, return_status=True)
     np.testing.assert_array_equal(actual, expected)
@@ -409,17 +409,17 @@ def test_dsl_direct_sum_matches_generic(dtype, case):
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_dsl_direct_sum_masks_and_initialized_locals(dtype):
-    direct = make_portable_sum(dtype)
+    direct = make_menudet_sum(dtype)
     x = np.array([np.inf, -np.inf, 2, 3], dtype=dtype)
     actual, status = direct.evaluate_block(
         {"x": x}, valid_mask=np.array([False, False, True, True]), return_status=True
     )
     assert actual == 5
     assert status["flags"] == 0
-    local = make_portable_sum(dtype, "y = x\n    return block_sum(y)")
+    local = make_menudet_sum(dtype, "y = x\n    return block_sum(y)")
     actual = local.evaluate_block({"x": np.array([1, 2, 3], dtype=dtype)})
     assert actual == 6
-    branch = make_portable_sum(dtype, "return where(x > 0, block_sum(x), 0)", "elementwise")
+    branch = make_menudet_sum(dtype, "return where(x > 0, block_sum(x), 0)", "elementwise")
     actual = branch.evaluate_block({"x": np.array([-1, 2, 3, -4], dtype=dtype)})
     np.testing.assert_array_equal(actual, [0, 5, 5, 0])
 
@@ -428,7 +428,7 @@ def graph(nodes, root=None, output="auto"):
     return json.dumps(
         {
             "format": "menudet-graph-1",
-            "semantics": "menudet-numpy-1.0",
+            "semantics": "menudet-numpy-0.1",
             "requires": ["numeric"],
             "nodes": [{"id": i, **node} for i, node in enumerate(nodes)],
             "root": len(nodes) - 1 if root is None else root,
@@ -574,7 +574,7 @@ def test_root_mask_initial_and_recovery():
     x = np.array([[4.0, -1], [9, -1]])
     policy = 0 if sys.platform == "emscripten" else 1
     if sys.platform == "emscripten":
-        with pytest.raises(blosc2.PortableArtifactError, match="floating status unavailable"):
+        with pytest.raises(blosc2.MenudetError, match="floating status unavailable"):
             schedule.execute({"x": x, "mask": np.array([True, False])}, 1)
     result, report = schedule.execute({"x": x, "mask": np.array([True, False])}, policy)
     np.testing.assert_array_equal(result, [[4], [5]])
@@ -583,7 +583,7 @@ def test_root_mask_initial_and_recovery():
         result, _ = schedule.execute({"x": x, "mask": np.array([True, True])}, policy)
         assert np.isnan(result).all()
     else:
-        with pytest.raises(blosc2.PortableArtifactError, match="floating") as failure:
+        with pytest.raises(blosc2.MenudetError, match="floating") as failure:
             schedule.execute({"x": x, "mask": np.array([True, True])}, 1)
         assert failure.value.fp_status["flags"] & 1
     result, report = schedule.execute({"x": x, "mask": np.array([True, False])}, policy)
@@ -618,7 +618,7 @@ def test_explicit_conversion_budget_preflight():
     plan = blosc2.NativeGraph.from_json(
         graph([{"op": "input", "name": "x", "dtype": "float32"}], output="float64")
     )
-    with pytest.raises(blosc2.PortableArtifactError, match="budget"):
+    with pytest.raises(blosc2.MenudetError, match="budget"):
         plan.specialize({"x": ("float32", (3,))}, intermediate_budget=4)
     schedule = plan.specialize({"x": ("float32", (3,))}, intermediate_budget=12)
     result, _ = schedule.execute({"x": np.ones(3, dtype="float32")})
@@ -627,7 +627,7 @@ def test_explicit_conversion_budget_preflight():
 
 def test_required_jit_fails_closed(monkeypatch):
     monkeypatch.setenv("CFLAGS", "-ffast-math")
-    with pytest.raises(blosc2.PortableArtifactError, match="JIT"):
+    with pytest.raises(blosc2.MenudetError, match="JIT"):
         blosc2.NativeGraph.from_expression("x + 1", {"x": "float32"}, require_jit=True)
 
 
@@ -673,7 +673,7 @@ def test_empty_broadcast_and_axis_preflight():
     assert result.shape == (0, 3)
     for expression in ["sum(x, axis=[0, -2])", "sum(x, axis=2)"]:
         reduction = blosc2.NativeGraph.from_expression(expression, {"x": "float32"})
-        with pytest.raises(blosc2.PortableArtifactError, match=r"axis|axes"):
+        with pytest.raises(blosc2.MenudetError, match=r"axis|axes"):
             reduction.specialize({"x": ("float32", (2, 3))})
 
 
@@ -686,12 +686,12 @@ def test_native_text_power_precedence(expression, expected):
 def test_weak_initial_range_error_is_runtime_only():
     plan = blosc2.NativeGraph.from_expression("min(x, initial=-1)", {"x": "uint8"})
     schedule = plan.specialize({"x": ("uint8", (1,))})
-    # Native portable semantics target NumPy 2.x, independently of the installed
+    # Native Menudet semantics target NumPy 2.x, independently of the installed
     # host NumPy ABI; 1.26 instead warns and wraps this weak initial value.
     if int(np.__version__.split(".")[0]) >= 2:
         with pytest.raises(OverflowError):
             np.min(np.array([1], dtype="uint8"), initial=-1)
-    with pytest.raises(blosc2.PortableArtifactError) as failure:
+    with pytest.raises(blosc2.MenudetError) as failure:
         schedule.execute({"x": np.array([1], dtype="uint8")})
     assert failure.value.status == "evaluation_error"
     assert failure.value.stage == 0
@@ -711,5 +711,5 @@ def test_weak_initial_range_error_is_runtime_only():
     ],
 )
 def test_invalid_graphs(nodes):
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         NativeGraphHandle(graph(nodes))

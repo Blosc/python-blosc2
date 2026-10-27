@@ -583,9 +583,9 @@ from .dsl_kernel import (
     dsl_kernel,
     validate_dsl,
     validate_dsl_jit,
-    validate_portable_dsl,
+    validate_menudet,
 )
-from .portable_kernel import PortableArtifactError, PortableKernel
+from .menudet_kernel import MenudetError, MenudetKernel
 from .graph_plan import NativeGraph
 from .jit_config import get_jit_options, jit_options, set_jit_options
 from .expression_graph import expression_evaluation
@@ -827,7 +827,7 @@ from .schema import (
 ndarray.NDArray = NDArray
 ndarray.NDField = NDField
 
-from .menudet import MenudetKernel, menudet
+from .menudet import MenudetFunction, menudet
 
 __all__ = [  # noqa : RUF022
     # Constants
@@ -912,10 +912,10 @@ __all__ = [  # noqa : RUF022
     "Index",
     "LazyArray",
     "DSLKernel",
-    "validate_portable_dsl",
-    "PortableKernel",
+    "validate_menudet",
+    "MenudetKernel",
     "NativeGraph",
-    "PortableArtifactError",
+    "MenudetError",
     "DSLSyntaxError",
     "LazyExpr",
     "PreparedEvaluator",
@@ -1064,7 +1064,7 @@ __all__ = [  # noqa : RUF022
     "lazyexpr",
     "dsl_kernel",
     "menudet",
-    "MenudetKernel",
+    "MenudetFunction",
     "validate_dsl",
     "validate_dsl_jit",
     "lazyudf",

@@ -36,14 +36,14 @@ def test_native_first_arithmetic(dtype, safe, native_first_runtime, monkeypatch)
     monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
     expected = x == y if dtype == "bool" else x + (y - 1)
     np.testing.assert_array_equal(expr[:], expected)
-    assert expr._native_execution_report["backend"] == "portable-jit"
+    assert expr._native_execution_report["backend"] == "menudet-jit"
     np.testing.assert_array_equal(expr.compute()[:], expected)
     x[:] = 0
     expected = x == y if dtype == "bool" else x + (y - 1)
     np.testing.assert_array_equal(expr[:], expected)
 
 
-def test_native_first_borrows_validated_portable_map(native_first_runtime, monkeypatch):
+def test_native_first_borrows_validated_menudet_map(native_first_runtime, monkeypatch):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
     x = np.arange(300_000, dtype=np.float64)
     y = x + 1
@@ -54,7 +54,7 @@ def test_native_first_borrows_validated_portable_map(native_first_runtime, monke
     def forbidden(*args, **kwargs):
         pytest.fail("Prepared graph map was exported and reimported")
 
-    monkeypatch.setattr(blosc2.PortableKernel, "from_json", forbidden)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", forbidden)
     kernel = resident_map_kernel(prepared[0])
     assert kernel.has_jit
     assert kernel.to_json() == prepared[0].map_json()
@@ -62,7 +62,7 @@ def test_native_first_borrows_validated_portable_map(native_first_runtime, monke
 
     np.testing.assert_array_equal(expr[:], x + (y - 1))
     assert expr._native_execution_report["route"] == "parallel-resident"
-    assert expr._native_execution_report["backend"] == "portable-jit"
+    assert expr._native_execution_report["backend"] == "menudet-jit"
 
 
 @pytest.mark.parametrize("expression", ["x[1:3]", "sum(sum(x))", "x and y", "unknown(x)"])
@@ -146,7 +146,7 @@ def test_native_first_unsupported_preparation_falls_back(status, monkeypatch):
     import blosc2.native_graph as native
 
     def unsupported(*args, **kwargs):
-        raise blosc2.PortableArtifactError("Not supported", status=status)
+        raise blosc2.MenudetError("Not supported", status=status)
 
     monkeypatch.setattr(native, "lower_native_graph", unsupported)
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
@@ -157,11 +157,11 @@ def test_native_first_unexpected_preparation_error_propagates(monkeypatch):
     import blosc2.native_graph as native
 
     def failure(*args, **kwargs):
-        raise blosc2.PortableArtifactError("Out of memory", status="out_of_memory")
+        raise blosc2.MenudetError("Out of memory", status="out_of_memory")
 
     monkeypatch.setattr(native, "lower_native_graph", failure)
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
-    with pytest.raises(blosc2.PortableArtifactError, match="Out of memory"):
+    with pytest.raises(blosc2.MenudetError, match="Out of memory"):
         expr.compute()
 
 
@@ -211,7 +211,7 @@ def test_native_first_numeric_coverage(dtype, expression, native_first_runtime):
     expr = blosc2.lazyexpr(expression, {"x": x})
     expected = eval(expression, {"x": x})  # fixed test expressions only
     np.testing.assert_array_equal(expr[:], expected)
-    assert expr._native_execution_report["backend"] == "portable-jit"
+    assert expr._native_execution_report["backend"] == "menudet-jit"
 
 
 @pytest.mark.parametrize("layout", ["strided", "fortran", "scalar"])
@@ -234,7 +234,7 @@ def test_native_first_jit_request(native_first_runtime):
     x = np.arange(8.0)
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     np.testing.assert_array_equal(expr.compute(jit=True)[:], x + 1)
-    assert expr._native_execution_report["backend"] == "portable-jit"
+    assert expr._native_execution_report["backend"] == "menudet-jit"
 
 
 def test_native_first_unavailable_jit_uses_interpreter(native_graph_runtime, monkeypatch):
@@ -248,7 +248,7 @@ def test_native_first_unavailable_jit_uses_interpreter(native_graph_runtime, mon
     monkeypatch.setattr(native, "lower_native_graph", interpreted)
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
     np.testing.assert_array_equal(expr[:], np.arange(4.0) + 1)
-    assert expr._native_execution_report["backend"] == "portable-interpreter"
+    assert expr._native_execution_report["backend"] == "menudet-interpreter"
 
 
 def test_native_first_jit_false_uses_interpreter(native_graph_runtime, monkeypatch):
@@ -266,7 +266,7 @@ def test_native_first_jit_false_uses_interpreter(native_graph_runtime, monkeypat
     np.testing.assert_array_equal(expr.compute(jit=False)[:], np.arange(4.0) + 1)
     assert calls
     assert not any(calls)
-    assert expr._native_execution_report["backend"] == "portable-interpreter"
+    assert expr._native_execution_report["backend"] == "menudet-interpreter"
 
 
 @pytest.mark.parametrize("compressed", [False, True])
@@ -301,7 +301,7 @@ def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, s
             result = expr.compute()
         np.testing.assert_array_equal(result[:], values + 1)
         if policy == {"jit": False} and hasattr(expr, "_native_execution_report"):
-            assert expr._native_execution_report["backend"] == "portable-interpreter"
+            assert expr._native_execution_report["backend"] == "menudet-interpreter"
         elif policy != {"jit": False}:
             assert not hasattr(expr, "_native_execution_report")
     finally:

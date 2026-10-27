@@ -119,7 +119,7 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
-option(MINIEXPR_BUILD_ARTIFACT "Build portable DSL artifact support" ON)
+option(MINIEXPR_BUILD_ARTIFACT "Build Menudet artifact support" ON)
 # Keep miniexpr's and C-Blosc2's bundled files inside the blosc2 package.
 # Without this, their install rules use the default CMAKE_INSTALL_LIBDIR
 # ("lib"), which scikit-build places at site-packages/lib.
@@ -143,16 +143,24 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG b6786bec8fabb9a295f6f3b3050d267ee697092d
+    GIT_TAG d8b01fb0f8db817b7b4b8929cb03cfb1c13e98e5
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
+
+# Reject an old source override instead of mixing beta Python bindings with a
+# different native ABI.
+file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr.h" B2_MENUDET_VERSION
+  REGEX "^#define ME_MENUDET_DSL_VERSION \"0\\.1\"")
+if(NOT B2_MENUDET_VERSION)
+  message(FATAL_ERROR "Python-Blosc2 requires Menudet 0.1 beta native sources. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+endif()
 
 # Link against miniexpr static library
 target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
 if(TARGET miniexpr_artifact)
   target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
-  target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_PORTABLE_ARTIFACT=1)
+  target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_MENUDET_ARTIFACT=1)
   file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_ARRAY_SOURCE_DECLARATION
     REGEX "^me_artifact_status me_artifact_eval_array_sources\\(")
   if(B2_ARRAY_SOURCE_DECLARATION)

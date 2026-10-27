@@ -321,7 +321,7 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
     if parallel and (
         blosc2.IS_WASM
         or not getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
-        or not getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+        or not getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)()
     ):
         return None
     if cached is not None and cached[0] == signature:
@@ -345,7 +345,7 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
             return None
         if not native_weak_scalars_eligible(plan, expression, inputs):
             return None
-    except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
+    except (NotImplementedError, blosc2.MenudetError, TypeError, ValueError):
         return None
     return signature, plan, schedule
 
@@ -397,8 +397,8 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
         **report,
         "route": "parallel-resident" if report["tasks"] > 1 else "native-resident",
         "threads": report["tasks"],
-        "semantic_revision": "menudet-numpy-1.0",
-        "backend": "portable-jit" if report["jit_stages"] else "portable-interpreter",
+        "semantic_revision": "menudet-numpy-0.1",
+        "backend": "menudet-jit" if report["jit_stages"] else "menudet-interpreter",
         "frontend": getattr(plan, "_frontend", "native-expression"),
         "plan_cache": compile_plan.cache_info()._asdict(),
         "input_materialization_bytes": 0,
@@ -502,7 +502,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
                                 for name in input_names
                             }
                         )
-                    except (ValueError, TypeError, blosc2.PortableArtifactError):
+                    except (ValueError, TypeError, blosc2.MenudetError):
                         return None
                     if not _native_cached_output_ok(expr, schedule, output):
                         return None
@@ -593,7 +593,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
             return None
     except NotImplementedError:
         return None  # Older installed miniexpr without graph support.
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if error.status not in {"invalid_signature", "unsupported"}:
             raise
         return None
@@ -609,7 +609,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
 def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/output admission
     expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None
 ):
-    """Use the shared portable prefilter for matching Blosc2 result storage."""
+    """Use the shared Menudet prefilter for matching Blosc2 result storage."""
     from types import SimpleNamespace
 
     import blosc2
@@ -713,7 +713,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         kernel = resident_map_kernel(plan)
     except NotImplementedError:
         return None
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if error.status not in {"invalid_signature", "unsupported"}:
             raise
         return None
@@ -730,8 +730,8 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     output, report = result
     expr._native_execution_report = {
         **report,
-        "semantic_revision": "menudet-numpy-1.0",
-        "backend": "portable-jit" if plan.has_jit else "portable-interpreter",
+        "semantic_revision": "menudet-numpy-0.1",
+        "backend": "menudet-jit" if plan.has_jit else "menudet-interpreter",
         "frontend": getattr(plan, "_frontend", "declarative-json"),
         "plan_cache": compile_plan.cache_info()._asdict(),
         "input_materialization_bytes": 0,
@@ -776,13 +776,13 @@ def _compute_native_stored_output(expr, output, options, *, jit=True):
             return None
     except NotImplementedError:
         return None
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if error.status not in {"invalid_signature", "unsupported"}:
             raise
         return None
     report = {
         "route": "bounded-stored-map",
-        "backend": "portable-jit" if plan.has_jit else "portable-interpreter",
+        "backend": "menudet-jit" if plan.has_jit else "menudet-interpreter",
         "fp_flags": 0,
         "fp_supported": True,
         "maximum_input_items": 0,
@@ -891,7 +891,7 @@ def _combine_graph_reductions(op, results, reports):
     partials = np.stack(results)
     document = {
         "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-1.0",
+        "semantics": "menudet-numpy-0.1",
         "requires": ["numeric"],
         "nodes": [
             {"id": 0, "op": "input", "name": "partials", "dtype": partials.dtype.name},
@@ -940,7 +940,7 @@ def _compressed_map_minimum(inputs):
         blosc2.nthreads >= 8
         and arrays
         and all(value.dtype in (np.dtype("int32"), np.dtype("int64")) for value in arrays)
-        and blosc2.blosc2_ext.portable_prefilter_inputs_eligible(inputs, allow_numpy=True)
+        and blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(inputs, allow_numpy=True)
     ):
         return MINIMUM_COMPRESSED_MAP_ITEMS
     return MINIMUM_COMPRESSED_GRAPH_ITEMS
@@ -1104,8 +1104,8 @@ def _prefilter_compressed_map(plan, inputs, workers, out):
     if (
         kernel is not None
         and storage_reader_eligible(kernel)
-        and blosc2.blosc2_ext.portable_prefilter_available()
-        and blosc2.blosc2_ext.portable_prefilter_inputs_eligible(inputs, allow_numpy=True)
+        and blosc2.blosc2_ext.menudet_prefilter_available()
+        and blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(inputs, allow_numpy=True)
     ):
         return evaluate_prefilter_numpy(kernel, inputs, out=out, workers=workers)
     return None
@@ -1300,16 +1300,16 @@ def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0, out=
 @lru_cache(maxsize=128)
 def resident_map_kernel(plan):
     from . import blosc2_ext
-    from .portable_kernel import PortableArtifactError, PortableKernel
+    from .menudet_kernel import MenudetError, MenudetKernel
 
     handle = getattr(plan._handle, "resident_artifact", lambda: None)()
     if handle is not None:
         # The borrowed handle retains the plan and its validated weak-capture semantics.
-        kernel = PortableKernel.__new__(PortableKernel)
+        kernel = MenudetKernel.__new__(MenudetKernel)
         kernel._handle = kernel._expression_handle = handle
         kernel._artifact = kernel._expression_artifact = plan.map_json().encode("utf-8")
         kernel._info = handle.info()
-        if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
+        if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
             kernel._info.update(handle.descriptor_info())
         kernel.native_partitionable = bool(plan.info().get("partitionable", False))
         return kernel
@@ -1347,17 +1347,17 @@ def resident_map_kernel(plan):
         manifest["source"] = ast.unparse(tree) + "\n"
         manifest["constants"] = []
     try:
-        kernel = PortableKernel.from_json(
+        kernel = MenudetKernel.from_json(
             json.dumps(manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
             jit=plan.has_jit,
         )
-    except PortableArtifactError as error:
+    except MenudetError as error:
         if not specialize_captures or error.status not in {"invalid_source", "invalid_signature"}:
             raise
         # Literal specialization is an optimization only. Keep the original,
         # already-validated artifact for source forms that cannot be re-imported.
         specialize_captures = False
-        kernel = PortableKernel.from_json(artifact, jit=plan.has_jit)
+        kernel = MenudetKernel.from_json(artifact, jit=plan.has_jit)
     if not specialize_captures:
         # Keep IEEE payload bits in the executable artifact; the substituted
         # source is used only by metadata-only storage eligibility checks.
@@ -1396,7 +1396,7 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
             and value.flags.aligned
             for value in inputs.values()
         )
-        and getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+        and getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)()
         and (
             out is None
             or (
@@ -1431,7 +1431,7 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
             min(blosc2.nthreads, 32)
             if (
                 not blosc2.IS_WASM
-                and getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+                and getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)()
             )
             else 1
         )
@@ -1682,7 +1682,7 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
             adapter.nodes[root]["initial"] = scalar_descriptor(root_options["initial"])
     document = {
         "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-1.0",
+        "semantics": "menudet-numpy-0.1",
         "requires": ["numeric", "staged"]
         if any(node["op"] in REDUCERS and node["id"] != root for node in adapter.nodes)
         else ["numeric"],
@@ -1781,12 +1781,12 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         )
         expr._native_execution_report = {
             **report,
-            "semantic_revision": "menudet-numpy-1.0",
-            "backend": "portable-mixed"
+            "semantic_revision": "menudet-numpy-0.1",
+            "backend": "menudet-mixed"
             if report["jit_stages"] and report["interpreter_stages"]
-            else "portable-jit"
+            else "menudet-jit"
             if report["jit_stages"]
-            else "portable-interpreter",
+            else "menudet-interpreter",
             "plan_cache": compile_plan.cache_info()._asdict(),
             "frontend": getattr(plan, "_frontend", "declarative-json"),
         }
@@ -1809,8 +1809,8 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
             result, report = streamed
             expr._native_execution_report = {
                 **report,
-                "semantic_revision": "menudet-numpy-1.0",
-                "backend": "portable-jit",
+                "semantic_revision": "menudet-numpy-0.1",
+                "backend": "menudet-jit",
                 "plan_cache": compile_plan.cache_info()._asdict(),
                 "frontend": getattr(plan, "_frontend", "declarative-json"),
             }
@@ -1854,12 +1854,12 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         result = output
     expr._native_execution_report = {
         **report,
-        "semantic_revision": "menudet-numpy-1.0",
-        "backend": "portable-mixed"
+        "semantic_revision": "menudet-numpy-0.1",
+        "backend": "menudet-mixed"
         if report["jit_stages"] and report["interpreter_stages"]
-        else "portable-jit"
+        else "menudet-jit"
         if report["jit_stages"]
-        else "portable-interpreter",
+        else "menudet-interpreter",
         "plan_cache": compile_plan.cache_info()._asdict(),
         "frontend": getattr(plan, "_frontend", "declarative-json"),
         "input_materialization_bytes": sum(

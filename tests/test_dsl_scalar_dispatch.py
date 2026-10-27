@@ -14,9 +14,9 @@ pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 def scalar_kernel(body, inputs, output="float64", *, jit=False, ndim=0, cardinality="block_scalar"):
     arguments = ", ".join(inputs)
     artifact = blosc2.DSLKernel.from_source(f"def k({arguments}):\n    {body}\n").export(
-        inputs, output, version="1.0", cardinality=cardinality, ndim=ndim
+        inputs, output, version="0.1", cardinality=cardinality, ndim=ndim
     )
-    return blosc2.PortableKernel.from_json(artifact, jit=jit)
+    return blosc2.MenudetKernel.from_json(artifact, jit=jit)
 
 
 @pytest.mark.parametrize(("jit", "dtype"), [(False, "float32"), (True, "float64"), (True, "int64")])
@@ -76,7 +76,7 @@ def test_simple_scalar_output_conversion(output):
 
 def test_simple_scalar_errors_are_not_retried_or_cached():
     kernel = scalar_kernel("return block_sum(x)", {"x": "int64"}, "int64")
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         kernel.evaluate_block({"x": np.array([2**63 - 1, 1], dtype="int64")})
     assert kernel.evaluate_block({"x": np.array([1, 2], dtype="int64")}) == 3
     for inputs in (
@@ -84,7 +84,7 @@ def test_simple_scalar_errors_are_not_retried_or_cached():
         {"x": np.array([1], dtype="float64")},
         {"x": np.array([1], dtype="int64"), "y": np.array([1])},
     ):
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block(inputs)
 
 
@@ -100,7 +100,7 @@ def test_simple_scalar_fp_errors_and_inactive_lanes():
         assert status["supported"]
         assert status["flags"] & 1
         error = "floating"
-    with pytest.raises(blosc2.PortableArtifactError, match=error):
+    with pytest.raises(blosc2.MenudetError, match=error):
         kernel.evaluate_block({"x": x}, fp_errors="raise")
     actual, status = kernel.evaluate_block(
         {"x": x},
@@ -115,7 +115,7 @@ def test_simple_scalar_fp_errors_and_inactive_lanes():
 def test_simple_scalar_context_and_elementwise_fallback():
     context = scalar_kernel("return block_sum(_flat_idx)", {}, "int64", ndim=1)
     assert context.evaluate_block({}, block_shape=(3,), logical_shape=(8,), block_origin=(2,)) == 9
-    with pytest.raises((ValueError, blosc2.PortableArtifactError)):
+    with pytest.raises((ValueError, blosc2.MenudetError)):
         context.evaluate_block({}, block_shape=(3,))
     elementwise = scalar_kernel("return x * 2", {"x": "float64"}, cardinality="elementwise")
     x = np.array([1, 2, 3], dtype="float64")
@@ -137,7 +137,7 @@ def test_simple_scalar_statement_control_flow_fallback():
     np.testing.assert_array_equal(
         uninitialized.evaluate_block({"x": np.array([1, 2], dtype="int64")}), [3, 3]
     )
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         uninitialized.evaluate_block({"x": np.array([-1, 2], dtype="int64")})
 
 

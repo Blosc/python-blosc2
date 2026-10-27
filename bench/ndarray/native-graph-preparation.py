@@ -20,10 +20,10 @@ from blosc2.dsl_kernel import DSLKernel
 def old_prepare(dtype):
     author = DSLKernel.from_source("def k(x, y):\n    return x * 2 + y\n")
     signatures = {"x": dtype, "y": dtype}
-    first = author.export(signatures, "float64", version="1.1", casting="unsafe")
-    inferred = blosc2.PortableKernel.from_json(first).inferred_dtype
-    return blosc2.PortableKernel.from_json(
-        author.export(signatures, inferred, version="1.1", casting="unsafe")
+    first = author.export(signatures, "float64", version="0.1", casting="unsafe")
+    inferred = blosc2.MenudetKernel.from_json(first).inferred_dtype
+    return blosc2.MenudetKernel.from_json(
+        author.export(signatures, inferred, version="0.1", casting="unsafe")
     )
 
 
@@ -75,7 +75,7 @@ def main():
                 "items": args.items,
                 "dtype": args.dtype,
                 "repeats": args.repeats,
-                "backend": "portable-jit" if plan.has_jit else "portable-interpreter",
+                "backend": "menudet-jit" if plan.has_jit else "menudet-interpreter",
                 "preparation_median_us": {key: statistics.median(value) for key, value in timings.items()},
                 "specialize_us": specialize,
                 "first_us": first,

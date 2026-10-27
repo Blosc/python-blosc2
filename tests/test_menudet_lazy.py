@@ -3,13 +3,13 @@ import weakref
 
 import numpy as np
 import pytest
-from test_portable_descriptor import manifest
+from test_menudet_descriptor import manifest
 
 import blosc2
 from blosc2 import blosc2_ext
 
 pytestmark = pytest.mark.skipif(
-    not getattr(blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    not getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)(),
     reason="Installed runtime has no draft descriptor ABI",
 )
 
@@ -26,9 +26,24 @@ def kernel(source, *, scalar=False, nd=False, string=False):
         requires.append("block-reductions")
     if nd:
         requires.append("nd-context")
-    return blosc2.PortableKernel.from_json(
+    return blosc2.MenudetKernel.from_json(
         manifest(source, inputs, output, requires=requires, ndim=2 if nd else 0), jit=False
     )
+
+
+def test_storage_uses_menudet_kind(tmp_path):
+    from blosc2.b2objects import decode_b2object_payload, encode_b2object_payload
+    from blosc2.menudet_lazy import MenudetLazyArray
+
+    source = blosc2.asarray(np.arange(6, dtype="int64"), urlpath=tmp_path / "source.b2nd")
+    lazy = kernel("def k(x):\n    return x + 1\n").lazy({"x": source})
+    assert isinstance(lazy, MenudetLazyArray)
+    payload = encode_b2object_payload(lazy)
+    assert payload["kind"] == "menudet"
+    restored = decode_b2object_payload(payload)
+    np.testing.assert_array_equal(restored[:], np.arange(6) + 1)
+    with pytest.raises(ValueError, match="Unsupported persisted Blosc2 object kind"):
+        decode_b2object_payload({**payload, "kind": "portable"})
 
 
 @pytest.mark.parametrize("scalar", [False, True])
@@ -40,7 +55,7 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
     source = blosc2.asarray(data, chunks=(128,), blocks=(32,))
     lazy = native.lazy({"x": source}, partitions=(128,))
     refs, extents = [], []
-    original = blosc2.PortableKernel.evaluate_block
+    original = blosc2.MenudetKernel.evaluate_block
 
     def evaluate(self, operands, **kwargs):
         if self is native:
@@ -53,13 +68,13 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
             refs.append(weakref.ref(result))
         return result
 
-    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", evaluate)
+    monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", evaluate)
     # Lane-local recipes may use native readers instead of materializing groups.
     # Keep the same lifetime/memory assertions for both execution routes.
     from blosc2.storage_readers import StorageReader
 
     original_read = StorageReader.read
-    original_sources = blosc2.PortableKernel.evaluate_sources
+    original_sources = blosc2.MenudetKernel.evaluate_sources
 
     def read(self, indices):
         result = original_read(self, indices)
@@ -76,7 +91,7 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
         return result
 
     monkeypatch.setattr(StorageReader, "read", read)
-    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_sources", evaluate_sources)
+    monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_sources", evaluate_sources)
     expr = blosc2.lazyexpr("x + 2", {"x": lazy}, evaluation="safe")
     expected = data.reshape(-1, 128).sum(axis=1) + 2 if scalar else data + 3
     enabled = gc.isenabled()
@@ -92,7 +107,7 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
 
 
 @pytest.mark.parametrize("mutation", ["kernel", "handle", "metadata", "artifact", "native_rebinding"])
-def test_safe_graph_checks_portable_kernel_closure_before_hooks(monkeypatch, mutation):
+def test_safe_graph_checks_menudet_kernel_closure_before_hooks(monkeypatch, mutation):
     native = kernel("def k(x):\n    return x + 1\n")
     lazy = native.lazy({"x": blosc2.asarray(np.arange(4, dtype="int64"))})
     expr = blosc2.lazyexpr("x + 1", {"x": lazy}, evaluation="safe")
@@ -122,7 +137,7 @@ def test_safe_graph_checks_portable_kernel_closure_before_hooks(monkeypatch, mut
 
 
 @pytest.mark.parametrize("mutation", ["mapping", "domain", "partitions", "shape", "grid", "input_dtype"])
-def test_safe_graph_checks_portable_domain_and_binding_metadata(monkeypatch, mutation):
+def test_safe_graph_checks_menudet_domain_and_binding_metadata(monkeypatch, mutation):
     lazy = kernel("def k(x):\n    return x + 1\n").lazy(
         {"x": blosc2.asarray(np.arange(4, dtype="int64"))}, partitions=(2,)
     )
@@ -251,7 +266,7 @@ def test_partial_reads_only_original_groups():
     assert lazy[1] == 22
     np.testing.assert_array_equal(lazy[::-1], [38, 22, 6])
     author = blosc2.DSLKernel.from_source("def k(x):\n    return x + block_sum(x)\n")
-    elementwise = blosc2.PortableKernel.from_json(author.export({"x": "int64"}, "int64", version="1.0"))
+    elementwise = blosc2.MenudetKernel.from_json(author.export({"x": "int64"}, "int64", version="0.1"))
     grouped = elementwise.lazy({"x": operand}, partitions=(4,))
     operand.reads.clear()
     np.testing.assert_array_equal(grouped[7:3:-2], [29, 27])

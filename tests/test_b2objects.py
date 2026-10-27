@@ -190,7 +190,7 @@ def test_lazyudf_open_roundtrip(tmp_path):
         invalid = blosc2.DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
         bad = blosc2.lazyudf(invalid, (a,), dtype="float64")
         before = urlpath.read_bytes()
-        with pytest.raises((blosc2.PortableArtifactError, ValueError), match=expected):
+        with pytest.raises((blosc2.MenudetError, ValueError), match=expected):
             bad.save(urlpath, mode="w")
         assert urlpath.read_bytes() == before
     fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"

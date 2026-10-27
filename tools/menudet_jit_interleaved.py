@@ -40,7 +40,7 @@ def worker():  # noqa: C901 -- independent compile, warm-up, validation and samp
     compile_rows = []
     for workload, expression in EXPRESSIONS.items():
         artifact = blosc2.DSLKernel.from_source(f"def k(x, y):\n    return {expression}\n").export(
-            {"x": "float64", "y": "float64"}, "float64", version="1.0"
+            {"x": "float64", "y": "float64"}, "float64", version="0.1"
         )
         compiled[workload] = {}
         for backend in ("interpreter", "tcc", "gcc", "clang"):
@@ -48,7 +48,7 @@ def worker():  # noqa: C901 -- independent compile, warm-up, validation and samp
             if backend in compilers:
                 os.environ["CC"] = compilers[backend]
             kernel, ms = timed(
-                lambda a=artifact, b=backend: blosc2.PortableKernel.from_json(a, jit=b != "interpreter")
+                lambda a=artifact, b=backend: blosc2.MenudetKernel.from_json(a, jit=b != "interpreter")
             )
             if kernel.has_jit != (backend != "interpreter"):
                 raise RuntimeError(f"Unexpected JIT eligibility: {workload}/{backend}")

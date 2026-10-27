@@ -13,16 +13,16 @@ import blosc2
 from tools import menudet_conformance as compat
 
 
-def kernel(expression, dtype="float64", output=None, version="1.0"):
+def kernel(expression, dtype="float64", output=None, version="0.1"):
     author = blosc2.DSLKernel.from_source(f"def k(x):\n    return {expression}\n")
-    return blosc2.PortableKernel.from_json(author.export({"x": dtype}, output or dtype, version=version))
+    return blosc2.MenudetKernel.from_json(author.export({"x": dtype}, output or dtype, version=version))
 
 
 @pytest.fixture(autouse=True)
 def status_runtime():
     try:
         kernel("isfinite(x)", output="bool")
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if os.environ.get("MENUDET_NUMPY_FUNCTION_CORPUS"):
             pytest.fail(f"Explicit M4 testing requires updated native function runtime: {error}")
         pytest.skip("Installed native dependency does not implement M4 functions/status")
@@ -47,11 +47,11 @@ def test_status_and_raise_recovery(expression, values, flags):
     np.testing.assert_array_equal(result, expected)
     if sys.platform == "emscripten":
         assert status == {"supported": False, "flags": 0}
-        with pytest.raises(blosc2.PortableArtifactError, match="unsupported"):
+        with pytest.raises(blosc2.MenudetError, match="unsupported"):
             k.evaluate({"x": np.array(values)}, fp_errors="raise")
     elif flags:
         assert status == {"supported": True, "flags": flags}
-        with pytest.raises(blosc2.PortableArtifactError, match="floating exception") as error:
+        with pytest.raises(blosc2.MenudetError, match="floating exception") as error:
             k.evaluate({"x": np.array(values)}, fp_errors="raise")
         assert error.value.fp_status == status
     else:
@@ -108,7 +108,7 @@ def test_policy_validation_and_default_profile():
     k = kernel("sqrt(x)")
     with pytest.raises(ValueError, match="fp_errors"):
         k.evaluate({"x": np.array([1.0])}, fp_errors="warn")
-    explicit = kernel("round(x)", version="1.0")
+    explicit = kernel("round(x)", version="0.1")
     values, status = explicit.evaluate({"x": np.array([0.5])}, return_status=True)
     assert values[0] == 0
     assert status["flags"] == 0
@@ -122,13 +122,13 @@ def test_policy_validation_and_default_profile():
 def test_new_spellings_do_not_change_legacy_routing(name):
     expression = f"{name}(x, x)" if name in {"minimum", "maximum"} else f"{name}(x)"
     assert blosc2.blosc2_ext.me_output_dtype(expression, {"x": np.dtype("float64")}) is None
-    assert kernel(expression, version="1.0").schema_version == "1.0"
+    assert kernel(expression, version="0.1").schema_version == "0.1"
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_extrema_zero_contract_and_nan_policy(dtype):
     author = blosc2.DSLKernel.from_source("def k(x, y):\n    return minimum(x, y)\n")
-    k = blosc2.PortableKernel.from_json(author.export({"x": dtype, "y": dtype}, dtype, version="1.0"))
+    k = blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, dtype, version="0.1"))
     result = k.evaluate(
         {
             "x": np.array([0.0, -0.0, np.nan, 1], dtype=dtype),
@@ -139,7 +139,7 @@ def test_extrema_zero_contract_and_nan_policy(dtype):
     assert np.isnan(result[2:]).all()
     artifact = json.loads(k.to_json())
     artifact["source"] = artifact["source"].replace("minimum", "fmin")
-    fmin = blosc2.PortableKernel.from_json(json.dumps(artifact))
+    fmin = blosc2.MenudetKernel.from_json(json.dumps(artifact))
     result = fmin.evaluate(
         {"x": np.array([np.nan, 1], dtype=dtype), "y": np.array([1, np.nan], dtype=dtype)}
     )

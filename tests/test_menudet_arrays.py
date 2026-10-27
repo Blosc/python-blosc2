@@ -26,14 +26,14 @@ DTYPES = [
 def kernel(expression="x", inputs=None, output="float64"):
     inputs = inputs or {"x": output}
     author = blosc2.DSLKernel.from_source(f"def k({', '.join(inputs)}):\n    return {expression}\n")
-    return blosc2.PortableKernel.from_json(author.export(inputs, output, version="1.0", casting="unsafe"))
+    return blosc2.MenudetKernel.from_json(author.export(inputs, output, version="0.1", casting="unsafe"))
 
 
 @pytest.fixture(autouse=True)
 def runtime():
     try:
         kernel().evaluate_array({"x": np.ones(1)})
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if os.environ.get("MENUDET_REQUIRE_ARRAY_RUNTIME"):
             pytest.fail(str(error))
         pytest.skip("Installed dependency does not implement native logical traversal")
@@ -75,7 +75,7 @@ def test_broadcast_and_layout(layout, dtype):
 def test_logical_reductions(dtype, op, axis):
     x = (np.arange(24).reshape(2, 3, 4) % 3).astype(dtype)
     k = kernel(output=dtype)
-    # Menudet's portable accumulator widths are fixed, unlike NumPy's native
+    # Menudet's Menudet accumulator widths are fixed, unlike NumPy's native
     # integer defaults (32 bits on WASM). Specify the contract in the oracle.
     options = {}
     if op in ("sum", "prod") and x.dtype.kind in "biu":
@@ -101,7 +101,7 @@ def test_masks_empty_and_initial(op):
     np.testing.assert_array_equal(result, getattr(np, op)(x, axis=1, where=mask, **options))
     empty = np.empty((2, 0))
     if op in {"min", "max"}:
-        with pytest.raises(blosc2.PortableArtifactError, match="initial"):
+        with pytest.raises(blosc2.MenudetError, match="initial"):
             k.evaluate_array({"x": empty}, reduction=op, axis=1)
     else:
         np.testing.assert_array_equal(
@@ -116,9 +116,9 @@ def test_zero_copy_and_bounds_rejection():
     assert report["zero_copy_tiles"] == 12
     np.testing.assert_array_equal(result, x)
     bad = np.lib.stride_tricks.as_strided(x, shape=(200,), strides=(8,))
-    with pytest.raises(blosc2.PortableArtifactError, match="bounds"):
+    with pytest.raises(blosc2.MenudetError, match="bounds"):
         kernel().evaluate_array({"x": bad})
-    with pytest.raises(blosc2.PortableArtifactError, match="axes"):
+    with pytest.raises(blosc2.MenudetError, match="axes"):
         kernel().evaluate_array({"x": x}, reduction="sum", axis=(0, 0))
 
 

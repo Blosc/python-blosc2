@@ -164,14 +164,14 @@ def test_safe_computed_column_graph_tracks_append_and_delete():
 
 
 @pytest.mark.skipif(
-    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    not getattr(blosc2.blosc2_ext, "menudet_descriptor_available", lambda: False)(),
     reason="Installed runtime has no draft descriptor ABI",
 )
 @pytest.mark.parametrize(
     "mutation", ["hostile", "kernel_replacement", "artifact_replacement", "bindings", "dtype", "row_shape"]
 )
-def test_safe_portable_column_checks_cached_kernel_before_dtype(monkeypatch, mutation):
-    from test_portable_lazy import kernel
+def test_safe_menudet_column_checks_cached_kernel_before_dtype(monkeypatch, mutation):
+    from test_menudet_lazy import kernel
 
     t = _make_invoice_table(3)
     t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
@@ -208,16 +208,16 @@ def test_safe_portable_column_checks_cached_kernel_before_dtype(monkeypatch, mut
 
 
 @pytest.mark.skipif(
-    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    not getattr(blosc2.blosc2_ext, "menudet_descriptor_available", lambda: False)(),
     reason="Installed runtime has no draft descriptor ABI",
 )
-def test_safe_portable_column_reuses_validated_native_handle(monkeypatch):
-    from test_portable_lazy import kernel
+def test_safe_menudet_column_reuses_validated_native_handle(monkeypatch):
+    from test_menudet_lazy import kernel
 
     t = _make_invoice_table(3)
     t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
     monkeypatch.setattr(
-        blosc2.PortableKernel,
+        blosc2.MenudetKernel,
         "from_json",
         lambda *a, **k: pytest.fail("Recompiled admitted cached artifact"),
     )
@@ -227,16 +227,16 @@ def test_safe_portable_column_reuses_validated_native_handle(monkeypatch):
 
 
 @pytest.mark.skipif(
-    not getattr(blosc2.blosc2_ext, "portable_descriptor_available", lambda: False)(),
+    not getattr(blosc2.blosc2_ext, "menudet_descriptor_available", lambda: False)(),
     reason="Installed runtime has no draft descriptor ABI",
 )
-def test_safe_portable_column_metadata_does_not_evaluate_rows(monkeypatch):
-    from test_portable_lazy import kernel
+def test_safe_menudet_column_metadata_does_not_evaluate_rows(monkeypatch):
+    from test_menudet_lazy import kernel
 
     t = _make_invoice_table(3)
     t.add_computed_column("total", kernel("def k(x):\n    return x + 1\n"), inputs={"x": "qty"})
     with monkeypatch.context() as patch:
-        patch.setattr(type(t), "_evaluate_portable_rows", lambda *a, **k: pytest.fail("Evaluated metadata"))
+        patch.setattr(type(t), "_evaluate_menudet_rows", lambda *a, **k: pytest.fail("Evaluated metadata"))
         assert t["total"].dtype == np.dtype("int64")
         expr = blosc2.lazyexpr("x + 1", {"x": t["total"]}, evaluation="safe")
         assert expr.shape == (3,)
@@ -524,7 +524,7 @@ def test_computed_column_view_str_and_info():
     s = str(view)
     assert "price" in s
     assert "total" in s
-    assert "1.0" in s or "1" in s
+    assert "0.1" in s or "1" in s
     assert "9.0" in s or "9" in s
 
     info = repr(view.info)
@@ -1229,7 +1229,7 @@ def test_dsl_generated_column_refresh(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
-def test_dsl_jit_backend_not_persisted_in_portable_schema():
+def test_dsl_jit_backend_not_persisted_in_menudet_schema():
     """A local JIT preference does not become a portable execution requirement."""
     t = _make_invoice_table(3)
     t.add_generated_column(
@@ -1238,13 +1238,13 @@ def test_dsl_jit_backend_not_persisted_in_portable_schema():
     )
     schema = t._schema_dict_with_computed()
     mat = {m["name"]: m for m in schema["materialized_columns"]}
-    assert mat["total"]["transformer_kind"] == "portable"
+    assert mat["total"]["transformer_kind"] == "menudet"
     assert "jit_backend" not in mat["total"]
     assert "dsl_source" not in mat["total"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
-def test_dsl_jit_backend_falls_back_after_portable_open(tmp_path):
+def test_dsl_jit_backend_falls_back_after_menudet_open(tmp_path):
     """A local backend preference allows native portable persistence/fallback."""
     t = _make_invoice_table(3)
     t.add_generated_column(

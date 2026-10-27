@@ -2,10 +2,15 @@
 
 ## Changes from 4.14.2 to 4.15.0 (in development)
 
-### Introducing the Menudet 1.0 draft
+### Introducing Menudet 0.1 beta
 
 **Menudet — a little language for portable computation on arrays and tables.**
 
+- Establish the unreleased language and artifact contract as Menudet 0.1 beta.
+  Use `MenudetFunction` for decorated authors, `MenudetKernel` for executable
+  specializations, `MenudetError` for errors, and `validate_menudet` for source
+  validation. Internal recipe tags and the artifact language identifier are
+  `menudet`. Old development names and draft artifacts are not supported.
 - Strengthen NumExpr-removal qualification: runtime/install behavior is independent
   of NumExpr, including native interpretation without JIT. Nullable
   `blosc2.numexpr` remains a compatibility surface, not an engine selector.
@@ -16,7 +21,7 @@
 - Use native structural classification for automatic execution policy: interpret
   single-return expressions and prefer JIT for multi-statement Menudet programs.
   Explicit JIT settings and source compiler pragmas retain priority. Expose
-  `PortableKernel.execution_kind`; `evaluate()` no longer needs a special default
+  `MenudetKernel.execution_kind`; `evaluate()` no longer needs a special default
   override. This requires the paired native classification API; older runtimes
   retain their existing default behavior. Remove the legacy
   `truediv`, `sanitize` and `disable_cache` keywords; supplying them now raises an
@@ -63,13 +68,14 @@
   Full-only nested payloads remain gated. String/lazy expressions and non-kernel
   row transformers retain their existing table registration behavior.
 
-Menudet 1.0 is a **draft**, not a frozen compatibility promise. The existing
-`DSLKernel` and portable API names remain unchanged. This draft uses the typed
-interpreter; optional JIT requests fall back before execution, while required JIT
-rejects unsupported acceleration. Complex computation, callbacks, arbitrary
-memory access and non-strict floating-point modes are outside the portable contract.
+Menudet 0.1 is **beta**: the core API and semantics are expected to remain
+relatively stable, but may change before a 1.0 compatibility commitment. The typed
+interpreter defines behavior and supported kernels can use JIT; required JIT
+rejects unsupported acceleration. Complex computation is supported through the
+interpreter on all supported platforms. Callbacks and arbitrary memory access
+remain outside the language contract.
 
-See the [Menudet reference](https://www.blosc.org/python-blosc2/reference/portable_dsl.html)
+See the [Menudet reference](https://www.blosc.org/python-blosc2/reference/menudet.html)
 for array/table examples, persistence policy and current limitations. Release
 certification is tracked separately; this development entry is not an announcement
 that 4.15.0 has been published.

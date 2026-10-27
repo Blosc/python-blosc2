@@ -115,7 +115,7 @@ def worker(size, dtype, route, layout, reduction):  # noqa: C901 -- isolated ben
         "peak_rss_bytes": peak_rss_bytes(),
         "native_report": native_report,
         "shape": shape,
-        "backend": "portable-interpreter" if route in {"native", "graph"} else route,
+        "backend": "menudet-interpreter" if route in {"native", "graph"} else route,
         "threads": 1,
         "iterator_tile_items": 1024,
         "numpy": np.__version__,

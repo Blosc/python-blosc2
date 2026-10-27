@@ -221,7 +221,7 @@ def test_jit_numpy_read_reuses_resident_schedule(monkeypatch, native_graph_runti
         # A schedule prepared under JIT must not survive a policy change.
         with blosc2.jit_options(jit=False):
             np.testing.assert_array_equal(expr[:], x + 10 + (y - 1))
-            assert expr._native_execution_report["backend"] == "portable-interpreter"
+            assert expr._native_execution_report["backend"] == "menudet-interpreter"
 
 
 def test_prepared_plan_without_destination_does_not_respecialize(monkeypatch, native_graph_runtime):

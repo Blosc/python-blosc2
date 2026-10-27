@@ -11,8 +11,8 @@ pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
 def make_kernel(source, signature, output, **kwargs):
-    artifact = blosc2.DSLKernel.from_source(source).export(signature, output, version="1.0", **kwargs)
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+    artifact = blosc2.DSLKernel.from_source(source).export(signature, output, version="0.1", **kwargs)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
     if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
         assert kernel.has_jit
     return kernel
@@ -22,13 +22,13 @@ def test_capture_binding_roundtrip_and_masked_error_recovery():
     source = "def k(x, c):\n    return x + int8(c)\n"
     for capture in (1.75, 7.75, 1.75):
         kernel = make_kernel(source, {"x": "int8"}, "int8", constants={"c": capture})
-        restored = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
+        restored = blosc2.MenudetKernel.from_json(kernel.to_json(), jit=True)
         np.testing.assert_array_equal(
             restored.evaluate_block({"x": np.array([0, 1], dtype="int8")}), [int(capture), int(capture) + 1]
         )
     kernel = make_kernel("def k(x):\n    return int64(x)\n", {"x": "float64"}, "int64")
     x = np.array([2.75, np.nan])
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         kernel.evaluate_block({"x": x})
     values = kernel.evaluate_block({"x": x}, valid_mask=np.array([True, False]))
     assert values.dtype == np.dtype("int64")
@@ -58,7 +58,7 @@ def test_capture_binding_roundtrip_and_masked_error_recovery():
 )
 def test_scalar_partition_dtype_and_status_binding(body, dtype, output):
     kernel = make_kernel(f"def k(x):\n    {body}\n", {"x": dtype}, output, cardinality="block_scalar")
-    reference = blosc2.PortableKernel.from_json(kernel.to_json(), jit=False)
+    reference = blosc2.MenudetKernel.from_json(kernel.to_json(), jit=False)
     x = np.arange(1, 7, dtype=dtype)
     for mask in (None, np.arange(6) % 2 == 0, np.zeros(6, dtype=bool)):
         actual, status = kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True)
@@ -95,7 +95,7 @@ def test_scalar_loop_cap_is_invocation_local(monkeypatch):
     kernel = make_kernel(source, {"x": "int64"}, "float64", cardinality="block_scalar")
     x = np.array([1, 3], dtype="int64")
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "2")
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         kernel.evaluate_block({"x": x})
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "0")
     assert kernel.evaluate_block({"x": x}) == 7
@@ -132,5 +132,5 @@ def test_tcc_arithmetic_bridge_binding(monkeypatch):
     assert status["flags"] == 0
 
     monkeypatch.setenv("ME_DSL_JIT_ARITH_BRIDGE", "0")
-    scalar = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
+    scalar = blosc2.MenudetKernel.from_json(kernel.to_json(), jit=True)
     np.testing.assert_array_equal(scalar.evaluate_block({"x": x, "y": y}), expected)

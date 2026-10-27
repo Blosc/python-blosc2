@@ -19,7 +19,7 @@ from types import FunctionType, MappingProxyType
 import numpy as np
 
 
-class PortableArtifactError(ValueError):
+class MenudetError(ValueError):
     """Artifact failure with a stable category and optional native/source diagnostics."""
 
     def __init__(self, message, *, status, native_status=0, line=0, column=0):
@@ -60,7 +60,7 @@ def _mapping(value, label):
     return dict(value)
 
 
-def portable_dtype_descriptor(value):
+def menudet_dtype_descriptor(value):
     if type(value) is np.dtype:
         dtype = value
     else:
@@ -77,15 +77,15 @@ def portable_dtype_descriptor(value):
         or (dtype.kind == "f" and dtype.itemsize not in (4, 8))
         or (dtype.kind == "c" and dtype.itemsize not in (8, 16))
     ):
-        raise PortableArtifactError(f"Unsupported portable dtype {dtype}", status="unsupported_requirement")
+        raise MenudetError(f"Unsupported Menudet dtype {dtype}", status="unsupported_requirement")
     if dtype.kind in "SU":
         if not dtype.itemsize:
-            raise PortableArtifactError("Fixed strings require a positive width", status="binding_error")
+            raise MenudetError("Fixed strings require a positive width", status="binding_error")
         return {"dtype": "bytes" if dtype.kind == "S" else "unicode32", "itemsize": dtype.itemsize}
     return {"dtype": dtype.name}
 
 
-def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dtype encoding matrix
+def menudet_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dtype encoding matrix
     numeric = (
         bool,
         int,
@@ -106,20 +106,20 @@ def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dt
         np.complex128,
     )
     if type(value) not in numeric + (str, bytes, np.str_, np.bytes_):
-        raise PortableArtifactError("Captures must be plain numeric/string scalars", status="binding_error")
+        raise MenudetError("Captures must be plain numeric/string scalars", status="binding_error")
     if dtype is None:
         dtype = {bool: "bool", int: "int64", float: "float64"}.get(type(value), np.asarray(value).dtype)
-    descriptor = portable_dtype_descriptor(dtype)
+    descriptor = menudet_dtype_descriptor(dtype)
     dtype = np.dtype(dtype).newbyteorder("=")
     if dtype.kind in "SU":
         if (dtype.kind == "S" and type(value) not in (bytes, np.bytes_)) or (
             dtype.kind == "U" and type(value) not in (str, np.str_)
         ):
-            raise PortableArtifactError("String capture family mismatch", status="binding_error")
+            raise MenudetError("String capture family mismatch", status="binding_error")
         if len(value) > dtype.itemsize // (4 if dtype.kind == "U" else 1):
-            raise PortableArtifactError("String capture exceeds its fixed width", status="binding_error")
+            raise MenudetError("String capture exceeds its fixed width", status="binding_error")
         if dtype.kind == "U" and any(0xD800 <= ord(c) <= 0xDFFF for c in value):
-            raise PortableArtifactError("Invalid Unicode scalar", status="binding_error")
+            raise MenudetError("Invalid Unicode scalar", status="binding_error")
         encoded = np.asarray(value, dtype=dtype).astype(dtype.newbyteorder(">"), copy=False).tobytes().hex()
         return {
             "name": name,
@@ -129,11 +129,11 @@ def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dt
         }
     if dtype.kind in "biu":
         if type(value) in (float, np.float32, np.float64, str, bytes, np.str_, np.bytes_):
-            raise PortableArtifactError("Integral captures require integral values", status="binding_error")
+            raise MenudetError("Integral captures require integral values", status="binding_error")
         integer = int(value)
         lower, upper = (0, 1) if dtype.kind == "b" else (np.iinfo(dtype).min, np.iinfo(dtype).max)
         if not lower <= integer <= upper:
-            raise PortableArtifactError("Capture is outside its dtype", status="binding_error")
+            raise MenudetError("Capture is outside its dtype", status="binding_error")
         return {
             "name": name,
             **descriptor,
@@ -141,14 +141,14 @@ def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dt
             "value": bool(integer) if dtype.kind == "b" else str(integer),
         }
     if type(value) in (str, bytes, np.str_, np.bytes_):
-        raise PortableArtifactError("Numeric capture family mismatch", status="binding_error")
+        raise MenudetError("Numeric capture family mismatch", status="binding_error")
     if dtype.kind == "c":
         if isinstance(value, np.complexfloating) and np.dtype(type(value)) != dtype:
-            raise PortableArtifactError(
+            raise MenudetError(
                 "Complex capture dtype disagrees with its declaration", status="binding_error"
             )
         if not isinstance(value, int | float | complex | np.number) or isinstance(value, bool):
-            raise PortableArtifactError("Complex captures require numeric values", status="binding_error")
+            raise MenudetError("Complex captures require numeric values", status="binding_error")
         scalar = np.asarray(value, dtype=dtype)
         # Two big-endian components: real then imaginary.
         return {
@@ -173,7 +173,7 @@ def portable_scalar_descriptor(name, value, dtype=None):  # noqa: C901 -- per-dt
     # NumPy signed minima cannot be negated in their own fixed-width dtype.
     magnitude = abs(int(value)) if integral else abs(float(value))
     if (integral or math.isfinite(value)) and magnitude > float(np.finfo(dtype).max):
-        raise PortableArtifactError("Floating capture overflows its dtype", status="binding_error")
+        raise MenudetError("Floating capture overflows its dtype", status="binding_error")
     scalar = np.asarray(value, dtype=dtype)
     return {
         "name": name,
@@ -218,7 +218,7 @@ def _parameterize_source(source, replacements, parameters):
 
 def _capture_scope(func):
     if not isinstance(func, FunctionType):
-        raise PortableArtifactError(
+        raise MenudetError(
             "Only ordinary Python functions can export captures", status="unsupported_requirement"
         )
     scope = func.__globals__.copy()
@@ -226,7 +226,7 @@ def _capture_scope(func):
         try:
             scope[name] = cell.cell_contents
         except ValueError as error:
-            raise PortableArtifactError(f"Unbound capture {name!r}", status="invalid_source") from error
+            raise MenudetError(f"Unbound capture {name!r}", status="invalid_source") from error
     return scope
 
 
@@ -245,18 +245,18 @@ def capture_analysis(source, names):
     return function, nodes, local, calls, loads
 
 
-def _export_captures(func, source, names, capture_dtypes, version="1.0", *, analysis=None):
+def _export_captures(func, source, names, capture_dtypes, version="0.1", *, analysis=None):
     scope = _capture_scope(func)
     function, nodes, local, calls, loads = capture_analysis(source, names) if analysis is None else analysis
     # Native compilation owns builtin membership. Never export external callbacks.
     if any(isinstance(n, (ast.Attribute, ast.Subscript, ast.Lambda)) for n in nodes):
-        raise PortableArtifactError("Unsupported dynamic authoring syntax", status="unsupported_requirement")
+        raise MenudetError("Unsupported dynamic authoring syntax", status="unsupported_requirement")
     for call in calls:
         # Module __getattr__ can warn for removed/renamed NumPy aliases (np.bool).
         # Membership here must stay a quiet dictionary lookup.
         allowed = (vars(builtins).get(call), vars(np).get(call), vars(math).get(call))
         if call in local or (call in scope and not any(v is not None and scope[call] is v for v in allowed)):
-            raise PortableArtifactError(
+            raise MenudetError(
                 f"External callback {call!r} cannot be exported", status="unsupported_requirement"
             )
     occupied = local | loads | {function.name}
@@ -267,7 +267,7 @@ def _export_captures(func, source, names, capture_dtypes, version="1.0", *, anal
             continue
         if name not in scope:
             node = next(node for node in nodes if isinstance(node, ast.Name) and node.id == name)
-            raise PortableArtifactError(
+            raise MenudetError(
                 f"Unresolved capture {name!r}",
                 status="invalid_source",
                 line=node.lineno,
@@ -279,8 +279,8 @@ def _export_captures(func, source, names, capture_dtypes, version="1.0", *, anal
             index += 1
             candidate = f"_capture_{index}"
         occupied.add(candidate)
-        scalar = portable_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
-        if version == "1.0" and scalar["dtype"] not in {"bytes", "unicode32"}:
+        scalar = menudet_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
+        if version == "0.1" and scalar["dtype"] not in {"bytes", "unicode32"}:
             scalar["category"] = (
                 "weak"
                 if type(scope[name]) in (bool, int, float) and name not in capture_dtypes
@@ -321,7 +321,7 @@ def _header_pragmas(source):
 def _artifact_semantics(source, version, casting):
     """Build validated semantic fields while leaving omissions as inheritance."""
     pragmas = _header_pragmas(source)
-    semantics = {**({"numeric": "numpy-2.5", "casting": casting} if version == "1.0" else {})}
+    semantics = {**({"numeric": "numpy-2.5", "casting": casting} if version == "0.1" else {})}
     requires = ["numeric", "control-flow", "block-reductions", "fixed-strings", "nd-context"]
     if "fp" in pragmas:
         semantics["fp"] = pragmas["fp"]
@@ -334,12 +334,12 @@ def _artifact_semantics(source, version, casting):
     return semantics, requires
 
 
-def export_portable_kernel(kernel, input_dtypes, output_dtype, **options):
+def export_menudet_kernel(kernel, input_dtypes, output_dtype, **options):
     """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
-    return prepare_portable_kernel(kernel, input_dtypes, output_dtype, **options).to_json()
+    return prepare_menudet_kernel(kernel, input_dtypes, output_dtype, **options).to_json()
 
 
-def prepare_portable_kernel(
+def prepare_menudet_kernel(
     kernel,
     input_dtypes,
     output_dtype=None,
@@ -347,7 +347,7 @@ def prepare_portable_kernel(
     capture_dtypes=None,
     constants=None,
     metadata=None,
-    version="1.0",
+    version="0.1",
     casting="unsafe",
     cardinality="elementwise",
     ndim=0,
@@ -359,25 +359,25 @@ def prepare_portable_kernel(
     declared input signatures and casting policy. The returned kernel retains an
     artifact text with the inferred concrete output dtype.
     """
-    if version != "1.0":
-        raise PortableArtifactError("Unsupported artifact version", status="unsupported_version")
+    if version != "0.1":
+        raise MenudetError("Unsupported artifact version", status="unsupported_version")
     if casting not in {"safe", "same_kind", "unsafe"}:
-        raise PortableArtifactError("Unsupported Menudet casting policy", status="unsupported_requirement")
+        raise MenudetError("Unsupported Menudet casting policy", status="unsupported_requirement")
     inputs = _mapping(input_dtypes, "input_dtypes")
     constants = _mapping({} if constants is None else constants, "constants")
     captures = _mapping({} if capture_dtypes is None else capture_dtypes, "capture_dtypes")
     source = kernel.dsl_source
     if not isinstance(source, str):
-        raise PortableArtifactError("Kernel has no normalized source", status="invalid_source")
+        raise MenudetError("Kernel has no normalized source", status="invalid_source")
     names = kernel.input_names
     if set(inputs) & set(constants) or set(inputs) | set(constants) != set(names):
-        raise PortableArtifactError(
+        raise MenudetError(
             "Every parameter needs exactly one input or constant binding", status="binding_error"
         )
     encoded = [
-        portable_scalar_descriptor(name, value, captures.get(name)) for name, value in constants.items()
+        menudet_scalar_descriptor(name, value, captures.get(name)) for name, value in constants.items()
     ]
-    if version == "1.0":
+    if version == "0.1":
         for scalar, (name, value) in zip(encoded, constants.items(), strict=True):
             if scalar["dtype"] not in {"bytes", "unicode32"}:
                 scalar["category"] = (
@@ -396,9 +396,9 @@ def prepare_portable_kernel(
         encoded.extend(captured)
         used |= extra
     if set(captures) - used:
-        raise PortableArtifactError("Unused capture dtype names", status="binding_error")
+        raise MenudetError("Unused capture dtype names", status="binding_error")
     if cardinality not in {"elementwise", "block_scalar"} or type(ndim) is not int or ndim < 0:
-        raise PortableArtifactError("Invalid return/context contract", status="binding_error")
+        raise MenudetError("Invalid return/context contract", status="binding_error")
     if metadata is not None and not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping")
     # This finite superset grants no unsupported operations: native typed import
@@ -406,16 +406,16 @@ def prepare_portable_kernel(
     semantics, requires = _artifact_semantics(source, version, casting)
     manifest = {
         "schema_version": version,
-        "language": {"name": "miniexpr", "version": version},
+        "language": {"name": "menudet", "version": version},
         "requires": requires,
         "source": source,
         "entry_point": kernel.__name__,
         "inputs": [
-            {"name": name, **portable_dtype_descriptor(inputs[name])} for name in names if name in inputs
+            {"name": name, **menudet_dtype_descriptor(inputs[name])} for name in names if name in inputs
         ],
         "constants": sorted(encoded, key=lambda item: item["name"]),
         "output": (
-            {**portable_dtype_descriptor(output_dtype), "contract": cardinality}
+            {**menudet_dtype_descriptor(output_dtype), "contract": cardinality}
             if output_dtype is not None
             else {"dtype": "auto", "contract": cardinality}
         ),
@@ -428,9 +428,9 @@ def prepare_portable_kernel(
         + "\n"
     )
     if output_dtype is not None:
-        return PortableKernel.from_json(artifact, jit=jit)
+        return MenudetKernel.from_json(artifact, jit=jit)
     try:
-        return PortableKernel.from_json(artifact, jit=jit, infer_output=True)
+        return MenudetKernel.from_json(artifact, jit=jit, infer_output=True)
     except NotImplementedError:
         return _prepare_inferred_fallback(
             kernel,
@@ -460,7 +460,7 @@ def _prepare_inferred_fallback(
     jit,
 ):
     """Infer through a float64 probe when the native auto-output loader is absent."""
-    probe = prepare_portable_kernel(
+    probe = prepare_menudet_kernel(
         kernel,
         input_dtypes,
         "float64",
@@ -475,30 +475,30 @@ def _prepare_inferred_fallback(
     )
     output = probe.inferred_dtype
     if output is None:
-        raise PortableArtifactError(
+        raise MenudetError(
             "Native output inference is unavailable", status="unsupported_requirement"
         ) from None
     if output == probe.output_dtype:
         return probe
-    return PortableKernel.from_json(_artifact_with_output(probe.to_json(), output), jit=jit)
+    return MenudetKernel.from_json(_artifact_with_output(probe.to_json(), output), jit=jit)
 
 
 def _artifact_with_output(artifact, output_dtype):
     """Resolve an inferred output dtype in retained artifact text without reimport."""
     manifest = json.loads(artifact)
-    manifest["output"].update(portable_dtype_descriptor(output_dtype))
+    manifest["output"].update(menudet_dtype_descriptor(output_dtype))
     encoded = json.dumps(
         manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
     )
     return (encoded + "\n").encode("utf-8")
 
 
-class PortableKernel:
+class MenudetKernel:
     """An owned, typed native artifact; no originating function or Python fallback.
 
     Use ``from_json`` to import and ``evaluate`` to return NumPy values. Inputs
     are same-shaped logical arrays, bound by name. The installed native adapter
-    enforces its supported profiles. Draft 1.0 descriptor blocks are available
+    enforces its supported profiles. Menudet 0.1 beta descriptor blocks are available
     only when that runtime exposes the extended ABI; no sibling build is inferred.
     """
 
@@ -512,20 +512,18 @@ class PortableKernel:
             raise TypeError("jit must be True, False, or None")
         if type(infer_output) is not bool:
             raise TypeError("infer_output must be a bool")
-        handle_type = getattr(blosc2_ext, "PortableArtifactHandle", None)
+        handle_type = getattr(blosc2_ext, "MenudetArtifactHandle", None)
         if handle_type is None:
-            raise NotImplementedError("Build with miniexpr portable artifact support")
+            raise NotImplementedError("Build with miniexpr Menudet artifact support")
         try:
             data = artifact.encode("utf-8") if isinstance(artifact, str) else artifact
         except UnicodeEncodeError as error:
-            raise PortableArtifactError(
-                "Artifact text must be valid UTF-8", status="invalid_artifact"
-            ) from error
+            raise MenudetError("Artifact text must be valid UTF-8", status="invalid_artifact") from error
         policy = jit_config.execution_options()["jit"] if jit is None else jit
         if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in ("1", "true", "on", "tcc", "cc"):
             policy = True
         mode = (
-            getattr(blosc2_ext, "portable_auto_jit_mode", lambda: 0)()
+            getattr(blosc2_ext, "menudet_auto_jit_mode", lambda: 0)()
             if policy is None
             else 1
             if policy
@@ -539,7 +537,7 @@ class PortableKernel:
         instance._handle = handle
         instance._expression_handle = handle
         instance._info = handle.info()
-        if getattr(blosc2_ext, "portable_descriptor_available", lambda: False)():
+        if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
             instance._info.update(handle.descriptor_info())
         if infer_output:
             data = _artifact_with_output(data, instance._info["output_dtype"])
@@ -565,7 +563,7 @@ class PortableKernel:
 
     @property
     def inferred_dtype(self):
-        """Metadata-only result dtype before final conversion (Menudet 1.0 runtime required)."""
+        """Metadata-only result dtype before final conversion (Menudet 0.1 beta runtime required)."""
         return self._info.get("inferred_dtype")
 
     @property
@@ -579,7 +577,7 @@ class PortableKernel:
 
     @property
     def schema_version(self):
-        return self._info.get("schema_version", "1.0")
+        return self._info.get("schema_version", "0.1")
 
     @property
     def result_cardinality(self):
@@ -601,14 +599,14 @@ class PortableKernel:
         Constant-only kernels require an explicit output ``shape`` (possibly empty).
         Draft block-scalar kernels return a scalar NumPy array. ND kernels require
         ``evaluate_block`` with explicit logical context.
-        Menudet 1.0 can return ``(values, status)`` with ``return_status=True``.
+        Menudet 0.1 beta can return ``(values, status)`` with ``return_status=True``.
         Status has stable ``flags`` bits (invalid=1, divide=2, overflow=4,
         underflow=8) and a ``supported`` capability. ``fp_errors='raise'`` raises
         for any of these flags; the default ``'ignore'`` emits no warnings.
         """
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
-            raise PortableArtifactError("Missing or extra runtime inputs", status="binding_error")
+            raise MenudetError("Missing or extra runtime inputs", status="binding_error")
         if shape is not None:
             if isinstance(shape, int):
                 shape = (shape,)
@@ -621,15 +619,13 @@ class PortableKernel:
             array = np.asarray(value)
             dtype = self.input_dtypes[name]
             if array.dtype.newbyteorder("=") != dtype:
-                raise PortableArtifactError(
+                raise MenudetError(
                     f"Input {name!r} must have dtype {dtype}, not {array.dtype}", status="binding_error"
                 )
             if shape is None:
                 shape = array.shape
             if array.shape != shape:
-                raise PortableArtifactError(
-                    "All input shapes must match the output shape", status="binding_error"
-                )
+                raise MenudetError("All input shapes must match the output shape", status="binding_error")
             arrays[name] = np.require(array, dtype=dtype, requirements=["C", "A"])
         if shape is None:
             raise ValueError("Constant-only kernels require an explicit shape")
@@ -653,7 +649,7 @@ class PortableKernel:
         fp_errors="ignore",
         _validated=False,
     ):
-        """Evaluate one explicit draft 1.0 block, returning its declared cardinality.
+        """Evaluate one explicit Menudet 0.1 beta block, returning its declared cardinality.
 
         This is standalone block execution, not lazy block-grid scheduling. Native
         validation owns coordinates, participating masks and result allocation.
@@ -661,8 +657,10 @@ class PortableKernel:
         and must be aggregated explicitly by callers across blocks. This is not
         full ``numpy.seterr`` emulation.
         """
-        if self.schema_version != "1.0":
-            raise NotImplementedError("Explicit descriptor blocks require an installed draft 1.0 runtime")
+        if self.schema_version != "0.1":
+            raise NotImplementedError(
+                "Explicit descriptor blocks require an installed Menudet 0.1 beta runtime"
+            )
         if _validated:
             # Callers with exact resident buffers keep native validation and
             # allocation but skip repeated Python-side binding checks.
@@ -677,7 +675,7 @@ class PortableKernel:
             )
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
-            raise PortableArtifactError("Missing or extra runtime inputs", status="binding_error")
+            raise MenudetError("Missing or extra runtime inputs", status="binding_error")
         if isinstance(block_shape, int):
             block_shape = (block_shape,)
         elif block_shape is not None:
@@ -689,15 +687,13 @@ class PortableKernel:
             array = np.asarray(value)
             dtype = self.input_dtypes[name]
             if array.dtype.newbyteorder("=") != dtype:
-                raise PortableArtifactError(
+                raise MenudetError(
                     f"Input {name!r} must have dtype {dtype}, not {array.dtype}", status="binding_error"
                 )
             if block_shape is None:
                 block_shape = array.shape
             if array.shape != block_shape:
-                raise PortableArtifactError(
-                    "Input shape disagrees with block extent", status="binding_error"
-                )
+                raise MenudetError("Input shape disagrees with block extent", status="binding_error")
             arrays[name] = np.require(array, dtype=dtype, requirements=["C", "A"])
         if block_shape is None:
             raise ValueError("Constant-only kernels require an explicit block_shape")
@@ -727,7 +723,7 @@ class PortableKernel:
         tile_items=1024,
         return_report=False,
     ):
-        """Menudet 1.0 logical broadcasting/axis reductions with bounded iterator scratch.
+        """Menudet 0.1 beta logical broadcasting/axis reductions with bounded iterator scratch.
 
         Supports C/F, negative-stride and nonnative-endian numeric arrays. Results
         own C-order storage; no mutable-view or in-place guarantees. Grouping is
@@ -736,11 +732,11 @@ class PortableKernel:
         """
         inputs = _mapping(inputs, "inputs")
         if set(inputs) != set(self.input_dtypes):
-            raise PortableArtifactError("Missing or extra runtime inputs", status="binding_error")
+            raise MenudetError("Missing or extra runtime inputs", status="binding_error")
         arrays = {name: np.asarray(value) for name, value in inputs.items()}
         for name, array in arrays.items():
             if array.dtype.newbyteorder("=") != self.input_dtypes[name]:
-                raise PortableArtifactError(f"Input {name!r} has incorrect dtype", status="binding_error")
+                raise MenudetError(f"Input {name!r} has incorrect dtype", status="binding_error")
         if shape is None:
             if not arrays:
                 raise ValueError("Constant-only kernels require shape")
@@ -780,8 +776,8 @@ class PortableKernel:
 
     def lazy(self, inputs, *, shape=None, partitions=None):
         """Bind native inputs to an immutable logical block grid, not a storage grid."""
-        from .portable_lazy import PortableLazyArray
+        from .menudet_lazy import MenudetLazyArray
 
-        if self.schema_version != "1.0":
-            raise NotImplementedError("Logical portable partitions require the descriptor profile")
-        return PortableLazyArray(self, inputs, shape=shape, partitions=partitions)
+        if self.schema_version != "0.1":
+            raise NotImplementedError("Logical Menudet partitions require the descriptor profile")
+        return MenudetLazyArray(self, inputs, shape=shape, partitions=partitions)

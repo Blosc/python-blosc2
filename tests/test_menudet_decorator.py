@@ -16,6 +16,22 @@ def annotated(x: np.float64, y: np.float64) -> np.float64:
     return x + (y - 1)
 
 
+def test_decorator_returns_menudet_function():
+    assert isinstance(inferred, blosc2.MenudetFunction)
+
+
+def test_menudet_public_names(native_graph_runtime):
+    for name in ("MenudetFunction", "MenudetKernel", "MenudetError", "validate_menudet"):
+        assert name in blosc2.__all__
+    for name in ("PortableKernel", "PortableArtifactError", "validate_portable_dsl"):
+        assert not hasattr(blosc2, name)
+        assert name not in blosc2.__all__
+    x = np.arange(4.0)
+    kernel = inferred.specialize(x, x)
+    assert isinstance(kernel, blosc2.MenudetKernel)
+    assert not isinstance(kernel, blosc2.MenudetFunction)
+
+
 @pytest.mark.parametrize("dtype", ["int8", "int32", "uint64", "float32", "float64"])
 @pytest.mark.parametrize("compressed", [False, True])
 def test_inferred_arrays(dtype, compressed, native_graph_runtime):
@@ -43,7 +59,7 @@ def test_specialization_cache_and_mutation(native_graph_runtime):
     lazy = inferred(x, y)
     x[:] = 10
     np.testing.assert_array_equal(lazy[:], np.full(4, 10.0))
-    assert isinstance(kernel, blosc2.PortableKernel)
+    assert isinstance(kernel, blosc2.MenudetKernel)
 
 
 @pytest.mark.parametrize(
@@ -60,7 +76,7 @@ def test_specialization_cache_and_mutation(native_graph_runtime):
 def test_specialization_reuses_validated_export(
     native_graph_runtime, monkeypatch, dtype, jit, annotate, imports
 ):
-    import blosc2.portable_kernel as portable
+    import blosc2.menudet_kernel as menudet_result
 
     offset = 2
 
@@ -70,8 +86,8 @@ def test_specialization_reuses_validated_export(
     if annotate:
         function.__annotations__["return"] = np.float64
     author = blosc2.menudet(jit=jit)(function)
-    original_captures = portable._export_captures
-    original_import = blosc2.PortableKernel.from_json
+    original_captures = menudet_result._export_captures
+    original_import = blosc2.MenudetKernel.from_json
     captures, policies = [], []
 
     def record_captures(*args, **kwargs):
@@ -82,8 +98,8 @@ def test_specialization_reuses_validated_export(
         policies.append(jit)
         return original_import(artifact, jit=jit, infer_output=infer_output)
 
-    monkeypatch.setattr(portable, "_export_captures", record_captures)
-    monkeypatch.setattr(blosc2.PortableKernel, "from_json", classmethod(record_import))
+    monkeypatch.setattr(menudet_result, "_export_captures", record_captures)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", classmethod(record_import))
     x = np.arange(4, dtype=dtype)
     kernel = author.specialize(x)
     np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), x + offset)
@@ -137,7 +153,7 @@ def test_automatic_program_and_explicit_overrides(native_graph_runtime, monkeypa
     x = np.arange(7.0)
     automatic = program.specialize(x)
     assert automatic.execution_kind == "program"
-    forced = blosc2.PortableKernel.from_json(automatic.to_json(), jit=True)
+    forced = blosc2.MenudetKernel.from_json(automatic.to_json(), jit=True)
     assert automatic.has_jit == forced.has_jit
     for author in (program, expression):
         with blosc2.jit_options(jit=False):
@@ -146,7 +162,7 @@ def test_automatic_program_and_explicit_overrides(native_graph_runtime, monkeypa
         with blosc2.jit_options(jit=True):
             compiled = author.specialize(x)
             assert compiled is not interpreted
-            assert compiled.has_jit == blosc2.PortableKernel.from_json(compiled.to_json(), jit=True).has_jit
+            assert compiled.has_jit == blosc2.MenudetKernel.from_json(compiled.to_json(), jit=True).has_jit
         np.testing.assert_array_equal(author(x)[:], x * 2 + 1)
 
 
@@ -164,7 +180,7 @@ def test_automatic_specialization_environment_override(native_graph_runtime, mon
     monkeypatch.setenv(environment, "1")
     compiled = expression.specialize(x)
     assert compiled is not interpreted
-    assert compiled.has_jit == blosc2.PortableKernel.from_json(compiled.to_json(), jit=True).has_jit
+    assert compiled.has_jit == blosc2.MenudetKernel.from_json(compiled.to_json(), jit=True).has_jit
 
 
 @pytest.mark.parametrize("compiler", ["tcc", "cc"])
@@ -174,11 +190,11 @@ def test_source_compiler_pragma_overrides_automatic_classification(native_graph_
     x = np.arange(7.0)
     artifact = json.loads(inferred.specialize(x, x).to_json())
     artifact["source"] = f"# me:compiler={compiler}\n" + artifact["source"]
-    automatic = blosc2.PortableKernel.from_json(json.dumps(artifact))
-    forced = blosc2.PortableKernel.from_json(json.dumps(artifact), jit=True)
+    automatic = blosc2.MenudetKernel.from_json(json.dumps(artifact))
+    forced = blosc2.MenudetKernel.from_json(json.dumps(artifact), jit=True)
     assert automatic.execution_kind == "expression"
     assert automatic.has_jit == forced.has_jit
-    assert not blosc2.PortableKernel.from_json(json.dumps(artifact), jit=False).has_jit
+    assert not blosc2.MenudetKernel.from_json(json.dumps(artifact), jit=False).has_jit
 
 
 def test_libm_kernel_roundtrip(native_graph_runtime):
@@ -191,7 +207,7 @@ def test_libm_kernel_roundtrip(native_graph_runtime):
     x = np.linspace(-np.pi, np.pi, 257)
     expected = np.sin(x) + np.cos(x) + 1
     np.testing.assert_allclose(trig(x)[:], expected, rtol=1e-14, atol=1e-14)
-    kernel = blosc2.PortableKernel.from_json(trig.specialize(x).to_json())
+    kernel = blosc2.MenudetKernel.from_json(trig.specialize(x).to_json())
     np.testing.assert_allclose(kernel.evaluate({"x": x}), expected, rtol=1e-14, atol=1e-14)
 
 
@@ -210,7 +226,7 @@ def test_binding_defaults_and_scalars(native_graph_runtime):
 
 
 def test_capture_snapshot(native_graph_runtime, monkeypatch):
-    import blosc2.portable_kernel as portable
+    import blosc2.menudet_kernel as menudet_result
 
     scale = 2
 
@@ -221,7 +237,7 @@ def test_capture_snapshot(native_graph_runtime, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Specialization repeated fixed-source capture analysis")
 
-    monkeypatch.setattr(portable, "capture_analysis", forbidden)
+    monkeypatch.setattr(menudet_result, "capture_analysis", forbidden)
     scale = 7
     for dtype in ("float32", "float64"):
         x = np.arange(4).astype(dtype)
@@ -252,7 +268,7 @@ def test_required_jit_unavailable(native_graph_runtime, monkeypatch):
     def k(x: np.float64) -> np.float64:
         return x + 1
 
-    monkeypatch.setattr(blosc2.PortableKernel, "has_jit", property(lambda self: False))
+    monkeypatch.setattr(blosc2.MenudetKernel, "has_jit", property(lambda self: False))
     with pytest.raises(RuntimeError, match="Required Menudet JIT"):
         k(np.arange(4.0))
 
@@ -279,14 +295,14 @@ def test_native_execution_error_not_replayed(native_graph_runtime, monkeypatch, 
     lazy = inferred(np.arange(4.0), np.ones(4))
 
     def failed(*args, **kwargs):
-        raise blosc2.PortableArtifactError("Invocation failed", status="evaluation_error")
+        raise blosc2.MenudetError("Invocation failed", status="evaluation_error")
 
     if route == "resident":
         monkeypatch.setattr("blosc2.native_graph.execute_resident", failed)
     else:
         monkeypatch.delattr(lazy.kernel, "_resident_plan")
-        monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", failed)
-    with pytest.raises(blosc2.PortableArtifactError, match="Invocation failed"):
+        monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", failed)
+    with pytest.raises(blosc2.MenudetError, match="Invocation failed"):
         lazy[:]
 
 
@@ -296,16 +312,16 @@ def test_arithmetic_specialization_borrows_native_inference(native_graph_runtime
     y = x + 1
 
     def forbidden(*args, **kwargs):
-        pytest.fail("Arithmetic specialization re-imported a portable artifact")
+        pytest.fail("Arithmetic specialization re-imported a Menudet artifact")
 
     with monkeypatch.context() as patch:
-        patch.setattr(blosc2.PortableKernel, "from_json", forbidden)
+        patch.setattr(blosc2.MenudetKernel, "from_json", forbidden)
         kernel = author.specialize(x, y)
         assert kernel.output_dtype == x.dtype
         assert kernel.inferred_dtype == x.dtype
         assert kernel is author.specialize(x, y)
         np.testing.assert_array_equal(kernel.lazy({"x": x, "y": y})[:], x + (y - 1))
-    restored = blosc2.PortableKernel.from_json(kernel.to_json())
+    restored = blosc2.MenudetKernel.from_json(kernel.to_json())
     np.testing.assert_array_equal(restored.evaluate({"x": x, "y": y}), x + (y - 1))
 
 
@@ -359,7 +375,7 @@ def test_unavailable_return_inference(native_graph_runtime, monkeypatch):
     def k(x):
         return x + 1
 
-    monkeypatch.setattr(blosc2.PortableKernel, "inferred_dtype", property(lambda self: None))
+    monkeypatch.setattr(blosc2.MenudetKernel, "inferred_dtype", property(lambda self: None))
     with pytest.raises(TypeError, match="return dtype annotation"):
         k(np.arange(4.0))
 
@@ -390,7 +406,7 @@ def test_full_read_fast_path_preserves_coordinates(native_graph_runtime):
 def test_decorated_artifact_is_standalone(native_graph_runtime):
     x, y = np.arange(4.0), np.ones(4)
     artifact = annotated.specialize(x, y).to_json()
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     np.testing.assert_array_equal(kernel.evaluate_array({"x": x, "y": y}), x + (y - 1))
 
 

@@ -12,11 +12,11 @@ import blosc2
 pytestmark = [pytest.mark.usefixtures("native_graph_runtime"), pytest.mark.native_semantics]
 
 
-def portable_kernel(source, inputs, output, *, jit=True, constants=None, cardinality="elementwise"):
+def menudet_kernel(source, inputs, output, *, jit=True, constants=None, cardinality="elementwise"):
     artifact = blosc2.DSLKernel.from_source(source).export(
-        inputs, output, constants=constants, version="1.0", cardinality=cardinality
+        inputs, output, constants=constants, version="0.1", cardinality=cardinality
     )
-    kernel = blosc2.PortableKernel.from_json(artifact, jit=jit)
+    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     # Probe backend availability with universally eligible arithmetic. Boolean
     # addition itself is not an eligible graph map, although Boolean reductions are.
     oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=jit)
@@ -32,8 +32,8 @@ def portable_kernel(source, inputs, output, *, jit=True, constants=None, cardina
 def test_exact_integer_comparisons(operator, mixed):
     signature = {"x": "int64", "y": "uint64" if mixed else "int64"}
     source = f"def k(x, y):\n    return x {operator} y\n"
-    kernel = portable_kernel(source, signature, "bool")
-    reference = portable_kernel(source, signature, "bool", jit=False)
+    kernel = menudet_kernel(source, signature, "bool")
+    reference = menudet_kernel(source, signature, "bool", jit=False)
     x = np.array([-(2**63), -1, 0, 2**53, 2**63 - 1], dtype="int64")
     y = np.array(
         [0, 2**64 - 1, 0, 2**53 + 1, 2**64 - 1] if mixed else [-(2**63), 0, -1, 2**53 + 1, 2**63 - 1],
@@ -47,18 +47,18 @@ def test_exact_integer_comparisons(operator, mixed):
 
 def test_checked_weak_intermediate_and_mask_recovery():
     source = "def k(x, y):\n    if x == 0:\n        return x\n    return x + (y + 1)\n"
-    kernel = portable_kernel(source, {"x": "int64"}, "int64", constants={"y": 2**63 - 1})
+    kernel = menudet_kernel(source, {"x": "int64"}, "int64", constants={"y": 2**63 - 1})
     zeros = np.zeros(2, dtype="int64")
     np.testing.assert_array_equal(kernel.evaluate_block({"x": zeros}), zeros)
     active = np.array([0, 1], dtype="int64")
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         kernel.evaluate_block({"x": active})
     kernel.evaluate_block({"x": active}, valid_mask=np.array([True, False]))
     np.testing.assert_array_equal(kernel.evaluate_block({"x": zeros}), zeros)
 
 
 @pytest.mark.parametrize("max_iter", [0, 1, 16, 64])
-def test_mandelbrot_portable_jit(max_iter):
+def test_mandelbrot_menudet_jit(max_iter):
     # Same per-pixel algorithm as bench/ndarray/jit-dsl-mandelbrot.py.
     source = """def k(cr, ci, max_iter):
     zr = 0.0
@@ -75,8 +75,8 @@ def test_mandelbrot_portable_jit(max_iter):
 """
     signature = {"cr": "float64", "ci": "float64"}
     constants = {"max_iter": max_iter}
-    kernel = portable_kernel(source, signature, "int64", constants=constants)
-    reference = portable_kernel(source, signature, "int64", constants=constants, jit=False)
+    kernel = menudet_kernel(source, signature, "int64", constants=constants)
+    reference = menudet_kernel(source, signature, "int64", constants=constants, jit=False)
     cr, ci = np.meshgrid(np.linspace(-2, 1, 31), np.linspace(-1.5, 1.5, 23))
     inputs = {"cr": cr.ravel(), "ci": ci.ravel()}
     actual = kernel.evaluate_block(inputs)
@@ -94,7 +94,7 @@ def test_mandelbrot_portable_jit(max_iter):
         zi = np.where(active, new_zi, zi)
         n = np.where(active, n + 1, n)
     np.testing.assert_array_equal(actual.reshape(cr.shape), n)
-    restored = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
+    restored = blosc2.MenudetKernel.from_json(kernel.to_json(), jit=True)
     np.testing.assert_array_equal(restored.evaluate_block(inputs), expected)
     # Pyodide's single-threaded runtime still qualifies values and round trips.
     if sys.platform != "emscripten":
@@ -105,7 +105,7 @@ def test_mandelbrot_portable_jit(max_iter):
 
 def test_while_limit_is_invocation_local(monkeypatch):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
-    kernel = portable_kernel(
+    kernel = menudet_kernel(
         "def k(x):\n    i = 0\n    while i < x:\n        i = i + 1\n    return i\n",
         {"x": "int64"},
         "int64",
@@ -113,7 +113,7 @@ def test_while_limit_is_invocation_local(monkeypatch):
     values = np.array([0, 3], dtype="int64")
     np.testing.assert_array_equal(kernel.evaluate_block({"x": values}), values)
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "2")
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         kernel.evaluate_block({"x": values})
     kernel.evaluate_block({"x": values}, valid_mask=np.array([True, False]))
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
@@ -126,8 +126,8 @@ def test_checked_cast_boundaries(dtype, cast):
     output = "int64" if cast == "int" else cast
     source = f"def k(x, enabled):\n    if enabled:\n        return {cast}(x)\n    return 0\n"
     signature = {"x": dtype, "enabled": "bool"}
-    kernel = portable_kernel(source, signature, output)
-    reference = portable_kernel(source, signature, output, jit=False)
+    kernel = menudet_kernel(source, signature, output)
+    reference = menudet_kernel(source, signature, output, jit=False)
     limits = np.iinfo(output)
     edges = [0, -0.0, 1.75, -1.75, float(limits.min), float(limits.max), np.inf, -np.inf, np.nan]
     for value in edges:
@@ -135,8 +135,8 @@ def test_checked_cast_boundaries(dtype, cast):
         inputs = {"x": x, "enabled": np.ones(2, dtype=bool)}
         try:
             expected, expected_status = reference.evaluate_block(inputs, return_status=True)
-        except blosc2.PortableArtifactError:
-            with pytest.raises(blosc2.PortableArtifactError):
+        except blosc2.MenudetError:
+            with pytest.raises(blosc2.MenudetError):
                 kernel.evaluate_block(inputs)
         else:
             actual, status = kernel.evaluate_block(inputs, return_status=True)
@@ -153,8 +153,8 @@ def test_checked_cast_boundaries(dtype, cast):
 )
 def test_integer_builtins(dtype, function):
     source = f"def k(x):\n    return {function}(x)\n"
-    kernel = portable_kernel(source, {"x": dtype}, dtype)
-    reference = portable_kernel(source, {"x": dtype}, dtype, jit=False)
+    kernel = menudet_kernel(source, {"x": dtype}, dtype)
+    reference = menudet_kernel(source, {"x": dtype}, dtype, jit=False)
     limits = np.iinfo(dtype)
     inputs = {"x": np.array([limits.min, 0, 1, limits.max], dtype=dtype)}
     actual, status = kernel.evaluate_block(inputs, return_status=True)
@@ -167,8 +167,8 @@ def test_integer_builtins(dtype, function):
 def test_integer_combinatorial_math(expression):
     signature = {"x": "int32", "y": "int32"}
     source = f"def k(x, y):\n    return {expression}\n"
-    kernel = portable_kernel(source, signature, "int32")
-    reference = portable_kernel(source, signature, "int32", jit=False)
+    kernel = menudet_kernel(source, signature, "int32")
+    reference = menudet_kernel(source, signature, "int32", jit=False)
     inputs = {"x": np.array([0, 3, 5], dtype="int32"), "y": np.array([0, 1, 2], dtype="int32")}
     assert kernel.evaluate_block(inputs).tobytes() == reference.evaluate_block(inputs).tobytes()
 
@@ -178,8 +178,8 @@ def test_integer_combinatorial_math(expression):
 def test_multi_operand_math(dtype, expression):
     signature = {"x": dtype, "y": dtype}
     source = f"def k(x, y):\n    return {expression}\n"
-    kernel = portable_kernel(source, signature, dtype)
-    reference = portable_kernel(source, signature, dtype, jit=False)
+    kernel = menudet_kernel(source, signature, dtype)
+    reference = menudet_kernel(source, signature, dtype, jit=False)
     inputs = {
         "x": np.array([0, -0.0, 1 + 2**-23, np.inf, np.nan], dtype=dtype),
         "y": np.array([1, -1, 1 - 2**-23, 0, 1], dtype=dtype),
@@ -194,13 +194,13 @@ def test_multi_operand_math(dtype, expression):
 def test_computed_weak_capture_checks(capture):
     source = "def k(x, c):\n    if x == 0:\n        return x\n    return x + (c + 1)\n"
     constants = {"c": capture}
-    kernel = portable_kernel(source, {"x": "int8"}, "int8", constants=constants)
-    reference = portable_kernel(source, {"x": "int8"}, "int8", constants=constants, jit=False)
+    kernel = menudet_kernel(source, {"x": "int8"}, "int8", constants=constants)
+    reference = menudet_kernel(source, {"x": "int8"}, "int8", constants=constants, jit=False)
     inputs = {"x": np.array([0, 1], dtype="int8")}
     try:
         expected = reference.evaluate_block(inputs)
-    except blosc2.PortableArtifactError:
-        with pytest.raises(blosc2.PortableArtifactError):
+    except blosc2.MenudetError:
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block(inputs)
     else:
         assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
@@ -211,13 +211,13 @@ def test_computed_weak_capture_checks(capture):
 @pytest.mark.parametrize("capture", [1.75, -1.75, 127.0, 128.0, np.inf, np.nan])
 def test_floating_weak_capture_conversion(capture):
     source = "def k(x, c):\n    if x == 0:\n        return x\n    return x + int8(c)\n"
-    kernel = portable_kernel(source, {"x": "int8"}, "int8", constants={"c": capture})
-    reference = portable_kernel(source, {"x": "int8"}, "int8", constants={"c": capture}, jit=False)
+    kernel = menudet_kernel(source, {"x": "int8"}, "int8", constants={"c": capture})
+    reference = menudet_kernel(source, {"x": "int8"}, "int8", constants={"c": capture}, jit=False)
     inputs = {"x": np.array([0, 1], dtype="int8")}
     try:
         expected = reference.evaluate_block(inputs)
-    except blosc2.PortableArtifactError:
-        with pytest.raises(blosc2.PortableArtifactError):
+    except blosc2.MenudetError:
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block(inputs)
     else:
         assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
@@ -231,8 +231,8 @@ def test_checked_expression_short_circuit(expression):
     output = "int64" if expression.startswith("where") else "bool"
     source = f"def k(x, y):\n    return {expression}\n"
     signature = {"x": "float64", "y": "float64"}
-    kernel = portable_kernel(source, signature, output)
-    reference = portable_kernel(source, signature, output, jit=False)
+    kernel = menudet_kernel(source, signature, output)
+    reference = menudet_kernel(source, signature, output, jit=False)
     inputs = {"x": np.array([-1, 1], dtype="float64"), "y": np.array([np.nan, 2], dtype="float64")}
     actual, status = kernel.evaluate_block(inputs, return_status=True)
     expected, reference_status = reference.evaluate_block(inputs, return_status=True)
@@ -243,13 +243,13 @@ def test_checked_expression_short_circuit(expression):
 def test_computed_capture_cache_reuse():
     source = "def k(x, c):\n    return x + (c + 1)\n"
     kernels = [
-        (portable_kernel(source, {"x": "int8"}, "int8", constants={"c": value}), value)
+        (menudet_kernel(source, {"x": "int8"}, "int8", constants={"c": value}), value)
         for value in (1, 7, -3, 1)
     ]
     x = np.array([0, 1, 2], dtype="int8")
     for kernel, value in reversed(kernels):
         np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), x + value + 1)
-        restored = blosc2.PortableKernel.from_json(kernel.to_json(), jit=True)
+        restored = blosc2.MenudetKernel.from_json(kernel.to_json(), jit=True)
         np.testing.assert_array_equal(restored.evaluate_block({"x": x}), x + value + 1)
 
 
@@ -271,13 +271,13 @@ def test_computed_capture_cache_reuse():
 def test_inline_weak_arithmetic_boundaries(expression, c, d):
     source = f"def k(x, c, d):\n    if x == 0:\n        return x\n    return x + ({expression})\n"
     constants = {"c": c, "d": d}
-    kernel = portable_kernel(source, {"x": "int64"}, "int64", constants=constants)
-    reference = portable_kernel(source, {"x": "int64"}, "int64", constants=constants, jit=False)
+    kernel = menudet_kernel(source, {"x": "int64"}, "int64", constants=constants)
+    reference = menudet_kernel(source, {"x": "int64"}, "int64", constants=constants, jit=False)
     inputs = {"x": np.array([0, 1], dtype="int64")}
     try:
         expected = reference.evaluate_block(inputs)
-    except blosc2.PortableArtifactError:
-        with pytest.raises(blosc2.PortableArtifactError):
+    except blosc2.MenudetError:
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block(inputs)
     else:
         assert kernel.evaluate_block(inputs).tobytes() == expected.tobytes()
@@ -300,8 +300,8 @@ def test_inline_weak_arithmetic_boundaries(expression, c, d):
 def test_serial_floating_reduction_jit(dtype, output, expression):
     source = f"def k(x, y):\n    return {expression}\n"
     signature = {"x": dtype, "y": dtype}
-    kernel = portable_kernel(source, signature, output, cardinality="block_scalar")
-    reference = portable_kernel(source, signature, output, jit=False, cardinality="block_scalar")
+    kernel = menudet_kernel(source, signature, output, cardinality="block_scalar")
+    reference = menudet_kernel(source, signature, output, jit=False, cardinality="block_scalar")
     for values in ([1e16, 1, -1e16, 3], [np.inf, 1, -np.inf, 3], [1, np.nan, 2, 3], [-0.0, 1, 0, 3], []):
         x = np.array(values, dtype=dtype)
         inputs = {"x": x, "y": x}
@@ -325,8 +325,8 @@ def test_serial_floating_reduction_jit(dtype, output, expression):
 @pytest.mark.parametrize("expression", ["block_sum(x)", "block_prod(x)"])
 def test_checked_integer_reductions_jit(expression):
     source = f"def k(x):\n    return {expression}\n"
-    kernel = portable_kernel(source, {"x": "int64"}, "int64", cardinality="block_scalar")
-    with pytest.raises(blosc2.PortableArtifactError):
+    kernel = menudet_kernel(source, {"x": "int64"}, "int64", cardinality="block_scalar")
+    with pytest.raises(blosc2.MenudetError):
         kernel.evaluate_block({"x": np.array([2**63 - 1, 2], dtype="int64")})
 
 
@@ -347,8 +347,8 @@ def test_checked_integer_reductions_jit(expression):
 )
 def test_scalar_reduction_recipes(dtype, output, body):
     source = f"def k(x):\n    {body}\n"
-    kernel = portable_kernel(source, {"x": dtype}, output, cardinality="block_scalar")
-    reference = portable_kernel(source, {"x": dtype}, output, jit=False, cardinality="block_scalar")
+    kernel = menudet_kernel(source, {"x": dtype}, output, cardinality="block_scalar")
+    reference = menudet_kernel(source, {"x": dtype}, output, jit=False, cardinality="block_scalar")
     for values in (
         [1e16, 1, -1e16, 3],
         [np.inf, 1, -np.inf, 3],
@@ -381,7 +381,7 @@ def test_scalar_checked_operand_order_and_recovery(first):
     expression = f"{cast} + {reduction}" if first else f"{reduction} + {cast}"
     source = f"def k(x, c):\n    return {expression}\n"
     kernels = [
-        portable_kernel(
+        menudet_kernel(
             source,
             {"x": "float64"},
             "float64",
@@ -393,12 +393,12 @@ def test_scalar_checked_operand_order_and_recovery(first):
     ]
     errors = []
     for kernel in kernels:
-        with pytest.raises(blosc2.PortableArtifactError) as failure:
+        with pytest.raises(blosc2.MenudetError) as failure:
             kernel.evaluate_block({"x": np.array([-1.0, 4.0])})
         errors.append(failure.value)
     assert errors[0].status == errors[1].status
     # Checked status is invocation-local; subsequent calls still report the error.
-    with pytest.raises(blosc2.PortableArtifactError) as repeated:
+    with pytest.raises(blosc2.MenudetError) as repeated:
         kernels[0].evaluate_block({"x": np.array([1.0, 4.0])})
     assert repeated.value.status == errors[0].status
 
@@ -406,12 +406,12 @@ def test_scalar_checked_operand_order_and_recovery(first):
 @pytest.mark.parametrize("cast", ["int8", "uint8", "int64", "uint64"])
 def test_scalar_final_checked_cast_and_recovery(cast):
     source = f"def k(x):\n    s = block_sum(x)\n    return {cast}(s)\n"
-    kernel = portable_kernel(source, {"x": "float64"}, cast, cardinality="block_scalar")
-    reference = portable_kernel(source, {"x": "float64"}, cast, jit=False, cardinality="block_scalar")
+    kernel = menudet_kernel(source, {"x": "float64"}, cast, cardinality="block_scalar")
+    reference = menudet_kernel(source, {"x": "float64"}, cast, jit=False, cardinality="block_scalar")
     for value in (np.nan, np.inf, 1e100):
         errors = []
         for k in (kernel, reference):
-            with pytest.raises(blosc2.PortableArtifactError) as failure:
+            with pytest.raises(blosc2.MenudetError) as failure:
                 k.evaluate_block({"x": np.array([value])})
             errors.append(failure.value)
         assert errors[0].status == errors[1].status
@@ -421,10 +421,10 @@ def test_scalar_final_checked_cast_and_recovery(cast):
 @pytest.mark.parametrize("select", [True, False])
 def test_scalar_lazy_reduction_with_capture(select):
     source = "def k(x, select):\n    return where(select, block_mean(sqrt(x)), 7.0)\n"
-    kernel = portable_kernel(
+    kernel = menudet_kernel(
         source, {"x": "float64"}, "float64", constants={"select": select}, cardinality="block_scalar"
     )
-    reference = portable_kernel(
+    reference = menudet_kernel(
         source,
         {"x": "float64"},
         "float64",
@@ -454,17 +454,17 @@ def test_scalar_lazy_reduction_with_capture(select):
 )
 def test_scalar_recipes_outside_scope_keep_fallback(body):
     artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
-        {"x": "float64"}, "float64", version="1.0", cardinality="block_scalar"
+        {"x": "float64"}, "float64", version="0.1", cardinality="block_scalar"
     )
-    assert not blosc2.PortableKernel.from_json(artifact, jit=True).has_jit
+    assert not blosc2.MenudetKernel.from_json(artifact, jit=True).has_jit
 
 
 def test_scalar_mean_logical_context():
     source = "def k(x):\n    s = block_mean(float64(_flat_idx))\n    return s + 1\n"
     artifact = blosc2.DSLKernel.from_source(source).export(
-        {"x": "float64"}, "float64", version="1.0", cardinality="block_scalar", ndim=1
+        {"x": "float64"}, "float64", version="0.1", cardinality="block_scalar", ndim=1
     )
-    kernels = [blosc2.PortableKernel.from_json(artifact, jit=jit) for jit in (True, False)]
+    kernels = [blosc2.MenudetKernel.from_json(artifact, jit=jit) for jit in (True, False)]
     oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=True)
     assert kernels[0].has_jit == oracle.has_jit
     for mask in (None, np.array([True, False, True]), np.zeros(3, dtype=bool)):
@@ -500,7 +500,7 @@ def test_scalar_mean_logical_context():
 def test_multiple_reductions_and_scalar_flow(dtype, body):
     source = f"def k(x):\n    {body}\n"
     kernels = [
-        portable_kernel(source, {"x": dtype}, dtype, jit=jit, cardinality="block_scalar")
+        menudet_kernel(source, {"x": dtype}, dtype, jit=jit, cardinality="block_scalar")
         for jit in (True, False)
     ]
     for values in ([1, 2, 3], [-1, -2, -3], [0, 0, 0], [np.inf, -np.inf], [np.nan, 1], []):
@@ -510,7 +510,7 @@ def test_multiple_reductions_and_scalar_flow(dtype, body):
             for kernel in kernels:
                 try:
                     results.append(kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True))
-                except blosc2.PortableArtifactError as error:
+                except blosc2.MenudetError as error:
                     errors.append(error.status)
             if errors:
                 assert len(errors) == 2
@@ -531,7 +531,7 @@ def test_integer_reduction_recipes(dtype, op, mapped):
     source = f"def k(x):\n    s = block_{op}({operand})\n    return s\n"
     output = "uint64" if dtype.startswith("uint") else "int64"
     kernels = [
-        portable_kernel(source, {"x": dtype}, output, jit=jit, cardinality="block_scalar")
+        menudet_kernel(source, {"x": dtype}, output, jit=jit, cardinality="block_scalar")
         for jit in (True, False)
     ]
     cases = [[0, 1, 1], [1, 2, 3], []]
@@ -545,7 +545,7 @@ def test_integer_reduction_recipes(dtype, op, mapped):
             for kernel in kernels:
                 try:
                     results.append(kernel.evaluate_block({"x": x}, valid_mask=mask, return_status=True))
-                except blosc2.PortableArtifactError as error:
+                except blosc2.MenudetError as error:
                     errors.append(error.status)
             if errors:
                 assert len(errors) == 2
@@ -560,7 +560,7 @@ def test_integer_reduction_recipes(dtype, op, mapped):
 @pytest.mark.parametrize("dtype", ["float32", "float64", "uint32", "uint64"])
 def test_checked_range_bounds(dtype):
     source = "def k(x):\n    s = 0\n    for i in range(x):\n        s = s + i\n    return s\n"
-    kernels = [portable_kernel(source, {"x": dtype}, "int64", jit=jit) for jit in (True, False)]
+    kernels = [menudet_kernel(source, {"x": dtype}, "int64", jit=jit) for jit in (True, False)]
     x = np.array([0, 1, 3, 4], dtype=dtype)
     for kernel in kernels:
         np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), [0, 0, 3, 6])
@@ -571,7 +571,7 @@ def test_checked_range_bounds(dtype):
     )
     for value in invalid:
         for kernel in kernels:
-            with pytest.raises(blosc2.PortableArtifactError):
+            with pytest.raises(blosc2.MenudetError):
                 kernel.evaluate_block({"x": np.array([value], dtype=dtype)})
             np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), [0, 0, 3, 6])
     if dtype.startswith("float"):
@@ -591,7 +591,7 @@ def test_checked_range_bounds(dtype):
 )
 def test_definite_assignment_at_live_joins(body):
     source = f"def k(x):\n    {body}\n"
-    kernels = [portable_kernel(source, {"x": "float64"}, "float64", jit=jit) for jit in (True, False)]
+    kernels = [menudet_kernel(source, {"x": "float64"}, "float64", jit=jit) for jit in (True, False)]
     x = np.array([-2.0, 0.0, 3.0])
     results = [kernel.evaluate_block({"x": x}, return_status=True) for kernel in kernels]
     np.testing.assert_array_equal(results[0][0], results[1][0])
@@ -604,12 +604,12 @@ def test_scalar_elif_reduction_participation():
         "    elif block_sum(int64(x * 1e100)) > 0:\n        return s\n    return s\n"
     )
     kernels = [
-        portable_kernel(source, {"x": "float64"}, "float64", jit=jit, cardinality="block_scalar")
+        menudet_kernel(source, {"x": "float64"}, "float64", jit=jit, cardinality="block_scalar")
         for jit in (True, False)
     ]
     for kernel in kernels:
         assert kernel.evaluate_block({"x": np.array([1.0, 2.0])}) == 3
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block({"x": np.array([-1.0, -2.0])})
         assert kernel.evaluate_block({"x": np.array([1.0, 2.0])}) == 3
 
@@ -618,7 +618,7 @@ def test_scalar_elif_reduction_participation():
 def test_integer_reduction_modular_map_checked_accumulator(op):
     source = f"def k(x):\n    return block_{op}(x + 1)\n"
     kernels = [
-        portable_kernel(source, {"x": "int8"}, "int64", jit=jit, cardinality="block_scalar")
+        menudet_kernel(source, {"x": "int8"}, "int64", jit=jit, cardinality="block_scalar")
         for jit in (True, False)
     ]
     for kernel in kernels:
@@ -636,19 +636,19 @@ def test_integer_reduction_modular_map_checked_accumulator(op):
 )
 def test_reductions_in_varying_branches_or_loops_still_rejected(body):
     dsl = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n")
-    with pytest.raises(blosc2.PortableArtifactError, match="not supported inside"):
-        dsl.export({"x": "float64"}, "float64", version="1.0", cardinality="block_scalar")
+    with pytest.raises(blosc2.MenudetError, match="not supported inside"):
+        dsl.export({"x": "float64"}, "float64", version="0.1", cardinality="block_scalar")
 
 
 @pytest.mark.parametrize("bounds", ["x, 5.0, 1.0", "0.0, 5.0, x", "5.0, 0.0, x"])
 def test_checked_range_start_and_step(bounds):
     source = f"def k(x):\n    s = 0\n    for i in range({bounds}):\n        s = s + i\n    return s\n"
-    kernels = [portable_kernel(source, {"x": "float64"}, "int64", jit=jit) for jit in (True, False)]
+    kernels = [menudet_kernel(source, {"x": "float64"}, "int64", jit=jit) for jit in (True, False)]
     x = np.array([1.9, -1.9, 2.1])
     np.testing.assert_array_equal(kernels[0].evaluate_block({"x": x}), kernels[1].evaluate_block({"x": x}))
     for value in (np.nan, np.inf, 1e100, *([0.9] if bounds.endswith("x") else [])):
         for kernel in kernels:
-            with pytest.raises(blosc2.PortableArtifactError):
+            with pytest.raises(blosc2.MenudetError):
                 kernel.evaluate_block({"x": np.array([value])})
             # Nonparticipating invalid bounds never execute conversion/step checks.
             kernel.evaluate_block({"x": np.array([value, 1.0])}, valid_mask=np.array([False, True]))
@@ -657,14 +657,14 @@ def test_checked_range_start_and_step(bounds):
 def test_explicit_modular_range_cast_remains_explicit():
     source = "def k(x):\n    s = 0\n    for i in range(int64(x)):\n        s = s + i\n    return s\n"
     for jit in (True, False):
-        kernel = portable_kernel(source, {"x": "uint64"}, "int64", jit=jit)
+        kernel = menudet_kernel(source, {"x": "uint64"}, "int64", jit=jit)
         assert kernel.evaluate_block({"x": np.array([2**64 - 1], dtype="uint64")}) == 0
 
 
 def test_possible_empty_loop_local_still_falls_back():
     source = "def k(x):\n    for i in range(x):\n        y = i\n    return y\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64", version="1.0")
-    assert not blosc2.PortableKernel.from_json(artifact, jit=True).has_jit
+    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64", version="0.1")
+    assert not blosc2.MenudetKernel.from_json(artifact, jit=True).has_jit
 
 
 @pytest.mark.parametrize(
@@ -677,8 +677,8 @@ def test_scalar_extrema_truth_recipes(dtype, op, mapped):
     operand = "where(x >= 0, x, x)" if mapped else "x"
     source = f"def k(x):\n    s = block_{op}({operand})\n    return s\n"
     output = "bool" if op in ("any", "all") else dtype
-    kernel = portable_kernel(source, {"x": dtype}, output, cardinality="block_scalar")
-    reference = portable_kernel(source, {"x": dtype}, output, jit=False, cardinality="block_scalar")
+    kernel = menudet_kernel(source, {"x": dtype}, output, cardinality="block_scalar")
+    reference = menudet_kernel(source, {"x": dtype}, output, jit=False, cardinality="block_scalar")
     if dtype.startswith("float"):
         cases = [[-0.0, 0.0, -0.0], [1, np.nan, 2, -np.nan], [np.inf, -np.inf], [0, 0], []]
         snan = np.array([1.0, 0.0, 2.0], dtype=dtype)
@@ -697,7 +697,7 @@ def test_scalar_extrema_truth_recipes(dtype, op, mapped):
             if op in ("min", "max") and (x.size == 0 or (mask is not None and not mask.any())):
                 errors = []
                 for k in (kernel, reference):
-                    with pytest.raises(blosc2.PortableArtifactError) as failure:
+                    with pytest.raises(blosc2.MenudetError) as failure:
                         k.evaluate_block({"x": x}, valid_mask=mask)
                     errors.append(failure.value)
                 assert errors[0].status == errors[1].status
@@ -719,11 +719,11 @@ def test_scalar_extrema_truth_recipes(dtype, op, mapped):
 @pytest.mark.parametrize(("op", "values"), [("any", [1.0, -1.0]), ("all", [0.0, -1.0])])
 def test_truth_reductions_do_not_skip_late_map_errors(op, values):
     source = f"def k(x):\n    return block_{op}(int64(x))\n"
-    kernel = portable_kernel(source, {"x": "float64"}, "bool", cardinality="block_scalar")
-    reference = portable_kernel(source, {"x": "float64"}, "bool", jit=False, cardinality="block_scalar")
+    kernel = menudet_kernel(source, {"x": "float64"}, "bool", cardinality="block_scalar")
+    reference = menudet_kernel(source, {"x": "float64"}, "bool", jit=False, cardinality="block_scalar")
     x = np.array([values[0], np.nan])
     for k in (kernel, reference):
-        with pytest.raises(blosc2.PortableArtifactError):
+        with pytest.raises(blosc2.MenudetError):
             k.evaluate_block({"x": x})
         assert k.evaluate_block({"x": np.array(values)}) == (op == "any")
 
@@ -732,7 +732,7 @@ def test_truth_reductions_do_not_skip_late_map_errors(op, values):
 def test_truth_reductions_keep_late_fp_status(op, values):
     source = f"def k(x):\n    return block_{op}(sqrt(x))\n"
     kernels = [
-        portable_kernel(source, {"x": "float64"}, "bool", jit=jit, cardinality="block_scalar")
+        menudet_kernel(source, {"x": "float64"}, "bool", jit=jit, cardinality="block_scalar")
         for jit in (True, False)
     ]
     results = [k.evaluate_block({"x": np.array(values)}, return_status=True) for k in kernels]
@@ -746,7 +746,7 @@ def test_truth_reductions_keep_late_fp_status(op, values):
 def test_lazy_extrema_do_not_raise_for_unselected_empty_group(op):
     source = f"def k(x, select):\n    return where(select, block_{op}(x), 7.0)\n"
     for jit in (True, False):
-        kernel = portable_kernel(
+        kernel = menudet_kernel(
             source,
             {"x": "float64"},
             "float64",
@@ -765,7 +765,7 @@ def test_extrema_truth_uniform_capture(op, capture):
     source = f"def k(x, c):\n    return block_{op}(c)\n"
     output = "bool" if op in ("any", "all") else "float64"
     kernels = [
-        portable_kernel(
+        menudet_kernel(
             source,
             {"x": "float64"},
             output,
@@ -778,7 +778,7 @@ def test_extrema_truth_uniform_capture(op, capture):
     for mask in (None, np.array([True, False, True]), np.zeros(3, dtype=bool)):
         if op in ("min", "max") and mask is not None and not mask.any():
             for kernel in kernels:
-                with pytest.raises(blosc2.PortableArtifactError):
+                with pytest.raises(blosc2.MenudetError):
                     kernel.evaluate_block({"x": np.ones(3)}, valid_mask=mask)
             continue
         results = [

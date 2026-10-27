@@ -32,7 +32,7 @@ def preflight_persistence(obj):
 
         msgpack_packb(obj._get_user_vlmeta())
     elif isinstance(obj, blosc2.CTable):
-        obj._preflight_portable_persistence()
+        obj._preflight_menudet_persistence()
     else:
         schunk = getattr(obj, "schunk", obj if isinstance(obj, blosc2.SChunk) else None)
         if schunk is not None:
@@ -72,9 +72,9 @@ def read_b2object_user_vlmeta(obj) -> dict[str, Any]:
 
 
 def encode_operand_reference(obj, *, base_path=None):
-    from blosc2.portable_lazy import PortableLazyArray
+    from blosc2.menudet_lazy import MenudetLazyArray
 
-    if isinstance(obj, PortableLazyArray | blosc2.LazyExpr | blosc2.LazyUDF):
+    if isinstance(obj, MenudetLazyArray | blosc2.LazyExpr | blosc2.LazyUDF):
         return encode_b2object_payload(obj)
     if type(obj) is blosc2.NDField:
         parent = blosc2.Ref.from_object(obj.ndarr).to_dict()
@@ -119,11 +119,11 @@ def decode_operand_reference(payload, *, base_path=None, deserialize="safe"):
 
 
 def encode_b2object_payload(obj) -> dict[str, Any] | None:
-    from blosc2.portable_lazy import PortableLazyArray
+    from blosc2.menudet_lazy import MenudetLazyArray
 
-    if isinstance(obj, PortableLazyArray):
+    if isinstance(obj, MenudetLazyArray):
         return {
-            "kind": "portable",
+            "kind": "menudet",
             "version": _B2OBJECT_VERSION,
             "artifact": obj.kernel.to_json(),
             "shape": list(obj._domain),
@@ -141,9 +141,9 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
             "operands": {key: encode_operand_reference(value) for key, value in operands.items()},
         }
     if isinstance(obj, blosc2.LazyUDF):
-        from blosc2.portable_lazy import portable_from_lazyudf
+        from blosc2.menudet_lazy import menudet_from_lazyudf
 
-        return encode_b2object_payload(portable_from_lazyudf(obj))
+        return encode_b2object_payload(menudet_from_lazyudf(obj))
     return None
 
 
@@ -157,13 +157,13 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carri
     if kind == "c2array":
         ref = blosc2.Ref.from_dict(payload)
         return ref.open(deserialize=deserialize)
-    if kind == "portable":
-        kernel = blosc2.PortableKernel.from_json(payload["artifact"])
+    if kind == "menudet":
+        kernel = blosc2.MenudetKernel.from_json(payload["artifact"])
         operands, missing = decode_operand_mapping(
             payload["operands"], base_path=carrier_path, deserialize=deserialize
         )
         if missing:
-            raise FileNotFoundError(f"Missing portable operands: {missing}")
+            raise FileNotFoundError(f"Missing Menudet operands: {missing}")
         return kernel.lazy(operands, shape=payload["shape"], partitions=payload["partitions"])
     if kind == "remote_array":
         if carrier is None:
@@ -211,7 +211,7 @@ def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="saf
     missing_ops = {}
     for key, value in operands_payload.items():
         try:
-            if value.get("kind") in {"portable", "lazyexpr", "lazyudf"}:
+            if value.get("kind") in {"menudet", "lazyexpr", "lazyudf"}:
                 operands[key] = decode_b2object_payload(
                     value, carrier_path=base_path, deserialize=deserialize
                 )
@@ -249,7 +249,7 @@ def _preflight_operand_recipes(mapping, active=()):
             if type(expression) is not str:
                 raise TypeError("Structured LazyExpr payload requires a string 'expression'")
             parse_expression(expression)
-        if kind in {"lazyexpr", "portable"}:
+        if kind in {"lazyexpr", "menudet"}:
             _preflight_operand_recipes(payload.get("operands"), active)
 
 

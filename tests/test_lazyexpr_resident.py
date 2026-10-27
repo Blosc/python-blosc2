@@ -24,7 +24,7 @@ def parallel_runtime(runtime):
         pytest.skip("Parallel graph execution requires host threads")
     plan = NativeGraph.from_expression("x + 1", {"x": np.dtype("float64")}, jit=True)
     if not plan.has_jit:
-        pytest.skip("Parallel graph execution requires an available portable JIT backend")
+        pytest.skip("Parallel graph execution requires an available Menudet JIT backend")
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
@@ -38,7 +38,7 @@ def test_native_graph_parallel(parallel_runtime, dtype, expression):
         np.testing.assert_array_equal(expr[:], expected)
     report = expr._native_execution_report
     assert report["route"] == "parallel-resident"
-    assert report["backend"] == "portable-jit"
+    assert report["backend"] == "menudet-jit"
     assert report["threads"] == 4
     assert report["input_materialization_bytes"] == 0
     assert report["normalization_bytes"] == 0
@@ -145,7 +145,7 @@ def test_resident_kernel_retains_plan_without_reimport(runtime, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Resident map reimported a validated graph artifact")
 
-    monkeypatch.setattr(blosc2.PortableKernel, "from_json", forbidden)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", forbidden)
     kernel = resident_map_kernel(plan)
     assert kernel.to_json() == plan.map_json()
     resident_map_kernel.cache_clear()

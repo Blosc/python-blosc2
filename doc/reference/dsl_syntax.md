@@ -4,8 +4,8 @@ This is the practical reference for the DSL used by `@blosc2.dsl_kernel`
 functions (and checked by `blosc2.validate_dsl()`).
 It focuses on what works today and the most common gotchas.
 The portable subset is named **Menudet**, a little language for portable
-computation on arrays and tables. See the [Menudet reference](portable_dsl.rst)
-for the Menudet 1.0 draft contract and numerical rules. This page also documents ordinary full-DSL features;
+computation on arrays and tables. See the [Menudet reference](menudet.rst)
+for the Menudet 0.1 beta contract and numerical rules. This page also documents ordinary full-DSL features;
 acceptance here does not imply portability.
 For usage walkthroughs and end-to-end examples, see the
 [LazyArray UDF DSL kernels tutorial](../tutorials/03.lazyarray-udf-kernels.ipynb).
@@ -45,15 +45,15 @@ available on this path; use native function spellings such as `sin(x)`.
 
 This is separate from the existing Python-based persistence reconstruction path.
 Menudet artifact export/import is still under development. The full native
-language reference and experimental Menudet profile live in miniexpr's
-`doc/dsl-syntax.md` and `doc/dsl-spec/1.0.md`, respectively. The Menudet profile
-and artifact contract are experimental drafts; see [Menudet artifacts](portable_dsl.rst)
+language reference and Menudet profile live in miniexpr's
+`doc/dsl-syntax.md` and `doc/dsl-spec/0.1.md`, respectively. The Menudet profile
+and artifact contract are beta; see [Menudet artifacts](menudet.rst)
 for the release boundary and legacy Python persistence policy.
 
 ### Experimental Menudet validation
 
 ```python
-info = blosc2.validate_portable_dsl(source, {"x": "float64"}, "float64")
+info = blosc2.validate_menudet(source, {"x": "float64"}, "float64")
 if not info["valid"]:
     print(info["status"], info["line"], info["column"], info["error"])
 ```
@@ -64,16 +64,16 @@ invokes a JIT compiler. It reports version, signature, source, and unsupported
 feature errors separately. Potential runtime errors, including missing returns
 on some paths, do not automatically invalidate a program.
 
-Menudet 1.0 admits Boolean, standard integer widths, float32/float64 and fixed strings,
+Menudet 0.1 beta admits Boolean, standard integer widths, float32/float64,
+complex64/complex128 and fixed strings,
 NumPy-style numeric typing/arithmetic, block reductions and explicit ND context.
 It is separate from the ordinary full language described below.
 Validation is not a sandbox, backend-support probe, or a guarantee about
-arbitrary runtime data. Older native builds report `runtime_unsupported` rather
-than attempting Python validation. Native dependency integration for this
-experimental API is pending; development builds can use the local miniexpr source
-via CMake's `FETCHCONTENT_SOURCE_DIR_MINIEXPR` override.
+arbitrary runtime data. Python-Blosc2 bundles the paired native implementation;
+custom source overrides must provide the same Menudet 0.1 contract. Validation
+never falls back to executing Python.
 
-### Menudet artifact export and import (experimental)
+### Menudet artifact export and import (beta)
 
 Export with explicit input/output dtypes. Scalar globals and closure values are
 snapshotted into typed manifest constants, not inserted as Python literals:
@@ -89,7 +89,7 @@ def scaled(x):
 
 artifact = scaled.export({"x": "float64"}, "float64")
 SCALE = 99.0  # Does not change the saved artifact.
-kernel = blosc2.PortableKernel.from_json(artifact, jit=False)
+kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
 values = kernel.evaluate({"x": np.arange(4, dtype=np.float64)})
 # values: array([0., 2., 4., 6.])
 ```
@@ -128,14 +128,15 @@ operand-driven before output conversion. Manifest float constants preserve
 IEEE bit patterns, including signed zero and non-finite values; integer constants
 are range-checked decimal strings. Comments and retained native pragmas survive
 parameterization. Required strict FP semantics are independent of host defaults;
-compiler pragmas remain preferences. Draft 1.0 currently always uses the typed interpreter.
+compiler pragmas remain preferences. Supported kernels can use JIT; otherwise they
+use the typed interpreter unless JIT is required.
 
 Runtime arrays are bound by name in any mapping order and must have the exact
 declared logical dtype and common shape. The adapter converts endian order,
 alignment, and strides, but does not broadcast arrays or silently change their
 dtype. Constant-only kernels require `evaluate({}, shape=(...))`; empty
 elementwise arrays validate bindings without execution, whereas scalar reductions
-obey their specified empty identities/errors. `PortableArtifactError` provides `status`, `native_status`, `line`, and
+obey their specified empty identities/errors. `MenudetError` provides `status`, `native_status`, `line`, and
 `column` for malformed artifacts, unsupported requirements, source, binding, and
 evaluation failures. The artifact format is not a sandbox or an arbitrary-input
 numerical-correctness guarantee.
@@ -152,8 +153,8 @@ conda run -n blosc2 python -m pip install -e . --no-build-isolation --no-deps \
 The optional adapter links pinned yyjson only when enabled. Builds without the
 adapter remain usable and report `NotImplementedError` for artifact operations,
 without attempting Python validation/execution as a fallback. The native candidate
-format and shared fixtures live in miniexpr's `doc/dsl-spec/artifact-1.0.md` and
-`tests/portable-artifacts/`.
+format and shared fixtures live in miniexpr's `doc/dsl-spec/artifact-0.1.md` and
+`tests/menudet-artifacts/`.
 
 `@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
 `if`/`for`/`while` and that compiles under this grammar is dispatched here

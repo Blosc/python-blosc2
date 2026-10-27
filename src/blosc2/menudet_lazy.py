@@ -1,4 +1,4 @@
-"""Native portable kernels over immutable logical partitions, independent of storage tiles."""
+"""Native Menudet kernels over immutable logical partitions, independent of storage tiles."""
 
 from itertools import product
 from math import prod
@@ -9,13 +9,13 @@ import blosc2
 from blosc2.lazyexpr import LazyArray
 
 
-def portable_from_lazyudf(obj):
+def menudet_from_lazyudf(obj):
     """Preflight a newly authored DSL recipe without executing it or touching storage."""
     from blosc2.dsl_kernel import DSLKernel
-    from blosc2.portable_kernel import PortableArtifactError, PortableKernel
+    from blosc2.menudet_kernel import MenudetError, MenudetKernel
 
     if not isinstance(obj.func, DSLKernel):
-        raise TypeError("Python LazyUDF cannot be persisted; use a compliant DSLKernel or PortableKernel")
+        raise TypeError("Python LazyUDF cannot be persisted; use a compliant DSLKernel or MenudetKernel")
     schunk = getattr(obj, "schunk", None)
     if getattr(obj, "_legacy_source_recipe", False) or (
         schunk is not None
@@ -33,43 +33,43 @@ def portable_from_lazyudf(obj):
     chunks = tuple(int(n) for n in obj.chunks)
     if any(c % b for c, b in zip(chunks, partitions, strict=True)):
         raise ValueError(
-            "LazyUDF chunk boundaries split its logical block grid; use PortableKernel.lazy "
+            "LazyUDF chunk boundaries split its logical block grid; use MenudetKernel.lazy "
             "with explicit partitions"
         )
     try:
         artifact = obj.func.export(
             {name: value.dtype for name, value in inputs.items()},
             obj.dtype,
-            version="1.0",
+            version="0.1",
             constants=constants,
             ndim=len(shape),
             cardinality="elementwise",
         )
-    except PortableArtifactError as error:
+    except MenudetError as error:
         if "return cardinality" in str(error):
             raise ValueError(
                 "LazyUDF declares elementwise shape but the kernel returns a block scalar; "
-                "use DSLKernel.export(cardinality='block_scalar', version='1.0') and "
-                "PortableKernel.lazy with explicit partitions"
+                "use DSLKernel.export(cardinality='block_scalar', version='0.1') and "
+                "MenudetKernel.lazy with explicit partitions"
             ) from error
         raise
-    portable = PortableLazyArray(
-        PortableKernel.from_json(artifact, jit=False), inputs, shape=shape, partitions=partitions
+    menudet_result = MenudetLazyArray(
+        MenudetKernel.from_json(artifact, jit=False), inputs, shape=shape, partitions=partitions
     )
-    portable._set_user_vlmeta(obj._get_user_vlmeta(), sync=False)
-    return portable
+    menudet_result._set_user_vlmeta(obj._get_user_vlmeta(), sync=False)
+    return menudet_result
 
 
-class PortableLazyArray(LazyArray):
+class MenudetLazyArray(LazyArray):
     def __init__(self, kernel, inputs, *, shape=None, partitions=None):
         self.kernel = kernel
         self.inputs = dict(inputs)
         input_dtypes = kernel.input_dtypes
         if self.inputs.keys() != input_dtypes.keys():
-            raise ValueError("Portable input names disagree with native signature")
+            raise ValueError("Menudet input names disagree with native signature")
         if shape is None:
             if not self.inputs:
-                raise ValueError("Constant-only portable arrays require shape")
+                raise ValueError("Constant-only Menudet arrays require shape")
             shape = np.broadcast_shapes(*(value.shape for value in self.inputs.values()))
         self._domain = tuple(shape)
         if any(type(n) is not int or not 0 <= n <= np.iinfo(np.int64).max for n in self._domain):
@@ -82,7 +82,7 @@ class PortableLazyArray(LazyArray):
                 and np.broadcast_shapes(value.shape, self._domain) != self._domain
             ) or np.dtype(value.dtype).newbyteorder("=") != input_dtypes[name]:
                 raise ValueError(
-                    "Portable operands must broadcast to the logical domain and match native dtype"
+                    "Menudet operands must broadcast to the logical domain and match native dtype"
                 )
         self._partitions = tuple(partitions if partitions is not None else (max(n, 1) for n in self._domain))
         if len(self._partitions) != len(self._domain) or any(
@@ -169,7 +169,7 @@ class PortableLazyArray(LazyArray):
         from .storage_readers import evaluate_storage_if_eligible
 
         # Complex has no native storage shortcut yet. Use the general block
-        # path, which is also the portable-schedule fallback on wasm32.
+        # path, which is also the Menudet-schedule fallback on wasm32.
         complex_domain = self.kernel.output_dtype.kind == "c" or any(
             dtype.kind == "c" for dtype in self.kernel.input_dtypes.values()
         )
@@ -228,7 +228,7 @@ class PortableLazyArray(LazyArray):
             if isinstance(part, int):
                 index = part + size if part < 0 else part
                 if not 0 <= index < size:
-                    raise IndexError("Portable output index out of range")
+                    raise IndexError("Menudet output index out of range")
                 selected.append(np.array([index], dtype=np.intp))
                 squeeze.append(axis)
             else:
@@ -314,10 +314,10 @@ class PortableLazyArray(LazyArray):
         return self.compute(chunks=chunks, blocks=blocks, **kwargs)
 
     def sort(self, order=None):
-        raise NotImplementedError("Portable sorting is not part of the kernel contract")
+        raise NotImplementedError("Menudet sorting is not part of the kernel contract")
 
     def argsort(self, order=None):
-        raise NotImplementedError("Portable sorting is not part of the kernel contract")
+        raise NotImplementedError("Menudet sorting is not part of the kernel contract")
 
     def save(self, urlpath=None, **kwargs):
         from blosc2.b2objects import (
@@ -328,13 +328,13 @@ class PortableLazyArray(LazyArray):
         )
 
         if urlpath is None:
-            raise ValueError("A portable carrier requires urlpath")
+            raise ValueError("A Menudet carrier requires urlpath")
         payload = encode_b2object_payload(self)  # Preflight every reference before opening destination.
         from blosc2.msgpack_utils import msgpack_packb
 
         msgpack_packb(payload)
         msgpack_packb(self._get_user_vlmeta())
-        carrier = make_b2object_carrier("portable", self.shape, self.dtype, urlpath=urlpath, **kwargs)
+        carrier = make_b2object_carrier("menudet", self.shape, self.dtype, urlpath=urlpath, **kwargs)
         write_b2object_payload(carrier, payload)
         write_b2object_user_vlmeta(carrier, self._get_user_vlmeta())
         self.array, self.schunk = carrier, carrier.schunk
@@ -348,7 +348,7 @@ class PortableLazyArray(LazyArray):
         )
 
         payload = encode_b2object_payload(self)
-        carrier = make_b2object_carrier("portable", self.shape, self.dtype, **kwargs)
+        carrier = make_b2object_carrier("menudet", self.shape, self.dtype, **kwargs)
         write_b2object_payload(carrier, payload)
         write_b2object_user_vlmeta(carrier, self._get_user_vlmeta())
         return carrier.to_cframe()

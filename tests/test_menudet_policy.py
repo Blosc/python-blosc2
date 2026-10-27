@@ -73,14 +73,14 @@ def test_rejected_kernel_does_not_replace_store_value(tmp_path, route):
     udf = blosc2.lazyudf(lambda inputs, output, offset: None, (np.arange(4),), dtype="int64")
     with cls(str(tmp_path / "store.b2z"), mode="w") as store:
         store["/value"] = np.arange(4)
-        with pytest.raises(TypeError, match="PortableKernel"):
+        with pytest.raises(TypeError, match="MenudetKernel"):
             store["/value"] = udf
         np.testing.assert_array_equal(store["/value"][:], np.arange(4))
         operand = blosc2.asarray(np.arange(4), urlpath=tmp_path / "input.b2nd", mode="w")
         for body in ("print(x)\n    return x", "return callback(x)"):
             kernel = blosc2.DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
             invalid = blosc2.lazyudf(kernel, (operand,), dtype="int64")
-            with pytest.raises(blosc2.PortableArtifactError):
+            with pytest.raises(blosc2.MenudetError):
                 store["/value"] = invalid
             np.testing.assert_array_equal(store["/value"][:], np.arange(4))
         valid = blosc2.DSLKernel.from_source("def valid(x):\n    return x + 2\n")
@@ -105,7 +105,7 @@ def test_ctable_legacy_metadata_policy_before_reconstruction(monkeypatch):
     table._computed_cols = {"x": {"kind": "dsl"}}
     table._materialized_cols = {}
     with pytest.raises(TypeError, match="row-domain"):
-        table._preflight_portable_persistence()
+        table._preflight_menudet_persistence()
 
 
 @pytest.mark.parametrize("generated", [False, True])

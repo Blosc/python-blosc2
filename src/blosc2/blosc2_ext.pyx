@@ -965,24 +965,24 @@ cdef extern from *:
     #include "miniexpr.h"
     #include <stdio.h>
     #include <string.h>
-    static int b2_validate_portable_dsl(const char *source, const char *version,
+    static int b2_validate_menudet(const char *source, const char *version,
         const me_variable *inputs, int ninputs, me_dtype output_dtype,
         size_t output_itemsize, int ndim, int cardinality,
         int *line, int *column, char *message, size_t capacity) {
-    #ifdef ME_PORTABLE_DSL_VALIDATION_DESCRIPTOR_VERSION
-        if (strcmp(ME_PORTABLE_DSL_VERSION, "1.0")) {
+    #ifdef ME_MENUDET_DSL_VALIDATION_DESCRIPTOR_VERSION
+        if (strcmp(ME_MENUDET_DSL_VERSION, "0.1")) {
             *line = *column = 0;
-            snprintf(message, capacity, "installed miniexpr lacks draft 1.0 source validation");
+            snprintf(message, capacity, "installed miniexpr lacks Menudet 0.1 beta source validation");
             return -100;
         }
-        me_portable_error error = {0};
+        me_menudet_error error = {0};
         int rc;
-        me_portable_validation_descriptor descriptor = {
+        me_menudet_validation_descriptor descriptor = {
             .struct_size = sizeof(descriptor),
-            .version = ME_PORTABLE_DSL_VALIDATION_DESCRIPTOR_VERSION,
+            .version = ME_MENUDET_DSL_VALIDATION_DESCRIPTOR_VERSION,
             .output_itemsize = output_itemsize, .ndim = ndim,
-            .cardinality = (me_portable_cardinality)cardinality};
-        rc = me_validate_portable_dsl_ex(source, version, inputs, ninputs,
+            .cardinality = (me_menudet_cardinality)cardinality};
+        rc = me_validate_menudet_ex(source, version, inputs, ninputs,
                                         output_dtype, &descriptor, &error);
         *line = error.line;
         *column = error.column;
@@ -990,22 +990,22 @@ cdef extern from *:
         return rc;
     #else
         *line = *column = 0;
-        snprintf(message, capacity, "miniexpr was built without draft 1.0 source validation support");
+        snprintf(message, capacity, "miniexpr was built without Menudet 0.1 beta source validation support");
         return -100;
     #endif
     }
     """
-    int b2_validate_portable_dsl(const char *source, const char *version,
+    int b2_validate_menudet(const char *source, const char *version,
         const me_variable *inputs, int ninputs, me_dtype output_dtype,
         size_t output_itemsize, int ndim, int cardinality,
         int *line, int *column, char *message, size_t capacity)
 
 
-def validate_portable_dsl_source(source, input_dtypes, output_dtype, version, int ndim=0, int cardinality=0):
+def validate_menudet_source(source, input_dtypes, output_dtype, version, int ndim=0, int cardinality=0):
     """Native-only versioned source validation; no arrays, JIT or Python execution."""
     cdef Py_ssize_t n = len(input_dtypes)
     if n > 128:
-        raise ValueError("Too many portable DSL inputs (maximum 128)")
+        raise ValueError("Too many Menudet DSL inputs (maximum 128)")
     cdef me_variable *variables = NULL
     cdef list names = [name.encode("utf-8") for name in input_dtypes]
     cdef bytes source_bytes = source.encode("utf-8")
@@ -1030,16 +1030,16 @@ def validate_portable_dsl_source(source, input_dtypes, output_dtype, version, in
                 variables[i].dtype = _me_dtype_from_numpy_dtype(dtype)
             except TypeError:
                 variables[i].dtype = ME_AUTO
-            if version == "1.0" and variables[i].dtype in (ME_STRING, ME_BYTES):
+            if version == "0.1" and variables[i].dtype in (ME_STRING, ME_BYTES):
                 variables[i].itemsize = dtype.itemsize
         dtype = np.dtype(output_dtype)
         try:
             result_dtype = _me_dtype_from_numpy_dtype(dtype)
         except TypeError:
             result_dtype = ME_AUTO
-        if version == "1.0" and result_dtype in (ME_STRING, ME_BYTES):
+        if version == "0.1" and result_dtype in (ME_STRING, ME_BYTES):
             output_itemsize = dtype.itemsize
-        rc = b2_validate_portable_dsl(source_bytes, version_bytes, variables, <int>n,
+        rc = b2_validate_menudet(source_bytes, version_bytes, variables, <int>n,
                                       result_dtype, output_itemsize, ndim, cardinality,
                                       &line, &column, message, sizeof(message))
         statuses = {
@@ -1156,7 +1156,7 @@ cdef extern from "dsl_array_bridge.h":
     int b2_array_eval_sources(const void *, const b2_array_source *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
 
 
-cdef struct portable_prefilter_worker:
+cdef struct menudet_prefilter_worker:
     void *edge_output
     b2_artifact_buffer *bindings
     blosc2_context **decoders
@@ -1169,7 +1169,7 @@ cdef struct portable_prefilter_worker:
     size_t output_zero_fill_bytes
 
 
-cdef struct portable_prefilter_state:
+cdef struct menudet_prefilter_state:
     const void *artifact
     int ndim
     int grid_ndim
@@ -1189,7 +1189,7 @@ cdef struct portable_prefilter_state:
     c_bool chunk_owned[128]
     int ninputs
     int nworkers
-    portable_prefilter_worker *workers
+    menudet_prefilter_worker *workers
     int64_t size
     int64_t chunk_items
     int64_t block_items
@@ -1202,9 +1202,9 @@ cdef struct portable_prefilter_state:
     size_t output_zero_fill_bytes
 
 
-cdef void portable_prefilter_merge(portable_prefilter_state *state) noexcept:
+cdef void menudet_prefilter_merge(menudet_prefilter_state *state) noexcept:
     """Merge worker-local status only after synchronous compression has joined."""
-    cdef portable_prefilter_worker *worker
+    cdef menudet_prefilter_worker *worker
     cdef int tid
     state.fp_flags = 0
     state.fp_supported = 1
@@ -1229,9 +1229,9 @@ cdef extern from "fenv.h":
     int fesetenv(const fenv_t *) noexcept nogil
 
 
-cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept nogil:
-    cdef portable_prefilter_state *state = <portable_prefilter_state *>params.user_data
-    cdef portable_prefilter_worker *worker = &state.workers[params.tid]
+cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nogil:
+    cdef menudet_prefilter_state *state = <menudet_prefilter_state *>params.user_data
+    cdef menudet_prefilter_worker *worker = &state.workers[params.tid]
     cdef b2_artifact_descriptor descriptor
     cdef b2_artifact_error error
     cdef b2_artifact_fp_status fp
@@ -1288,7 +1288,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
             if worker.edge_output == NULL:
                 worker.status = -6
                 worker.error_block = block_id
-                strcpy(worker.error.message, "Cannot allocate portable prefilter edge output")
+                strcpy(worker.error.message, "Cannot allocate Menudet prefilter edge output")
                 return -1
             destination = worker.edge_output
         memset(&descriptor, 0, sizeof(descriptor))
@@ -1305,12 +1305,12 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
             descriptor.block_extent = extents
         if feholdexcept(&environment):
             worker.status = -5
-            strcpy(worker.error.message, "Cannot isolate portable prefilter floating environment")
+            strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
             return -1
         rc = b2_artifact_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
         if fesetenv(&environment):
             rc = -5
-            strcpy(error.message, "Cannot restore portable prefilter floating environment")
+            strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
         if rc:
             worker.status = rc
             worker.error = error
@@ -1353,7 +1353,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         memset(params.output, 0, params.output_size)
         worker.status = -5
         worker.error_block = block_id
-        strcpy(worker.error.message, "Cannot isolate portable prefilter floating environment")
+        strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
         return -1
     for i in range(state.ninputs):
         if state.numpy_inputs[i] != NULL:
@@ -1367,7 +1367,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
             worker.bindings[i].data = malloc(block_bytes)
             if worker.bindings[i].data == NULL:
                 rc = -6
-                strcpy(error.message, "Cannot allocate portable prefilter input block")
+                strcpy(error.message, "Cannot allocate Menudet prefilter input block")
                 break
         if worker.decoders[i] == NULL:
             dparams = state.inputs[i].sc.storage.dparams[0]
@@ -1377,7 +1377,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
             worker.decoders[i] = blosc2_create_dctx(dparams)
             if worker.decoders[i] == NULL:
                 rc = -6
-                strcpy(error.message, "Cannot allocate portable prefilter decoder")
+                strcpy(error.message, "Cannot allocate Menudet prefilter decoder")
                 break
         worker.bindings[i].capacity = count * worker.bindings[i].itemsize
         read_status = blosc2_getitem_bytes_ctx(worker.decoders[i], state.chunks[i], state.chunk_bytes[i],
@@ -1385,7 +1385,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
         if read_status != block_bytes:
             rc = -5
             error.native_status = read_status
-            strcpy(error.message, "Portable prefilter input decompression failed")
+            strcpy(error.message, "Menudet prefilter input decompression failed")
             break
     if not rc:
         memset(&descriptor, 0, sizeof(descriptor))
@@ -1403,7 +1403,7 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
                                     destination, &descriptor, 0, &fp, &error)
     if fesetenv(&environment):
         rc = -5
-        strcpy(error.message, "Cannot restore portable prefilter floating environment")
+        strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
     if rc and (worker.status == 0 or block_id < worker.error_block):
         worker.status = rc
         worker.error = error
@@ -1421,11 +1421,11 @@ cdef int portable_menudet_prefilter(blosc2_prefilter_params *params) noexcept no
     return -1 if rc else (1 if state.numpy_output != NULL else 0)
 
 
-def portable_prefilter_available():
+def menudet_prefilter_available():
     return bool(b2_artifact_descriptor_available())
 
 
-def portable_resident_available():
+def menudet_resident_available():
     return bool(b2_artifact_descriptor_available())
 
 
@@ -1620,10 +1620,10 @@ cdef void raise_graph_error(int rc, b2_graph_error *error, b2_array_report *repo
         raise NotImplementedError("Build with miniexpr native graph preparation support")
     if rc == -7:
         raise MemoryError((<bytes>error.native.message).decode("utf-8", "replace"))
-    from blosc2.portable_kernel import PortableArtifactError
+    from blosc2.menudet_kernel import MenudetError
     statuses = {-1: "invalid_graph", -2: "unsupported_requirement", -3: "invalid_signature",
                 -4: "shape_error", -5: "binding_error", -6: "evaluation_error", -8: "unavailable_capability"}
-    exception = PortableArtifactError(
+    exception = MenudetError(
         f"{(<bytes>error.native.message).decode('utf-8', 'replace')} (node={error.node}, stage={error.stage})",
         status=statuses.get(rc, "native_error"), native_status=error.native.native_status,
         line=error.native.line, column=error.native.column)
@@ -1787,7 +1787,7 @@ cdef class NativeGraphHandle:
         cdef const void *artifact = b2_graph_map_artifact(self._handle)
         if artifact == NULL:
             return None
-        cdef PortableArtifactHandle result = PortableArtifactHandle()
+        cdef MenudetArtifactHandle result = MenudetArtifactHandle()
         result._handle = <void *>artifact
         result._owner = self
         return result
@@ -2071,34 +2071,34 @@ cdef class NativeGraphSchedule:
                          "input_materialization_bytes": 0}
 
 
-def portable_artifact_available():
+def menudet_artifact_available():
     return bool(b2_artifact_available())
 
 
-def portable_auto_jit_mode():
+def menudet_auto_jit_mode():
     return b2_artifact_auto_jit_mode()
 
 
-def portable_descriptor_available():
+def menudet_descriptor_available():
     return bool(b2_artifact_descriptor_available())
 
 
 cdef void raise_artifact_error(int rc, b2_artifact_error *error) except *:
-    from blosc2.portable_kernel import PortableArtifactError
+    from blosc2.menudet_kernel import MenudetError
 
     if rc == -100:
-        raise NotImplementedError("Build with miniexpr portable artifact support")
+        raise NotImplementedError("Build with miniexpr Menudet artifact support")
     if rc == -6:
         raise MemoryError((<bytes>error.message).decode("utf-8", "replace"))
     statuses = {-1: "invalid_artifact", -2: "unsupported_requirement", -3: "invalid_source",
                 -4: "binding_error", -5: "evaluation_error"}
-    raise PortableArtifactError(
+    raise MenudetError(
         (<bytes>error.message).decode("utf-8", "replace"),
         status=statuses.get(rc, "native_error"), native_status=error.native_status,
         line=error.line, column=error.column)
 
 
-cdef class PortableArtifactHandle:
+cdef class MenudetArtifactHandle:
     """Owned immutable native handle; no Python artifact decoding or source execution."""
     cdef void *_handle
     cdef object _owner
@@ -2192,7 +2192,7 @@ cdef class PortableArtifactHandle:
             raise NotImplementedError("Build with draft miniexpr descriptor support")
         cdef Py_ssize_t n = len(inputs), i
         if n > 128:
-            raise ValueError("Too many portable artifact inputs")
+            raise ValueError("Too many Menudet artifact inputs")
         block_shape = tuple(block_shape)
         if any(type(size) is not int or size < 0 for size in block_shape):
             raise ValueError("Block shape must contain nonnegative Python integers")
@@ -2240,7 +2240,7 @@ cdef class PortableArtifactHandle:
                 or not output.flags.writeable):
             raise ValueError("Output must be writable, aligned, contiguous and match the result signature")
         if _output is not None and any(np.shares_memory(output, value) for value in arrays):
-            raise ValueError("Portable block output must not alias inputs")
+            raise ValueError("Menudet block output must not alias inputs")
         descriptor.output_capacity = output.nbytes
         if n:
             bindings = <b2_artifact_buffer *>calloc(n, sizeof(b2_artifact_buffer))
@@ -2360,22 +2360,22 @@ cdef class PortableArtifactHandle:
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
                            _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
-        if not portable_prefilter_inputs_eligible(
+        if not menudet_prefilter_inputs_eligible(
                 inputs, allow_numpy=numpy_out is not None or out is not None, output=out):
-            raise NotImplementedError("Inputs are not eligible for portable prefilter execution")
+            raise NotImplementedError("Inputs are not eligible for Menudet prefilter execution")
         signature = self.descriptor_info()
         if set(inputs) != set(signature["inputs"]):
-            raise ValueError("Portable prefilter input names disagree with signature")
+            raise ValueError("Menudet prefilter input names disagree with signature")
         if (signature["cardinality"] != "elementwise"
                 or signature["ndim"] not in (0, (out.ndim if not inputs and out is not None else 1))):
-            raise ValueError("Portable prefilters require matching-rank elementwise kernels")
+            raise ValueError("Menudet prefilters require matching-rank elementwise kernels")
         if any(value.dtype != signature["inputs"][name] for name, value in inputs.items()):
-            raise TypeError("Portable prefilter input dtype disagrees with signature")
+            raise TypeError("Menudet prefilter input dtype disagrees with signature")
         first = next((value for value in inputs.values() if isinstance(value, NDArray)), out)
         if first is None:
             raise ValueError("An output NDArray is required to schedule an input-free prefilter")
         if first.ndim > 1 and numpy_out is not None:
-            raise ValueError("N-D portable prefilters require an NDArray output")
+            raise ValueError("N-D Menudet prefilters require an NDArray output")
         if _diagonal is not None and (inputs or first.ndim != 2 or out is None):
             raise ValueError("Diagonal scheduling requires input-free 2-D NDArray output")
         block_items = first.blocks[0]
@@ -2431,11 +2431,11 @@ cdef class PortableArtifactHandle:
             if (type(out) is not blosc2.NDArray or out.shape != first.shape
                     or out.dtype != self.signature_dtype(-1)
                     or out.chunks != first.chunks or out.blocks != first.blocks):
-                raise ValueError("Portable prefilter output must match the input grid and result dtype")
+                raise ValueError("Menudet prefilter output must match the input grid and result dtype")
             if any(out is source for source in inputs.values()):
-                raise ValueError("Portable prefilter output must not alias an input")
+                raise ValueError("Menudet prefilter output must not alias an input")
             output = out
-        return output._execute_portable_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
+        return output._execute_menudet_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
                                                  driver_input=_driver_input, diagonal=_diagonal)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
@@ -2514,7 +2514,7 @@ cdef class PortableArtifactHandle:
     def evaluate(self, inputs, shape):
         cdef Py_ssize_t n = len(inputs)
         if n > 128:
-            raise ValueError("Too many portable artifact inputs")
+            raise ValueError("Too many Menudet artifact inputs")
         cdef b2_artifact_input *bindings = NULL
         cdef b2_artifact_error error
         cdef np.ndarray array, output
@@ -2894,7 +2894,7 @@ cdef _check_cparams(blosc2_cparams *cparams):
 
         if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter
                 and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter
-                and cparams.prefilter != <blosc2_prefilter_fn>portable_menudet_prefilter):
+                and cparams.prefilter != <blosc2_prefilter_fn>menudet_menudet_prefilter):
             # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
@@ -6168,24 +6168,24 @@ cdef class NDArray:
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    def _portable_chunk_buffer(self):
+    def _menudet_chunk_buffer(self):
         """Decode one physical chunk without leaking codec floating flags."""
         cdef fenv_t environment
         buffer = np.empty(self.array.sc.chunksize // self.dtype.itemsize, dtype=self.dtype)
         if feholdexcept(&environment):
-            raise RuntimeError("Cannot isolate portable chunk decoder floating environment")
+            raise RuntimeError("Cannot isolate Menudet chunk decoder floating environment")
         try:
             self.schunk.decompress_chunk(0, dst=buffer)
         finally:
             if fesetenv(&environment):
-                raise RuntimeError("Cannot restore portable chunk decoder floating environment")
+                raise RuntimeError("Cannot restore Menudet chunk decoder floating environment")
         return buffer[:self.array.shape[0]]
 
-    def _execute_portable_prefilter(self, PortableArtifactHandle kernel, inputs,
+    def _execute_menudet_prefilter(self, MenudetArtifactHandle kernel, inputs,
                                     np.ndarray numpy_out=None, chunk_range=None, driver_input=None,
                                     diagonal=None):
-        cdef portable_prefilter_state state
-        cdef portable_prefilter_worker *worker
+        cdef menudet_prefilter_state state
+        cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
         cdef blosc2_cparams *cparams = self.array.sc.storage.cparams
         cdef NDArray value
@@ -6254,8 +6254,8 @@ cdef class NDArray:
         state.nworkers = cparams.nthreads
         # One compact allocation holds worker records and only the bindings
         # actually used by this signature, rather than 128 slots per worker.
-        state.workers = <portable_prefilter_worker *>calloc(state.nworkers,
-            sizeof(portable_prefilter_worker) + state.ninputs * (sizeof(b2_artifact_buffer) + sizeof(void *)))
+        state.workers = <menudet_prefilter_worker *>calloc(state.nworkers,
+            sizeof(menudet_prefilter_worker) + state.ninputs * (sizeof(b2_artifact_buffer) + sizeof(void *)))
         if state.workers == NULL:
             raise MemoryError()
         parameters.user_data = &state
@@ -6264,7 +6264,7 @@ cdef class NDArray:
         # placeholders: the callback skips filters and writes the real sink.
         # Never discard the payload of a caller's Blosc2 output.
         parameters.output_is_disposable = numpy_out is not None or cparams.clevel == 0
-        cparams.prefilter = portable_menudet_prefilter
+        cparams.prefilter = menudet_menudet_prefilter
         cparams.preparams = &parameters
         try:
             # Active workers allocate their private scratch on first use.
@@ -6280,7 +6280,7 @@ cdef class NDArray:
                 blosc2_free_ctx(self.array.sc.cctx)
             self.array.sc.cctx = blosc2_create_cctx(cparams[0])
             if self.array.sc.cctx == NULL:
-                raise MemoryError("Cannot create portable prefilter compression context")
+                raise MemoryError("Cannot create Menudet prefilter compression context")
             try:
                 for chunk in range(begin, end):
                     # Fetch/validate each compressed input chunk once. The
@@ -6299,13 +6299,13 @@ cdef class NDArray:
                         if state.chunk_bytes[i] < 0:
                             state.status = -5
                             state.error.native_status = state.chunk_bytes[i]
-                            strcpy(state.error.message, "Portable prefilter could not read an input chunk")
+                            strcpy(state.error.message, "Menudet prefilter could not read an input chunk")
                             raise_artifact_error(state.status, &state.error)
                         rc = blosc2_cbuffer_sizes(state.chunks[i], &decoded_bytes, &encoded_bytes, &block_bytes)
                         if rc < 0 or block_bytes != state.inputs[i].blockshape[0] * state.signature[i].itemsize:
                             state.status = -5
                             state.error.native_status = rc
-                            strcpy(state.error.message, "Portable prefilter input block layout mismatch")
+                            strcpy(state.error.message, "Menudet prefilter input block layout mismatch")
                             raise_artifact_error(state.status, &state.error)
                     if numpy_out is not None:
                         # Always releases the GIL, including single-threaded
@@ -6317,14 +6317,14 @@ cdef class NDArray:
                     # are captured locally rather than propagated by Blosc2.
                     for tid in range(state.nworkers):
                         if state.workers[tid].status:
-                            portable_prefilter_merge(&state)
+                            menudet_prefilter_merge(&state)
                             raise_artifact_error(state.status, &state.error)
             except Exception:
-                portable_prefilter_merge(&state)
+                menudet_prefilter_merge(&state)
                 if state.status:
                     raise_artifact_error(state.status, &state.error)
                 raise
-            portable_prefilter_merge(&state)
+            menudet_prefilter_merge(&state)
             if state.status:
                 raise_artifact_error(state.status, &state.error)
         finally:
@@ -6350,7 +6350,7 @@ cdef class NDArray:
                 if state.chunk_owned[i]:
                     free(state.chunks[i])
         result = numpy_out if numpy_out is not None else self
-        return result, {"route": "portable-prefilter", "evaluated_blocks": state.evaluated_blocks,
+        return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
                          "output_destination": "numpy" if numpy_out is not None else "blosc2",
                          "discarded_output_bytes": placeholder_bytes,
                         "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
@@ -6788,12 +6788,12 @@ def get_loaded_matmul_cblas_library():
     return path.decode("utf-8")
 
 
-def portable_artifact_options_available():
+def menudet_artifact_options_available():
     return bool(b2_artifact_options_available())
 
 
-def portable_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
-    """Metadata-only gate for bounded resident 1-D portable prefilters."""
+def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
+    """Metadata-only gate for bounded resident 1-D Menudet prefilters."""
     cdef NDArray value
     if not b2_artifact_descriptor_available() or blosc2.IS_WASM or len(inputs) > 128:
         return False

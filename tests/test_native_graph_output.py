@@ -60,7 +60,7 @@ def test_self_overlapping_output_rejected_before_write():
     output = np.lib.stride_tricks.as_strided(storage, shape=x.shape, strides=(8, 8))
     plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
     schedule = plan.specialize({"x": (x.dtype, x.shape)})
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         schedule.execute({"x": x}, out=output)
     np.testing.assert_array_equal(storage, -999)
 

@@ -68,7 +68,7 @@ def test_native_required_staged_adapter():
 def test_shared_stage_value_and_budget():
     graph = {
         "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-1.0",
+        "semantics": "menudet-numpy-0.1",
         "requires": ["numeric", "staged"],
         "nodes": [
             {"id": 0, "op": "input", "name": "x", "dtype": "float32"},
@@ -79,7 +79,7 @@ def test_shared_stage_value_and_budget():
         "output": {"dtype": "auto", "casting": "unsafe"},
     }
     plan = blosc2.NativeGraph.from_json(graph)
-    with pytest.raises(blosc2.PortableArtifactError, match="budget"):
+    with pytest.raises(blosc2.MenudetError, match="budget"):
         plan.specialize({"x": ("float32", (3,))}, intermediate_budget=11)
     schedule = plan.specialize({"x": ("float32", (3,))}, intermediate_budget=12)
     assert schedule.stage_info(0) == {
@@ -113,7 +113,7 @@ def test_conditional_stage_domains_reject(expression):
     inputs = {"x": "float32"}
     if "mask" in expression:
         inputs["mask"] = "bool"
-    with pytest.raises(blosc2.PortableArtifactError, match=r"conditional|masked"):
+    with pytest.raises(blosc2.MenudetError, match=r"conditional|masked"):
         blosc2.NativeGraph.from_expression(expression, inputs)
 
 
@@ -122,14 +122,14 @@ def trusted_document():
     graph = json.loads(blosc2.NativeGraph.from_expression("sum(y)", {"y": "float32"}).to_json())
     return {
         "format": "menudet-staged-graph-1",
-        "semantics": "menudet-numpy-1.0",
+        "semantics": "menudet-numpy-0.1",
         "requires": ["numeric", "staged"],
         "inputs": [{"name": "x", "dtype": "float32"}],
         "root": 1,
         "stages": [
             {
                 "id": 0,
-                "kind": "portable",
+                "kind": "menudet",
                 "inputs": {"x": {"input": "x"}},
                 "artifact": artifact,
                 "contract": {
@@ -144,7 +144,7 @@ def trusted_document():
     }
 
 
-def test_trusted_portable_stage_and_roundtrip():
+def test_trusted_menudet_stage_and_roundtrip():
     plan = blosc2.NativeGraph(trusted_document())
     imported = blosc2.NativeGraph(plan.to_json())
     x = np.arange(5, dtype="float32")
@@ -159,14 +159,14 @@ def test_trusted_portable_stage_and_roundtrip():
 def test_unqualified_trusted_contract_rejects(field, value):
     document = trusted_document()
     document["stages"][0]["contract"][field] = value
-    with pytest.raises(blosc2.PortableArtifactError, match="contract"):
+    with pytest.raises(blosc2.MenudetError, match="contract"):
         blosc2.NativeGraph(document)
 
 
 def test_late_stage_status_recovery():
     plan = blosc2.NativeGraph.from_expression("sqrt(x) + sum(y)", {"x": "float64", "y": "float64"})
     schedule = plan.specialize({"x": ("float64", (3,)), "y": ("float64", (3,))})
-    with pytest.raises(blosc2.PortableArtifactError) as failure:
+    with pytest.raises(blosc2.MenudetError) as failure:
         schedule.execute({"x": np.array([-1.0, 1.0, 4.0]), "y": np.ones(3)}, 1)
     if sys.platform == "emscripten":
         assert "floating status unavailable" in str(failure.value)
@@ -233,7 +233,7 @@ def test_staged_dependency_validation(mutation):
         document["requires"] = ["numeric"]
     else:
         document["stages"][1]["graph"] = trusted_document()
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         blosc2.NativeGraph(document)
 
 
@@ -244,7 +244,7 @@ def test_staged_map_export_and_required_jit():
         plan = blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
         assert plan.has_jit
     else:
-        with pytest.raises(blosc2.PortableArtifactError, match="required map JIT"):
+        with pytest.raises(blosc2.MenudetError, match="required map JIT"):
             blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
     with pytest.raises(ValueError, match="elementwise"):
         plan.map_json()

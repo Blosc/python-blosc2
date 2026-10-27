@@ -26,7 +26,7 @@ def evaluate_resident_if_eligible(lazy, selection, out=None):
     workers = min(blosc2.nthreads, MAXIMUM_WORKERS, count // MINIMUM_WORKER_ITEMS)
     if workers < 2 or blosc2.IS_WASM or not lazy.inputs:
         return None
-    if not getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)():
+    if not getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)():
         return None
     floating = all(dtype.kind == "f" for dtype in lazy.kernel.input_dtypes.values())
     if floating:
@@ -65,7 +65,7 @@ def resident_integer_operations_safe(kernel):
 
 
 def _resident_integer_operations_safe_legacy(kernel):
-    """Compatibility proof for portable kernels without native graph metadata."""
+    """Compatibility proof for Menudet kernels without native graph metadata."""
     if not kernel.input_dtypes:
         return False
     dtype = next(iter(kernel.input_dtypes.values()))
@@ -162,7 +162,7 @@ def evaluate_resident_selection_if_eligible(lazy, selection):
         if isinstance(part, int):
             index = part + size if part < 0 else part
             if not 0 <= index < size:
-                raise IndexError("Portable output index out of range")
+                raise IndexError("Menudet output index out of range")
             item.append(slice(index, index + 1))
             squeeze.append(axis)
         else:
@@ -182,7 +182,7 @@ def evaluate_resident_selection_if_eligible(lazy, selection):
     if (
         workers >= 2
         and not blosc2.IS_WASM
-        and getattr(blosc2.blosc2_ext, "portable_resident_available", lambda: False)()
+        and getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)()
     ):
         values, report = evaluate_resident(lazy.kernel, operands, shape, workers)
         report["route"] = "parallel-resident-selection"

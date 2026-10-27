@@ -16,13 +16,13 @@ def storage_runtime():
 def prefilter_runtime(storage_runtime):
     if blosc2.IS_WASM:
         pytest.skip("Native compressed prefilters are host-only; WASM uses bounded readers")
-    if not getattr(blosc2.blosc2_ext, "portable_prefilter_available", lambda: False)():
-        pytest.skip("Native dependency does not provide portable prefilters")
+    if not getattr(blosc2.blosc2_ext, "menudet_prefilter_available", lambda: False)():
+        pytest.skip("Native dependency does not provide Menudet prefilters")
 
 
 def make_kernel(source="def k(x, y):\n    return x + (y - 1)\n", inputs=None, output="float64", jit=True):
     author = blosc2.DSLKernel.from_source(source)
-    return blosc2.PortableKernel.from_json(
+    return blosc2.MenudetKernel.from_json(
         author.export(inputs or {"x": "float64", "y": "float64"}, output), jit=jit
     )
 
@@ -59,7 +59,7 @@ def test_lazy_and_compute_use_readers(storage_runtime, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Original whole-partition block path used")
 
-    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", forbidden)
+    monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", forbidden)
     np.testing.assert_array_equal(lazy[:], x_np)
     assert lazy._source_execution_report["maximum_reader_items"] <= 65536
     np.testing.assert_array_equal(lazy.compute(chunks=(8192,), blocks=(1024,))[:], x_np)
@@ -111,7 +111,7 @@ def test_reader_error_not_replayed(storage_runtime, monkeypatch):
         pytest.fail("Storage failure replayed through whole-partition execution")
 
     monkeypatch.setattr(StorageReader, "read", failure)
-    monkeypatch.setattr(blosc2.PortableKernel, "evaluate_block", forbidden)
+    monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", forbidden)
     with pytest.raises(OSError, match="Storage failed"):
         lazy[::2]
     assert len(calls) == 2
@@ -142,7 +142,7 @@ def test_context_and_final_cast_retain_original_path(storage_runtime):
     cast = make_kernel("def k(x):\n    return x\n", {"x": "float64"}, "int32")
     assert not storage_reader_eligible(cast)
     author = blosc2.DSLKernel.from_source("def k(x):\n    return x + _i0\n")
-    context = blosc2.PortableKernel.from_json(author.export({"x": "float64"}, "float64", ndim=1))
+    context = blosc2.MenudetKernel.from_json(author.export({"x": "float64"}, "float64", ndim=1))
     assert not storage_reader_eligible(context)
     np.testing.assert_array_equal(context.lazy({"x": blosc2.asarray(np.ones(4))})[2:], [3, 4])
 
@@ -203,7 +203,7 @@ def test_compute_returns_prefilter_output_without_numpy_staging(
     with monkeypatch.context() as patch:
         patch.setattr(blosc2.NDArray, "__getitem__", forbidden)
         patch.setattr(lazy, "_values", forbidden)
-        patch.setattr(blosc2.PortableKernel, "evaluate_sources", forbidden)
+        patch.setattr(blosc2.MenudetKernel, "evaluate_sources", forbidden)
         result = lazy.compute(cparams={"clevel": 0, "nthreads": threads})
         second = lazy.compute(cparams={"clevel": 0, "nthreads": threads})
     assert isinstance(result, blosc2.NDArray)
@@ -211,7 +211,7 @@ def test_compute_returns_prefilter_output_without_numpy_staging(
     assert result.chunks == x.chunks
     assert result.blocks == x.blocks
     assert result.cparams.clevel == 0
-    assert lazy._source_execution_report["route"] == "portable-prefilter"
+    assert lazy._source_execution_report["route"] == "menudet-prefilter"
     assert lazy._source_execution_report["evaluated_blocks"] == (size + 31) // 32
     report = lazy._source_execution_report
     assert report["threads"] == threads
@@ -247,7 +247,7 @@ def test_integer_literal_compute_uses_prefilter(prefilter_runtime, monkeypatch, 
     assert result.cparams.codec == blosc2.Codec.LZ4
     assert result.cparams.clevel == 3
     report = lazy._source_execution_report
-    assert report["route"] == "portable-prefilter"
+    assert report["route"] == "menudet-prefilter"
     assert report["evaluated_blocks"] == (values.size + 63) // 64
     assert report["input_chunk_fetches"] == x.schunk.nchunks * 2
 
@@ -298,7 +298,7 @@ def test_prefilter_numpy_sink_contract(prefilter_runtime):
             handle.evaluate_prefilter(inputs, numpy_out=output)
     with pytest.raises(ValueError, match="overlap"):
         handle.evaluate_prefilter({"x": x, "y": values}, numpy_out=values)
-    assert not blosc2.blosc2_ext.portable_prefilter_inputs_eligible({"x": x, "y": values})
+    assert not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({"x": x, "y": values})
 
 
 def test_prefilter_numpy_small_chunks_and_failure_recovery(prefilter_runtime, monkeypatch):
@@ -307,7 +307,7 @@ def test_prefilter_numpy_small_chunks_and_failure_recovery(prefilter_runtime, mo
     guarded = np.full(11, 123.0)
     output = guarded[1:-1]
     failing = make_kernel("def k(x):\n    return x + (1 // 0)\n", {"x": "float64"})
-    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+    with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
         failing._handle.evaluate_prefilter({"x": x}, numpy_out=output)
 
     def forbidden(*args, **kwargs):
@@ -330,7 +330,7 @@ def test_compute_prefilter_preserves_storage_options(prefilter_runtime, tmp_path
     x = blosc2.asarray(values, chunks=(128,), blocks=(32,))
     lazy = make_kernel().lazy({"x": x, "y": x})
     cparams = blosc2.CParams(clevel=5, nthreads=2)
-    path = tmp_path / "portable-compute.b2nd"
+    path = tmp_path / "Menudet-compute.b2nd"
     result = lazy.compute(cparams=cparams, urlpath=path, meta={"test": "direct"})
     assert cparams.nthreads == 2  # The caller's options are not mutated.
     assert result.cparams.clevel == 5
@@ -394,7 +394,7 @@ def test_prefilter_failure_is_raised_and_output_can_be_reused(prefilter_runtime,
         x.shape, dtype=x.dtype, chunks=x.chunks, blocks=x.blocks, cparams={"clevel": clevel, "nthreads": 3}
     )
     for _ in range(3):
-        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
             failing._handle.evaluate_prefilter({"x": x}, out=output)
     healthy = make_kernel()
     result, report = healthy._handle.evaluate_prefilter({"x": x, "y": x}, out=output)
@@ -441,7 +441,7 @@ def test_wasm_compute_keeps_bounded_reader_fallback(storage_runtime, monkeypatch
         pytest.fail("Threadless WASM requested a host-only prefilter")
 
     monkeypatch.setattr(blosc2, "IS_WASM", True)
-    monkeypatch.setattr(blosc2.NDArray, "_execute_portable_prefilter", forbidden)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", forbidden)
     result = lazy.compute(chunks=(128,), blocks=(32,), cparams={"clevel": 0, "nthreads": 1})
     np.testing.assert_array_equal(result[:], values * 2 - 1)
     assert lazy._source_execution_report["route"] == "bounded-readers"

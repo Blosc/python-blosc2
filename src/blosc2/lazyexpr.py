@@ -203,7 +203,7 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
             native = lower_native_graph(stub, jit=graph_jit, allow_output=True)
         except (NotImplementedError, ValueError, TypeError):
             native = None
-        except blosc2.PortableArtifactError as error:
+        except blosc2.MenudetError as error:
             if error.status not in {"invalid_signature", "unsupported"}:
                 raise
     if native is not None:
@@ -4937,7 +4937,7 @@ class LazyExpr(LazyArray):
 
             if jit_backend is not None or fp_accuracy is not None:
                 raise ValueError(
-                    "Native-required portable execution does not accept acceleration/accuracy overrides"
+                    "Native-required Menudet execution does not accept acceleration/accuracy overrides"
                 )
             return compute_native_graph(self, item, tile_items=_native_tile_items, jit=jit is True, **kwargs)
         jit, jit_backend = _jit_from_env(jit, jit_backend)
@@ -5058,7 +5058,7 @@ class LazyExpr(LazyArray):
         return result
 
     def native_kernel(self):
-        """Export the eligible elementwise safe graph as an immutable native Menudet 1.0 plan.
+        """Export the eligible elementwise safe graph as an immutable native Menudet 0.1 beta plan.
 
         Unsupported syntax/signatures reject; no Python numerical fallback. Root
         logical reduction options are separate from this elementwise artifact.
@@ -5068,7 +5068,7 @@ class LazyExpr(LazyArray):
         plan, _, reduction = lower_native_graph(self)
         if reduction:
             raise ValueError("Root logical reductions require native compute, not an elementwise export")
-        return blosc2.PortableKernel.from_json(plan.map_json())
+        return blosc2.MenudetKernel.from_json(plan.map_json())
 
     def __getitem__(self, item):
         safe = evaluation_mode() == "safe" or getattr(self, "_evaluation", "full") == "safe"
@@ -5304,7 +5304,7 @@ class LazyExpr(LazyArray):
                                     # Compressed inputs must still pass execution/layout admission before reuse.
                                     result._metadata_native = prepared
                                 return result
-                        except (NotImplementedError, blosc2.PortableArtifactError, TypeError, ValueError):
+                        except (NotImplementedError, blosc2.MenudetError, TypeError, ValueError):
                             pass
                     if graph is None:
                         graph = parse_expression(expression)
@@ -5769,20 +5769,20 @@ class LazyUDF(LazyArray):
         -----
         * All operands must be :ref:`NDArray` or :ref:`C2Array` objects stored on
           disk or a remote server (i.e. they must have a ``urlpath``).
-        * Newly authored DSLKernel functions normalize and validate as portable
+        * Newly authored DSLKernel functions normalize and validate as Menudet
           1.0 before saving. Python UDFs and noncompliant kernels reject before
-          writing. Block-scalar kernels require the explicit portable API.
+          writing. Block-scalar kernels require the explicit Menudet API.
           Historical source-backed files require ``deserialize='full'`` on open
           and are not automatically migrated by saving.
         """
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        from blosc2.portable_lazy import portable_from_lazyudf
+        from blosc2.menudet_lazy import menudet_from_lazyudf
 
-        portable = portable_from_lazyudf(self)
-        portable.save(urlpath, **kwargs)
-        self.array, self.schunk = portable.array, portable.schunk
+        menudet_result = menudet_from_lazyudf(self)
+        menudet_result.save(urlpath, **kwargs)
+        self.array, self.schunk = menudet_result.array, menudet_result.schunk
 
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
@@ -5814,7 +5814,7 @@ class LazyUDF(LazyArray):
         msgpack_packb(payload)
         msgpack_packb(self._get_user_vlmeta())
         array = make_b2object_carrier(
-            "portable",
+            "menudet",
             self.shape,
             self.dtype,
             chunks=self.chunks,

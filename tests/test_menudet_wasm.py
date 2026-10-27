@@ -14,9 +14,9 @@ def make(expression, dtype, *, inputs=None, output=None, jit=True):
     inputs = inputs or {"x": dtype, "y": dtype}
     source = f"def k({', '.join(inputs)}):\n    return {expression}\n"
     artifact = blosc2.DSLKernel.from_source(source).export(
-        inputs, output or dtype, version="1.0", casting="unsafe"
+        inputs, output or dtype, version="0.1", casting="unsafe"
     )
-    return blosc2.PortableKernel.from_json(artifact, jit=jit)
+    return blosc2.MenudetKernel.from_json(artifact, jit=jit)
 
 
 def require_helpers():
@@ -70,13 +70,13 @@ def test_exact_integer_boundaries_and_control_flow():
 
     loop = "def k(x, y):\n    v = x\n    for i in range(16):\n        v = v + y\n    return v\n"
     artifact = blosc2.DSLKernel.from_source(loop).export(
-        {"x": "float64", "y": "float64"}, "float64", version="1.0", casting="unsafe"
+        {"x": "float64", "y": "float64"}, "float64", version="0.1", casting="unsafe"
     )
-    accelerated = blosc2.PortableKernel.from_json(artifact, jit=True)
+    accelerated = blosc2.MenudetKernel.from_json(artifact, jit=True)
     assert accelerated.has_jit
     assert_same(
         accelerated.evaluate({"x": xf, "y": yf}),
-        blosc2.PortableKernel.from_json(artifact, jit=False).evaluate({"x": xf, "y": yf}),
+        blosc2.MenudetKernel.from_json(artifact, jit=False).evaluate({"x": xf, "y": yf}),
     )
 
 
@@ -103,10 +103,10 @@ def test_masks_tiles_and_reuse():
     # Reusing the same artifact should keep returning an executable JIT kernel.
     source = "def k(x, y):\n    return x * y + 1.0\n"
     artifact = blosc2.DSLKernel.from_source(source).export(
-        {"x": "float64", "y": "float64"}, "float64", version="1.0", casting="unsafe"
+        {"x": "float64", "y": "float64"}, "float64", version="0.1", casting="unsafe"
     )
     for _ in range(8):
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
         assert kernel.has_jit
         assert_same(kernel.evaluate({"x": x, "y": y}), x * y + 1.0)
 
@@ -192,10 +192,10 @@ def test_nd_context_falls_back():
     require_helpers()
     source = "def k(x, y):\n    return x + _flat_idx + y\n"
     artifact = blosc2.DSLKernel.from_source(source).export(
-        {"x": "float64", "y": "float64"}, "float64", version="1.0", casting="unsafe", ndim=2
+        {"x": "float64", "y": "float64"}, "float64", version="0.1", casting="unsafe", ndim=2
     )
-    accelerated = blosc2.PortableKernel.from_json(artifact, jit=True)
-    reference = blosc2.PortableKernel.from_json(artifact, jit=False)
+    accelerated = blosc2.MenudetKernel.from_json(artifact, jit=True)
+    reference = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert not accelerated.has_jit
     x = np.arange(4, dtype=np.float64).reshape(2, 2)
     y = np.ones((2, 2), dtype=np.float64)
@@ -212,10 +212,10 @@ def test_reduction_falls_back():
     require_helpers()
     source = "def k(x):\n    return block_sum(x)\n"
     artifact = blosc2.DSLKernel.from_source(source).export(
-        {"x": "float64"}, "float64", version="1.0", casting="unsafe", cardinality="block_scalar"
+        {"x": "float64"}, "float64", version="0.1", casting="unsafe", cardinality="block_scalar"
     )
-    accelerated = blosc2.PortableKernel.from_json(artifact, jit=True)
-    reference = blosc2.PortableKernel.from_json(artifact, jit=False)
+    accelerated = blosc2.MenudetKernel.from_json(artifact, jit=True)
+    reference = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert not accelerated.has_jit
     x = np.array([1.0, 2.0, 3.0, 4.0], dtype="float64")
     assert_same(accelerated.evaluate({"x": x}), reference.evaluate({"x": x}))

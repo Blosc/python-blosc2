@@ -45,10 +45,10 @@ def worker(route, workload, dtype, size, api):
             )
         source = f"def k(x, y):\n    return {expression}\n"
         artifact = blosc2.DSLKernel.from_source(source).export(
-            {"x": dtype, "y": dtype}, dtype, version="1.0"
+            {"x": dtype, "y": dtype}, dtype, version="0.1"
         )
         kernel, compile_ms = timed(
-            lambda: blosc2.PortableKernel.from_json(artifact, jit=route != "interpreter")
+            lambda: blosc2.MenudetKernel.from_json(artifact, jit=route != "interpreter")
         )
         has_jit = kernel.has_jit
         if has_jit != (route != "interpreter"):

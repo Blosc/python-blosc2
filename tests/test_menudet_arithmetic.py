@@ -12,29 +12,29 @@ from tools import menudet_conformance as compat
 
 
 def export(source, inputs, output, **kwargs):
-    return blosc2.DSLKernel.from_source(source).export(inputs, output, version="1.0", **kwargs)
+    return blosc2.DSLKernel.from_source(source).export(inputs, output, version="0.1", **kwargs)
 
 
 @pytest.fixture(autouse=True)
 def numpy_runtime():
     try:
         export("def k(x):\n    return x\n", {"x": "int8"}, "int8")
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if error.status != "unsupported_requirement":
             raise
         if os.environ.get("MENUDET_NUMPY_ARITHMETIC_CORPUS"):
-            pytest.fail("Explicit testing requires a rebuilt Menudet 1.0 native dependency")
-        pytest.skip("Installed native dependency does not implement Menudet 1.0")
+            pytest.fail("Explicit testing requires a rebuilt Menudet 0.1 beta native dependency")
+        pytest.skip("Installed native dependency does not implement Menudet 0.1 beta")
 
 
 def test_menudet_1_default_and_metadata_only_inference():
     source = "def k(x):\n    return (x + 1) * 2\n"
     author = blosc2.DSLKernel.from_source(source)
-    default = blosc2.PortableKernel.from_json(author.export({"x": "int8"}, "int64"))
-    new = blosc2.PortableKernel.from_json(export(source, {"x": "int8"}, "int64"))
-    assert default.schema_version == "1.0"
+    default = blosc2.MenudetKernel.from_json(author.export({"x": "int8"}, "int64"))
+    new = blosc2.MenudetKernel.from_json(export(source, {"x": "int8"}, "int64"))
+    assert default.schema_version == "0.1"
     assert default.inferred_dtype == np.dtype("int8")
-    assert new.schema_version == "1.0"
+    assert new.schema_version == "0.1"
     assert new.inferred_dtype == np.dtype("int8")
     x = np.array([127, -128], dtype="int8")
     with np.errstate(over="ignore"):
@@ -42,11 +42,11 @@ def test_menudet_1_default_and_metadata_only_inference():
         np.testing.assert_array_equal(new.evaluate({"x": x}), ((x + 1) * 2).astype("int64"))
     assert new.to_json() == export(source, {"x": "int8"}, "int64")
     # Semantic identity is explicit: partial upgrades and future profiles reject.
-    for schema, language in [("1.0", "1.1"), ("1.1", "1.0"), ("1.1", "1.1"), ("9.0", "9.0")]:
+    for schema, language in [("0.1", "1.1"), ("1.1", "0.1"), ("1.1", "1.1"), ("9.0", "9.0")]:
         artifact = json.loads(new.to_json())
         artifact["schema_version"], artifact["language"]["version"] = schema, language
-        with pytest.raises(blosc2.PortableArtifactError):
-            blosc2.PortableKernel.from_json(json.dumps(artifact))
+        with pytest.raises(blosc2.MenudetError):
+            blosc2.MenudetKernel.from_json(json.dumps(artifact))
 
 
 @pytest.mark.parametrize(
@@ -68,7 +68,7 @@ def test_weak_and_typed_constants(value, explicit, expected_dtype):
     )
     encoded = json.loads(artifact)["constants"][0]
     assert encoded["category"] == ("weak" if type(value) is int and explicit is None else "typed_scalar")
-    kernel = blosc2.PortableKernel.from_json(artifact)
+    kernel = blosc2.MenudetKernel.from_json(artifact)
     assert kernel.inferred_dtype == np.dtype(expected_dtype)
     x = np.array([1], dtype="float32")
     np.testing.assert_array_equal(kernel.evaluate({"x": x}), x + (np.int64(value) if explicit else value))
@@ -76,12 +76,12 @@ def test_weak_and_typed_constants(value, explicit, expected_dtype):
 
 def test_weak_constant_range_and_same_handle_recovery():
     artifact = export("def k(x, c):\n    return x + c\n", {"x": "int8"}, "int8", constants={"c": 128})
-    kernel = blosc2.PortableKernel.from_json(artifact)
+    kernel = blosc2.MenudetKernel.from_json(artifact)
     for _ in range(3):
-        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
             kernel.evaluate({"x": np.array([1], dtype="int8")})
     # A typed scalar participates in strong promotion before explicit narrowing.
-    typed = blosc2.PortableKernel.from_json(
+    typed = blosc2.MenudetKernel.from_json(
         export("def k(x, c):\n    return x + c\n", {"x": "int8"}, "int8", constants={"c": np.int64(128)})
     )
     assert typed.inferred_dtype == np.dtype("int64")
@@ -89,32 +89,30 @@ def test_weak_constant_range_and_same_handle_recovery():
 
 
 def test_float_cast_failure_then_success():
-    kernel = blosc2.PortableKernel.from_json(
+    kernel = blosc2.MenudetKernel.from_json(
         export("def k(x):\n    return int8(x)\n", {"x": "float64"}, "int8")
     )
     for values in [[np.nan], [np.inf], [128.0], [-129.0]]:
-        with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+        with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
             kernel.evaluate({"x": np.array(values)})
         assert kernel.evaluate({"x": np.array([-1.9])})[0] == -1
 
 
 def test_construction_is_not_array_narrowing():
     # A weak scalar constructor is checked; conversion of array elements wraps.
-    literal = blosc2.PortableKernel.from_json(
+    literal = blosc2.MenudetKernel.from_json(
         export("def k(x):\n    return x + int8(128)\n", {"x": "int8"}, "int8")
     )
-    with pytest.raises(blosc2.PortableArtifactError, match="evaluation_error"):
+    with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
         literal.evaluate({"x": np.array([1], dtype="int8")})
-    array = blosc2.PortableKernel.from_json(
-        export("def k(x):\n    return int8(x)\n", {"x": "int64"}, "int8")
-    )
+    array = blosc2.MenudetKernel.from_json(export("def k(x):\n    return int8(x)\n", {"x": "int64"}, "int8"))
     assert array.evaluate({"x": np.array([128], dtype="int64")})[0] == -128
 
 
 @pytest.mark.parametrize("shape", [(), (1,)])
 def test_typed_zero_dimensional_array(shape):
     source = "def k(x, y):\n    return x + y\n"
-    kernel = blosc2.PortableKernel.from_json(export(source, {"x": "float32", "y": "float64"}, "float64"))
+    kernel = blosc2.MenudetKernel.from_json(export(source, {"x": "float32", "y": "float64"}, "float64"))
     assert kernel.inferred_dtype == np.dtype("float64")
     actual = kernel.evaluate({"x": np.ones(shape, dtype="float32"), "y": np.ones(shape, dtype="float64")})
     assert actual.shape == shape
@@ -124,9 +122,9 @@ def test_typed_zero_dimensional_array(shape):
 def test_cast_policy_rejection_is_metadata_only():
     source = "def k(x):\n    return x\n"
     for policy in ["safe", "same_kind"]:
-        with pytest.raises(blosc2.PortableArtifactError, match="cast policy"):
+        with pytest.raises(blosc2.MenudetError, match="cast policy"):
             export(source, {"x": "float64"}, "int8", casting=policy)
-    assert blosc2.PortableKernel.from_json(
+    assert blosc2.MenudetKernel.from_json(
         export(source, {"x": "int8"}, "int64", casting="safe")
     ).inferred_dtype == np.dtype("int8")
 
@@ -138,19 +136,19 @@ def test_authoring_captured_scalar():
     def k(x):
         return x + c
 
-    artifact = k.export({"x": "float32"}, "float32", version="1.0")
+    artifact = k.export({"x": "float32"}, "float32", version="0.1")
     assert json.loads(artifact)["constants"][0]["category"] == "weak"
-    kernel = blosc2.PortableKernel.from_json(artifact)
+    kernel = blosc2.MenudetKernel.from_json(artifact)
     assert kernel.inferred_dtype == np.dtype("float32")
     assert kernel.evaluate({"x": np.array([1], dtype="float32")})[0] == 2
 
 
 def test_local_weak_scalar_and_float_literal_overflow():
     source = "def k(x):\n    c = 1 + 2\n    return x + c\n"
-    kernel = blosc2.PortableKernel.from_json(export(source, {"x": "float32"}, "float32"))
+    kernel = blosc2.MenudetKernel.from_json(export(source, {"x": "float32"}, "float32"))
     assert kernel.inferred_dtype == np.dtype("float32")
     assert kernel.evaluate({"x": np.array([1], dtype="float32")})[0] == 4
-    kernel = blosc2.PortableKernel.from_json(
+    kernel = blosc2.MenudetKernel.from_json(
         export("def k(x):\n    return x + 1e100\n", {"x": "float32"}, "float32")
     )
     assert np.isposinf(kernel.evaluate({"x": np.array([1], dtype="float32")})[0])
@@ -158,12 +156,12 @@ def test_local_weak_scalar_and_float_literal_overflow():
 
 def test_persistence_preserves_profile(tmp_path):
     x = blosc2.asarray(np.array([127, -128, 0, 1], dtype="int8"), urlpath=str(tmp_path / "x.b2nd"))
-    kernel = blosc2.PortableKernel.from_json(export("def k(x):\n    return x + 1\n", {"x": "int8"}, "int8"))
+    kernel = blosc2.MenudetKernel.from_json(export("def k(x):\n    return x + 1\n", {"x": "int8"}, "int8"))
     lazy = kernel.lazy({"x": x}, partitions=(2,))
     path = str(tmp_path / "recipe.b2nd")
     lazy.save(path)
     restored = blosc2.open(path)
-    assert restored.kernel.schema_version == "1.0"
+    assert restored.kernel.schema_version == "0.1"
     assert restored.kernel.inferred_dtype == np.dtype("int8")
     assert restored.kernel.to_json() == kernel.to_json()
     np.testing.assert_array_equal(restored[:], np.array([-128, -127, 1, 2], dtype="int8"))

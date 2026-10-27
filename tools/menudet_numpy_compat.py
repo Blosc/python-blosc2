@@ -95,8 +95,8 @@ def generate():
             )
         names = ["x", "y"][: len(arrays)]
         artifact = {
-            "schema_version": "1.0",
-            "language": {"name": "miniexpr", "version": "1.0"},
+            "schema_version": "0.1",
+            "language": {"name": "menudet", "version": "0.1"},
             "requires": ["numeric"],
             "source": f"def k({', '.join(names)}):\n    return {expression}\n",
             "entry_point": "k",
@@ -203,7 +203,7 @@ def integrate(corpus, repeats=1):
     for case in corpus["cases"]:
         start = time.perf_counter_ns()
         try:
-            kernel = blosc2.PortableKernel.from_json(case["artifact"], jit=True)
+            kernel = blosc2.MenudetKernel.from_json(case["artifact"], jit=True)
             compile_ns = time.perf_counter_ns() - start
             inputs = {item["name"]: decode(item) for item in case["inputs"]}
             start = time.perf_counter_ns()
@@ -218,7 +218,7 @@ def integrate(corpus, repeats=1):
                 "compile_ns": compile_ns,
                 "evaluation_ns": elapsed // repeats,
             }
-        except blosc2.PortableArtifactError as error:
+        except blosc2.MenudetError as error:
             statuses = {"invalid_source": -3, "evaluation_error": -5}
             result = {
                 "id": case["id"],
@@ -292,12 +292,12 @@ def benchmark():
             {"x": dtype}, dtype
         )
         start = time.perf_counter_ns()
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
         compile_ns = time.perf_counter_ns() - start
         for count in (16, 262144):
             x = np.arange(count, dtype=dtype)
             engines = {
-                "portable": lambda x=x, kernel=kernel: kernel.evaluate({"x": x}),
+                "menudet": lambda x=x, kernel=kernel: kernel.evaluate({"x": x}),
                 "numpy": lambda x=x: x * 2 + 1,
             }
             if numexpr is not None:
@@ -317,11 +317,11 @@ def benchmark():
                         "dtype": dtype,
                         "nitems": count,
                         "engine": name,
-                        "compile_ns": compile_ns if name == "portable" else None,
+                        "compile_ns": compile_ns if name == "menudet" else None,
                         "first_ns": first_ns,
                         "median_ns": int(np.median(samples)),
                         "backend": ("jit" if kernel.has_jit else "interpreter")
-                        if name == "portable"
+                        if name == "menudet"
                         else name,
                     }
                 )

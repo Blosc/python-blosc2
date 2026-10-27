@@ -41,8 +41,8 @@ def worker(engine, dtype, count, repeats):
     if engine == "integrated":
         artifact = json.dumps(
             {
-                "schema_version": "1.0",
-                "language": {"name": "miniexpr", "version": "1.0"},
+                "schema_version": "0.1",
+                "language": {"name": "menudet", "version": "0.1"},
                 "requires": ["numeric"],
                 "source": "def k(x):\n    return x * 2 + 1\n",
                 "entry_point": "k",
@@ -55,7 +55,7 @@ def worker(engine, dtype, count, repeats):
             }
         )
         start = time.perf_counter_ns()
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=True)
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
         compile_ns = time.perf_counter_ns() - start
         if kernel.has_jit:
             raise AssertionError("Update baseline eligibility before benchmarking a new portable JIT")
@@ -112,7 +112,7 @@ def run(args):
         if not key.startswith("ME_DSL_") and key not in {"CC", "CFLAGS"}
     }
     environment.update(ME_DSL_FP_MODE="strict", ME_DSL_JIT="1", CC=str(wrapper), NUMEXPR_NUM_THREADS="1")
-    backends = ["portable", "interpreter", "tcc", "integrated", "numpy", "numexpr"]
+    backends = ["menudet", "interpreter", "tcc", "integrated", "numpy", "numexpr"]
     if args.gcc:
         backends.append("cc")
     rows = []
@@ -132,7 +132,7 @@ def run(args):
                     cache = owned / f"trial-{trial}-{dtype}-{count}-{backend}"
                     cache.mkdir()
                     env = {**environment, "ME_DSL_JIT_CACHE_DIR": str(cache)}
-                    native = backend in {"portable", "interpreter", "tcc", "cc"}
+                    native = backend in {"menudet", "interpreter", "tcc", "cc"}
                     command = (
                         [str(args.native_runner.resolve()), backend, dtype, str(count), str(args.repeats)]
                         if native
@@ -166,7 +166,7 @@ def run(args):
                             "full-miniexpr-control"
                             if backend in {"interpreter", "tcc", "cc"}
                             else "menudet-draft-1.0-checked"
-                            if backend in {"portable", "integrated"}
+                            if backend in {"menudet", "integrated"}
                             else "control"
                         )
                         if backend == "cc":

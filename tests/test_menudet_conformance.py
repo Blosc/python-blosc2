@@ -130,7 +130,7 @@ def test_paired_corpus(native_inputs, tmp_path, monkeypatch):
     corpus, runner = native_inputs
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("No NumExpr fallback in portable conformance")
+        raise AssertionError("No NumExpr fallback in Menudet conformance")
 
     monkeypatch.setattr(numexpr, "evaluate", forbidden)
     report = compat.paired(corpus, runner, tmp_path)

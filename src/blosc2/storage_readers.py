@@ -1,4 +1,4 @@
-"""Bounded adapters for the native portable array storage-reader ABI."""
+"""Bounded adapters for the native Menudet array storage-reader ABI."""
 
 import ast
 from dataclasses import replace
@@ -208,7 +208,7 @@ def _normalize_selection(selection, domain):
             if isinstance(part, int):
                 part = part + size if part < 0 else part
                 if not 0 <= part < size:
-                    raise IndexError("Portable output index out of range")
+                    raise IndexError("Menudet output index out of range")
             elif not isinstance(part, slice):
                 raise TypeError("Storage readers support basic integer/slice selection")
             normalized.append(part)
@@ -276,9 +276,7 @@ def _compute_resident_prefilter(lazy, kwargs):
         or output.dtype != lazy.dtype
     ):
         return None
-    if not blosc2.blosc2_ext.portable_prefilter_inputs_eligible(
-        lazy.inputs, allow_numpy=True, output=output
-    ):
+    if not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(lazy.inputs, allow_numpy=True, output=output):
         return None
     return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
 
@@ -290,12 +288,12 @@ def compute_storage_if_eligible(lazy, kwargs):
     extension = blosc2.blosc2_ext
     if (
         not storage_reader_eligible(lazy.kernel)
-        or not getattr(extension, "portable_prefilter_available", lambda: False)()
+        or not getattr(extension, "menudet_prefilter_available", lambda: False)()
     ):
         return None
     if lazy.inputs and all(type(value) is np.ndarray for value in lazy.inputs.values()):
         return _compute_resident_prefilter(lazy, kwargs)
-    if not _dense_compressed_eligible(lazy) or not extension.portable_prefilter_inputs_eligible(lazy.inputs):
+    if not _dense_compressed_eligible(lazy) or not extension.menudet_prefilter_inputs_eligible(lazy.inputs):
         return None
     first = next(iter(lazy.inputs.values()))
     options = dict(kwargs)
@@ -429,7 +427,7 @@ def evaluate_prefilter_numpy(kernel, inputs, out=None, workers=None):
     for part in reports:
         report["fp_flags"] |= part["fp_flags"]
     report.update(
-        route="portable-prefilter",
+        route="menudet-prefilter",
         scheduling=scheduling,
         threads=workers,
         fp_supported=all(part["fp_supported"] for part in reports),
@@ -455,22 +453,20 @@ def _evaluate_dense_compressed(lazy):
     import blosc2
 
     extension = blosc2.blosc2_ext
-    if not getattr(extension, "portable_prefilter_available", lambda: False)():
+    if not getattr(extension, "menudet_prefilter_available", lambda: False)():
         return lazy.kernel.evaluate_sources(lazy.inputs, shape=lazy._domain, return_report=True)
-    if not extension.portable_prefilter_inputs_eligible(lazy.inputs):
+    if not extension.menudet_prefilter_inputs_eligible(lazy.inputs):
         return lazy.kernel.evaluate_sources(lazy.inputs, shape=lazy._domain, return_report=True)
     values = tuple(lazy.inputs.values())
     if any(value.dtype != lazy.kernel.input_dtypes[name] for name, value in lazy.inputs.items()):
-        from .portable_kernel import PortableArtifactError
+        from .menudet_kernel import MenudetError
 
-        raise PortableArtifactError(
-            "Storage input dtype disagrees with native signature", status="binding_error"
-        )
+        raise MenudetError("Storage input dtype disagrees with native signature", status="binding_error")
     decoded_bytes = sum(value.schunk.chunksize for value in values)
     if values[0].schunk.nchunks == 1 and decoded_bytes <= DENSE_MATERIALIZATION_BUDGET:
         operands = {}
         for name, value in lazy.inputs.items():
-            operands[name] = value._portable_chunk_buffer()
+            operands[name] = value._menudet_chunk_buffer()
         result, status = lazy.kernel.evaluate_block(operands, return_status=True)
         return result, {
             "route": "single-chunk",

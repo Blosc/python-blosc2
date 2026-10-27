@@ -134,7 +134,7 @@ def test_graph_sources_validation_precedes_reads(monkeypatch):
     plan = blosc2.NativeGraph.from_expression("sum(x + y)", {"x": "float64", "y": "float64"})
     x = blosc2.asarray(np.ones(8))
     y = blosc2.asarray(np.ones(7))
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         plan.evaluate_sources({"x": x, "y": y})
 
 
@@ -234,7 +234,7 @@ def test_graph_sources_compressed_mask_rejected_before_reads(monkeypatch):
     monkeypatch.setattr(StorageReader, "read", forbidden)
     inputs = {"x": blosc2.asarray(np.ones(8)), "mask": blosc2.asarray(np.ones(8, dtype=bool))}
     plan = blosc2.NativeGraph.from_expression("sum(x, where=mask)", {"x": "float64", "mask": "bool"})
-    with pytest.raises(blosc2.PortableArtifactError):
+    with pytest.raises(blosc2.MenudetError):
         plan.evaluate_sources(inputs)
 
 

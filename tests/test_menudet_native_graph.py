@@ -18,9 +18,9 @@ def array_runtime(native_graph_runtime):
 
     try:
         source = DSLKernel.from_source("def k(x):\n    return x\n")
-        plan = blosc2.PortableKernel.from_json(source.export({"x": "float64"}, "float64", version="1.0"))
+        plan = blosc2.MenudetKernel.from_json(source.export({"x": "float64"}, "float64", version="0.1"))
         plan.evaluate_array({"x": np.ones(1)})
-    except blosc2.PortableArtifactError as error:
+    except blosc2.MenudetError as error:
         if os.environ.get("MENUDET_REQUIRE_ARRAY_RUNTIME"):
             pytest.fail(str(error))
         pytest.skip("Installed dependency does not implement native logical arrays")
@@ -47,7 +47,7 @@ def test_required_graph_no_fallback_and_plan_reuse(monkeypatch, dtype):
     x[:] = 3
     np.testing.assert_array_equal(expr.compute(_require_native=True)[:], x * 2 + y)
     assert compile_plan.cache_info().hits > previous
-    assert expr._native_execution_report["backend"] == "portable-interpreter"
+    assert expr._native_execution_report["backend"] == "menudet-interpreter"
 
 
 def test_partial_reads_and_reductions():
@@ -78,8 +78,8 @@ def test_root_reduction_and_export(tmp_path):
         expr.native_kernel()
     plan = elementwise.native_kernel()
     inputs = {name: value for name, value in elementwise.operands.items() if name in plan.input_dtypes}
-    portable = plan.lazy(inputs, partitions=(2, 3))
-    portable.save(tmp_path / "plan.b2nd")
+    menudet_result = plan.lazy(inputs, partitions=(2, 3))
+    menudet_result.save(tmp_path / "plan.b2nd")
     loaded = blosc2.open(tmp_path / "plan.b2nd")
     np.testing.assert_array_equal(loaded[:], x[:] * 2)
 
@@ -88,7 +88,7 @@ def test_unsupported_rejects_before_destination_write(tmp_path):
     with blosc2.expression_evaluation("safe"):
         expr = blosc2.lazyexpr("cumsum(x)", {"x": np.arange(8.0)})
     target = tmp_path / "output.b2nd"
-    with pytest.raises((ValueError, blosc2.PortableArtifactError)):
+    with pytest.raises((ValueError, blosc2.MenudetError)):
         expr.compute(_require_native=True, urlpath=target)
     assert not target.exists()
 
@@ -111,7 +111,7 @@ with blosc2.expression_evaluation('safe'):
     np.testing.assert_allclose(result[:], np.sqrt(x[:]) + 2)
     np.testing.assert_allclose(e.sum(axis=0, _require_native=True), np.sum(np.sqrt(x[:]) + 2,axis=0))
     plan = e.native_kernel()
-    imported = blosc2.PortableKernel.from_json(plan.to_json())
+    imported = blosc2.MenudetKernel.from_json(plan.to_json())
     bindings = {name:value[()] for name,value in e.operands.items() if name in imported.input_dtypes}
     np.testing.assert_allclose(imported.evaluate_array(bindings), np.sqrt(x[:]) + 2)
     from pathlib import Path
@@ -120,8 +120,8 @@ with blosc2.expression_evaluation('safe'):
     e = blosc2.lazyexpr('sqrt(x) + 2', {'x':stored})
     plan = e.native_kernel()
     bindings = {name:value for name,value in e.operands.items() if name in plan.input_dtypes}
-    plan.lazy(bindings, partitions=(2,3)).save(root/'portable.b2nd')
-    restored = blosc2.open(root/'portable.b2nd', deserialize='safe')
+    plan.lazy(bindings, partitions=(2,3)).save(root/'Menudet.b2nd')
+    restored = blosc2.open(root/'Menudet.b2nd', deserialize='safe')
     np.testing.assert_allclose(restored[:], np.sqrt(stored[:])+2)
 assert not any(n == 'numexpr' or n.startswith('numexpr.') for n in sys.modules)
 """

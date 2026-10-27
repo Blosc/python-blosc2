@@ -1,4 +1,4 @@
-"""Actual portable JIT execution, not accelerated-request interpreter fallback."""
+"""Actual Menudet JIT execution, not accelerated-request interpreter fallback."""
 
 import os
 import shutil
@@ -15,8 +15,8 @@ def make(expression, dtype, *, jit, output=None, inputs=None):
     inputs = inputs or {"x": dtype, "y": dtype}
     source = f"def k({', '.join(inputs)}):\n    return {expression}\n"
     author = blosc2.DSLKernel.from_source(source)
-    artifact = author.export(inputs, output or dtype, version="1.0", casting="unsafe")
-    return blosc2.PortableKernel.from_json(artifact, jit=jit)
+    artifact = author.export(inputs, output or dtype, version="0.1", casting="unsafe")
+    return blosc2.MenudetKernel.from_json(artifact, jit=jit)
 
 
 @pytest.fixture(
@@ -41,19 +41,19 @@ def backend(request, monkeypatch, tmp_path):
         monkeypatch.setenv("CC", compiler)
     try:
         probe = make("x + y", "float64", jit=True)
-    except blosc2.PortableArtifactError as error:
-        if "unsupported portable artifact version" not in str(error):
+    except blosc2.MenudetError as error:
+        if "unsupported Menudet artifact version" not in str(error):
             raise
         if (
             os.environ.get("MENUDET_REQUIRE_JIT") == "1"
             or os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME") == "1"
         ):
             pytest.fail(str(error))
-        pytest.skip("Installed miniexpr dependency does not implement Menudet 1.0")
+        pytest.skip("Installed miniexpr dependency does not implement Menudet 0.1 beta")
     if not probe.has_jit:
         if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
-            pytest.fail(f"{request.param} did not produce actual portable JIT")
-        pytest.skip(f"Portable {request.param} JIT unavailable in this runtime")
+            pytest.fail(f"{request.param} did not produce actual Menudet JIT")
+        pytest.skip(f"Menudet {request.param} JIT unavailable in this runtime")
     return request.param
 
 
@@ -135,7 +135,7 @@ def test_lazy_mask_raise_recovery_and_threads(backend):
         bindings, reduction="sum", where=np.array([False, True]), return_report=True
     )
     assert report["fp_flags"] == 0
-    with pytest.raises(blosc2.PortableArtifactError) as error:
+    with pytest.raises(blosc2.MenudetError) as error:
         div.evaluate(bindings, fp_errors="raise")
     assert error.value.fp_status["flags"] == 2
     values, status = div.evaluate({"x": np.ones(2), "y": np.ones(2)}, return_status=True)
@@ -200,7 +200,7 @@ def test_native_graph_acceleration_and_reuse(backend, native_graph_runtime):
     with blosc2.expression_evaluation("safe"):
         expr = blosc2.lazyexpr("x * 2 + 1", {"x": x})
     result = expr.compute(_require_native=True, jit=True)
-    assert expr._native_execution_report["backend"] == "portable-jit"
+    assert expr._native_execution_report["backend"] == "menudet-jit"
     np.testing.assert_array_equal(result[:], x * 2 + 1)
     hits = compile_plan.cache_info().hits
     x[:] = 4
@@ -377,10 +377,10 @@ def test_unary_math_lowering(backend, dtype):
 @pytest.mark.native_semantics
 def test_local_and_branch_lowering(backend, dtype, body):
     artifact = blosc2.DSLKernel.from_source("def k(x, y):\n" + body).export(
-        {"x": dtype, "y": dtype}, dtype, version="1.0"
+        {"x": dtype, "y": dtype}, dtype, version="0.1"
     )
-    compiled = blosc2.PortableKernel.from_json(artifact, jit=True)
-    reference = blosc2.PortableKernel.from_json(artifact, jit=False)
+    compiled = blosc2.MenudetKernel.from_json(artifact, jit=True)
+    reference = blosc2.MenudetKernel.from_json(artifact, jit=False)
     assert compiled.has_jit
     bindings = {
         "x": np.array([0.0, -0.0, -2.0, 3.0, np.inf, np.nan, 2**24], dtype=dtype),

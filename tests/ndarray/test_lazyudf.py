@@ -484,7 +484,7 @@ def test_save_ludf(tmp_path):
 
     expr = blosc2.lazyudf(udf1p, (array,), np.float64, cparams=cparams)
 
-    with pytest.raises(TypeError, match="PortableKernel"):
+    with pytest.raises(TypeError, match="MenudetKernel"):
         expr.save(urlpath=urlpath)
     assert not (tmp_path / "lazyarray.b2nd").exists()
     assert isinstance(expr, blosc2.LazyUDF)
@@ -493,7 +493,7 @@ def test_save_ludf(tmp_path):
 
     if blosc2._HAS_NUMBA:
         expr = blosc2.lazyudf(udf1p_numba, (array,), np.float64)
-        with pytest.raises(TypeError, match="PortableKernel"):
+        with pytest.raises(TypeError, match="MenudetKernel"):
             expr.save(urlpath=urlpath)
         assert not (tmp_path / "lazyarray.b2nd").exists()
         assert isinstance(expr, blosc2.LazyUDF)
@@ -509,7 +509,7 @@ def test_lazyudf_vlmeta_roundtrip(tmp_path):
 
     expr.vlmeta["name"] = "increment"
     expr.vlmeta["attrs"] = {"version": 1}
-    with pytest.raises(TypeError, match="PortableKernel"):
+    with pytest.raises(TypeError, match="MenudetKernel"):
         expr.save(urlpath=str(expr_path))
     assert not expr_path.exists()
     assert expr.vlmeta["name"] == "increment"

@@ -156,7 +156,7 @@ explicit overrides remain useful for unusual or repeatedly executed workloads.
 This applies consistently to eligible string expressions, graph-generated maps
 and Menudet artifacts. ``evaluate()`` does not accept per-call JIT keywords;
 use ``blosc2.jit_options(jit=True)`` or ``blosc2.set_jit_options(jit=True)`` to opt
-in. Native metadata is exposed as ``PortableKernel.execution_kind``. Older native
+in. Native metadata is exposed as ``MenudetKernel.execution_kind``. Older native
 runtimes report ``"unknown"`` and retain their existing native default behavior.
 
 Scalar miniexpr reductions currently use the native interpreter, even when JIT

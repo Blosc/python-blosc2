@@ -41,7 +41,7 @@ def test_generator_requires_pinned_numpy(monkeypatch):
 
 
 def test_initial_array_inventory():
-    add = blosc2.PortableKernel.from_json(
+    add = blosc2.MenudetKernel.from_json(
         blosc2.DSLKernel.from_source("def k(x, y):\n    return x + y\n").export(
             {"x": "float32", "y": "float32"}, "float32"
         ),
@@ -50,9 +50,9 @@ def test_initial_array_inventory():
     x = np.array([[1], [2]], dtype="float32")
     y = np.array([[2, 3, 4]], dtype="float32")
     assert (x + y).shape == (2, 3)
-    with pytest.raises(blosc2.PortableArtifactError, match="binding_error"):
+    with pytest.raises(blosc2.MenudetError, match="binding_error"):
         add.evaluate({"x": x, "y": y})
-    block_sum = blosc2.PortableKernel.from_json(
+    block_sum = blosc2.MenudetKernel.from_json(
         blosc2.DSLKernel.from_source("def k(x):\n    return block_sum(x)\n").export(
             {"x": "int8"}, "int64", cardinality="block_scalar"
         ),
@@ -64,7 +64,7 @@ def test_initial_array_inventory():
     assert actual.dtype == np.dtype("int64")
     assert actual == 15
     np.testing.assert_array_equal(np.sum(values, axis=1), [3, 12])
-    identity = blosc2.PortableKernel.from_json(
+    identity = blosc2.MenudetKernel.from_json(
         blosc2.DSLKernel.from_source("def k(x):\n    return x\n").export({"x": "float32"}, "float32"),
         jit=False,
     )
@@ -74,14 +74,14 @@ def test_initial_array_inventory():
 
 @pytest.mark.parametrize("dtype", ["float16"])
 def test_inventory_unsupported_dtypes(dtype):
-    with pytest.raises(blosc2.PortableArtifactError, match="unsupported_requirement"):
+    with pytest.raises(blosc2.MenudetError, match="unsupported_requirement"):
         blosc2.DSLKernel.from_source("def k(x):\n    return x\n").export({"x": dtype}, dtype)
 
 
 @pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 def test_inventory_complex_dtypes(dtype):
     values = np.array([1 + 2j, -3 + 0.5j, 0 + 0j], dtype=dtype)
-    kernel = blosc2.PortableKernel.from_json(
+    kernel = blosc2.MenudetKernel.from_json(
         blosc2.DSLKernel.from_source("def k(x):\n    return x * x + 1\n").export({"x": dtype}, dtype),
         jit=False,
     )
@@ -98,7 +98,7 @@ def test_shared_checkpoint_corpus(monkeypatch):
     import numexpr
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("Portable integration must not call NumExpr")
+        raise AssertionError("Menudet integration must not call NumExpr")
 
     monkeypatch.setattr(numexpr, "evaluate", forbidden)
     report = compat.integrate(corpus, repeats=2)
@@ -116,19 +116,19 @@ def test_shared_checkpoint_corpus(monkeypatch):
         signature = {item["name"]: item["dtype"] for item in artifact["inputs"]}
         constants = {item["name"]: compat.decode(item)[()] for item in case.get("scalar_operands", [])}
         if case["baseline"]["status"] == -3:
-            with pytest.raises(blosc2.PortableArtifactError, match="invalid_source"):
+            with pytest.raises(blosc2.MenudetError, match="invalid_source"):
                 author.export(signature, artifact["output"]["dtype"], constants=constants)
         else:
             exported = json.loads(author.export(signature, artifact["output"]["dtype"], constants=constants))
             assert exported["source"] == artifact["source"]
             assert exported["constants"] == artifact["constants"]
         artifact["language"]["version"] = "1.1"
-        with pytest.raises(blosc2.PortableArtifactError, match="unsupported"):
-            blosc2.PortableKernel.from_json(json.dumps(artifact), jit=False)
-        artifact["language"]["version"] = "1.0"
+        with pytest.raises(blosc2.MenudetError, match="unsupported"):
+            blosc2.MenudetKernel.from_json(json.dumps(artifact), jit=False)
+        artifact["language"]["version"] = "0.1"
         artifact["schema_version"] = "1.1"
-        with pytest.raises(blosc2.PortableArtifactError, match="unsupported"):
-            blosc2.PortableKernel.from_json(json.dumps(artifact), jit=False)
+        with pytest.raises(blosc2.MenudetError, match="unsupported"):
+            blosc2.MenudetKernel.from_json(json.dumps(artifact), jit=False)
 
 
 @pytest.mark.parametrize("corruption", ["schema", "semantic_revision", "hex", "extent", "baseline"])

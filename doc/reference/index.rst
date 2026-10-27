@@ -12,6 +12,6 @@ API Reference
     save_load
     utilities
     dsl_syntax
-    portable_dsl
+    menudet
     menudet_accuracy
     jit

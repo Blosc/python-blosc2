@@ -19,14 +19,14 @@ env:
   # that expected import warning; never force PYTHON_GIL=0 or claim no-GIL safety.
   CIBW_TEST_COMMAND: >-
     python -m pytest
-    {project}/tests/test_portable_artifact.py
-    {project}/tests/test_portable_descriptor.py
-    {project}/tests/test_portable_descriptor_host.py
-    {project}/tests/test_portable_lazy.py
-    {project}/tests/test_portable_jit_integration.py
-    {project}/tests/test_portable_policy.py
-    {project}/tests/test_portable_table_export.py
-    {project}/tests/test_dsl_portable.py -q -n 0 &&
+    {project}/tests/test_menudet_artifact.py
+    {project}/tests/test_menudet_descriptor.py
+    {project}/tests/test_menudet_descriptor_host.py
+    {project}/tests/test_menudet_lazy.py
+    {project}/tests/test_menudet_jit_integration.py
+    {project}/tests/test_menudet_policy.py
+    {project}/tests/test_menudet_table_export.py
+    {project}/tests/test_dsl_menudet.py -q -n 0 &&
     python {project}/scripts/certify_menudet_math.py &&
     python {project}/scripts/verify_safe_lazyexpr.py
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long

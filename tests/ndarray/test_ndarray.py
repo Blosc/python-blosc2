@@ -449,7 +449,7 @@ def test_large_linspace_menudet_eager_parity():
 def test_lazy_arange_and_linspace():
     for dt in [np.int64, np.float64, np.float32]:
         a1 = blosc2.arange(100, dtype=dt, lazy=True)
-        assert isinstance(a1, blosc2.portable_lazy.PortableLazyArray)
+        assert isinstance(a1, blosc2.menudet_lazy.MenudetLazyArray)
         np.testing.assert_allclose(a1[:], np.arange(100, dtype=dt))
 
         a2 = blosc2.arange(0, 100, shape=(10, 10), dtype=dt, lazy=True)
@@ -458,7 +458,7 @@ def test_lazy_arange_and_linspace():
 
     for dt in [np.float64, np.float32]:
         l1 = blosc2.linspace(0.0, 1.0, 100, dtype=dt, lazy=True)
-        assert isinstance(l1, blosc2.portable_lazy.PortableLazyArray)
+        assert isinstance(l1, blosc2.menudet_lazy.MenudetLazyArray)
         np.testing.assert_allclose(l1[:], np.linspace(0.0, 1.0, 100, dtype=dt))
 
         l2 = blosc2.linspace(0.0, 1.0, 100, shape=(10, 10), dtype=dt, lazy=True)
@@ -528,7 +528,7 @@ def test_eye(k, N, M, dtype, chunks):
 @pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.parametrize("clevel", [0, 5])
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
-def test_eye_portable_edges_and_storage(jit, clevel, tmp_path, monkeypatch):
+def test_eye_menudet_edges_and_storage(jit, clevel, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Numeric eye must not use the Python LazyUDF callback")
 

@@ -61,7 +61,7 @@ def _decode_structured_reference(data, *, deserialize="safe"):
     if kind == "ref":
         ref_payload = payload.get("ref")
         return Ref.from_dict(ref_payload)
-    if kind in {"c2array", "lazyexpr", "lazyudf", "portable"}:
+    if kind in {"c2array", "lazyexpr", "lazyudf", "menudet"}:
         return decode_b2object_payload(payload, deserialize=deserialize)
     raise ValueError(f"Unsupported structured Blosc2 msgpack payload kind: {kind!r}")
 
@@ -216,7 +216,7 @@ def _safe_msgpack_unpackb(payload):
                 kind = candidate if isinstance(candidate, str) else "structured reference"
             except Exception:
                 kind = "structured reference"
-            if candidate in {"portable", "lazyexpr"}:
+            if candidate in {"menudet", "lazyexpr"}:
                 return decode_b2object_payload(envelope, deserialize="safe")
         else:
             kind = f"MessagePack extension code {code}"

@@ -1,4 +1,4 @@
-"""Execute source-authored LazyUDF recipes using the portable Menudet runtime."""
+"""Execute source-authored LazyUDF recipes using the Menudet Menudet runtime."""
 
 import copy
 import os
@@ -9,7 +9,7 @@ import numpy as np
 
 import blosc2
 
-from .portable_lazy import PortableLazyArray
+from .menudet_lazy import MenudetLazyArray
 
 
 def _compatibility_result(udf):
@@ -18,7 +18,7 @@ def _compatibility_result(udf):
     return False, None
 
 
-class _PartitionedDSL(PortableLazyArray):
+class _PartitionedDSL(MenudetLazyArray):
     """Keep original chunk-local groups and broadcast scalar returns like LazyUDF."""
 
     def __init__(self, kernel, inputs, shape, chunks, blocks):
@@ -92,7 +92,7 @@ class _PartitionedDSL(PortableLazyArray):
 def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit compatibility gates
     """Return (handled, result), retaining explicit compatibility exclusions."""
     from .dsl_kernel import DSLKernel
-    from .portable_kernel import PortableArtifactError
+    from .menudet_kernel import MenudetError
 
     if (
         not isinstance(udf.func, DSLKernel)
@@ -110,10 +110,10 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
         execution["jit_backend"] = None
     if (
         execution["jit_backend"] == "js"
-        or not blosc2.blosc2_ext.portable_descriptor_available()
+        or not blosc2.blosc2_ext.menudet_descriptor_available()
         or (
             any(execution[name] for name in ("compiler", "cflags", "cache_dir", "compiler_output", "trace"))
-            and not blosc2.blosc2_ext.portable_artifact_options_available()
+            and not blosc2.blosc2_ext.menudet_artifact_options_available()
         )
         or np.dtype(udf.dtype).kind not in "biufcSU"
         or (np.dtype(udf.dtype).kind == "f" and np.dtype(udf.dtype).itemsize not in (4, 8))
@@ -128,7 +128,7 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
         else:
             inputs[name] = value
     # Argument defaults have already been bound by the Python call wrapper;
-    # the portable native grammar expects a plain parameter list.
+    # the Menudet native grammar expects a plain parameter list.
     text = re.sub(
         r"(?m)^def ([^(]+)\([^\n]*\):",
         lambda match: f"def {match[1]}({', '.join(udf.func.input_names)}):",
@@ -148,7 +148,7 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
                 constants=constants,
                 ndim=ndim,
             )
-    except PortableArtifactError as error:
+    except MenudetError as error:
         if "return cardinality" in str(error):
             with blosc2.jit_options(**execution):
                 artifact = source.export(
@@ -161,31 +161,31 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
         else:
             raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
     with blosc2.jit_options(**execution):
-        kernel = blosc2.PortableKernel.from_json(artifact, jit=execution["jit"])
+        kernel = blosc2.MenudetKernel.from_json(artifact, jit=execution["jit"])
     if kernel.result_cardinality == "block_scalar":
-        portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
+        menudet_result = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
     elif any(c % b for c, b in zip(chunks, blocks, strict=True)):
-        portable = _PartitionedDSL(kernel, inputs, tuple(udf.shape), chunks, blocks)
+        menudet_result = _PartitionedDSL(kernel, inputs, tuple(udf.shape), chunks, blocks)
     else:
-        portable = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
+        menudet_result = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
     udf._native_execution_report = {"route": "menudet-lazyudf", "jit": kernel.has_jit}
     if os.environ.get("BLOSC_ME_JIT_TRACE") == "1":
         print(f"[blosc2] engine=menudet jit={execution['jit']} expr={text[:120]}")
     if getitem:
-        return True, portable[item]
+        return True, menudet_result[item]
     output = storage.pop("_output", None)
     for key in ("dtype", "shape", "in_place", "strict_miniexpr"):
         storage.pop(key, None)
     if output is not None:
-        output[...] = portable[item]
+        output[...] = menudet_result[item]
         return True, output
     if storage.get("chunks") is None and storage.get("blocks") is None:
         storage["chunks"] = chunks
         storage["blocks"] = blocks
     full = item is None or item is Ellipsis or (isinstance(item, tuple) and not item)
     if full:
-        return True, portable.compute(**storage)
+        return True, menudet_result.compute(**storage)
     # Selection can change rank/shape; do not impose the original storage grid.
     storage.pop("chunks", None)
     storage.pop("blocks", None)
-    return True, portable.compute(item=item, **storage)
+    return True, menudet_result.compute(item=item, **storage)

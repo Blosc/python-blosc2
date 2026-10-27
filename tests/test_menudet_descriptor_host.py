@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from blosc2 import PortableKernel, blosc2_ext
+from blosc2 import MenudetKernel, blosc2_ext
 
 
 def test_native_descriptor_authority_and_block_routing(monkeypatch):
@@ -25,7 +25,7 @@ def test_native_descriptor_authority_and_block_routing(monkeypatch):
 
         def descriptor_info(self):
             return {
-                "schema_version": "1.0",
+                "schema_version": "0.1",
                 "inputs": {"x": np.dtype("int64")},
                 "output_dtype": np.dtype("int64"),
                 "cardinality": "block_scalar",
@@ -36,9 +36,9 @@ def test_native_descriptor_authority_and_block_routing(monkeypatch):
             calls.append((arrays, shape, context))
             return marker
 
-    monkeypatch.setattr(blosc2_ext, "PortableArtifactHandle", Handle)
-    monkeypatch.setattr(blosc2_ext, "portable_descriptor_available", lambda: True, raising=False)
-    kernel = PortableKernel.from_json(b"opaque record validated only by native code")
+    monkeypatch.setattr(blosc2_ext, "MenudetArtifactHandle", Handle)
+    monkeypatch.setattr(blosc2_ext, "menudet_descriptor_available", lambda: True, raising=False)
+    kernel = MenudetKernel.from_json(b"opaque record validated only by native code")
     assert kernel.result_cardinality == "block_scalar"
     assert kernel.context_ndim == 2
     with pytest.raises(ValueError, match="explicit logical_shape"):

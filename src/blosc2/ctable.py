@@ -3044,7 +3044,7 @@ class Column:
         ``numpy.dtypes.StringDType()``, the dtype of their materialized reads.
         """
         recipe = self._table._computed_cols.get(self._col_name)
-        if recipe is not None and recipe.get("kind") == "portable":
+        if recipe is not None and recipe.get("kind") == "menudet":
             # The native artifact fixes this dtype. Building the virtual column
             # here would evaluate every row just to answer a metadata question.
             return recipe["dtype"]
@@ -7019,7 +7019,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if not str(urlpath).endswith(".b2z"):
             raise ValueError("urlpath must have a .b2z extension")
-        self._preflight_portable_persistence()
+        self._preflight_menudet_persistence()
         if preserve_sources and self.base is not None:
             raise ValueError("preserve_sources requires an unfiltered root table")
 
@@ -7088,7 +7088,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         urlpath = os.fspath(urlpath)
         storage = getattr(self, "_storage", None)
-        self._preflight_portable_persistence()
+        self._preflight_menudet_persistence()
         can_physical_unpack = (
             not compact
             and self.base is None
@@ -7136,7 +7136,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         :func:`blosc2.ctable_from_cframe`
         """
         # Materialize live rows for views/slices; for base tables use the live
-        self._preflight_portable_persistence()
+        self._preflight_menudet_persistence()
         # columns directly.  copy() is the canonical materialization path.
         if self.base is not None:
             src = self.copy(compact=True)
@@ -7436,7 +7436,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if preserve_sources and self.base is not None:
             raise ValueError("preserve_sources requires an unfiltered root table")
-        self._preflight_portable_persistence()
+        self._preflight_menudet_persistence()
         if self.base is not None:
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
@@ -12182,8 +12182,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ``kernel(dep0, dep1)`` call label is returned.
         """
         col_deps = cc["col_deps"]
-        if cc.get("kind") == "portable":
-            return f"portable[independent]({', '.join(col_deps)})"
+        if cc.get("kind") == "menudet":
+            return f"menudet[independent]({', '.join(col_deps)})"
         if cc.get("kind") == "dsl":
             kernel = cc.get("kernel")
             kname = getattr(kernel, "__name__", "dsl_kernel")
@@ -12278,11 +12278,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if self._computed_cols:
             computed = []
             for name, cc in self._computed_cols.items():
-                if cc.get("kind") == "portable":
+                if cc.get("kind") == "menudet":
                     computed.append(
                         {
                             "name": name,
-                            "kind": "portable",
+                            "kind": "menudet",
                             "artifact": cc["artifact"],
                             "bindings": cc["bindings"],
                             "row_shape": list(cc["row_shape"]),
@@ -12326,7 +12326,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 }
                 if "transformer" in meta:
                     entry["transformer"] = meta["transformer"]
-                if meta.get("transformer_kind") == "portable":
+                if meta.get("transformer_kind") == "menudet":
                     entry.update({key: meta[key] for key in ("artifact", "bindings", "row_shape")})
                 if meta.get("dsl_source") is not None:
                     entry["dsl_source"] = meta["dsl_source"]
@@ -12527,8 +12527,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             name = cc_meta["name"]
             col_deps = cc_meta["col_deps"]
             dtype = np.dtype(cc_meta["dtype"])
-            if cc_meta.get("kind") == "portable":
-                self._computed_cols[name] = self._validate_portable_table_metadata(cc_meta)
+            if cc_meta.get("kind") == "menudet":
+                self._computed_cols[name] = self._validate_menudet_table_metadata(cc_meta)
             elif cc_meta.get("kind") == "dsl":
                 from blosc2.dsl_kernel import kernel_from_source
 
@@ -12575,10 +12575,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             }
             if "transformer" in meta:
                 loaded["transformer"] = dict(meta["transformer"])
-            if meta.get("transformer_kind") == "portable":
-                desc = self._validate_portable_table_metadata(meta)
+            if meta.get("transformer_kind") == "menudet":
+                desc = self._validate_menudet_table_metadata(meta)
                 if self._cols[meta["name"]].dtype != desc["dtype"]:
-                    raise ValueError("Stored portable output dtype disagrees with native signature")
+                    raise ValueError("Stored Menudet output dtype disagrees with native signature")
                 loaded.update({key: desc[key] for key in ("artifact", "bindings", "row_shape", "kernel")})
             if meta.get("dsl_source") is not None:
                 loaded["dsl_source"] = meta["dsl_source"]
@@ -12631,10 +12631,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 "intend to retain legacy table-kernel behavior.",
             )
 
-    def _preflight_portable_persistence(self):
+    def _preflight_menudet_persistence(self):
         for meta in [*self._computed_cols.values(), *self._materialized_cols.values()]:
-            if meta.get("kind") == "portable" or meta.get("transformer_kind") == "portable":
-                self._validate_portable_table_metadata(meta)
+            if meta.get("kind") == "menudet" or meta.get("transformer_kind") == "menudet":
+                self._validate_menudet_table_metadata(meta)
         if any(cc.get("kind") == "dsl" for cc in self._computed_cols.values()) or any(
             meta.get("dsl_source") is not None or meta.get("transformer_kind") == "dsl"
             for meta in self._materialized_cols.values()
@@ -12669,9 +12669,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if meta.get("transformer_kind") == "row_transformer":
                 transformer = RowTransformer.from_metadata(meta["transformer"])
                 row[name] = np.asarray(transformer.evaluate_row(row), dtype=meta["dtype"])
-            elif meta.get("transformer_kind") == "portable":
+            elif meta.get("transformer_kind") == "menudet":
                 single = {dep: [row[dep]] for dep in meta["col_deps"]}
-                row[name] = self._evaluate_portable_rows(meta, single, count=1)[0]
+                row[name] = self._evaluate_menudet_rows(meta, single, count=1)[0]
             elif meta.get("transformer_kind") == "dsl":
                 single = {dep: [row[dep]] for dep in meta["col_deps"]}
                 row[name] = self._evaluate_dsl_materialized_batch(meta, single)[0]
@@ -12721,8 +12721,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if meta.get("transformer_kind") == "row_transformer":
                 transformer = RowTransformer.from_metadata(meta["transformer"])
                 values = transformer.evaluate_batch(raw_columns)
-            elif meta.get("transformer_kind") == "portable":
-                values = self._evaluate_portable_rows(meta, raw_columns)
+            elif meta.get("transformer_kind") == "menudet":
+                values = self._evaluate_menudet_rows(meta, raw_columns)
             elif meta.get("transformer_kind") == "dsl":
                 values = self._evaluate_dsl_materialized_batch(meta, raw_columns)
             else:
@@ -12903,15 +12903,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if target_name in self._computed_cols:
             raise ValueError(f"A computed column named {target_name!r} already exists.")
         target_dtype = np.dtype(dtype) if dtype is not None else np.dtype(cc["dtype"])
-        if cc.get("kind") == "portable" and target_dtype != cc["dtype"]:
-            raise ValueError("Portable materialization cannot override its native result dtype")
+        if cc.get("kind") == "menudet" and target_dtype != cc["dtype"]:
+            raise ValueError("Menudet materialization cannot override its native result dtype")
 
         self._create_empty_stored_column(target_name, target_dtype, cparams=cparams)
-        if cc.get("kind") == "portable":
+        if cc.get("kind") == "menudet":
             self._materialized_cols[target_name] = {
                 **cc,
                 "computed_column": name,
-                "transformer_kind": "portable",
+                "transformer_kind": "menudet",
                 "stale": False,
             }
         elif cc.get("kind") == "dsl":
@@ -13040,7 +13040,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Returns one of::
 
             {"kind": "expression", "lazy": <LazyExpr>, "col_deps": [...]}
-            {"kind": "portable", "kernel": <PortableKernel>, "bindings": {...}, ...}
+            {"kind": "menudet", "kernel": <MenudetKernel>, "bindings": {...}, ...}
 
         A ``@blosc2.dsl_kernel`` is accepted either directly (with *inputs*
         naming one source column per kernel parameter) or as a ``LazyUDF``
@@ -13049,7 +13049,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         New kernel registrations always validate/export Menudet and evaluate
         independent rows; only loaded legacy recipes use vector-column execution.
         """
-        if isinstance(expr, blosc2.DSLKernel | blosc2.PortableKernel):
+        if isinstance(expr, blosc2.DSLKernel | blosc2.MenudetKernel):
             names = expr.input_names if isinstance(expr, blosc2.DSLKernel) else list(expr.input_dtypes)
             if inputs is None:
                 raise TypeError("A table kernel requires inputs= naming one source column per parameter")
@@ -13063,7 +13063,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if isinstance(expr, blosc2.DSLKernel):
                 output_dtype = dtype if isinstance(dtype, type) else getattr(dtype, "dtype", dtype)
                 dtype = self._dsl_result_dtype(expr, list(bindings.values()), output_dtype)
-            return self._portable_table_descriptor(expr, bindings, dtype=dtype, cardinality=cardinality)
+            return self._menudet_table_descriptor(expr, bindings, dtype=dtype, cardinality=cardinality)
         # Resolve a callable once (a lambda may return a LazyExpr or a LazyUDF).
         obj = expr(self._cols) if (callable(expr) and not isinstance(expr, blosc2.LazyExpr)) else expr
         if isinstance(obj, blosc2.LazyUDF):
@@ -13136,10 +13136,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         (the all-NDArray miniexpr fast path).  The full column is recomputed on
         each access — acceptable for a virtual, unstored column.
         """
-        if cc.get("kind") == "portable":
+        if cc.get("kind") == "menudet":
             positions = np.flatnonzero(self._valid_rows[:])
             raw = {dep: self._cols[dep][positions] for dep in cc["col_deps"]}
-            values = self._evaluate_portable_rows(cc, raw, count=len(positions))
+            values = self._evaluate_menudet_rows(cc, raw, count=len(positions))
             output = np.zeros(len(self._valid_rows), dtype=cc["dtype"])
             output[positions] = values
             return blosc2.asarray(output)
@@ -13211,52 +13211,52 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     queue.append(name)
         return affected
 
-    def _portable_table_descriptor(self, kernel, bindings, *, dtype=None, cardinality="elementwise"):
+    def _menudet_table_descriptor(self, kernel, bindings, *, dtype=None, cardinality="elementwise"):
         if isinstance(kernel, blosc2.DSLKernel):
             if dtype is None:
-                raise ValueError("Authored portable table kernels require an explicit output dtype")
+                raise ValueError("Authored Menudet table kernels require an explicit output dtype")
             bindings = dict(bindings)
             if any(dep not in self._cols for dep in bindings.values()):
-                raise ValueError("Portable row inputs require stored columns")
+                raise ValueError("Menudet row inputs require stored columns")
             row_shape = (
                 np.broadcast_shapes(*(tuple(self._cols[dep].shape[1:]) or (1,) for dep in bindings.values()))
                 if bindings
                 else (1,)
             )
-            kernel = blosc2.PortableKernel.from_json(
+            kernel = blosc2.MenudetKernel.from_json(
                 kernel.export(
                     {name: self._cols[dep].dtype for name, dep in bindings.items()},
                     dtype,
-                    version="1.0",
+                    version="0.1",
                     ndim=len(row_shape),
                     cardinality=cardinality,
                 ),
                 jit=False,
             )
-        if not isinstance(kernel, blosc2.PortableKernel):
-            raise TypeError("Portable table transformers require a validated PortableKernel")
+        if not isinstance(kernel, blosc2.MenudetKernel):
+            raise TypeError("Menudet table transformers require a validated MenudetKernel")
         output_dtype = dtype if isinstance(dtype, type) else getattr(dtype, "dtype", dtype)
         if dtype is not None and np.dtype(output_dtype) != kernel.output_dtype:
-            raise ValueError("Output dtype disagrees with the portable kernel signature")
-        if kernel.schema_version != "1.0":
-            raise ValueError("Independent rows require portable 1.0")
+            raise ValueError("Output dtype disagrees with the Menudet kernel signature")
+        if kernel.schema_version != "0.1":
+            raise ValueError("Independent rows require Menudet 0.1")
         bindings = dict(bindings)
         if set(bindings) != set(kernel.input_dtypes):
-            raise ValueError("Portable table bindings must match the native signature")
+            raise ValueError("Menudet table bindings must match the native signature")
         row_shapes = set()
         for name, dep in bindings.items():
             if dep not in self._cols:
-                raise ValueError("Portable row inputs require stored columns")
+                raise ValueError("Menudet row inputs require stored columns")
             row_shapes.add(tuple(self._cols[dep].shape[1:]) or (1,))
             if np.dtype(self._cols[dep].dtype) != kernel.input_dtypes[name]:
-                raise ValueError("Portable table column dtype disagrees with the native signature")
+                raise ValueError("Menudet table column dtype disagrees with the native signature")
         row_shape = np.broadcast_shapes(*row_shapes) if row_shapes else (1,)
         if kernel.context_ndim not in (0, len(row_shape)):
-            raise ValueError("Portable context rank disagrees with the fixed row domain")
+            raise ValueError("Menudet context rank disagrees with the fixed row domain")
         if row_shape != (1,) and kernel.result_cardinality != "block_scalar":
             raise ValueError("Fixed-shape row transformers currently require scalar native returns")
         return {
-            "kind": "portable",
+            "kind": "menudet",
             "kernel": kernel,
             "artifact": kernel.to_json(),
             "bindings": bindings,
@@ -13265,23 +13265,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             "dtype": kernel.output_dtype,
         }
 
-    def _validate_portable_table_metadata(self, meta):
-        kernel = blosc2.PortableKernel.from_json(meta["artifact"])
+    def _validate_menudet_table_metadata(self, meta):
+        kernel = blosc2.MenudetKernel.from_json(meta["artifact"])
         if meta.get("row_domain", "independent") != "independent":
-            raise ValueError("Only independent-row portable table groups are implemented")
-        desc = self._portable_table_descriptor(kernel, meta["bindings"])
+            raise ValueError("Only independent-row Menudet table groups are implemented")
+        desc = self._menudet_table_descriptor(kernel, meta["bindings"])
         if (
             desc["dtype"] != np.dtype(meta["dtype"])
             or desc["col_deps"] != meta["col_deps"]
             or desc["row_shape"] != tuple(meta.get("row_shape", (1,)))
         ):
-            raise ValueError("Portable table metadata disagrees with native signature/bindings")
+            raise ValueError("Menudet table metadata disagrees with native signature/bindings")
         return desc
 
-    def _evaluate_portable_rows(self, meta, raw_columns, *, count=None):
+    def _evaluate_menudet_rows(self, meta, raw_columns, *, count=None):
         kernel = meta.get("kernel")
         if kernel is None:
-            kernel = blosc2.PortableKernel.from_json(meta["artifact"])
+            kernel = blosc2.MenudetKernel.from_json(meta["artifact"])
         arrays = {
             name: np.asarray(raw_columns[dep], dtype=kernel.input_dtypes[name])
             for name, dep in meta["bindings"].items()
@@ -13289,7 +13289,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if count is None:
             count = len(next(iter(raw_columns.values())))
         if any(len(array) != count for array in arrays.values()):
-            raise ValueError("Portable row operands disagree on batch length")
+            raise ValueError("Menudet row operands disagree on batch length")
         result = np.empty(count, dtype=kernel.output_dtype)
         row_shape = tuple(meta["row_shape"])
         context = (
@@ -13330,9 +13330,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if meta.get("transformer_kind") == "row_transformer":
             transformer = RowTransformer.from_metadata(meta["transformer"])
             values = np.asarray(transformer.evaluate_existing(self), dtype=meta["dtype"])
-        elif meta.get("transformer_kind") == "portable":
+        elif meta.get("transformer_kind") == "menudet":
             raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
-            values = self._evaluate_portable_rows(meta, raw_columns, count=len(self))
+            values = self._evaluate_menudet_rows(meta, raw_columns, count=len(self))
         elif meta.get("transformer_kind") == "dsl":
             raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
             values = self._evaluate_dsl_materialized_batch(meta, raw_columns)
@@ -13441,7 +13441,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         values: str
         | blosc2.LazyExpr
         | blosc2.DSLKernel
-        | blosc2.PortableKernel
+        | blosc2.MenudetKernel
         | Callable[[dict[str, Any]], blosc2.LazyExpr]
         | RowTransformer,
         dtype=None,
@@ -13485,7 +13485,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               per row.
             * :class:`blosc2.LazyExpr`: scalar lazy expression over stored
               columns of this table.  It must produce a 1-D scalar stream.
-            * :class:`blosc2.DSLKernel` or :class:`blosc2.PortableKernel` with
+            * :class:`blosc2.DSLKernel` or :class:`blosc2.MenudetKernel` with
               named ``inputs={parameter: column}`` bindings (positional lists
               are also accepted). Menudet artifacts are validated before
               registration and persisted without Python reconstruction.
@@ -13531,7 +13531,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cardinality:
             Result contract for authored kernels: ``"elementwise"`` by default;
             use ``"block_scalar"`` for fixed-shape row reductions. A
-            :class:`blosc2.PortableKernel` already carries its result contract.
+            :class:`blosc2.MenudetKernel` already carries its result contract.
 
         Examples
         --------
@@ -13640,16 +13640,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             }
         elif (desc := self._normalize_transformer(values, inputs, dtype=dtype, cardinality=cardinality))[
             "kind"
-        ] == "portable":
+        ] == "menudet":
             raw = {dep: self[dep][:] for dep in desc["col_deps"]}
-            generated_values = self._evaluate_portable_rows(desc, raw, count=n_live)
+            generated_values = self._evaluate_menudet_rows(desc, raw, count=n_live)
             spec = self._coerce_generated_spec(dtype, generated_values)
             metadata = {
                 **desc,
                 "computed_column": None,
                 "expression": None,
                 "dtype": np.dtype(spec.dtype),
-                "transformer_kind": "portable",
+                "transformer_kind": "menudet",
                 "stale": False,
             }
         else:
@@ -13703,7 +13703,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         expr: str
         | blosc2.LazyExpr
         | blosc2.DSLKernel
-        | blosc2.PortableKernel
+        | blosc2.MenudetKernel
         | Callable[[dict[str, Any]], blosc2.LazyExpr],
         *,
         dtype: np.dtype | None = None,
@@ -13740,7 +13740,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               ``"price * qty"``.
             * :class:`blosc2.LazyExpr`: lazy expression over stored columns of
               this table.
-            * :class:`blosc2.DSLKernel` or :class:`blosc2.PortableKernel` with
+            * :class:`blosc2.DSLKernel` or :class:`blosc2.MenudetKernel` with
               named ``inputs={parameter: column}`` bindings (positional lists
               are also accepted). Kernels are validated as Menudet before
               registration and persist without Python reconstruction.
@@ -13782,7 +13782,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cardinality:
             Result contract for authored kernels: ``"elementwise"`` by default;
             use ``"block_scalar"`` for fixed-shape row reductions. A
-            :class:`blosc2.PortableKernel` already carries its result contract.
+            :class:`blosc2.MenudetKernel` already carries its result contract.
 
         Examples
         --------
@@ -13861,7 +13861,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError(f"A computed column named {name!r} already exists.")
 
         desc = self._normalize_transformer(expr, inputs, dtype=dtype, cardinality=cardinality)
-        if desc["kind"] == "portable":
+        if desc["kind"] == "menudet":
             self._computed_cols[name] = desc
         else:
             lazy = desc["lazy"]
@@ -13997,7 +13997,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         view._col_widths = dict(self._col_widths)
         for name, value in bound.items():
             desc = view._normalize_transformer(value)
-            if desc["kind"] == "portable":
+            if desc["kind"] == "menudet":
                 view._computed_cols[name] = desc
             else:
                 lazy = desc["lazy"]
@@ -15104,7 +15104,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             the source.
         """
         if urlpath is not None:
-            self._preflight_portable_persistence()
+            self._preflight_menudet_persistence()
             urlpath = os.fspath(urlpath)
             if chunks is not None or blocks is not None or cparams is not None:
                 # When storage layout changes we must go through _save_to_storage
@@ -15348,7 +15348,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Rebuild computed columns with the new NDArray objects as operands
         obj._computed_cols = {}
         for cc_name, cc in self._computed_cols.items():
-            if cc.get("kind") in {"portable", "dsl"}:
+            if cc.get("kind") in {"menudet", "dsl"}:
                 # Native/source descriptors resolve columns on demand. Neither
                 # retains the old table's array operands in a cached expression.
                 obj._computed_cols[cc_name] = dict(cc)
