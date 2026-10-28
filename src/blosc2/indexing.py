@@ -5097,7 +5097,25 @@ def get_index(array: blosc2.NDArray, field: str | None = None, name: str | None 
     return Index(array, token)
 
 
+def _may_have_indexes(array: blosc2.NDArray) -> bool:
+    """Cheap pre-check for :func:`mark_indexes_stale`, which runs after every write.
+
+    Resolving a persistent array's store costs a ``realpath()`` and ``stat()`` calls on
+    its file, and on NFS each ``stat()`` of a file with buffered writes first pushes them
+    to the server: a synchronous round trip per ``__setitem__``. A file whose vlmeta has
+    no index store, in a process that caches no store with indexes either, has nothing
+    to mark.
+    """
+    if not _is_persistent_array(array):
+        return True
+    if any(store.get("indexes") for store in _PERSISTENT_INDEXES.values()):
+        return True
+    return INDEXES_VLMETA_KEY in array.schunk.vlmeta
+
+
 def mark_indexes_stale(array: blosc2.NDArray) -> None:
+    if not _may_have_indexes(array):
+        return
     store = _load_store(array)
     if not store["indexes"]:
         return
