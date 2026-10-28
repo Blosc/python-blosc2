@@ -17,6 +17,7 @@ import sys
 import functools
 import time
 import warnings
+import weakref
 from threading import RLock
 
 import _ctypes
@@ -876,7 +877,13 @@ blosc2_init()
 
 @atexit.register
 def destroy():
-    blosc2_destroy()
+    # Daemon threads can still be inside a slice read without the GIL (see
+    # NDArray.get_slice_numpy), and blosc2_destroy() frees thread pools and plugins such a
+    # read may be using.  If they do not finish soon, leave the cleanup to the OS.
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    if _wait_for_nogil_reads(timeout=1.0):
+        blosc2_destroy()
 
 
 def register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
@@ -1727,6 +1734,81 @@ def _handle_locked(method):
     return locked
 
 
+# Every handle lock, so that a forked child can free those that other threads held at the fork
+_all_handle_locks = weakref.WeakSet()
+
+
+def _new_handle_lock():
+    lock = RLock()
+    _all_handle_locks.add(lock)
+    return lock
+
+
+cdef class HandleLocks:
+    """Reusable context manager that holds the handle locks of `arrays` (objects without one are
+    skipped), always in the same order, so that threads locking overlapping sets cannot deadlock.
+    For C code that reads other arrays' super-chunks outside their methods: concat() and the
+    miniexpr prefilter of lazy expressions.
+    """
+    cdef list locks
+
+    def __init__(self, arrays):
+        locks = {id(lock): lock for lock in (getattr(a, "_handle_lock", None) for a in arrays)
+                 if lock is not None}
+        self.locks = [locks[key] for key in sorted(locks)]
+
+    def __enter__(self):
+        cdef Py_ssize_t n = 0
+        try:
+            for lock in self.locks:
+                lock.acquire()
+                n += 1
+        except BaseException:
+            for lock in reversed(self.locks[:n]):
+                lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc_info):
+        for lock in reversed(self.locks):
+            lock.release()
+
+
+# Slice reads running without the GIL (see NDArray.get_slice_numpy), and whether new ones must
+# keep it (> 0).  Both only change with the GIL held.
+cdef int _nogil_reads = 0
+cdef int _nogil_reads_blocked = 0
+
+
+def _wait_for_nogil_reads(timeout=None):
+    """Wait until no slice read runs without the GIL; return False if `timeout` (s) ran out.
+
+    For changes to C state that such reads use (registering a Python codec or filter, exit).
+    The caller increments `_nogil_reads_blocked` first, so that no new ones start meanwhile.
+    """
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while _nogil_reads:
+        if deadline is not None and time.monotonic() > deadline:
+            return False
+        time.sleep(0.0005)  # releases the GIL, so the readers can finish
+    return True
+
+
+def _reset_after_fork():
+    # The threads that held handle locks or read without the GIL at the fork do not exist in
+    # the child, so nothing would ever release those locks there
+    global _nogil_reads, _nogil_reads_blocked
+    _nogil_reads = 0
+    _nogil_reads_blocked = 0
+    for lock in list(_all_handle_locks):
+        if not lock._is_owned():
+            lock._at_fork_reinit()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 cdef class SChunk:
     cdef blosc2_schunk *schunk
     cdef c_bool _is_view
@@ -1734,7 +1816,7 @@ cdef class SChunk:
 
     def __init__(self, _schunk=None, chunksize=2 ** 24, data=None, **kwargs):
         # Replaced by the NDArray's lock when this is an NDArray's SChunk (see NDArray.__init__)
-        self._handle_lock = RLock()
+        self._handle_lock = _new_handle_lock()
         # hold on to a bytestring of urlpath for the lifetime of the instance
         # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
@@ -3422,6 +3504,7 @@ cdef class vlmeta:
         if rc < 0:
             raise RuntimeError("Could not delete the vlmeta")
 
+    @_handle_locked
     def nvlmetalayers(self):
         return self.schunk.nvlmetalayers
 
@@ -3474,6 +3557,7 @@ def meta__setitem__(self, name, content):
         raise ValueError("The length of the content in a metalayer cannot change.")
     blosc2_meta_update(schunk, name, content, len(content))
 
+@_handle_locked
 def meta__len__(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     return schunk.nmetalayers
@@ -3705,12 +3789,21 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     else:
         codec.decoder = <blosc2_codec_decoder_cb> general_decoder
 
-    rc = blosc2_register_codec(&codec)
-    if rc < 0:
-        raise RuntimeError("Error while registering codec")
+    # A slice read that found no Python codec could otherwise meet `decoder` without the GIL: keep
+    # new reads from releasing it and wait for those that did.  Nothing below releases the GIL
+    # before the registry is updated.
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    try:
+        _wait_for_nogil_reads()
+        rc = blosc2_register_codec(&codec)
+        if rc < 0:
+            raise RuntimeError("Error while registering codec")
 
-    if encoder and decoder:
-        blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+        if encoder and decoder:
+            blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+    finally:
+        _nogil_reads_blocked -= 1
 
 
 cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,
@@ -3772,11 +3865,18 @@ def register_filter(id, forward, backward, filter_name):
         filter.name = <char *> malloc(strlen(filter_name_) + 1)
         strcpy(filter.name, filter_name_)
 
-    rc = blosc2_register_filter(&filter)
-    if rc < 0:
-        raise RuntimeError("Error while registering filter")
-    if forward and backward:
-        blosc2.ufilters_registry[id] = (forward, backward)
+    # As in register_codec()
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    try:
+        _wait_for_nogil_reads()
+        rc = blosc2_register_filter(&filter)
+        if rc < 0:
+            raise RuntimeError("Error while registering filter")
+        if forward and backward:
+            blosc2.ufilters_registry[id] = (forward, backward)
+    finally:
+        _nogil_reads_blocked -= 1
 
 cdef _check_rc(rc, message):
     if rc < 0:
@@ -3892,8 +3992,9 @@ cdef c_bool _can_release_gil(blosc2_schunk *sc) except? False:
     """Whether decompressing from `sc` may run without the GIL, i.e. no Python callback can run on
     the way: no postfilter on its decompression context and no codec or filter registered from
     Python (any chunk could use one, whatever the super-chunk's own cparams say).  Never on wasm32,
-    where releasing the GIL is known to give wrong results (see blosc2.set_releasegil)."""
-    if blosc2.IS_WASM or blosc2.ucodecs_registry or blosc2.ufilters_registry:
+    where releasing the GIL is known to give wrong results (see blosc2.set_releasegil), nor while
+    _wait_for_nogil_reads() callers need the reads to stop."""
+    if _nogil_reads_blocked or blosc2.IS_WASM or blosc2.ucodecs_registry or blosc2.ufilters_registry:
         return False
     cdef blosc2_dparams dparams
     if sc.dctx == NULL or blosc2_ctx_get_dparams(sc.dctx, &dparams) < 0:
@@ -3918,7 +4019,7 @@ cdef class NDArray:
         elif schunk is not None:
             self._handle_lock = (<SChunk?>schunk)._handle_lock
         else:
-            self._handle_lock = RLock()
+            self._handle_lock = _new_handle_lock()
         if schunk is not None:
             (<SChunk?>schunk)._handle_lock = self._handle_lock
 
@@ -3978,6 +4079,7 @@ cdef class NDArray:
         return dtype
 
     def get_slice_numpy(self, arr, key):
+        global _nogil_reads
         start, stop = key
 
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -3998,9 +4100,11 @@ cdef class NDArray:
                 # of the same file) run in parallel; everything else that uses this super-chunk
                 # holds the lock meanwhile.
                 if _can_release_gil(self.array.sc):
+                    _nogil_reads += 1
                     with nogil:
                         rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
                                                     <void *> view.buf, buffershape_, view.len)
+                    _nogil_reads -= 1
                 else:
                     rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
                                                 <void *> view.buf, buffershape_, view.len)
@@ -5015,10 +5119,7 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
 
     cdef b2nd_array_t *array
     cdef int rc = 0
-    # Both handle locks, always in the same order, so that concat(a, b) and concat(b, a) in two
-    # threads cannot deadlock (they are the same lock for views of one array)
-    first, second = sorted((arr1._handle_lock, arr2._handle_lock), key=id)
-    with first, second:
+    with HandleLocks((arr1, arr2)):
         rc = b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array)
     _check_rc(rc, "Error while concatenating the arrays")
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")

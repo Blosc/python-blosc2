@@ -1979,10 +1979,13 @@ def fast_eval(  # noqa: C901
                 nct = res_eval.schunk.nchunks
                 if bpc > 0 and _cb_anchor.shape[0] >= nct * bpc:
                     chunk_has_candidate = _cb_anchor[: nct * bpc].reshape(nct, bpc).any(axis=1)
+            # The prefilter reads the operands' super-chunks from C, outside their methods
+            operand_locks = blosc2.blosc2_ext.HandleLocks(_pref_ops.values())
             for nchunk in range(res_eval.schunk.nchunks):
                 if chunk_has_candidate is not None and not chunk_has_candidate[nchunk]:
                     continue
-                res_eval.schunk.update_data(nchunk, data, copy=False)
+                with operand_locks:
+                    res_eval.schunk.update_data(nchunk, data, copy=False)
             # _cb_anchor (if any) stays referenced until fast_eval returns, which
             # is after the finally below removes the prefilter — so the buffer
             # safely outlives every prefilter dereference.
@@ -2920,8 +2923,11 @@ def reduce_slices(  # noqa: C901
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
             # Exercise prefilter for each chunk
+            # The prefilter reads the operands' super-chunks from C, outside their methods
+            operand_locks = blosc2.blosc2_ext.HandleLocks(operands.values())
             for nchunk in range(res_eval.schunk.nchunks):
-                res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                with operand_locks:
+                    res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
         except Exception as e:
             use_miniexpr = False
             if callable(expression) and _is_dsl_kernel_expression(expression):
