@@ -48,6 +48,53 @@ def engine_benchmark():
     return runpy.run_path(str(Path(__file__).resolve().parents[1] / "bench" / "menudet-engines.py"))
 
 
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ([], [100_000, 1_000_000, 8_000_000, 100_000_000]),
+        (["--maxitems", "1000000"], [100_000, 1_000_000]),
+        (["--maxitems", "1m"], [100_000, 1_000_000]),
+        (["--maxsize", "8M"], [100_000, 1_000_000, 8_000_000]),
+        (["--items", "3", "1", "2", "--maxitems", "2"], [1, 2]),
+        (["--maxitems", "1"], []),
+    ],
+)
+def test_maxitems_cli(engine_benchmark, monkeypatch, capsys, options, expected):
+    main = engine_benchmark["main"]
+    namespace = main.__globals__
+    sizes = []
+
+    def build_operands(size, *args, **kwargs):
+        sizes.append(size)
+        return {}, np.zeros(1)
+
+    monkeypatch.setattr(sys, "argv", ["menudet-engines.py", "--operands", "numpy", *options])
+    monkeypatch.setitem(namespace, "build_operands", build_operands)
+    monkeypatch.setitem(namespace, "make_engines", lambda *args, **kwargs: {})
+    monkeypatch.setitem(namespace, "benchmark", lambda *args, **kwargs: {})
+    monkeypatch.setattr(blosc2, "set_nthreads", lambda threads: None)
+    monkeypatch.setattr(namespace["ne"], "set_num_threads", lambda threads: None)
+    main()
+    assert sizes == expected
+    if not expected:
+        assert "nothing to benchmark" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "invalid", "8MB", "1.5M"])
+def test_maxitems_invalid(engine_benchmark, monkeypatch, value):
+    monkeypatch.setattr(sys, "argv", ["menudet-engines.py", "--maxitems", value])
+    with pytest.raises(SystemExit) as error:
+        engine_benchmark["main"]()
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("123", 123), ("100K", 100_000), ("8m", 8_000_000), ("1G", 1_000_000_000)]
+)
+def test_parse_item_count(engine_benchmark, value, expected):
+    assert engine_benchmark["parse_item_count"](value) == expected
+
+
 @pytest.mark.parametrize("reduc", [None, "sum", "mean", "min", "max", "any", "all"])
 @pytest.mark.parametrize(("size", "kind"), [(1, "numpy"), (257, "blosc2")])
 def test_engine_results(engine_benchmark, size, kind, reduc):

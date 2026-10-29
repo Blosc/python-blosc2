@@ -35,6 +35,8 @@ Numexpr any/all use max/min of exact floating 0/1 truth values.
 Usage::
 
     python bench/menudet-engines.py --items 100000 1000000 8000000
+    python bench/menudet-engines.py --maxitems 1000000
+    python bench/menudet-engines.py --maxsize 8M
     python bench/menudet-engines.py --reduc sum
     python bench/menudet-engines.py --jit cc
     python bench/menudet-engines.py --dtype int16 --codec lz4 --clevel 3
@@ -49,6 +51,7 @@ import argparse
 import importlib
 import os
 import random
+import re
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -64,6 +67,15 @@ EXPRESSION = "x + (y - 1)"
 ENGINES = ("NumPy", "numexpr", "LazyExpr-NumPy", "LazyExpr", "evaluate", "Menudet")
 GREEN = "\033[1;32m"
 RESET = "\033[0m"
+
+
+def parse_item_count(value):
+    """Parse an integer item count with an optional decimal SI suffix (K, M, G)."""
+    match = re.fullmatch(r"([0-9]+)([KMG]?)", value, re.IGNORECASE)
+    if match is None:
+        raise argparse.ArgumentTypeError("expected an integer item count, optionally suffixed with K, M or G")
+    count, suffix = match.groups()
+    return int(count) * {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[suffix.upper()]
 
 
 def human_items(count):
@@ -384,6 +396,12 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     )
     parser.add_argument("--items", type=int, nargs="+", default=[100_000, 1_000_000, 8_000_000, 100_000_000])
     parser.add_argument(
+        "--maxitems",
+        "--maxsize",
+        type=parse_item_count,
+        help="skip sizes exceeding this positive item count (K/M/G suffixes use powers of 1000)",
+    )
+    parser.add_argument(
         "--samples", type=int, default=3, help="timed repetitions per row; the median is reported"
     )
     parser.add_argument(
@@ -447,6 +465,15 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
         parser.error("--allocation-control requires elementwise NumPy operand rows")
     if args.allocation_control and args.warmups == 0:
         parser.error("--allocation-control requires warm measurements (--warmups > 0)")
+
+    if args.maxitems is not None:
+        if args.maxitems <= 0:
+            parser.error("maxitems must be positive")
+        # Apply the inclusive cap to default sizes and explicit --items alike.
+        args.items = [size for size in args.items if size <= args.maxitems]
+        if not args.items:
+            print("No sizes at or below --maxitems; nothing to benchmark.")
+            return
 
     # Select before LazyExpr preparation or Menudet dtype specialization. Both
     # native compilation paths consume this environment override.
