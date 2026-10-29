@@ -51,7 +51,12 @@ def test_parallel_compressed_map(backend, dtype, mixed, comparison, monkeypatch)
     report = expression._native_execution_report
     assert report["route"] == "menudet-prefilter"
     assert report["threads"] == 2
-    assert report["native_decoder_contexts"] == (2 if mixed else 4)
+    # Dynamic jobs can all finish on one worker before another starts. Only
+    # workers that actually decode a block need per-input native contexts.
+    compressed_inputs = 1 if mixed else 2
+    contexts = report["native_decoder_contexts"]
+    assert compressed_inputs <= contexts <= report["threads"] * compressed_inputs
+    assert contexts % compressed_inputs == 0
     assert report["reader_bytes"] == values.nbytes * (1 if mixed else 2)
     assert report["maximum_reader_items"] <= report["tile_items"]
     # Prefilter scratch contains only compressed input values, even when the
