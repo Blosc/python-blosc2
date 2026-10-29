@@ -1892,11 +1892,11 @@ def test_setitem_without_indexes_skips_index_store(tmp_path, monkeypatch):
     _clear_caches()
     urlpath = str(tmp_path / "plain.b2nd")
     arr = blosc2.zeros(1_000, dtype=np.int64, chunks=(250,), blocks=(50,), urlpath=urlpath, mode="w")
-    monkeypatch.setattr(
-        indexing,
-        "_load_store",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("an unindexed array has no store")),
-    )
+
+    def fail_load_store(array):
+        raise AssertionError("an unindexed array has no store to load")
+
+    monkeypatch.setattr(indexing, "_load_store", fail_load_store)
     arr[:3] = -1
     arr[10:20] = 7
     np.testing.assert_array_equal(arr[:3], np.full(3, -1, dtype=np.int64))
@@ -1905,11 +1905,7 @@ def test_setitem_without_indexes_skips_index_store(tmp_path, monkeypatch):
 
 def test_setitem_marks_on_disk_index_stale_with_cold_caches(tmp_path):
     # The index is only known from the file's vlmeta here, not from any in-process cache
-    urlpath = str(tmp_path / "indexed.b2nd")
-    arr = blosc2.asarray(
-        np.arange(1_000, dtype=np.int64), chunks=(250,), blocks=(50,), urlpath=urlpath, mode="w"
-    )
-    arr.create_index(kind=blosc2.IndexKind.FULL)
+    arr, urlpath = _make_scalar_persistent_array(tmp_path)
     del arr
     _clear_caches()
 
