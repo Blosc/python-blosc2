@@ -2358,7 +2358,8 @@ cdef class MenudetArtifactHandle:
             free(views)
 
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
-                           _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None):
+                           _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
+                           _chunk_indices=None):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not menudet_prefilter_inputs_eligible(
                 inputs, allow_numpy=numpy_out is not None or out is not None, output=out):
@@ -2399,6 +2400,10 @@ cdef class MenudetArtifactHandle:
             if not 0 <= begin < end <= first.schunk.nchunks:
                 raise ValueError("Invalid prefilter chunk range")
             threads = 1
+        if _chunk_indices is not None:
+            if numpy_out is None or out is not None or _chunk_range is not None:
+                raise ValueError("Dynamic prefilter chunks require a direct NumPy output")
+            threads = 1
         if out is None and numpy_out is None:
             numpy_out = np.empty(first.shape, dtype=self.signature_dtype(-1))
         if numpy_out is not None:
@@ -2436,7 +2441,8 @@ cdef class MenudetArtifactHandle:
                 raise ValueError("Menudet prefilter output must not alias an input")
             output = out
         return output._execute_menudet_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
-                                                 driver_input=_driver_input, diagonal=_diagonal)
+                                                 driver_input=_driver_input, diagonal=_diagonal,
+                                                 chunk_indices=_chunk_indices)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -6183,7 +6189,7 @@ cdef class NDArray:
 
     def _execute_menudet_prefilter(self, MenudetArtifactHandle kernel, inputs,
                                     np.ndarray numpy_out=None, chunk_range=None, driver_input=None,
-                                    diagonal=None):
+                                    diagonal=None, chunk_indices=None):
         cdef menudet_prefilter_state state
         cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -6282,7 +6288,11 @@ cdef class NDArray:
             if self.array.sc.cctx == NULL:
                 raise MemoryError("Cannot create Menudet prefilter compression context")
             try:
-                for chunk in range(begin, end):
+                # Reuse this worker's native context and decoder scratch while
+                # claiming chunks from an invocation-local synchronized queue.
+                for chunk in (range(begin, end) if chunk_indices is None else chunk_indices):
+                    if chunk < begin or chunk >= end:
+                        raise ValueError("Dynamic prefilter chunk is outside the output domain")
                     # Fetch/validate each compressed input chunk once. The
                     # synchronous update joins all workers before these shared
                     # read-only pointers advance to the next chunk.

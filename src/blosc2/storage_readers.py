@@ -335,18 +335,64 @@ def compute_storage_if_eligible(lazy, kwargs):
     return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
 
 
+def _dynamic_prefilter_reports(kernel, inputs, output, driver, block_items, workers, nchunks):
+    from concurrent.futures import wait
+
+    from .resident_execution import WorkQueue, resident_pool, work_indices
+
+    jobs = WorkQueue(work_indices(nchunks, workers))
+
+    def execute():
+        current = -1
+        failure = None
+
+        def claim():
+            nonlocal current
+            for chunk in jobs:
+                current = chunk
+                yield chunk
+
+        while True:
+            current = -1
+            try:
+                result = kernel._handle.evaluate_prefilter(
+                    inputs,
+                    numpy_out=output,
+                    _chunk_indices=claim(),
+                    _driver_input=driver,
+                    _block_items=block_items,
+                )
+            except Exception as error:
+                if failure is None or current < failure[0]:
+                    failure = (current, error)
+                if current < 0:
+                    return None, failure  # Setup failed before claiming any chunk.
+                # The failed context was freed. Continue with unclaimed chunks
+                # only, so logical error ordering does not depend on core speed.
+                continue
+            return result[1], failure
+
+    futures = []
+    try:
+        for _ in range(workers):
+            futures.append(resident_pool().submit(execute))
+    finally:
+        wait(futures)
+    results = [future.result() for future in futures]
+    failures = [error for _, error in results if error is not None]
+    if failures:
+        raise min(failures, key=lambda item: item[0])[1]
+    return [report for report, _ in results]
+
+
 def evaluate_prefilter_numpy(kernel, inputs, out=None, workers=None):
-    """Drive the shared prefilter over coarse ranges into a direct NumPy sink.
+    """Drive the shared prefilter over dynamically claimed chunks into a NumPy sink.
 
     Each outer worker owns a single-threaded compression context and reusable
     block decoders. Only the final output and a read-only dummy driver buffer
     are shared; no result chunks are stored or materialized.
     """
-    from concurrent.futures import wait
-
     import blosc2
-
-    from .resident_execution import resident_pool
 
     first = next(value for value in inputs.values() if type(value) is blosc2.NDArray)
     dtype = np.dtype(kernel.output_dtype)
@@ -392,25 +438,10 @@ def evaluate_prefilter_numpy(kernel, inputs, out=None, workers=None):
         scheduling = "block-workers"
     else:
         workers = min(workers, first.schunk.nchunks)
-        futures = []
-        try:
-            for worker in range(workers):
-                begin = first.schunk.nchunks * worker // workers
-                end = first.schunk.nchunks * (worker + 1) // workers
-                futures.append(
-                    resident_pool().submit(
-                        kernel._handle.evaluate_prefilter,
-                        inputs,
-                        numpy_out=output,
-                        _chunk_range=(begin, end),
-                        _driver_input=driver,
-                        _block_items=block_items,
-                    )
-                )
-        finally:
-            wait(futures)  # Keep buffers and sources alive through every worker join.
-        reports = [future.result()[1] for future in futures]
-        scheduling = "chunk-ranges"
+        reports = _dynamic_prefilter_reports(
+            kernel, inputs, output, driver, block_items, workers, first.schunk.nchunks
+        )
+        scheduling = "dynamic-chunks"
     report = dict(reports[0])
     for name in (
         "evaluated_blocks",

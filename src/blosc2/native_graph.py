@@ -1074,7 +1074,7 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
 
 @lru_cache(maxsize=128)
 def _compressed_map_schedules(plan, shape, workers, chunk, block, units, worker_tile):
-    """Reusable immutable region schedules, with no input/output ownership."""
+    """Reusable immutable dynamic jobs, with no input/output ownership."""
     blocks_per_chunk = (chunk + block - 1) // block
 
     def region_offset(unit):
@@ -1082,15 +1082,20 @@ def _compressed_map_schedules(plan, shape, workers, chunk, block, units, worker_
         return min(shape[0], nchunk * chunk + within_chunk * block)
 
     schedules = []
+    by_size = {}
     dtypes = plan.input_dtypes
-    for worker in range(workers):
-        start = region_offset(units * worker // workers)
-        stop = region_offset(units * (worker + 1) // workers)
-        schedule = plan.specialize(
-            {name: (dtype, (stop - start,)) for name, dtype in dtypes.items()}, worker_tile
-        )
-        if schedule.info()["shape"] != (stop - start,):
-            return None
+    job_blocks = max(1, (units + workers * 16 - 1) // (workers * 16))
+    for unit in range(0, units, job_blocks):
+        start = region_offset(unit)
+        stop = region_offset(min(unit + job_blocks, units))
+        schedule = by_size.get(stop - start)
+        if schedule is None:
+            schedule = plan.specialize(
+                {name: (dtype, (stop - start,)) for name, dtype in dtypes.items()}, worker_tile
+            )
+            if schedule.info()["shape"] != (stop - start,):
+                return None
+            by_size[stop - start] = schedule
         schedules.append((start, stop, schedule))
     return tuple(schedules)
 
@@ -1113,11 +1118,9 @@ def _prefilter_compressed_map(plan, inputs, workers, out):
 
 def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
     """Prefer shared native prefilters; retain bounded readers for other layouts."""
-    from concurrent.futures import wait
-
     import blosc2
 
-    from .resident_execution import resident_pool
+    from .resident_execution import run_dynamic
     from .storage_readers import ReaderState, StorageReader
 
     layout = _compressed_execution_layout(plan, inputs, shape, reduction=False)
@@ -1162,26 +1165,21 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
         if any(type(value) is np.ndarray and np.shares_memory(out, value) for value in inputs.values()):
             raise ValueError("Native map output must not overlap an input")
         output = out
-    futures = []
-    try:
-        for start, stop, schedule in schedules:
-            arrays = {
-                name: value if type(value) is blosc2.NDArray else value[start:stop]
-                for name, value in inputs.items()
-            }
-            readers = {
-                name: ReaderState(SpanReader(value, start, stop))
-                for name, value in inputs.items()
-                if type(value) is blosc2.NDArray
-            }
-            futures.append(
-                resident_pool().submit(
-                    schedule.execute_sources, arrays, readers, native_spans=True, out=output[start:stop]
-                )
-            )
-    finally:
-        wait(futures)  # Keep output/readers alive until every submitted worker joins.
-    reports = [future.result()[1] for future in futures]
+
+    def execute(job):
+        start, stop, schedule = job
+        arrays = {
+            name: value if type(value) is blosc2.NDArray else value[start:stop]
+            for name, value in inputs.items()
+        }
+        readers = {
+            name: ReaderState(SpanReader(value, start, stop))
+            for name, value in inputs.items()
+            if type(value) is blosc2.NDArray
+        }
+        return schedule.execute_sources(arrays, readers, native_spans=True, out=output[start:stop])[1]
+
+    reports = run_dynamic(schedules, workers, execute)
     report = dict(reports[0])
     for key in (
         "temporary_bytes",

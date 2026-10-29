@@ -4,6 +4,7 @@ import ast
 from concurrent.futures import ThreadPoolExecutor, wait
 from functools import lru_cache
 from math import prod
+from threading import Lock
 
 import numpy as np
 
@@ -13,10 +14,63 @@ MINIMUM_WORKER_ITEMS = 128 * 1024
 MAXIMUM_WORKERS = 32
 
 
+class WorkQueue:
+    """Invocation-local dynamic jobs, including on free-threaded Python."""
+
+    def __init__(self, jobs):
+        self._jobs = iter(jobs)
+        self._lock = Lock()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        with self._lock:
+            return next(self._jobs)
+
+
+def work_indices(count, workers):
+    """Spread first-touch writes across the allocation, without pinning workers."""
+    quotient, remainder = divmod(count, workers)
+    for index in range(count):
+        turn, stripe = divmod(index, workers)
+        yield stripe * quotient + min(stripe, remainder) + turn
+
+
 @lru_cache(maxsize=1)
 def resident_pool():
     # Reuse threads across warm reads. The executor joins them at interpreter exit.
     return ThreadPoolExecutor(max_workers=MAXIMUM_WORKERS, thread_name_prefix="menudet-resident")
+
+
+def run_dynamic(jobs, workers, execute):
+    """Join bounded workers; return job results or the first logical failure."""
+    queue = WorkQueue((index, jobs[index]) for index in work_indices(len(jobs), workers))
+
+    def worker():
+        results = []
+        failure = None
+        for index, job in queue:
+            try:
+                result = execute(job)
+            except Exception as error:
+                if failure is None or index < failure[0]:
+                    failure = (index, error)
+                continue  # Drain independent jobs; never replay a failed job.
+            results.append((index, result))
+        return results, failure
+
+    futures = []
+    try:
+        for _ in range(workers):
+            futures.append(resident_pool().submit(worker))
+    finally:
+        wait(futures)  # No writes or borrowed buffers may outlive this invocation.
+    results = [future.result() for future in futures]
+    failures = [error for _, error in results if error is not None]
+    if failures:
+        raise min(failures, key=lambda item: item[0])[1]
+    return [result for _, result in sorted(part for parts, _ in results for part in parts)]
 
 
 def evaluate_resident_if_eligible(lazy, selection, out=None):
@@ -227,29 +281,21 @@ def evaluate_resident(kernel, inputs, shape, workers, out=None):
         raise ValueError("Resident output must not overlap an input")
     flat_output = output.reshape(-1)
     flat_inputs = {name: value.reshape(-1) for name, value in inputs.items()}
-    futures = []
-    try:
-        for worker in range(workers):
-            start, stop = count * worker // workers, count * (worker + 1) // workers
-            operands = {name: value[start:stop] for name, value in flat_inputs.items()}
-            futures.append(
-                resident_pool().submit(
-                    kernel._handle.evaluate_block,
-                    operands,
-                    (stop - start,),
-                    return_status=True,
-                    _output=flat_output[start:stop],
-                )
-            )
-    finally:
-        # Even submission failures wait for in-flight writes before unwinding.
-        wait(futures)
+    tile = max(32 * 1024, (count + workers * 16 - 1) // (workers * 16))
+
+    def execute(start):
+        stop = min(start + tile, count)
+        operands = {name: value[start:stop] for name, value in flat_inputs.items()}
+        _, status = kernel._handle.evaluate_block(
+            operands, (stop - start,), return_status=True, _output=flat_output[start:stop]
+        )
+        return status
+
+    reports = run_dynamic(range(0, count, tile), workers, execute)
     flags, supported = 0, True
-    for future in futures:
-        # Logical region order determines which failure is reported.
-        _, status = future.result()
-        flags |= status["flags"]
-        supported &= status["supported"]
+    for report in reports:
+        flags |= report["flags"]
+        supported &= report["supported"]
     return output, {
         "route": "parallel-resident",
         "threads": workers,

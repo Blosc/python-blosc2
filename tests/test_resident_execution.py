@@ -262,7 +262,79 @@ def test_failures_join_and_never_replay():
     fake = SimpleNamespace(output_dtype=values.dtype, _handle=SimpleNamespace(evaluate_block=fail))
     with pytest.raises(OSError, match=r"Failed region 0$"):
         evaluate_resident(fake, {"x": values}, values.shape, 4)
-    assert len(calls) == 4
+    assert len(calls) > 4
+    assert len(set(calls)) == len(calls)
+
+
+@pytest.mark.parametrize("count", [0, 1, 3, 4, 17, 193])
+@pytest.mark.parametrize("workers", [1, 4, 12])
+def test_dynamic_job_order_is_a_permutation(count, workers):
+    from blosc2.resident_execution import work_indices
+
+    assert sorted(work_indices(count, workers)) == list(range(count))
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Dynamic workers require host threads")
+def test_dynamic_failures_follow_logical_not_claim_order(monkeypatch):
+    from concurrent.futures import Future
+    from types import SimpleNamespace
+
+    from blosc2.resident_execution import run_dynamic
+
+    def submit(worker):
+        future = Future()
+        future.set_result(worker())
+        return future
+
+    monkeypatch.setattr("blosc2.resident_execution.resident_pool", lambda: SimpleNamespace(submit=submit))
+    visited = []
+
+    def execute(index):
+        visited.append(index)
+        if index in (3, 6, 7, 11, 16):
+            raise OSError(f"job {index}")
+        return index
+
+    with pytest.raises(OSError, match=r"job 3$"):
+        run_dynamic(range(20), 4, execute)
+    assert sorted(visited) == list(range(20))
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Dynamic workers require host threads")
+def test_dynamic_workers_claim_every_tile_once():
+    from collections import Counter
+    from itertools import pairwise
+    from threading import Event, Lock, get_ident
+    from types import SimpleNamespace
+
+    values = np.arange(600_003.0)
+    release = Event()
+    lock = Lock()
+    calls = []
+
+    def evaluate(inputs, shape, **kwargs):
+        start = int(inputs["x"][0])
+        stop = start + shape[0]
+        with lock:
+            calls.append((start, stop, get_ident()))
+        if start == 0:
+            assert release.wait(timeout=10)
+        kwargs["_output"][:] = inputs["x"]
+        if stop == values.size:
+            release.set()
+        return kwargs["_output"], {"flags": int(stop == values.size), "supported": True}
+
+    fake = SimpleNamespace(output_dtype=values.dtype, _handle=SimpleNamespace(evaluate_block=evaluate))
+    result, report = evaluate_resident(fake, {"x": values}, values.shape, 4)
+    np.testing.assert_array_equal(result, values)
+    regions = sorted((start, stop) for start, stop, _ in calls)
+    assert regions[0][0] == 0
+    assert regions[-1][1] == values.size
+    assert all(left[1] == right[0] for left, right in pairwise(regions))
+    assert len(regions) > 4
+    assert max(Counter(thread for _, _, thread in calls).values()) > 1
+    assert report["fp_flags"] == 1
+    assert report["fp_supported"]
 
 
 def test_private_output_rejects_alias_and_wrong_dtype():

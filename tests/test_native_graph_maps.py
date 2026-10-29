@@ -114,18 +114,26 @@ def test_prefilter_workers_join_failures(monkeypatch):
     output = np.empty_like(values)
     completed = []
 
-    def execute(inputs, *, numpy_out, _chunk_range, _driver_input, _block_items):
-        if _chunk_range[0] == 0:
+    def execute(inputs, *, numpy_out, _chunk_indices, _driver_input, _block_items):
+        first = next(_chunk_indices, None)
+        if first == 0:
             raise OSError("decoder failure")
-        result = native._handle.evaluate_prefilter(
+
+        def chunks():
+            if first is not None:
+                completed.append(first)
+                yield first
+            for chunk in _chunk_indices:
+                completed.append(chunk)
+                yield chunk
+
+        return native._handle.evaluate_prefilter(
             inputs,
             numpy_out=numpy_out,
-            _chunk_range=_chunk_range,
+            _chunk_indices=chunks(),
             _driver_input=_driver_input,
             _block_items=_block_items,
         )
-        completed.append(_chunk_range)
-        return result
 
     fake = SimpleNamespace(
         output_dtype=native.output_dtype, _handle=SimpleNamespace(evaluate_prefilter=execute)
@@ -133,8 +141,8 @@ def test_prefilter_workers_join_failures(monkeypatch):
     with pytest.raises(OSError, match="decoder failure"):
         evaluate_prefilter_numpy(fake, {"x": x}, out=output, workers=2)
     # The second worker finishes before the first worker's error escapes.
-    assert completed == [(8, 17)]
-    np.testing.assert_array_equal(output[8 * 256 :], (values + 1)[8 * 256 :])
+    assert sorted(completed) == list(range(1, 17))
+    np.testing.assert_array_equal(output[256:], (values + 1)[256:])
     result, _ = evaluate_prefilter_numpy(native, {"x": x}, workers=2)
     np.testing.assert_array_equal(result, values + 1)
 
@@ -214,7 +222,9 @@ def test_parallel_map_worker_failure_is_not_replayed(monkeypatch):
 
     class FailedPool:
         def submit(self, *args, **kwargs):
-            submissions.append(kwargs["_chunk_range"])
+            assert callable(args[0])
+            assert not kwargs
+            submissions.append(args[0])
             result = Future()
             result.set_exception(OSError("map worker failed"))
             return result
@@ -228,7 +238,7 @@ def test_parallel_map_worker_failure_is_not_replayed(monkeypatch):
     with pytest.raises(OSError, match="map worker failed"):
         blosc2.lazyexpr("x + 1", {"x": x})[:]
     assert len(submissions) == 2
-    assert submissions == [(0, 2), (2, 4)]
+    assert submissions[0] is submissions[1]
 
 
 def test_graph_sources_explicit_output_validation():
