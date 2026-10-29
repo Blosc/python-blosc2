@@ -137,6 +137,21 @@ def test_borrowed_artifact_retains_native_owner(parallel_runtime):
     gc.collect()
 
 
+def test_borrowed_artifact_collected_with_unreachable_cycle():
+    def make_cycle():
+        plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=False)
+        borrowed = plan._handle.resident_artifact()
+        assert borrowed is not None
+        cycle = [borrowed]
+        cycle.append(cycle)
+
+    # GC can clear the borrowed handle's owner before clearing the cycle that
+    # retains it. It must not then free the graph-owned artifact a second time.
+    for _ in range(5):
+        make_cycle()
+        gc.collect()
+
+
 def test_resident_kernel_retains_plan_without_reimport(runtime, monkeypatch):
     from blosc2.native_graph import resident_map_kernel
 

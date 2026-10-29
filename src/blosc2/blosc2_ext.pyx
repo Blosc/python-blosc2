@@ -1788,6 +1788,7 @@ cdef class NativeGraphHandle:
         if artifact == NULL:
             return None
         cdef MenudetArtifactHandle result = MenudetArtifactHandle()
+        result._borrowed = True
         result._handle = <void *>artifact
         result._owner = self
         return result
@@ -2102,6 +2103,7 @@ cdef class MenudetArtifactHandle:
     """Owned immutable native handle; no Python artifact decoding or source execution."""
     cdef void *_handle
     cdef object _owner
+    cdef bint _borrowed
 
     def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
         cdef b2_artifact_error error
@@ -2136,7 +2138,9 @@ cdef class MenudetArtifactHandle:
             raise_artifact_error(rc, &error)
 
     def __dealloc__(self):
-        if self._owner is None:
+        # Cyclic GC may clear _owner before __dealloc__. Native ownership must
+        # not depend on a Python reference which tp_clear can replace with None.
+        if not self._borrowed:
             b2_artifact_free(self._handle)
 
     def info(self):

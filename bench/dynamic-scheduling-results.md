@@ -78,12 +78,13 @@ python bench/menudet-engines.py --dtype float64 --codec lz4 --warmups 0 --sample
 ## Validation
 
 Native graph preparation/execution, allocation-failure tests, and ASan graph
-tests pass. Python scheduling, output, storage-reader, decorator, dispatch, and
-route tests pass when run by file: 330 tests exit cleanly. All 57 benchmark tests
-also pass, but that process can segfault during cleanup. A larger combined run
-crashes during `test_borrowed_artifact_retains_native_owner` garbage collection;
-the same native-free stack reproduces with the saved static build. This existing
-ownership/GC issue was not changed as part of scheduling.
+tests pass. The combined Python scheduling, output, storage-reader, decorator,
+dispatch, route, and benchmark qualification now passes all 388 tests with a
+clean exit. Initial runs exposed a pre-existing ownership/GC crash, also
+reproducible with the saved static build: GC cleared a borrowed artifact's owner
+before its destructor, causing a second native free. A follow-up separates the
+native ownership flag from that clearable Python reference and adds an explicit
+unreachable-cycle regression. It does not change scheduling or benchmark timings.
 
 Build warnings are the existing Cython shared-declarator, CBLAS deprecation,
 generated-C qualifier/`abs`, dependency CMake policy, and duplicate-library
