@@ -191,7 +191,7 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     monkeypatch.setattr(sys, "argv", argv)
     observed = []
 
-    def make_engines(inputs, kind, reduc, cparams=None):
+    def make_engines(inputs, kind, reduc, cparams=None, expression=None):
         assert inputs["x"].dtype == np.dtype("uint64")
         assert cparams.codec == blosc2.Codec.LZ4
         assert cparams.clevel == 3
@@ -246,3 +246,49 @@ def test_benchmark_reports_nonparity(engine_benchmark):
     )
     assert set(times) == {"NumPy"}
     assert failures == {"numexpr": "different numerical results"}
+
+
+@pytest.mark.parametrize("expression", ["z * 2", "x * y + z", "sqrt(y + z)"])
+@pytest.mark.parametrize("kind", ["numpy", "blosc2"])
+def test_custom_expression(engine_benchmark, expression, kind):
+    inputs, expected = engine_benchmark["build_operands"](257, kind, expression=expression)
+    assert tuple(inputs) == engine_benchmark["operand_names"](expression)
+    for reduc in (None, "sum"):
+        engines = engine_benchmark["make_engines"](inputs, kind, reduc, expression=expression)
+        reference = expected.sum() if reduc else expected
+        for name, operation in engines.items():
+            result = operation()
+            if isinstance(result, blosc2.NDArray):
+                result = result[:]
+            np.testing.assert_allclose(result, reference, rtol=1e-12, atol=1e-12, err_msg=name)
+
+
+def test_custom_expression_allocation_and_cold(engine_benchmark):
+    expression = "y > z"
+    inputs, expected = engine_benchmark["build_operands"](17, "numpy", expression=expression)
+    for operation in engine_benchmark["make_allocation_engines"](inputs, expression=expression).values():
+        np.testing.assert_array_equal(operation(), expected)
+    with engine_benchmark["cold_preparation"]():
+        operation = engine_benchmark["make_engines"](
+            inputs, "numpy", selected="Menudet", expression=expression
+        )["Menudet"]
+        np.testing.assert_array_equal(operation(), expected)
+
+
+def test_custom_expression_cli(engine_benchmark, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["menudet-engines.py", "--expr", "z * 2", "--items", "17", "--samples", "1", "--warmups", "1"],
+    )
+    engine_benchmark["main"]()
+    text = capsys.readouterr().out
+    assert "Expression: z * 2" in text
+    assert "N/A" not in text
+
+
+@pytest.mark.parametrize("expression", ["x +", "x + w", "42"])
+def test_invalid_expression_cli(engine_benchmark, monkeypatch, expression):
+    monkeypatch.setattr(sys, "argv", ["menudet-engines.py", "--expr", expression])
+    with pytest.raises(SystemExit, match="2"):
+        engine_benchmark["main"]()

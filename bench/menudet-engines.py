@@ -1,4 +1,4 @@
-"""Compare compute engines for ``x + (y - 1)`` over NumPy and Blosc2 operands.
+"""Compare compute engines for an expression over NumPy and Blosc2 operands.
 
 A single human-readable table reports warm medians for the same expression
 evaluated by NumPy, numexpr, both LazyExpr output paths, blosc2.evaluate and a Menudet kernel -- on
@@ -41,6 +41,11 @@ Usage::
     python bench/menudet-engines.py --jit cc
     python bench/menudet-engines.py --dtype int16 --codec lz4 --clevel 3
     python bench/menudet-engines.py --dtype int64 --jit cc --allocation-control
+    python bench/menudet-engines.py --expr "x * y + z"
+
+``--expr`` defaults to ``x + (y - 1)`` and can use operands x, y and z,
+constructed as arange(size), arange(1, size + 1) and arange(2, size + 2).
+NumPy function names such as sin and sqrt are available without a prefix.
 
 ``--jit tcc|cc`` selects miniexpr's JIT compiler backend. With ``cc``, the
 ``CC`` environment variable selects the system compiler. Omitting ``--jit``
@@ -48,7 +53,9 @@ preserves the existing environment/default backend selection.
 """
 
 import argparse
+import ast
 import importlib
+import linecache
 import os
 import random
 import re
@@ -67,6 +74,8 @@ EXPRESSION = "x + (y - 1)"
 ENGINES = ("NumPy", "numexpr", "LazyExpr-NumPy", "LazyExpr", "evaluate", "Menudet")
 GREEN = "\033[1;32m"
 RESET = "\033[0m"
+MENUDET_AUTHORS = {}
+NUMPY_GLOBALS = {**vars(np), "np": np, "__builtins__": {}}
 
 
 def parse_item_count(value):
@@ -87,75 +96,76 @@ def human_items(count):
     return str(count)
 
 
-@blosc2.menudet
-def adjusted(x, y):
-    return x + (y - 1)
+def operand_names(expression):
+    """Return the used operands in a stable order, requiring at least one array."""
+    tree = ast.parse(expression, mode="eval")
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    operands = tuple(name for name in ("x", "y", "z") if name in names)
+    unknown = names - {"x", "y", "z", "np"} - set(vars(np))
+    if unknown:
+        raise ValueError(f"Unknown expression names: {', '.join(sorted(unknown))}")
+    if not operands:
+        raise ValueError("Expression must use at least one operand: x, y or z")
+    return operands
 
 
-@blosc2.menudet(cardinality="block_scalar")
-def adjusted_sum(x, y):
-    return block_sum(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+def numpy_expression(expression, inputs):
+    """Evaluate the CLI expression using NumPy's functions and resident arrays."""
+    return eval(expression, NUMPY_GLOBALS, inputs)
 
 
-@blosc2.menudet(cardinality="block_scalar")
-def adjusted_mean(x, y):
-    return block_mean(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
+def menudet_author(expression, reduc=None):
+    """Build a cached Menudet author with inspectable source for the expression."""
+    key = (expression, reduc)
+    if key not in MENUDET_AUTHORS:
+        names = ", ".join(operand_names(expression))
+        value = f"block_{reduc}({expression})" if reduc else expression
+        source = f"def adjusted({names}):\n    return {ast.unparse(ast.parse(value, mode='eval'))}\n"
+        filename = f"<menudet-benchmark-{len(MENUDET_AUTHORS)}>"
+        # Menudet inspects the function source; exec alone does not retain it.
+        linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
+        namespace = {"np": np}
+        exec(compile(source, filename, "exec"), namespace)
+        MENUDET_AUTHORS[key] = blosc2.menudet(
+            namespace["adjusted"], cardinality="block_scalar" if reduc else "elementwise"
+        )
+    return MENUDET_AUTHORS[key]
 
 
-@blosc2.menudet(cardinality="block_scalar")
-def adjusted_min(x, y):
-    return block_min(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
-
-
-@blosc2.menudet(cardinality="block_scalar")
-def adjusted_max(x, y):
-    return block_max(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
-
-
-@blosc2.menudet(cardinality="block_scalar")
-def adjusted_any(x, y):
-    return block_any(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
-
-
-@blosc2.menudet(cardinality="block_scalar")
-def adjusted_all(x, y):
-    return block_all(x + (y - 1))  # noqa: F821 -- native DSL intrinsic
-
-
-def build_operands(size, kind, dtype="float64", cparams=None):
-    """Return the ``x``/``y`` operands and the expected result for one storage kind."""
-    x = np.arange(size, dtype=dtype)
-    y = np.arange(1, size + 1, dtype=dtype)
-    expected = x + (y - 1)
+def build_operands(size, kind, dtype="float64", cparams=None, expression=EXPRESSION):
+    """Return the used operands and NumPy reference result for one storage kind."""
+    names = operand_names(expression)
+    offsets = {"x": 0, "y": 1, "z": 2}
+    resident = {name: np.arange(offsets[name], size + offsets[name], dtype=dtype) for name in names}
+    expected = numpy_expression(expression, resident)
     if kind == "numpy":
-        return {"x": x, "y": y}, expected
+        return resident, expected
     layout = {} if size <= 1_000_000 else {"chunks": (1_000_000,), "blocks": (15625,)}
     cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5) if cparams is None else cparams
     if size == 1:
         # The DSL-backed Blosc2 constructor rejects scalar-like domains.
-        return {
-            name: blosc2.asarray(value, cparams=cparams) for name, value in {"x": x, "y": y}.items()
-        }, expected
+        return {name: blosc2.asarray(value, cparams=cparams) for name, value in resident.items()}, expected
     inputs = {
-        "x": blosc2.arange(size, dtype=dtype, cparams=cparams, **layout),
-        "y": blosc2.arange(1, size + 1, dtype=dtype, cparams=cparams, **layout),
+        name: blosc2.arange(offsets[name], size + offsets[name], dtype=dtype, cparams=cparams, **layout)
+        for name in names
     }
     return inputs, expected
 
 
-def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa: C901 -- explicit engine routes
+def make_engines(inputs, kind, reduc=None, cparams=None, selected=None, expression=EXPRESSION):  # noqa: C901 -- explicit engine routes
     """Return an ordered mapping of engine name to a callable producing a result.
 
     LazyExpr returns compressed Blosc2 output; LazyExpr-NumPy, NumPy, numexpr
     and evaluate always return NumPy. Menudet preserves the input storage kind.
     """
     numpy_reduce = getattr(np, reduc) if reduc else None
-    numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({EXPRESSION})" if reduc else EXPRESSION
+    numpy_code = compile(expression, "<numpy-benchmark>", "eval")
+    numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({expression})" if reduc else expression
     if reduc in ("any", "all"):
         # Numexpr has no any/all intrinsic; reduce exact floating 0/1 values.
         # Float literals also avoid integer-extrema seed narrowing on NumPy 2.
         operation = "max" if reduc == "any" else "min"
-        numexpr_expression = f"{operation}(where(({EXPRESSION}) != 0, 1.0, 0.0))"
+        numexpr_expression = f"{operation}(where(({expression}) != 0, 1.0, 0.0))"
 
     def finish_numpy(values):
         return numpy_reduce(values) if reduc else values
@@ -163,7 +173,7 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa
     def finish_numexpr(resident):
         result = ne.evaluate(numexpr_expression, local_dict=resident)
         if reduc == "mean":
-            return result.item() / inputs["x"].size
+            return result.item() / next(iter(inputs.values())).size
         if reduc in ("any", "all"):
             return bool(result.item())
         return result.item() if reduc else result
@@ -171,7 +181,7 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa
     if kind == "numpy":
 
         def numpy_run():
-            return finish_numpy(inputs["x"] + (inputs["y"] - 1))
+            return finish_numpy(numpy_expression(numpy_code, inputs))
 
         def numexpr_run():
             return finish_numexpr(inputs)
@@ -179,9 +189,8 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa
     else:
 
         def numpy_run():
-            x = inputs["x"][:]
-            y = inputs["y"][:]
-            return finish_numpy(x + (y - 1))
+            resident = {name: value[:] for name, value in inputs.items()}
+            return finish_numpy(numpy_expression(numpy_code, resident))
 
         def numexpr_run():
             resident = {name: value[:] for name, value in inputs.items()}
@@ -193,21 +202,15 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa
                 "NumPy": numpy_run,
                 "numexpr": numexpr_run,
                 "evaluate": lambda: blosc2.evaluate(
-                    f"{reduc}({EXPRESSION})" if reduc else EXPRESSION, local_dict=inputs
+                    f"{reduc}({expression})" if reduc else expression, local_dict=inputs
                 ),
             }[selected]
         }
-    lazy = blosc2.lazyexpr(EXPRESSION, inputs) if selected in (None, "LazyExpr", "LazyExpr-NumPy") else None
+    lazy = blosc2.lazyexpr(expression, inputs) if selected in (None, "LazyExpr", "LazyExpr-NumPy") else None
     if reduc:
-        author = {
-            "sum": adjusted_sum,
-            "mean": adjusted_mean,
-            "min": adjusted_min,
-            "max": adjusted_max,
-            "any": adjusted_any,
-            "all": adjusted_all,
-        }[reduc]
-        kernel = author.specialize(**inputs) if selected in (None, "Menudet") else None
+        kernel = (
+            menudet_author(expression, reduc).specialize(**inputs) if selected in (None, "Menudet") else None
+        )
 
         def menudet_reduce():
             resident = inputs if kind == "numpy" else {name: value[:] for name, value in inputs.items()}
@@ -218,38 +221,38 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None):  # noqa
             "numexpr": numexpr_run,
             "LazyExpr-NumPy": getattr(lazy, reduc) if lazy is not None else None,
             "LazyExpr": getattr(lazy, reduc) if lazy is not None else None,
-            "evaluate": lambda: blosc2.evaluate(f"{reduc}({EXPRESSION})", local_dict=inputs),
+            "evaluate": lambda: blosc2.evaluate(f"{reduc}({expression})", local_dict=inputs),
             "Menudet": menudet_reduce,
         }
-    menudet = adjusted(**inputs) if selected in (None, "Menudet") else None
+    menudet = menudet_author(expression)(**inputs) if selected in (None, "Menudet") else None
     output_options = {
         "cparams": blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5) if cparams is None else cparams
     }
     if kind == "blosc2":
-        first = inputs["x"]
+        first = next(iter(inputs.values()))
         output_options.update(chunks=first.chunks, blocks=first.blocks)
     return {
         "NumPy": numpy_run,
         "numexpr": numexpr_run,
         "LazyExpr-NumPy": lambda: lazy[:],
         "LazyExpr": lambda: lazy.compute(**output_options),
-        "evaluate": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
+        "evaluate": lambda: blosc2.evaluate(expression, local_dict=inputs),
         "Menudet": (lambda: menudet.compute(**output_options)) if kind == "blosc2" else (lambda: menudet[:]),
     }
 
 
-def make_allocation_engines(inputs):
+def make_allocation_engines(inputs, expression=EXPRESSION):
     """Compare fresh/reused NumPy destinations without changing the main table.
 
     Reused cases share one buffer: benchmark calls are sequential and qualify
     each result immediately. No operands are decompressed in this control.
     """
-    output = np.empty_like(inputs["x"])
+    output = np.empty_like(numpy_expression(expression, inputs))
     return {
-        "numexpr fresh": lambda: ne.evaluate(EXPRESSION, local_dict=inputs),
-        "numexpr reused": lambda: ne.evaluate(EXPRESSION, local_dict=inputs, out=output),
-        "evaluate fresh": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs),
-        "evaluate reused": lambda: blosc2.evaluate(EXPRESSION, local_dict=inputs, out=output),
+        "numexpr fresh": lambda: ne.evaluate(expression, local_dict=inputs),
+        "numexpr reused": lambda: ne.evaluate(expression, local_dict=inputs, out=output),
+        "evaluate fresh": lambda: blosc2.evaluate(expression, local_dict=inputs),
+        "evaluate reused": lambda: blosc2.evaluate(expression, local_dict=inputs, out=output),
     }
 
 
@@ -271,15 +274,7 @@ def cold_preparation():
     ):
         function.cache_clear()
     lazy._evaluate_recipe_cache.clear()
-    for author in (
-        adjusted,
-        adjusted_sum,
-        adjusted_mean,
-        adjusted_min,
-        adjusted_max,
-        adjusted_any,
-        adjusted_all,
-    ):
+    for author in MENUDET_AUTHORS.values():
         author._kernels.clear()
     for cache in (ne.necompiler._numexpr_cache, ne.necompiler._names_cache):
         getattr(cache, "c", {}).clear()
@@ -402,6 +397,9 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
         help="skip sizes exceeding this positive item count (K/M/G suffixes use powers of 1000)",
     )
     parser.add_argument(
+        "--expr", default=EXPRESSION, help="expression using x, y and/or z (default: %(default)s)"
+    )
+    parser.add_argument(
         "--samples", type=int, default=3, help="timed repetitions per row; the median is reported"
     )
     parser.add_argument(
@@ -457,6 +455,10 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
         help="reduce the expression to a scalar",
     )
     args = parser.parse_args()
+    try:
+        operand_names(args.expr)
+    except (SyntaxError, ValueError) as error:
+        parser.error(f"invalid --expr: {error}")
     if args.samples <= 0 or args.warmups < 0 or any(size <= 0 for size in args.items):
         parser.error("items and samples must be positive; warmups must be non-negative")
     if args.threads <= 0:
@@ -465,7 +467,6 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
         parser.error("--allocation-control requires elementwise NumPy operand rows")
     if args.allocation_control and args.warmups == 0:
         parser.error("--allocation-control requires warm measurements (--warmups > 0)")
-
     if args.maxitems is not None:
         if args.maxitems <= 0:
             parser.error("maxitems must be positive")
@@ -489,7 +490,7 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     kinds = ("numpy", "blosc2") if args.operands == "both" else (args.operands,)
     cparams = blosc2.CParams(codec=blosc2.Codec[args.codec.upper()], clevel=args.clevel)
 
-    expression = f"{args.reduc}({EXPRESSION})" if args.reduc else EXPRESSION
+    expression = f"{args.reduc}({args.expr})" if args.reduc else args.expr
     print(f"Expression: {expression}")
     mode = "Preparation-cold" if args.warmups == 0 else "Warm"
     print(f"{mode} medians in milliseconds (lower is better); fastest figure per row in green.")
@@ -513,14 +514,16 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     allocation_rows = []
     for size in args.items:
         for kind in kinds:
-            inputs, expected = build_operands(size, kind, args.dtype, cparams)
+            inputs, expected = build_operands(size, kind, args.dtype, cparams, expression=args.expr)
             if args.reduc:
                 expected = getattr(np, args.reduc)(expected)
-            engines = make_engines(inputs, kind, args.reduc, cparams=cparams)
+            engines = make_engines(inputs, kind, args.reduc, cparams=cparams, expression=args.expr)
             failures = {}
 
             def cold_factory(name, inputs=inputs, kind=kind):
-                return make_engines(inputs, kind, args.reduc, cparams=cparams, selected=name)[name]
+                return make_engines(
+                    inputs, kind, args.reduc, cparams=cparams, selected=name, expression=args.expr
+                )[name]
 
             times = benchmark(
                 engines,
@@ -532,7 +535,7 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
                 cold_factory=cold_factory if args.warmups == 0 else None,
             )
             if args.allocation_control and kind == "numpy":
-                controls = make_allocation_engines(inputs)
+                controls = make_allocation_engines(inputs, expression=args.expr)
                 control_times = benchmark(controls, expected, args.samples, args.warmups, rng, failures={})
                 allocation_rows.append((size, tuple(controls), control_times))
                 del controls
