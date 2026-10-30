@@ -375,6 +375,8 @@ cdef extern from "blosc2.h":
 
     blosc2_context* blosc2_create_dctx(blosc2_dparams dparams) nogil
 
+    int blosc2_ctx_get_cparams(blosc2_context *ctx, blosc2_cparams *cparams)
+
     int blosc2_ctx_get_dparams(blosc2_context *ctx, blosc2_dparams *dparams)
 
     void blosc2_free_ctx(blosc2_context * context) nogil
@@ -1276,6 +1278,18 @@ def set_nthreads(nthreads):
         raise ValueError("nthreads must be a positive integer.")
     else:
         return rc
+
+def context_nthreads(int16_t nthreads):
+    """The number of threads that C-Blosc2 gives a compression context asking for `nthreads`: the
+    BLOSC_NTHREADS environment variable instead, when that is set to a number it accepts."""
+    cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
+    cparams.nthreads = nthreads
+    cdef blosc2_context *cctx = blosc2_create_cctx(cparams)
+    if cctx == NULL:
+        raise MemoryError()
+    blosc2_ctx_get_cparams(cctx, &cparams)
+    blosc2_free_ctx(cctx)
+    return cparams.nthreads
 
 def set_blocksize(size_t blocksize=0):
     blosc1_set_blocksize(blocksize)
