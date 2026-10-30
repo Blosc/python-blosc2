@@ -2406,3 +2406,19 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     expected = np.cumulative_sum(data, axis=0)
     np.testing.assert_array_equal(result[:], expected)
     np.testing.assert_array_equal(out[:], expected)
+
+
+@pytest.mark.parametrize("source", ["contiguous", "cframe"])
+def test_frame_backed_inmemory_operands(source):
+    # In-memory frames (contiguous=True, or views of a cframe) keep no chunk table, so the
+    # miniexpr prefilter must fetch their chunks like it does for on-disk operands
+    na = np.arange(270, dtype=np.int16).reshape(10, 27)
+    if source == "contiguous":
+        a = blosc2.asarray(na, chunks=(3, 4), blocks=(1, 2), contiguous=True)
+    else:
+        a = blosc2.ndarray_from_cframe(blosc2.asarray(na, chunks=(3, 4), blocks=(1, 2)).to_cframe())
+    assert a.schunk.contiguous
+    assert a.schunk.urlpath is None
+    b = blosc2.asarray(na * 2, chunks=(3, 4), blocks=(1, 2))
+    np.testing.assert_array_equal((a + 1)[:], na + 1)
+    np.testing.assert_array_equal((a + b).compute()[:], na * 3)

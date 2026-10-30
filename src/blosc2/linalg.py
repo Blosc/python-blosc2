@@ -77,6 +77,11 @@ def _matmul_can_use_fast_path(
     if not all_ndarray:
         return False
 
+    # The prefilter reads the operands' chunks straight from memory, which frames (on disk,
+    # or in memory with contiguous=True) do not keep
+    if any(op.schunk.urlpath is not None or op.schunk.contiguous for op in (x1, x2)):
+        return False
+
     # The current prefilter-backed implementation is only supported for 2-D layouts.
     if result.ndim != 2 or x1.ndim != 2 or x2.ndim != 2:
         return False

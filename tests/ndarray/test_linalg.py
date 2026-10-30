@@ -1283,3 +1283,31 @@ def test_matmul_broadcast_batch_chunks():
         blosc2.asarray(b, chunks=(1, 2, 2)), blosc2.asarray(a, chunks=(1, 2, 2)), chunks=(1, 2, 2)
     )
     np.testing.assert_allclose(res[:], np.matmul(b, a))
+
+
+@pytest.mark.parametrize("storage", ["contiguous", "disk"])
+def test_matmul_frame_backed_operands(storage, tmp_path):
+    # The fast matmul prefilter reads in-memory chunk tables; frames must take the general path
+    x = np.arange(64 * 64, dtype=np.float32).reshape(64, 64) / 100
+    y = x.T.copy()
+    if storage == "contiguous":
+        a, b = blosc2.asarray(x, contiguous=True), blosc2.asarray(y, contiguous=True)
+    else:
+        a = blosc2.asarray(x, urlpath=str(tmp_path / "x.b2nd"), mode="w")
+        b = blosc2.asarray(y, urlpath=str(tmp_path / "y.b2nd"), mode="w")
+    np.testing.assert_allclose(blosc2.matmul(a, b)[:], x @ y, rtol=1e-5)
+
+
+@pytest.mark.parametrize("storage", ["contiguous", "disk"])
+def test_set_pref_matmul_rejects_frame_backed_operands(storage, tmp_path):
+    # The prefilter itself refuses frames too, rather than leaving that to matmul's Python checks
+    x = np.ones((64, 64), dtype=np.float32)
+    if storage == "contiguous":
+        a = blosc2.asarray(x, contiguous=True)
+    else:
+        a = blosc2.asarray(x, urlpath=str(tmp_path / "x.b2nd"), mode="w")
+    b = blosc2.asarray(x)
+    out = blosc2.zeros((64, 64), dtype=np.float32)
+    for inputs in ({"x1": a, "x2": b}, {"x1": b, "x2": a}):
+        with pytest.raises(ValueError, match="frame-backed"):
+            out._set_pref_matmul(inputs, fp_accuracy=blosc2.FPAccuracy.DEFAULT)

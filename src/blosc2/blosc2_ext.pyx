@@ -2961,7 +2961,9 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             continue
 
         ndarr = udata.inputs[i]
-        if ndarr.sc.storage.urlpath == NULL:
+        # sc.data only holds the chunks of in-memory super-chunks that are not frames
+        # (contiguous=True or from a cframe); read frames through blosc2_schunk_get_chunk()
+        if ndarr.sc.storage.urlpath == NULL and ndarr.sc.frame == NULL:
             src = ndarr.sc.data[nchunk]
         else:
             input_cache = &udata.input_chunk_caches[i]
@@ -4751,6 +4753,13 @@ cdef class NDArray:
 
     @_handle_locked
     def _set_pref_matmul(self, inputs, fp_accuracy):
+        cdef b2nd_array_t* operand
+        for name in ("x1", "x2"):
+            operand = <b2nd_array_t*><uintptr_t>inputs[name].c_array
+            # aux_matmul() reads the chunks from sc.data, which frames (on disk, or in memory
+            # with contiguous=True) do not fill
+            if operand.sc.frame != NULL:
+                raise ValueError("The fast matmul path does not support frame-backed operands")
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> matmul_prefilter
