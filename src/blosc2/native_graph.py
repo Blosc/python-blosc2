@@ -1267,7 +1267,11 @@ def _native_text_expression(expression):
 
 
 def _graph_configuration(jit):
-    policy = tuple((key, os.environ.get(key)) for key in ("ME_SIMD_MATH_BACKEND", "ME_DSL_FP_MODE"))
+    import blosc2
+
+    policy = (("math_backend", blosc2.jit_config.execution_options()["math_backend"]),) + tuple(
+        (key, os.environ.get(key)) for key in ("ME_SIMD_MATH_BACKEND", "ME_DSL_FP_MODE")
+    )
     if jit is False:
         return policy
     return policy + tuple(

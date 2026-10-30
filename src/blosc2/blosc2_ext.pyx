@@ -711,6 +711,7 @@ cdef extern from "miniexpr.h":
         const char *cache_dir
         int trace
         int compiler_output
+        const char *math_backend
 
     int me_compile_nd_jit_options(const char *expression, const me_variable *variables,
         int var_count, me_dtype dtype, int ndims, const int64_t *shape,
@@ -1583,8 +1584,8 @@ cdef extern from "dsl_graph_bridge.h":
         size_t jit_stages
         size_t interpreter_stages
         size_t tasks
-    int b2_graph_prepare(const char *, size_t, int, int, void **, b2_graph_error *) nogil
-    int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, void **, b2_graph_error *) nogil
+    int b2_graph_prepare(const char *, size_t, int, int, const char *, void **, b2_graph_error *) nogil
+    int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, const char *, void **, b2_graph_error *) nogil
     int b2_graph_specialize(const void *, const b2_graph_metadata *, int, size_t, size_t, void **, b2_graph_error *) nogil
     int b2_graph_execute(const void *, const b2_array_view *, int, void *, size_t, unsigned, b2_graph_report *, b2_graph_error *) nogil
     int b2_graph_sources_available()
@@ -1722,6 +1723,8 @@ cdef class NativeGraphHandle:
         cdef const char *json
         cdef size_t size
         cdef int rc
+        cdef bytes math_bytes = (blosc2.jit_config.execution_options()["math_backend"] or "").encode("ascii")
+        cdef const char *math_backend = <const char *>math_bytes if math_bytes else NULL
         self._handle = NULL
         if graph is None:
             return
@@ -1729,7 +1732,7 @@ cdef class NativeGraphHandle:
         json = encoded
         size = len(encoded)
         with nogil:
-            rc = b2_graph_prepare(json, size, jit_mode, require_jit, &self._handle, &error)
+            rc = b2_graph_prepare(json, size, jit_mode, require_jit, math_backend, &self._handle, &error)
         if rc:
             raise_graph_error(rc, &error)
 
@@ -1803,6 +1806,8 @@ cdef class NativeGraphHandle:
         cdef const char *text = expression
         cdef size_t length = len(expression)
         cdef NativeGraphHandle result = NativeGraphHandle()
+        cdef bytes math_bytes = (blosc2.jit_config.execution_options()["math_backend"] or "").encode("ascii")
+        cdef const char *math_backend = <const char *>math_bytes if math_bytes else NULL
         if n > 128:
             raise ValueError("Native graph binding limit exceeded")
         memset(metadata, 0, sizeof(metadata))
@@ -1813,7 +1818,7 @@ cdef class NativeGraphHandle:
             metadata[i].name = name
             metadata[i].dtype = _me_dtype_from_numpy_dtype(np.dtype(dtype).newbyteorder('='))
         with nogil:
-            rc = b2_graph_prepare_text(text, length, metadata, n, jit_mode, require_jit, &result._handle, &error)
+            rc = b2_graph_prepare_text(text, length, metadata, n, jit_mode, require_jit, math_backend, &result._handle, &error)
         if rc:
             raise_graph_error(rc, &error)
         return result
@@ -2112,12 +2117,14 @@ cdef class MenudetArtifactHandle:
         cdef size_t size
         cdef me_jit_options native_options
         options = blosc2.jit_config.execution_options()
+        cdef bytes math_bytes = (options["math_backend"] or "").encode("utf-8")
         cdef bytes compiler = (options["compiler"] or "").encode()
         cdef bytes flags = (options["cflags"] or "").encode()
         cdef bytes cache = (options["cache_dir"] or "").encode()
         native_options.compiler = <const char *>compiler if compiler else NULL
         native_options.cflags = <const char *>flags if flags else NULL
         native_options.cache_dir = <const char *>cache if cache else NULL
+        native_options.math_backend = <const char *>math_bytes if math_bytes else NULL
         native_options.trace = int(options["trace"])
         native_options.compiler_output = int(options["compiler_output"])
         self._handle = NULL
@@ -2661,6 +2668,20 @@ cdef int _me_compile_nd_configured(const char *expression, const me_variable *va
     int n, me_dtype dtype, int ndims, const int64_t *shape, const int32_t *chunkshape,
     const int32_t *blockshape, int jit_mode, int *error, me_expr **out_expr) except *:
     options = blosc2.jit_config.execution_options()
+    cdef bytes math_bytes = options["math_backend"].encode("utf-8") if options["math_backend"] is not None else b""
+    cdef bytes configured_expression
+    cdef str expression_text
+    cdef list parameter_names
+    if math_bytes:
+        # Plain miniexpr expressions do not consult the DSL math policy. A
+        # function wrapper selects the same validated DSL path without a source
+        # pragma, so author pragmas remain authoritative.
+        expression_text = (<bytes>expression).decode("utf-8")
+        if not any(line.lstrip().startswith("def ") for line in expression_text.splitlines()):
+            parameter_names = [(<bytes>variables[i].name).decode("utf-8") for i in range(n)]
+            expression_text = f"def __me_math({', '.join(parameter_names)}):\n    return {expression_text}"
+            configured_expression = expression_text.encode("utf-8")
+            expression = configured_expression
     cdef bytes compiler_bytes = options["compiler"].encode("utf-8") if options["compiler"] is not None else b""
     cdef bytes flags_bytes = options["cflags"].encode("utf-8") if options["cflags"] is not None else b""
     cdef bytes cache_bytes = options["cache_dir"].encode("utf-8") if options["cache_dir"] is not None else b""
@@ -2670,6 +2691,7 @@ cdef int _me_compile_nd_configured(const char *expression, const me_variable *va
     native_options.cache_dir = <const char *>cache_bytes if cache_bytes else NULL
     native_options.trace = int(options["trace"])
     native_options.compiler_output = int(options["compiler_output"])
+    native_options.math_backend = <const char *>math_bytes if math_bytes else NULL
     return me_compile_nd_jit_options(expression, variables, n, dtype, ndims, shape,
                                     chunkshape, blockshape, jit_mode, &native_options, error, out_expr)
 

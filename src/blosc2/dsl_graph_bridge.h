@@ -51,8 +51,25 @@ static int b2_graph_native_fork_join(void *host, size_t count, b2_graph_task_fn 
 }
 #ifdef B2_HAVE_NATIVE_GRAPH
 #include "miniexpr_graph.h"
-static int b2_graph_prepare(const char *json, size_t n, int jit, int required, void **out, b2_graph_error *e) {
+static int b2_graph_math_options(me_graph_prepare_options *options, const char *math, b2_graph_error *e) {
+#ifdef ME_GRAPH_MATH_BACKEND_OPTIONS
+    options->math_backend = math;
+#else
+    (void)options;
+    if (math) {
+        memset(e, 0, sizeof(*e)); e->node = e->stage = -1;
+        snprintf(e->native.message, sizeof(e->native.message), "Build with miniexpr per-call graph math backend support");
+        return -8;
+    }
+#endif
+    (void)e;
+    return 0;
+}
+static int b2_graph_prepare(const char *json, size_t n, int jit, int required, const char *math, void **out, b2_graph_error *e) {
     me_graph_prepare_options options = {sizeof(options), ME_GRAPH_VERSION, (me_jit_mode)jit, required != 0, true};
+    *out = NULL;
+    int math_rc = b2_graph_math_options(&options, math, e);
+    if (math_rc) return math_rc;
     me_graph_plan *p = NULL;
     me_graph_error error;
     int rc = me_graph_prepare_json(json, n, &options, &p, &error);
@@ -78,7 +95,7 @@ static int b2_graph_specialize(const void *p, const b2_graph_metadata *inputs, i
     return rc;
 }
 static int b2_graph_prepare_text(const char *text, size_t length, const b2_graph_metadata *inputs,
-    int n, int jit, int required, void **out, b2_graph_error *e) {
+    int n, int jit, int required, const char *math, void **out, b2_graph_error *e) {
     me_graph_input_metadata metadata[ME_MAX_VARS] = {0};
     if (n < 0 || n > ME_MAX_VARS) {
         *out = NULL; memset(e, 0, sizeof(*e)); e->node = e->stage = -1;
@@ -87,6 +104,9 @@ static int b2_graph_prepare_text(const char *text, size_t length, const b2_graph
     }
     for (int i = 0; i < n; i++) { metadata[i].name = inputs[i].name; metadata[i].dtype = inputs[i].dtype; }
     me_graph_prepare_options options = {sizeof(options), ME_GRAPH_VERSION, (me_jit_mode)jit, required != 0, true};
+    *out = NULL;
+    int math_rc = b2_graph_math_options(&options, math, e);
+    if (math_rc) return math_rc;
     me_graph_plan *p = NULL; me_graph_error error;
     int rc = me_graph_prepare_expression(text, length, metadata, n, &options, &p, &error);
     *out = p; e->node = error.node; e->stage = error.stage; e->native = error.native;
@@ -156,16 +176,16 @@ static int b2_graph_map_shape(const void *s, int64_t *shape) {
     return rank;
 }
 #else
-static int b2_graph_prepare(const char *json, size_t n, int jit, int required, void **out, b2_graph_error *e) {
-    (void)json; (void)n; (void)jit; (void)required; *out = NULL; memset(e, 0, sizeof(*e));
+static int b2_graph_prepare(const char *json, size_t n, int jit, int required, const char *math, void **out, b2_graph_error *e) {
+    (void)json; (void)n; (void)jit; (void)required; (void)math; *out = NULL; memset(e, 0, sizeof(*e));
     snprintf(e->native.message, sizeof(e->native.message), "Build with miniexpr native graph preparation support"); return -100;
 }
 static int b2_graph_specialize(const void *p, const b2_graph_metadata *inputs, int n, size_t tile, size_t budget, void **out, b2_graph_error *e) {
     (void)p; (void)inputs; (void)n; (void)tile; (void)budget; (void)e; *out = NULL; return -100;
 }
 static int b2_graph_prepare_text(const char *text, size_t length, const b2_graph_metadata *inputs,
-    int n, int jit, int required, void **out, b2_graph_error *e) {
-    (void)text; (void)length; (void)inputs; (void)n; (void)jit; (void)required; (void)e; *out = NULL; return -100;
+    int n, int jit, int required, const char *math, void **out, b2_graph_error *e) {
+    (void)text; (void)length; (void)inputs; (void)n; (void)jit; (void)required; (void)math; (void)e; *out = NULL; return -100;
 }
 static int b2_graph_execute(const void *s, const b2_array_view *inputs, int n, void *out, size_t bytes,
     unsigned raise_mask, b2_graph_report *report, b2_graph_error *e) {

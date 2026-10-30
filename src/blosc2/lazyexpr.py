@@ -2095,6 +2095,8 @@ def fast_eval(  # noqa: C901
             # is after the finally below removes the prefilter — so the buffer
             # safely outlives every prefilter dereference.
         except Exception as e:
+            if blosc2.jit_config.execution_options()["math_backend"] is not None:
+                raise
             if is_dsl:
                 reason = (
                     f"miniexpr compilation or execution failed for this DSL kernel:\n{expression.dsl_source}"
@@ -3041,6 +3043,8 @@ def reduce_slices(  # noqa: C901
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
         except Exception as e:
+            if blosc2.jit_config.execution_options()["math_backend"] is not None:
+                raise
             if callable(expression) and _is_dsl_kernel_expression(expression):
                 reason = "miniexpr compilation or execution failed for this DSL kernel."
                 backend_error = str(e)
@@ -4921,12 +4925,14 @@ class LazyExpr(LazyArray):
         return indexing.explain_query(self)
 
     @expression_method
+    @blosc2.jit_config.math_execution
     def compute(  # noqa: C901 -- native-first/strict dispatch plus legacy output policies
         self,
         item=(),
         fp_accuracy: blosc2.FPAccuracy | None = None,
         jit=None,
         jit_backend: str | None = None,
+        math_backend: str | None = None,
         _require_native=None,
         _native_tile_items=1024,
         **kwargs,
@@ -6389,7 +6395,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
         )
         for name, value in inputs.items()
     )
-    key = (expression, signature, mode, optimization)
+    key = (expression, signature, mode, optimization, blosc2.jit_config.execution_options()["math_backend"])
     with _evaluate_recipe_lock:
         recipe = _evaluate_recipe_cache.get(key)
         if recipe is not None:
@@ -6510,11 +6516,14 @@ def _array_owner(value):
 
 
 @remember_evaluation
+@blosc2.jit_config.math_execution
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
     out: blosc2.Array = None,
+    *,
+    math_backend: str | None = None,
     **kwargs: Any,
 ) -> blosc2.Array:
     """
@@ -6566,6 +6575,12 @@ def evaluate(
     out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
+    math_backend: str, optional
+        Math library: ``"system"``, ``"sleef"`` or ``"accelerate"``. None inherits
+        the current Python/native defaults. Explicit choices override the native
+        environment default and require a build supporting the requested library.
+        Accelerate is macOS-only and uses tiled vector interpretation, independently
+        of JIT selection. Prepared plans are cached separately for each policy.
     kwargs: Any, optional
         Accepted options are ``order``, ``casting`` and ``optimization``.
         ``optimization`` defaults to ``"aggressive"``, matching NumExpr's default.

@@ -40,6 +40,11 @@ Both functions accept the same keyword-only parameters:
     * - ``jit_backend``
       - ``None``
       - ``"tcc"``, ``"cc"``, or ``"js"``. JavaScript is WebAssembly/Pyodide-only.
+    * - ``math_backend``
+      - ``None``
+      - Math library: ``"system"``, ``"sleef"``, or ``"accelerate"``. An explicit
+        choice requires a build supporting it; ``accelerate`` is macOS-only.
+        Independent of ``jit``; prepared kernels are cached per policy.
     * - ``fp_accuracy``
       - ``FPAccuracy.DEFAULT``
       - Existing floating-point function accuracy policy, not a compiler flag.
@@ -109,8 +114,9 @@ Existing nonempty environment overrides remain authoritative: ``CC`` overrides
 ``compiler``, ``CFLAGS`` overrides ``cflags``, ``ME_DSL_TRACE`` overrides ``trace``,
 ``ME_DSL_JIT_DEBUG_CC`` overrides ``compiler_output``, and
 ``ME_DSL_JIT_CACHE_DIR`` overrides ``cache_dir``. ``TMPDIR`` is used only when no
-explicit cache directory is selected. The JIT enable/backend environment rules
-below remain unchanged. Configuration does not require changing environment
+explicit cache directory is selected. An explicit ``math_backend`` overrides
+``ME_SIMD_MATH_BACKEND`` for that evaluation. The JIT enable/backend environment
+rules below remain unchanged. Configuration does not require changing environment
 variables; native compilation receives a call-local settings snapshot.
 
 .. autofunction:: blosc2.set_jit_options
@@ -154,10 +160,11 @@ This is a conservative structural heuristic, not a profitability guarantee;
 explicit overrides remain useful for unusual or repeatedly executed workloads.
 
 This applies consistently to eligible string expressions, graph-generated maps
-and Menudet artifacts. ``evaluate()`` does not accept per-call JIT keywords;
-use ``blosc2.jit_options(jit=True)`` or ``blosc2.set_jit_options(jit=True)`` to opt
-in. Native metadata is exposed as ``MenudetKernel.execution_kind``. Older native
-runtimes report ``"unknown"`` and retain their existing native default behavior.
+and Menudet artifacts. ``evaluate()`` accepts ``math_backend=`` per call but not
+the JIT keywords; use ``blosc2.jit_options(jit=True)`` or
+``blosc2.set_jit_options(jit=True)`` to opt into JIT. Native metadata is exposed as
+``MenudetKernel.execution_kind``. Older native runtimes report ``"unknown"`` and
+retain their existing native default behavior.
 
 Scalar miniexpr reductions currently use the native interpreter, even when JIT
 is requested. Elementwise DSL returns (including automatically lifted expressions)

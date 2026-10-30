@@ -42,6 +42,7 @@ Usage::
     python bench/menudet-engines.py --maxsize 8M
     python bench/menudet-engines.py --reduc sum
     python bench/menudet-engines.py --jit cc
+    python bench/menudet-engines.py --math-backend accelerate
     python bench/menudet-engines.py --dtype int16 --codec lz4 --clevel 3
     python bench/menudet-engines.py --dtype int64 --jit cc --allocation-control
     python bench/menudet-engines.py --expr "x * y + z"
@@ -53,6 +54,11 @@ NumPy function names such as sin and sqrt are available without a prefix.
 ``--jit tcc|cc`` selects miniexpr's JIT compiler backend. With ``cc``, the
 ``CC`` environment variable selects the system compiler. Omitting ``--jit``
 preserves the existing environment/default backend selection.
+
+``--math-backend system|sleef|accelerate`` selects the math library for the
+Blosc2 engines through the per-call API. Omitting it inherits the current
+Python/native policy. Accelerate requires a macOS build; SLEEF requires a
+SLEEF-enabled build.
 """
 
 import argparse
@@ -65,6 +71,7 @@ import re
 import sys
 import tempfile
 from contextlib import contextmanager
+from functools import partial
 from statistics import median
 from time import perf_counter
 
@@ -78,7 +85,7 @@ ENGINES = ("NumPy", "numexpr", "LazyExpr-NumPy", "LazyExpr", "evaluate", "Menude
 GREEN = "\033[1;32m"
 RESET = "\033[0m"
 MENUDET_AUTHORS = {}
-NUMPY_GLOBALS = {**vars(np), "np": np, "__builtins__": {}}
+NUMPY_GLOBALS = {**vars(np), "np": np, "__builtins__": {"__import__": __import__}}
 
 
 def parse_item_count(value):
@@ -114,7 +121,8 @@ def operand_names(expression):
 
 def numpy_expression(expression, inputs):
     """Evaluate the CLI expression using NumPy's functions and resident arrays."""
-    return eval(expression, NUMPY_GLOBALS, inputs)
+    with np.errstate(all="ignore"):
+        return eval(expression, NUMPY_GLOBALS, inputs)
 
 
 def menudet_author(expression, reduc=None):
@@ -155,13 +163,22 @@ def build_operands(size, kind, dtype="float64", cparams=None, expression=EXPRESS
     return inputs, expected
 
 
-def make_engines(inputs, kind, reduc=None, cparams=None, selected=None, expression=EXPRESSION):  # noqa: C901 -- explicit engine routes
+def make_engines(  # noqa: C901 -- explicit engine routes
+    inputs,
+    kind,
+    reduc=None,
+    cparams=None,
+    selected=None,
+    expression=EXPRESSION,
+    math_backend=None,
+):
     """Return an ordered mapping of engine name to a callable producing a result.
 
     LazyExpr returns compressed Blosc2 output; LazyExpr-NumPy, NumPy, numexpr
     and evaluate always return NumPy. Menudet preserves the input storage kind.
     """
     numpy_reduce = getattr(np, reduc) if reduc else None
+    execution = {"math_backend": math_backend} if math_backend is not None else {}
     numpy_code = compile(expression, "<numpy-benchmark>", "eval")
     numexpr_expression = f"{('sum' if reduc == 'mean' else reduc)}({expression})" if reduc else expression
     if reduc in ("any", "all"):
@@ -205,15 +222,18 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None, expressi
                 "NumPy": numpy_run,
                 "numexpr": numexpr_run,
                 "evaluate": lambda: blosc2.evaluate(
-                    f"{reduc}({expression})" if reduc else expression, local_dict=inputs
+                    f"{reduc}({expression})" if reduc else expression, local_dict=inputs, **execution
                 ),
             }[selected]
         }
     lazy = blosc2.lazyexpr(expression, inputs) if selected in (None, "LazyExpr", "LazyExpr-NumPy") else None
     if reduc:
-        kernel = (
-            menudet_author(expression, reduc).specialize(**inputs) if selected in (None, "Menudet") else None
-        )
+        with blosc2.jit_options(**execution):
+            kernel = (
+                menudet_author(expression, reduc).specialize(**inputs)
+                if selected in (None, "Menudet")
+                else None
+            )
 
         def menudet_reduce():
             resident = inputs if kind == "numpy" else {name: value[:] for name, value in inputs.items()}
@@ -222,12 +242,13 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None, expressi
         return {
             "NumPy": numpy_run,
             "numexpr": numexpr_run,
-            "LazyExpr-NumPy": getattr(lazy, reduc) if lazy is not None else None,
-            "LazyExpr": getattr(lazy, reduc) if lazy is not None else None,
-            "evaluate": lambda: blosc2.evaluate(f"{reduc}({expression})", local_dict=inputs),
+            "LazyExpr-NumPy": partial(getattr(lazy, reduc), **execution) if lazy is not None else None,
+            "LazyExpr": partial(getattr(lazy, reduc), **execution) if lazy is not None else None,
+            "evaluate": lambda: blosc2.evaluate(f"{reduc}({expression})", local_dict=inputs, **execution),
             "Menudet": menudet_reduce,
         }
-    menudet = menudet_author(expression)(**inputs) if selected in (None, "Menudet") else None
+    with blosc2.jit_options(**execution):
+        menudet = menudet_author(expression)(**inputs) if selected in (None, "Menudet") else None
     output_options = {
         "cparams": blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5) if cparams is None else cparams
     }
@@ -237,25 +258,26 @@ def make_engines(inputs, kind, reduc=None, cparams=None, selected=None, expressi
     return {
         "NumPy": numpy_run,
         "numexpr": numexpr_run,
-        "LazyExpr-NumPy": lambda: lazy[:],
-        "LazyExpr": lambda: lazy.compute(**output_options),
-        "evaluate": lambda: blosc2.evaluate(expression, local_dict=inputs),
+        "LazyExpr-NumPy": lambda: lazy.compute(_getitem=True, **execution),
+        "LazyExpr": lambda: lazy.compute(**output_options, **execution),
+        "evaluate": lambda: blosc2.evaluate(expression, local_dict=inputs, **execution),
         "Menudet": (lambda: menudet.compute(**output_options)) if kind == "blosc2" else (lambda: menudet[:]),
     }
 
 
-def make_allocation_engines(inputs, expression=EXPRESSION):
+def make_allocation_engines(inputs, expression=EXPRESSION, math_backend=None):
     """Compare fresh/reused NumPy destinations without changing the main table.
 
     Reused cases share one buffer: benchmark calls are sequential and qualify
     each result immediately. No operands are decompressed in this control.
     """
     output = np.empty_like(numpy_expression(expression, inputs))
+    execution = {"math_backend": math_backend} if math_backend is not None else {}
     return {
         "numexpr fresh": lambda: ne.evaluate(expression, local_dict=inputs),
         "numexpr reused": lambda: ne.evaluate(expression, local_dict=inputs, out=output),
-        "evaluate fresh": lambda: blosc2.evaluate(expression, local_dict=inputs),
-        "evaluate reused": lambda: blosc2.evaluate(expression, local_dict=inputs, out=output),
+        "evaluate fresh": lambda: blosc2.evaluate(expression, local_dict=inputs, **execution),
+        "evaluate reused": lambda: blosc2.evaluate(expression, local_dict=inputs, out=output, **execution),
     }
 
 
@@ -483,6 +505,11 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     )
     parser.add_argument("--operands", choices=("both", "numpy", "blosc2"), default="both")
     parser.add_argument(
+        "--math-backend",
+        choices=("system", "sleef", "accelerate"),
+        help="math library for Blosc2 engines (default: inherit Python/native policy)",
+    )
+    parser.add_argument(
         "--allocation-control",
         action="store_true",
         help="also compare fresh/reused NumPy outputs for numexpr and evaluate (resident maps only)",
@@ -543,6 +570,7 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     )
     print(f"Blosc2 compression: codec {args.codec} | clevel {args.clevel}")
     print(f"Miniexpr JIT backend request: {os.environ.get('ME_DSL_JIT_COMPILER', 'runtime default')}")
+    print(f"Miniexpr math backend request: {args.math_backend or 'runtime default'}")
     print()
     widths = column_widths(args.items)
     print(table_header(widths))
@@ -557,12 +585,25 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
             inputs, expected = build_operands(size, kind, args.dtype, cparams, expression=args.expr)
             if args.reduc:
                 expected = getattr(np, args.reduc)(expected)
-            engines = make_engines(inputs, kind, args.reduc, cparams=cparams, expression=args.expr)
+            engines = make_engines(
+                inputs,
+                kind,
+                args.reduc,
+                cparams=cparams,
+                expression=args.expr,
+                math_backend=args.math_backend,
+            )
             failures = {}
 
             def cold_factory(name, inputs=inputs, kind=kind):
                 return make_engines(
-                    inputs, kind, args.reduc, cparams=cparams, selected=name, expression=args.expr
+                    inputs,
+                    kind,
+                    args.reduc,
+                    cparams=cparams,
+                    selected=name,
+                    expression=args.expr,
+                    math_backend=args.math_backend,
                 )[name]
 
             times = benchmark(
@@ -576,7 +617,9 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
             )
             failure_rows.extend((size, kind, name, reason) for name, reason in failures.items())
             if args.allocation_control and kind == "numpy":
-                controls = make_allocation_engines(inputs, expression=args.expr)
+                controls = make_allocation_engines(
+                    inputs, expression=args.expr, math_backend=args.math_backend
+                )
                 control_times = benchmark(controls, expected, args.samples, args.warmups, rng, failures={})
                 allocation_rows.append((size, tuple(controls), control_times))
                 del controls

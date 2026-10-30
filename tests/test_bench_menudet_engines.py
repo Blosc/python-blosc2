@@ -241,10 +241,11 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     monkeypatch.setattr(sys, "argv", argv)
     observed = []
 
-    def make_engines(inputs, kind, reduc, cparams=None, expression=None):
+    def make_engines(inputs, kind, reduc, cparams=None, expression=None, math_backend=None):
         assert inputs["x"].dtype == np.dtype("uint64")
         assert cparams.codec == blosc2.Codec.LZ4
         assert cparams.clevel == 3
+        assert math_backend is None
         observed.append((kind, os.environ["ME_DSL_JIT_COMPILER"]))
         return {name: lambda: np.zeros(1) for name in namespace["ENGINES"]}
 
@@ -255,6 +256,53 @@ def test_jit_backend_selection(engine_benchmark, monkeypatch, capsys, backend):
     expected = backend or "tcc"
     assert observed == [("numpy", expected), ("blosc2", expected)]
     assert f"Miniexpr JIT backend request: {expected}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [
+        "system",
+        pytest.param(
+            "accelerate",
+            marks=pytest.mark.skipif(
+                sys.platform != "darwin" or blosc2.IS_WASM,
+                reason="Accelerate requires a macOS native build",
+            ),
+        ),
+    ],
+)
+def test_math_backend_cli(engine_benchmark, monkeypatch, capsys, backend):
+    main = engine_benchmark["main"]
+    namespace = main.__globals__
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "menudet-engines.py",
+            "--items",
+            "17",
+            "--samples",
+            "1",
+            "--warmups",
+            "1",
+            "--operands",
+            "numpy",
+            "--math-backend",
+            backend,
+        ],
+    )
+    observed = []
+
+    def make_engines(*args, math_backend=None, **kwargs):
+        observed.append(math_backend)
+        return {name: lambda: np.zeros(17) for name in namespace["ENGINES"]}
+
+    monkeypatch.setitem(namespace, "make_engines", make_engines)
+    monkeypatch.setattr(blosc2, "set_nthreads", lambda threads: None)
+    monkeypatch.setattr(namespace["ne"], "set_num_threads", lambda threads: None)
+    main()
+    assert observed == [backend]
+    assert f"Miniexpr math backend request: {backend}" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("dtype", ["int16", "uint64", "float32"])
@@ -298,7 +346,7 @@ def test_benchmark_reports_nonparity(engine_benchmark):
     assert failures == {"numexpr": "different numerical results"}
 
 
-@pytest.mark.parametrize("expression", ["z * 2", "x * y + z", "sqrt(y + z)"])
+@pytest.mark.parametrize("expression", ["z * 2", "x * y + z", "sqrt(y + z)", "exp(x)"])
 @pytest.mark.parametrize("kind", ["numpy", "blosc2"])
 def test_custom_expression(engine_benchmark, expression, kind):
     inputs, expected = engine_benchmark["build_operands"](257, kind, expression=expression)

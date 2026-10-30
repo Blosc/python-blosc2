@@ -33,16 +33,17 @@ def restore_options(monkeypatch):
 
 def test_set_get_and_atomic_validation():
     original = blosc2.get_jit_options()
-    assert blosc2.set_jit_options(jit=True, jit_backend="cc") == original
+    assert blosc2.set_jit_options(jit=True, jit_backend="cc", math_backend="system") == original
     result = blosc2.get_jit_options()
     assert result["jit"] is True
     assert result["jit_backend"] == "cc"
+    assert result["math_backend"] == "system"
     result["jit"] = False
     assert blosc2.get_jit_options()["jit"] is True
     with pytest.raises(TypeError):
         blosc2.set_jit_options(jit=False, trace="yes")
     assert blosc2.get_jit_options()["jit"] is True
-    blosc2.set_jit_options(jit=None, jit_backend=None)
+    blosc2.set_jit_options(jit=None, jit_backend=None, math_backend=None)
     assert blosc2.get_jit_options() == original
 
 
@@ -51,6 +52,8 @@ def test_set_get_and_atomic_validation():
     [
         {"jit": 1},
         {"jit_backend": "invalid"},
+        {"math_backend": "invalid"},
+        {"math_backend": 1},
         {"fp_accuracy": 1},
         {"compiler": ""},
         {"cflags": "\0"},
