@@ -11,6 +11,8 @@ import builtins
 import inspect
 import itertools
 import math
+import operator
+import sys
 import weakref
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
@@ -245,11 +247,64 @@ def is_inside_new_expr() -> bool:
     return builtins.any(frame_info.function in {"_new_expr", "open_lazyarray"} for frame_info in stack)
 
 
+def _normalize_slice(s):
+    """Return slice s with bool or out-of-range integer bounds and step as NumPy reads them.
+
+    NumPy (like slice.indices()) accepts any integers there, clamping them to the index range,
+    and bools as integers; ndindex rejects both.  Slices without such values, or with a value
+    that is not an integer at all, are returned unchanged.
+    """
+    values, changed = [], False
+    for v, lo in ((s.start, -sys.maxsize - 1), (s.stop, -sys.maxsize - 1), (s.step, -sys.maxsize)):
+        if v is not None:
+            try:
+                i = operator.index(v)
+            except TypeError:
+                return s
+            if isinstance(v, bool) or not lo <= i <= sys.maxsize:
+                v, changed = builtins.min(builtins.max(int(i), lo), sys.maxsize), True
+        values.append(v)
+    return slice(*values) if changed else s
+
+
+def _normalize_key_item(k):
+    if isinstance(k, slice):
+        return _normalize_slice(k)
+    # NumPy indexes with a 0-d integer array as with an integer
+    if isinstance(k, np.ndarray) and k.ndim == 0 and np.issubdtype(k.dtype, np.integer):
+        return int(k)
+    return k
+
+
+def _normalize_key(key):
+    """Turn the parts of an indexing key that NumPy accepts but ndindex does not into equivalents."""
+    if isinstance(key, tuple):
+        return tuple(_normalize_key_item(k) for k in key)
+    return _normalize_key_item(key)
+
+
 def _is_scalar_bool(k):
     """True for Python/numpy scalar bools and 0-d bool arrays (numpy's scalar-bool indexing)."""
     return isinstance(k, (bool, np.bool_)) or (
         isinstance(k, np.ndarray) and k.ndim == 0 and k.dtype == np.bool_
     )
+
+
+def _check_adjacent_advanced(key, count_bools=False):
+    """Raise NotImplementedError unless the advanced indices in the tuple `key` (arrays, integers
+    and, with `count_bools`, scalar bools) are adjacent: NumPy moves the broadcast dimensions to
+    the front otherwise."""
+    adv = [
+        i
+        for i, k in enumerate(key)
+        if (count_bools and _is_scalar_bool(k))
+        or isinstance(k, list | np.ndarray)
+        or (isinstance(k, int | np.integer) and not isinstance(k, bool))
+    ]
+    if adv[-1] - adv[0] + 1 != len(adv):
+        raise NotImplementedError(
+            "Array indices separated by slices, ellipses (...), or newaxes (None) are not supported"
+        )
 
 
 def make_key_hashable(key):
@@ -4545,33 +4600,52 @@ class NDArray(blosc2_ext.NDArray, Operand):
         if not isinstance(key, (list, np.ndarray)):
             return None
         key_arr = np.asarray(key)
-        if not (np.issubdtype(key_arr.dtype, np.integer) and key_arr.ndim >= 1):
+        if not (np.issubdtype(key_arr.dtype, np.integer) and key_arr.ndim >= 1) or self.ndim == 0:
             return None
         # 1-D: axis=None (flat); ndim>1: axis=0 (row selection)
         return self._take_numpy(key_arr, axis=None if self.ndim == 1 else 0)
 
-    def _scalar_bool_key_to_newaxis(self, key):
-        """Rewrite a tuple key's scalar bools to numpy's single-newaxis semantics.
+    def _drop_scalar_bools(self, key):
+        """Handle the scalar bools of a tuple key like NumPy.
 
-        Scalar bools act as one np.newaxis-like dimension of length 1 (all True)
-        or 0 (any False), placed at the first bool's position.  Returns
-        ``(key, None)`` unchanged when there are no scalar bools, ``(new_key,
-        None)`` to continue processing, or ``(None, empty_shape)`` when any bool
-        is False and the result is an empty array of that shape.
+        NumPy treats them as 0-d boolean (advanced) indices: together they add one
+        dimension of length 1 (all True) or 0 (any False), which goes where the
+        advanced indices (integers included) are if those are adjacent, else in
+        front.  Returns ``(key, None)`` unchanged when there are no scalar bools,
+        ``(rest, shape)`` when the result is ``self[rest]`` (the key without the
+        bools) reshaped to ``shape``, ``(None, shape)`` when the result is an empty
+        array of that shape, or ``(rest, None)`` to continue processing with rest.
         """
         if not builtins.any(_is_scalar_bool(k) for k in key):
             return key, None
-        first = next(i for i, k in enumerate(key) if _is_scalar_bool(k))
-        new_key = key[:first] + (None,) + tuple(k for k in key[first + 1 :] if not _is_scalar_bool(k))
-        if builtins.all(k for k in key if _is_scalar_bool(k)):  # all True -> plain newaxis
-            return new_key, None
-        # any False -> the newaxis dim is empty; shape from the all-True form
-        key_idx = ndindex.ndindex(new_key).expand(self.shape)
-        shape = list(key_idx.newshape(self.shape))
-        raw = key_idx.raw
-        pos = builtins.sum(not isinstance(k, int) for k in raw[: raw.index(None)])
-        shape[pos] = 0
-        return None, tuple(shape)
+        rest = tuple(k for k in key if not _is_scalar_bool(k))
+        all_true = builtins.all(k for k in key if _is_scalar_bool(k))
+        # NumPy works out the shape (and validates the key) on a stride-0 stand-in for self; that
+        # costs no memory for basic indices, nor for an empty result
+        stand_in = np.broadcast_to(np.empty((), dtype=np.uint8), self.shape)
+        if not builtins.any(isinstance(k, list | np.ndarray) for k in rest):
+            shape = stand_in[key].shape
+            return (rest, shape) if all_true else (None, shape)
+        # Together with array indices, a False empties the broadcast result (or does not broadcast)
+        if not all_true:
+            return None, stand_in[key].shape
+        # and True bools broadcast away, unless they separate the advanced indices
+        _check_adjacent_advanced(key, count_bools=True)
+        return rest, None
+
+    def _getitem_fancy_newaxis(self, key):
+        """Fancy indexing with np.newaxis in a tuple key.
+
+        Index without the Nones and insert their dimensions where NumPy puts them.
+        The advanced indices (arrays and integers) must be adjacent, as without
+        Nones.
+        """
+        _check_adjacent_advanced(key)
+        nparr = self[tuple(k for k in key if k is not None)]
+        # NumPy places the new axes on a stride-0 stand-in for self; an extra trailing dimension of
+        # length 0 keeps its result empty, so this costs no memory
+        stand_in = np.broadcast_to(np.empty((), dtype=np.uint8), (*self.shape, 0))
+        return nparr.reshape(stand_in[(*key, slice(None))].shape[:-1])
 
     def _getitem_bool_mask(self, key):
         """Handle boolean array key with optional sparse-gather fast path.
@@ -4580,6 +4654,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         boolean mask (caller should continue with regular indexing).
         """
         if not (hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape):
+            return None
+        if isinstance(key, np.generic):  # a scalar bool, whose shape matches a 0-d array's
             return None
         # For sparse boolean masks, converting to flat indices and using the
         # sparse-gather path is faster than decompressing every data chunk.
@@ -4663,17 +4739,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+        key = _normalize_key(key)
 
-        # Scalar bools inside a tuple act like a single np.newaxis dimension of
-        # length 1 (all True) or 0 (any False), placed at the first bool's
-        # position (numpy semantics); rewrite to the equivalent None form so the
-        # regular machinery handles them.  Bare scalar bools are handled below in
-        # the fancy branch.  (numpy rejects scalar-bool tuples in __setitem__, so
-        # this stays getitem-only.)
+        # Scalar bools inside a tuple are 0-d boolean indices, as in NumPy (see
+        # _drop_scalar_bools).  Bare scalar bools are handled below in the fancy
+        # branch.  (__setitem__ does not support them.)
         if isinstance(key, tuple):
-            key, empty_shape = self._scalar_bool_key_to_newaxis(key)
-            if empty_shape is not None:
-                return np.empty(empty_shape, dtype=self.dtype)
+            key, bool_shape = self._drop_scalar_bools(key)
+            if key is None:
+                return np.empty(bool_shape, dtype=self.dtype)
+            if bool_shape is not None:
+                return self[key].reshape(bool_shape)
 
         # Check boolean array key early to avoid expensive process_key / nonzero
         result = self._getitem_bool_mask(key)
@@ -4703,6 +4779,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return np.expand_dims(self._get_set_findex_default(_slice, out=out), 0)
                 else:  # do nothing
                     return np.empty((0,) + self.shape, dtype=self.dtype)
+            if isinstance(key, tuple) and builtins.any(k is None for k in key):
+                return self._getitem_fancy_newaxis(key)
             return self.get_fselection_numpy(key)  # fancy index default, can be quite slow
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
