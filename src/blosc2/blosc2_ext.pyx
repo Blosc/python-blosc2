@@ -30,8 +30,13 @@ from cpython cimport (
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
+from cpython.bool cimport PyBool_Check
+from cpython.long cimport PyLong_Check
+from cpython.number cimport PyIndex_Check
+from cpython.pyport cimport PY_SSIZE_T_MAX, PY_SSIZE_T_MIN
 from cpython.ref cimport Py_INCREF, Py_DECREF
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
+from cpython.slice cimport PySlice_AdjustIndices, PySlice_Check, PySlice_Unpack
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc, calloc
@@ -608,6 +613,7 @@ cdef extern from "b2nd.h":
         int64_t chunk_array_strides[B2ND_MAX_DIM]
         char *dtype
         int8_t dtype_format
+        int64_t last_tick
 
     ctypedef struct b2nd_context_t:
         pass
@@ -4004,6 +4010,18 @@ cdef c_bool _can_release_gil(blosc2_schunk *sc) except? False:
     return dparams.postfilter == NULL
 
 
+# Kinds of key items in NDArray.get_basic_numpy() and get_basic_start_stop()
+cdef enum:
+    _KEY_INT
+    _KEY_SLICE
+    _KEY_NEWAXIS
+    _KEY_ELLIPSIS
+    _MAX_BASIC_KEY = 64  # longer keys (only possible with many None) take the general path
+    _BASIC_READ_ATTEMPTS = 3
+
+cdef object _np_integer = np.integer
+
+
 cdef class NDArray:
     cdef b2nd_array_t* array
     cdef readonly object _handle_lock
@@ -4081,40 +4099,238 @@ cdef class NDArray:
         return dtype
 
     def get_slice_numpy(self, arr, key):
-        global _nogil_reads
         start, stop = key
 
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
-        cdef int64_t[B2ND_MAX_DIM] buffershape_
+        cdef int rc
         for i in range(self.ndim):
             start_[i] = start[i]
             stop_[i] = stop[i]
+        # Waiting for the lock releases the GIL (RLock does that), so a holder that needs the
+        # GIL back, e.g. for a Python postfilter, can finish.
+        with self._handle_lock:
+            rc = self._get_slice_cbuffer(arr, start_, stop_)
+        _check_rc(rc, "Error while getting the buffer")
+
+        return arr
+
+    cdef Py_ssize_t _classify_basic_key(self, tuple items, char *kinds, int64_t *ints, Py_ssize_t *starts,
+                                        Py_ssize_t *stops, c_bool setitem=False) except -2:
+        """First pass of get_basic_numpy() and get_basic_start_stop() (`setitem`): classify the
+        key items without looking at the shape.
+
+        Fill kinds, ints, starts and stops (_MAX_BASIC_KEY entries) and return the number of
+        items that index a dimension, or -1 if the key is not a basic one (or has too many).
+        """
+        cdef Py_ssize_t nkey = len(items)
+        if nkey > _MAX_BASIC_KEY:
+            return -1
+        cdef Py_ssize_t i, step, nidx = 0
+        cdef c_bool ellipsis = False
+        for i in range(nkey):
+            k = items[i]
+            if k is None:
+                if setitem:
+                    return -1
+                kinds[i] = _KEY_NEWAXIS
+            elif PySlice_Check(k):
+                try:
+                    PySlice_Unpack(k, &starts[i], &stops[i], &step)
+                except Exception:
+                    return -1
+                if step != 1:
+                    return -1
+                # __setitem__'s general path rejects some bool steps and bounds clamped by
+                # PySlice_Unpack (beyond the index range): leave them all to it
+                if setitem and (
+                    PyBool_Check(k.step)
+                    or starts[i] in (PY_SSIZE_T_MIN, PY_SSIZE_T_MAX)
+                    or stops[i] == PY_SSIZE_T_MIN
+                    or (stops[i] == PY_SSIZE_T_MAX and k.stop is not None)
+                ):
+                    return -1
+                kinds[i] = _KEY_SLICE
+                nidx += 1
+            elif k is Ellipsis:
+                if ellipsis:
+                    return -1
+                ellipsis = True
+                kinds[i] = _KEY_ELLIPSIS
+            # NumPy integers without __index__ (timedelta64) are no index for NumPy either
+            elif (PyLong_Check(k) and not PyBool_Check(k)) or (
+                isinstance(k, _np_integer) and PyIndex_Check(k)
+            ):
+                try:
+                    ints[i] = k
+                except Exception:  # e.g. beyond int64
+                    return -1
+                kinds[i] = _KEY_INT
+                nidx += 1
+            else:
+                return -1
+        return nidx if nidx <= self.array.ndim else -1
+
+    def get_basic_start_stop(self, key):
+        """Resolve a basic index key without None for __setitem__, else return None.
+
+        For keys made of integers (Python or NumPy, not bools), slices with unit
+        step and Ellipsis, follow shape changes made by another handle (SWMR) and
+        return ``(start, stop, int_mask)``: the region as lists and which dimensions
+        are indexed with an integer.  Any other key, or one that does not fit the
+        shape, gives None (the general path then raises the appropriate exception).
+        """
+        cdef tuple items = key if type(key) is tuple else (key,)
+        cdef Py_ssize_t nkey = len(items)
+        cdef char[_MAX_BASIC_KEY] kinds
+        cdef int64_t[_MAX_BASIC_KEY] ints
+        cdef Py_ssize_t[_MAX_BASIC_KEY] starts, stops
+        cdef Py_ssize_t nidx = self._classify_basic_key(items, kinds, ints, starts, stops, True)
+        if nidx < 0:
+            return None
+        cdef int64_t[B2ND_MAX_DIM] start_, stop_
+        cdef c_bool[B2ND_MAX_DIM] int_dims
+        with self._handle_lock:
+            _check_rc(b2nd_refresh(self.array), "Error while refreshing the array")
+            out_shape = self._resolve_basic_key(nkey, kinds, ints, starts, stops, nidx, start_, stop_,
+                                                int_dims)
+            if out_shape is None:
+                return None
+        cdef int ndim = self.array.ndim, j
+        return ([start_[j] for j in range(ndim)], [stop_[j] for j in range(ndim)],
+                tuple([int_dims[j] for j in range(ndim)]))
+
+    def get_basic_numpy(self, key):
+        """Return ``self[key]`` as a NumPy array if *key* is a basic index, else None.
+
+        Only keys made of integers (Python or NumPy, not bools), slices with unit
+        step, Ellipsis and None are handled here, after following shape changes
+        made by another handle (SWMR).  Any other key, and any key that is out of
+        range or otherwise invalid, gives None, so that the caller can use the
+        general indexing path, which also raises the appropriate exception.
+        """
+        cdef tuple items = key if type(key) is tuple else (key,)
+        cdef Py_ssize_t nkey = len(items)
+        cdef char[_MAX_BASIC_KEY] kinds
+        cdef int64_t[_MAX_BASIC_KEY] ints
+        cdef Py_ssize_t[_MAX_BASIC_KEY] starts, stops
+        cdef Py_ssize_t nidx = self._classify_basic_key(items, kinds, ints, starts, stops)
+        if nidx < 0:
+            return None
+
+        cdef int64_t[B2ND_MAX_DIM] start_, stop_
+        cdef int64_t tick
+        cdef int rc, attempt
+        with self._handle_lock:
+            # The read itself follows shape changes made by another handle (SWMR) before reading,
+            # so a key resolved against the cached shape is right if the read did not find any.
+            # This saves a second check of the file per read.  Otherwise (or if the key does not
+            # fit the cached shape, or the read failed) follow the changes first and try again;
+            # another handle can change the shape once more meanwhile, hence a few attempts.
+            for attempt in range(_BASIC_READ_ATTEMPTS):
+                if attempt > 0:
+                    _check_rc(b2nd_refresh(self.array), "Error while refreshing the array")
+                tick = self.array.last_tick
+                out_shape = self._resolve_basic_key(nkey, kinds, ints, starts, stops, nidx, start_, stop_)
+                if out_shape is None:
+                    if attempt > 0:
+                        return None
+                    continue
+                arr = np.empty(out_shape, dtype=self.dtype)
+                rc = self._get_slice_cbuffer(arr, start_, stop_)
+                if rc >= 0 and self.array.last_tick == tick:
+                    return arr
+        # Out of attempts: as the general path, return what the last read gave
+        _check_rc(rc, "Error while getting the buffer")
+        return arr
+
+    cdef _resolve_basic_key(self, Py_ssize_t nkey, const char *kinds, const int64_t *ints,
+                            const Py_ssize_t *starts, const Py_ssize_t *stops, Py_ssize_t nidx,
+                            int64_t *start_, int64_t *stop_, c_bool *int_dims=NULL):
+        """Resolve a key classified by _classify_basic_key() against the cached shape.
+
+        Fill start_ and stop_ (and int_dims, which dimensions are indexed with an integer, if
+        given) and return the shape of the result, or None if the key does not fit the shape.
+        """
+        cdef int64_t n, idx
+        cdef Py_ssize_t i, start, stop
+        cdef int dim = 0
+        out_shape = []
+        for i in range(nkey):
+            if kinds[i] == _KEY_NEWAXIS:
+                out_shape.append(1)
+                continue
+            if kinds[i] == _KEY_ELLIPSIS:
+                dim = self._whole_dims(dim, self.array.ndim - nidx, start_, stop_, int_dims, out_shape)
+                continue
+            n = self.array.shape[dim]
+            if kinds[i] == _KEY_INT:
+                idx = ints[i]
+                if idx < 0:
+                    idx += n
+                if idx < 0 or idx >= n:
+                    return None
+                start_[dim] = idx
+                stop_[dim] = idx + 1
+            else:
+                if n > PY_SSIZE_T_MAX:
+                    return None
+                start = starts[i]
+                stop = stops[i]
+                PySlice_AdjustIndices(<Py_ssize_t> n, &start, &stop, 1)
+                if start >= stop:
+                    start = stop = 0
+                start_[dim] = start
+                stop_[dim] = stop
+                out_shape.append(stop - start)
+            if int_dims != NULL:
+                int_dims[dim] = kinds[i] == _KEY_INT
+            dim += 1
+        # The dimensions after the key (none if it has an ellipsis)
+        self._whole_dims(dim, self.array.ndim - dim, start_, stop_, int_dims, out_shape)
+        return out_shape
+
+    cdef int _whole_dims(self, int dim, int count, int64_t *start_, int64_t *stop_, c_bool *int_dims,
+                         list out_shape):
+        """Select `count` whole dimensions from `dim` on for _resolve_basic_key(); return the next."""
+        cdef int64_t n
+        cdef int j
+        for j in range(count):
+            n = self.array.shape[dim]
+            start_[dim] = 0
+            stop_[dim] = n
+            if int_dims != NULL:
+                int_dims[dim] = False
+            out_shape.append(n)
+            dim += 1
+        return dim
+
+    cdef int _get_slice_cbuffer(self, arr, int64_t *start_, int64_t *stop_) except? -9999:
+        # The caller holds self._handle_lock; returns the rc of b2nd_get_slice_cbuffer()
+        global _nogil_reads
+        cdef int64_t[B2ND_MAX_DIM] buffershape_
+        cdef int i
+        for i in range(self.array.ndim):
             buffershape_[i] = stop_[i] - start_[i]
 
         cdef Py_buffer view
         cdef int rc = 0
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
         try:
-            # Waiting for the lock releases the GIL (RLock does that), so a holder that needs the
-            # GIL back, e.g. for a Python postfilter, can finish.
-            with self._handle_lock:
-                # Decompress without the GIL, so that threads reading other arrays (or other handles
-                # of the same file) run in parallel; everything else that uses this super-chunk
-                # holds the lock meanwhile.
-                if _can_release_gil(self.array.sc):
-                    _nogil_reads += 1
-                    with nogil:
-                        rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                                    <void *> view.buf, buffershape_, view.len)
-                    _nogil_reads -= 1
-                else:
+            # Decompress without the GIL, so that threads reading other arrays (or other handles
+            # of the same file) run in parallel; everything else that uses this super-chunk
+            # holds the lock meanwhile.
+            if _can_release_gil(self.array.sc):
+                _nogil_reads += 1
+                with nogil:
                     rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
                                                 <void *> view.buf, buffershape_, view.len)
+                _nogil_reads -= 1
+            else:
+                rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                            <void *> view.buf, buffershape_, view.len)
         finally:
             PyBuffer_Release(&view)
-        _check_rc(rc, "Error while getting the buffer")
-
-        return arr
+        return rc
 
     @_handle_locked
     def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):

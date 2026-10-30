@@ -4721,6 +4721,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
+        # Fast path for the common basic indexing (integers, unit-step slices, Ellipsis, None);
+        # None means that the key needs the general path below
+        nparr = self.get_basic_numpy(key)
+        if nparr is not None:
+            if self._keep_last_read:
+                self._remember_read(key, nparr)
+            return nparr
+
         # Follow shape changes made by another handle (SWMR) before validating the key
         self.refresh()
         # The more general case (this is quite slow)
@@ -4805,11 +4813,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
             nparr = np.expand_dims(nparr, axis=[i for i, n in enumerate(none_mask) if n])
 
         if self._keep_last_read:
-            self._last_read.clear()
-            inmutable_key = make_key_hashable(key)
-            self._last_read[inmutable_key] = nparr
-
+            self._remember_read(key, nparr)
         return nparr
+
+    def _remember_read(self, key, nparr: np.ndarray) -> None:
+        """Make `nparr`, read with `key`, the content of the last-read cache (see keep_last_read)."""
+        self._last_read.clear()
+        self._last_read[make_key_hashable(key)] = nparr
 
     def __setitem__(
         self,
@@ -4846,21 +4856,30 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
-        # Follow shape changes made by another handle (SWMR) before validating the key
-        self.refresh()
+        # Fast path for basic keys (integers, unit-step slices, Ellipsis), which also follows shape
+        # changes made by another handle (SWMR); None means that the key needs the general path
+        basic = self.get_basic_start_stop(key)
+        if basic is None:
+            # Follow shape changes made by another handle (SWMR) before validating the key
+            self.refresh()
 
-        # key not iterable
-        key = key[()] if isinstance(key, NDArray) else key
-        key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+            # key not iterable
+            key = key[()] if isinstance(key, NDArray) else key
+            key = (
+                tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+            )
 
-        key_, mask = process_key(key, self.shape)  # internally handles key an integer
+            key_, mask = process_key(key, self.shape)  # internally handles key an integer
         if hasattr(value, "shape") and value.shape == () and not getattr(value.dtype, "fields", None):
             value = value.item()
         value = (
             value if np.isscalar(value) else blosc2.as_simpleproxy(value)
         )  # convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch
 
-        if builtins.any(isinstance(k, list | np.ndarray) for k in key_):  # fancy indexing
+        if basic is not None:
+            start, stop, mask = basic
+            none_mask = ()
+        elif builtins.any(isinstance(k, list | np.ndarray) for k in key_):  # fancy indexing
             _slice = ndindex.ndindex(key_).expand(
                 self.shape
             )  # handles negative indices -> positive internally
@@ -4877,17 +4896,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
             indexing.mark_indexes_stale(self)
             return result
+        else:
+            start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
+            if step != (1,) * self.ndim:  # handle non-unit or negative steps
+                if np.any(none_mask):
+                    raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
+                result = self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+                from . import indexing
 
-        start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
-
-        if step != (1,) * self.ndim:  # handle non-unit or negative steps
-            if np.any(none_mask):
-                raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
-            result = self._get_set_nonunit_steps((start, stop, step, mask), value=value)
-            from . import indexing
-
-            indexing.mark_indexes_stale(self)
-            return result
+                indexing.mark_indexes_stale(self)
+                return result
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
         if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
