@@ -360,6 +360,21 @@ def are_partitions_aligned(shape, chunks, blocks):
     return builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
 
 
+def blocks_contiguous(chunks, blocks):
+    """Whether the blocks are C-contiguous runs of their chunk (no block may be 0 long).
+
+    That is the case only if their leading dims are 1, then one dim divides the chunk's, and the
+    rest are equal to the chunk's; same rule as nchunk_fastpath() in C-Blosc2's b2nd.c.
+    """
+    k = 0
+    for i, (size, unit) in enumerate(zip(chunks, blocks, strict=True)):
+        if size % unit != 0 or (i > k and size != unit):
+            return False
+        if i == k and unit == 1:
+            k += 1
+    return True
+
+
 def are_partitions_behaved(shape, chunks, blocks):
     """
     Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.
@@ -376,18 +391,6 @@ def are_partitions_behaved(shape, chunks, blocks):
         if container and container[-1] != part[-1]:
             return False
         return builtins.all(size % unit == 0 for size, unit in zip(container[:-1], part[:-1], strict=True))
-
-    def blocks_contiguous(chunks, blocks):
-        # A block is a C-contiguous run of its chunk only if its leading dims are 1,
-        # then one dim divides the chunk's, and the rest are equal to the chunk's.
-        # Same rule as nchunk_fastpath() in C-Blosc2's b2nd.c.
-        k = 0
-        for i, (size, unit) in enumerate(zip(chunks, blocks, strict=True)):
-            if size % unit != 0 or (i > k and size != unit):
-                return False
-            if i == k and unit == 1:
-                k += 1
-        return True
 
     return blocks_contiguous(chunks, blocks) and check_contiguity(shape, chunks)
 

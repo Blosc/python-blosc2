@@ -2408,6 +2408,102 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     np.testing.assert_array_equal(out[:], expected)
 
 
+@pytest.mark.parametrize(
+    ("dtype", "x", "y"),
+    [
+        (np.float32, "a", 0),
+        (np.float32, 1.5, "a"),
+        (np.int32, "a", 0.5),
+        (np.int16, "a", -1),
+        (np.float64, "a", "b"),
+    ],
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    compiled = []
+
+    def wrapped_set_pref_expr(self, expression, inputs, *args, **kwargs):
+        res = original_set_pref_expr(self, expression, inputs, *args, **kwargs)
+        compiled.append(expression)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+    na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
+    nb = (na // 3).astype(dtype)
+    a = blosc2.asarray(na, chunks=(16, 30), blocks=(4, 30))
+    b = blosc2.asarray(nb, chunks=(16, 30), blocks=(4, 30))
+    ops, nops = {"a": a, "b": b}, {"a": na, "b": nb}
+    expr = blosc2.where(a > 500, ops.get(x, x), ops.get(y, y))
+    expected = np.where(na > 500, nops.get(x, x), nops.get(y, y))
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
+    assert len(compiled) == 1
+    assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "direct"),
+    [
+        ((100, 100), (100, 100), (25, 100), True),
+        ((10_000,), (3000,), (1000,), True),  # partial last chunk
+        ((5,), (8,), (4,), True),  # a single, partial chunk
+        ((37, 50, 60), (5, 50, 60), (1, 25, 60), True),
+        ((4, 12, 30), (1, 4, 30), (1, 2, 30), True),
+        ((1, 10, 30), (1, 4, 30), (1, 2, 30), True),  # partial, but the very last chunk
+        ((4, 10, 30), (1, 4, 30), (1, 2, 30), False),  # partial chunks inside the array
+        ((40, 30), (16, 30), (4, 10), False),  # blocks not contiguous in their chunk
+        ((40, 30), (16, 15), (4, 15), False),  # chunks not contiguous in the array
+        ((24, 20, 18), (8, 10, 9), (4, 5, 9), False),
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.int16, np.complex128])
+def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, dtype):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    assert lazyexpr_mod._chunks_tile_flat(shape, chunks, blocks) is direct
+    original = lazyexpr_mod._prefilter_to_numpy
+    results = []
+
+    def wrapped(*args):
+        res = original(*args)
+        results.append(res is not None)
+        return res
+
+    monkeypatch.setattr(lazyexpr_mod, "_prefilter_to_numpy", wrapped)
+    rng = np.random.default_rng(1)
+    na = (rng.random(shape) * 100).astype(dtype)
+    nb = (rng.random(shape) * 10).astype(dtype)
+    a = blosc2.asarray(na, chunks=chunks, blocks=blocks)
+    b = blosc2.asarray(nb, chunks=chunks, blocks=blocks)
+    if dtype is np.complex128:
+        second = (a * b, na * nb)
+    else:
+        second = ((a - b) > 40, (na - nb) > 40)
+    for expr, expected in [(a + b * 2, na + nb * 2), second]:
+        for res in (expr[:], expr[()]):
+            assert res.dtype == expected.dtype
+            assert res.flags.c_contiguous
+            assert res.flags.writeable
+            np.testing.assert_array_equal(res, expected)
+            base = res
+            while base.base is not None:
+                base = base.base
+            # The padding of a partial last chunk is not kept allocated
+            assert base.nbytes <= res.nbytes + blosc2.MAX_OVERHEAD
+    if dtype is np.complex128 and not results:
+        return  # miniexpr is not used for complex numbers on some platforms
+    assert results == ([True] * 4 if direct else [])
+
+
 @pytest.mark.parametrize("source", ["contiguous", "cframe"])
 def test_frame_backed_inmemory_operands(source):
     # In-memory frames (contiguous=True, or views of a cframe) keep no chunk table, so the
