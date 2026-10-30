@@ -914,6 +914,59 @@ def test_scalar_bool_key_matches_numpy(shape, key):
         np.testing.assert_array_equal(got, want)
 
 
+# Keys for NDArray.get_basic_numpy(), the fast path of __getitem__ for integers, unit-step slices,
+# Ellipsis and None.  Mixed with keys it must leave to the general path (invalid, out of range, steps,
+# bools, huge bounds, fancy), as any key must give the same result or exception either way.
+def _random_key_item(rng, n):
+    r = rng.random()
+    if r < 0.3:
+        i = int(rng.integers(-n - 2, n + 2))
+        return i if rng.random() < 0.5 else np.dtype(rng.choice(["i1", "i8", "u2"])).type(abs(i) % 100)
+    if r < 0.7:
+        bounds = [None, *rng.integers(-n - 3, n + 3, size=2).tolist()]
+        start, stop = rng.choice(bounds), rng.choice(bounds)
+        step = rng.choice([None, None, 1, np.int64(1), 2, -1, True])
+        return slice(start, stop, step)
+    if r < 0.8:
+        return Ellipsis
+    if r < 0.9:
+        return None
+    return [True, 1.0, 2**64, slice(2**64), [0], np.array(1)][int(rng.integers(6))]
+
+
+@pytest.mark.parametrize("on_disk", [False, True], ids=["memory", "disk"])
+def test_basic_index_fast_path_matches_general_path(tmp_path, monkeypatch, on_disk):
+    rng = np.random.default_rng(1)
+    shapes = [(), (0,), (7,), (5, 0, 3), (6, 5), (4, 3, 5), (3, 2, 4, 3)]
+    for ishape, shape in enumerate(shapes):
+        npa = np.arange(math.prod(shape), dtype=np.int32).reshape(shape)
+        kwargs = {"urlpath": tmp_path / f"basic{ishape}.b2nd", "mode": "w"} if on_disk else {}
+        a = blosc2.asarray(npa, **kwargs)
+        n = shape[0] if shape else 1
+        for _ in range(150):
+            items = tuple(_random_key_item(rng, n) for _ in range(int(rng.integers(0, len(shape) + 3))))
+            key = items[0] if len(items) == 1 and rng.random() < 0.5 else items
+            outcomes = []
+            for general in (False, True):
+                with monkeypatch.context() as m:
+                    if general:
+                        m.setattr(blosc2.NDArray, "get_basic_numpy", lambda self, key: None)
+                    try:
+                        outcomes.append(("ok", a[key]))
+                    except Exception as e:
+                        outcomes.append((type(e), str(e)))
+            (fast, got), (general, want) = outcomes
+            assert fast == general, key
+            if fast == "ok":
+                assert type(got) is type(want), key
+                assert got.shape == want.shape, key
+                assert got.dtype == want.dtype, key
+                np.testing.assert_array_equal(got, want)
+                if a.get_basic_numpy(key) is not None:  # the fast path took it: compare with NumPy
+                    np.testing.assert_array_equal(got, npa[key])
+                    assert got.shape == np.asarray(npa[key]).shape, key
+
+
 def _assert_getitem_matches_numpy(npa, a, key):
     try:
         want = npa[key]
@@ -963,6 +1016,21 @@ def test_getitem_huge_slice_bounds_and_bool_steps(key):
 def test_getitem_0d_integer_array(key):
     npa = np.arange(60).reshape(3, 4, 5)
     _assert_getitem_matches_numpy(npa, blosc2.asarray(npa), key)
+
+
+# timedelta64 is a NumPy integer type, but no index (it has no __index__): IndexError, as in NumPy
+@pytest.mark.parametrize(
+    "key", [np.timedelta64(1, "ns"), (np.timedelta64(1, "ps"),), (1, np.timedelta64(2, "ns"))]
+)
+def test_timedelta64_key(key):
+    npa = np.arange(20).reshape(4, 5)
+    a = blosc2.asarray(npa)
+    _assert_getitem_matches_numpy(npa, a, key)
+    with pytest.raises(IndexError):
+        npa[key] = 7
+    with pytest.raises(IndexError):
+        a[key] = 7
+    np.testing.assert_array_equal(a[...], npa)
 
 
 # NumPy places the dimension of scalar bools among the other advanced indices (integers count as
