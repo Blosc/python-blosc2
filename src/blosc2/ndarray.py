@@ -7250,7 +7250,7 @@ def _ndarray_asarray_requires_copy(
     return builtins.any(key in user_kwargs for key in copy_keys)
 
 
-def asarray(
+def asarray(  # noqa: C901
     array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any
 ) -> NDArray | blosc2.UTF8Array:
     """Convert the `array` to an `NDArray`.
@@ -7353,6 +7353,8 @@ def asarray(
 
         # Create the empty array
         ndarr = empty(shape, dtype, chunks=chunks, blocks=blocks, **kwargs)
+        if isinstance(array, NDArray) and _copy_chunkwise(array, ndarr):
+            return ndarr
         behaved = are_partitions_behaved(shape, chunks, blocks)
 
         # Get the coordinates of the chunks
@@ -7380,6 +7382,48 @@ def asarray(
         return array
 
     return ndarr
+
+
+def _copy_chunkwise(src: NDArray, dst: NDArray) -> bool:
+    """Fill `dst` (just created) with the items of `src`, casting them to the dtype of `dst`.
+
+    Both must have the same shape, chunks and blocks, so that their chunks lay out the same items
+    the same way; returns False, writing nothing, otherwise.  Chunks without padding are
+    decompressed into one reused buffer, cast into another and compressed from there: no slicing
+    and no allocations per chunk.  Chunks encoded the same way in both arrays are copied as they are.
+    """
+    if src.ndim == 0 or src.shape != dst.shape or src.chunks != dst.chunks or src.blocks != dst.blocks:
+        return False
+    extshape = src.ext_chunks
+    nitems = math.prod(extshape)
+    if (
+        nitems * src.dtype.itemsize != src.schunk.chunksize
+        or nitems * dst.dtype.itemsize != dst.schunk.chunksize
+    ):
+        return False
+    if _chunks_interchangeable(dst, src):
+        for nchunk in range(src.schunk.nchunks):
+            dst.schunk.update_chunk(nchunk, src.schunk.get_chunk(nchunk))
+        return True
+    # Raw byte buffers: datetime dtypes do not export a buffer themselves
+    src_raw = np.empty(src.schunk.chunksize, dtype=np.uint8)
+    dst_raw = np.empty(dst.schunk.chunksize, dtype=np.uint8)
+    src_buf, dst_buf = src_raw.view(src.dtype), dst_raw.view(dst.dtype)
+    grid, _ = get_chunks_idx(src.shape, src.chunks)
+    for nchunk, coords in enumerate(np.ndindex(grid)):
+        valid = tuple(
+            builtins.min(c, s - i * c) for i, c, s in zip(coords, src.chunks, src.shape, strict=True)
+        )
+        if valid == extshape:
+            # Casting goes item by item, so the block layout inside the chunk does not matter
+            src.schunk.decompress_chunk(nchunk, src_raw)
+            np.copyto(dst_buf, src_buf, casting="unsafe")
+            dst.schunk.update_data(nchunk, dst_raw, copy=False)
+        else:
+            # Padding may hold anything (casting it could warn): go through the items only
+            box = tuple(slice(i * c, i * c + v) for i, c, v in zip(coords, src.chunks, valid, strict=True))
+            dst[box] = np.require(src[box], dtype=dst.dtype, requirements="C")
+    return True
 
 
 def array(array: Sequence | blosc2.Array, copy: bool | None = True, **kwargs: Any) -> NDArray:

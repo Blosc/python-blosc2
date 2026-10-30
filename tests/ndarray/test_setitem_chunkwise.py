@@ -6,7 +6,7 @@
 #######################################################################
 
 # Assignments of scalars and NDArrays that are written chunk by chunk (bounded memory, special
-# chunks, compressed chunk copies).
+# chunks, compressed chunk copies), and the chunk-wise casts of astype().
 
 import importlib
 import os
@@ -288,6 +288,40 @@ def test_ndarray_value_squeezed_and_kinds():
     f = blosc2.zeros((30, 20), dtype=np.float32, chunks=(4, 20), blocks=(2, 10))
     f[...] = blosc2.asarray(xc)
     np.testing.assert_array_equal(f[...], xc.real)
+
+
+# asarray() casts arrays from 16 MB on chunk by chunk
+BIG = (65, 256, 256)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "blocks"),
+    [(None, None), ((32, 100, 64), (8, 50, 32)), ((13, 256, 256), (13, 16, 256))],
+)
+@pytest.mark.parametrize("dtype", [np.float64, np.uint8, np.int16, np.float32])
+def test_astype_chunkwise(chunks, blocks, dtype):
+    x = _random(BIG, np.float32, np.random.default_rng(7))
+    a = blosc2.asarray(x, chunks=chunks, blocks=blocks)
+    b = blosc2.astype(a, dtype)
+    assert b.dtype == np.dtype(dtype)
+    assert b.chunks == a.chunks
+    assert b.blocks == a.blocks
+    np.testing.assert_array_equal(b[...], x.astype(dtype))
+    sub = (slice(3, 50), slice(10, 200), slice(7, 250))
+    np.testing.assert_array_equal(b[sub], x[sub].astype(dtype))
+
+
+def test_astype_chunkwise_kinds(tmp_path):
+    rng = np.random.default_rng(8)
+    x = rng.integers(-100, 100, size=BIG).astype(np.int64)
+    a = blosc2.asarray(x, chunks=(16, 128, 256), blocks=(4, 32, 256))
+    np.testing.assert_array_equal(blosc2.astype(a, "m8[s]")[...], x.astype("m8[s]"))
+    c = blosc2.astype(a, np.complex64, urlpath=str(tmp_path / "c.b2nd"), mode="w")
+    np.testing.assert_array_equal(blosc2.open(c.urlpath)[...], x.astype(np.complex64))
+    # A copy with the same chunk encoding copies the compressed chunks
+    d = blosc2.asarray(a, copy=True, urlpath=str(tmp_path / "d.b2nd"), mode="w")
+    assert all(a.schunk.get_chunk(n) == d.schunk.get_chunk(n) for n in range(a.schunk.nchunks))
+    np.testing.assert_array_equal(blosc2.open(d.urlpath)[...], x)
 
 
 def test_chunkwise_buffers_fit_the_boxes():
