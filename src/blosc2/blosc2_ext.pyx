@@ -27,6 +27,7 @@ from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
     PyBuffer_Release,
+    PyBytes_AsString,
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
@@ -34,7 +35,7 @@ from cpython.bool cimport PyBool_Check
 from cpython.long cimport PyLong_Check
 from cpython.number cimport PyIndex_Check
 from cpython.pyport cimport PY_SSIZE_T_MAX, PY_SSIZE_T_MIN
-from cpython.ref cimport Py_INCREF, Py_DECREF
+from cpython.ref cimport PyObject, Py_INCREF, Py_DECREF, Py_XDECREF
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from cpython.slice cimport PySlice_AdjustIndices, PySlice_Check, PySlice_Unpack
 from cython.operator cimport dereference
@@ -492,7 +493,9 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset) nogil
     blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio) nogil
 
-    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
+    int64_t blosc2_schunk_to_buffer_alloc(blosc2_schunk* schunk,
+                                          uint8_t* (*alloc)(int64_t length, void* user_data) noexcept nogil,
+                                          void* user_data) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int blosc2_schunk_lock(blosc2_schunk *schunk) nogil
     int blosc2_schunk_unlock(blosc2_schunk *schunk) nogil
@@ -647,8 +650,6 @@ cdef extern from "b2nd.h":
     int b2nd_get_sparse_cbuffer(b2nd_array_t *array, int64_t ncoords, const int64_t *coords,
                                 void *buffer, int64_t buffersize)
     int b2nd_from_cframe(uint8_t *cframe, int64_t cframe_len, c_bool copy, b2nd_array_t ** array);
-    int b2nd_to_cframe(const b2nd_array_t *array, uint8_t ** cframe, int64_t *cframe_len,
-                       c_bool *needs_free);
 
     int b2nd_squeeze(b2nd_array_t *array, b2nd_array_t **view)
     int b2nd_squeeze_index(b2nd_array_t *array, b2nd_array_t **view, const c_bool *index)
@@ -2546,21 +2547,7 @@ cdef class SChunk:
 
     @_handle_locked
     def to_cframe(self):
-        cdef c_bool needs_free
-        cdef uint8_t *cframe
-        cdef int64_t cframe_len
-        if RELEASEGIL:
-            with nogil:
-                cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
-        else:
-            cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
-        if cframe_len < 0:
-            raise RuntimeError("Error while getting the cframe")
-        out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
-        if needs_free:
-            free(cframe)
-
-        return out
+        return schunk_to_cframe(self.schunk, RELEASEGIL)
 
     @_handle_locked
     def _avoid_cframe_free(self, avoid_cframe_free):
@@ -3770,6 +3757,44 @@ cdef schunk_is_ndarray(blosc2_schunk* schunk):
     return blosc2_meta_exists(schunk, meta) >= 0
 
 
+cdef struct cframe_dest:
+    PyObject* out
+    c_bool alloc_failed
+
+
+cdef uint8_t* cframe_alloc(int64_t length, void* user_data) noexcept with gil:
+    # The bytes object that to_cframe() returns, for the frame to be written into
+    cdef cframe_dest* dest = <cframe_dest*> user_data
+    try:
+        out = PyBytes_FromStringAndSize(NULL, length)
+    except MemoryError:
+        dest.alloc_failed = True
+        return NULL
+    Py_INCREF(out)
+    dest.out = <PyObject*> out
+    return <uint8_t*> PyBytes_AsString(out)
+
+
+cdef schunk_to_cframe(blosc2_schunk* schunk, c_bool release_gil):
+    """Serialize `schunk` straight into a new bytes object (a cframe)."""
+    cdef cframe_dest dest
+    dest.out = NULL
+    dest.alloc_failed = False
+    cdef int64_t cframe_len
+    if release_gil:
+        with nogil:
+            cframe_len = blosc2_schunk_to_buffer_alloc(schunk, cframe_alloc, &dest)
+    else:
+        cframe_len = blosc2_schunk_to_buffer_alloc(schunk, cframe_alloc, &dest)
+    out = <object> dest.out if dest.out != NULL else None
+    Py_XDECREF(dest.out)
+    if dest.alloc_failed:
+        raise MemoryError()
+    if cframe_len < 0:
+        raise RuntimeError("Error while getting the cframe")
+    return out
+
+
 def schunk_from_cframe(cframe, copy=False):
     cdef Py_buffer buf
     PyObject_GetBuffer(cframe, &buf, PyBUF_SIMPLE)
@@ -4627,18 +4652,7 @@ cdef class NDArray:
 
     @_handle_locked
     def to_cframe(self):
-        cdef c_bool needs_free
-        cdef uint8_t *cframe
-        cdef int64_t cframe_len;
-        cdef int rc;
-        rc = b2nd_to_cframe(self.array, &cframe, &cframe_len, &needs_free)
-        if rc < 0:
-            raise RuntimeError("Error while getting the cframe")
-        out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
-        if needs_free:
-            free(cframe)
-
-        return out
+        return schunk_to_cframe(self.array.sc, False)
 
     @_handle_locked
     def copy(self, dtype, **kwargs):
