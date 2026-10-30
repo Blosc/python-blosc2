@@ -194,6 +194,7 @@ cdef extern from "blosc2.h":
     ctypedef enum:
         BLOSC2_SPECIAL_ZERO
         BLOSC2_SPECIAL_NAN
+        BLOSC2_SPECIAL_VALUE
         BLOSC2_SPECIAL_UNINIT
 
     ctypedef enum:
@@ -521,6 +522,9 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int64_t *offsets_order)
     int64_t blosc2_schunk_frame_len(blosc2_schunk* schunk)
 
+    int blosc2_chunk_zeros(blosc2_cparams cparams, const int32_t nbytes, void *dest, int32_t destsize)
+    int blosc2_chunk_nans(blosc2_cparams cparams, const int32_t nbytes, void *dest, int32_t destsize)
+    int blosc2_chunk_uninit(blosc2_cparams cparams, const int32_t nbytes, void *dest, int32_t destsize)
     int blosc2_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
                                void *dest, int32_t destsize, const void *repeatval)
 
@@ -1718,6 +1722,20 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         storage.io = NULL
 
 
+cdef _repeatval_array(value, int32_t typesize):
+    """`value` as an array of one item of `typesize` bytes, for repeated-value chunks."""
+    array = np.array([value])
+    if array.dtype.itemsize != typesize:
+        if isinstance(value, int):
+            dtype = np.dtype('i'+ str(typesize))
+        elif isinstance(value, float):
+            dtype = np.dtype('f' + str(typesize))
+        else:
+            raise ValueError("value size in bytes must match with typesize")
+        array = np.array([value], dtype=dtype)
+    return array
+
+
 cdef get_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
                         void *dest, int32_t destsize, Py_buffer *repeatval):
     if blosc2_chunk_repeatval(cparams, nbytes, dest, destsize, repeatval.buf) < 0:
@@ -2128,15 +2146,7 @@ cdef class SChunk:
         if self.nbytes > 0 or self.cbytes > 0:
             raise RuntimeError("Filling with special values only works on empty SChunks")
         # Get a void pointer to the value
-        array = np.array([value])
-        if array.dtype.itemsize != self.typesize:
-            if isinstance(value, int):
-                dtype = np.dtype('i'+ str(self.typesize))
-            elif isinstance(value, float):
-                dtype = np.dtype('f' + str(self.typesize))
-            else:
-                raise ValueError("value size in bytes must match with typesize")
-            array = np.array([value], dtype=dtype)
+        array = _repeatval_array(value, self.typesize)
         cdef Py_buffer buf
         PyObject_GetBuffer(array, &buf, PyBUF_SIMPLE)
         # Create chunk with repeated values
@@ -2166,21 +2176,43 @@ cdef class SChunk:
         return self.nchunks
 
     @_handle_locked
+    def _special_chunk(self, int32_t nbytes, int special_value, value=None):
+        """Return a special chunk of `nbytes` bytes (`special_value` is a SpecialValue value; VALUE
+        repeats `value`, as in fill_special()).  It is made with the cparams of this super-chunk,
+        so that its header has the same block size as the other chunks: b2nd reads blocks
+        selectively and checks the number of blocks per chunk."""
+        cdef blosc2_cparams *cparams = self.schunk.storage.cparams
+        cdef int32_t destsize = BLOSC_EXTENDED_HEADER_LENGTH + cparams.typesize
+        cdef uint8_t *dest = <uint8_t *> malloc(destsize)
+        cdef Py_buffer buf
+        cdef int rc
+        try:
+            if special_value == BLOSC2_SPECIAL_ZERO:
+                rc = blosc2_chunk_zeros(cparams[0], nbytes, dest, destsize)
+            elif special_value == BLOSC2_SPECIAL_NAN:
+                rc = blosc2_chunk_nans(cparams[0], nbytes, dest, destsize)
+            elif special_value == BLOSC2_SPECIAL_UNINIT:
+                rc = blosc2_chunk_uninit(cparams[0], nbytes, dest, destsize)
+            elif special_value == BLOSC2_SPECIAL_VALUE:
+                array = _repeatval_array(value, self.typesize)
+                PyObject_GetBuffer(array, &buf, PyBUF_SIMPLE)
+                rc = blosc2_chunk_repeatval(cparams[0], nbytes, dest, destsize, buf.buf)
+                PyBuffer_Release(&buf)
+            else:
+                raise ValueError(f"Not a special value: {special_value}")
+            if rc < 0:
+                raise RuntimeError("Could not create the special chunk")
+            return PyBytes_FromStringAndSize(<char *> dest, rc)
+        finally:
+            free(dest)
+
+    @_handle_locked
     def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t *chunk
         cdef c_bool needs_free
-        rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
-
-        if rc < 0:
-            raise RuntimeError("Error while getting the chunk")
-
         cdef int32_t nbytes
         cdef int32_t cbytes
         cdef int32_t blocksize
-        blosc2_cbuffer_sizes(chunk, &nbytes, &cbytes, &blocksize)
-        if needs_free:
-            free(chunk)
-
         cdef Py_buffer buf
         if dst is not None:
             PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
@@ -2189,6 +2221,13 @@ cdef class SChunk:
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)
             PyBuffer_Release(&buf)
         else:
+            # Only the header is needed: a lazy chunk does not read the whole chunk from a frame twice
+            rc = blosc2_schunk_get_lazychunk(self.schunk, nchunk, &chunk, &needs_free)
+            if rc < 0:
+                raise RuntimeError("Error while getting the chunk")
+            blosc2_cbuffer_sizes(chunk, &nbytes, &cbytes, &blocksize)
+            if needs_free:
+                free(chunk)
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
                 raise RuntimeError("Could not get a bytes object")
@@ -2291,16 +2330,17 @@ cdef class SChunk:
         else:
             size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(&buf)
-        if size < 0:
-            raise RuntimeError("Could not compress the data")
-        elif size == 0:
+        if size <= 0:
             free(chunk)
+            if size < 0:
+                raise RuntimeError("Could not compress the data")
             raise RuntimeError("The result could not fit ")
 
         chunk = <uint8_t*> realloc(chunk, size)
         _check_comp_length('chunk', size)
         rc = blosc2_schunk_insert_chunk(self.schunk, nchunk, chunk, copy)
-        if copy:
+        # Without a copy, the schunk owns the chunk only if the insert succeeded
+        if copy or rc < 0:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not insert the desired chunk")
@@ -2340,16 +2380,17 @@ cdef class SChunk:
             size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
 
         PyBuffer_Release(&buf)
-        if size < 0:
-            raise RuntimeError("Could not compress the data")
-        elif size == 0:
+        if size <= 0:
             free(chunk)
+            if size < 0:
+                raise RuntimeError("Could not compress the data")
             raise RuntimeError("The result could not fit ")
 
         chunk = <uint8_t*> realloc(chunk, size)
         _check_comp_length('chunk', size)
         rc = blosc2_schunk_update_chunk(self.schunk, nchunk, chunk, copy)
-        if copy:
+        # Without a copy, the schunk owns the chunk only if the update succeeded
+        if copy or rc < 0:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
