@@ -149,3 +149,99 @@ def test_setitem_fancy_index():
     out_numpy[idx] = value
 
     np.testing.assert_array_equal(out[:], out_numpy)
+
+
+# NumPy values are written directly, without the SimpleProxy wrapping of other array types; the
+# outcome (data or exception) must be the same as with the wrapping
+@pytest.mark.parametrize(
+    "key",
+    [
+        (slice(1, 4), slice(2, 5)),
+        (2, slice(None)),
+        (slice(0, 6, 2), slice(1, 7, 3)),
+        ([0, 2], slice(None)),
+        (slice(None), [1, 5]),
+        Ellipsis,
+        (1, 2),
+        (slice(5, 2), 1),
+        (None, slice(1, 3), 0),
+    ],
+)
+def test_setitem_numpy_value_same_as_proxied(key):
+    base = np.arange(48, dtype=np.float32).reshape(6, 8)
+    shape = np.shape(base[key])
+    values = [
+        np.full(shape, 7.5, np.float32),
+        np.full(shape, 7, np.int64),  # converted
+        np.full((*shape, 2), 9, np.float32)[..., 0],  # not contiguous
+        np.asfortranarray(np.full(shape, 3, np.float32)),
+        np.array(2.5, np.float32),  # 0-d
+        np.full(shape[-1:], 4, np.float32),  # broadcast
+        np.zeros((1, *shape), np.float64),
+    ]
+    for value in values:
+        outcomes = []
+        for v in (value, blosc2.SimpleProxy(value)):
+            a = blosc2.asarray(base, chunks=(3, 4), blocks=(2, 2))
+            try:
+                a[key] = v
+                outcomes.append(a[:])
+            except Exception as e:
+                outcomes.append((type(e), str(e)))
+        if isinstance(outcomes[0], tuple):
+            assert outcomes[0] == outcomes[1]
+        else:
+            np.testing.assert_array_equal(outcomes[0], outcomes[1])
+
+
+def _random_setitem_key(rng, n, ndim):
+    items = []
+    for _ in range(int(rng.integers(0, ndim + 2))):
+        r = rng.random()
+        if r < 0.35:
+            i = int(rng.integers(-n - 2, n + 2))
+            items.append(i if rng.random() < 0.5 else np.int64(i))
+        elif r < 0.75:
+            bounds = [None, *rng.integers(-n - 3, n + 3, size=2).tolist()]
+            step = [None, None, 1, np.int64(1), 2, -1, True][int(rng.integers(7))]
+            items.append(slice(bounds[int(rng.integers(3))], bounds[int(rng.integers(3))], step))
+        elif r < 0.85:
+            items.append(Ellipsis)
+        elif r < 0.9:
+            items.append(None)
+        else:
+            items.append([True, [0], 1.5][int(rng.integers(3))])
+    return items[0] if len(items) == 1 and rng.random() < 0.5 else tuple(items)
+
+
+@pytest.mark.parametrize("on_disk", [False, True], ids=["memory", "disk"])
+def test_setitem_basic_key_fast_path_matches_general_path(tmp_path, monkeypatch, on_disk):
+    # NDArray.get_basic_start_stop() resolves basic keys for __setitem__; every key must write the
+    # same data (or raise the same exception) with and without it
+    rng = np.random.default_rng(2)
+    for ishape, shape in enumerate([(), (7,), (6, 5), (4, 3, 5)]):
+        npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+        n = shape[0] if shape else 1
+        for _ in range(60):
+            key = _random_setitem_key(rng, n, len(shape))
+            try:
+                values = [-1, np.full(np.shape(npa[key]), -2, dtype=np.int64)]
+            except Exception:
+                values = [-1]
+            for value in values:
+                outcomes = []
+                for general in (False, True):
+                    kwargs = {"urlpath": tmp_path / f"set{ishape}.b2nd", "mode": "w"} if on_disk else {}
+                    a = blosc2.asarray(npa, **kwargs)
+                    with monkeypatch.context() as m:
+                        if general:
+                            m.setattr(blosc2.NDArray, "get_basic_start_stop", lambda self, key: None)
+                        try:
+                            a[key] = value
+                            outcomes.append(a[()])
+                        except Exception as e:
+                            outcomes.append((type(e), str(e)))
+                if isinstance(outcomes[1], tuple):
+                    assert outcomes[0] == outcomes[1], key
+                else:
+                    np.testing.assert_array_equal(outcomes[0], outcomes[1])

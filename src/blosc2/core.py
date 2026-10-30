@@ -24,7 +24,7 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from functools import cache, lru_cache
 from typing import TYPE_CHECKING, ClassVar
 
@@ -1286,7 +1286,10 @@ def set_nthreads(nthreads: int) -> int:
     Notes
     -----
     The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
-    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set
+    variable (e.g., ``export BLOSC_NTHREADS=1``), which :attr:`~blosc2.nthreads`
+    then starts from.  While it is set, C-Blosc2 uses it for every compression and
+    decompression, over this function and the ``nthreads`` of :class:`CParams` and
+    :class:`DParams`.  Additionally, you may want to set
     ``NUMEXPR_NUM_THREADS`` (e.g., ``export NUMEXPR_NUM_THREADS=1``) as well since
     numexpr is used under the hood when performing some operations.  Note that
     this function only sets the number of threads used by Blosc, not the number
@@ -1448,6 +1451,10 @@ def set_releasegil(gilstate: bool) -> bool:
     Designed to be used with larger chunk sizes and a ThreadPool.  There is a
     small performance penalty with releasing the GIL that will more harshly
     penalize small block sizes.
+
+    Reading slices of an :ref:`NDArray` releases the GIL while decompressing
+    regardless of this setting, unless a Python postfilter, codec or filter
+    could run during the read.
 
     Examples
     --------
@@ -1977,7 +1984,9 @@ def compute_chunks_blocks(  # noqa: C901
 
     cparams = kwargs.get("cparams") or blosc2.CParams()  # just get defaults
     if isinstance(cparams, blosc2.CParams):
-        cparams = asdict(cparams)
+        # Shallow is enough (only keys are set below, filters only on a deep copy), and asdict()
+        # costs more than the rest of this function
+        cparams = {f.name: getattr(cparams, f.name) for f in fields(cparams)}
     # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
@@ -1985,7 +1994,7 @@ def compute_chunks_blocks(  # noqa: C901
         # Get the default blocksize for the compression params
         # Check if we need STUNE for lossy codecs/filters that have specific blocksize requirements
         codec = cparams.get("codec")
-        filters = cparams.get("filters", None)
+        filters = cparams.get("filters")
         needs_stune = codec in (
             blosc2.Codec.ZFP_RATE,
             blosc2.Codec.ZFP_PREC,

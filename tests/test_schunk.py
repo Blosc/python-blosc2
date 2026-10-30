@@ -349,6 +349,27 @@ def test_schunk_update_special():
         schunk2.update_special(5, blosc2.SpecialValue.UNINIT)
 
 
+@pytest.mark.parametrize(
+    ("special", "value", "expected"),
+    [
+        (blosc2.SpecialValue.ZERO, None, 0.0),
+        (blosc2.SpecialValue.NAN, None, np.nan),
+        (blosc2.SpecialValue.VALUE, np.float64(7.5).tobytes(), 7.5),
+        (blosc2.SpecialValue.VALUE, 7.5, 7.5),
+    ],
+)
+def test_schunk_update_special_ndarray(special, value, expected):
+    # The special chunk must have the block size of the array (b2nd reads blocks selectively, and
+    # checks their number per chunk), not the one a plain SChunk would choose
+    x = np.arange(100 * 100, dtype=np.float64).reshape(100, 100)
+    a = blosc2.asarray(x, chunks=(50, 50), blocks=(10, 10))
+    a.schunk.update_special(1, special, value)
+    assert blosc2.get_cbuffer_sizes(a.schunk.get_chunk(1))[2] == 10 * 10 * 8
+    x[:50, 50:] = expected
+    np.testing.assert_array_equal(a[:], x)
+    np.testing.assert_array_equal(a[2:5, 48:53], x[2:5, 48:53])
+
+
 def test_get_lazychunk_sections(tmp_path):
     """A lazy chunk keeps its block offsets and trailer; other chunks stay capped."""
     urlpath = tmp_path / "lazy.b2nd"

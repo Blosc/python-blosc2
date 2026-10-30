@@ -127,6 +127,63 @@ XXX version-specific blurb XXX
   plotting requires an explicit bounded row window. Client caches are separate
   from a shared cat2lite server cache; repository allowances are per root.
 
+### Faster NDArray indexing, writes and expressions
+
+- Basic keys (integers, unit-step slices, `...`, `None`) in
+  `NDArray.__getitem__` and `__setitem__` are resolved in Cython: `a[3, 5, 7]`
+  and row reads take ~30% less time, keys with NumPy integers up to 5x less.
+- Creating small arrays costs a third less (`zeros((100, 100))` 31 -> 20 µs);
+  `arange`, `linspace`, `eye`, `reshape` and lazy functions such as `clip` no
+  longer call `inspect.stack()` (`clip()` 84 -> 12 µs).
+- `a[region] = scalar` stores fully covered chunks as special chunks and writes
+  the rest in bounded pieces instead of building the region with `np.full()`
+  (`a[:] = 0.0` on 300 MB: 41 -> 0.2 ms, no extra memory). `a[region] = ndarray`
+  goes chunk by chunk too, copying compressed chunks when both arrays encode
+  them the same way (8x faster, a tenth of the memory). Arrays opened with
+  `locking=True` keep the single atomic write.
+- `asarray()`/`astype()` of an NDArray cast whole chunks in reused buffers
+  (`astype(np.uint8)` 2x faster).
+- `to_cframe()` writes the frame straight into the returned `bytes` (3.5x
+  faster, half the peak memory).
+- Lazy expressions: `expr[:]` evaluates straight into the NumPy result
+  (`(a + b)[:]` 2x faster), full `std()`/`var()` are two single-pass reductions
+  (3x faster), chunked reductions decompress into reused buffers, and
+  `where(cond, x, y)` with a scalar `x` or `y` runs in miniexpr.
+- `SChunk.decompress_chunk()` no longer reads the chunk from a frame twice.
+
+### Bug fixes
+
+- Fixed crashes of lazy expressions over in-memory frame-backed arrays
+  (`contiguous=True`, or `ndarray_from_cframe()` without a copy) and of the fast
+  `matmul` path with on-disk or frame-backed operands.
+- Expressions that the bundled miniexpr evaluates wrongly or crashes on now take
+  the numexpr path: reductions with constant subexpressions, true division and
+  two-argument float functions of integers or bools, `%` with negative
+  operands, constants compared with integers, some mixed-dtype expressions,
+  `bool + bool`, and grammar differences such as `-x ** 2`.
+- The result dtype of `hypot`, `copysign` and `nextafter` of integer
+  subexpressions and of true division involving bools follows NumPy (results
+  were truncated to integers).
+- `NDArray.__getitem__` accepts the keys NumPy accepts that raised or gave a
+  wrong shape: huge slice bounds, bool steps, 0-d integer arrays, scalar bools
+  (placed and broadcast as in NumPy) and `None` next to array indices.
+- `SChunk.update_special()` on an NDArray's super-chunk wrote chunks with the
+  wrong block size, so later reads of the array failed.
+- `update_data()`/`insert_data()` with `copy=False` leaked their chunk when the
+  write failed.
+- True positions of 1-D bool masks no longer run past the array length.
+- `blosc2.nthreads` and the `CParams`/`DParams` defaults follow the
+  `BLOSC_NTHREADS` environment variable, which C-Blosc2 always applied; importing
+  blosc2 no longer overrides `NUMEXPR_NUM_THREADS`.
+
+### Compatibility notes
+
+- Requires the next C-Blosc2 release, for `blosc2_schunk_to_buffer_alloc()` and
+  for its rule that a failed chunk write without a copy leaves the chunk with
+  the caller.
+- Keys with `None` return arrays that own their data (formerly views of a
+  temporary). `std()`/`var()` may differ from before in the last bits.
+
 ## Changes from 4.14.0 to 4.14.1
 
 Python-Blosc2 4.14.1 is a security and feature release introducing safe

@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import builtins
-import inspect
 import itertools
 import math
+import operator
+import os
+import sys
 import weakref
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
@@ -38,10 +40,12 @@ from blosc2.schunk import SChunk
 
 from .linalg import matmul
 from .utils import (
+    chunk_flat_index,
     get_chunks_idx,
     get_local_slice,
     get_selection,
     incomplete_lazyfunc,
+    is_called_from,
     npbinvert,
     nplshift,
     nprshift,
@@ -240,9 +244,43 @@ def is_inside_new_expr() -> bool:
     """
     Whether the current code is being executed during the creation of new expression.
     """
-    # Get the current call stack
-    stack = inspect.stack()
-    return builtins.any(frame_info.function in {"_new_expr", "open_lazyarray"} for frame_info in stack)
+    return is_called_from(("_new_expr", "open_lazyarray"))
+
+
+def _normalize_slice(s):
+    """Return slice s with bool or out-of-range integer bounds and step as NumPy reads them.
+
+    NumPy (like slice.indices()) accepts any integers there, clamping them to the index range,
+    and bools as integers; ndindex rejects both.  Slices without such values, or with a value
+    that is not an integer at all, are returned unchanged.
+    """
+    values, changed = [], False
+    for v, lo in ((s.start, -sys.maxsize - 1), (s.stop, -sys.maxsize - 1), (s.step, -sys.maxsize)):
+        if v is not None:
+            try:
+                i = operator.index(v)
+            except TypeError:
+                return s
+            if isinstance(v, bool) or not lo <= i <= sys.maxsize:
+                v, changed = builtins.min(builtins.max(int(i), lo), sys.maxsize), True
+        values.append(v)
+    return slice(*values) if changed else s
+
+
+def _normalize_key_item(k):
+    if isinstance(k, slice):
+        return _normalize_slice(k)
+    # NumPy indexes with a 0-d integer array as with an integer
+    if isinstance(k, np.ndarray) and k.ndim == 0 and np.issubdtype(k.dtype, np.integer):
+        return int(k)
+    return k
+
+
+def _normalize_key(key):
+    """Turn the parts of an indexing key that NumPy accepts but ndindex does not into equivalents."""
+    if isinstance(key, tuple):
+        return tuple(_normalize_key_item(k) for k in key)
+    return _normalize_key_item(key)
 
 
 def _is_scalar_bool(k):
@@ -250,6 +288,23 @@ def _is_scalar_bool(k):
     return isinstance(k, (bool, np.bool_)) or (
         isinstance(k, np.ndarray) and k.ndim == 0 and k.dtype == np.bool_
     )
+
+
+def _check_adjacent_advanced(key, count_bools=False):
+    """Raise NotImplementedError unless the advanced indices in the tuple `key` (arrays, integers
+    and, with `count_bools`, scalar bools) are adjacent: NumPy moves the broadcast dimensions to
+    the front otherwise."""
+    adv = [
+        i
+        for i, k in enumerate(key)
+        if (count_bools and _is_scalar_bool(k))
+        or isinstance(k, list | np.ndarray)
+        or (isinstance(k, int | np.integer) and not isinstance(k, bool))
+    ]
+    if adv[-1] - adv[0] + 1 != len(adv):
+        raise NotImplementedError(
+            "Array indices separated by slices, ellipses (...), or newaxes (None) are not supported"
+        )
 
 
 def make_key_hashable(key):
@@ -305,6 +360,21 @@ def are_partitions_aligned(shape, chunks, blocks):
     return builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
 
 
+def blocks_contiguous(chunks, blocks):
+    """Whether the blocks are C-contiguous runs of their chunk (no block may be 0 long).
+
+    That is the case only if their leading dims are 1, then one dim divides the chunk's, and the
+    rest are equal to the chunk's; same rule as nchunk_fastpath() in C-Blosc2's b2nd.c.
+    """
+    k = 0
+    for i, (size, unit) in enumerate(zip(chunks, blocks, strict=True)):
+        if size % unit != 0 or (i > k and size != unit):
+            return False
+        if i == k and unit == 1:
+            k += 1
+    return True
+
+
 def are_partitions_behaved(shape, chunks, blocks):
     """
     Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.
@@ -321,18 +391,6 @@ def are_partitions_behaved(shape, chunks, blocks):
         if container and container[-1] != part[-1]:
             return False
         return builtins.all(size % unit == 0 for size, unit in zip(container[:-1], part[:-1], strict=True))
-
-    def blocks_contiguous(chunks, blocks):
-        # A block is a C-contiguous run of its chunk only if its leading dims are 1,
-        # then one dim divides the chunk's, and the rest are equal to the chunk's.
-        # Same rule as nchunk_fastpath() in C-Blosc2's b2nd.c.
-        k = 0
-        for i, (size, unit) in enumerate(zip(chunks, blocks, strict=True)):
-            if size % unit != 0 or (i > k and size != unit):
-                return False
-            if i == k and unit == 1:
-                k += 1
-        return True
 
     return blocks_contiguous(chunks, blocks) and check_contiguity(shape, chunks)
 
@@ -3725,38 +3783,14 @@ def detect_aligned_chunks(
         if s.stop is not None and s.stop % chunks[i] != 0:
             return []
 
-    # Parse the slice boundaries
-    start_indices = []
-    end_indices = []
-    n_chunks = []
-
-    for i, s in enumerate(key):
-        start = s.start if s.start is not None else 0
-        stop = s.stop if s.stop is not None else shape[i]
-        chunk_size = chunks[i]
-        start_idx = start // chunk_size
-        end_idx = stop // chunk_size
-        start_indices.append(start_idx)
-        end_indices.append(end_idx)
-        # Total chunk count along this dim: ceil, not floor -- a trailing
-        # partial chunk (shape[i] not a multiple of chunk_size) still counts
-        # as one chunk. Floor division here undercounts it, which corrupts
-        # the flat chunk-index math below for any aligned slice with a
-        # nonzero start in an earlier dimension (silently returns a
-        # different chunk's data instead of the requested one).
-        n_chunks.append(math.ceil(shape[i] / chunk_size))
-
     # Get all chunk combinations in the slice
-    indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
-    result = []
-
-    for combination in product(*indices):
-        flat_index = 0
-        multiplier = 1
-        for idx, n in zip(reversed(range(len(n_chunks))), reversed(n_chunks), strict=False):
-            flat_index += combination[idx] * multiplier
-            multiplier *= n
-        result.append(flat_index)
+    indices = []
+    for s, n, c in zip(key, shape, chunks, strict=True):
+        start = s.start if s.start is not None else 0
+        stop = s.stop if s.stop is not None else n
+        indices.append(range(start // c, stop // c))
+    grid, _ = get_chunks_idx(shape, chunks)
+    result = [chunk_flat_index(combination, grid) for combination in product(*indices)]
 
     # Check if chunks are consecutive if requested
     if consecutive and result:
@@ -3770,6 +3804,173 @@ def detect_aligned_chunks(
                 return []
 
     return sorted(result)
+
+
+_LOSSLESS_CODECS = frozenset(
+    (blosc2.Codec.BLOSCLZ, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC, blosc2.Codec.ZLIB, blosc2.Codec.ZSTD)
+)
+_LOSSLESS_FILTERS = frozenset(
+    (
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.SHUFFLE,
+        blosc2.Filter.BITSHUFFLE,
+        blosc2.Filter.DELTA,
+        blosc2.Filter.BYTEDELTA,
+    )
+)
+
+
+def _is_lossless(cparams: blosc2.CParams) -> bool:
+    """Whether compressing with *cparams* gives back exactly the input (no lossy codec or filter)."""
+    return (
+        cparams.codec in _LOSSLESS_CODECS
+        and builtins.all(f in _LOSSLESS_FILTERS for f in cparams.filters)
+        and not cparams.use_dict
+    )
+
+
+_CHUNK_ENCODING = (
+    "codec",
+    "codec_meta",
+    "clevel",
+    "use_dict",
+    "typesize",
+    "blocksize",
+    "splitmode",
+    "filters",
+    "filters_meta",
+)
+
+
+def _chunks_interchangeable(dst: NDArray, src: NDArray) -> bool:
+    """Whether the compressed chunks of `src` can stand for those of `dst` (and vice versa): they
+    lay out the same items the same way (dtype, chunks, blocks) and encode them the same lossless
+    way."""
+    if src.dtype != dst.dtype or src.chunks != dst.chunks or src.blocks != dst.blocks:
+        return False
+    a, b = dst.cparams, src.cparams
+    return _is_lossless(a) and builtins.all(getattr(a, f) == getattr(b, f) for f in _CHUNK_ENCODING)
+
+
+def _resolved_urlpath(a: NDArray, path: str) -> str:
+    """`path`, the urlpath of `a`, with symlinks resolved.  Cached per handle: resolving costs one
+    lstat per path component, and on NFS one of the file itself also flushes its dirty pages."""
+    cached = a.__dict__.get("_resolved_urlpath")
+    if cached is None or cached[0] != path:
+        cached = a._resolved_urlpath = (path, os.path.realpath(path))
+    return cached[1]
+
+
+def _same_storage(a: NDArray, b: NDArray) -> bool:
+    """Whether two arrays may share their data (the same super-chunk, or the same file)."""
+    if a._handle_lock is b._handle_lock:  # one lock per C super-chunk, shared by views
+        return True
+    pa, pb = a.schunk.urlpath, b.schunk.urlpath
+    if not (isinstance(pa, str) and isinstance(pb, str)):
+        return False
+    return pa == pb or _resolved_urlpath(a, pa) == _resolved_urlpath(b, pb)
+
+
+# Upper bound for the temporary buffers of chunk-wise writes (unless a single chunk is larger)
+_CHUNKWISE_MAX_NBYTES = 32 * 2**20
+
+
+def _region_boxes(
+    shape, chunks, start, stop, max_items, split_covered=False, reverse=False, split_edges=True
+):
+    """Split the non-empty region ``[start, stop)`` along chunk boundaries into boxes.
+
+    Yields ``(lo, hi, nchunk)``.  Boxes hold at most `max_items` items (or one chunk, when that is
+    larger), so that writing each with one ``set_slice`` keeps memory bounded while staying with
+    few calls (every call costs some frame I/O on disk).  With `split_covered`, a chunk the region
+    fully covers is always yielded alone, with its index in `nchunk` (None otherwise); an edge
+    chunk (one with padding beyond the shape) only with `split_edges`.  Boxes come in C order, or
+    the reverse one.
+    """
+    ndim = len(shape)
+    grid, _ = get_chunks_idx(shape, chunks)
+    strides = [math.prod(grid[d + 1 :]) for d in range(ndim)]  # of the chunk indices
+
+    def covers_a_chunk(lo, hi):
+        for s, c, l_, h in zip(shape, chunks, lo, hi, strict=True):
+            i = -(-l_ // c)  # first chunk starting inside the box
+            end = builtins.min((i + 1) * c, s) if split_edges else (i + 1) * c
+            if i * c >= h or end > h:
+                return False
+        return True
+
+    def whole_chunks(lo, hi):
+        """The chunks of a box made of whole chunks, in the order in which visit() splits it."""
+        ranges = [range(l_ // c, -(-h // c)) for l_, h, c in zip(lo, hi, chunks, strict=True)]
+        if reverse:
+            ranges = [r[::-1] for r in ranges]
+        los = [[i * c for i in r] for r, c in zip(ranges, chunks, strict=True)]
+        his = [
+            [builtins.min((i + 1) * c, s) for i in r] for r, c, s in zip(ranges, chunks, shape, strict=True)
+        ]
+        offsets = [[i * st for i in r] for r, st in zip(ranges, strides, strict=True)]
+        return zip(product(*los), product(*his), map(builtins.sum, product(*offsets)), strict=True)
+
+    def visit(lo, hi):
+        covered = split_covered and covers_a_chunk(lo, hi)
+        nitems = math.prod(h - l_ for l_, h in zip(lo, hi, strict=True))
+        if not covered and nitems <= max_items:
+            yield lo, hi, None
+            return
+        d = next((d for d in range(ndim) if lo[d] // chunks[d] != (hi[d] - 1) // chunks[d]), None)
+        if d is None:  # a single chunk
+            nchunk = None
+            if covered:
+                nchunk = chunk_flat_index([l_ // c for l_, c in zip(lo, chunks, strict=True)], grid)
+            yield lo, hi, nchunk
+            return
+        if covered and builtins.all(
+            l_ % c == 0 and (h % c == 0 or (split_edges and h == s))
+            for l_, h, c, s in zip(lo, hi, chunks, shape, strict=True)
+        ):
+            yield from whole_chunks(lo, hi)
+            return
+        c = chunks[d]
+        # Slabs as thick as the budget allows; covered chunks have to be isolated one by one
+        step = 1 if covered else builtins.max(1, max_items // (nitems // (hi[d] - lo[d]) * c))
+        idx = range(lo[d] // c, (hi[d] - 1) // c + 1, step)
+        for i in reversed(idx) if reverse else idx:
+            sub_lo = lo[:d] + (builtins.max(lo[d], i * c),) + lo[d + 1 :]
+            sub_hi = hi[:d] + (builtins.min(hi[d], (i + step) * c),) + hi[d + 1 :]
+            yield from visit(sub_lo, sub_hi)
+
+    yield from visit(tuple(start), tuple(stop))
+
+
+def _chunkwise_plan(
+    shape,
+    chunks,
+    start,
+    stop,
+    itemsize,
+    split_covered,
+    reverse=False,
+    buffer_covered=False,
+    split_edges=True,
+):
+    """Plan writing the region ``[start, stop)`` box by box, with boxes of at most
+    _CHUNKWISE_MAX_NBYTES of `itemsize`-byte items (or one chunk, when that is larger).
+
+    Returns the boxes from _region_boxes as ``(lo, hi, nchunk, nitems)``, and the largest
+    `nitems` of the boxes that are written from a buffer: all of them with `buffer_covered`, else
+    all but the covered chunks (`nchunk` not None), whose `nitems` is left out (None).
+    """
+    max_items = builtins.max(math.prod(chunks), _CHUNKWISE_MAX_NBYTES // itemsize)
+    boxes, buf_items = [], 0
+    for lo, hi, nchunk in _region_boxes(
+        shape, chunks, start, stop, max_items, split_covered, reverse, split_edges
+    ):
+        n = None
+        if nchunk is None or buffer_covered:
+            n = math.prod(map(operator.sub, hi, lo))
+            buf_items = builtins.max(buf_items, n)
+        boxes.append((lo, hi, nchunk, n))
+    return boxes, buf_items
 
 
 class NDOuterIterator:
@@ -4545,33 +4746,52 @@ class NDArray(blosc2_ext.NDArray, Operand):
         if not isinstance(key, (list, np.ndarray)):
             return None
         key_arr = np.asarray(key)
-        if not (np.issubdtype(key_arr.dtype, np.integer) and key_arr.ndim >= 1):
+        if not (np.issubdtype(key_arr.dtype, np.integer) and key_arr.ndim >= 1) or self.ndim == 0:
             return None
         # 1-D: axis=None (flat); ndim>1: axis=0 (row selection)
         return self._take_numpy(key_arr, axis=None if self.ndim == 1 else 0)
 
-    def _scalar_bool_key_to_newaxis(self, key):
-        """Rewrite a tuple key's scalar bools to numpy's single-newaxis semantics.
+    def _drop_scalar_bools(self, key):
+        """Handle the scalar bools of a tuple key like NumPy.
 
-        Scalar bools act as one np.newaxis-like dimension of length 1 (all True)
-        or 0 (any False), placed at the first bool's position.  Returns
-        ``(key, None)`` unchanged when there are no scalar bools, ``(new_key,
-        None)`` to continue processing, or ``(None, empty_shape)`` when any bool
-        is False and the result is an empty array of that shape.
+        NumPy treats them as 0-d boolean (advanced) indices: together they add one
+        dimension of length 1 (all True) or 0 (any False), which goes where the
+        advanced indices (integers included) are if those are adjacent, else in
+        front.  Returns ``(key, None)`` unchanged when there are no scalar bools,
+        ``(rest, shape)`` when the result is ``self[rest]`` (the key without the
+        bools) reshaped to ``shape``, ``(None, shape)`` when the result is an empty
+        array of that shape, or ``(rest, None)`` to continue processing with rest.
         """
         if not builtins.any(_is_scalar_bool(k) for k in key):
             return key, None
-        first = next(i for i, k in enumerate(key) if _is_scalar_bool(k))
-        new_key = key[:first] + (None,) + tuple(k for k in key[first + 1 :] if not _is_scalar_bool(k))
-        if builtins.all(k for k in key if _is_scalar_bool(k)):  # all True -> plain newaxis
-            return new_key, None
-        # any False -> the newaxis dim is empty; shape from the all-True form
-        key_idx = ndindex.ndindex(new_key).expand(self.shape)
-        shape = list(key_idx.newshape(self.shape))
-        raw = key_idx.raw
-        pos = builtins.sum(not isinstance(k, int) for k in raw[: raw.index(None)])
-        shape[pos] = 0
-        return None, tuple(shape)
+        rest = tuple(k for k in key if not _is_scalar_bool(k))
+        all_true = builtins.all(k for k in key if _is_scalar_bool(k))
+        # NumPy works out the shape (and validates the key) on a stride-0 stand-in for self; that
+        # costs no memory for basic indices, nor for an empty result
+        stand_in = np.broadcast_to(np.empty((), dtype=np.uint8), self.shape)
+        if not builtins.any(isinstance(k, list | np.ndarray) for k in rest):
+            shape = stand_in[key].shape
+            return (rest, shape) if all_true else (None, shape)
+        # Together with array indices, a False empties the broadcast result (or does not broadcast)
+        if not all_true:
+            return None, stand_in[key].shape
+        # and True bools broadcast away, unless they separate the advanced indices
+        _check_adjacent_advanced(key, count_bools=True)
+        return rest, None
+
+    def _getitem_fancy_newaxis(self, key):
+        """Fancy indexing with np.newaxis in a tuple key.
+
+        Index without the Nones and insert their dimensions where NumPy puts them.
+        The advanced indices (arrays and integers) must be adjacent, as without
+        Nones.
+        """
+        _check_adjacent_advanced(key)
+        nparr = self[tuple(k for k in key if k is not None)]
+        # NumPy places the new axes on a stride-0 stand-in for self; an extra trailing dimension of
+        # length 0 keeps its result empty, so this costs no memory
+        stand_in = np.broadcast_to(np.empty((), dtype=np.uint8), (*self.shape, 0))
+        return nparr.reshape(stand_in[(*key, slice(None))].shape[:-1])
 
     def _getitem_bool_mask(self, key):
         """Handle boolean array key with optional sparse-gather fast path.
@@ -4580,6 +4800,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         boolean mask (caller should continue with regular indexing).
         """
         if not (hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape):
+            return None
+        if isinstance(key, np.generic):  # a scalar bool, whose shape matches a 0-d array's
             return None
         # For sparse boolean masks, converting to flat indices and using the
         # sparse-gather path is faster than decompressing every data chunk.
@@ -4645,6 +4867,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
+        # Fast path for the common basic indexing (integers, unit-step slices, Ellipsis, None);
+        # None means that the key needs the general path below
+        nparr = self.get_basic_numpy(key)
+        if nparr is not None:
+            if self._keep_last_read:
+                self._remember_read(key, nparr)
+            return nparr
+
         # Follow shape changes made by another handle (SWMR) before validating the key
         self.refresh()
         # The more general case (this is quite slow)
@@ -4663,17 +4893,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+        key = _normalize_key(key)
 
-        # Scalar bools inside a tuple act like a single np.newaxis dimension of
-        # length 1 (all True) or 0 (any False), placed at the first bool's
-        # position (numpy semantics); rewrite to the equivalent None form so the
-        # regular machinery handles them.  Bare scalar bools are handled below in
-        # the fancy branch.  (numpy rejects scalar-bool tuples in __setitem__, so
-        # this stays getitem-only.)
+        # Scalar bools inside a tuple are 0-d boolean indices, as in NumPy (see
+        # _drop_scalar_bools).  Bare scalar bools are handled below in the fancy
+        # branch.  (__setitem__ does not support them.)
         if isinstance(key, tuple):
-            key, empty_shape = self._scalar_bool_key_to_newaxis(key)
-            if empty_shape is not None:
-                return np.empty(empty_shape, dtype=self.dtype)
+            key, bool_shape = self._drop_scalar_bools(key)
+            if key is None:
+                return np.empty(bool_shape, dtype=self.dtype)
+            if bool_shape is not None:
+                return self[key].reshape(bool_shape)
 
         # Check boolean array key early to avoid expensive process_key / nonzero
         result = self._getitem_bool_mask(key)
@@ -4703,6 +4933,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return np.expand_dims(self._get_set_findex_default(_slice, out=out), 0)
                 else:  # do nothing
                     return np.empty((0,) + self.shape, dtype=self.dtype)
+            if isinstance(key, tuple) and builtins.any(k is None for k in key):
+                return self._getitem_fancy_newaxis(key)
             return self.get_fselection_numpy(key)  # fancy index default, can be quite slow
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
@@ -4727,13 +4959,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
             nparr = np.expand_dims(nparr, axis=[i for i, n in enumerate(none_mask) if n])
 
         if self._keep_last_read:
-            self._last_read.clear()
-            inmutable_key = make_key_hashable(key)
-            self._last_read[inmutable_key] = nparr
-
+            self._remember_read(key, nparr)
         return nparr
 
-    def __setitem__(
+    def _remember_read(self, key, nparr: np.ndarray) -> None:
+        """Make `nparr`, read with `key`, the content of the last-read cache (see keep_last_read)."""
+        self._last_read.clear()
+        self._last_read[make_key_hashable(key)] = nparr
+
+    def __setitem__(  # noqa: C901
         self,
         key: int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | None,
         value: object,
@@ -4768,21 +5002,31 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
-        # Follow shape changes made by another handle (SWMR) before validating the key
-        self.refresh()
+        # Fast path for basic keys (integers, unit-step slices, Ellipsis), which also follows shape
+        # changes made by another handle (SWMR); None means that the key needs the general path
+        basic = self.get_basic_start_stop(key)
+        if basic is None:
+            # Follow shape changes made by another handle (SWMR) before validating the key
+            self.refresh()
 
-        # key not iterable
-        key = key[()] if isinstance(key, NDArray) else key
-        key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+            # key not iterable
+            key = key[()] if isinstance(key, NDArray) else key
+            key = (
+                tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+            )
 
-        key_, mask = process_key(key, self.shape)  # internally handles key an integer
+            key_, mask = process_key(key, self.shape)  # internally handles key an integer
         if hasattr(value, "shape") and value.shape == () and not getattr(value.dtype, "fields", None):
             value = value.item()
-        value = (
-            value if np.isscalar(value) else blosc2.as_simpleproxy(value)
-        )  # convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch
+        # Convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch (not NumPy arrays: that costs more
+        # than a small write, for the same result)
+        if not (np.isscalar(value) or type(value) is np.ndarray):
+            value = blosc2.as_simpleproxy(value)
 
-        if builtins.any(isinstance(k, list | np.ndarray) for k in key_):  # fancy indexing
+        if basic is not None:
+            start, stop, mask = basic
+            none_mask = ()
+        elif builtins.any(isinstance(k, list | np.ndarray) for k in key_):  # fancy indexing
             _slice = ndindex.ndindex(key_).expand(
                 self.shape
             )  # handles negative indices -> positive internally
@@ -4794,27 +5038,28 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
                 else:  # do nothing
                     return self
-            result = self._get_set_findex_default(_slice, value=value)
-            from . import indexing
-
-            indexing.mark_indexes_stale(self)
-            return result
-
-        start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
-
-        if step != (1,) * self.ndim:  # handle non-unit or negative steps
-            if np.any(none_mask):
-                raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
-            result = self._get_set_nonunit_steps((start, stop, step, mask), value=value)
-            from . import indexing
-
-            indexing.mark_indexes_stale(self)
-            return result
+            return self._mark_indexes_stale(self._get_set_findex_default(_slice, value=value))
+        else:
+            start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
+            if step != (1,) * self.ndim:  # handle non-unit or negative steps
+                if np.any(none_mask):
+                    raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
+                return self._mark_indexes_stale(
+                    self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+                )
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
+        if (
+            isinstance(value, NDArray)
+            and not builtins.any(none_mask)
+            and self._set_array_chunkwise(start, stop, mask, value)
+        ):
+            return self._mark_indexes_stale(self)
         if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
             value = value[()]  # convert to numpy
         if np.isscalar(value) or value.shape == ():
+            if self._fill_chunkwise(start, stop, value):
+                return self._mark_indexes_stale(self)
             value = np.full(shape, value, dtype=self.dtype)
         if value.dtype != self.dtype:  # handles decompressed NDArray too
             try:
@@ -4824,11 +5069,156 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # when using complex functions (e.g. conj) with real arrays
                 value = value.real.astype(self.dtype)
 
-        result = super().set_slice((start, stop), value)
+        return self._mark_indexes_stale(super().set_slice((start, stop), value))
+
+    def _mark_indexes_stale(self, result):
+        """Mark the indexes of this array stale (its data changed), and return `result`."""
         from . import indexing
 
         indexing.mark_indexes_stale(self)
         return result
+
+    def _fill_chunkwise(self, start, stop, value) -> bool:
+        """Fill the region ``[start, stop)`` with a scalar in bounded pieces.
+
+        Every chunk the region fully covers gets one shared special (repeated value) chunk instead
+        of being compressed (edge chunks only for a zero value: writing them leaves zeros in their
+        padding, which a resize brings to light), and the rest is written in boxes of bounded
+        size instead of one buffer as large as the region.  Returns False without writing
+        anything when the region is smaller than a chunk (one buffer and one ``set_slice`` call is
+        cheaper there), or when the frame takes the cross-process lock: one ``set_slice`` holds
+        that from refreshing the shape to the last chunk, so the write is atomic for other
+        processes and lands where the key says even if another handle resizes the array
+        meanwhile.  (Holding it across a Python loop would make other handles of the file in this
+        process wait for it holding the GIL.)
+        """
+        if self.ndim == 0:
+            return False
+        region = math.prod(sp - st for st, sp in zip(start, stop, strict=True))
+        chunk_nitems = math.prod(self.chunks)
+        if region == 0 or region < chunk_nitems or self.schunk._locks_frame:
+            return False
+        fill = np.full(1, value, dtype=self.dtype)  # same conversion as filling the whole region
+        const_chunk = None
+        if self.schunk.typesize == self.dtype.itemsize and _is_lossless(self.cparams):
+            # A lossy codec would not give back `value` exactly; keep compressing for those
+            const_chunk = self._constant_chunk(fill)
+        # Last chunks first: a frame compacts its payload behind an updated chunk, and that
+        # tail then holds the (tiny) special chunks already written instead of the old ones.
+        boxes, nbuf = _chunkwise_plan(
+            self.shape,
+            self.chunks,
+            start,
+            stop,
+            self.dtype.itemsize,
+            const_chunk is not None,
+            reverse=True,
+            split_edges=fill.tobytes() == bytes(fill.nbytes),
+        )
+        # One buffer, as large as the largest box written from it (often just a few edge chunks)
+        buf = np.full(nbuf, fill[0], dtype=self.dtype)
+        # Holding the handle lock for the whole fill keeps it atomic for other threads, as a single
+        # set_slice was
+        with self._handle_lock:
+            for lo, hi, nchunk, n in boxes:
+                if nchunk is not None:
+                    self.schunk.update_chunk(nchunk, const_chunk)
+                else:
+                    super().set_slice((lo, hi), buf[:n].reshape(tuple(map(operator.sub, hi, lo))))
+        return True
+
+    def _set_array_chunkwise(self, start, stop, mask, value: NDArray) -> bool:
+        """Copy the NDArray `value` into the region ``[start, stop)`` in bounded pieces.
+
+        Instead of decompressing all of `value` first, read it box by box (boxes of bounded size,
+        along this array's chunk boundaries) and write each box with one ``set_slice``.  When both
+        arrays encode chunks the same way (dtype, chunks, blocks, cparams) and the region starts at
+        a chunk boundary, the covered chunks are copied compressed.  Returns False without writing
+        anything when `value` does not have the shape of the region (minus integer-indexed
+        dimensions), when the region is smaller than a chunk, when `value` may share storage
+        with this array or takes the cross-process frame lock (it must be read in full before
+        writing then), or when this array takes that lock (see _fill_chunkwise).
+        """
+        if self.ndim == 0:
+            return False
+        region = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        chunk_nitems = math.prod(self.chunks)
+        nitems = math.prod(region)
+        if nitems == 0 or nitems < chunk_nitems or self.schunk._locks_frame or _same_storage(self, value):
+            return False
+        if value.schunk._locks_frame:
+            # One read keeps `value` consistent
+            return False
+        value.refresh()  # as reading it with value[...] would
+        kept = (True,) * self.ndim if value.shape == region else tuple(not m for m in mask)
+        if value.shape != tuple(s for s, k in zip(region, kept, strict=True) if k):
+            return False
+        copy_compressed = (
+            value.shape == region
+            and builtins.all(st % c == 0 for st, c in zip(start, self.chunks, strict=True))
+            and _chunks_interchangeable(self, value)
+        )
+        # Covered chunks are best copied one by one (get_slice and set_slice take their fast paths
+        # for single chunks), unless that would decompress blocks of `value` more than once.
+        it = iter(value.blocks)
+        vblocks = [next(it) if k else 1 for k in kept]  # per dimension of the region
+        one_by_one = copy_compressed or builtins.all(
+            st // c == (sp - 1) // c or (c % b == 0 and st % b == 0)
+            for st, sp, c, b in zip(start, stop, self.chunks, vblocks, strict=True)
+        )
+        if copy_compressed:
+            vgrid, _ = get_chunks_idx(value.shape, self.chunks)
+        vsize, size = value.dtype.itemsize, self.dtype.itemsize
+        # Reused raw byte buffers, as large as the largest box read into them (fresh ones would
+        # page-fault in on every box)
+        itemsize = builtins.max(vsize, size)
+        # The padding of an edge chunk of `value` may hold anything (full() repeats its value
+        # there), where writing leaves zeros: only chunks without padding are copied compressed
+        boxes, buf_items = _chunkwise_plan(
+            self.shape,
+            self.chunks,
+            start,
+            stop,
+            itemsize,
+            one_by_one,
+            buffer_covered=not copy_compressed,
+            split_edges=not copy_compressed,
+        )
+        src_raw = dst_raw = None
+        # Holding the handle locks (in a fixed order) for the whole copy keeps it atomic for other
+        # threads, as a single set_slice was
+        with blosc2_ext.HandleLocks((self, value)):
+            for lo, hi, nchunk, n in boxes:
+                if nchunk is not None and copy_compressed:
+                    # A covered chunk starting at a chunk boundary of `value` holds the same items
+                    vcoords = [(l_ - st) // c for l_, st, c in zip(lo, start, self.chunks, strict=True)]
+                    vchunk = chunk_flat_index(vcoords, vgrid)
+                    self.schunk.update_chunk(nchunk, value.schunk.get_chunk(vchunk))
+                    continue
+                if src_raw is None:
+                    src_raw = np.empty(buf_items * vsize, dtype=np.uint8)
+                data = src_raw[: n * vsize]
+                vkey = [(l_ - st, h - st) for l_, h, st, k in zip(lo, hi, start, kept, strict=True) if k]
+                blosc2_ext.NDArray.get_slice_numpy(value, data, tuple(zip(*vkey, strict=True)))
+                if value.dtype != self.dtype:
+                    if dst_raw is None:
+                        dst_raw = np.empty(buf_items * size, dtype=np.uint8)
+                    src, data = data.view(value.dtype), dst_raw[: n * size]
+                    try:
+                        np.copyto(data.view(self.dtype), src, casting="unsafe")
+                    except ComplexWarning:
+                        np.copyto(data.view(self.dtype), src.real, casting="unsafe")
+                super().set_slice((lo, hi), data)
+        return True
+
+    def _constant_chunk(self, fill: np.ndarray) -> bytes:
+        """Return a special chunk for this array where every item equals ``fill[0]``."""
+        schunk = self.schunk
+        if fill.tobytes() == bytes(fill.nbytes):
+            return schunk._special_chunk(schunk.chunksize, SpecialValue.ZERO.value)
+        # Pass a void view: datetime dtypes do not export a buffer
+        void = fill.view(np.dtype((np.void, fill.itemsize)))
+        return schunk._special_chunk(schunk.chunksize, SpecialValue.VALUE.value, void)
 
     def __iter__(self):
         """Iterate over the (outer) elements of the array.
@@ -6863,7 +7253,7 @@ def _ndarray_asarray_requires_copy(
     return builtins.any(key in user_kwargs for key in copy_keys)
 
 
-def asarray(
+def asarray(  # noqa: C901
     array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any
 ) -> NDArray | blosc2.UTF8Array:
     """Convert the `array` to an `NDArray`.
@@ -6966,6 +7356,8 @@ def asarray(
 
         # Create the empty array
         ndarr = empty(shape, dtype, chunks=chunks, blocks=blocks, **kwargs)
+        if isinstance(array, NDArray) and _copy_chunkwise(array, ndarr):
+            return ndarr
         behaved = are_partitions_behaved(shape, chunks, blocks)
 
         # Get the coordinates of the chunks
@@ -6993,6 +7385,48 @@ def asarray(
         return array
 
     return ndarr
+
+
+def _copy_chunkwise(src: NDArray, dst: NDArray) -> bool:
+    """Fill `dst` (just created) with the items of `src`, casting them to the dtype of `dst`.
+
+    Both must have the same shape, chunks and blocks, so that their chunks lay out the same items
+    the same way; returns False, writing nothing, otherwise.  Chunks without padding are
+    decompressed into one reused buffer, cast into another and compressed from there: no slicing
+    and no allocations per chunk.  Chunks encoded the same way in both arrays are copied as they are.
+    """
+    if src.ndim == 0 or src.shape != dst.shape or src.chunks != dst.chunks or src.blocks != dst.blocks:
+        return False
+    extshape = src.ext_chunks
+    nitems = math.prod(extshape)
+    if (
+        nitems * src.dtype.itemsize != src.schunk.chunksize
+        or nitems * dst.dtype.itemsize != dst.schunk.chunksize
+    ):
+        return False
+    if _chunks_interchangeable(dst, src):
+        for nchunk in range(src.schunk.nchunks):
+            dst.schunk.update_chunk(nchunk, src.schunk.get_chunk(nchunk))
+        return True
+    # Raw byte buffers: datetime dtypes do not export a buffer themselves
+    src_raw = np.empty(src.schunk.chunksize, dtype=np.uint8)
+    dst_raw = np.empty(dst.schunk.chunksize, dtype=np.uint8)
+    src_buf, dst_buf = src_raw.view(src.dtype), dst_raw.view(dst.dtype)
+    grid, _ = get_chunks_idx(src.shape, src.chunks)
+    for nchunk, coords in enumerate(np.ndindex(grid)):
+        valid = tuple(
+            builtins.min(c, s - i * c) for i, c, s in zip(coords, src.chunks, src.shape, strict=True)
+        )
+        if valid == extshape:
+            # Casting goes item by item, so the block layout inside the chunk does not matter
+            src.schunk.decompress_chunk(nchunk, src_raw)
+            np.copyto(dst_buf, src_buf, casting="unsafe")
+            dst.schunk.update_data(nchunk, dst_raw, copy=False)
+        else:
+            # Padding may hold anything (casting it could warn): go through the items only
+            box = tuple(slice(i * c, i * c + v) for i, c, v in zip(coords, src.chunks, valid, strict=True))
+            dst[box] = np.require(src[box], dtype=dst.dtype, requirements="C")
+    return True
 
 
 def array(array: Sequence | blosc2.Array, copy: bool | None = True, **kwargs: Any) -> NDArray:
@@ -7081,8 +7515,9 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
         else:
             kwargs = {**kwargs, **storage}
     else:
-        # Add the default storage values as long as they are not already passed
-        storage_dflts = asdict(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
+        # Add the default storage values as long as they are not already passed.  Its fields
+        # are plain values, so vars() gives what asdict() does, only much faster.
+        storage_dflts = vars(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
         # If a key appears in both operands, the one from the right-hand operand wins
         kwargs = storage_dflts | kwargs
 

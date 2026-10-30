@@ -8,7 +8,6 @@
 import ast
 import builtins
 import contextlib
-import inspect
 import math
 import sys
 import warnings
@@ -1007,6 +1006,15 @@ def get_chunks_idx(shape, chunks):
     return chunks_idx, nchunks
 
 
+def chunk_flat_index(coords, grid) -> int:
+    """The index, in C order, of the chunk at `coords` in a grid of `grid` chunks per dimension
+    (as from get_chunks_idx)."""
+    nchunk = 0
+    for i, n in zip(coords, grid, strict=True):
+        nchunk = nchunk * n + i
+    return nchunk
+
+
 def process_key(key, shape):
     # Fast path: a plain tuple (or scalar) of slices/ints, with no ellipsis,
     # newaxis, arrays, or strided/negative steps, needs none of ndindex's
@@ -1050,13 +1058,23 @@ def process_key(key, shape):
     return key, mask
 
 
+def is_called_from(names) -> bool:
+    """Whether a function with one of these names is on the call stack."""
+    # Walk the call stack by hand: inspect.stack() also reads the source of every frame,
+    # which costs hundreds of microseconds per call
+    frame = sys._getframe()
+    while frame is not None:
+        if frame.f_code.co_name in names:
+            return True
+        frame = frame.f_back
+    return False
+
+
 def is_inside_ne_evaluate() -> bool:
     """
     Whether the current code is being executed from an ne_evaluate call
     """
-    # Get the current call stack
-    stack = inspect.stack()
-    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
+    return is_called_from(("ne_evaluate",))
 
 
 def incomplete_lazyfunc(func) -> None:

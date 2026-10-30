@@ -2406,3 +2406,412 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     expected = np.cumulative_sum(data, axis=0)
     np.testing.assert_array_equal(result[:], expected)
     np.testing.assert_array_equal(out[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "x", "y"),
+    [
+        (np.float32, "a", 0),
+        (np.float32, 1.5, "a"),
+        (np.int32, "a", 0.5),
+        (np.int16, "a", -1),
+        (np.float64, "a", "b"),
+    ],
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    compiled = []
+
+    def wrapped_set_pref_expr(self, expression, inputs, *args, **kwargs):
+        res = original_set_pref_expr(self, expression, inputs, *args, **kwargs)
+        compiled.append(expression)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+    na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
+    nb = (na // 3).astype(dtype)
+    a = blosc2.asarray(na, chunks=(16, 30), blocks=(4, 30))
+    b = blosc2.asarray(nb, chunks=(16, 30), blocks=(4, 30))
+    ops, nops = {"a": a, "b": b}, {"a": na, "b": nb}
+    expr = blosc2.where(a > 500, ops.get(x, x), ops.get(y, y))
+    expected = np.where(na > 500, nops.get(x, x), nops.get(y, y))
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
+    assert len(compiled) == 1
+    assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "direct"),
+    [
+        ((100, 100), (100, 100), (25, 100), True),
+        ((10_000,), (3000,), (1000,), True),  # partial last chunk
+        ((5,), (8,), (4,), True),  # a single, partial chunk
+        ((37, 50, 60), (5, 50, 60), (1, 25, 60), True),
+        ((4, 12, 30), (1, 4, 30), (1, 2, 30), True),
+        ((1, 10, 30), (1, 4, 30), (1, 2, 30), True),  # partial, but the very last chunk
+        ((4, 10, 30), (1, 4, 30), (1, 2, 30), False),  # partial chunks inside the array
+        ((40, 30), (16, 30), (4, 10), False),  # blocks not contiguous in their chunk
+        ((40, 30), (16, 15), (4, 15), False),  # chunks not contiguous in the array
+        ((24, 20, 18), (8, 10, 9), (4, 5, 9), False),
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.int16, np.complex128])
+def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, dtype):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    assert lazyexpr_mod._chunks_tile_flat(shape, chunks, blocks) is direct
+    original = lazyexpr_mod._prefilter_to_numpy
+    results = []
+
+    def wrapped(*args):
+        res = original(*args)
+        results.append(res is not None)
+        return res
+
+    monkeypatch.setattr(lazyexpr_mod, "_prefilter_to_numpy", wrapped)
+    rng = np.random.default_rng(1)
+    na = (rng.random(shape) * 100).astype(dtype)
+    nb = (rng.random(shape) * 10).astype(dtype)
+    a = blosc2.asarray(na, chunks=chunks, blocks=blocks)
+    b = blosc2.asarray(nb, chunks=chunks, blocks=blocks)
+    if dtype is np.complex128:
+        second = (a * b, na * nb)
+    else:
+        second = ((a - b) > 40, (na - nb) > 40)
+    for expr, expected in [(a + b * 2, na + nb * 2), second]:
+        for res in (expr[:], expr[()]):
+            assert res.dtype == expected.dtype
+            assert res.flags.c_contiguous
+            assert res.flags.writeable
+            np.testing.assert_array_equal(res, expected)
+            base = res
+            while base.base is not None:
+                base = base.base
+            # The padding of a partial last chunk is not kept allocated
+            assert base.nbytes <= res.nbytes + blosc2.MAX_OVERHEAD
+    if dtype is np.complex128 and not results:
+        return  # miniexpr is not used for complex numbers on some platforms
+    assert results == ([True] * 4 if direct else [])
+
+
+@pytest.mark.parametrize("source", ["contiguous", "cframe"])
+def test_frame_backed_inmemory_operands(source):
+    # In-memory frames (contiguous=True, or views of a cframe) keep no chunk table, so the
+    # miniexpr prefilter must fetch their chunks like it does for on-disk operands
+    na = np.arange(270, dtype=np.int16).reshape(10, 27)
+    if source == "contiguous":
+        a = blosc2.asarray(na, chunks=(3, 4), blocks=(1, 2), contiguous=True)
+    else:
+        a = blosc2.ndarray_from_cframe(blosc2.asarray(na, chunks=(3, 4), blocks=(1, 2)).to_cframe())
+    assert a.schunk.contiguous
+    assert a.schunk.urlpath is None
+    b = blosc2.asarray(na * 2, chunks=(3, 4), blocks=(1, 2))
+    np.testing.assert_array_equal((a + 1)[:], na + 1)
+    np.testing.assert_array_equal((a + b).compute()[:], na * 3)
+
+
+def _numpy_eval(expression, operands):
+    namespace = {"where": np.where, "sin": np.sin, "hypot": np.hypot, "nextafter": np.nextafter}
+    namespace.update(
+        remainder=np.remainder, arctan2=np.arctan2, copysign=np.copysign, logaddexp=np.logaddexp
+    )
+    return eval(expression, namespace, operands)
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.float64, np.float32])
+@pytest.mark.parametrize(
+    "expression", ["o0 * -2", "-2 * o0", "o0 - -0.5", "o0 / -2", "o0 * (0 - 2)", "o0 + sin(1.0)", "o0 > -2"]
+)
+@pytest.mark.parametrize("op", ["sum", "max", "mean"])
+def test_miniexpr_reduction_constant_subexpressions(monkeypatch, dtype, expression, op):
+    # miniexpr does not fold constant subexpressions inside reductions (they evaluated to garbage)
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    na = np.arange(37 * 40 * 5, dtype=dtype).reshape(37, 40, 5) % 7
+    a = blosc2.asarray(na, chunks=(10, 20, 5), blocks=(5, 10, 5))
+    res = getattr(blosc2.lazyexpr(expression, {"o0": a}), op)()
+    expected = getattr(_numpy_eval(expression, {"o0": na}), op)()
+    np.testing.assert_allclose(res, expected, rtol=1e-5)
+
+
+@pytest.mark.parametrize("dtype", [np.int16, np.int32, np.int64, np.uint32, np.bool_])
+@pytest.mark.parametrize(
+    "expression", ["a / b", "(a + b) / b", "where(f > 0, a, b) / b", "hypot(a, b)", "nextafter(a, b)"]
+)
+@pytest.mark.parametrize("how", ["getitem", "compute", "sum"])
+def test_miniexpr_integer_true_division(monkeypatch, dtype, expression, how):
+    # miniexpr computed these in integer arithmetic for two integer operands
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    if dtype is np.bool_ and expression != "a / b":
+        pytest.skip("only true division is defined for two bools here")
+    if dtype is np.int16 and expression == "nextafter(a, b)":
+        pytest.skip("the float32 result is computed in float64 on every path")
+    rng = np.random.default_rng(2)
+    na = rng.integers(0, 50, size=(30, 40)).astype(dtype)
+    nb = (rng.integers(1, 9, size=(30, 40)) if dtype is not np.bool_ else np.ones((30, 40))).astype(dtype)
+    nf = rng.normal(size=(30, 40))
+    ops = {
+        name: blosc2.asarray(v, chunks=(10, 40), blocks=(5, 40))
+        for name, v in zip("abf", (na, nb, nf), strict=True)
+    }
+    expr = blosc2.lazyexpr(expression, ops)
+    expected = _numpy_eval(expression, {"a": na, "b": nb, "f": nf})
+    if how == "sum":
+        np.testing.assert_allclose(expr.sum(), expected.sum(), rtol=1e-5)
+    else:
+        res = expr[:] if how == "getitem" else expr.compute()[:]
+        np.testing.assert_allclose(res, expected.astype(res.dtype), rtol=1e-6)
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.int64, np.uint32, np.bool_])
+@pytest.mark.parametrize("func", ["arctan2", "copysign", "hypot", "logaddexp"])
+@pytest.mark.parametrize("how", ["getitem", "compute", "sum"])
+def test_miniexpr_integer_float_functions(monkeypatch, dtype, func, how):
+    # miniexpr computes every two-argument function in the promoted operand type: integer
+    # arithmetic for two integer operands, where NumPy gives a float (logaddexp gave 1, 2, 3, ...)
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    if dtype is np.bool_ and func == "logaddexp":
+        pytest.skip("logaddexp does not accept bools")
+    na = (np.arange(1, 1201) % 400 + 1).reshape(30, 40).astype(dtype)
+    nb = (np.arange(1, 1201) % 7).reshape(30, 40).astype(dtype)
+    ops = {
+        name: blosc2.asarray(v, chunks=(10, 40), blocks=(5, 40))
+        for name, v in zip("ab", (na, nb), strict=True)
+    }
+    expression = f"{func}(a, b) + {func}(a, a)"
+    expr = blosc2.lazyexpr(expression, ops)
+    if how == "sum":
+        # bool inputs give float16 in NumPy, so sum up float64 values instead
+        expected = _numpy_eval(expression, {"a": na.astype(np.float64), "b": nb.astype(np.float64)})
+        np.testing.assert_allclose(expr.sum(), expected.sum(), rtol=1e-5)
+    else:
+        res = expr[:] if how == "getitem" else expr.compute()[:]
+        expected = _numpy_eval(expression, {"a": na, "b": nb})
+        np.testing.assert_allclose(res, expected.astype(res.dtype), rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "(a / 3) > 2",
+        "(a / 2.5) > 3",
+        "where(a / 3 > 2, a, b)",
+        "hypot(a, 2.5) > 3",
+        "arctan2(a, 2) > 1",
+        "logaddexp(a, 2) > 3",
+    ],
+)
+@pytest.mark.parametrize("how", ["getitem", "sum"])
+def test_miniexpr_integer_division_by_constant(monkeypatch, expression, how):
+    # miniexpr types numeric constants after the result: as integers or bools when that is not a
+    # float, so these divided integers (or took hypot of them) in integer arithmetic
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    na = np.arange(-600, 600, dtype=np.int64).reshape(30, 40) % 23
+    nb = np.arange(1200, dtype=np.int64).reshape(30, 40)
+    ops = {
+        name: blosc2.asarray(v, chunks=(10, 40), blocks=(5, 40))
+        for name, v in zip("ab", (na, nb), strict=True)
+    }
+    expr = blosc2.lazyexpr(expression, ops)
+    expected = _numpy_eval(expression, {"a": na, "b": nb})
+    if how == "sum":
+        assert expr.sum() == expected.sum()
+    else:
+        np.testing.assert_array_equal(expr[:], expected)
+
+
+_RESULT_DTYPE_EXPRESSIONS = [
+    "hypot({n}, b)",
+    "copysign({n}, b)",
+    "nextafter({n}, b)",
+    "arctan2({n}, b)",
+    "hypot(a, b * 1)",
+    "hypot({n}, 2)",
+    "arctan2({n}, 2.5)",
+    "(a < b) / b",
+    "a / 2",
+    "a / b",
+    "{n} / b",
+    "{n} // b",
+    "{n} % b",
+    "a ** b",
+    "{n} ** 2",
+    "sin({n})",
+    "sqrt(a)",
+]
+
+
+@pytest.mark.parametrize("dtype", [np.bool_, np.int8, np.uint16, np.int32, np.int64])
+@pytest.mark.parametrize("expression", _RESULT_DTYPE_EXPRESSIONS)
+@pytest.mark.parametrize("build", ["functions", "string"])
+def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build):
+    # Float functions and true division of integer (or bool) subexpressions were given an integer
+    # (or bool) result dtype, so the results were truncated on every evaluation path
+    if dtype is np.int32 and expression in ("a / b", "{n} / b"):
+        pytest.skip("int32 / int32 gives float32 on purpose")
+    if "nextafter" in expression and dtype not in (np.int32, np.int64):
+        pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
+    # A subexpression of the operand dtype (bool + bool is an or in NumPy)
+    expression = expression.format(n="(a & b)" if dtype is np.bool_ else "(a + b)")
+    na = (np.arange(1200).reshape(30, 40) % 5).astype(dtype)
+    nb = (np.arange(1200).reshape(30, 40) % 3 + 1).astype(dtype)
+    a = blosc2.asarray(na, chunks=(10, 40), blocks=(5, 40))
+    b = blosc2.asarray(nb, chunks=(10, 40), blocks=(5, 40))
+    namespace = {"hypot": np.hypot, "copysign": np.copysign, "nextafter": np.nextafter}
+    namespace.update(arctan2=np.arctan2, sin=np.sin, sqrt=np.sqrt)
+    with np.errstate(all="ignore"):
+        expected = eval(expression, namespace, {"a": na, "b": nb})
+        if build == "string":
+            expr = blosc2.lazyexpr(expression, {"a": a, "b": b})
+        else:
+            expr = eval(expression, {name: getattr(blosc2, name) for name in namespace}, {"a": a, "b": b})
+        assert expr.dtype == expected.dtype
+        rtol = 1e-3 if expected.dtype == np.float16 else 1e-6
+        results = [expr[:], expr[...], expr.compute()[:], blosc2.where(b > 1, expr, 0)[:]]
+        for res, exp in zip(results, [expected] * 3 + [np.where(nb > 1, expected, 0)], strict=True):
+            assert res.dtype == exp.dtype
+            np.testing.assert_allclose(res, exp, rtol=rtol)
+        np.testing.assert_allclose(expr.sum(), expected.sum(dtype=np.float64), rtol=rtol)
+
+
+def _typing_bug_data(dtype):
+    x = np.arange(1200).reshape(30, 40)
+    if dtype is np.bool_:
+        return x % 3 == 0
+    if np.dtype(dtype).kind == "u":
+        return (x % 200).astype(dtype)
+    if np.dtype(dtype).kind == "i":
+        return (x % 251 - 120).astype(dtype)
+    return ((x % 17 - 8) * 0.5).astype(dtype)
+
+
+_I8, _U8, _F32 = np.int8, np.uint8, np.float32
+
+
+@pytest.mark.parametrize(
+    ("expression", "dtypes"),
+    [
+        # a comparison of operands of other dtypes inside arithmetic
+        ("(a < c) + c", (_I8, _I8, _U8)),
+        ("(a < c) * c", (_I8, _I8, _U8)),
+        ("(a < c) == b", (_I8, _I8, _U8)),
+        ("(a < c) + 1", (np.bool_, np.bool_, _U8)),
+        ("(a + b) * abs(c)", (np.int64,) * 3),
+        ("a + b > c", (_F32, _F32, np.float64)),
+        ("a * b < c", (np.int16, np.int16, np.int32)),
+        # bool + bool, which miniexpr adds as numbers
+        ("hypot(a + b, 2)", (np.bool_,) * 3),
+        ("sin(a + b)", (np.bool_,) * 3),
+        ("(a + b) * 1.5", (np.bool_,) * 3),
+        ("(a + b) == b", (np.bool_,) * 3),
+        ("a + b", (np.bool_,) * 3),
+        ("(a + b) + c", (np.bool_, np.bool_, np.int64)),
+        # constants truncated to the dtype they are compared in
+        ("a < 2.5", (np.int32,) * 3),
+        ("a >= 2.5", (np.int32,) * 3),
+        ("a == 2.5", (np.int32,) * 3),
+        ("a < 300", (_I8,) * 3),
+        # a comparison of two bools in a reduction, and miniexpr's grammar
+        ("a == b", (np.bool_,) * 3),
+        ("-a ** 2", (np.int64,) * 3),
+        ("a ** b ** c", (np.float64,) * 3),
+    ],
+)
+@pytest.mark.parametrize("how", ["getitem", "compute", "sum"])
+def test_miniexpr_typing_bugs(monkeypatch, expression, dtypes, how):
+    # Expressions that miniexpr types or parses differently from NumPy, which gave wrong results
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    nps = {name: _typing_bug_data(dt) for name, dt in zip("abc", dtypes, strict=True)}
+    if expression == "a ** b ** c":
+        nps = {k: v / 8 + 1 for k, v in nps.items()}
+    ops = {k: blosc2.asarray(v, chunks=(10, 40), blocks=(5, 40)) for k, v in nps.items()}
+    expr = blosc2.lazyexpr(expression, ops)
+    with np.errstate(all="ignore"):
+        expected = eval(expression, {"hypot": np.hypot, "sin": np.sin, "abs": np.abs}, nps)
+    rtol = 1e-3 if expected.dtype == np.float16 else 1e-6
+    if how == "sum":
+        np.testing.assert_allclose(expr.sum(), expected.sum(dtype=np.float64), rtol=rtol)
+        return
+    res = expr[:] if how == "getitem" else expr.compute()[:]
+    np.testing.assert_allclose(res, expected.astype(res.dtype), rtol=rtol)
+    if res.dtype == np.bool_:
+        assert res.view(np.uint8).max() <= 1  # True + True stored as 2
+
+
+def test_miniexpr_typing_bugs_no_crash():
+    # These overflowed miniexpr's buffers (a float64 conversion into a narrower one) and corrupted the heap
+    code = (
+        "import numpy as np, blosc2\n"
+        "x = np.arange(30000)\n"
+        "nps = {'a': (x % 7 - 3).astype(np.int16), 'b': (x % 7).astype(np.uint32), 'f': (x % 7).astype(np.float32),\n"
+        "       'i': (x % 251 - 120).astype(np.int32), 'j': (x % 7).astype(np.int32)}\n"
+        "ops = {k: blosc2.asarray(v) for k, v in nps.items()}\n"
+        "for e in ['(a + a) * abs(a)', '(b * 3) * (-b)', '(f + f) - (f * -1.5)', 'where((f + f) > -1, f, f)',\n"
+        "          'abs(i) + (j < i)']:\n"
+        "    res = blosc2.lazyexpr(e, ops)[:]\n"
+        "    with np.errstate(all='ignore'):\n"
+        "        assert np.allclose(res, eval(e, {'abs': np.abs, 'where': np.where}, nps)), e\n"
+    )
+    import subprocess
+    import sys
+
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_miniexpr_bool_true_division_no_crash():
+    # bool / bool with a zero divisor died of SIGFPE inside miniexpr
+    code = (
+        "import numpy as np, blosc2\n"
+        "a = blosc2.asarray(np.arange(1200).reshape(30, 40) % 3 > 0)\n"
+        "with np.errstate(all='ignore'):\n"
+        "    r = blosc2.lazyexpr('a / a', {'a': a})[:]\n"
+        "    blosc2.lazyexpr_mod = __import__('importlib').import_module('blosc2.lazyexpr')\n"
+        "    blosc2.lazyexpr_mod.try_miniexpr = False\n"
+        "    assert np.array_equal(r, blosc2.lazyexpr('a / a', {'a': a})[:], equal_nan=True)\n"
+    )
+    import subprocess
+    import sys
+
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.float64])
+@pytest.mark.parametrize("expression", ["a % b", "remainder(a, b)", "a % 3", "a % -3"])
+@pytest.mark.parametrize("how", ["getitem", "sum"])
+def test_miniexpr_remainder_sign(monkeypatch, dtype, expression, how):
+    # miniexpr's % follows C (sign of the dividend); NumPy's the sign of the divisor
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    rng = np.random.default_rng(4)
+    na = rng.integers(-50, 50, size=(30, 40)).astype(dtype)
+    nb = (rng.integers(1, 9, size=(30, 40)) * rng.choice([-1, 1], size=(30, 40))).astype(dtype)
+    ops = {
+        name: blosc2.asarray(v, chunks=(10, 40), blocks=(5, 40))
+        for name, v in zip("ab", (na, nb), strict=True)
+    }
+    expr = blosc2.lazyexpr(expression, ops)
+    expected = _numpy_eval(expression, {"a": na, "b": nb})
+    res = expr.sum() if how == "sum" else expr[:]
+    np.testing.assert_allclose(res, expected.sum() if how == "sum" else expected, rtol=1e-12)

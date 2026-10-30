@@ -14,8 +14,11 @@ import ast
 import atexit
 import pathlib
 import sys
+import functools
 import time
 import warnings
+import weakref
+from threading import RLock
 
 import _ctypes
 
@@ -24,11 +27,17 @@ from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
     PyBuffer_Release,
+    PyBytes_AsString,
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
-from cpython.ref cimport Py_INCREF, Py_DECREF
+from cpython.bool cimport PyBool_Check
+from cpython.long cimport PyLong_Check
+from cpython.number cimport PyIndex_Check
+from cpython.pyport cimport PY_SSIZE_T_MAX, PY_SSIZE_T_MIN
+from cpython.ref cimport PyObject, Py_INCREF, Py_DECREF, Py_XDECREF
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
+from cpython.slice cimport PySlice_AdjustIndices, PySlice_Check, PySlice_Unpack
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc, calloc
@@ -186,6 +195,7 @@ cdef extern from "blosc2.h":
     ctypedef enum:
         BLOSC2_SPECIAL_ZERO
         BLOSC2_SPECIAL_NAN
+        BLOSC2_SPECIAL_VALUE
         BLOSC2_SPECIAL_UNINIT
 
     ctypedef enum:
@@ -365,6 +375,10 @@ cdef extern from "blosc2.h":
 
     blosc2_context* blosc2_create_dctx(blosc2_dparams dparams) nogil
 
+    int blosc2_ctx_get_cparams(blosc2_context *ctx, blosc2_cparams *cparams)
+
+    int blosc2_ctx_get_dparams(blosc2_context *ctx, blosc2_dparams *dparams)
+
     void blosc2_free_ctx(blosc2_context * context) nogil
 
     int blosc2_set_maskout(blosc2_context *ctx, c_bool *maskout, int nblocks)
@@ -481,7 +495,9 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset) nogil
     blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio) nogil
 
-    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
+    int64_t blosc2_schunk_to_buffer_alloc(blosc2_schunk* schunk,
+                                          uint8_t* (*alloc)(int64_t length, void* user_data) noexcept nogil,
+                                          void* user_data) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int blosc2_schunk_lock(blosc2_schunk *schunk) nogil
     int blosc2_schunk_unlock(blosc2_schunk *schunk) nogil
@@ -511,6 +527,9 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int64_t *offsets_order)
     int64_t blosc2_schunk_frame_len(blosc2_schunk* schunk)
 
+    int blosc2_chunk_zeros(blosc2_cparams cparams, const int32_t nbytes, void *dest, int32_t destsize)
+    int blosc2_chunk_nans(blosc2_cparams cparams, const int32_t nbytes, void *dest, int32_t destsize)
+    int blosc2_chunk_uninit(blosc2_cparams cparams, const int32_t nbytes, void *dest, int32_t destsize)
     int blosc2_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
                                void *dest, int32_t destsize, const void *repeatval)
 
@@ -603,6 +622,7 @@ cdef extern from "b2nd.h":
         int64_t chunk_array_strides[B2ND_MAX_DIM]
         char *dtype
         int8_t dtype_format
+        int64_t last_tick
 
     ctypedef struct b2nd_context_t:
         pass
@@ -622,7 +642,7 @@ cdef extern from "b2nd.h":
     int b2nd_free(b2nd_array_t *array)
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
-                               void *buffer, int64_t *buffershape, int64_t buffersize)
+                               void *buffer, int64_t *buffershape, int64_t buffersize) nogil
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
@@ -632,8 +652,6 @@ cdef extern from "b2nd.h":
     int b2nd_get_sparse_cbuffer(b2nd_array_t *array, int64_t ncoords, const int64_t *coords,
                                 void *buffer, int64_t buffersize)
     int b2nd_from_cframe(uint8_t *cframe, int64_t cframe_len, c_bool copy, b2nd_array_t ** array);
-    int b2nd_to_cframe(const b2nd_array_t *array, uint8_t ** cframe, int64_t *cframe_len,
-                       c_bool *needs_free);
 
     int b2nd_squeeze(b2nd_array_t *array, b2nd_array_t **view)
     int b2nd_squeeze_index(b2nd_array_t *array, b2nd_array_t **view, const c_bool *index)
@@ -872,7 +890,13 @@ blosc2_init()
 
 @atexit.register
 def destroy():
-    blosc2_destroy()
+    # Daemon threads can still be inside a slice read without the GIL (see
+    # NDArray.get_slice_numpy), and blosc2_destroy() frees thread pools and plugins such a
+    # read may be using.  If they do not finish soon, leave the cleanup to the OS.
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    if _wait_for_nogil_reads(timeout=1.0):
+        blosc2_destroy()
 
 
 def register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
@@ -1255,6 +1279,18 @@ def set_nthreads(nthreads):
     else:
         return rc
 
+def context_nthreads(int16_t nthreads):
+    """The number of threads that C-Blosc2 gives a compression context asking for `nthreads`: the
+    BLOSC_NTHREADS environment variable instead, when that is set to a number it accepts."""
+    cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
+    cparams.nthreads = nthreads
+    cdef blosc2_context *cctx = blosc2_create_cctx(cparams)
+    if cctx == NULL:
+        raise MemoryError()
+    blosc2_ctx_get_cparams(cctx, &cparams)
+    blosc2_free_ctx(cctx)
+    return cparams.nthreads
+
 def set_blocksize(size_t blocksize=0):
     blosc1_set_blocksize(blocksize)
 
@@ -1352,10 +1388,12 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     filters = kwargs.get('filters', blosc2.cparams_dflts['filters'])
     if len(filters) > BLOSC2_MAX_FILTERS:
         raise ValueError(f"filters list cannot exceed {BLOSC2_MAX_FILTERS}")
+    # Looked up once: an enum's value is a slow descriptor
+    cdef int bytedelta = blosc2.Filter.BYTEDELTA.value
     for i, filter in enumerate(filters):
         cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
         # Bytedelta does not work on typesize 1
-        if cparams.filters[i] == blosc2.Filter.BYTEDELTA.value and typesize == 1:
+        if cparams.filters[i] == bytedelta and typesize == 1:
             cparams.filters[i] = 0
 
     if "filters_meta" not in kwargs:
@@ -1369,7 +1407,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     for i, meta in enumerate(filters_meta):
         # We still may want to encode negative values
         meta_value = <int8_t>meta if meta < 0 else meta
-        if meta_value == 0 and cparams.filters[i] == blosc2.Filter.BYTEDELTA.value:
+        if meta_value == 0 and cparams.filters[i] == bytedelta:
             # bytedelta typesize cannot be zero when using compress2
             cparams.filters_meta[i] = <uint8_t>typesize
         else:
@@ -1699,6 +1737,20 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         storage.io = NULL
 
 
+cdef _repeatval_array(value, int32_t typesize):
+    """`value` as an array of one item of `typesize` bytes, for repeated-value chunks."""
+    array = np.array([value])
+    if array.dtype.itemsize != typesize:
+        if isinstance(value, int):
+            dtype = np.dtype('i'+ str(typesize))
+        elif isinstance(value, float):
+            dtype = np.dtype('f' + str(typesize))
+        else:
+            raise ValueError("value size in bytes must match with typesize")
+        array = np.array([value], dtype=dtype)
+    return array
+
+
 cdef get_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
                         void *dest, int32_t destsize, Py_buffer *repeatval):
     if blosc2_chunk_repeatval(cparams, nbytes, dest, destsize, repeatval.buf) < 0:
@@ -1707,11 +1759,105 @@ cdef get_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
         raise RuntimeError("Problems when creating the repeated values chunk")
 
 
+def _handle_locked(method):
+    """Run `method` holding the handle lock of its first argument (an SChunk, NDArray or vlmeta).
+
+    There is one such lock per C super-chunk, shared by the SChunk wrapper, the NDArray built on it
+    and that array's views.  NDArray.get_slice_numpy() decompresses without the GIL, so every other
+    operation that uses the super-chunk's C state (its contexts, frame, metalayers) must hold this
+    lock instead of relying on the GIL.  It is reentrant because Python callbacks (prefilters,
+    postfilters, UDFs) can call back into the same array.
+    """
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._handle_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
+# Every handle lock, so that a forked child can free those that other threads held at the fork
+_all_handle_locks = weakref.WeakSet()
+
+
+def _new_handle_lock():
+    lock = RLock()
+    _all_handle_locks.add(lock)
+    return lock
+
+
+cdef class HandleLocks:
+    """Reusable context manager that holds the handle locks of `arrays` (objects without one are
+    skipped), always in the same order, so that threads locking overlapping sets cannot deadlock.
+    For C code that reads other arrays' super-chunks outside their methods: concat() and the
+    miniexpr prefilter of lazy expressions.
+    """
+    cdef list locks
+
+    def __init__(self, arrays):
+        locks = {id(lock): lock for lock in (getattr(a, "_handle_lock", None) for a in arrays)
+                 if lock is not None}
+        self.locks = [locks[key] for key in sorted(locks)]
+
+    def __enter__(self):
+        cdef Py_ssize_t n = 0
+        try:
+            for lock in self.locks:
+                lock.acquire()
+                n += 1
+        except BaseException:
+            for lock in reversed(self.locks[:n]):
+                lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc_info):
+        for lock in reversed(self.locks):
+            lock.release()
+
+
+# Slice reads running without the GIL (see NDArray.get_slice_numpy), and whether new ones must
+# keep it (> 0).  Both only change with the GIL held.
+cdef int _nogil_reads = 0
+cdef int _nogil_reads_blocked = 0
+
+
+def _wait_for_nogil_reads(timeout=None):
+    """Wait until no slice read runs without the GIL; return False if `timeout` (s) ran out.
+
+    For changes to C state that such reads use (registering a Python codec or filter, exit).
+    The caller increments `_nogil_reads_blocked` first, so that no new ones start meanwhile.
+    """
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while _nogil_reads:
+        if deadline is not None and time.monotonic() > deadline:
+            return False
+        time.sleep(0.0005)  # releases the GIL, so the readers can finish
+    return True
+
+
+def _reset_after_fork():
+    # The threads that held handle locks or read without the GIL at the fork do not exist in
+    # the child, so nothing would ever release those locks there
+    global _nogil_reads, _nogil_reads_blocked
+    _nogil_reads = 0
+    _nogil_reads_blocked = 0
+    for lock in list(_all_handle_locks):
+        if not lock._is_owned():
+            lock._at_fork_reinit()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 cdef class SChunk:
     cdef blosc2_schunk *schunk
     cdef c_bool _is_view
+    cdef readonly object _handle_lock
 
     def __init__(self, _schunk=None, chunksize=2 ** 24, data=None, **kwargs):
+        # Replaced by the NDArray's lock when this is an NDArray's SChunk (see NDArray.__init__)
+        self._handle_lock = _new_handle_lock()
         # hold on to a bytestring of urlpath for the lifetime of the instance
         # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
@@ -1881,6 +2027,7 @@ cdef class SChunk:
     def contiguous(self):
         return self.schunk.storage.contiguous
 
+    @_handle_locked
     def get_cparams(self):
         if self.schunk.storage.cparams.compcode in blosc2.Codec._value2member_map_:
             codec = blosc2.Codec(self.schunk.storage.cparams.compcode)
@@ -1914,6 +2061,7 @@ cdef class SChunk:
 
         return cparams
 
+    @_handle_locked
     def update_cparams(self, new_cparams):
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         codec = new_cparams.codec
@@ -1957,9 +2105,11 @@ cdef class SChunk:
         self.schunk.filters = self.schunk.storage.cparams.filters
         self.schunk.filters_meta = self.schunk.storage.cparams.filters_meta
 
+    @_handle_locked
     def get_dparams(self):
         return blosc2.DParams(nthreads=self.schunk.storage.dparams.nthreads)
 
+    @_handle_locked
     def update_dparams(self, new_dparams):
         cdef blosc2_dparams* dparams = self.schunk.storage.dparams
         dparams.nthreads = new_dparams.nthreads
@@ -1971,6 +2121,7 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
+    @_handle_locked
     def append_data(self, data):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
@@ -1998,6 +2149,7 @@ cdef class SChunk:
             raise RuntimeError("Could not append the chunk")
         return rc
 
+    @_handle_locked
     def fill_special(self, nitems, special_value, value):
         if value is None:
             return blosc2_schunk_fill_special(self.schunk, nitems, special_value, self.chunksize)
@@ -2009,15 +2161,7 @@ cdef class SChunk:
         if self.nbytes > 0 or self.cbytes > 0:
             raise RuntimeError("Filling with special values only works on empty SChunks")
         # Get a void pointer to the value
-        array = np.array([value])
-        if array.dtype.itemsize != self.typesize:
-            if isinstance(value, int):
-                dtype = np.dtype('i'+ str(self.typesize))
-            elif isinstance(value, float):
-                dtype = np.dtype('f' + str(self.typesize))
-            else:
-                raise ValueError("value size in bytes must match with typesize")
-            array = np.array([value], dtype=dtype)
+        array = _repeatval_array(value, self.typesize)
         cdef Py_buffer buf
         PyObject_GetBuffer(array, &buf, PyBUF_SIMPLE)
         # Create chunk with repeated values
@@ -2046,21 +2190,44 @@ cdef class SChunk:
 
         return self.nchunks
 
+    @_handle_locked
+    def _special_chunk(self, int32_t nbytes, int special_value, value=None):
+        """Return a special chunk of `nbytes` bytes (`special_value` is a SpecialValue value; VALUE
+        repeats `value`, as in fill_special()).  It is made with the cparams of this super-chunk,
+        so that its header has the same block size as the other chunks: b2nd reads blocks
+        selectively and checks the number of blocks per chunk."""
+        cdef blosc2_cparams *cparams = self.schunk.storage.cparams
+        cdef int32_t destsize = BLOSC_EXTENDED_HEADER_LENGTH + cparams.typesize
+        cdef uint8_t *dest = <uint8_t *> malloc(destsize)
+        cdef Py_buffer buf
+        cdef int rc
+        try:
+            if special_value == BLOSC2_SPECIAL_ZERO:
+                rc = blosc2_chunk_zeros(cparams[0], nbytes, dest, destsize)
+            elif special_value == BLOSC2_SPECIAL_NAN:
+                rc = blosc2_chunk_nans(cparams[0], nbytes, dest, destsize)
+            elif special_value == BLOSC2_SPECIAL_UNINIT:
+                rc = blosc2_chunk_uninit(cparams[0], nbytes, dest, destsize)
+            elif special_value == BLOSC2_SPECIAL_VALUE:
+                array = _repeatval_array(value, self.typesize)
+                PyObject_GetBuffer(array, &buf, PyBUF_SIMPLE)
+                rc = blosc2_chunk_repeatval(cparams[0], nbytes, dest, destsize, buf.buf)
+                PyBuffer_Release(&buf)
+            else:
+                raise ValueError(f"Not a special value: {special_value}")
+            if rc < 0:
+                raise RuntimeError("Could not create the special chunk")
+            return PyBytes_FromStringAndSize(<char *> dest, rc)
+        finally:
+            free(dest)
+
+    @_handle_locked
     def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t *chunk
         cdef c_bool needs_free
-        rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
-
-        if rc < 0:
-            raise RuntimeError("Error while getting the chunk")
-
         cdef int32_t nbytes
         cdef int32_t cbytes
         cdef int32_t blocksize
-        blosc2_cbuffer_sizes(chunk, &nbytes, &cbytes, &blocksize)
-        if needs_free:
-            free(chunk)
-
         cdef Py_buffer buf
         if dst is not None:
             PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
@@ -2069,6 +2236,13 @@ cdef class SChunk:
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)
             PyBuffer_Release(&buf)
         else:
+            # Only the header is needed: a lazy chunk does not read the whole chunk from a frame twice
+            rc = blosc2_schunk_get_lazychunk(self.schunk, nchunk, &chunk, &needs_free)
+            if rc < 0:
+                raise RuntimeError("Error while getting the chunk")
+            blosc2_cbuffer_sizes(chunk, &nbytes, &cbytes, &blocksize)
+            if needs_free:
+                free(chunk)
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
                 raise RuntimeError("Could not get a bytes object")
@@ -2079,6 +2253,7 @@ cdef class SChunk:
         if size < 0:
             raise RuntimeError(f"Error while decompressing the specified chunk, error code: {size}")
 
+    @_handle_locked
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
         cdef c_bool needs_free
@@ -2090,6 +2265,7 @@ cdef class SChunk:
             free(chunk)
         return ret_chunk
 
+    @_handle_locked
     def get_lazychunk(self, nchunk):
         cdef uint8_t *chunk
         cdef c_bool needs_free
@@ -2113,6 +2289,7 @@ cdef class SChunk:
             free(chunk)
         return ret_chunk
 
+    @_handle_locked
     def get_vlblock(self, nchunk, nblock):
         cdef uint8_t *block
         cdef int32_t destsize
@@ -2123,12 +2300,14 @@ cdef class SChunk:
         free(block)
         return ret_block
 
+    @_handle_locked
     def delete_chunk(self, nchunk):
         rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
         if rc < 0:
             raise RuntimeError("Could not delete the desired chunk")
         return rc
 
+    @_handle_locked
     def append_chunk(self, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
@@ -2139,6 +2318,7 @@ cdef class SChunk:
             raise RuntimeError("Could not append the desired chunk")
         return rc
 
+    @_handle_locked
     def insert_chunk(self, nchunk, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
@@ -2149,6 +2329,7 @@ cdef class SChunk:
             raise RuntimeError("Could not insert the desired chunk")
         return rc
 
+    @_handle_locked
     def insert_data(self, nchunk, data, copy):
         cdef blosc2_context *cctx
         cdef Py_buffer buf
@@ -2164,21 +2345,23 @@ cdef class SChunk:
         else:
             size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(&buf)
-        if size < 0:
-            raise RuntimeError("Could not compress the data")
-        elif size == 0:
+        if size <= 0:
             free(chunk)
+            if size < 0:
+                raise RuntimeError("Could not compress the data")
             raise RuntimeError("The result could not fit ")
 
         chunk = <uint8_t*> realloc(chunk, size)
         _check_comp_length('chunk', size)
         rc = blosc2_schunk_insert_chunk(self.schunk, nchunk, chunk, copy)
-        if copy:
+        # Without a copy, the schunk owns the chunk only if the insert succeeded
+        if copy or rc < 0:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not insert the desired chunk")
         return rc
 
+    @_handle_locked
     def update_chunk(self, nchunk, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
@@ -2189,6 +2372,7 @@ cdef class SChunk:
             raise RuntimeError("Could not update the desired chunk")
         return rc
 
+    @_handle_locked
     def reorder_offsets(self, order):
         cdef np.ndarray[np.int64_t, ndim=1] offsets_order = np.ascontiguousarray(order, dtype=np.int64)
         rc = blosc2_schunk_reorder_offsets(self.schunk, <int64_t*> offsets_order.data)
@@ -2196,6 +2380,7 @@ cdef class SChunk:
             raise RuntimeError("Could not reorder the chunk offsets")
         return None
 
+    @_handle_locked
     def update_data(self, nchunk, data, copy):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
@@ -2210,22 +2395,24 @@ cdef class SChunk:
             size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
 
         PyBuffer_Release(&buf)
-        if size < 0:
-            raise RuntimeError("Could not compress the data")
-        elif size == 0:
+        if size <= 0:
             free(chunk)
+            if size < 0:
+                raise RuntimeError("Could not compress the data")
             raise RuntimeError("The result could not fit ")
 
         chunk = <uint8_t*> realloc(chunk, size)
         _check_comp_length('chunk', size)
         rc = blosc2_schunk_update_chunk(self.schunk, nchunk, chunk, copy)
-        if copy:
+        # Without a copy, the schunk owns the chunk only if the update succeeded
+        if copy or rc < 0:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
         return rc
 
     # This is used internally for prefiltering
+    @_handle_locked
     def _prefilter_data(self, nchunk, data, chunk_data):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
@@ -2241,6 +2428,7 @@ cdef class SChunk:
             raise RuntimeError("The result could not fit ")
         return size
 
+    @_handle_locked
     def get_slice(self, start=0, stop=None, out=None):
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
         start, stop, _ = slice(start, stop, 1).indices(nitems)
@@ -2265,6 +2453,7 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while getting the slice")
 
+    @_handle_locked
     def set_slice(self, value, start=0, stop=None):
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
         start, stop = self._massage_key(start, stop, nitems)
@@ -2370,26 +2559,15 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while setting the slice")
 
+    @_handle_locked
     def to_cframe(self):
-        cdef c_bool needs_free
-        cdef uint8_t *cframe
-        cdef int64_t cframe_len
-        if RELEASEGIL:
-            with nogil:
-                cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
-        else:
-            cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
-        if cframe_len < 0:
-            raise RuntimeError("Error while getting the cframe")
-        out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
-        if needs_free:
-            free(cframe)
+        return schunk_to_cframe(self.schunk, RELEASEGIL)
 
-        return out
-
+    @_handle_locked
     def _avoid_cframe_free(self, avoid_cframe_free):
         blosc2_schunk_avoid_cframe_free(self.schunk, avoid_cframe_free)
 
+    @_handle_locked
     def lock(self):
         """Take the exclusive frame lock and hold it across several operations.
 
@@ -2402,12 +2580,26 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not lock the super-chunk frame")
 
+    @_handle_locked
     def unlock(self):
         """Release the frame lock taken with `lock()`."""
         cdef int rc = blosc2_schunk_unlock(self.schunk)
         if rc < 0:
             raise RuntimeError("Could not unlock the super-chunk frame")
 
+    @property
+    def _locks_frame(self):
+        """Whether operations take the cross-process frame lock: on disk with the default I/O, and
+        `locking` or the BLOSC_LOCKING environment variable set (what C-Blosc2 checks when it
+        opens the frame)."""
+        cdef blosc2_storage *storage = self.schunk.storage
+        if storage.urlpath == NULL or storage.io == NULL or storage.io.id != BLOSC2_IO_FILESYSTEM:
+            return False
+        if storage.io.params != NULL and (<blosc2_stdio_params *> storage.io.params).locking:
+            return True
+        return os.environ.get("BLOSC_LOCKING", "") not in ("", "0")
+
+    @_handle_locked
     def refresh(self):
         cdef int rc = blosc2_schunk_refresh(self.schunk)
         _check_rc(rc, "Error while refreshing the schunk")
@@ -2433,6 +2625,7 @@ cdef class SChunk:
 
         return start, stop
 
+    @_handle_locked
     def _set_postfilter(self, func, dtype_input, dtype_output=None):
         # Get user data
         func_id = func.__name__
@@ -2467,7 +2660,11 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    cpdef remove_postfilter(self, func_name, _new_ctx=True):
+    @_handle_locked
+    def remove_postfilter(self, func_name, _new_ctx=True):
+        self._remove_postfilter(func_name, _new_ctx)
+
+    cdef _remove_postfilter(self, func_name, _new_ctx):
         if func_name is not None:
             del blosc2.postfilter_funcs[func_name]
 
@@ -2487,6 +2684,7 @@ cdef class SChunk:
             # Avoid creating new dctx when calling this from the __dealloc__
             self.schunk.dctx = NULL
 
+    @_handle_locked
     def _set_filler(self, func, inputs_id, dtype_output):
         if self.schunk.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -2516,6 +2714,7 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    @_handle_locked
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
         if self.schunk.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -2551,7 +2750,11 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    cpdef remove_prefilter(self, func_name, _new_ctx=True):
+    @_handle_locked
+    def remove_prefilter(self, func_name, _new_ctx=True):
+        self._remove_prefilter(func_name, _new_ctx)
+
+    cdef _remove_prefilter(self, func_name, _new_ctx):
         cdef udf_udata* udf_data
         cdef user_filters_udata* udata
         cdef mm_udata* mm_data
@@ -2630,9 +2833,9 @@ cdef class SChunk:
         if self.schunk != NULL and not self._is_view:
             # Free prefilters and postfilters params
             if self.schunk.storage.cparams.prefilter != NULL:
-                self.remove_prefilter(func_name=None, _new_ctx=False)
+                self._remove_prefilter(None, False)
             if self.schunk.storage.dparams.postfilter != NULL:
-                self.remove_postfilter(func_name=None, _new_ctx=False)
+                self._remove_postfilter(None, False)
 
             # Free the C-Blosc2 super-chunk with the GIL held so threadpool
             # teardown cannot race with active miniexpr workers.
@@ -2820,7 +3023,9 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             continue
 
         ndarr = udata.inputs[i]
-        if ndarr.sc.storage.urlpath == NULL:
+        # sc.data only holds the chunks of in-memory super-chunks that are not frames
+        # (contiguous=True or from a cframe); read frames through blosc2_schunk_get_chunk()
+        if ndarr.sc.storage.urlpath == NULL and ndarr.sc.frame == NULL:
             src = ndarr.sc.data[nchunk]
         else:
             input_cache = &udata.input_chunk_caches[i]
@@ -3320,6 +3525,13 @@ cdef class vlmeta:
     def __init__(self, schunk):
         self.schunk = <blosc2_schunk*> <uintptr_t>schunk
 
+    @property
+    def _handle_lock(self):
+        # Looked up on every call: an NDArray swaps its own lock into the owning SChunk after
+        # that SChunk (and this object) were created
+        return self._owner._handle_lock
+
+    @_handle_locked
     def set_vlmeta(self, name, content, **cparams):
         cdef blosc2_cparams ccparams
         create_cparams_from_kwargs(&ccparams, cparams)
@@ -3335,6 +3547,7 @@ cdef class vlmeta:
         if rc < 0:
             raise RuntimeError
 
+    @_handle_locked
     def get_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
         rc = blosc2_vlmeta_exists(self.schunk, name)
@@ -3348,15 +3561,18 @@ cdef class vlmeta:
             raise RuntimeError
         return content[:content_len]
 
+    @_handle_locked
     def del_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
         rc = blosc2_vlmeta_delete(self.schunk, name)
         if rc < 0:
             raise RuntimeError("Could not delete the vlmeta")
 
+    @_handle_locked
     def nvlmetalayers(self):
         return self.schunk.nvlmetalayers
 
+    @_handle_locked
     def get_names(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char *))
         rc = blosc2_vlmeta_get_names(self.schunk, names)
@@ -3365,6 +3581,7 @@ cdef class vlmeta:
         res = [names[i].decode("utf-8") for i in range(rc)]
         return res
 
+    @_handle_locked
     def to_dict(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char*))
         rc = blosc2_vlmeta_get_names(self.schunk, names)
@@ -3376,12 +3593,14 @@ cdef class vlmeta:
         return res
 
 
+@_handle_locked
 def meta__contains__(self, name):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     name = name.encode("utf-8") if isinstance(name, str) else name
     n = blosc2_meta_exists(schunk, name)
     return False if n < 0 else True
 
+@_handle_locked
 def meta__getitem__(self, name):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     name = name.encode("utf-8") if isinstance(name, str) else name
@@ -3393,6 +3612,7 @@ def meta__getitem__(self, name):
 
     return res
 
+@_handle_locked
 def meta__setitem__(self, name, content):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     name = name.encode("utf-8") if isinstance(name, str) else name
@@ -3401,10 +3621,12 @@ def meta__setitem__(self, name, content):
         raise ValueError("The length of the content in a metalayer cannot change.")
     blosc2_meta_update(schunk, name, content, len(content))
 
+@_handle_locked
 def meta__len__(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     return schunk.nmetalayers
 
+@_handle_locked
 def meta_keys(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     keys = []
@@ -3549,6 +3771,44 @@ cdef schunk_is_ndarray(blosc2_schunk* schunk):
     return blosc2_meta_exists(schunk, meta) >= 0
 
 
+cdef struct cframe_dest:
+    PyObject* out
+    c_bool alloc_failed
+
+
+cdef uint8_t* cframe_alloc(int64_t length, void* user_data) noexcept with gil:
+    # The bytes object that to_cframe() returns, for the frame to be written into
+    cdef cframe_dest* dest = <cframe_dest*> user_data
+    try:
+        out = PyBytes_FromStringAndSize(NULL, length)
+    except MemoryError:
+        dest.alloc_failed = True
+        return NULL
+    Py_INCREF(out)
+    dest.out = <PyObject*> out
+    return <uint8_t*> PyBytes_AsString(out)
+
+
+cdef schunk_to_cframe(blosc2_schunk* schunk, c_bool release_gil):
+    """Serialize `schunk` straight into a new bytes object (a cframe)."""
+    cdef cframe_dest dest
+    dest.out = NULL
+    dest.alloc_failed = False
+    cdef int64_t cframe_len
+    if release_gil:
+        with nogil:
+            cframe_len = blosc2_schunk_to_buffer_alloc(schunk, cframe_alloc, &dest)
+    else:
+        cframe_len = blosc2_schunk_to_buffer_alloc(schunk, cframe_alloc, &dest)
+    out = <object> dest.out if dest.out != NULL else None
+    Py_XDECREF(dest.out)
+    if dest.alloc_failed:
+        raise MemoryError()
+    if cframe_len < 0:
+        raise RuntimeError("Error while getting the cframe")
+    return out
+
+
 def schunk_from_cframe(cframe, copy=False):
     cdef Py_buffer buf
     PyObject_GetBuffer(cframe, &buf, PyBUF_SIMPLE)
@@ -3631,12 +3891,21 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     else:
         codec.decoder = <blosc2_codec_decoder_cb> general_decoder
 
-    rc = blosc2_register_codec(&codec)
-    if rc < 0:
-        raise RuntimeError("Error while registering codec")
+    # A slice read that found no Python codec could otherwise meet `decoder` without the GIL: keep
+    # new reads from releasing it and wait for those that did.  Nothing below releases the GIL
+    # before the registry is updated.
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    try:
+        _wait_for_nogil_reads()
+        rc = blosc2_register_codec(&codec)
+        if rc < 0:
+            raise RuntimeError("Error while registering codec")
 
-    if encoder and decoder:
-        blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+        if encoder and decoder:
+            blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+    finally:
+        _nogil_reads_blocked -= 1
 
 
 cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,
@@ -3698,11 +3967,18 @@ def register_filter(id, forward, backward, filter_name):
         filter.name = <char *> malloc(strlen(filter_name_) + 1)
         strcpy(filter.name, filter_name_)
 
-    rc = blosc2_register_filter(&filter)
-    if rc < 0:
-        raise RuntimeError("Error while registering filter")
-    if forward and backward:
-        blosc2.ufilters_registry[id] = (forward, backward)
+    # As in register_codec()
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    try:
+        _wait_for_nogil_reads()
+        rc = blosc2_register_filter(&filter)
+        if rc < 0:
+            raise RuntimeError("Error while registering filter")
+        if forward and backward:
+            blosc2.ufilters_registry[id] = (forward, backward)
+    finally:
+        _nogil_reads_blocked -= 1
 
 cdef _check_rc(rc, message):
     if rc < 0:
@@ -3814,24 +4090,52 @@ cdef class slice_flatter:
                 self.done = 1
 
 
+cdef c_bool _can_release_gil(blosc2_schunk *sc) except? False:
+    """Whether decompressing from `sc` may run without the GIL, i.e. no Python callback can run on
+    the way: no postfilter on its decompression context and no codec or filter registered from
+    Python (any chunk could use one, whatever the super-chunk's own cparams say).  Never on wasm32,
+    where releasing the GIL is known to give wrong results (see blosc2.set_releasegil), nor while
+    _wait_for_nogil_reads() callers need the reads to stop."""
+    if _nogil_reads_blocked or blosc2.IS_WASM or blosc2.ucodecs_registry or blosc2.ufilters_registry:
+        return False
+    cdef blosc2_dparams dparams
+    if sc.dctx == NULL or blosc2_ctx_get_dparams(sc.dctx, &dparams) < 0:
+        return False
+    return dparams.postfilter == NULL
+
+
+# Kinds of key items in NDArray.get_basic_numpy() and get_basic_start_stop()
+cdef enum:
+    _KEY_INT
+    _KEY_SLICE
+    _KEY_NEWAXIS
+    _KEY_ELLIPSIS
+    _MAX_BASIC_KEY = 64  # longer keys (only possible with many None) take the general path
+    _BASIC_READ_ATTEMPTS = 3
+
+cdef object _np_integer = np.integer
+
+
 cdef class NDArray:
     cdef b2nd_array_t* array
-    cdef PyThread_type_lock read_lock
-    cdef c_bool owns_read_lock
+    cdef readonly object _handle_lock
 
     def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
         self.base = base # add reference to base if NDArray is a view
-        if base is None:
-            self.read_lock = PyThread_allocate_lock()
-            if self.read_lock == NULL:
-                raise MemoryError("Could not allocate NDArray read lock")
-            self.owns_read_lock = True
+        # One handle lock per C super-chunk (see _handle_locked): expand_dims/squeeze views share
+        # their base's, and the SChunk wrapper over the same super-chunk (blosc2.NDArray._schunk,
+        # created before this runs) is switched to it.
+        schunk = getattr(self, "_schunk", None)
+        if base is not None:
+            self._handle_lock = (<NDArray?>base)._handle_lock
+        elif schunk is not None:
+            self._handle_lock = (<SChunk?>schunk)._handle_lock
         else:
-            # expand_dims/squeeze views share the base SChunk, so reads through
-            # all aliases must be protected by the same lock.
-            self.read_lock = (<NDArray>base).read_lock
+            self._handle_lock = _new_handle_lock()
+        if schunk is not None:
+            (<SChunk?>schunk)._handle_lock = self._handle_lock
 
     @property
     def c_array(self):
@@ -3892,29 +4196,237 @@ cdef class NDArray:
         start, stop = key
 
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
-        cdef int64_t[B2ND_MAX_DIM] buffershape_
+        cdef int rc
         for i in range(self.ndim):
             start_[i] = start[i]
             stop_[i] = stop[i]
-            buffershape_[i] = stop_[i] - start_[i]
-
-        cdef Py_buffer view
-        cdef int rc
-        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
-        # Waiting for a reader already using this SChunk must not retain the
-        # GIL: that reader can need the GIL again from a Python postfilter.
-        with nogil:
-            PyThread_acquire_lock(self.read_lock, 1)
-        try:
-            rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                        <void *> view.buf, buffershape_, view.len)
-        finally:
-            PyThread_release_lock(self.read_lock)
-        PyBuffer_Release(&view)
+        # Waiting for the lock releases the GIL (RLock does that), so a holder that needs the
+        # GIL back, e.g. for a Python postfilter, can finish.
+        with self._handle_lock:
+            rc = self._get_slice_cbuffer(arr, start_, stop_)
         _check_rc(rc, "Error while getting the buffer")
 
         return arr
 
+    cdef Py_ssize_t _classify_basic_key(self, tuple items, char *kinds, int64_t *ints, Py_ssize_t *starts,
+                                        Py_ssize_t *stops, c_bool setitem=False) except -2:
+        """First pass of get_basic_numpy() and get_basic_start_stop() (`setitem`): classify the
+        key items without looking at the shape.
+
+        Fill kinds, ints, starts and stops (_MAX_BASIC_KEY entries) and return the number of
+        items that index a dimension, or -1 if the key is not a basic one (or has too many).
+        """
+        cdef Py_ssize_t nkey = len(items)
+        if nkey > _MAX_BASIC_KEY:
+            return -1
+        cdef Py_ssize_t i, step, nidx = 0
+        cdef c_bool ellipsis = False
+        for i in range(nkey):
+            k = items[i]
+            if k is None:
+                if setitem:
+                    return -1
+                kinds[i] = _KEY_NEWAXIS
+            elif PySlice_Check(k):
+                try:
+                    PySlice_Unpack(k, &starts[i], &stops[i], &step)
+                except Exception:
+                    return -1
+                if step != 1:
+                    return -1
+                # __setitem__'s general path rejects some bool steps and bounds clamped by
+                # PySlice_Unpack (beyond the index range): leave them all to it
+                if setitem and (
+                    PyBool_Check(k.step)
+                    or starts[i] in (PY_SSIZE_T_MIN, PY_SSIZE_T_MAX)
+                    or stops[i] == PY_SSIZE_T_MIN
+                    or (stops[i] == PY_SSIZE_T_MAX and k.stop is not None)
+                ):
+                    return -1
+                kinds[i] = _KEY_SLICE
+                nidx += 1
+            elif k is Ellipsis:
+                if ellipsis:
+                    return -1
+                ellipsis = True
+                kinds[i] = _KEY_ELLIPSIS
+            # NumPy integers without __index__ (timedelta64) are no index for NumPy either
+            elif (PyLong_Check(k) and not PyBool_Check(k)) or (
+                isinstance(k, _np_integer) and PyIndex_Check(k)
+            ):
+                try:
+                    ints[i] = k
+                except Exception:  # e.g. beyond int64
+                    return -1
+                kinds[i] = _KEY_INT
+                nidx += 1
+            else:
+                return -1
+        return nidx if nidx <= self.array.ndim else -1
+
+    def get_basic_start_stop(self, key):
+        """Resolve a basic index key without None for __setitem__, else return None.
+
+        For keys made of integers (Python or NumPy, not bools), slices with unit
+        step and Ellipsis, follow shape changes made by another handle (SWMR) and
+        return ``(start, stop, int_mask)``: the region as lists and which dimensions
+        are indexed with an integer.  Any other key, or one that does not fit the
+        shape, gives None (the general path then raises the appropriate exception).
+        """
+        cdef tuple items = key if type(key) is tuple else (key,)
+        cdef Py_ssize_t nkey = len(items)
+        cdef char[_MAX_BASIC_KEY] kinds
+        cdef int64_t[_MAX_BASIC_KEY] ints
+        cdef Py_ssize_t[_MAX_BASIC_KEY] starts, stops
+        cdef Py_ssize_t nidx = self._classify_basic_key(items, kinds, ints, starts, stops, True)
+        if nidx < 0:
+            return None
+        cdef int64_t[B2ND_MAX_DIM] start_, stop_
+        cdef c_bool[B2ND_MAX_DIM] int_dims
+        with self._handle_lock:
+            _check_rc(b2nd_refresh(self.array), "Error while refreshing the array")
+            out_shape = self._resolve_basic_key(nkey, kinds, ints, starts, stops, nidx, start_, stop_,
+                                                int_dims)
+            if out_shape is None:
+                return None
+        cdef int ndim = self.array.ndim, j
+        return ([start_[j] for j in range(ndim)], [stop_[j] for j in range(ndim)],
+                tuple([int_dims[j] for j in range(ndim)]))
+
+    def get_basic_numpy(self, key):
+        """Return ``self[key]`` as a NumPy array if *key* is a basic index, else None.
+
+        Only keys made of integers (Python or NumPy, not bools), slices with unit
+        step, Ellipsis and None are handled here, after following shape changes
+        made by another handle (SWMR).  Any other key, and any key that is out of
+        range or otherwise invalid, gives None, so that the caller can use the
+        general indexing path, which also raises the appropriate exception.
+        """
+        cdef tuple items = key if type(key) is tuple else (key,)
+        cdef Py_ssize_t nkey = len(items)
+        cdef char[_MAX_BASIC_KEY] kinds
+        cdef int64_t[_MAX_BASIC_KEY] ints
+        cdef Py_ssize_t[_MAX_BASIC_KEY] starts, stops
+        cdef Py_ssize_t nidx = self._classify_basic_key(items, kinds, ints, starts, stops)
+        if nidx < 0:
+            return None
+
+        cdef int64_t[B2ND_MAX_DIM] start_, stop_
+        cdef int64_t tick
+        cdef int rc, attempt
+        with self._handle_lock:
+            # The read itself follows shape changes made by another handle (SWMR) before reading,
+            # so a key resolved against the cached shape is right if the read did not find any.
+            # This saves a second check of the file per read.  Otherwise (or if the key does not
+            # fit the cached shape, or the read failed) follow the changes first and try again;
+            # another handle can change the shape once more meanwhile, hence a few attempts.
+            for attempt in range(_BASIC_READ_ATTEMPTS):
+                if attempt > 0:
+                    _check_rc(b2nd_refresh(self.array), "Error while refreshing the array")
+                tick = self.array.last_tick
+                out_shape = self._resolve_basic_key(nkey, kinds, ints, starts, stops, nidx, start_, stop_)
+                if out_shape is None:
+                    if attempt > 0:
+                        return None
+                    continue
+                arr = np.empty(out_shape, dtype=self.dtype)
+                rc = self._get_slice_cbuffer(arr, start_, stop_)
+                if rc >= 0 and self.array.last_tick == tick:
+                    return arr
+        # Out of attempts: as the general path, return what the last read gave
+        _check_rc(rc, "Error while getting the buffer")
+        return arr
+
+    cdef _resolve_basic_key(self, Py_ssize_t nkey, const char *kinds, const int64_t *ints,
+                            const Py_ssize_t *starts, const Py_ssize_t *stops, Py_ssize_t nidx,
+                            int64_t *start_, int64_t *stop_, c_bool *int_dims=NULL):
+        """Resolve a key classified by _classify_basic_key() against the cached shape.
+
+        Fill start_ and stop_ (and int_dims, which dimensions are indexed with an integer, if
+        given) and return the shape of the result, or None if the key does not fit the shape.
+        """
+        cdef int64_t n, idx
+        cdef Py_ssize_t i, start, stop
+        cdef int dim = 0
+        out_shape = []
+        for i in range(nkey):
+            if kinds[i] == _KEY_NEWAXIS:
+                out_shape.append(1)
+                continue
+            if kinds[i] == _KEY_ELLIPSIS:
+                dim = self._whole_dims(dim, self.array.ndim - nidx, start_, stop_, int_dims, out_shape)
+                continue
+            n = self.array.shape[dim]
+            if kinds[i] == _KEY_INT:
+                idx = ints[i]
+                if idx < 0:
+                    idx += n
+                if idx < 0 or idx >= n:
+                    return None
+                start_[dim] = idx
+                stop_[dim] = idx + 1
+            else:
+                if n > PY_SSIZE_T_MAX:
+                    return None
+                start = starts[i]
+                stop = stops[i]
+                PySlice_AdjustIndices(<Py_ssize_t> n, &start, &stop, 1)
+                if start >= stop:
+                    start = stop = 0
+                start_[dim] = start
+                stop_[dim] = stop
+                out_shape.append(stop - start)
+            if int_dims != NULL:
+                int_dims[dim] = kinds[i] == _KEY_INT
+            dim += 1
+        # The dimensions after the key (none if it has an ellipsis)
+        self._whole_dims(dim, self.array.ndim - dim, start_, stop_, int_dims, out_shape)
+        return out_shape
+
+    cdef int _whole_dims(self, int dim, int count, int64_t *start_, int64_t *stop_, c_bool *int_dims,
+                         list out_shape):
+        """Select `count` whole dimensions from `dim` on for _resolve_basic_key(); return the next."""
+        cdef int64_t n
+        cdef int j
+        for j in range(count):
+            n = self.array.shape[dim]
+            start_[dim] = 0
+            stop_[dim] = n
+            if int_dims != NULL:
+                int_dims[dim] = False
+            out_shape.append(n)
+            dim += 1
+        return dim
+
+    cdef int _get_slice_cbuffer(self, arr, int64_t *start_, int64_t *stop_) except? -9999:
+        # The caller holds self._handle_lock; returns the rc of b2nd_get_slice_cbuffer()
+        global _nogil_reads
+        cdef int64_t[B2ND_MAX_DIM] buffershape_
+        cdef int i
+        for i in range(self.array.ndim):
+            buffershape_[i] = stop_[i] - start_[i]
+
+        cdef Py_buffer view
+        cdef int rc = 0
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        try:
+            # Decompress without the GIL, so that threads reading other arrays (or other handles
+            # of the same file) run in parallel; everything else that uses this super-chunk
+            # holds the lock meanwhile.
+            if _can_release_gil(self.array.sc):
+                _nogil_reads += 1
+                with nogil:
+                    rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                                <void *> view.buf, buffershape_, view.len)
+                _nogil_reads -= 1
+            else:
+                rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                            <void *> view.buf, buffershape_, view.len)
+        finally:
+            PyBuffer_Release(&view)
+        return rc
+
+    @_handle_locked
     def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
         if self.ndim != 1:
             raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
@@ -3997,6 +4509,7 @@ cdef class NDArray:
 
         return arr
 
+    @_handle_locked
     def get_sparse_numpy(self, arr, coords):
         cdef np.ndarray[np.int64_t, ndim=1, mode="c"] coords_ = np.ascontiguousarray(coords, dtype=np.int64)
         cdef Py_buffer view
@@ -4014,6 +4527,7 @@ cdef class NDArray:
         _check_rc(rc, "Error while getting the sparse selection")
         return arr
 
+    @_handle_locked
     def get_oindex_numpy(self, arr, key):
         """
         Orthogonal indexing. Key is a tuple of lists of integer indices.
@@ -4046,6 +4560,7 @@ cdef class NDArray:
         free(key_)
         return arr
 
+    @_handle_locked
     def set_oindex_numpy(self, key, arr):
         """
         Orthogonal indexing. Set elements of self with arr using key.
@@ -4079,6 +4594,7 @@ cdef class NDArray:
         return arr
 
 
+    @_handle_locked
     def get_slice(self, key, mask, **kwargs):
         start, stop = key
         shape = tuple(sp - st for sp, st in zip(stop, start))
@@ -4120,6 +4636,7 @@ cdef class NDArray:
 
         return ndarray
 
+    @_handle_locked
     def set_slice(self, key, ndarray):
         ndim = self.ndim
         start, stop = key
@@ -4138,6 +4655,7 @@ cdef class NDArray:
 
         return self
 
+    @_handle_locked
     def tobytes(self):
         buffersize = self.size * self.array.sc.typesize
         buffer = bytes(buffersize)
@@ -4146,20 +4664,11 @@ cdef class NDArray:
 
         return buffer
 
+    @_handle_locked
     def to_cframe(self):
-        cdef c_bool needs_free
-        cdef uint8_t *cframe
-        cdef int64_t cframe_len;
-        cdef int rc;
-        rc = b2nd_to_cframe(self.array, &cframe, &cframe_len, &needs_free)
-        if rc < 0:
-            raise RuntimeError("Error while getting the cframe")
-        out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
-        if needs_free:
-            free(cframe)
+        return schunk_to_cframe(self.array.sc, False)
 
-        return out
-
+    @_handle_locked
     def copy(self, dtype, **kwargs):
         chunks = kwargs.pop("chunks", self.chunks)
         blocks = kwargs.pop("blocks", self.blocks)
@@ -4180,6 +4689,7 @@ cdef class NDArray:
 
         return ndarray
 
+    @_handle_locked
     def resize(self, new_shape):
         cdef int64_t new_shape_[B2ND_MAX_DIM]
         for i, s in enumerate(new_shape):
@@ -4187,6 +4697,7 @@ cdef class NDArray:
         _check_rc(b2nd_resize(self.array, new_shape_, NULL),
                   "Error while resizing the array")
 
+    @_handle_locked
     def refresh(self):
         cdef int rc = b2nd_refresh(self.array)
         _check_rc(rc, "Error while refreshing the array")
@@ -4356,6 +4867,7 @@ cdef class NDArray:
 
         return udata
 
+    @_handle_locked
     def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None,
                        candidate_blocks=None):
         # Set prefilter for miniexpr
@@ -4538,7 +5050,15 @@ cdef class NDArray:
             "status": _me_compile_status_name(rc),
         }
 
+    @_handle_locked
     def _set_pref_matmul(self, inputs, fp_accuracy):
+        cdef b2nd_array_t* operand
+        for name in ("x1", "x2"):
+            operand = <b2nd_array_t*><uintptr_t>inputs[name].c_array
+            # aux_matmul() reads the chunks from sc.data, which frames (on disk, or in memory
+            # with contiguous=True) do not fill
+            if operand.sc.frame != NULL:
+                raise ValueError("The fast matmul path does not support frame-backed operands")
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> matmul_prefilter
@@ -4558,6 +5078,7 @@ cdef class NDArray:
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    @_handle_locked
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -4580,6 +5101,7 @@ cdef class NDArray:
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    @_handle_locked
     def _set_postf_udf(self, func, inputs_id):
         if self.array.sc.storage.dparams.nthreads > 1:
             raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
@@ -4608,8 +5130,6 @@ cdef class NDArray:
     def __dealloc__(self):
         if self.array != NULL:
             _check_rc(b2nd_free(self.array), "Error while freeing the array")
-        if self.owns_read_lock and self.read_lock != NULL:
-            PyThread_free_lock(self.read_lock)
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
@@ -4859,6 +5379,7 @@ def ndarray_from_cframe(cframe, copy=False):
     return ndarray
 
 
+@_handle_locked
 def array_get_slice_nchunks(array: NDArray, key):
     start, stop = key
     cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -4875,6 +5396,7 @@ def array_get_slice_nchunks(array: NDArray, key):
     return res
 
 
+@_handle_locked
 def schunk_get_slice_nchunks(schunk: SChunk, key):
     start, stop = key
     nitems = schunk.nbytes // schunk.typesize
@@ -4904,8 +5426,10 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
         raise RuntimeError("Error while creating the context for concatenation")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array),
-              "Error while concatenating the arrays")
+    cdef int rc = 0
+    with HandleLocks((arr1, arr2)):
+        rc = b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array)
+    _check_rc(rc, "Error while concatenating the arrays")
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
     if copy:
@@ -4916,6 +5440,7 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
         # Return the first array, which now contains the concatenated data
         return arr1
 
+@_handle_locked
 def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2.NDArray:
     """
     Add new dummy axis to NDArray object at specified dimension.
@@ -4933,6 +5458,7 @@ def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
                           _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)
 
+@_handle_locked
 def squeeze(arr1: NDArray, axis_mask: list[bool]) -> blosc2.NDArray:
     """
     Remove axis from NDArray object at specified dimensions.

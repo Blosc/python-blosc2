@@ -189,3 +189,29 @@ def test_cross_process_growth_hammer(tmp_path):
 
     assert writer.returncode == 0, f"writer process failed with exit code {writer.returncode}"
     assert seen > 0
+
+
+@pytest.mark.parametrize(
+    "key", [15, -1, slice(None), slice(-12, None), (Ellipsis, 3), (None, slice(8, 13)), (np.int64(19), 2)]
+)
+def test_reader_basic_keys_follow_resize(tmp_path, key):
+    # Keys are resolved against the shape another handle just set (getitem's fast path)
+    urlpath = tmp_path / "keys.b2nd"
+    w = create_array(urlpath)
+    w[:] = np.arange(100, dtype=DTYPE).reshape(10, 10)
+    r = blosc2.open(str(urlpath))
+    _ = r[0]
+
+    w.resize((20, 10))
+    w[10:20] = np.arange(100, 200, dtype=DTYPE).reshape(10, 10)
+    np.testing.assert_array_equal(r[key], np.arange(200, dtype=DTYPE).reshape(20, 10)[key])
+
+    w.resize((5, 10))
+    expected = np.arange(50, dtype=DTYPE).reshape(5, 10)
+    try:
+        want = expected[key]
+    except IndexError:
+        with pytest.raises(IndexError):
+            r[key]
+    else:
+        np.testing.assert_array_equal(r[key], want)

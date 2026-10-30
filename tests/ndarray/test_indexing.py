@@ -1886,6 +1886,37 @@ def test_invalidation_on_mark_indexes_stale(tmp_path):
     assert indexing._HOT_CACHE_BYTES == 0
 
 
+def test_setitem_without_indexes_skips_index_store(tmp_path, monkeypatch):
+    # Loading the store costs realpath() and stat() calls on the file for every write, and on
+    # NFS each stat() first pushes the writes still buffered for that file to the server
+    _clear_caches()
+    urlpath = str(tmp_path / "plain.b2nd")
+    arr = blosc2.zeros(1_000, dtype=np.int64, chunks=(250,), blocks=(50,), urlpath=urlpath, mode="w")
+
+    def fail_load_store(array):
+        raise AssertionError("an unindexed array has no store to load")
+
+    monkeypatch.setattr(indexing, "_load_store", fail_load_store)
+    arr[:3] = -1
+    arr[10:20] = 7
+    np.testing.assert_array_equal(arr[:3], np.full(3, -1, dtype=np.int64))
+    np.testing.assert_array_equal(arr[10:20], np.full(10, 7, dtype=np.int64))
+
+
+def test_setitem_marks_on_disk_index_stale_with_cold_caches(tmp_path):
+    # The index is only known from the file's vlmeta here, not from any in-process cache
+    arr, urlpath = _make_scalar_persistent_array(tmp_path)
+    del arr
+    _clear_caches()
+
+    arr = blosc2.open(urlpath, mode="a")
+    arr[:3] = -1
+    assert arr.indexes[0]["stale"] is True
+    del arr
+    _clear_caches()
+    assert blosc2.open(urlpath, mode="r").indexes[0]["stale"] is True
+
+
 def test_invalidation_on_append(tmp_path):
     arr, _ = _make_persistent_array(tmp_path)
     _clear_caches()
