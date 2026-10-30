@@ -2586,6 +2586,18 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not unlock the super-chunk frame")
 
+    @property
+    def _locks_frame(self):
+        """Whether operations take the cross-process frame lock: on disk with the default I/O, and
+        `locking` or the BLOSC_LOCKING environment variable set (what C-Blosc2 checks when it
+        opens the frame)."""
+        cdef blosc2_storage *storage = self.schunk.storage
+        if storage.urlpath == NULL or storage.io == NULL or storage.io.id != BLOSC2_IO_FILESYSTEM:
+            return False
+        if storage.io.params != NULL and (<blosc2_stdio_params *> storage.io.params).locking:
+            return True
+        return os.environ.get("BLOSC_LOCKING", "") not in ("", "0")
+
     @_handle_locked
     def refresh(self):
         cdef int rc = blosc2_schunk_refresh(self.schunk)

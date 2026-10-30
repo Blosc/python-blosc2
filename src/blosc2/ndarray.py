@@ -11,6 +11,7 @@ import builtins
 import itertools
 import math
 import operator
+import os
 import sys
 import weakref
 from abc import abstractmethod
@@ -39,6 +40,7 @@ from blosc2.schunk import SChunk
 
 from .linalg import matmul
 from .utils import (
+    chunk_flat_index,
     get_chunks_idx,
     get_local_slice,
     get_selection,
@@ -3778,38 +3780,14 @@ def detect_aligned_chunks(
         if s.stop is not None and s.stop % chunks[i] != 0:
             return []
 
-    # Parse the slice boundaries
-    start_indices = []
-    end_indices = []
-    n_chunks = []
-
-    for i, s in enumerate(key):
-        start = s.start if s.start is not None else 0
-        stop = s.stop if s.stop is not None else shape[i]
-        chunk_size = chunks[i]
-        start_idx = start // chunk_size
-        end_idx = stop // chunk_size
-        start_indices.append(start_idx)
-        end_indices.append(end_idx)
-        # Total chunk count along this dim: ceil, not floor -- a trailing
-        # partial chunk (shape[i] not a multiple of chunk_size) still counts
-        # as one chunk. Floor division here undercounts it, which corrupts
-        # the flat chunk-index math below for any aligned slice with a
-        # nonzero start in an earlier dimension (silently returns a
-        # different chunk's data instead of the requested one).
-        n_chunks.append(math.ceil(shape[i] / chunk_size))
-
     # Get all chunk combinations in the slice
-    indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
-    result = []
-
-    for combination in product(*indices):
-        flat_index = 0
-        multiplier = 1
-        for idx, n in zip(reversed(range(len(n_chunks))), reversed(n_chunks), strict=False):
-            flat_index += combination[idx] * multiplier
-            multiplier *= n
-        result.append(flat_index)
+    indices = []
+    for s, n, c in zip(key, shape, chunks, strict=True):
+        start = s.start if s.start is not None else 0
+        stop = s.stop if s.stop is not None else n
+        indices.append(range(start // c, stop // c))
+    grid, _ = get_chunks_idx(shape, chunks)
+    result = [chunk_flat_index(combination, grid) for combination in product(*indices)]
 
     # Check if chunks are consecutive if requested
     if consecutive and result:
@@ -3823,6 +3801,173 @@ def detect_aligned_chunks(
                 return []
 
     return sorted(result)
+
+
+_LOSSLESS_CODECS = frozenset(
+    (blosc2.Codec.BLOSCLZ, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC, blosc2.Codec.ZLIB, blosc2.Codec.ZSTD)
+)
+_LOSSLESS_FILTERS = frozenset(
+    (
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.SHUFFLE,
+        blosc2.Filter.BITSHUFFLE,
+        blosc2.Filter.DELTA,
+        blosc2.Filter.BYTEDELTA,
+    )
+)
+
+
+def _is_lossless(cparams: blosc2.CParams) -> bool:
+    """Whether compressing with *cparams* gives back exactly the input (no lossy codec or filter)."""
+    return (
+        cparams.codec in _LOSSLESS_CODECS
+        and builtins.all(f in _LOSSLESS_FILTERS for f in cparams.filters)
+        and not cparams.use_dict
+    )
+
+
+_CHUNK_ENCODING = (
+    "codec",
+    "codec_meta",
+    "clevel",
+    "use_dict",
+    "typesize",
+    "blocksize",
+    "splitmode",
+    "filters",
+    "filters_meta",
+)
+
+
+def _chunks_interchangeable(dst: NDArray, src: NDArray) -> bool:
+    """Whether the compressed chunks of `src` can stand for those of `dst` (and vice versa): they
+    lay out the same items the same way (dtype, chunks, blocks) and encode them the same lossless
+    way."""
+    if src.dtype != dst.dtype or src.chunks != dst.chunks or src.blocks != dst.blocks:
+        return False
+    a, b = dst.cparams, src.cparams
+    return _is_lossless(a) and builtins.all(getattr(a, f) == getattr(b, f) for f in _CHUNK_ENCODING)
+
+
+def _resolved_urlpath(a: NDArray, path: str) -> str:
+    """`path`, the urlpath of `a`, with symlinks resolved.  Cached per handle: resolving costs one
+    lstat per path component, and on NFS one of the file itself also flushes its dirty pages."""
+    cached = a.__dict__.get("_resolved_urlpath")
+    if cached is None or cached[0] != path:
+        cached = a._resolved_urlpath = (path, os.path.realpath(path))
+    return cached[1]
+
+
+def _same_storage(a: NDArray, b: NDArray) -> bool:
+    """Whether two arrays may share their data (the same super-chunk, or the same file)."""
+    if a._handle_lock is b._handle_lock:  # one lock per C super-chunk, shared by views
+        return True
+    pa, pb = a.schunk.urlpath, b.schunk.urlpath
+    if not (isinstance(pa, str) and isinstance(pb, str)):
+        return False
+    return pa == pb or _resolved_urlpath(a, pa) == _resolved_urlpath(b, pb)
+
+
+# Upper bound for the temporary buffers of chunk-wise writes (unless a single chunk is larger)
+_CHUNKWISE_MAX_NBYTES = 32 * 2**20
+
+
+def _region_boxes(
+    shape, chunks, start, stop, max_items, split_covered=False, reverse=False, split_edges=True
+):
+    """Split the non-empty region ``[start, stop)`` along chunk boundaries into boxes.
+
+    Yields ``(lo, hi, nchunk)``.  Boxes hold at most `max_items` items (or one chunk, when that is
+    larger), so that writing each with one ``set_slice`` keeps memory bounded while staying with
+    few calls (every call costs some frame I/O on disk).  With `split_covered`, a chunk the region
+    fully covers is always yielded alone, with its index in `nchunk` (None otherwise); an edge
+    chunk (one with padding beyond the shape) only with `split_edges`.  Boxes come in C order, or
+    the reverse one.
+    """
+    ndim = len(shape)
+    grid, _ = get_chunks_idx(shape, chunks)
+    strides = [math.prod(grid[d + 1 :]) for d in range(ndim)]  # of the chunk indices
+
+    def covers_a_chunk(lo, hi):
+        for s, c, l_, h in zip(shape, chunks, lo, hi, strict=True):
+            i = -(-l_ // c)  # first chunk starting inside the box
+            end = builtins.min((i + 1) * c, s) if split_edges else (i + 1) * c
+            if i * c >= h or end > h:
+                return False
+        return True
+
+    def whole_chunks(lo, hi):
+        """The chunks of a box made of whole chunks, in the order in which visit() splits it."""
+        ranges = [range(l_ // c, -(-h // c)) for l_, h, c in zip(lo, hi, chunks, strict=True)]
+        if reverse:
+            ranges = [r[::-1] for r in ranges]
+        los = [[i * c for i in r] for r, c in zip(ranges, chunks, strict=True)]
+        his = [
+            [builtins.min((i + 1) * c, s) for i in r] for r, c, s in zip(ranges, chunks, shape, strict=True)
+        ]
+        offsets = [[i * st for i in r] for r, st in zip(ranges, strides, strict=True)]
+        return zip(product(*los), product(*his), map(builtins.sum, product(*offsets)), strict=True)
+
+    def visit(lo, hi):
+        covered = split_covered and covers_a_chunk(lo, hi)
+        nitems = math.prod(h - l_ for l_, h in zip(lo, hi, strict=True))
+        if not covered and nitems <= max_items:
+            yield lo, hi, None
+            return
+        d = next((d for d in range(ndim) if lo[d] // chunks[d] != (hi[d] - 1) // chunks[d]), None)
+        if d is None:  # a single chunk
+            nchunk = None
+            if covered:
+                nchunk = chunk_flat_index([l_ // c for l_, c in zip(lo, chunks, strict=True)], grid)
+            yield lo, hi, nchunk
+            return
+        if covered and builtins.all(
+            l_ % c == 0 and (h % c == 0 or (split_edges and h == s))
+            for l_, h, c, s in zip(lo, hi, chunks, shape, strict=True)
+        ):
+            yield from whole_chunks(lo, hi)
+            return
+        c = chunks[d]
+        # Slabs as thick as the budget allows; covered chunks have to be isolated one by one
+        step = 1 if covered else builtins.max(1, max_items // (nitems // (hi[d] - lo[d]) * c))
+        idx = range(lo[d] // c, (hi[d] - 1) // c + 1, step)
+        for i in reversed(idx) if reverse else idx:
+            sub_lo = lo[:d] + (builtins.max(lo[d], i * c),) + lo[d + 1 :]
+            sub_hi = hi[:d] + (builtins.min(hi[d], (i + step) * c),) + hi[d + 1 :]
+            yield from visit(sub_lo, sub_hi)
+
+    yield from visit(tuple(start), tuple(stop))
+
+
+def _chunkwise_plan(
+    shape,
+    chunks,
+    start,
+    stop,
+    itemsize,
+    split_covered,
+    reverse=False,
+    buffer_covered=False,
+    split_edges=True,
+):
+    """Plan writing the region ``[start, stop)`` box by box, with boxes of at most
+    _CHUNKWISE_MAX_NBYTES of `itemsize`-byte items (or one chunk, when that is larger).
+
+    Returns the boxes from _region_boxes as ``(lo, hi, nchunk, nitems)``, and the largest
+    `nitems` of the boxes that are written from a buffer: all of them with `buffer_covered`, else
+    all but the covered chunks (`nchunk` not None), whose `nitems` is left out (None).
+    """
+    max_items = builtins.max(math.prod(chunks), _CHUNKWISE_MAX_NBYTES // itemsize)
+    boxes, buf_items = [], 0
+    for lo, hi, nchunk in _region_boxes(
+        shape, chunks, start, stop, max_items, split_covered, reverse, split_edges
+    ):
+        n = None
+        if nchunk is None or buffer_covered:
+            n = math.prod(map(operator.sub, hi, lo))
+            buf_items = builtins.max(buf_items, n)
+        boxes.append((lo, hi, nchunk, n))
+    return boxes, buf_items
 
 
 class NDOuterIterator:
@@ -4819,7 +4964,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         self._last_read.clear()
         self._last_read[make_key_hashable(key)] = nparr
 
-    def __setitem__(
+    def __setitem__(  # noqa: C901
         self,
         key: int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | None,
         value: object,
@@ -4890,26 +5035,28 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
                 else:  # do nothing
                     return self
-            result = self._get_set_findex_default(_slice, value=value)
-            from . import indexing
-
-            indexing.mark_indexes_stale(self)
-            return result
+            return self._mark_indexes_stale(self._get_set_findex_default(_slice, value=value))
         else:
             start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
             if step != (1,) * self.ndim:  # handle non-unit or negative steps
                 if np.any(none_mask):
                     raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
-                result = self._get_set_nonunit_steps((start, stop, step, mask), value=value)
-                from . import indexing
-
-                indexing.mark_indexes_stale(self)
-                return result
+                return self._mark_indexes_stale(
+                    self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+                )
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
+        if (
+            isinstance(value, NDArray)
+            and not builtins.any(none_mask)
+            and self._set_array_chunkwise(start, stop, mask, value)
+        ):
+            return self._mark_indexes_stale(self)
         if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
             value = value[()]  # convert to numpy
         if np.isscalar(value) or value.shape == ():
+            if self._fill_chunkwise(start, stop, value):
+                return self._mark_indexes_stale(self)
             value = np.full(shape, value, dtype=self.dtype)
         if value.dtype != self.dtype:  # handles decompressed NDArray too
             try:
@@ -4919,11 +5066,156 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # when using complex functions (e.g. conj) with real arrays
                 value = value.real.astype(self.dtype)
 
-        result = super().set_slice((start, stop), value)
+        return self._mark_indexes_stale(super().set_slice((start, stop), value))
+
+    def _mark_indexes_stale(self, result):
+        """Mark the indexes of this array stale (its data changed), and return `result`."""
         from . import indexing
 
         indexing.mark_indexes_stale(self)
         return result
+
+    def _fill_chunkwise(self, start, stop, value) -> bool:
+        """Fill the region ``[start, stop)`` with a scalar in bounded pieces.
+
+        Every chunk the region fully covers gets one shared special (repeated value) chunk instead
+        of being compressed (edge chunks only for a zero value: writing them leaves zeros in their
+        padding, which a resize brings to light), and the rest is written in boxes of bounded
+        size instead of one buffer as large as the region.  Returns False without writing
+        anything when the region is smaller than a chunk (one buffer and one ``set_slice`` call is
+        cheaper there), or when the frame takes the cross-process lock: one ``set_slice`` holds
+        that from refreshing the shape to the last chunk, so the write is atomic for other
+        processes and lands where the key says even if another handle resizes the array
+        meanwhile.  (Holding it across a Python loop would make other handles of the file in this
+        process wait for it holding the GIL.)
+        """
+        if self.ndim == 0:
+            return False
+        region = math.prod(sp - st for st, sp in zip(start, stop, strict=True))
+        chunk_nitems = math.prod(self.chunks)
+        if region == 0 or region < chunk_nitems or self.schunk._locks_frame:
+            return False
+        fill = np.full(1, value, dtype=self.dtype)  # same conversion as filling the whole region
+        const_chunk = None
+        if self.schunk.typesize == self.dtype.itemsize and _is_lossless(self.cparams):
+            # A lossy codec would not give back `value` exactly; keep compressing for those
+            const_chunk = self._constant_chunk(fill)
+        # Last chunks first: a frame compacts its payload behind an updated chunk, and that
+        # tail then holds the (tiny) special chunks already written instead of the old ones.
+        boxes, nbuf = _chunkwise_plan(
+            self.shape,
+            self.chunks,
+            start,
+            stop,
+            self.dtype.itemsize,
+            const_chunk is not None,
+            reverse=True,
+            split_edges=fill.tobytes() == bytes(fill.nbytes),
+        )
+        # One buffer, as large as the largest box written from it (often just a few edge chunks)
+        buf = np.full(nbuf, fill[0], dtype=self.dtype)
+        # Holding the handle lock for the whole fill keeps it atomic for other threads, as a single
+        # set_slice was
+        with self._handle_lock:
+            for lo, hi, nchunk, n in boxes:
+                if nchunk is not None:
+                    self.schunk.update_chunk(nchunk, const_chunk)
+                else:
+                    super().set_slice((lo, hi), buf[:n].reshape(tuple(map(operator.sub, hi, lo))))
+        return True
+
+    def _set_array_chunkwise(self, start, stop, mask, value: NDArray) -> bool:
+        """Copy the NDArray `value` into the region ``[start, stop)`` in bounded pieces.
+
+        Instead of decompressing all of `value` first, read it box by box (boxes of bounded size,
+        along this array's chunk boundaries) and write each box with one ``set_slice``.  When both
+        arrays encode chunks the same way (dtype, chunks, blocks, cparams) and the region starts at
+        a chunk boundary, the covered chunks are copied compressed.  Returns False without writing
+        anything when `value` does not have the shape of the region (minus integer-indexed
+        dimensions), when the region is smaller than a chunk, when `value` may share storage
+        with this array or takes the cross-process frame lock (it must be read in full before
+        writing then), or when this array takes that lock (see _fill_chunkwise).
+        """
+        if self.ndim == 0:
+            return False
+        region = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        chunk_nitems = math.prod(self.chunks)
+        nitems = math.prod(region)
+        if nitems == 0 or nitems < chunk_nitems or self.schunk._locks_frame or _same_storage(self, value):
+            return False
+        if value.schunk._locks_frame:
+            # One read keeps `value` consistent
+            return False
+        value.refresh()  # as reading it with value[...] would
+        kept = (True,) * self.ndim if value.shape == region else tuple(not m for m in mask)
+        if value.shape != tuple(s for s, k in zip(region, kept, strict=True) if k):
+            return False
+        copy_compressed = (
+            value.shape == region
+            and builtins.all(st % c == 0 for st, c in zip(start, self.chunks, strict=True))
+            and _chunks_interchangeable(self, value)
+        )
+        # Covered chunks are best copied one by one (get_slice and set_slice take their fast paths
+        # for single chunks), unless that would decompress blocks of `value` more than once.
+        it = iter(value.blocks)
+        vblocks = [next(it) if k else 1 for k in kept]  # per dimension of the region
+        one_by_one = copy_compressed or builtins.all(
+            st // c == (sp - 1) // c or (c % b == 0 and st % b == 0)
+            for st, sp, c, b in zip(start, stop, self.chunks, vblocks, strict=True)
+        )
+        if copy_compressed:
+            vgrid, _ = get_chunks_idx(value.shape, self.chunks)
+        vsize, size = value.dtype.itemsize, self.dtype.itemsize
+        # Reused raw byte buffers, as large as the largest box read into them (fresh ones would
+        # page-fault in on every box)
+        itemsize = builtins.max(vsize, size)
+        # The padding of an edge chunk of `value` may hold anything (full() repeats its value
+        # there), where writing leaves zeros: only chunks without padding are copied compressed
+        boxes, buf_items = _chunkwise_plan(
+            self.shape,
+            self.chunks,
+            start,
+            stop,
+            itemsize,
+            one_by_one,
+            buffer_covered=not copy_compressed,
+            split_edges=not copy_compressed,
+        )
+        src_raw = dst_raw = None
+        # Holding the handle locks (in a fixed order) for the whole copy keeps it atomic for other
+        # threads, as a single set_slice was
+        with blosc2_ext.HandleLocks((self, value)):
+            for lo, hi, nchunk, n in boxes:
+                if nchunk is not None and copy_compressed:
+                    # A covered chunk starting at a chunk boundary of `value` holds the same items
+                    vcoords = [(l_ - st) // c for l_, st, c in zip(lo, start, self.chunks, strict=True)]
+                    vchunk = chunk_flat_index(vcoords, vgrid)
+                    self.schunk.update_chunk(nchunk, value.schunk.get_chunk(vchunk))
+                    continue
+                if src_raw is None:
+                    src_raw = np.empty(buf_items * vsize, dtype=np.uint8)
+                data = src_raw[: n * vsize]
+                vkey = [(l_ - st, h - st) for l_, h, st, k in zip(lo, hi, start, kept, strict=True) if k]
+                blosc2_ext.NDArray.get_slice_numpy(value, data, tuple(zip(*vkey, strict=True)))
+                if value.dtype != self.dtype:
+                    if dst_raw is None:
+                        dst_raw = np.empty(buf_items * size, dtype=np.uint8)
+                    src, data = data.view(value.dtype), dst_raw[: n * size]
+                    try:
+                        np.copyto(data.view(self.dtype), src, casting="unsafe")
+                    except ComplexWarning:
+                        np.copyto(data.view(self.dtype), src.real, casting="unsafe")
+                super().set_slice((lo, hi), data)
+        return True
+
+    def _constant_chunk(self, fill: np.ndarray) -> bytes:
+        """Return a special chunk for this array where every item equals ``fill[0]``."""
+        schunk = self.schunk
+        if fill.tobytes() == bytes(fill.nbytes):
+            return schunk._special_chunk(schunk.chunksize, SpecialValue.ZERO.value)
+        # Pass a void view: datetime dtypes do not export a buffer
+        void = fill.view(np.dtype((np.void, fill.itemsize)))
+        return schunk._special_chunk(schunk.chunksize, SpecialValue.VALUE.value, void)
 
     def __iter__(self):
         """Iterate over the (outer) elements of the array.
