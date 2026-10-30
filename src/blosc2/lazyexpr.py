@@ -54,6 +54,7 @@ from .b2objects import (
     write_b2object_user_vlmeta,
 )
 from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
+from .miniexpr_guard import miniexpr_known_bad
 from .ndarray import blocks_contiguous
 from .proxy_source import convert_dtype
 from .utils import (
@@ -341,6 +342,23 @@ _datetime_binops = {
     "/": operator.truediv,
     "//": operator.floordiv,
     "%": operator.mod,
+}
+# NumPy operations of the numeric operators and functions whose result dtype is not just the
+# promoted operand dtype: true division and the float functions turn integers (and bools) into
+# floats, and //, %, ** and the shifts, which NumPy has no bool loops for, turn bools into int8
+_result_dtype_ufuncs = {
+    "/": operator.truediv,
+    "//": operator.floordiv,
+    "%": operator.mod,
+    "**": operator.pow,  # not np.power: NumPy squares for x ** 2, which keeps bools int8
+    "<<": operator.lshift,
+    ">>": operator.rshift,
+    "arctan2": np.arctan2,
+    "copysign": np.copysign,
+    "hypot": np.hypot,
+    "nextafter": np.nextafter,
+    "pow": np.power,
+    "power": np.power,
 }
 logical_ops = ["&", "|", "^", "~"]
 not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
@@ -1716,15 +1734,6 @@ def _raise_dsl_miniexpr_required(reason: str | None = None) -> None:
     raise RuntimeError(_dsl_miniexpr_required_message(reason))
 
 
-def _miniexpr_integer_atan2(expression, operands):
-    # ponytail: use the chunked fallback until miniexpr promotes integer atan2 inputs.
-    return (
-        isinstance(expression, str)
-        and re.search(r"\b(?:arctan2|atan2)\s*\(", expression)
-        and any(getattr(op, "dtype", np.dtype(float)).kind in "biu" for op in operands.values())
-    )
-
-
 def _c_run_axis(outer, inner) -> int:
     """Axis along which `inner` tiles are C-contiguous runs of `outer`, or -1 if they are not.
 
@@ -1945,7 +1954,7 @@ def fast_eval(  # noqa: C901
             if is_dsl and dsl_disable_reason is None:
                 dsl_disable_reason = "cumulative scans are not supported by the DSL miniexpr path."
         if isinstance(expr_string_miniexpr, str):
-            if not is_dsl and _miniexpr_integer_atan2(expr_string_miniexpr, operands):
+            if not is_dsl and miniexpr_known_bad(expr_string_miniexpr, operands_miniexpr, dtype):
                 use_miniexpr = False
             expr_string_miniexpr = _apply_jit_backend_pragma(
                 expr_string_miniexpr, operands_miniexpr, jit_backend
@@ -2968,7 +2977,8 @@ def reduce_slices(  # noqa: C901
 
     # Check whether we can use miniexpr
     if use_miniexpr and isinstance(expression, str):
-        if _miniexpr_integer_atan2(expression, operands):
+        reduced_expr = expression if where is None else f"where({expression}, _where_x, _where_y)"
+        if miniexpr_known_bad(reduced_expr, operands, dtype, reduction=True):
             use_miniexpr = False
         has_complex = any(
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
@@ -3609,12 +3619,18 @@ def fuse_expressions(expr, new_base, dup_op):
     return new_expr
 
 
+def _operand_dtype(value):
+    """blosc2.result_type(value), without building a NumPy array for an array operand."""
+    dtype = None if np.isscalar(value) else getattr(value, "dtype", None)
+    return blosc2.result_type(value) if dtype is None else convert_dtype(dtype)
+
+
 def check_dtype(op, value1, value2):
     if op in ("contains", "startswith", "endswith"):
         return np.dtype(np.bool_)
 
-    v1_dtype = blosc2.result_type(value1)
-    v2_dtype = v1_dtype if value2 is None else blosc2.result_type(value2)
+    v1_dtype = _operand_dtype(value1)
+    v2_dtype = v1_dtype if value2 is None else _operand_dtype(value2)
     if op in not_complex_ops and (v1_dtype == np.complex128 or v2_dtype == np.complex128):
         # Ensure that throw exception for functions which don't support complex args
         raise ValueError(f"Invalid operand type for {op}: {v1_dtype, v2_dtype}")
@@ -3627,14 +3643,20 @@ def check_dtype(op, value1, value2):
         if v2_dtype not in (np.bool_, np.int32, np.int64):
             raise ValueError(f"Invalid operand type for {op}: {v2_dtype}")
 
-    if op == "/":
-        if v1_dtype == np.int32 and v2_dtype == np.int32:
-            return blosc2.float32
-        if np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
-            return blosc2.float64
+    if op == "/" and v1_dtype == np.int32 and v2_dtype == np.int32:
+        return blosc2.float32
 
-    if op == "arctan2":
-        return np.arctan2(np.empty(0, v1_dtype), np.empty(0, v2_dtype)).dtype
+    ufunc = _result_dtype_ufuncs.get(op)
+    if ufunc is not None and value2 is not None and v1_dtype.kind in "biufc" and v2_dtype.kind in "biufc":
+        # Ask NumPy on empty operands, but with a scalar next to an array as it is, so that NumPy
+        # promotes it as usual; what it rejects is left to the evaluation
+        scalars = np.isscalar(value1) and np.isscalar(value2)
+        probes = [
+            v if np.isscalar(v) and not scalars else np.empty(0, dt)
+            for v, dt in ((value1, v1_dtype), (value2, v2_dtype))
+        ]
+        with contextlib.suppress(TypeError, ValueError, OverflowError):
+            return ufunc(*probes).dtype
 
     if (v1_dtype.kind in "Mm" or v2_dtype.kind in "Mm") and op in _datetime_binops:
         # result_type describes promotion, not operator semantics, and the two
