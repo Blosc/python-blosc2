@@ -69,6 +69,7 @@ from .expression_graph import (
     record_expression_metadata,
     validate_operands,
 )
+from .ndarray import blocks_contiguous
 from .prepared_evaluate import remember_evaluation
 from .proxy_source import convert_dtype
 from .utils import (
@@ -319,6 +320,9 @@ eager_funcs = linalg_funcs + reducers + ["slice"] + ["." + attr for attr in lina
 functions = blosc2_funcs
 _TRANSIENT_MASK_CPARAMS = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filters=[blosc2.Filter.SHUFFLE])
 _constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
+_any_constructor_call_pattern = re.compile(
+    rf"\b(?:{'|'.join(re.escape(name) for name in constructors)})\s*\("
+)
 
 
 def _restore_code_unit_shuffle(cparams: blosc2.CParams, dtype) -> None:
@@ -343,6 +347,10 @@ def _restore_code_unit_shuffle(cparams: blosc2.CParams, dtype) -> None:
 
 def _has_constructor_call(expression: str, constructor: str) -> bool:
     return _constructor_call_patterns[constructor].search(expression) is not None
+
+
+def _has_any_constructor_call(expression: str) -> bool:
+    return _any_constructor_call_pattern.search(expression) is not None
 
 
 def _find_constructor_call(expression: str, constructor: str) -> re.Match | None:
@@ -1380,7 +1388,7 @@ def do_slices_intersect(slice1: list | tuple, slice2: list | tuple) -> bool:
 
 
 def get_chunk(arr, info, nchunk):
-    reduc, aligned, low_mem, chunks_idx = info
+    reduc, low_mem, chunks_idx = info
 
     if low_mem:
         # We don't want to uncompress the chunk, so keep it compressed and
@@ -1404,14 +1412,6 @@ def get_chunk(arr, info, nchunk):
         slice(c * s, min((c + 1) * s, shape[i]))
         for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
     )
-    chunks_ = tuple(s.stop - s.start for s in slice_)
-
-    if aligned:
-        # Decompress the whole chunk and return it
-        buff = arr.schunk.decompress_chunk(nchunk)
-        bsize = arr.dtype.itemsize * math.prod(chunks_)
-        return np.frombuffer(buff[:bsize], dtype=arr.dtype).reshape(chunks_)
-
     return arr[slice_]
 
 
@@ -1441,10 +1441,10 @@ def read_chunks_worker(arrs, info, queue, stop):
     max_workers = max(1, min(len(arrs), int(getattr(blosc2, "nthreads", 1) or 1)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         my_chunk_iter = range(arrs[0].schunk.nchunks)
-        if len(info) == 5:
+        if len(info) == 4:
             if info[-1] is not None:
                 my_chunk_iter = sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
-            info = info[:4]
+            info = info[:3]
         for i, nchunk in enumerate(my_chunk_iter):
             futures = [executor.submit(get_chunk, arr, info, nchunk) for arr in arrs]
             # result() keeps operand order and propagates the first exception raised
@@ -1505,12 +1505,43 @@ def read_nchunk(arrs, info):
 iter_chunks = None
 
 
+def _chunk_buffers(operands, shape, chunks):
+    """Reusable chunk-sized buffers for the NDArray operands of `shape` and `chunks` whose
+    decompressed chunks are C-order.
+
+    That is the case when blocks are C-contiguous runs of their chunk (as with the default
+    partitions), so a plain decompress_chunk() gives the (padded) chunk, and is cheaper than a
+    slice read.
+    """
+    return {
+        key: np.empty(value.chunks, dtype=value.dtype)
+        for key, value in operands.items()
+        if isinstance(value, blosc2.NDArray)
+        and value.ndim > 0
+        and value.shape == shape
+        and value.chunks == chunks
+        and 0 not in value.blocks
+        and blocks_contiguous(value.chunks, value.blocks)
+    }
+
+
 def fill_chunk_operands(
-    operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False, axis=None
+    operands,
+    slice_,
+    chunks_,
+    full_chunk,
+    nchunk,
+    iter_disk,
+    chunk_operands,
+    reduc=False,
+    axis=None,
+    chunk_buffers=None,
 ):
     """Retrieve the chunk operands for evaluating an expression.
 
     This function provides an optimized path for full chunks and a slower path for partial chunks.
+    Operands with a buffer in `chunk_buffers` (see `_chunk_buffers`) get their chunk decompressed
+    into it, whether the chunk is full or not.
     """
     global iter_chunks
 
@@ -1522,28 +1553,16 @@ def fill_chunk_operands(
         if iter_chunks is None:
             # Initialize the iterator for reading the chunks
             # Take any operand (all should have the same shape and chunks)
-            key, arr = next(iter(operands.items()))
+            arr = next(iter(operands.values()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
-            info = (reduc, aligned[key], low_mem, chunks_idx, axis)
+            info = (reduc, low_mem, chunks_idx, axis)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
 
         for i, (key, value) in enumerate(operands.items()):
-            # Chunks are already decompressed, so we can use them directly
-            if not low_mem:
-                if full_chunk:
-                    chunk_operands[key] = chunks[i]
-                else:
-                    chunk_operands[key] = value[slice_]
-                continue
-            # Otherwise, we need to decompress them
-            if aligned[key]:
-                buff = blosc2.decompress2(chunks[i])
-                bsize = value.dtype.itemsize * math.prod(chunks_)
-                chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-            else:
-                chunk_operands[key] = value[slice_]
+            # Chunks are already decompressed (unless low_mem), so full ones can be used directly
+            chunk_operands[key] = chunks[i] if full_chunk and not low_mem else value[slice_]
         return
 
     # Get the starts and stops for the slice
@@ -1556,6 +1575,11 @@ def fill_chunk_operands(
             continue
         if value.shape == ():
             chunk_operands[key] = value[()]
+            continue
+        buf = chunk_buffers.get(key) if chunk_buffers else None
+        if buf is not None:
+            value.schunk.decompress_chunk(nchunk, buf)
+            chunk_operands[key] = buf if full_chunk else buf[tuple(slice(0, n) for n in chunks_)]
             continue
         if not full_chunk or not isinstance(value, blosc2.NDArray):
             # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
@@ -1572,13 +1596,7 @@ def fill_chunk_operands(
             value.get_slice_numpy(chunk_operands[key], (starts, stops))
             continue
 
-        if aligned[key]:
-            # Decompress the whole chunk and store it
-            buff = value.schunk.decompress_chunk(nchunk)
-            bsize = value.dtype.itemsize * math.prod(chunks_)
-            chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-        else:
-            chunk_operands[key] = value[slice_]
+        chunk_operands[key] = value[slice_]
 
 
 def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | None) -> str:
@@ -1914,6 +1932,31 @@ def _miniexpr_where_matches_numpy(cond: str, operands: dict, dtype) -> bool:  # 
     return same_dtype(tree.body)
 
 
+def _c_run_axis(outer, inner) -> int:
+    """Axis along which `inner` tiles are C-contiguous runs of `outer`, or -1 if they are not.
+
+    That is the case when the leading dims of the tile are 1, then one dim is free, and the rest
+    span the container.
+    """
+    k = 0
+    while k < len(inner) - 1 and inner[k] == 1:
+        k += 1
+    return k if tuple(inner[k + 1 :]) == tuple(outer[k + 1 :]) else -1
+
+
+def _chunks_tile_flat(shape, chunks, blocks) -> bool:
+    """Whether the uncompressed chunks of an array, in order, are consecutive runs of its C-order buffer.
+
+    Blocks must be C-contiguous runs of their chunk, and chunks C-contiguous runs of the array; only
+    the very last chunk may be partial, so that its padding spills past the end of the array instead
+    of into another chunk.
+    """
+    if len(shape) == 0 or 0 in shape or 0 in chunks or 0 in blocks or not blocks_contiguous(chunks, blocks):
+        return False
+    k = _c_run_axis(shape, chunks)
+    return k >= 0 and (shape[k] % chunks[k] == 0 or math.prod(shape[:k]) == 1)
+
+
 @blosc2.jit_config.jit_execution
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
@@ -2013,11 +2056,7 @@ def fast_eval(  # noqa: C901
     blocks = kwargs.pop("blocks", None)
     if blocks is None:
         blocks = basearr.blocks
-    # Check whether the partitions are aligned and behaved
-    aligned = {
-        k: False if not hasattr(k, "chunks") else blosc2.are_partitions_aligned(k.shape, k.chunks, k.blocks)
-        for k in operands
-    }
+    # Check whether the partitions are behaved
     behaved = blosc2.are_partitions_behaved(shape, chunks, blocks)
 
     # Check that all operands are NDArray for fast path
@@ -2116,14 +2155,18 @@ def fast_eval(  # noqa: C901
                 )
         numpy_output = (
             (getitem or isinstance(out, np.ndarray))
-            and len(shape) == 1
-            and chunks[0] % blocks[0] == 0
+            # Each chunk's payload must be a consecutive run of the C-order result
+            and _chunks_tile_flat(shape, chunks, blocks)
             and not prune_chunks
             and (out is None or not is_dsl)
             # Rebinding an existing LazyExpr can leave unused operand names.
             # Retain its established fallback rather than compiling extra inputs.
             and (is_dsl or set(operands_miniexpr) == set(get_expr_operands(expr_string)))
-            and (out is None or (out.dtype == dtype and out.flags.writeable))
+            and (
+                out is None
+                # A 1-D out may be strided; an N-D one is written through its flat view
+                or (out.dtype == dtype and out.flags.writeable and (out.ndim == 1 or out.flags.c_contiguous))
+            )
         )
         if not (all_eligible_miniexpr and (out is None or numpy_output)):
             use_miniexpr = False
@@ -2203,6 +2246,8 @@ def fast_eval(  # noqa: C901
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             if numpy_output:
+                chunk_nitems = math.prod(chunks)
+                out_flat = None if out is None else (out if out.ndim == 1 else out.reshape(-1))
                 output_storage = None
                 if out is None:
                     # Reserve a header prefix and at most one chunk of tail
@@ -2233,8 +2278,9 @@ def fast_eval(  # noqa: C901
                 if chunk_has_candidate is not None and not chunk_has_candidate[nchunk]:
                     continue
                 if numpy_output:
-                    start = nchunk * chunks[0]
-                    count = min(chunks[0], shape[0] - start)
+                    # Chunks are consecutive runs of the C-order result (see _chunks_tile_flat)
+                    start = nchunk * chunk_nitems
+                    count = min(chunk_nitems, out.size - start)
                     if output_storage is not None:
                         byte_start = nchunk * data.size
                         chunk_data = output_storage[
@@ -2253,7 +2299,7 @@ def fast_eval(  # noqa: C901
                         values = np.frombuffer(
                             chunk_data, dtype=dtype, count=count, offset=blosc2.EXTENDED_HEADER_LENGTH
                         )
-                        out[start : start + count] = values
+                        out_flat[start : start + count] = values
                 else:
                     res_eval.schunk.update_data(nchunk, data, copy=False)
             # _cb_anchor (if any) stays referenced until fast_eval returns, which
@@ -2301,6 +2347,7 @@ def fast_eval(  # noqa: C901
             return res_eval
 
     chunk_operands = {}
+    chunk_buffers = None if iter_disk else _chunk_buffers(operands, shape, chunks)
     # Check which chunks intersect with _slice
     all_chunks = get_intersecting_chunks((), shape, chunks)  # if _slice is (), returns all chunks
     for nchunk, chunk_slice in enumerate(all_chunks):
@@ -2310,7 +2357,15 @@ def fast_eval(  # noqa: C901
 
         full_chunk = chunks_ == chunks  # slice is same as chunk
         fill_chunk_operands(
-            operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
+            operands,
+            cslice,
+            chunks_,
+            full_chunk,
+            nchunk,
+            iter_disk,
+            chunk_operands,
+            # Partial chunks keep their contiguous slice reads, which UDFs may rely on
+            chunk_buffers=chunk_buffers if full_chunk else None,
         )
 
         # Since evaluate_chunk() can return a dtype larger than the one computed in the expression,
@@ -3099,7 +3154,6 @@ def reduce_slices(  # noqa: C901
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
         fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
-        aligned = dict.fromkeys(operands.keys(), False)
         iter_disk = False
         if fast_path:
             chunks = operand.chunks
@@ -3256,16 +3310,19 @@ def reduce_slices(  # noqa: C901
         intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
     res_out_init = False
-    ratio = (
-        np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
-        if 0 not in chunks
-        else np.asarray(shape)
+    # Flat chunk index = sum(chunk coordinate * stride) over the chunk grid
+    chunk_strides = []
+    if 0 not in chunks:
+        nchunks_dim, _ = get_chunks_idx(shape, chunks)
+        chunk_strides = [math.prod(nchunks_dim[i + 1 :]) for i in range(len(nchunks_dim))]
+    chunk_buffers = (
+        _chunk_buffers(operands, shape, chunks) if fast_path and not iter_disk and _slice == () else None
     )
 
     for chunk_slice in intersecting_chunks:
         cslice = chunk_slice.raw
         nchunk = (
-            builtins.sum(c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice))
+            builtins.sum(c.start // chunks[i] * chunk_strides[i] for i, c in enumerate(cslice))
             if 0 not in chunks
             else 0
         )
@@ -3275,10 +3332,10 @@ def reduce_slices(  # noqa: C901
             cslice = step_handler(cslice, _slice)
         offset = tuple(s.start for s in cslice)  # offset for the udf
         starts = [s.start if s.start is not None else 0 for s in cslice]
-        unit_steps = np.all([s.step == 1 for s in cslice])
+        unit_steps = builtins.all(s.step == 1 for s in cslice)
         cslice_shape = tuple(s.stop - s.start for s in cslice)
-        # get local index of part of out that is to be updated
-        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw  # if _slice is (), just gives cslice
+        # get local index of part of out that is to be updated (with no _slice, that is cslice)
+        cslice_subidx = cslice if _slice == () else ndindex.ndindex(cslice).as_subindex(_slice).raw
         if _slice == () and fast_path and unit_steps:
             # Fast path
             full_chunk = cslice_shape == chunks
@@ -3287,12 +3344,12 @@ def reduce_slices(  # noqa: C901
                 cslice,
                 cslice_shape,
                 full_chunk,
-                aligned,
                 nchunk,
                 iter_disk,
                 chunk_operands,
                 reduc=True,
                 axis=reduce_args["axis"] if np.isscalar(reduce_args["axis"]) else None,
+                chunk_buffers=chunk_buffers,
             )
         else:
             get_chunk_operands(operands, cslice, chunk_operands, shape)
@@ -4223,7 +4280,7 @@ class LazyExpr(LazyArray):
             return None
 
         # Operands shape can change, so we always need to recompute this
-        if any(_has_constructor_call(self.expression, constructor) for constructor in constructors):
+        if _has_any_constructor_call(self.expression):
             # might have an expression with pure constructors
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in self.operands.items()}
             _shape = infer_shape(self.expression, opshapes)  # infer shape, includes constructors
@@ -4981,7 +5038,7 @@ class LazyExpr(LazyArray):
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
-        if any(_has_constructor_call(self.expression, constructor) for constructor in constructors):
+        if _has_any_constructor_call(self.expression):
             expression = self.expression
             newexpr = expression
             newops = self.operands.copy()
@@ -6355,7 +6412,7 @@ def lazyexpr(
             operands = seek_operands(operand_set, local_dict, global_dict, _frame_depth=_frame_depth)
         else:
             # No operands found in the expression. Maybe a constructor?
-            constructor = any(_has_constructor_call(expression, constructor) for constructor in constructors)
+            constructor = _has_any_constructor_call(expression)
             if not constructor and parse_expression(expression).names:
                 # Approved constant-only numerical expressions are valid too;
                 # parsing, rather than Python eval, decides whether to admit them.
