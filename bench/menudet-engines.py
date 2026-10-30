@@ -18,6 +18,9 @@ output for Blosc2 inputs and NumPy output for NumPy inputs. ``--codec`` and
 ``--clevel`` configure compressed inputs and outputs (defaults: zstd, 5).
 Blosc2 outputs use the input chunk/block layout for Blosc2 inputs.
 Engines with unsupported dtypes or different numerical results are reported as N/A.
+Floating-point arrays use rtol=atol=4*eps of the reference's real dtype;
+integer and boolean arrays must match exactly. Numerical failures report the
+maximum absolute error and up to three mismatching indices and values.
 ``--warmups 0`` measures preparation-cold samples: expression and compiler caches
 are isolated before every sample, and engine construction/compilation is timed.
 Operand construction, imports and cache isolation are not timed; CPU/OS caches
@@ -293,6 +296,39 @@ def cold_preparation():
                     os.environ[key] = value
 
 
+def assert_float_arrays_close(result, expected):
+    """Check mixed tolerances in bounded batches, retaining useful diagnostics."""
+    result, expected = np.asarray(result), np.asarray(expected)
+    np.testing.assert_equal(result.shape, expected.shape)
+    tolerance = 4 * np.finfo(expected.real.dtype).eps
+    max_error = 0.0
+    mismatch_count = 0
+    examples = []
+    # Avoid allocating several full-sized temporaries for the 100M-item rows.
+    for start in range(0, expected.size, 65536):
+        actual = result.flat[start : start + 65536]
+        reference = expected.flat[start : start + 65536]
+        with np.errstate(invalid="ignore", over="ignore"):
+            close = np.isclose(actual, reference, rtol=tolerance, atol=tolerance, equal_nan=True)
+            errors = np.abs(actual - reference)
+        # Equal infinities/NaNs have no error; unmatched nonfinite values have
+        # unbounded error rather than an uninformative NaN diagnostic.
+        errors = np.where(np.isnan(errors), np.where(close, 0.0, np.inf), errors)
+        max_error = max(max_error, float(np.max(errors, initial=0.0)))
+        indices = np.flatnonzero(~close)
+        mismatch_count += indices.size
+        for index in indices[: max(0, 3 - len(examples))]:
+            position = np.unravel_index(start + int(index), expected.shape)
+            position = tuple(int(axis) for axis in position)
+            examples.append(f"index={position}: actual={actual[index]!r}, expected={reference[index]!r}")
+    if mismatch_count:
+        raise AssertionError(
+            f"different numerical results: {mismatch_count} mismatches; "
+            f"max absolute error={max_error:.17g}; rtol=atol={tolerance:.17g}; "
+            + "; ".join(examples)
+        )
+
+
 def benchmark(engines, expected, samples, warmups, rng, failures=None, cold_factory=None):
     """Correctness-check once, warm up, then time interleaved shuffled samples."""
     qualified = {}
@@ -306,6 +342,8 @@ def benchmark(engines, expected, samples, warmups, rng, failures=None, cold_fact
                     raise AssertionError("Reduction must return a scalar")
                 # Native/parallel summation can group floating additions differently.
                 np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+            elif np.asarray(expected).dtype.kind in "fc":
+                assert_float_arrays_close(result, expected)
             else:
                 np.testing.assert_array_equal(result, expected)
             del result
@@ -314,7 +352,8 @@ def benchmark(engines, expected, samples, warmups, rng, failures=None, cold_fact
                 raise
             message = str(error).strip().splitlines()
             failures[name] = (
-                "different numerical results"
+                message[0] if message and message[0].startswith("different numerical results:")
+                else "different numerical results"
                 if isinstance(error, AssertionError)
                 else f"{type(error).__name__}: {message[0] if message else 'unsupported execution'}"
             )
@@ -512,6 +551,7 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
     rng = random.Random(42)
     previous = None
     allocation_rows = []
+    failure_rows = []
     for size in args.items:
         for kind in kinds:
             inputs, expected = build_operands(size, kind, args.dtype, cparams, expression=args.expr)
@@ -534,6 +574,7 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
                 failures=failures,
                 cold_factory=cold_factory if args.warmups == 0 else None,
             )
+            failure_rows.extend((size, kind, name, reason) for name, reason in failures.items())
             if args.allocation_control and kind == "numpy":
                 controls = make_allocation_engines(inputs, expression=args.expr)
                 control_times = benchmark(controls, expected, args.samples, args.warmups, rng, failures={})
@@ -547,6 +588,11 @@ def main():  # noqa: C901 -- CLI validation and warm/cold table orchestration
             previous = size
 
     print()
+    if failure_rows:
+        print("Qualification failures:")
+        for size, kind, name, reason in failure_rows:
+            print(f"  {human_items(size)} {kind} {name}: {reason}")
+        print()
     if args.reduc:
         print(
             "Blosc2 operands: NumPy, numexpr and Menudet include operand decompression; "

@@ -270,10 +270,11 @@ def _native_plan_cache_key(expr, jit, options, configuration=None):
         _graph_configuration(jit) if configuration is None else configuration,
         getattr(expr, "_evaluation", "full"),
         bool(options.get("_getitem", False)),
+        getattr(expr, "_optimization", "moderate"),
     )
 
 
-def _resident_signature(expression, inputs, jit):
+def _resident_signature(expression, inputs, jit, optimization="moderate"):
     import blosc2
 
     if not inputs:
@@ -301,7 +302,11 @@ def _resident_signature(expression, inputs, jit):
         elif value.shape != first.shape:
             return None
         dtypes.append((name, dtype.str))
-    configuration = (_graph_configuration(jit), tuple(blosc2.jit_config.execution_options().items()))
+    configuration = (
+        _graph_configuration(jit),
+        tuple(blosc2.jit_config.execution_options().items()),
+        optimization,
+    )
     return (expression, tuple(dtypes), first.shape, jit, configuration)
 
 
@@ -310,11 +315,11 @@ def native_weak_scalars_eligible(plan, expression, inputs):
     return plan.partitionable or (parse_expression(expression).infer_dtype(inputs) is not None)
 
 
-def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
+def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None, optimization="moderate"):
     """Prepare an admitted resident map; retain metadata and native owners only."""
     import blosc2
 
-    signature = _resident_signature(expression, inputs, jit)
+    signature = _resident_signature(expression, inputs, jit, optimization)
     if signature is None:
         return None
     parallel = math.prod(signature[2]) >= _MINIMUM_PARALLEL_ITEMS
@@ -333,6 +338,7 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None):
                 jit,
                 signature[-1],
                 input_dtypes=tuple((name, value.dtype) for name, value in inputs.items()),
+                optimization=optimization,
             )
         # Checked conversions and mixed-type errors retain their whole-domain execution order.
         if plan.stages != 1 or (parallel and not plan.partitionable):
@@ -381,7 +387,9 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
         not isinstance(part, slice) or part != slice(None) for part in selection
     ):
         return None
-    if prepared[0] != _resident_signature(expr.expression, expr.operands, jit):
+    if prepared[0] != _resident_signature(
+        expr.expression, expr.operands, jit, getattr(expr, "_optimization", "moderate")
+    ):
         return None
     _, plan, schedule = prepared
     if output is not None and (
@@ -1208,12 +1216,19 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
 
 
 @lru_cache(maxsize=128)
-def compile_plan(graph, jit=False, configuration=(), *, input_dtypes=None):
+def compile_plan(graph, jit=False, configuration=(), *, input_dtypes=None, optimization="moderate"):
     """Reusable native plans; cache identity includes explicit captures and policy."""
     from .graph_plan import NativeGraph
 
     if input_dtypes is None:
         plan = NativeGraph(graph, jit=jit)
+        plan._frontend = "declarative-json"
+    elif optimization == "aggressive":
+        # Transport syntax and dtype metadata only. Native typed lowering owns
+        # integer-power qualification; no Python algebraic rewrite is performed.
+        adapter = GraphAdapter({name: np.empty((), dtype=dtype) for name, dtype in input_dtypes})
+        root = adapter.visit(ast.parse(graph, mode="eval").body)
+        plan = NativeGraph(_graph_document(adapter, root, optimization), jit=jit)
         plan._frontend = "declarative-json"
     else:
         plan = NativeGraph.from_expression(graph, dict(input_dtypes), jit=jit)
@@ -1490,6 +1505,22 @@ def scalar_descriptor(value):
     return {"dtype": dtype, "category": category, "encoding": encoding, "value": payload}
 
 
+def _graph_document(adapter, root, optimization="moderate"):
+    document = {
+        "format": "menudet-graph-1",
+        "semantics": "menudet-numpy-0.1",
+        "requires": ["numeric", "staged"]
+        if any(node["op"] in REDUCERS and node["id"] != root for node in adapter.nodes)
+        else ["numeric"],
+        "nodes": adapter.nodes,
+        "root": root,
+        "output": {"dtype": "auto", "casting": "unsafe"},
+    }
+    if optimization == "aggressive":
+        document["optimization"] = "aggressive"
+    return document
+
+
 class GraphAdapter:
     """Python syntax -> declarative nodes; no type/shape/reduction planning."""
 
@@ -1657,7 +1688,12 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     if graph.names - operands.keys():
         raise ValueError("Native graph contains unbound names")
     configuration = _graph_configuration(jit)
-    text = _native_text_expression(graph.text) if not reduction_options and not root_options else None
+    optimization = getattr(expr, "_optimization", "moderate")
+    text = (
+        _native_text_expression(graph.text)
+        if not reduction_options and not root_options and optimization != "aggressive"
+        else None
+    )
     arrays = {name: operands[name] for name in sorted(graph.names)}
     if (
         text is not None
@@ -1678,16 +1714,7 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
             raise ValueError("Root reduction options require a reduction graph")
         if "initial" in root_options:
             adapter.nodes[root]["initial"] = scalar_descriptor(root_options["initial"])
-    document = {
-        "format": "menudet-graph-1",
-        "semantics": "menudet-numpy-0.1",
-        "requires": ["numeric", "staged"]
-        if any(node["op"] in REDUCERS and node["id"] != root for node in adapter.nodes)
-        else ["numeric"],
-        "nodes": adapter.nodes,
-        "root": root,
-        "output": {"dtype": "auto", "casting": "unsafe"},
-    }
+    document = _graph_document(adapter, root, optimization)
     plan = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")), jit, configuration)
     return plan, adapter.arrays, adapter.nodes[root]["op"] in REDUCERS
 

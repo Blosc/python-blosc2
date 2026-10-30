@@ -6358,7 +6358,7 @@ def _evaluate_recipe_names(expression):
     return tuple(sorted(graph.names)) or None
 
 
-def _prepare_cached_evaluate(expression, local_dict, global_dict):
+def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="aggressive"):
     if type(expression) is not str or len(expression) > 65536:
         return None
     names = _evaluate_recipe_names(expression)
@@ -6389,7 +6389,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
         )
         for name, value in inputs.items()
     )
-    key = (expression, signature, mode)
+    key = (expression, signature, mode, optimization)
     with _evaluate_recipe_lock:
         recipe = _evaluate_recipe_cache.get(key)
         if recipe is not None:
@@ -6404,6 +6404,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict):
             inputs,
             jit=native_jit,
             cached=recipe.resident if recipe is not None else None,
+            optimization=optimization,
         )
         if native_backend is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
         else None
@@ -6567,8 +6568,13 @@ def evaluate(
         a new NumPy array will be created and returned.
     kwargs: Any, optional
         Accepted options are ``order``, ``casting`` and ``optimization``.
-        ``optimization`` defaults to ``"aggressive"`` and is accepted as a hint;
-        no NumExpr algebraic transformations or relaxed math policies are applied.
+        ``optimization`` defaults to ``"aggressive"``, matching NumExpr's default.
+        Constant real floating-point squares use multiplication. Aggressive optimization allows
+        native multiplication chains for constant integer powers, including negative
+        exponents. These can change rounding and floating-point status, but do not
+        enable global fast-math or alter integer/complex base semantics. Explicit
+        ``"moderate"`` or ``"none"`` retains general power for other exponents;
+        constant squares still use multiplication.
         ``casting`` defaults to ``"same_kind"`` and controls conversion into an
         explicit destination, not arithmetic precision.
         ``order`` controls newly allocated NumPy output: ``"C"`` or ``"F"``
@@ -6607,12 +6613,10 @@ def evaluate(
     """
     if kwargs:
         validate_evaluate_options(kwargs)
-    # The optimization hint has no backend-specific numerical transformation.
-    # Consume it here rather than blocking native/JIT admission accidentally.
-    kwargs.pop("optimization", None)
+    optimization = kwargs.pop("optimization", "aggressive")
     order = kwargs.pop("order", "K")
     order = order.upper()
-    lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict) if not kwargs else None
+    lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict, optimization) if not kwargs else None
     if isinstance(lexpr, tuple):
         resident, inputs = lexpr
         if out is None and order in {"C", "A", "K"}:
@@ -6640,6 +6644,7 @@ def evaluate(
             ne_args=kwargs or None,
             _frame_depth=3,
         )
+    lexpr._optimization = optimization
     if out is None and (
         order == "F"
         or (

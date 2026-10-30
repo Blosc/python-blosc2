@@ -48,6 +48,56 @@ def engine_benchmark():
     return runpy.run_path(str(Path(__file__).resolve().parents[1] / "bench" / "menudet-engines.py"))
 
 
+@pytest.mark.parametrize("dtype", ["float32", "float64", "complex64", "complex128"])
+@pytest.mark.parametrize("epsilons", [4, 16])
+def test_array_mixed_tolerance(engine_benchmark, dtype, epsilons):
+    expected = np.array([0.0, 1.0, -1.0], dtype=dtype)
+    result = expected.copy()
+    result.real[:] += epsilons * np.finfo(expected.real.dtype).eps
+    failures = {}
+    times = engine_benchmark["benchmark"](
+        {"probe": lambda: result}, expected, 1, 0, random.Random(42), failures=failures
+    )
+    assert ("probe" in times) == (epsilons <= 4)
+    assert bool(failures) == (epsilons > 4)
+    if failures:
+        assert "max absolute error=" in failures["probe"]
+        assert "index=(0,): actual=" in failures["probe"]
+        assert "expected=" in failures["probe"]
+
+
+def test_array_mixed_tolerance_diagnostics(engine_benchmark):
+    expected = np.zeros((2, 65536))
+    result = expected.copy()
+    result.flat[[0, 1, 2, 65536]] = [1, 2, 3, 4]
+    with pytest.raises(AssertionError) as error:
+        engine_benchmark["assert_float_arrays_close"](result, expected)
+    message = str(error.value)
+    assert "4 mismatches; max absolute error=4;" in message
+    assert message.count("index=") == 3
+    assert "index=(0, 2):" in message
+
+
+def test_array_mixed_tolerance_nonfinite(engine_benchmark):
+    check = engine_benchmark["assert_float_arrays_close"]
+    expected = np.array([np.nan, np.inf, -np.inf])
+    check(expected.copy(), expected)
+    with pytest.raises(AssertionError, match="max absolute error=inf"):
+        check(np.array([0.0, np.inf, -np.inf]), expected)
+
+
+@pytest.mark.parametrize("dtype", ["int64", "bool"])
+def test_array_exact_tolerance(engine_benchmark, dtype):
+    expected = np.array([0, 1], dtype=dtype)
+    result = np.array([1, 1], dtype=dtype)
+    failures = {}
+    times = engine_benchmark["benchmark"](
+        {"probe": lambda: result}, expected, 1, 0, random.Random(42), failures=failures
+    )
+    assert not times
+    assert failures == {"probe": "different numerical results"}
+
+
 @pytest.mark.parametrize(
     ("options", "expected"),
     [

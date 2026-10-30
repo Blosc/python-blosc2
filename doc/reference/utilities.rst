@@ -62,9 +62,20 @@ and empty inputs. Unknown keywords and invalid values raise an error before
 destination writes.
 
 * ``order`` and ``casting`` describe destination allocation/conversion.
-* ``optimization`` accepts ``none``, ``moderate`` and ``aggressive`` as compatibility
-  hints. Neither native execution nor the NumPy fallback reproduces NumExpr's
-  algebraic rewrites; NumPy-style numerical semantics remain authoritative.
+* ``evaluate()`` defaults to ``optimization="aggressive"``, matching NumExpr's
+  default. Constant real floating squares use multiplication. Aggressive
+  optimization enables native multiplication chains for constant integer powers, including
+  negative exponents. This can change rounding and floating-point status, without
+  enabling global fast-math or changing integer/complex base semantics. Explicit
+  ``moderate`` or ``none`` retains general power for other exponents, while
+  constant squares still use multiplication. NumPy
+  fallbacks retain NumPy behavior. Prepared evaluators still accept the option as
+  a compatibility hint; their numerical policy is unchanged.
+
+  For example::
+
+      result = blosc2.evaluate("x**3 - 1", local_dict={"x": x})
+      strict_result = blosc2.evaluate("x**3 - 1", local_dict={"x": x}, optimization="moderate")
 
 ``truediv``, ``sanitize`` and ``disable_cache`` are no longer accepted, including
 by prepared evaluators. Division follows NumPy semantics (use ``//`` for floor
@@ -83,7 +94,8 @@ override retain their existing precedence. To opt in for repeated computations::
 
 Set ``jit_backend="cc"`` in that context to request the system compiler instead
 of TCC. JIT remains best effort. Accelerate remains an explicit opt-in; the
-``optimization`` hint does not select it or relax numerical guarantees.
+``optimization`` option does not select it. The targeted integer-power policy
+does not affect other arithmetic transformations or math-library selection.
 
 Overlapping NumPy inputs are snapshotted before writing an explicit output;
 this may require temporary memory proportional to the overlapping operands.
