@@ -5,7 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import os
 import random
+import sys
 
 import numpy as np
 import pytest
@@ -143,3 +145,37 @@ def test_append_chunk_variable_sizes(contiguous, urlpath):
         assert [reopened.decompress_chunk(i) for i in range(reopened.nchunks)] == expected
 
     blosc2.remove_urlpath(urlpath)
+
+
+def _rss_bytes():
+    with open("/proc/self/statm") as f:
+        return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs /proc and unlink of open files")
+@pytest.mark.parametrize("method", ["update_data", "insert_data"])
+def test_failed_data_write_without_copy_frees_chunk(tmp_path, method):
+    # A failed update_chunk/insert_chunk without a copy leaves the compressed
+    # chunk with the caller, so update_data/insert_data must free it
+    urlpath = str(tmp_path / "failed_write.b2frame")
+    nbytes = 2 * 2**20
+    rng = np.random.default_rng(0)
+    data = rng.integers(0, 256, nbytes, dtype=np.uint8)  # incompressible, so chunks stay large
+    schunk = blosc2.SChunk(
+        chunksize=nbytes,
+        data=data,
+        urlpath=urlpath,
+        contiguous=True,
+        mode="w",
+        cparams={"typesize": 1, "clevel": 1},
+    )
+    os.remove(urlpath)  # the frame keeps working through its cached reader, but cannot write
+    write = getattr(schunk, method)
+    with pytest.raises(RuntimeError):
+        write(0, data, copy=False)  # warm-up
+    rss0 = _rss_bytes()
+    for _ in range(40):
+        with pytest.raises(RuntimeError):
+            write(0, data, copy=False)
+    # 40 leaked chunks would be 80 MB
+    assert _rss_bytes() - rss0 < 30 * 2**20
