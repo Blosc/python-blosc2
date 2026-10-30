@@ -4598,29 +4598,29 @@ class LazyExpr(LazyArray):
             Flat indices of True positions (int64).
         """
         chunk_len = bool_ndarray.chunks[0]
+        nitems = bool_ndarray.shape[0]
         all_indices = []
 
         for info in bool_ndarray.iterchunks_info():
+            offset = info.nchunk * chunk_len
+            # Items of this chunk inside the array: the last chunk's padding is not data, and it
+            # can hold anything (e.g. the fill value of a blosc2.full() array)
+            nvalid = builtins.min(chunk_len, nitems - offset)
             # Skip special-value chunks that are entirely False
             if info.special == blosc2.SpecialValue.ZERO:
                 continue
             if info.special == blosc2.SpecialValue.VALUE:
-                if not info.repeated_value:  # repeated_value is False/0
+                if not bool(info.repeated_value):  # repeated_value is False/0
                     continue
                 # repeated_value is True: all elements in this chunk are True
-                offset = info.nchunk * chunk_len
-                all_indices.append(np.arange(offset, offset + chunk_len, dtype=np.int64))
+                all_indices.append(np.arange(offset, offset + nvalid, dtype=np.int64))
                 continue
 
             # Normal chunk: decompress and scan for True positions
             raw = bool_ndarray.schunk.decompress_chunk(info.nchunk)
-            arr = np.frombuffer(raw, dtype=np.bool_)
-            # Truncate to the logical chunk size (buffer may include padding)
-            if len(arr) > chunk_len:
-                arr = arr[:chunk_len]
+            arr = np.frombuffer(raw, dtype=np.bool_)[:nvalid]
             idx = np.flatnonzero(arr)
             if len(idx) > 0:
-                offset = info.nchunk * chunk_len
                 all_indices.append(idx + offset)
 
         if not all_indices:

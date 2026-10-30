@@ -967,6 +967,18 @@ def test_basic_index_fast_path_matches_general_path(tmp_path, monkeypatch, on_di
                     assert got.shape == np.asarray(npa[key]).shape, key
 
 
+@pytest.mark.parametrize("fill", [True, False])
+@pytest.mark.parametrize("modified", [False, True])
+@pytest.mark.parametrize("nitems", [900, 1000])
+def test_collect_flat_indices_clips_last_chunk(fill, modified, nitems):
+    # The last chunk's padding holds the fill value, and must not yield indices past the end
+    mask = blosc2.full(nitems, fill, dtype=np.bool_, chunks=(300,), blocks=(100,))
+    if modified:
+        mask[nitems - 50 : nitems - 40] = not fill  # makes the last chunk a regular one
+    indices = blosc2.LazyExpr._collect_flat_indices_from_bool_ndarray(mask)
+    np.testing.assert_array_equal(indices, np.flatnonzero(mask[:]))
+
+
 def _assert_getitem_matches_numpy(npa, a, key):
     try:
         want = npa[key]
