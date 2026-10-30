@@ -151,6 +151,49 @@ def test_setitem_fancy_index():
     np.testing.assert_array_equal(out[:], out_numpy)
 
 
+# NumPy values are written directly, without the SimpleProxy wrapping of other array types; the
+# outcome (data or exception) must be the same as with the wrapping
+@pytest.mark.parametrize(
+    "key",
+    [
+        (slice(1, 4), slice(2, 5)),
+        (2, slice(None)),
+        (slice(0, 6, 2), slice(1, 7, 3)),
+        ([0, 2], slice(None)),
+        (slice(None), [1, 5]),
+        Ellipsis,
+        (1, 2),
+        (slice(5, 2), 1),
+        (None, slice(1, 3), 0),
+    ],
+)
+def test_setitem_numpy_value_same_as_proxied(key):
+    base = np.arange(48, dtype=np.float32).reshape(6, 8)
+    shape = np.shape(base[key])
+    values = [
+        np.full(shape, 7.5, np.float32),
+        np.full(shape, 7, np.int64),  # converted
+        np.full((*shape, 2), 9, np.float32)[..., 0],  # not contiguous
+        np.asfortranarray(np.full(shape, 3, np.float32)),
+        np.array(2.5, np.float32),  # 0-d
+        np.full(shape[-1:], 4, np.float32),  # broadcast
+        np.zeros((1, *shape), np.float64),
+    ]
+    for value in values:
+        outcomes = []
+        for v in (value, blosc2.SimpleProxy(value)):
+            a = blosc2.asarray(base, chunks=(3, 4), blocks=(2, 2))
+            try:
+                a[key] = v
+                outcomes.append(a[:])
+            except Exception as e:
+                outcomes.append((type(e), str(e)))
+        if isinstance(outcomes[0], tuple):
+            assert outcomes[0] == outcomes[1]
+        else:
+            np.testing.assert_array_equal(outcomes[0], outcomes[1])
+
+
 def _random_setitem_key(rng, n, ndim):
     items = []
     for _ in range(int(rng.integers(0, ndim + 2))):
