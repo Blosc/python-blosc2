@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import builtins
-import inspect
 import itertools
 import math
 import operator
@@ -44,6 +43,7 @@ from .utils import (
     get_local_slice,
     get_selection,
     incomplete_lazyfunc,
+    is_called_from,
     npbinvert,
     nplshift,
     nprshift,
@@ -242,9 +242,7 @@ def is_inside_new_expr() -> bool:
     """
     Whether the current code is being executed during the creation of new expression.
     """
-    # Get the current call stack
-    stack = inspect.stack()
-    return builtins.any(frame_info.function in {"_new_expr", "open_lazyarray"} for frame_info in stack)
+    return is_called_from(("_new_expr", "open_lazyarray"))
 
 
 def _normalize_slice(s):
@@ -4872,9 +4870,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
             key_, mask = process_key(key, self.shape)  # internally handles key an integer
         if hasattr(value, "shape") and value.shape == () and not getattr(value.dtype, "fields", None):
             value = value.item()
-        value = (
-            value if np.isscalar(value) else blosc2.as_simpleproxy(value)
-        )  # convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch
+        # Convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch (not NumPy arrays: that costs more
+        # than a small write, for the same result)
+        if not (np.isscalar(value) or type(value) is np.ndarray):
+            value = blosc2.as_simpleproxy(value)
 
         if basic is not None:
             start, stop, mask = basic
@@ -7177,8 +7176,9 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
         else:
             kwargs = {**kwargs, **storage}
     else:
-        # Add the default storage values as long as they are not already passed
-        storage_dflts = asdict(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
+        # Add the default storage values as long as they are not already passed.  Its fields
+        # are plain values, so vars() gives what asdict() does, only much faster.
+        storage_dflts = vars(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
         # If a key appears in both operands, the one from the right-hand operand wins
         kwargs = storage_dflts | kwargs
 

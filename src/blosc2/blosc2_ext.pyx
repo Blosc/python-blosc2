@@ -1369,10 +1369,12 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     filters = kwargs.get('filters', blosc2.cparams_dflts['filters'])
     if len(filters) > BLOSC2_MAX_FILTERS:
         raise ValueError(f"filters list cannot exceed {BLOSC2_MAX_FILTERS}")
+    # Looked up once: an enum's value is a slow descriptor
+    cdef int bytedelta = blosc2.Filter.BYTEDELTA.value
     for i, filter in enumerate(filters):
         cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
         # Bytedelta does not work on typesize 1
-        if cparams.filters[i] == blosc2.Filter.BYTEDELTA.value and typesize == 1:
+        if cparams.filters[i] == bytedelta and typesize == 1:
             cparams.filters[i] = 0
 
     if "filters_meta" not in kwargs:
@@ -1386,7 +1388,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     for i, meta in enumerate(filters_meta):
         # We still may want to encode negative values
         meta_value = <int8_t>meta if meta < 0 else meta
-        if meta_value == 0 and cparams.filters[i] == blosc2.Filter.BYTEDELTA.value:
+        if meta_value == 0 and cparams.filters[i] == bytedelta:
             # bytedelta typesize cannot be zero when using compress2
             cparams.filters_meta[i] = <uint8_t>typesize
         else:
