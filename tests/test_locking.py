@@ -8,6 +8,7 @@
 # Tests for the opt-in cross-process file locking for disk-based containers
 # (the `locking` storage parameter, backed by a `.b2lock` sidecar file).
 
+import math
 import os
 import subprocess
 import sys
@@ -1077,23 +1078,29 @@ import sys
 import numpy as np
 import blosc2
 
-urlpath, value, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+urlpath, value, iters, kind = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 w = blosc2.open(urlpath, mode="a", locking=True)
 buf = np.full(w.shape, value, dtype=np.int64)
+if kind == "scalar":
+    buf = value
+elif kind == "ndarray":
+    buf = blosc2.asarray(buf, chunks=w.chunks, blocks=w.blocks)
 for i in range(iters):
     w[:, :] = buf
 sys.exit(0)
 """
 
 
-def test_cross_process_overlapping_slice_atomic(tmp_path):
+# Scalars and NDArrays, which are written chunk by chunk without locking, take one
+# b2nd_set_slice_cbuffer call with it too
+@pytest.mark.parametrize("kind", ["numpy", "scalar", "ndarray"])
+def test_cross_process_overlapping_slice_atomic(tmp_path, kind):
     # Two writer processes repeatedly overwrite the *same* (multi-chunk)
     # NDArray region with their own distinguishable constant value via
-    # __setitem__ (b2nd_set_slice_cbuffer at the C level); a locked reader
-    # sampling the whole region under holding_lock() must only ever see one
-    # writer's complete pass, never a chunk-wise mix of both (the atomicity
-    # b2nd_set_slice_cbuffer's exclusive-lock bracket provides -- python
-    # inherits it through __setitem__ with no code changes of its own).
+    # __setitem__; a locked reader sampling the whole region under
+    # holding_lock() must only ever see one writer's complete pass, never a
+    # chunk-wise mix of both (the atomicity b2nd_set_slice_cbuffer's
+    # exclusive-lock bracket provides).
     urlpath = str(tmp_path / "array-overlap.b2nd")
     nrows, ncols = 200, 50
     iters = 150
@@ -1111,7 +1118,7 @@ def test_cross_process_overlapping_slice_atomic(tmp_path):
 
     writers = [
         subprocess.Popen(
-            [sys.executable, "-c", OVERLAPPING_SLICE_WRITER_SCRIPT, urlpath, str(v), str(iters)]
+            [sys.executable, "-c", OVERLAPPING_SLICE_WRITER_SCRIPT, urlpath, str(v), str(iters), kind]
         )
         for v in (1, 2)
     ]
@@ -1136,6 +1143,201 @@ def test_cross_process_overlapping_slice_atomic(tmp_path):
     assert all(w.returncode == 0 for w in writers), "a writer process failed"
     assert nreads > 0
     blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize("kind", ["scalar", "ndarray", "ndarray-cast"])
+def test_chunkwise_write_holds_the_handle_lock(tmp_path, monkeypatch, kind):
+    # Scalars and NDArrays are written chunk by chunk (without locking); for the whole write, as
+    # with one set_slice, other threads must not get the handle lock
+    import threading
+
+    urlpath = tmp_path / "array-chunkwise.b2nd"
+    shape, chunks, blocks = (40, 30), (10, 10), (5, 5)
+    a = blosc2.zeros(shape, dtype=np.int64, chunks=chunks, blocks=blocks, urlpath=str(urlpath))
+    handle_lock = a._handle_lock
+    probes = []
+
+    def probe():
+        got = []
+
+        def try_handle_lock():
+            got.append(handle_lock.acquire(blocking=False))
+            if got[0]:
+                handle_lock.release()
+
+        t = threading.Thread(target=try_handle_lock)
+        t.start()
+        t.join()
+        probes.append(got[0])
+
+    def probing(f):
+        def wrapper(*args, **kwargs):
+            probe()
+            return f(*args, **kwargs)
+
+        return wrapper
+
+    keys = [(slice(None), slice(None)), (slice(1, 40), slice(0, 25))]
+    x = np.arange(math.prod(shape)).reshape(shape)
+    if kind == "scalar":
+        values = [7, 8]
+    else:
+        dtype = np.int64 if kind == "ndarray" else np.int32
+        values = [blosc2.asarray(x[key].astype(dtype), chunks=chunks, blocks=blocks) for key in keys]
+    # Hooks in the middle of the writes: covered chunks are stored with update_chunk, casts copy
+    monkeypatch.setattr(blosc2.SChunk, "update_chunk", probing(blosc2.SChunk.update_chunk))
+    if kind == "ndarray-cast":
+        monkeypatch.setattr(np, "copyto", probing(np.copyto))
+    expected = np.zeros(shape, dtype=np.int64)
+    for key, value in zip(keys, values, strict=True):
+        a[key] = value
+        expected[key] = value if kind == "scalar" else x[key]
+    monkeypatch.undo()
+    np.testing.assert_array_equal(a[:], expected)
+    assert len(probes) > 1
+    assert probes == [False] * len(probes)
+    del a
+    blosc2.remove_urlpath(str(urlpath))
+
+
+def test_chunkwise_write_of_a_locked_ndarray(tmp_path, monkeypatch):
+    # An NDArray value that takes its own frame lock is read in one piece (consistently), and a
+    # destination that takes one is written in one piece: no chunk-wise copy
+    monkeypatch.delenv("BLOSC_LOCKING", raising=False)
+    shape, chunks = (40, 30), (10, 10)
+    x = np.arange(math.prod(shape)).reshape(shape)
+    bpath, apath = str(tmp_path / "b.b2nd"), str(tmp_path / "a.b2nd")
+    b = blosc2.asarray(x, chunks=chunks, urlpath=bpath, locking=True)
+    c = blosc2.open(bpath)
+    assert b.schunk._locks_frame
+    assert not c.schunk._locks_frame
+    for value, locking, ncalls in [(b, True, 0), (b, False, 0), (c, True, 0), (c, False, 12)]:
+        a = blosc2.zeros(shape, dtype=x.dtype, chunks=chunks, urlpath=apath, mode="w", locking=locking)
+        calls = []
+        with monkeypatch.context() as m:
+            m.setattr(blosc2.SChunk, "update_chunk", lambda *args, calls=calls: calls.append(args))
+            a[:] = value
+        # Without the lock, the chunks are copied compressed
+        assert len(calls) == ncalls
+        if ncalls == 0:
+            np.testing.assert_array_equal(a[:], x)
+        del a
+    blosc2.remove_urlpath(apath)
+    blosc2.remove_urlpath(bpath)
+
+
+SAME_FILE_THREADS_SCRIPT = """
+import sys
+import threading
+import time
+
+import blosc2
+
+h1 = blosc2.open(sys.argv[1], mode="a", locking=True)
+h2 = blosc2.open(sys.argv[1], mode="a", locking=True)
+src = None
+if sys.argv[2] == "ndarray":
+    src = blosc2.full(h1.shape, 3.0, dtype=h1.dtype, chunks=h1.chunks, blocks=h1.blocks)
+stop = time.monotonic() + 1
+
+
+def fill():
+    i = 0
+    while time.monotonic() < stop:
+        h1[:] = float(i) if src is None else src
+        i += 1
+
+
+def write_one():
+    while time.monotonic() < stop:
+        h2[0, 0] = 1.0
+
+
+threads = [threading.Thread(target=fill), threading.Thread(target=write_one)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+"""
+
+
+@pytest.mark.parametrize("kind", ["scalar", "ndarray"])
+def test_same_file_handles_write_in_threads(tmp_path, kind):
+    # Two locked handles of one file, written from two threads: a writer must not hold the frame
+    # lock while the other thread waits for it holding the GIL (both would hang)
+    urlpath = str(tmp_path / "threads.b2nd")
+    blosc2.zeros((400, 400), chunks=(50, 50), blocks=(10, 10), urlpath=urlpath, mode="w", locking=True)
+    try:
+        subprocess.run(
+            [sys.executable, "-c", SAME_FILE_THREADS_SCRIPT, urlpath, kind], check=True, timeout=60
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("writing two handles of a locked file from two threads deadlocked")
+    blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize("kind", ["scalar", "ndarray"])
+def test_write_after_another_handle_resized(tmp_path, monkeypatch, kind):
+    # Another handle resizes the array after this one has followed the shape for its key, before it
+    # writes: the write must land where the key says in the new shape, as set_slice does it under
+    # the frame lock, refreshing the shape there
+    urlpath = str(tmp_path / "resized.b2nd")
+    blosc2.zeros((4, 4), dtype=np.int32, chunks=(2, 2), blocks=(2, 2), urlpath=urlpath, locking=True)
+    h1 = blosc2.open(urlpath, mode="a", locking=True)
+    h2 = blosc2.open(urlpath, mode="a", locking=True)
+    get_basic_start_stop = blosc2.NDArray.get_basic_start_stop
+
+    def resized_meanwhile(self, key):
+        basic = get_basic_start_stop(self, key)
+        if h2.shape == (4, 4):
+            h2.resize((4, 8))
+        return basic
+
+    monkeypatch.setattr(blosc2.NDArray, "get_basic_start_stop", resized_meanwhile)
+    value = 7
+    if kind == "ndarray":
+        value = blosc2.full((2, 4), 7, dtype=np.int32, chunks=(2, 2), blocks=(2, 2))
+    h1[2:4, 0:4] = value
+    monkeypatch.undo()
+    expected = np.zeros((4, 8), dtype=np.int32)
+    expected[2:4, 0:4] = 7
+    np.testing.assert_array_equal(h2[...], expected)
+
+
+CROSS_COPY_SCRIPT = """
+import sys
+import blosc2
+
+src, dst, iters = sys.argv[1], sys.argv[2], int(sys.argv[3])
+s = blosc2.open(src, mode="r", locking=True)
+d = blosc2.open(dst, mode="a", locking=True)
+for i in range(iters):
+    d[:] = s
+sys.exit(0)
+"""
+
+
+def test_cross_process_copies_both_ways(tmp_path):
+    # a[:] = b in one process and b[:] = a in another: neither may wait for the lock of its source
+    # while holding the lock of its destination
+    paths = [str(tmp_path / f"{name}.b2nd") for name in "ab"]
+    for i, path in enumerate(paths):
+        blosc2.full((64, 64), i, dtype=np.int64, chunks=(16, 16), urlpath=path, mode="w", locking=True)
+    procs = [
+        subprocess.Popen([sys.executable, "-c", CROSS_COPY_SCRIPT, src, dst, "100"])
+        for src, dst in (paths, paths[::-1])
+    ]
+    try:
+        for p in procs:
+            p.wait(timeout=120)
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+    assert all(p.returncode == 0 for p in procs), "a copying process failed or deadlocked"
+    for path in paths:
+        blosc2.remove_urlpath(path)
 
 
 # ---------------------------------------------------------------------------
