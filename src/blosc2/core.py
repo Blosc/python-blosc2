@@ -1286,7 +1286,10 @@ def set_nthreads(nthreads: int) -> int:
     Notes
     -----
     The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
-    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set
+    variable (e.g., ``export BLOSC_NTHREADS=1``), which :attr:`~blosc2.nthreads`
+    then starts from.  While it is set, C-Blosc2 uses it for every compression and
+    decompression, over this function and the ``nthreads`` of :class:`CParams` and
+    :class:`DParams`.  Additionally, you may want to set
     ``NUMEXPR_NUM_THREADS`` (e.g., ``export NUMEXPR_NUM_THREADS=1``) as well since
     numexpr is used under the hood when performing some operations.  Note that
     this function only sets the number of threads used by Blosc, not the number
