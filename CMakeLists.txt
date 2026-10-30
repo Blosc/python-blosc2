@@ -17,6 +17,9 @@ project(python-blosc2)
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.3.0)
 set(BLOSC2_BUNDLED_VERSION v3.3.5)
+# TEMPORARY: build against the companion c-blosc2 PR branch until it is merged and released
+set(BLOSC2_BUNDLED_REPOSITORY https://github.com/FabianIsensee/c-blosc2)
+set(BLOSC2_BUNDLED_VERSION 903bf73f002fd2b9298cd606a725dd31a88c5367)
 #set(BLOSC2_BUNDLED_VERSION a54e259aeb1c0e62d6bbea28934369d4831e4046)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -219,7 +222,7 @@ else()
     set(BLOSC_INSTALL ON)
     include(FetchContent)
     FetchContent_Declare(blosc2
-        GIT_REPOSITORY https://github.com/Blosc/c-blosc2
+        GIT_REPOSITORY ${BLOSC2_BUNDLED_REPOSITORY}
         GIT_TAG ${BLOSC2_BUNDLED_VERSION}
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
