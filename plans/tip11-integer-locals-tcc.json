@@ -1,0 +1,251 @@
+{
+  "metadata": {
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/__init__.py",
+    "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/blosc2_ext.abi3.so",
+    "python": "3.14.4 | packaged by conda-forge | (main, Apr  8 2026, 02:33:53) [Clang 20.1.8 ]",
+    "numpy": "2.5.4",
+    "blosc2": "4.15.0.dev0",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M4 Pro",
+    "arguments": {
+      "items": 20000000,
+      "repeat": 7,
+      "threads": 12,
+      "compiler": "tcc",
+      "chunks": 4194304,
+      "blocks": 262144,
+      "quality_items": 0,
+      "output": "plans/tip11-integer-locals-tcc.json",
+      "plot": false,
+      "worker": null,
+      "memory_only": false
+    },
+    "environment": {
+      "ME_DSL_JIT_COMPILER": "tcc"
+    },
+    "extension_sha256": "98545a3e5dd474a714d33c71c3bbeb600b7f2c096f15a97a6b7941357864466d",
+    "execution_options": {
+      "jit": null,
+      "jit_backend": null,
+      "math_backend": null,
+      "fp_accuracy": "FPAccuracy.MEDIUM",
+      "trace": false,
+      "compiler": null,
+      "cflags": null,
+      "cache_dir": null,
+      "compiler_output": false
+    },
+    "protocol": "Separate subprocess per route and memory run; preparation, first compute, then warm samples. Timings include allocation and clevel=0 storage, exclude imports. Memory is OS process peak RSS during first compute; also report growth over preparation.",
+    "revisions": {
+      "python_blosc2": {
+        "head": "6a6027457aa6693fcd7d9d2a6c4ff50ef8297453",
+        "tracked_changes": " bench/optim_tips/README.md                  |  13 +\n bench/optim_tips/tip_11_dsl_random.py       | 376 ++++++++++++++++++++++------\n doc/guides/optim_tips/tip_11_dsl_random.png | Bin 27287 -> 33186 bytes\n doc/guides/optimization_tips.md             |  10 +-\n src/blosc2/menudet_lazy.py                  |  50 ++++\n src/blosc2/storage_readers.py               |  64 ++++-\n tests/test_menudet_lazy.py                  |  28 ++-\n 7 files changed, 460 insertions(+), 81 deletions(-)\n"
+      },
+      "miniexpr": {
+        "head": "7ba6d40fdb5084526fc1750d7a30c4125caa332f",
+        "tracked_changes": " RELEASE_NOTES.md                |  5 +++++\n src/dsl_menudet_jit.c           | 16 +++++++++++++++-\n tests/test_menudet_jit_parity.c |  3 ++-\n 3 files changed, 22 insertions(+), 2 deletions(-)\n"
+      }
+    }
+  },
+  "results": [
+    {
+      "variant": "numpy",
+      "preparation_s": 1.3327226042747498e-06,
+      "first_compute_s": 0.04837079159915447,
+      "samples_s": [
+        0.0355016253888607,
+        0.03599170874804258,
+        0.03581512439996004,
+        0.03633404150605202,
+        0.03649829234927893,
+        0.03547920938581228,
+        0.0360624585300684
+      ],
+      "median_s": 0.03599170874804258,
+      "peak_rss_bytes": 253870080,
+      "peak_growth_bytes": 184008704,
+      "has_jit": null,
+      "legacy_jit_probe": null,
+      "execution_report": null,
+      "output_grid": {
+        "chunks": [
+          4194304
+        ],
+        "blocks": [
+          262144
+        ]
+      },
+      "source_blocks": null,
+      "logical_partitions": null,
+      "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/__init__.py",
+      "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "legacy-engine",
+      "preparation_s": 2.8499402105808258e-05,
+      "first_compute_s": 0.015381832607090473,
+      "samples_s": [
+        0.010516375303268433,
+        0.010468415915966034,
+        0.010515833273530006,
+        0.010272500105202198,
+        0.010408833622932434,
+        0.010401999577879906,
+        0.010535416193306446
+      ],
+      "median_s": 0.010468415915966034,
+      "peak_rss_bytes": 166952960,
+      "peak_growth_bytes": 95485952,
+      "has_jit": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": true,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "execution_report": null,
+      "output_grid": {
+        "chunks": [
+          4194304
+        ],
+        "blocks": [
+          262144
+        ]
+      },
+      "source_blocks": [
+        32000
+      ],
+      "logical_partitions": null,
+      "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/__init__.py",
+      "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "legacy-adapter",
+      "preparation_s": 2.7417205274105072e-05,
+      "first_compute_s": 0.7118876250460744,
+      "samples_s": [
+        0.7041369574144483,
+        0.7090263329446316,
+        0.7053445829078555,
+        0.7047021249309182,
+        0.7047892501577735,
+        0.7064140420407057,
+        0.7117481250315905
+      ],
+      "median_s": 0.7053445829078555,
+      "peak_rss_bytes": 190971904,
+      "peak_growth_bytes": 121782272,
+      "has_jit": null,
+      "legacy_jit_probe": null,
+      "execution_report": {
+        "route": "menudet-lazyudf",
+        "jit": true
+      },
+      "output_grid": {
+        "chunks": [
+          4194304
+        ],
+        "blocks": [
+          262144
+        ]
+      },
+      "source_blocks": [
+        32000
+      ],
+      "logical_partitions": null,
+      "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/__init__.py",
+      "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "menudet-serial",
+      "preparation_s": 0.005515790544450283,
+      "first_compute_s": 0.4232519594952464,
+      "samples_s": [
+        0.4218813329935074,
+        0.4194827089086175,
+        0.42006066627800465,
+        0.42170458287000656,
+        0.4206995004788041,
+        0.420054541900754,
+        0.42196100018918514
+      ],
+      "median_s": 0.4206995004788041,
+      "peak_rss_bytes": 199245824,
+      "peak_growth_bytes": 126468096,
+      "has_jit": true,
+      "legacy_jit_probe": null,
+      "execution_report": null,
+      "output_grid": {
+        "chunks": [
+          4194304
+        ],
+        "blocks": [
+          262144
+        ]
+      },
+      "source_blocks": [
+        20000000
+      ],
+      "logical_partitions": [
+        262144
+      ],
+      "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/__init__.py",
+      "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "menudet",
+      "preparation_s": 0.005464124493300915,
+      "first_compute_s": 0.06316233333200216,
+      "samples_s": [
+        0.0615197503939271,
+        0.06967224925756454,
+        0.06281937565654516,
+        0.06105983257293701,
+        0.06077358406037092,
+        0.0608498752117157,
+        0.06395741645246744
+      ],
+      "median_s": 0.0615197503939271,
+      "peak_rss_bytes": 158138368,
+      "peak_growth_bytes": 85180416,
+      "has_jit": true,
+      "legacy_jit_probe": null,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 77,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 0,
+        "input_buffer_allocations": 0,
+        "input_chunk_fetches": 0,
+        "output_zero_fill_bytes": 3886080,
+        "output_chunk_buffer_bytes": 16777216,
+        "input_buffer_bytes": 0,
+        "logical_partitions": [
+          262144
+        ],
+        "output_copy_bytes": 0
+      },
+      "output_grid": {
+        "chunks": [
+          4194304
+        ],
+        "blocks": [
+          262144
+        ]
+      },
+      "source_blocks": [
+        20000000
+      ],
+      "logical_partitions": [
+        262144
+      ],
+      "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/__init__.py",
+      "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/tip11-parallel-isolated/blosc2/blosc2_ext.abi3.so"
+    }
+  ],
+  "quality": {}
+}

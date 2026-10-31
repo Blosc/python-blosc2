@@ -281,10 +281,72 @@ def _compute_resident_prefilter(lazy, kwargs):
     return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
 
 
-def compute_storage_if_eligible(lazy, kwargs):
-    """Write a full lane-local domain directly into matching Blosc2 output tiles."""
+def _compute_generator_prefilter(lazy, kwargs):
+    """Run input-free 1-D groups on the native block workers without repartitioning.
+
+    Unlike lane-local map kernels, generators may observe context or reductions.
+    Only an exact original partition/storage-block match is eligible: every
+    callback evaluates one whole original group, including the final short one.
+    """
     import blosc2
 
+    extension = blosc2.blosc2_ext
+    if (
+        lazy.inputs
+        or lazy.kernel.input_dtypes
+        or len(lazy.shape) != 1
+        or not lazy.shape[0]
+        or lazy.kernel.result_cardinality != "elementwise"
+        or lazy.kernel.context_ndim not in (0, 1)
+        or lazy.dtype.kind not in "biuf"
+        or blosc2.IS_WASM
+        or not getattr(extension, "menudet_prefilter_available", lambda: False)()
+    ):
+        return None
+    options = dict(kwargs)
+    output = options.pop("out", None)
+    if output is None:
+        cparams = options.get("cparams")
+        if cparams is None:
+            cparams = blosc2.CParams()
+        elif isinstance(cparams, dict):
+            cparams = blosc2.CParams(**cparams)
+        chunks, blocks = blosc2.compute_chunks_blocks(
+            lazy.shape,
+            chunks=options.get("chunks"),
+            blocks=options.get("blocks"),
+            dtype=lazy.dtype,
+            cparams=cparams,
+        )
+        if (
+            tuple(blocks) != lazy.partitions
+            or chunks[0] % blocks[0]
+            or chunks[0] * lazy.dtype.itemsize > DENSE_MATERIALIZATION_BUDGET
+        ):
+            return None
+        options.update(chunks=chunks, blocks=blocks, cparams=cparams)
+        output = blosc2.uninit(lazy.shape, dtype=lazy.dtype, **options)
+    elif (
+        type(output) is not blosc2.NDArray
+        or options
+        or output.shape != lazy.shape
+        or output.dtype != lazy.dtype
+        or output.blocks != lazy.partitions
+    ):
+        return None
+    if not extension.menudet_prefilter_inputs_eligible({}, output=output):
+        return None
+    output, report = lazy.kernel._handle.evaluate_prefilter({}, out=output)
+    report.update(logical_partitions=lazy.partitions, output_copy_bytes=0)
+    return output, report
+
+
+def compute_storage_if_eligible(lazy, kwargs):
+    """Stream lane-local maps or exactly aligned generator groups into storage."""
+    import blosc2
+
+    if not lazy.inputs:
+        return _compute_generator_prefilter(lazy, kwargs)
     extension = blosc2.blosc2_ext
     if (
         not storage_reader_eligible(lazy.kernel)

@@ -224,6 +224,11 @@ class MenudetLazyArray(LazyArray):
                 else {}
             )
             return self.kernel.evaluate_block(operands, block_shape=self._domain, **context)
+        if self.kernel.result_cardinality == "elementwise" and all(
+            isinstance(part, slice) and part.indices(size)[2] == 1
+            for part, size in zip(selection, self.shape, strict=True)
+        ):
+            return self._contiguous_values(selection)
         selected, squeeze = [], []
         for axis, (part, size) in enumerate(zip(selection, self.shape, strict=True)):
             if isinstance(part, int):
@@ -278,6 +283,49 @@ class MenudetLazyArray(LazyArray):
                 result[np.ix_(*positions)] = block if scalar else block[np.ix_(*local)]
         return np.squeeze(result, axis=tuple(squeeze)) if squeeze else result
 
+    def _contiguous_values(self, selection):
+        """Intersect rectangular slices with original groups without lane index arrays."""
+        bounds = [part.indices(size)[:2] for part, size in zip(selection, self.shape, strict=True)]
+        result = np.empty(tuple(max(stop - start, 0) for start, stop in bounds), dtype=self.dtype)
+        if not result.size:
+            return result
+        groups = [
+            range(start // p, (stop - 1) // p + 1)
+            for (start, stop), p in zip(bounds, self._partitions, strict=True)
+        ]
+        for index in product(*groups):
+            origin = tuple(i * p for i, p in zip(index, self._partitions, strict=True))
+            extent = tuple(
+                min(p, n - o) for p, n, o in zip(self._partitions, self._domain, origin, strict=True)
+            )
+            item = tuple(slice(o, o + n) for o, n in zip(origin, extent, strict=True))
+            operands = {}
+            for name, value in self.inputs.items():
+                rank = len(value.shape)
+                source_item = (
+                    tuple(
+                        slice(0, 1) if size == 1 else part
+                        for size, part in zip(value.shape, item[len(item) - rank :], strict=True)
+                    )
+                    if rank
+                    else ()
+                )
+                operands[name] = np.broadcast_to(np.asarray(value[source_item]), extent)
+            context = (
+                {"logical_shape": self._domain, "block_origin": origin} if self.kernel.context_ndim else {}
+            )
+            block = self.kernel.evaluate_block(operands, block_shape=extent, **context)
+            overlap = [
+                (max(start, o), min(stop, o + n))
+                for (start, stop), o, n in zip(bounds, origin, extent, strict=True)
+            ]
+            target = tuple(
+                slice(lo - start, hi - start) for (lo, hi), (start, _) in zip(overlap, bounds, strict=True)
+            )
+            source = tuple(slice(lo - o, hi - o) for (lo, hi), o in zip(overlap, origin, strict=True))
+            result[target] = block[source]
+        return result
+
     def __getitem__(self, item):
         return self._values(item)
 
@@ -288,6 +336,8 @@ class MenudetLazyArray(LazyArray):
         compressed 1-D inputs write directly through a native prefilter. Omitted chunks/blocks
         retain the input grid on this path. Partial selections and different
         output grids keep the general partition-preserving implementation.
+        Input-free numeric 1-D kernels also use native block workers when output
+        blocks exactly match their logical partitions and chunks contain whole blocks.
         """
         if item is not None:
             return blosc2.asarray(self._values(item), **kwargs)

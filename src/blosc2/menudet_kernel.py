@@ -313,7 +313,7 @@ def _header_pragmas(source):
             continue
         key, separator, value = body[3:].partition("=")
         key, value = key.strip(), value.strip()
-        if separator and key in {"fp", "math", "ulp"}:
+        if separator and key in {"fp", "math", "ulp", "compiler"}:
             values[key] = value
     return values
 
@@ -493,6 +493,41 @@ def _artifact_with_output(artifact, output_dtype):
     return (encoded + "\n").encode("utf-8")
 
 
+def _execution_artifact(data, options):
+    """Apply a runtime compiler default without baking machine policy into recipes."""
+    backend = options["jit_backend"]
+    if backend is None:
+        return data
+    if backend == "js":
+        raise NotImplementedError("Menudet artifacts do not support the JavaScript JIT backend")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate artifact field")
+            result[key] = value
+        return result
+
+    try:
+        manifest = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+    except (ValueError, UnicodeError):
+        return data  # Preserve native artifact validation/error reporting.
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("source"), str):
+        return data
+    source = manifest["source"]
+    if "compiler" in _header_pragmas(source):
+        return data  # Author-supplied native pragmas remain authoritative.
+    environment = os.environ.get("ME_DSL_JIT_COMPILER", "").strip().lower()
+    if environment in ("cc", "tcc"):
+        backend = environment
+    manifest["source"] = f"# me:compiler={backend}\n{source}"
+    try:
+        return json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (ValueError, UnicodeError):
+        return data  # Invalid numeric/Unicode content is still rejected natively.
+
+
 class MenudetKernel:
     """An already specialized Menudet kernel, with no Python fallback.
 
@@ -519,7 +554,9 @@ class MenudetKernel:
             data = artifact.encode("utf-8") if isinstance(artifact, str) else artifact
         except UnicodeEncodeError as error:
             raise MenudetError("Artifact text must be valid UTF-8", status="invalid_artifact") from error
-        policy = jit_config.execution_options()["jit"] if jit is None else jit
+        options = jit_config.execution_options()
+        runtime_data = _execution_artifact(data, options)
+        policy = options["jit"] if jit is None else jit
         if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in ("1", "true", "on", "tcc", "cc"):
             policy = True
         mode = (
@@ -530,9 +567,9 @@ class MenudetKernel:
             else 2
         )
         if infer_output:
-            handle = handle_type(data, mode, True)
+            handle = handle_type(runtime_data, mode, True)
         else:
-            handle = handle_type(data, mode)
+            handle = handle_type(runtime_data, mode)
         instance = cls.__new__(cls)
         instance._handle = handle
         instance._expression_handle = handle

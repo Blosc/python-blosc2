@@ -11,6 +11,14 @@
   for executable specializations, `MenudetError` for errors, and `validate_menudet`
   for source validation. During beta, API and artifact changes remain possible and
   will be documented with migration guidance.
+- Keep kernel authoring (`@menudet`) distinct from NumPy-style eager/tracing
+  convenience (`@jit`). Existing `@jit` return types, `strict`, `out=`, `disable=`
+  and pandas contracts are unchanged. Scoped compiler backend defaults now reach
+  Menudet artifact preparation without being embedded in serialized author source.
+- Materialize eligible input-free numeric 1-D Menudet generators through native
+  block workers when output blocks match their logical partitions. Contiguous
+  partial reads also avoid building per-lane index grids; other layouts retain
+  partition-preserving execution.
 - Retire the unqualified alpha `@blosc2.dsl_kernel`: importing it still works,
   but using it raises actionable migration guidance to `@blosc2.menudet`. Direct
   `DSLKernel(...)` and `DSLKernel.from_source(...)` also raise retirement guidance.

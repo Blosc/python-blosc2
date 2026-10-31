@@ -46,11 +46,10 @@ This works for any expression over operands blosc2 can broadcast, not just two `
 
 *Benchmark for this tip: [`tip_12_broadcast_build.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_12_broadcast_build.py)*
 
+(generate-arrays-with-dsl-kernels)=
 ## Generate arrays without NumPy staging
 
 The constructors from the previous tip generate values directly into Blosc2 storage. Likewise, prefer {doc}`blosc2.random <../reference/random>` to a full NumPy staging buffer when generating random arrays. For supported user-authored kernels, see the {doc}`Menudet guide <menudet>`.
-
-The earlier version of this tip used a hand-written integer hash through the alpha DSL decorator. That interface is retired. Its historical timing plot and benchmark below do not qualify Menudet or imply identical integer semantics after migration.
 
 ```python
 # Avoid: materializes the full array with NumPy first
@@ -67,9 +66,13 @@ a = blosc2.random.default_rng(42).integers(
 
 (`clevel=0` because random data is incompressible — don't pay the codec for nothing.)
 
-![DSL random kernel vs asarray(rng.integers())](optim_tips/tip_11_dsl_random.png)
+### A separate integer-hash experiment
 
-In the historical benchmark plotted above, writing directly to chunks was **~3.6x faster** and used **~1.9x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
+![Menudet integer hash versus NumPy PCG64 staging (different sampling semantics)](optim_tips/tip_11_dsl_random.png)
+
+At **200M int32 items**, a `@blosc2.menudet` hash took **0.0456s**, versus **0.3716s** for NumPy PCG64 plus {func}`asarray() <blosc2.asarray>`: about **8.2x faster**, with **1.9x lower whole-process peak RSS** (837 MiB versus 1617 MiB). These measurements use an Apple M4 Pro, 12 threads, the system-CC JIT, `clevel=0`, and aligned native generator scheduling plus optimized integer locals described in the [qualification report](https://github.com/Blosc/python-blosc2/blob/main/plans/menudet-api.md). This is about the **same throughput as the true legacy JIT control** (0.0444s) on this configuration. They are **not measurements of `blosc2.random`** or a promise of legacy parity on other compilers, thread counts or machines.
+
+The hash permutes the 32-bit domain: distinct counters produce no duplicates. It therefore does **not** provide independent random draws, even if its mean, variance and lag-one correlation look reasonable. The plot illustrates kernel generation and storage costs, not interchangeable RNG performance. Timings are medians of seven warm runs; peak RSS is measured in separate processes.
 
 For statistically rigorous work such as Monte Carlo, {doc}`blosc2.random <../reference/random>` provides NumPy-quality streams (one independent `SeedSequence` per chunk) while keeping chunk-parallel generation directly into storage.
 

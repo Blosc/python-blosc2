@@ -11,6 +11,8 @@ with migration guidance.
 Key contracts
 -------------
 
+* Author with ``@blosc2.menudet``. It is distinct from the eager/tracing ``@jit``
+  convenience decorator; native JIT is an execution policy, not an authoring mode.
 * Decorated calls return lazy arrays; ``result[:]`` returns values and
   ``result.compute()`` materializes a Blosc2 array.
 * ``MenudetFunction`` knows how to specialize; ``MenudetKernel`` is already
@@ -34,8 +36,8 @@ Specifications
 
 For the full language and format contracts, see miniexpr's specifications:
 
-* `Menudet 0.1 language specification <https://github.com/Blosc/miniexpr/blob/7ba6d40fdb5084526fc1750d7a30c4125caa332f/doc/dsl-spec/0.1.md>`_
-* `Menudet 0.1 artifact specification <https://github.com/Blosc/miniexpr/blob/7ba6d40fdb5084526fc1750d7a30c4125caa332f/doc/dsl-spec/artifact-0.1.md>`_
+* `Menudet 0.1 language specification <https://github.com/Blosc/miniexpr/blob/6413c800984ff1b8c63953e336b3b8b245b1c3a5/doc/dsl-spec/0.1.md>`_
+* `Menudet 0.1 artifact specification <https://github.com/Blosc/miniexpr/blob/6413c800984ff1b8c63953e336b3b8b245b1c3a5/doc/dsl-spec/artifact-0.1.md>`_
 
 API
 ---

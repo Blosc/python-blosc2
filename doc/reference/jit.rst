@@ -7,6 +7,24 @@ Blosc2 can compile eligible computations at runtime (JIT compilation). Native
 builds use the bundled Tiny C Compiler (TCC) by default, so installing a system
 compiler is **not** necessary to use Blosc2 or its default JIT.
 
+Authoring and execution are separate
+------------------------------------
+
+``@blosc2.menudet`` authors lazy, typed kernels with specialization and validated
+artifact persistence; the Python body is never executed. ``@blosc2.jit`` remains
+the NumPy-style eager/tracing convenience decorator, including ``out=``,
+``disable=`` and pandas integration. ``strict=True`` retains its existing
+control-flow parsing contract; it is not an alias for Menudet.
+
+Both can use native interpretation or JIT. For Menudet, choose ``jit=False`` to
+interpret, ``jit=True`` to prefer compilation, or ``require_jit=True`` to require
+JIT. Select backend/compiler options with ``blosc2.jit_options(...)`` when
+specializing/calling the function. A prepared kernel's policy is fixed; call or
+specialize again to select a different one. Runtime backend defaults reach
+artifact preparation but are not written into serialized author source. Existing
+source-pragma/environment precedence remains authoritative. See
+:doc:`../guides/menudet` for types, captures, domains and persistence.
+
 Global defaults and scoped options
 ----------------------------------
 
@@ -103,6 +121,7 @@ inherit their creation context but do not affect unrelated tasks. Thread context
 propagation follows Python's ``contextvars`` rules (including explicit copied
 contexts, ``asyncio.to_thread()``, and Python's thread-context inheritance setting).
 Process-wide setters still affect all threads without a contextual override.
+Menudet functions resolve their policy at preparation time as described above.
 
 Compiler command/flags and explicit cache directories participate in native cache
 identity, including process-local positive/negative caches. Changing them must not
@@ -150,6 +169,8 @@ accept them through ``**kwargs``. Eligible lazy-expression reductions, such as
 ``expr.sum(jit=True, jit_backend="cc")``, forward them to evaluation. These
 settings tune execution rather than array storage; they are not options to
 :func:`blosc2.empty`.
+For portable Menudet lazy results, select execution policy when preparing the
+kernel instead; their ``compute()`` options are storage/materialization options.
 
 Automatic policy uses miniexpr's validated structural classification: a single
 ``return <expression>`` defaults to interpretation, while programs with multiple

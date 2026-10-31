@@ -23,7 +23,7 @@ def kernel(source, *, scalar=False, nd=False, string=False):
     if string:
         inputs[0]["itemsize"] = output["itemsize"] = 16
         requires.append("fixed-strings")
-    if scalar:
+    if scalar or "block_sum(" in source:
         requires.append("block-reductions")
     if nd:
         requires.append("nd-context")
@@ -208,6 +208,32 @@ def test_string_roundtrip_and_native_only_load(tmp_path, monkeypatch):
         dsl_module, "kernel_from_source", lambda *a, **k: pytest.fail("Python reconstruction")
     )
     np.testing.assert_array_equal(blosc2.open(tmp_path / "textlazy.b2nd")[:], ["SS A", "AB", "Z"])
+
+
+def test_contiguous_context_slices_preserve_whole_partitions(monkeypatch):
+    values = np.arange(7, dtype="int64").reshape(1, 7)
+    native = kernel("def k(x):\n    return x + block_sum(x) + _flat_idx\n", nd=True)
+    lazy = native.lazy({"x": values}, shape=(5, 7), partitions=(2, 3))
+    expected = np.broadcast_to(values, (5, 7)).copy() + np.arange(35).reshape(5, 7)
+    for i in range(0, 5, 2):
+        for j in range(0, 7, 3):
+            expected[i : i + 2, j : j + 3] += values[:, j : j + 3].sum() * min(2, 5 - i)
+    extents = []
+    evaluate = blosc2.MenudetKernel.evaluate_block
+
+    def track(self, operands, **kwargs):
+        extents.append(kwargs["block_shape"])
+        return evaluate(self, operands, **kwargs)
+
+    def no_index_grid(*args, **kwargs):
+        pytest.fail("Contiguous selection must not construct advanced-index grids")
+
+    monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", track)
+    monkeypatch.setattr(np, "ix_", no_index_grid)
+    np.testing.assert_array_equal(lazy[1:4, -6:-1], expected[1:4, -6:-1])
+    assert extents == [(2, 3)] * 4
+    np.testing.assert_array_equal(lazy[3:1, :], expected[3:1, :])
+    np.testing.assert_array_equal(lazy.rechunk(chunks=(3, 4), blocks=(1, 2))[:], expected)
 
 
 def test_preflight_preserves_destination(tmp_path):
