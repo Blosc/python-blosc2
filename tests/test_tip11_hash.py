@@ -8,6 +8,8 @@ import pytest
 
 import blosc2
 
+pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Host JIT workload is qualified outside WASM")
+
 
 def test_tip11_hash_domain_partitions_and_signed_output():
     path = Path(__file__).resolve().parents[1] / "bench/optim_tips/tip_11_dsl_random.py"

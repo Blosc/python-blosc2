@@ -17,12 +17,16 @@ import hashlib
 import json
 import os
 import platform
-import resource
 import subprocess
 import sys
 from pathlib import Path
 from statistics import median
 from time import perf_counter
+
+try:
+    import resource
+except ImportError:  # Windows: resource is POSIX-only.
+    resource = None
 
 import numpy as np
 
@@ -106,6 +110,8 @@ def prepare(variant, args):
 
 
 def peak_rss():
+    if resource is None:
+        return 0
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
 
 

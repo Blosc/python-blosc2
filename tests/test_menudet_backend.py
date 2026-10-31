@@ -8,7 +8,10 @@ import pytest
 
 import blosc2
 
-pytestmark = pytest.mark.usefixtures("native_graph_runtime")
+pytestmark = [
+    pytest.mark.usefixtures("native_graph_runtime"),
+    pytest.mark.skipif(blosc2.IS_WASM, reason="Host compiler backend selection is not a WASM contract"),
+]
 
 
 @blosc2.menudet(jit=False)
