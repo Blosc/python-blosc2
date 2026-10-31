@@ -16,6 +16,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 EXPRESSIONS = {
     "affine": "x * 2 + y / 3 - 1",
@@ -44,9 +45,7 @@ def worker(route, workload, dtype, size, api):
                 "MENUDET_GCC", shutil.which("gcc-16") or shutil.which("gcc") or "cc"
             )
         source = f"def k(x, y):\n    return {expression}\n"
-        artifact = blosc2.DSLKernel.from_source(source).export(
-            {"x": dtype, "y": dtype}, dtype, version="0.1"
-        )
+        artifact = DSLKernel.from_source(source).export({"x": dtype, "y": dtype}, dtype, version="0.1")
         kernel, compile_ms = timed(
             lambda: blosc2.MenudetKernel.from_json(artifact, jit=route != "interpreter")
         )

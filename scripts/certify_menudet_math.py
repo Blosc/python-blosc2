@@ -116,6 +116,7 @@ def generate():
 
 def check(record):
     import blosc2
+    from blosc2.dsl_kernel import SourceKernel
 
     failures = []
     maxima = {}
@@ -126,7 +127,7 @@ def check(record):
         if name == "ldexp":
             signature["y"] = "int64"
         source = f"def k({', '.join(names)}):\n    return {name}({', '.join(names)})\n"
-        artifact = blosc2.DSLKernel.from_source(source).export(signature, dtype)
+        artifact = SourceKernel.from_source(source).export(signature, dtype)
         kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
         inputs = {
             key: np.array([float.fromhex(value)], dtype=signature[key])

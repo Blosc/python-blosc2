@@ -285,12 +285,11 @@ def benchmark():
         numexpr = None
 
     import blosc2
+    from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
     rows = []
     for dtype in ("float32", "float64", "int64"):
-        artifact = blosc2.DSLKernel.from_source("def k(x):\n    return x * 2 + 1\n").export(
-            {"x": dtype}, dtype
-        )
+        artifact = DSLKernel.from_source("def k(x):\n    return x * 2 + 1\n").export({"x": dtype}, dtype)
         start = time.perf_counter_ns()
         kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
         compile_ns = time.perf_counter_ns() - start
