@@ -179,7 +179,7 @@ def test_external_backend_benchmark_without_numexpr(monkeypatch):
     assert result["numexpr_threads"] is None
     assert worker("numexpr", "float64", 16, 1)["status"] == "unavailable"
     for tool, args in (
-        ("tools/menudet_jit_bench.py", ("numexpr", "affine", "float64", 16, "flat")),
+        ("bench/menudet_jit_bench.py", ("numexpr", "affine", "float64", 16, "flat")),
         ("tools/menudet_graph_bench.py", (16, "float64", "numexpr", "C", False)),
     ):
         unavailable = runpy.run_path(str(root / tool))["worker"](*args)

@@ -13,7 +13,7 @@ import blosc2
 from blosc2.dsl_kernel import SourceKernel
 
 spec = importlib.util.spec_from_file_location(
-    "menudet_numpy_compat", Path(__file__).resolve().parents[1] / "tools" / "menudet_numpy_compat.py"
+    "menudet_numpy_compat", Path(__file__).resolve().parent / "menudet_numpy_compat.py"
 )
 compat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compat)

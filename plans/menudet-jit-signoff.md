@@ -59,7 +59,7 @@ M1–M6 work are not represented as resolved by local host qualification.
 
 ## Benchmark method
 
-`tools/menudet_jit_bench.py` produces `plans/menudet-jit-benchmarks.json`: 84 isolated
+`bench/menudet_jit_bench.py` produces `plans/menudet-jit-benchmarks.json`: 84 isolated
 rows, sizes 8 and 262,144, float32/64, affine/polynomial/lazy-where workloads;
 interpreter/TCC/GCC/NumPy/one-thread NumExpr. Every result is value-checked.
 Compiled routes assert `has_jit`; each worker has a fresh cache directory.
@@ -69,7 +69,7 @@ array timings are separate; these are finite C-contiguous workloads, not claims
 about compressed traversal, production concurrency or universal NumPy performance.
 
 Reproduce in the `blosc2` conda environment with `MENUDET_WORK_DIR` pointing to the
-approved OpenCode temporary directory and `python -m tools.menudet_jit_bench
+approved OpenCode temporary directory and `python -m bench.menudet_jit_bench
 --report plans/menudet-jit-benchmarks.json`.
 
 ### Warm results (milliseconds, 262,144 float64 elements, flat API)

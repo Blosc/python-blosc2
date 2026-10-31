@@ -18,7 +18,16 @@ from pathlib import Path
 
 import numpy as np
 
-from tools import menudet_numpy_compat as checkpoint
+try:
+    from tests import menudet_numpy_compat as checkpoint
+except ImportError:
+    import importlib.util
+
+    _spec = importlib.util.spec_from_file_location(
+        "menudet_numpy_compat", Path(__file__).resolve().parents[1] / "tests" / "menudet_numpy_compat.py"
+    )
+    checkpoint = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(checkpoint)
 
 VERSION = "menudet-numpy-vectors-2"
 CAPABILITIES = {

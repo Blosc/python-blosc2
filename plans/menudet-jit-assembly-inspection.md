@@ -125,7 +125,7 @@ directory: `menudet-asm-probe.c`, `menudet-asm-times.csv`, `{tcc,gcc,clang}.c`,
 
 ## Full-table interleaved rerun
 
-`tools/menudet_jit_interleaved.py` repeats the three original workloads with all six
+`bench/menudet_jit_interleaved.py` repeats the three original workloads with all six
 backends in each of five fresh processes. It shares identical input buffers, warms
 each engine, rotates both workload and backend order, and verifies reference values
 before and after sampling. Compilation is excluded; NumExpr uses one thread and
@@ -154,5 +154,5 @@ are preferable to the original isolated-run ranking, but still do not measure
 core residency/frequency or prove the cause of the earlier discrepancy.
 
 Reproduce with `MENUDET_WORK_DIR` set to the approved temporary directory:
-`conda run -n blosc2 python -m tools.menudet_jit_interleaved --report
+`conda run -n blosc2 python -m bench.menudet_jit_interleaved --report
 plans/menudet-jit-interleaved.json`.

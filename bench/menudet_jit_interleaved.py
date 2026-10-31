@@ -15,8 +15,8 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import SourceKernel as DSLKernel
-from tools.menudet_jit_bench import EXPRESSIONS, timed
+from bench.menudet_jit_bench import EXPRESSIONS, timed
+from blosc2.dsl_kernel import SourceKernel
 
 try:
     import numexpr
@@ -40,7 +40,7 @@ def worker():  # noqa: C901 -- independent compile, warm-up, validation and samp
     compiled = {}
     compile_rows = []
     for workload, expression in EXPRESSIONS.items():
-        artifact = DSLKernel.from_source(f"def k(x, y):\n    return {expression}\n").export(
+        artifact = SourceKernel.from_source(f"def k(x, y):\n    return {expression}\n").export(
             {"x": "float64", "y": "float64"}, "float64", version="0.1"
         )
         compiled[workload] = {}
@@ -128,7 +128,7 @@ def main():
     processes = []
     for _ in range(args.processes):
         result = subprocess.run(
-            [sys.executable, "-m", "tools.menudet_jit_interleaved", "--worker"],
+            [sys.executable, "-m", "bench.menudet_jit_interleaved", "--worker"],
             capture_output=True,
             text=True,
             check=True,

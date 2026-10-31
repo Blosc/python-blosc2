@@ -285,11 +285,11 @@ def benchmark():
         numexpr = None
 
     import blosc2
-    from blosc2.dsl_kernel import SourceKernel as DSLKernel
+    from blosc2.dsl_kernel import SourceKernel
 
     rows = []
     for dtype in ("float32", "float64", "int64"):
-        artifact = DSLKernel.from_source("def k(x):\n    return x * 2 + 1\n").export({"x": dtype}, dtype)
+        artifact = SourceKernel.from_source("def k(x):\n    return x * 2 + 1\n").export({"x": dtype}, dtype)
         start = time.perf_counter_ns()
         kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
         compile_ns = time.perf_counter_ns() - start
@@ -369,7 +369,7 @@ def main():
         "native_revision": args.native_revision,
         "installed_native_revision": args.installed_native_revision,
         "local_changes": [
-            "tools/menudet_numpy_compat.py",
+            "tests/menudet_numpy_compat.py",
             "tests/test_menudet_numpy_compat.py",
             "checkpoint reports",
         ],

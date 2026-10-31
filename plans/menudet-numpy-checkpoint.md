@@ -50,7 +50,7 @@ Native repository owns the single reviewed corpus, schema and inventory:
 
 Python integration adds:
 
-- `tools/menudet_numpy_compat.py`: pinned reference generation, installed-extension
+- `tests/menudet_numpy_compat.py`: pinned reference generation, installed-extension
   execution, cross-runner recording, baseline verification, drift detection and
   preliminary performance measurements. No source `eval`, sibling-library loading
   or independently maintained NumPy arithmetic rules.
@@ -92,7 +92,7 @@ Reproduction from this repository, selecting native artifacts explicitly:
 export MENUDET_NUMPY_CORPUS=/absolute/path/to/miniexpr/tests/numpy-compat/vectors.json
 export MENUDET_NUMPY_RUNNER=/absolute/path/to/native-build/tests/numpy_compat_runner
 conda run -n blosc2 pytest tests/test_menudet_numpy_compat.py -q -n 0
-conda run -n blosc2 python tools/menudet_numpy_compat.py run "$MENUDET_NUMPY_CORPUS" \
+conda run -n blosc2 python tests/menudet_numpy_compat.py run "$MENUDET_NUMPY_CORPUS" \
   --native-runner "$MENUDET_NUMPY_RUNNER" \
   --native-revision 4e45081889e20e6a3820822a808f92de00fff7e6 \
   --installed-native-revision 3418cdce4b5c11e1661c8b6453e3d31d94b0b2b4
