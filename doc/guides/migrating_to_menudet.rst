@@ -68,7 +68,9 @@ parameters and nonnumeric returns require annotations:
 Scalar globals and closures are captured at decoration. Pass arrays as arguments
 rather than capturing them. Callbacks, arbitrary objects, side effects such as
 ``print`` and unsupported dynamic Python constructs must move outside the kernel.
-The Python body is never executed as a fallback.
+For conditional selection, prefer ``np.where(condition, yes, no)`` rather than
+importing ``from blosc2 import where`` (which cannot be exported as an external
+callback). The Python body is never executed as a fallback.
 
 Do not assume legacy numerical results are identical: check dtypes, conversions
 and reductions against :doc:`../reference/menudet_accuracy`. See

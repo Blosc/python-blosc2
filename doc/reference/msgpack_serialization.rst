@@ -135,14 +135,12 @@ Only durable reference-style operands are supported:
 Purely in-memory operands are intentionally rejected. This keeps msgpack
 serialization of ``LazyExpr`` reference-preserving rather than value-copying.
 
-``LazyUDF``
------------
+Menudet lazy arrays (and historical ``LazyUDF``)
+-------------------------------------------------
 
 New computation recipes use validated Menudet artifacts, not Python function
 source. Author them with ``@blosc2.menudet`` and serialize the returned lazy
-array. Compatible internal DSLKernel-backed LazyUDFs normalize to Menudet before
-serialization internally; the retired decorator and constructor are not public
-authoring options.
+array.
 
 The payload preserves the artifact, logical domain/partitions and durable operand
 references. Historical source-backed LazyUDF payloads reject under both safe and

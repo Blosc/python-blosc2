@@ -6,12 +6,16 @@
 
 **Menudet — a little language for portable computation on arrays and tables.**
 
-- Make `@blosc2.menudet` the sole supported computation-language decorator.
-  The unqualified alpha `@blosc2.dsl_kernel` is retired: importing it still
-  works, but using it raises an actionable error. See the
-  [migration guide](https://blosc.org/python-blosc2/guides/migrating_to_menudet.html).
-  Direct `DSLKernel(...)` and `DSLKernel.from_source(...)` also raise retirement
-  guidance. Shared source normalization is internal, not a legacy authoring API.
+- Establish Menudet 0.1 beta as the supported computation language going forward.
+  Use `@blosc2.menudet` (`MenudetFunction`) for decorated authors, `MenudetKernel`
+  for executable specializations, `MenudetError` for errors, and `validate_menudet`
+  for source validation. During beta, API and artifact changes remain possible and
+  will be documented with migration guidance.
+- Retire the unqualified alpha `@blosc2.dsl_kernel`: importing it still works,
+  but using it raises actionable migration guidance to `@blosc2.menudet`. Direct
+  `DSLKernel(...)` and `DSLKernel.from_source(...)` also raise retirement guidance.
+  Shared source normalization is internal, not a legacy authoring API.
+  See the [migration guide](https://blosc.org/python-blosc2/guides/migrating_to_menudet.html).
   Generic Python LazyUDFs and supported LazyExpr computations are unaffected.
 - Reject historical source-backed DSL/Python UDF recipes and legacy table-kernel
   metadata with `UnsupportedLegacyRecipeError`, even with `deserialize="full"`.
@@ -20,16 +24,6 @@
   No source reconstruction, silent column dropping or automatic migration occurs.
 - `lazyudf()` rejects MenudetFunction/MenudetKernel with guidance to call the
   function directly or use `kernel.lazy(...)`; it is not a second Menudet API.
-- Remove experimental `blosc2.NativeGraph` from the public API. Graph planning
-  remains internal; artifact identifiers and execution formats are unchanged.
-- Menudet is the supported language going forward. During beta, API and artifact
-  changes remain possible and will be documented with migration guidance.
-
-- Establish the unreleased language and artifact contract as Menudet 0.1 beta.
-  Use `MenudetFunction` for decorated authors, `MenudetKernel` for executable
-  specializations, `MenudetError` for errors, and `validate_menudet` for source
-  validation. Internal recipe tags and the artifact language identifier are
-  `menudet`. Old development names and draft artifacts are not supported.
 - Strengthen NumExpr-removal qualification: runtime/install behavior is independent
   of NumExpr, including native interpretation without JIT. Nullable
   `blosc2.numexpr` remains a compatibility surface, not an engine selector.

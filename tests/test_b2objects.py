@@ -145,6 +145,19 @@ def test_legacy_lazyudf_open_is_unsupported(policy):
         blosc2.open(fixture, mode="r", deserialize=policy)
 
 
+def test_open_b2object_rejects_legacy_marker_before_reading_payload(monkeypatch):
+    import blosc2.b2objects as objects
+
+    carrier = blosc2.empty((4,), dtype="float64", meta={"b2o": {"version": 1, "kind": "lazyudf"}})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Read the payload before rejecting the legacy marker")
+
+    monkeypatch.setattr(objects, "read_b2object_payload", forbidden)
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.open_b2object(carrier)
+
+
 def test_lazyudf_from_cframe_roundtrip(tmp_path):
     a = blosc2.asarray(np.arange(5, dtype=np.float64), urlpath=tmp_path / "a.b2nd", mode="w")
     b = blosc2.asarray(np.arange(5, dtype=np.float64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")

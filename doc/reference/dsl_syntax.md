@@ -105,7 +105,9 @@ falling back to Python.
 - Chained comparisons such as `0 <= x < 10` short-circuit left to right.
 - Recognized mathematical calls include `np.sin(x)`, `np.sqrt(x)` and their
   native spellings. This does not make arbitrary NumPy functions available.
-- `where(condition, yes, no)` evaluates only the selected branch for each element.
+- `np.where(condition, yes, no)` (or bare `where(...)`) evaluates only the
+  selected branch for each element. Prefer `np.where(...)` to avoid linter
+  warnings and avoid conflicts with `from blosc2 import where` in module globals.
 - `int(x)`, `float(x)` and `bool(x)` perform explicit conversions; fixed-width
   conversions such as `int32(x)` are also available.
 - Numeric literals support digit separators and binary, octal and hexadecimal

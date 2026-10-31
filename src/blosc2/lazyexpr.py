@@ -5916,10 +5916,8 @@ def lazyudf(
         any other object is supported too, and it will be passed as-is to the
         user-defined function. If not needed, this can be empty, but `shape` must
         be provided.
-    dtype: np.dtype, optional
-        The resulting ndarray dtype in NumPy format. Required for Python UDFs.
-        Internal numerical constructors can infer it from normalized source;
-        this is not a public legacy-kernel authoring interface.
+    dtype: np.dtype
+        The resulting ndarray dtype in NumPy format. Required.
     shape: tuple, optional
         The shape of the resulting array. If None, the shape will be guessed from inputs.
     chunked_eval: bool, optional

@@ -271,6 +271,8 @@ def open_b2object(obj):
     marker = read_b2object_marker(obj)
     if marker is None:
         return None
+    if isinstance(marker, dict) and marker.get("kind") == "lazyudf":
+        raise UnsupportedLegacyRecipeError()
 
     payload = read_b2object_payload(obj)
     if marker.get("version") != _B2OBJECT_VERSION:

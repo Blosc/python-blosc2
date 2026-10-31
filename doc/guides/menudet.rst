@@ -138,6 +138,17 @@ kernel and register its named inputs:
 
 .. code-block:: python
 
+    from dataclasses import dataclass
+
+
+    @dataclass
+    class Row:
+        amount: int = 0
+
+
+    table = blosc2.CTable(Row, new_data={"amount": [10, 20, 30]})
+
+
     @blosc2.menudet
     def twice(x):
         return x * 2

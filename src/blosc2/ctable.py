@@ -13308,22 +13308,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         func:
             UDF passed straight to :func:`blosc2.lazyudf`; see that function
             for the expected signature (``func(inputs_tuple, output,
-            offset)``). Internal source kernels use native execution
-            rather than ordinary Python callbacks.
+            offset)``).
         columns:
             Names of *stored* columns to bind as *func*'s inputs, in order
             (computed/generated columns are not supported). Defaults to
             every stored column, in schema order.
         dtype:
-            Result dtype. Required unless *func* is a
-            internal source kernel, whose dtype can be inferred by
-            NumPy type promotion of the input dtypes -- same rule as
-            :func:`blosc2.lazyudf`.
+            Result dtype. Required for Python UDFs.
         engine:
             Forwarded to :func:`blosc2.lazyudf` as its ``jit`` policy:
-            ``"auto"`` (default) lets it choose, ``"jit"`` forces JIT
-            (only effective for a compatible native kernel),
-            ``"numpy"`` disables JIT.
+            ``"auto"`` (default) inherits configured defaults, ``"jit"``
+            prefers JIT, and ``"numpy"`` disables JIT. Ordinary Python
+            callbacks are not JIT-compiled.
 
         Returns
         -------
@@ -13373,7 +13369,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         values: str
         | blosc2.LazyExpr
-        | SourceKernel
         | blosc2.MenudetKernel
         | Callable[[dict[str, Any]], blosc2.LazyExpr]
         | RowTransformer,
@@ -13396,9 +13391,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             add_generated_column(name, *, values="price * qty", dtype=..., create_index=False)
             add_generated_column(name, *, values=lazy_expr, dtype=...)
-            add_generated_column(name, *, values=dsl_kernel,
+            add_generated_column(name, *, values=menudet_kernel,
                                  inputs={"price": "price", "qty": "qty"}, dtype=...)
-            add_generated_column(name, *, values=blosc2.lazyudf(dsl_kernel, (t.price, t.qty)))
             add_generated_column(name, *, values=lambda cols: cols["price"] * 1.21, dtype=...)
             add_generated_column(name, *, values=t.embedding.row_transformer.norm(axis=0), dtype=...)
             add_generated_column(name, *, values=t.image.row_transformer.mean(axis=(0, 1)),
@@ -13425,15 +13419,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               Each row is an independent logical group, including its complete
               fixed-shape array inputs. Appended rows are auto-filled and
               :meth:`refresh_generated_column` recomputes after in-place edits.
-            * Internally normalized :class:`blosc2.LazyUDF` via
-              :func:`blosc2.lazyudf` — column bindings are inferred by identity
-              from the operands, so ``inputs=`` is not needed.  Accepts
-              :class:`Column` accessors (``t.col1``) or raw NDArrays as
-              operands. Same independent-row semantics and persistence as above.
             * callable: called as ``values(self._cols)`` and must return a
-              :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
-              internal source kernel. Specialize a :func:`blosc2.menudet`
-              function to obtain a :class:`blosc2.MenudetKernel` for public authoring.
+              :class:`blosc2.LazyExpr`. For portable kernels, specialize a
+              :func:`blosc2.menudet` function to obtain a
+              :class:`blosc2.MenudetKernel`.
             * :class:`RowTransformer`: row-wise projection/reduction bound to a
               fixed-shape ndarray column, e.g.
               ``t.embedding.row_transformer.norm(axis=0)`` or
@@ -13634,11 +13623,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def add_computed_column(
         self,
         name: str,
-        expr: str
-        | blosc2.LazyExpr
-        | SourceKernel
-        | blosc2.MenudetKernel
-        | Callable[[dict[str, Any]], blosc2.LazyExpr],
+        expr: str | blosc2.LazyExpr | blosc2.MenudetKernel | Callable[[dict[str, Any]], blosc2.LazyExpr],
         *,
         dtype: np.dtype | None = None,
         inputs: Mapping[str, str] | list[str] | None = None,
@@ -13677,14 +13662,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               named ``inputs={parameter: column}`` bindings (positional lists
               are also accepted). Kernels are validated as Menudet before
               registration and persist without Python reconstruction.
-            * Internally normalized :class:`blosc2.LazyUDF` via
-              :func:`blosc2.lazyudf` — column bindings are inferred by identity
-              from the operands, so ``inputs=`` is not needed.  Accepted forms
-              include ``blosc2.lazyudf(kernel, (t.col1, t.col2))`` (using
-              :class:`Column` accessors) or the raw NDArray equivalents.
             * callable: called as ``expr(self._cols)`` and must return a
-              :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
-              internal source kernel. For public kernels use :func:`blosc2.menudet`
+              :class:`blosc2.LazyExpr`. For portable kernels use :func:`blosc2.menudet`
               and register its specialized :class:`blosc2.MenudetKernel`.
 
             Kernel columns use independent-row semantics: scalar inputs form
@@ -13703,12 +13682,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         dtype:
             Optional dtype override for the computed values.  For expression
             forms it is inferred from the resulting :class:`blosc2.LazyExpr`
-            when omitted.  For DSL forms, an omitted dtype is inferred by NumPy
-            type promotion of the input column dtypes (correct for elementwise
-            arithmetic kernels); pass *dtype* explicitly for kernels that change
-            the type (comparisons/``where``/casts) or when the kernel has no
-            column inputs.  This changes the dtype reported by the CTable column
-            wrapper; it does not create physical storage.
+            when omitted.  For Menudet kernels, dtype is inferred from the
+            kernel's output signature; an explicit *dtype* must match it.
+            For expression forms, this changes the dtype reported by the CTable
+            column wrapper; it does not create physical storage.
         inputs:
             For bare kernels, a mapping from parameter names to stored columns,
             or a positional list of column names. LazyUDF bindings are inferred
@@ -16458,9 +16435,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         The predicate can be supplied as a boolean :class:`blosc2.LazyExpr`,
         a boolean :class:`blosc2.NDArray`, a boolean NumPy array, a boolean
-        ``Column``, an unbound :func:`col` expression, a :class:`blosc2.LazyUDF`
-        (including internally normalized source kernels), or a string
-        expression evaluated against this table's columns.  String expressions
+        ``Column``, an unbound :func:`col` expression, a :class:`blosc2.LazyUDF`,
+        or a string expression evaluated against this table's columns.  String expressions
         can reference stored and computed columns directly by name.
 
         The returned object is a :class:`CTable` view sharing the original

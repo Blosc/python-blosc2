@@ -69,9 +69,9 @@ a = blosc2.random.default_rng(42).integers(
 
 ![DSL random kernel vs asarray(rng.integers())](optim_tips/tip_11_dsl_random.png)
 
-At 200M int32 elements, the DSL kernel was **~3.6x faster** and used **~1.9x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
+In the historical benchmark plotted above, writing directly to chunks was **~3.6x faster** and used **~1.9x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
 
-The output passes light uniformity checks against NumPy's PCG64 (the benchmark script prints them) — good enough for synthetic data, benchmarks and test fixtures, but this hand-rolled hash is *not* a substitute for a real generator. For statistically rigorous work such as Monte Carlo, use {doc}`blosc2.random <../reference/random>`, which gives you NumPy-quality streams (one independent `SeedSequence` per chunk) and keeps the chunk-parallel generation. The benchmark source explains the hash design and the DSL integer-arithmetic rules it relies on; see also the [DSL syntax reference](../reference/dsl_syntax.md).
+For statistically rigorous work such as Monte Carlo, {doc}`blosc2.random <../reference/random>` provides NumPy-quality streams (one independent `SeedSequence` per chunk) while keeping chunk-parallel generation directly into storage.
 
 *Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
 

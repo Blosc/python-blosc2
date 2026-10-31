@@ -1389,7 +1389,7 @@ above).  Do not plan storage on either figure without measuring your own data.
    just like any other leaf.
 
 .. [#utf8compute] Expressions that *return* strings — concatenation,
-   ``upper``, ``replace``, DSL kernels — run on fixed-width arrays, so a utf8
+   ``upper``, ``replace``, Menudet kernels — run on fixed-width arrays, so a utf8
    column is converted first and the result written back.  See
    :ref:`ComputingUtf8Strings` below.
 
@@ -1473,7 +1473,7 @@ naming the column and printing the recipe above:
 
 * :meth:`CTable.add_computed_column`, :meth:`CTable.add_generated_column` and
   :meth:`CTable.assign` with a string expression that references a utf8 column;
-* the same three with a :func:`blosc2.dsl_kernel`, plus :meth:`CTable.apply`
+* the same three with a :class:`blosc2.MenudetKernel`, plus :meth:`CTable.apply`
   and :func:`blosc2.lazyudf` — note it is the utf8 **operand** that cannot
   work, whatever the kernel returns, so a kernel producing a number or a
   boolean is refused just the same.
