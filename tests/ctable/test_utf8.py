@@ -1757,7 +1757,8 @@ def test_utf8_array_comparison_edge_cases():
     assert isinstance(hash(arr), int)
 
 
-def test_bare_utf8_expr_uses_span_driver():
+@pytest.mark.parametrize("keyword", ["eval_kwargs", "ne_args"])
+def test_bare_utf8_expr_uses_span_driver(keyword):
     """A bare UTF8Array must not evaluate through the NumPy slices_eval path.
 
     That path returns correct-looking values while never reaching miniexpr,
@@ -1766,7 +1767,10 @@ def test_bare_utf8_expr_uses_span_driver():
     values = ["hello", "world", "héllo"]
     arr = blosc2.utf8_array(values)
 
-    result = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute(strict_miniexpr=True)
+    expr = blosc2.lazyexpr("'x=' + a", {"a": arr}, **{keyword: {}})
+    assert expr._eval_kwargs == {}
+    assert not hasattr(expr, "_ne_args")
+    result = expr.compute(strict_miniexpr=True)
     # Contagion: a string result over a utf8 operand stays variable-width.
     assert isinstance(result, blosc2.UTF8Array)
     assert list(result[:]) == ["x=" + v for v in values]

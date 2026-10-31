@@ -25,8 +25,11 @@
 - `lazyudf()` rejects MenudetFunction/MenudetKernel with guidance to call the
   function directly or use `kernel.lazy(...)`; it is not a second Menudet API.
 - Strengthen NumExpr-removal qualification: runtime/install behavior is independent
-  of NumExpr, including native interpretation without JIT. Nullable
-  `blosc2.numexpr` remains a compatibility surface, not an engine selector.
+  of NumExpr, including native interpretation without JIT. Remove the
+  `blosc2.numexpr` compatibility placeholder; accessing it now raises
+  `AttributeError`. Rename internal chunk evaluation and options to
+  `evaluate_chunk` and `eval_kwargs`; retain temporary `ne_evaluate` and public
+  `ne_args=` compatibility aliases.
   - Native compression/reduction prefilter failures now propagate instead of
     replaying a partially executed operation through NumPy.
   - Serial bounded stored-output maps accept interpreter artifacts as well as JIT.

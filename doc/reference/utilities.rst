@@ -102,8 +102,8 @@ this may require temporary memory proportional to the overlapping operands.
 Empty sums/products use NumPy identities, and empty extrema raise without an
 explicit identity. Native output descriptors support validated Fortran, transposed,
 stepped and reversed destinations with bounded scratch. Unsupported operations
-retain explicit NumPy fallbacks. NumExpr is not a runtime dependency;
-``blosc2.numexpr`` remains a compatibility placeholder equal to ``None``.
+retain explicit NumPy fallbacks. NumExpr is not a runtime dependency, and the
+``blosc2.numexpr`` compatibility placeholder has been removed.
 
 NumExpr migration
 -----------------
@@ -114,9 +114,12 @@ Use ``blosc2.set_nthreads()`` and :ref:`JITOptions` for native execution policy.
 ``jit=False`` requests native interpretation where supported, not NumExpr.
 Optional benchmark scripts may still use NumExpr as an independent reference.
 
-The legacy internal ``ne_evaluate`` spelling delegates to the backend-neutral
-chunk evaluator; it neither imports nor invokes NumExpr. Native preparation can
-decline an unsupported signature to explicit NumPy semantics. An error after
+The backend-neutral ``evaluate_chunk`` evaluator neither imports nor invokes
+NumExpr; ``ne_evaluate`` remains a temporary internal compatibility alias.
+``lazyexpr(..., eval_kwargs=...)`` supplies expression evaluation options;
+the legacy ``ne_args=`` keyword remains a compatibility alias. Do not pass both
+names. Native preparation can decline an unsupported signature to explicit NumPy
+semantics. An error after
 native execution starts propagates instead of replaying the operation through
 another backend, including for compression prefilters and scalar reductions.
 

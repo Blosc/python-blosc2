@@ -1120,19 +1120,19 @@ def process_key(key, shape):
     return key, mask
 
 
-def is_inside_ne_evaluate() -> bool:
+def is_inside_evaluate_chunk() -> bool:
     """
-    Whether execution is inside the chunk evaluator (including its legacy alias).
+    Whether execution is inside the chunk evaluator.
     """
     # Get the current call stack
     stack = inspect.stack()
-    return builtins.any(frame_info.function in {"ne_evaluate", "evaluate_chunk"} for frame_info in stack)
+    return builtins.any(frame_info.function == "evaluate_chunk" for frame_info in stack)
 
 
 def incomplete_lazyfunc(func) -> None:
     """Decorator for lazy functions requiring explicit NumPy fallback coverage.
 
-    This function will force eager execution when called from ne_evaluate.
+    This function will force eager execution when called from evaluate_chunk.
 
     Returns
     -------
@@ -1149,7 +1149,7 @@ def incomplete_lazyfunc(func) -> None:
     """
 
     def wrapper(*args, **kwargs):
-        if is_inside_ne_evaluate():  # haven't been able to use miniexpr so use numpy
+        if is_inside_evaluate_chunk():  # haven't been able to use miniexpr so use numpy
             return safe_numpy_globals[func.__name__](*args, **kwargs)
         return func(*args, **kwargs)
 

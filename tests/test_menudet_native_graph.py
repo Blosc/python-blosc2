@@ -39,7 +39,7 @@ def test_required_graph_no_fallback_and_plan_reuse(monkeypatch, dtype):
     import importlib
 
     module = importlib.import_module("blosc2.lazyexpr")
-    monkeypatch.setattr(module, "ne_evaluate", forbidden)
+    monkeypatch.setattr(module, "evaluate_chunk", forbidden)
     monkeypatch.setattr(ExpressionGraph, "evaluate", forbidden)
     result = expr.compute(_require_native=True)
     np.testing.assert_array_equal(result[:], x * 2 + y)
@@ -103,7 +103,7 @@ class Block(importlib.abc.MetaPathFinder):
             raise ModuleNotFoundError('NumExpr deliberately unavailable', name='numexpr')
 sys.meta_path.insert(0, Block())
 import blosc2, numpy as np
-assert blosc2.numexpr is None
+assert not hasattr(blosc2, "numexpr")
 with blosc2.expression_evaluation('safe'):
     x = blosc2.asarray(np.arange(24.).reshape(4,6))
     e = blosc2.lazyexpr('sqrt(x) + 2', {'x':x})

@@ -71,7 +71,7 @@ def main():
 
     import blosc2
 
-    assert blosc2.numexpr is None
+    assert not hasattr(blosc2, "numexpr")
     requirements = importlib.metadata.requires("blosc2") or []
     assert not any(item.lower().startswith("numexpr") for item in requirements)
     options = args.pytest_args

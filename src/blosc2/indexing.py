@@ -1151,9 +1151,9 @@ def _values_from_numpy_target(values: np.ndarray, target: dict) -> np.ndarray:
         field = target.get("field")
         return values if field is None else values[field]
     if target["source"] == "expression":
-        from .lazyexpr import ne_evaluate
+        from .lazyexpr import evaluate_chunk
 
-        result = ne_evaluate(
+        result = evaluate_chunk(
             target["expression_key"], _operands_for_dependencies(values, target["dependencies"])
         )
         return np.asarray(result)
@@ -6468,13 +6468,13 @@ def _process_segment_query_batch(
     units: np.ndarray,
     expression: str,
     operands: dict,
-    ne_args: dict,
+    eval_kwargs: dict,
     where: dict,
     plan: IndexPlan,
     result_dtype: np.dtype,
     return_positions: bool,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    from .lazyexpr import _get_result, ne_evaluate
+    from .lazyexpr import _get_result, evaluate_chunk
     from .utils import get_chunk_operands
 
     chunk_operands = {}
@@ -6486,13 +6486,13 @@ def _process_segment_query_batch(
         cslice = (slice(start, stop, 1),)
         get_chunk_operands(operands, cslice, chunk_operands, plan.base.shape)
         if return_positions:
-            match = ne_evaluate(expression, chunk_operands, **ne_args)
+            match = evaluate_chunk(expression, chunk_operands, **eval_kwargs)
             if np.any(match):
                 value_parts.append(np.require(chunk_operands["_where_x"][match], requirements="C"))
                 absolute = np.arange(start, stop, dtype=np.int64)
                 position_parts.append(absolute[match])
         else:
-            result, _ = _get_result(expression, chunk_operands, ne_args, where)
+            result, _ = _get_result(expression, chunk_operands, eval_kwargs, where)
             if len(result) > 0:
                 value_parts.append(np.require(result, requirements="C"))
     if return_positions:
@@ -7180,7 +7180,7 @@ def _where_output_dtype(where_x) -> np.dtype:
 def evaluate_segment_query(
     expression: str,
     operands: dict,
-    ne_args: dict,
+    eval_kwargs: dict,
     where: dict,
     plan: IndexPlan,
     *,
@@ -7199,7 +7199,7 @@ def evaluate_segment_query(
                 candidate_units,
                 expression,
                 operands,
-                ne_args,
+                eval_kwargs,
                 where,
                 plan,
                 result_dtype,
@@ -7215,7 +7215,7 @@ def evaluate_segment_query(
                     batches,
                     [expression] * len(batches),
                     [operands] * len(batches),
-                    [ne_args] * len(batches),
+                    [eval_kwargs] * len(batches),
                     [where] * len(batches),
                     [plan] * len(batches),
                     [result_dtype] * len(batches),
@@ -7229,13 +7229,13 @@ def evaluate_segment_query(
 def evaluate_bucket_query(
     expression: str,
     operands: dict,
-    ne_args: dict,
+    eval_kwargs: dict,
     where: dict,
     plan: IndexPlan,
     *,
     return_positions: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    del expression, operands, ne_args
+    del expression, operands, eval_kwargs
 
     if plan.base is None or plan.bucket_masks is None or plan.chunk_len is None or plan.bucket_len is None:
         raise ValueError("bucket evaluation requires bucket masks and chunk geometry")

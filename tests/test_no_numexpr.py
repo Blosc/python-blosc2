@@ -33,6 +33,9 @@ def test_package_has_no_numexpr_import_or_requirement():
     assert not imports
     requirements = importlib.metadata.requires("blosc2") or []
     assert not any(item.lower().startswith("numexpr") for item in requirements)
+    assert not hasattr(blosc2, "numexpr")
+    assert "numexpr" not in blosc2.__all__
+    assert not hasattr(importlib.import_module("blosc2.lazyexpr"), "numexpr")
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Subprocess isolation is unavailable on WASM")
@@ -71,7 +74,7 @@ def test_runtime_never_imports_numexpr(installed, split_package):
         blosc2 = importlib.util.module_from_spec(spec)
         sys.modules["blosc2"] = blosc2
         spec.loader.exec_module(blosc2)
-        assert blosc2.numexpr is None
+        assert not hasattr(blosc2, "numexpr")
         x = np.arange(24.).reshape(4,6)
         for order in ("C", "F"):
             result=blosc2.evaluate("x * 2 + 1", local_dict={"x":x}, order=order)
@@ -102,7 +105,7 @@ def test_runtime_never_imports_numexpr(installed, split_package):
         np.testing.assert_array_equal(evaluator({"x":x}),x+1)
         blosc2.evaluate("sum(x)",local_dict={"x":x})
         assert blosc2.re_evaluate({"x":x}) == x.sum()
-        assert blosc2.numexpr is None
+        assert not hasattr(blosc2, "numexpr")
         if sys.argv[2] != "installed":
             assert "numexpr" not in sys.modules
     """)
@@ -150,9 +153,63 @@ def test_interpreter_bounded_stored_output(native_graph_runtime):
 def test_chunk_evaluator_preserves_caller_scope(legacy):
     from blosc2.lazyexpr import evaluate_chunk, ne_evaluate
 
+    assert ne_evaluate is evaluate_chunk
     x = np.arange(7, dtype="float64")
     evaluate = ne_evaluate if legacy else evaluate_chunk
     np.testing.assert_array_equal(evaluate("x + 1"), x + 1)
+
+
+@pytest.mark.parametrize("mode", ["safe", "full"])
+@pytest.mark.parametrize("keyword", ["eval_kwargs", "ne_args"])
+def test_lazyexpr_evaluation_options(mode, keyword):
+    x = np.arange(12, dtype="float64").reshape(3, 4)
+    options = {"casting": "unsafe"}
+    output = np.empty(x.shape, dtype="int32", order="F")
+    expr = blosc2.lazyexpr("x / 2", {"x": x}, out=output, evaluation=mode, **{keyword: options})
+    assert expr._eval_kwargs == options
+    assert not hasattr(expr, "_ne_args")
+    assert expr.compute() is output
+    np.testing.assert_array_equal(output, (x / 2).astype("int32"))
+
+
+@pytest.mark.parametrize("keyword", ["eval_kwargs", "ne_args"])
+def test_compute_evaluation_options_override_constructor(keyword):
+    x = np.arange(12, dtype="float64").reshape(3, 4)
+    expr = blosc2.lazyexpr("x / 2", {"x": x}, eval_kwargs={"casting": "no"})
+    output = np.empty(x.shape, dtype="int32", order="F")
+    with pytest.raises(TypeError):
+        expr.compute(out=output)
+    assert expr.compute(out=output, **{keyword: {"casting": "unsafe"}}) is output
+    np.testing.assert_array_equal(output, (x / 2).astype("int32"))
+    assert expr._eval_kwargs == {"casting": "no"}
+
+
+def test_legacy_options_keep_positional_constructor_and_caller_scope():
+    x = np.arange(7, dtype="float64")
+    options = {"casting": "same_kind"}
+    expr = blosc2.lazyexpr("x + 1", None, None, None, None, None, options)
+    assert expr._eval_kwargs == options
+    np.testing.assert_array_equal(expr[:], x + 1)
+    scoped = blosc2.lazyexpr("x + 1", eval_kwargs=options, evaluation="safe")
+    np.testing.assert_array_equal(scoped[:], x + 1)
+
+
+def test_evaluation_option_alias_conflicts():
+    x = np.arange(7, dtype="float64")
+    with pytest.raises(TypeError, match="Pass only one"):
+        blosc2.lazyexpr("x + 1", {"x": x}, eval_kwargs={}, ne_args={})
+    expr = blosc2.lazyexpr("x + 1", {"x": x})
+    with pytest.raises(TypeError, match="Pass only one"):
+        expr.compute(eval_kwargs={}, ne_args={})
+
+
+@pytest.mark.parametrize("form", ["ndarray", "lazyexpr"])
+def test_rebound_expression_options(form):
+    x = blosc2.asarray(np.arange(7, dtype="float64"))
+    source = x if form == "ndarray" else x + 1
+    expr = blosc2.lazyexpr(source, eval_kwargs={"casting": "unsafe"})
+    assert expr._eval_kwargs == {"casting": "unsafe"}
+    np.testing.assert_array_equal(expr[:], np.arange(7) + (form == "lazyexpr"))
 
 
 @pytest.mark.parametrize("owner", ["blosc2.audit_probe", "external_reference"])

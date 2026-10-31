@@ -37,7 +37,7 @@ def test_numexpr_environment_does_not_control_blosc_threads():
             "blosc2=importlib.util.module_from_spec(spec); sys.modules['blosc2']=blosc2; "
             "spec.loader.exec_module(blosc2); "
             "blosc2.set_nthreads(2); assert blosc2.nthreads==2; "
-            "assert blosc2.numexpr is None; assert 'numexpr' not in sys.modules",
+            "assert not hasattr(blosc2, 'numexpr'); assert 'numexpr' not in sys.modules",
             json.dumps(sys.path),
             json.dumps({"origin": blosc2.__file__, "paths": list(blosc2.__path__)}),
         ],

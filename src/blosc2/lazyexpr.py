@@ -92,8 +92,6 @@ from .utils import (
     try_miniexpr,
 )
 
-numexpr = None  # Compatibility placeholder; no runtime import or backend selection.
-
 # Canonical expression text has no quoted strings or attribute names to rewrite.
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
 
@@ -148,12 +146,6 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
         if getattr(res, "dtype", None) != np.bool_:
             raise
         return res
-
-
-def ne_evaluate(expression, local_dict=None, **kwargs):
-    """Legacy internal name for native/NumPy chunk evaluation; no NumExpr usage."""
-    kwargs.setdefault("_frame_depth", 1)
-    return evaluate_chunk(expression, local_dict, **kwargs)
 
 
 def evaluate_chunk(expression, local_dict=None, **kwargs):
@@ -237,7 +229,11 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
     return result
 
 
-def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
+# Temporary compatibility alias; a direct alias preserves caller-scope lookup.
+ne_evaluate = evaluate_chunk
+
+
+def _get_result(expression, chunk_operands, eval_kwargs, where=None, indices=None, _order=None):
     chunk_indices = None
 
     # Apply the where condition (in result) — fusion path, evaluate before shortcut
@@ -246,16 +242,16 @@ def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _
         # y = chunk_operands["_where_y"]
         # Preserve a fused native select when the expression is supported.
         new_expr = f"where({expression}, _where_x, _where_y)"
-        return ne_evaluate(new_expr, chunk_operands, **ne_args), None
+        return evaluate_chunk(new_expr, chunk_operands, **eval_kwargs), None
 
     # If the expression is a simple operand reference (e.g. "key", "o0"),
-    # grab it directly from chunk_operands instead of calling ne_evaluate.
+    # grab it directly from chunk_operands instead of calling evaluate_chunk.
     # This avoids unnecessary expression preparation for identity chunks.
     _expr = expression.strip("()")
     if _expr in chunk_operands:
         result = chunk_operands[_expr]
     else:
-        result = ne_evaluate(expression, chunk_operands, **ne_args)
+        result = evaluate_chunk(expression, chunk_operands, **eval_kwargs)
     if where is None:
         return result, None
     elif len(where) == 1:
@@ -614,6 +610,10 @@ class LazyArray(ABC, blosc2.Operand):
             These arguments will be set in the resulting :ref:`NDArray`.
             Additionally, the following special kwargs are supported:
 
+            - ``eval_kwargs`` (dict): for :ref:`LazyExpr`, override the expression
+              evaluation options supplied to :func:`lazyexpr` for this call.
+              ``ne_args`` is a compatibility alias; do not pass both names.
+
             - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
               failures are raised instead of silently falling back to regular chunked eval
               for non-DSL expressions.  Setting it ``True`` also opts a DSL kernel out of the
@@ -654,7 +654,7 @@ class LazyArray(ABC, blosc2.Operand):
             - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
               ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
               showing which compute engine was selected (``miniexpr`` or
-              ``ne_evaluate``), the JIT mode and backend if applicable, and the
+              ``evaluate_chunk``), the JIT mode and backend if applicable, and the
               expression being evaluated.
 
         Returns
@@ -1806,9 +1806,9 @@ def fast_eval(  # noqa: C901
         use_miniexpr = False
 
     out = kwargs.pop("_output", None)
-    ne_args: dict = kwargs.pop("_ne_args", {})
-    if ne_args is None:
-        ne_args = {}
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
+    if eval_kwargs is None:
+        eval_kwargs = {}
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     jit = kwargs.pop("jit", None)
     jit_backend = kwargs.pop("jit_backend", None)
@@ -1990,7 +1990,9 @@ def fast_eval(  # noqa: C901
         "on",
     ):
         engine = (
-            "miniexpr" if use_miniexpr else ("ne_evaluate" if isinstance(expr_string, str) else "python-udf")
+            "miniexpr"
+            if use_miniexpr
+            else ("evaluate_chunk" if isinstance(expr_string, str) else "python-udf")
         )
         jit_info = f"jit={jit}, backend={jit_backend}" if use_miniexpr else ""
         expr_short = str(expr_string)[:120].replace("\n", " ")
@@ -2148,14 +2150,14 @@ def fast_eval(  # noqa: C901
             operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
 
-        # Since ne_evaluate() can return a dtype larger than the one in computed in the expression,
+        # Since evaluate_chunk() can return a dtype larger than the one computed in the expression,
         # we cannot take this fast path
         # if isinstance(out, np.ndarray) and not where:
         #     # Fast path: put the result straight in the output array (avoiding a memory copy)
         #     if callable(expression):
         #         expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
         #     else:
-        #         ne_evaluate(expression, chunk_operands, out=out[slice_])
+        #         evaluate_chunk(expression, chunk_operands, out=out[slice_])
         #     continue
         if out is None:
             # We can enter here when using any of the compute() or __getitem__() methods
@@ -2180,12 +2182,12 @@ def fast_eval(  # noqa: C901
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             if where is None:
-                result = ne_evaluate(expression, chunk_operands, **ne_args)
+                result = evaluate_chunk(expression, chunk_operands, **eval_kwargs)
             else:
                 # Apply the where condition (in result)
                 if len(where) == 2:
                     new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = ne_evaluate(new_expr, chunk_operands, **ne_args)
+                    result = evaluate_chunk(new_expr, chunk_operands, **eval_kwargs)
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
@@ -2284,9 +2286,9 @@ def slices_eval(  # noqa: C901
         The output array.
     """
     out: blosc2.NDArray | None = kwargs.pop("_output", None)
-    ne_args: dict = kwargs.pop("_ne_args", {})
-    if ne_args is None:
-        ne_args = {}
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
+    if eval_kwargs is None:
+        eval_kwargs = {}
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     use_index = kwargs.pop("_use_index", True)
@@ -2421,13 +2423,13 @@ def slices_eval(  # noqa: C901
                 return coords
             if index_plan.bucket_masks is not None:
                 _, coords = indexing.evaluate_bucket_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return coords
             if index_plan.candidate_units is not None and index_plan.segment_len is not None:
                 _, coords = indexing.evaluate_segment_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return coords
@@ -2438,13 +2440,13 @@ def slices_eval(  # noqa: C901
                 return indexing.evaluate_full_query(where, index_plan)
             if index_plan.bucket_masks is not None:
                 result, coords = indexing.evaluate_bucket_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return result
             if index_plan.candidate_units is not None and index_plan.segment_len is not None:
                 result, coords = indexing.evaluate_segment_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return result
@@ -2525,9 +2527,11 @@ def slices_eval(  # noqa: C901
         if _indices or _order:
             indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(cslice_shape)
             leninputs += len_chunk
-            result, chunk_indices = _get_result(expression, chunk_operands, ne_args, where, indices, _order)
+            result, chunk_indices = _get_result(
+                expression, chunk_operands, eval_kwargs, where, indices, _order
+            )
         else:
-            result, _ = _get_result(expression, chunk_operands, ne_args, where)
+            result, _ = _get_result(expression, chunk_operands, eval_kwargs, where)
         # Enforce contiguity of result (necessary to fill the out array)
         # but avoid copy if already contiguous
         result = np.require(result, requirements="C")
@@ -2622,10 +2626,10 @@ def slices_eval_getitem(
         The output array.
     """
     out: np.ndarray | None = kwargs.pop("_output", None)
-    ne_args: dict = kwargs.pop("_ne_args", {})
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
     _in_place = kwargs.pop("in_place", False)
-    if ne_args is None:
-        ne_args = {}
+    if eval_kwargs is None:
+        eval_kwargs = {}
     where: dict | None = kwargs.pop("_where_args", None)
 
     dtype = kwargs.pop("dtype", None)
@@ -2681,7 +2685,7 @@ def slices_eval_getitem(
             result = np.empty(slice_shape, dtype=dtype)
             expression(tuple(slice_operands.values()), result, offset=offset)
     else:
-        result, _ = _get_result(expression, slice_operands, ne_args, where)
+        result, _ = _get_result(expression, slice_operands, eval_kwargs, where)
 
     if out is None:  # avoid copying unnecessarily
         try:
@@ -2846,9 +2850,9 @@ def reduce_slices(  # noqa: C901
 
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
-    ne_args: dict = kwargs.pop("_ne_args", {})
-    if ne_args is None:
-        ne_args = {}
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
+    if eval_kwargs is None:
+        eval_kwargs = {}
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     # Scalar native reductions cannot use elementwise DSL JIT output buffers.
     kwargs.pop("jit", None)
@@ -3163,7 +3167,7 @@ def reduce_slices(  # noqa: C901
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
             continue
 
-        result, _ = _get_result(expression, chunk_operands, ne_args, where)
+        result, _ = _get_result(expression, chunk_operands, eval_kwargs, where)
         # Enforce contiguity of result (necessary to fill the out array)
         # but avoid copy if already contiguous
         result = np.require(result, requirements="C")
@@ -3421,8 +3425,8 @@ def chunked_eval(  # noqa: C901
             Default is False.
         _output: blosc2.Array, optional
             The output array to store the result.
-        _ne_args: dict, optional
-            Compatibility expression options, validated independently of backend.
+        _eval_kwargs: dict, optional
+            Expression evaluation options, validated independently of backend.
         _where_args: dict, optional
             Additional arguments for conditional evaluation.
     """
@@ -3766,7 +3770,7 @@ class LazyExpr(LazyArray):
                 self.operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    value1 = ne_evaluate(f"{op}({value1!r})")
+                    value1 = evaluate_chunk(f"{op}({value1!r})")
                     op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
@@ -3818,7 +3822,7 @@ class LazyExpr(LazyArray):
                 self.expression = "o0"
                 svalue1 = format_expr_scalar(value1)
                 svalue2 = format_expr_scalar(value2)
-                self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
+                self.operands = {"o0": evaluate_chunk(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
                 if isinstance(value2, np.floating) and not math.isfinite(value2):
                     # nan/inf have no expression literal — keep as named operand
@@ -3842,7 +3846,7 @@ class LazyExpr(LazyArray):
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = "o0"
-            self.operands = {"o0": ne_evaluate(f"({value1!r} {op} {value2!r})")}  # eager evaluation
+            self.operands = {"o0": evaluate_chunk(f"({value1!r} {op} {value2!r})")}  # eager evaluation
         elif np.isscalar(value2):
             if hasattr(value2, "dtype"):  # typed numpy scalar — keep as named operand
                 self.operands = {"o0": value1, "o1": value2}
@@ -4748,7 +4752,7 @@ class LazyExpr(LazyArray):
                 and not root[3]
                 and all(node[0] == "name" for node in root[2])
             ):
-                casting = (kwargs.get("_ne_args") or {}).get("casting", "same_kind")
+                casting = (kwargs.get("_eval_kwargs") or {}).get("casting", "same_kind")
                 if not np.can_cast(np.dtype("complex128"), output.dtype, casting=casting):
                     raise TypeError("Cannot cast complex construction into destination")
                 return safe_numpy_globals["complex"](
@@ -4771,7 +4775,7 @@ class LazyExpr(LazyArray):
             result = parse_expression(self.expression).evaluate(self.operands, prefer_blosc=False)
             if output is None:
                 return np.asarray(result)
-            np.copyto(output, result, casting=(kwargs.get("_ne_args") or {}).get("casting", "same_kind"))
+            np.copyto(output, result, casting=(kwargs.get("_eval_kwargs") or {}).get("casting", "same_kind"))
             return output
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
@@ -4938,6 +4942,12 @@ class LazyExpr(LazyArray):
         **kwargs,
     ) -> blosc2.NDArray:
         self.__dict__.pop("_native_execution_report", None)
+        if "ne_args" in kwargs:
+            if "eval_kwargs" in kwargs:
+                raise TypeError("Pass only one of 'eval_kwargs' and the legacy 'ne_args' alias")
+            kwargs["eval_kwargs"] = kwargs.pop("ne_args")
+        if "eval_kwargs" in kwargs:
+            kwargs["_eval_kwargs"] = kwargs.pop("eval_kwargs")
         if _require_native:
             from .native_graph import compute_native_graph
 
@@ -5020,10 +5030,8 @@ class LazyExpr(LazyArray):
         elif hasattr(self, "_output"):
             kwargs["_output"] = self._output
 
-        if "ne_args" in kwargs:
-            kwargs["_ne_args"] = kwargs.pop("ne_args")
-        if hasattr(self, "_ne_args"):
-            kwargs["_ne_args"] = self._ne_args
+        if "_eval_kwargs" not in kwargs and hasattr(self, "_eval_kwargs"):
+            kwargs["_eval_kwargs"] = self._eval_kwargs
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs.setdefault("fp_accuracy", fp_accuracy)
@@ -5053,7 +5061,7 @@ class LazyExpr(LazyArray):
                 "_where_args",
                 "_indices",
                 "_order",
-                "_ne_args",
+                "_eval_kwargs",
                 "_use_index",
                 "dtype",
                 "shape",
@@ -5188,7 +5196,7 @@ class LazyExpr(LazyArray):
         return array
 
     @classmethod
-    def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):  # noqa: C901
+    def _new_expr(cls, expression, operands, guess, out=None, where=None, eval_kwargs=None):  # noqa: C901
         native_metadata = (
             guess
             and type(expression) is str
@@ -5196,7 +5204,7 @@ class LazyExpr(LazyArray):
             and operands
             and out is None
             and where is None
-            and ne_args is None
+            and eval_kwargs is None
             and evaluation_mode() == "full"
         )
         text = _arithmetic_recipe_text(expression, operands) if native_metadata else None
@@ -5258,7 +5266,7 @@ class LazyExpr(LazyArray):
                     result.operands = bindings
                     result.expression_tosave = expression
                     result.operands_tosave = operands
-                    result._ne_args = ne_args
+                    result._eval_kwargs = eval_kwargs
                     result._evaluation = "full"
                     policy = blosc2.jit_config.execution_options()
                     native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
@@ -5373,7 +5381,7 @@ class LazyExpr(LazyArray):
                 )
             elif _shape == () and not _operands:  # passed scalars
                 expression_ = "o0"
-                operands_ = {"o0": ne_evaluate(_expression)}
+                operands_ = {"o0": evaluate_chunk(_expression)}
             else:
                 # An immediate evaluation happened
                 # (e.g. all operands are numpy arrays or constructors)
@@ -5404,7 +5412,7 @@ class LazyExpr(LazyArray):
             new_expr._output = out
         if where is not None:
             new_expr._where_args = where
-        new_expr._ne_args = ne_args
+        new_expr._eval_kwargs = eval_kwargs
         new_expr._evaluation = evaluation_mode()
         if evaluation_mode() == "safe":
             record_expression_metadata(new_expr)
@@ -5878,7 +5886,7 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
         # with synthetic operands (1's). Try the native/NumPy chunk evaluator.
         # about this.
         ops = npops if blosc2.IS_WASM else ops
-        _out = ne_evaluate(expression, local_dict=ops)
+        _out = evaluate_chunk(expression, local_dict=ops)
     return _out
 
 
@@ -6053,6 +6061,15 @@ def seek_operands(names, local_dict=None, global_dict=None, _frame_depth: int = 
     return op_dict
 
 
+def _resolve_eval_kwargs(eval_kwargs, ne_args):
+    """Normalize the public legacy option name without changing caller frames."""
+    if ne_args is None:
+        return eval_kwargs
+    if eval_kwargs is not None:
+        raise TypeError("Pass only one of 'eval_kwargs' and the legacy 'ne_args' alias")
+    return ne_args
+
+
 def lazyexpr(
     expression: str | bytes | LazyArray | blosc2.NDArray,
     operands: dict | None = None,
@@ -6060,10 +6077,11 @@ def lazyexpr(
     where: tuple | list | None = None,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
-    ne_args: dict | None = None,
+    eval_kwargs: dict | None = None,
     _frame_depth: int = 2,
     *,
     evaluation: str | None = None,
+    ne_args: dict | None = None,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
@@ -6093,8 +6111,10 @@ def lazyexpr(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
+    eval_kwargs: dict, optional
+        Expression evaluation options, validated independently of backend.
     ne_args: dict, optional
-        Compatibility expression options, validated independently of backend.
+        Compatibility alias for ``eval_kwargs``. Do not pass both names.
     _frame_depth: int, optional
         The depth of the frame to use when looking for operands in the expression.
         The default value is 2.
@@ -6130,6 +6150,7 @@ def lazyexpr(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    eval_kwargs = _resolve_eval_kwargs(eval_kwargs, ne_args)
     if evaluation is not None:
         with expression_evaluation(evaluation):
             return lazyexpr(
@@ -6139,7 +6160,7 @@ def lazyexpr(
                 where,
                 local_dict,
                 global_dict,
-                ne_args,
+                eval_kwargs,
                 _frame_depth=_frame_depth + 1,
             )
     if isinstance(expression, str) and evaluation_mode() == "safe":
@@ -6159,21 +6180,21 @@ def lazyexpr(
                     "'out' and 'where' are not supported for expressions over a bare "
                     "UTF8Array; use a CTable column, which supports both."
                 )
-            return UTF8LazyExpr(expression, operands, ne_args=ne_args)
+            return UTF8LazyExpr(expression, operands, eval_kwargs=eval_kwargs)
 
     if isinstance(expression, LazyExpr):
         if operands is not None:
             expression.operands.update(operands)
         if out is not None:
             expression._output = out
-        expression._ne_args = ne_args
+        expression._eval_kwargs = eval_kwargs
         if where is not None:
             where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
     elif isinstance(expression, blosc2.NDArray):
         operands = {"o0": expression}
-        return LazyExpr._new_expr("o0", operands, guess=False, out=out, where=where, ne_args=ne_args)
+        return LazyExpr._new_expr("o0", operands, guess=False, out=out, where=where, eval_kwargs=eval_kwargs)
 
     if operands is None:
         # Try to get operands from variables in the stack
@@ -6192,7 +6213,9 @@ def lazyexpr(
             # _new_expr will take care of the constructor, but needs an empty dict in operands
             operands = {}
 
-    return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where, ne_args=ne_args)
+    return LazyExpr._new_expr(
+        expression, operands, guess=True, out=out, where=where, eval_kwargs=eval_kwargs
+    )
 
 
 def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
@@ -6360,7 +6383,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
         for value in inputs.values()
     ) or len({id(value) for value in inputs.values()}) != len(inputs):
         # Avoid ambiguous alias-to-name mappings and scalar capture semantics.
-        return lazyexpr(expression, operands=inputs, ne_args=None)
+        return lazyexpr(expression, operands=inputs, eval_kwargs=None)
     validate_operands(inputs)
     mode = evaluation_mode()
     signature = tuple(
@@ -6412,7 +6435,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
             while len(_evaluate_recipe_cache) > _EVALUATE_RECIPE_CACHE_SIZE:
                 _evaluate_recipe_cache.popitem(last=False)
     elif recipe is None:
-        expr = lazyexpr(expression, operands=inputs, ne_args=None)
+        expr = lazyexpr(expression, operands=inputs, eval_kwargs=None)
         # Match constructor-renamed bindings to original names without retaining
         # arrays in either the cache key or recipe. Aliased inputs were excluded.
         source_names = {id(value): name for name, value in inputs.items()}
@@ -6442,7 +6465,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
     expr._dtype, expr._shape = recipe.dtype, recipe.shape
     if recipe.chunks is not None:
         expr._chunks, expr._blocks = recipe.chunks, recipe.blocks
-    expr._ne_args = None
+    expr._eval_kwargs = None
     expr._evaluation = mode
     if mode == "safe":
         record_expression_metadata(expr)
@@ -6625,7 +6648,7 @@ def evaluate(
         lexpr.expression_tosave, lexpr.operands_tosave = ex, dict(inputs)
         info = resident[2].info()
         lexpr._dtype, lexpr._shape = info["dtype"], info["shape"]
-        lexpr._ne_args, lexpr._evaluation = None, evaluation_mode()
+        lexpr._eval_kwargs, lexpr._evaluation = None, evaluation_mode()
         lexpr._resident_native = resident
         if lexpr._evaluation == "safe":
             record_expression_metadata(lexpr)
@@ -6635,7 +6658,7 @@ def evaluate(
             local_dict=local_dict,
             global_dict=global_dict,
             out=out,
-            ne_args=kwargs or None,
+            eval_kwargs=kwargs or None,
             _frame_depth=3,
         )
     lexpr._optimization = optimization
@@ -6702,7 +6725,7 @@ if __name__ == "__main__":
     nres = na1 + na2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = ne_evaluate("na1 + na2")
+    nres = evaluate_chunk("na1 + na2")
     print(f"Elapsed time (native/NumPy, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
@@ -6725,7 +6748,7 @@ if __name__ == "__main__":
     # nres = np.sin(na1[:]) + 2 * na1[:] + 1 + 2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = evaluate_chunk("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     print(f"Elapsed time (native/NumPy, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()

@@ -26,8 +26,6 @@ IS_WASM = platform.machine() == "wasm32"
 Flag for WebAssembly platform.
 """
 
-numexpr = None
-
 from .version import __array_api_version__, __version__
 
 _PACKAGE_DIR = str(Path(__file__).resolve().parent)

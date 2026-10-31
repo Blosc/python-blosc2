@@ -41,7 +41,7 @@ def forbid_fallback(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Native output dispatch used a numerical fallback")
 
-    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "ne_evaluate", forbidden)
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "evaluate_chunk", forbidden)
     monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
     return forbidden
 

@@ -376,7 +376,7 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
     if (
         type(expr) is not blosc2.LazyExpr
         or any(hasattr(expr, name) for name in ("_where_args", "_indices", "_order"))
-        or getattr(expr, "_ne_args", None) is not None
+        or getattr(expr, "_eval_kwargs", None) is not None
         or options.keys() - {"_getitem", "out"}
         or (not options.get("_getitem", False) and type(output) is not np.ndarray)
         or ("out" in options and output is None)
@@ -453,7 +453,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
         hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
     ):
         return None
-    if getattr(expr, "_ne_args", None) is not None:
+    if getattr(expr, "_eval_kwargs", None) is not None:
         return None
     options = options or {}
     output = options.get("out", getattr(expr, "_output", None))
@@ -630,7 +630,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
     ):
         return None
-    if getattr(expr, "_ne_args", None) is not None:
+    if getattr(expr, "_eval_kwargs", None) is not None:
         return None
     options = dict(options or {})
     if options.pop("_getitem", False):
@@ -1761,7 +1761,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         or (reduction and any(type(value) is blosc2.NDArray for value in inputs.values()))
     ):
         raise ValueError("Explicit native output requires an eligible map or resident reduction")
-    for key in ("_output", "out", "_ne_args", "ne_args", "_where_args", "_indices", "_order"):
+    for key in ("_output", "out", "_eval_kwargs", "eval_kwargs", "_where_args", "_indices", "_order"):
         if key in kwargs:
             raise ValueError(f"{key} is not native-graph eligible")
     kwargs.pop("_use_index", None)

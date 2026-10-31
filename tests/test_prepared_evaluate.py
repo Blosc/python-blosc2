@@ -145,11 +145,7 @@ def test_prepared_broadcast_scalar_and_compressed_rebinding():
     assert blosc2.prepare_evaluate("3.0")({}) == 3.0
 
 
-def test_numpy_fallback_options_without_numexpr(monkeypatch):
-    import importlib
-
-    module = importlib.import_module("blosc2.lazyexpr")
-    monkeypatch.setattr(module, "numexpr", None)
+def test_numpy_fallback_options_without_numexpr():
     x = np.arange(12.0).reshape(3, 4)
     evaluator = blosc2.prepare_evaluate("x / 2", order="F")
     result = evaluator({"x": x})

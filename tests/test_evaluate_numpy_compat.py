@@ -43,18 +43,8 @@ def test_default_order_preserves_fortran_layout():
 
 @pytest.mark.parametrize("mode", ["full", "safe"])
 @pytest.mark.parametrize("order", ["C", "F", "A", "K"])
-def test_layout_does_not_select_numexpr(mode, order, monkeypatch):
-    import importlib
-
-    module = importlib.import_module("blosc2.lazyexpr")
+def test_layout_does_not_select_numexpr(mode, order):
     x = np.asfortranarray(np.arange(24.0).reshape(2, 3, 4))
-
-    def forbidden(*args, **kwargs):
-        pytest.fail("Output order selected the NumExpr backend")
-
-    if module.numexpr is not None:
-        for name in ("evaluate", "validate", "NumExpr"):
-            monkeypatch.setattr(module.numexpr, name, forbidden)
     with blosc2.expression_evaluation(mode):
         result = blosc2.evaluate("x + 1", local_dict={"x": x}, order=order)
     expected = np.add(x, 1, order=order)
