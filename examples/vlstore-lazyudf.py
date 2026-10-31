@@ -14,7 +14,7 @@ def show(label, value):
     print(f"{label}: {value}")
 
 
-@blosc2.dsl_kernel
+@blosc2.menudet
 def kernel_add_twice(x, y):
     return x + y * 2
 
@@ -28,7 +28,7 @@ blosc2.remove_urlpath(b_path)
 
 a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=a_path, mode="w")
 b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=b_path, mode="w")
-lazy_udf = blosc2.lazyudf(kernel_add_twice, (a, b), dtype=a.dtype, shape=a.shape)
+lazy_udf = kernel_add_twice(a, b)
 
 oarr = blosc2.ObjectArray(urlpath=urlpath, mode="w", contiguous=True)
 oarr.append({"kind": "lazyudf", "value": lazy_udf})

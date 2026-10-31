@@ -663,6 +663,7 @@ class _RemoteHDF5Field(blosc2.Operand):
         self.records = records
         self.field = name
         self._storage_dtype = np.dtype(records.dtype.fields[name][0])
+        self._logical_dtype_override = dtype is not None
         self._dtype = self._storage_dtype if dtype is None else np.dtype(dtype)
         self._shape = records.shape
         self.chunks = records.chunks

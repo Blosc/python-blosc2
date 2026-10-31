@@ -10,6 +10,18 @@ independently; rows are never materialised in their entirety unless you
 explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
 :meth:`~blosc2.CTable.__iter__`.
 
+.. note::
+
+   **Sharing a table between threads:** concurrent reads and writes to the
+   same underlying storage are unsupported. If a shared table can be modified
+   or closed, use one application lock around complete reads, writes, appends
+   and close operations. Views and column handles sharing that storage must
+   use the same lock. For lazy or computed columns, hold the lock while
+   evaluating the result, not just while creating the expression.
+
+   Safe expression evaluation does not make table storage thread-safe or
+   provide a consistent snapshot across reads.
+
 Source-bound columns
 --------------------
 
@@ -709,30 +721,21 @@ available for display, export, or occasional reads.  Use a generated column
 derived value frequently — the index pays for itself after the first few
 queries.
 
-Both forms accept plain expression strings, :func:`blosc2.dsl_kernel`-decorated
-functions, and :class:`blosc2.LazyUDF` objects.  DSL kernels support full Python
-control flow (``if``/``else``, ``where()``, loops) and have their source
-persisted and recompiled on open.
+Both forms accept expression strings and :class:`blosc2.MenudetKernel` objects
+with named input bindings. Author a function with :func:`blosc2.menudet`, obtain
+its kernel with ``specialize()``, and pass it to the registration method. Kernels
+support Menudet's defined control flow, not arbitrary Python, and persist as
+validated artifacts without Python function reconstruction. See
+:doc:`../guides/migrating_to_menudet` for an example.
 
 .. warning::
 
-    Because DSL kernel source is persisted in the table metadata and re-executed
-    during :func:`blosc2.open`, **do not open** ``.b2d`` files from untrusted
-    sources if they may contain DSL computed or generated columns.  The kernel
-    source runs with restricted builtins (no ``__import__``), but arbitrary
-    Python code execution still carries risk.
-
-When passing a :class:`blosc2.LazyUDF` built with an explicit ``jit_backend=``
-(e.g. ``jit_backend="cc"`` to use the system C compiler instead of the default
-TCC), that choice is persisted in the column metadata and automatically restored
-on :func:`blosc2.open`.  This matters for kernels where one backend produces
-measurably faster code — the optimised backend stays active for the lifetime of
-the table without any extra configuration::
-
-    t.add_generated_column(
-        "score",
-        values=blosc2.lazyudf(my_kernel, (t.col_a, t.col_b), jit_backend="cc"),
-    )
+    Historical source-backed table columns are unsupported, even with
+    ``deserialize="full"``. Before upgrading, export their values with a previous
+    release and reauthor/compare as described in the migration guide. Legacy
+    columns are not silently dropped or reinterpreted. New Menudet columns use
+    independent-row semantics. Menudet itself is not a general sandbox for
+    arbitrary untrusted source or data.
 
 When a computed result should become a stored snapshot rather than a live
 virtual column, use :meth:`CTable.materialize_computed_column` to convert it
@@ -1386,7 +1389,7 @@ above).  Do not plan storage on either figure without measuring your own data.
    just like any other leaf.
 
 .. [#utf8compute] Expressions that *return* strings — concatenation,
-   ``upper``, ``replace``, DSL kernels — run on fixed-width arrays, so a utf8
+   ``upper``, ``replace``, Menudet kernels — run on fixed-width arrays, so a utf8
    column is converted first and the result written back.  See
    :ref:`ComputingUtf8Strings` below.
 
@@ -1470,7 +1473,7 @@ naming the column and printing the recipe above:
 
 * :meth:`CTable.add_computed_column`, :meth:`CTable.add_generated_column` and
   :meth:`CTable.assign` with a string expression that references a utf8 column;
-* the same three with a :func:`blosc2.dsl_kernel`, plus :meth:`CTable.apply`
+* the same three with a :class:`blosc2.MenudetKernel`, plus :meth:`CTable.apply`
   and :func:`blosc2.lazyudf` — note it is the utf8 **operand** that cannot
   work, whatever the kernel returns, so a kernel producing a number or a
   boolean is refused just the same.

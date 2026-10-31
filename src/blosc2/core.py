@@ -1286,11 +1286,9 @@ def set_nthreads(nthreads: int) -> int:
     Notes
     -----
     The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
-    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set
-    ``NUMEXPR_NUM_THREADS`` (e.g., ``export NUMEXPR_NUM_THREADS=1``) as well since
-    numexpr is used under the hood when performing some operations.  Note that
-    this function only sets the number of threads used by Blosc, not the number
-    of threads used by numexpr.
+    variable (e.g., ``export BLOSC_NTHREADS=1``). Expression execution uses native
+    miniexpr scheduling or explicit NumPy fallbacks; NumExpr thread settings do
+    not affect Blosc2.
 
     The maximum number of threads for Blosc is :math:`2^{31} - 1`. In some
     cases, Blosc gets better results if you set the number of threads
@@ -1511,9 +1509,7 @@ def print_versions():
         print(f"  {clib}: {clib_versions[clib]}")
     print(f"NumPy version: {np.__version__}")
     if not blosc2.IS_WASM:
-        import numexpr
-
-        print(f"numexpr version: {numexpr.__version__}")
+        print("expression engines: miniexpr (interpreter/JIT), NumPy fallback")
     import httpx
 
     print(f"httpx version: {httpx.__version__}")
@@ -2392,9 +2388,13 @@ def from_cframe(
     if "b2o" in schunk.meta:
         marker = schunk.meta["b2o"]
         kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"
-        if deserialize is DeserializeMode.SAFE:
+        if kind == "lazyudf":
+            raise blosc2.UnsupportedLegacyRecipeError()
+        if deserialize is DeserializeMode.SAFE and kind not in {"menudet", "lazyexpr"}:
             raise UnsafeDeserializationError(str(kind))
         return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy, deserialize=deserialize))
+    if schunk.meta.get("LazyArray") == 1:
+        raise blosc2.UnsupportedLegacyRecipeError()
     if "b2nd" in schunk.meta:
         return ndarray_from_cframe(cframe, copy=copy, deserialize=deserialize)
     return schunk_from_cframe(cframe, copy=copy, deserialize=deserialize)

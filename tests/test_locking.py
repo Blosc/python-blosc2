@@ -446,6 +446,7 @@ import sys
 import numpy as np
 import blosc2
 
+blosc2.set_nthreads(1)
 urlpath, writer_id, chunk_nitems, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 schunk = blosc2.open(urlpath, mode="a", locking=True)
 nchunk = writer_id % schunk.nchunks
@@ -507,6 +508,9 @@ def test_cross_process_open_race_under_update(tmp_path):
     schunk = create_schunk(urlpath, contiguous=True, locking=True)
     del schunk
 
+    # The race is between processes, not codec/numexpr workers. Avoid creating
+    # dozens of unrelated threads in each of the eight fresh interpreters.
+    env = {**os.environ, "NUMEXPR_MAX_THREADS": "1", "NUMEXPR_NUM_THREADS": "1"}
     writers = [
         subprocess.Popen(
             [
@@ -517,12 +521,13 @@ def test_cross_process_open_race_under_update(tmp_path):
                 str(wid),
                 str(CHUNK_NITEMS),
                 str(iters),
-            ]
+            ],
+            env=env,
         )
         for wid in range(nwriters)
     ]
     openers = [
-        subprocess.Popen([sys.executable, "-c", OPEN_RACE_OPENER_SCRIPT, str(urlpath), str(iters)])
+        subprocess.Popen([sys.executable, "-c", OPEN_RACE_OPENER_SCRIPT, str(urlpath), str(iters)], env=env)
         for _ in range(nopeners)
     ]
     procs = writers + openers

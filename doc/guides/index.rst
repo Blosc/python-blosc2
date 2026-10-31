@@ -13,6 +13,8 @@ Topics
 
     benchmarks
     optimization_tips
+    menudet
+    migrating_to_menudet
     remote_objects
     remote_arrays
     remote_tables

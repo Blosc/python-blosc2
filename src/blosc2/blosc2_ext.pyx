@@ -711,6 +711,7 @@ cdef extern from "miniexpr.h":
         const char *cache_dir
         int trace
         int compiler_output
+        const char *math_backend
 
     int me_compile_nd_jit_options(const char *expression, const me_variable *variables,
         int var_count, me_dtype dtype, int ndims, const int64_t *shape,
@@ -728,7 +729,6 @@ cdef extern from "miniexpr.h":
         ME_COMPILE_ERR_OOM
         ME_COMPILE_ERR_PARSE
         ME_COMPILE_ERR_INVALID_ARG
-        ME_COMPILE_ERR_COMPLEX_UNSUPPORTED
         ME_COMPILE_ERR_REDUCTION_INVALID
         ME_COMPILE_ERR_VAR_MIXED
         ME_COMPILE_ERR_VAR_UNSPECIFIED
@@ -961,6 +961,1613 @@ cdef inline object _numpy_dtype_from_me_dtype(me_dtype dt):
     return None
 
 
+cdef extern from *:
+    """
+    #include "miniexpr.h"
+    #include <stdio.h>
+    #include <string.h>
+    static int b2_validate_menudet(const char *source, const char *version,
+        const me_variable *inputs, int ninputs, me_dtype output_dtype,
+        size_t output_itemsize, int ndim, int cardinality,
+        int *line, int *column, char *message, size_t capacity) {
+    #ifdef ME_MENUDET_DSL_VALIDATION_DESCRIPTOR_VERSION
+        if (strcmp(ME_MENUDET_DSL_VERSION, "0.1")) {
+            *line = *column = 0;
+            snprintf(message, capacity, "installed miniexpr lacks Menudet 0.1 beta source validation");
+            return -100;
+        }
+        me_menudet_error error = {0};
+        int rc;
+        me_menudet_validation_descriptor descriptor = {
+            .struct_size = sizeof(descriptor),
+            .version = ME_MENUDET_DSL_VALIDATION_DESCRIPTOR_VERSION,
+            .output_itemsize = output_itemsize, .ndim = ndim,
+            .cardinality = (me_menudet_cardinality)cardinality};
+        rc = me_validate_menudet_ex(source, version, inputs, ninputs,
+                                        output_dtype, &descriptor, &error);
+        *line = error.line;
+        *column = error.column;
+        snprintf(message, capacity, "%s", error.message);
+        return rc;
+    #else
+        *line = *column = 0;
+        snprintf(message, capacity, "miniexpr was built without Menudet 0.1 beta source validation support");
+        return -100;
+    #endif
+    }
+    """
+    int b2_validate_menudet(const char *source, const char *version,
+        const me_variable *inputs, int ninputs, me_dtype output_dtype,
+        size_t output_itemsize, int ndim, int cardinality,
+        int *line, int *column, char *message, size_t capacity)
+
+
+def validate_menudet_source(source, input_dtypes, output_dtype, version, int ndim=0, int cardinality=0):
+    """Native-only versioned source validation; no arrays, JIT or Python execution."""
+    cdef Py_ssize_t n = len(input_dtypes)
+    if n > 128:
+        raise ValueError("Too many Menudet DSL inputs (maximum 128)")
+    cdef me_variable *variables = NULL
+    cdef list names = [name.encode("utf-8") for name in input_dtypes]
+    cdef bytes source_bytes = source.encode("utf-8")
+    cdef bytes version_bytes = version.encode("utf-8")
+    cdef bytes name_bytes
+    cdef np.dtype dtype
+    cdef me_dtype result_dtype
+    cdef size_t output_itemsize = 0
+    cdef int rc, line = 0, column = 0
+    cdef char message[256]
+    cdef Py_ssize_t i
+    if n:
+        variables = <me_variable *> calloc(n, sizeof(me_variable))
+        if variables == NULL:
+            raise MemoryError()
+    try:
+        for i, value in enumerate(input_dtypes.values()):
+            name_bytes = names[i]
+            variables[i].name = name_bytes
+            dtype = np.dtype(value)
+            try:
+                variables[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+            except TypeError:
+                variables[i].dtype = ME_AUTO
+            if version == "0.1" and variables[i].dtype in (ME_STRING, ME_BYTES):
+                variables[i].itemsize = dtype.itemsize
+        dtype = np.dtype(output_dtype)
+        try:
+            result_dtype = _me_dtype_from_numpy_dtype(dtype)
+        except TypeError:
+            result_dtype = ME_AUTO
+        if version == "0.1" and result_dtype in (ME_STRING, ME_BYTES):
+            output_itemsize = dtype.itemsize
+        rc = b2_validate_menudet(source_bytes, version_bytes, variables, <int>n,
+                                      result_dtype, output_itemsize, ndim, cardinality,
+                                      &line, &column, message, sizeof(message))
+        statuses = {
+            0: "success", -1: "unsupported_version", -2: "invalid_signature",
+            -3: "invalid_source", -4: "unsupported_feature", -5: "out_of_memory",
+            -100: "runtime_unsupported",
+        }
+        return {"valid": rc == 0, "status": statuses.get(rc, "native_error"),
+                "line": line, "column": column,
+                "error": None if rc == 0 else (<bytes>message).decode("utf-8", "replace")}
+    finally:
+        free(variables)
+
+
+cdef extern from "dsl_artifact_bridge.h":
+    ctypedef struct b2_artifact_input:
+        const char *name
+        me_dtype dtype
+        const void *data
+        size_t nitems
+    ctypedef struct b2_artifact_error:
+        int native_status
+        int line
+        int column
+        char message[256]
+    int b2_artifact_available()
+    int b2_artifact_load(const char *, size_t, int, void **, b2_artifact_error *) nogil
+    int b2_artifact_load_options(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
+    int b2_artifact_load_inferred(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
+    int b2_artifact_load_inferred_available()
+    int b2_artifact_options_available()
+    int b2_artifact_eval(const void *, const b2_artifact_input *, int, void *, size_t,
+                        b2_artifact_error *) nogil
+    void b2_artifact_free(void *) noexcept nogil
+    const char *b2_artifact_source(const void *)
+    const char *b2_artifact_entry(const void *)
+    int b2_artifact_ninputs(const void *)
+    const char *b2_artifact_name(const void *, int)
+    me_dtype b2_artifact_dtype(const void *, int)
+    me_dtype b2_artifact_output(const void *)
+    me_dtype b2_artifact_inferred(const void *)
+    ctypedef struct b2_artifact_fp_status:
+        unsigned flags
+        unsigned supported
+    int b2_artifact_eval_status(const void *, const b2_artifact_buffer *, int, void *,
+                               const b2_artifact_descriptor *, unsigned, b2_artifact_fp_status *, b2_artifact_error *) nogil
+    int b2_artifact_jit(const void *)
+    int b2_artifact_auto_jit_mode()
+    const char *b2_artifact_execution_kind(const void *)
+    ctypedef struct b2_artifact_buffer:
+        const char *name
+        me_dtype dtype
+        size_t itemsize
+        const void *data
+        size_t capacity
+    ctypedef struct b2_artifact_descriptor:
+        size_t struct_size
+        unsigned int version
+        size_t nitems
+        size_t output_capacity
+        const uint8_t *valid_mask
+        size_t valid_mask_capacity
+        int ndim
+        const int64_t *logical_shape
+        const int64_t *block_origin
+        const int64_t *block_extent
+    int b2_artifact_descriptor_available()
+    int b2_artifact_cardinality(const void *)
+    size_t b2_artifact_width(const void *, int)
+    int b2_artifact_rank(const void *)
+    const char *b2_artifact_version(const void *)
+    const char *b2_artifact_math(const void *)
+    const char *b2_artifact_math_ulp(const void *)
+    const char *b2_artifact_fp(const void *)
+    int b2_artifact_eval_ex(const void *, const b2_artifact_buffer *, int, void *,
+                          const b2_artifact_descriptor *, b2_artifact_error *) nogil
+
+cdef extern from "dsl_array_bridge.h":
+    ctypedef struct b2_array_view:
+        const char *name
+        me_dtype dtype
+        const void *base
+        size_t capacity
+        size_t offset
+        int rank
+        int64_t shape[16]
+        int64_t strides[16]
+        unsigned byte_order
+    ctypedef struct b2_array_options:
+        unsigned version
+        int reduction
+        int naxes
+        int axes[16]
+        bint keepdims
+        me_dtype accumulator
+        const void *initial
+        size_t tile_items
+        const b2_array_view *where
+    ctypedef struct b2_array_report:
+        size_t temporary_bytes
+        size_t gathered_bytes
+        size_t zero_copy_tiles
+        size_t evaluated_tiles
+        unsigned fp_flags
+        unsigned fp_supported
+    int b2_array_shape(const void *, int, const int64_t *, const b2_array_options *, int *, int64_t *, me_dtype *, b2_artifact_error *) nogil
+    int b2_array_eval(const void *, const b2_array_view *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
+    ctypedef int (*b2_array_reader)(void *, const size_t *, size_t, void *, size_t) noexcept nogil
+    ctypedef struct b2_array_source:
+        b2_array_view view
+        b2_array_reader read
+        void *owner
+    int b2_array_sources_available()
+    int b2_array_eval_sources(const void *, const b2_array_source *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
+
+
+cdef struct menudet_prefilter_worker:
+    void *edge_output
+    b2_artifact_buffer *bindings
+    blosc2_context **decoders
+    int status
+    int64_t error_block
+    b2_artifact_error error
+    unsigned fp_flags
+    unsigned fp_supported
+    size_t evaluated_blocks
+    size_t output_zero_fill_bytes
+
+
+cdef struct menudet_prefilter_state:
+    const void *artifact
+    int ndim
+    int grid_ndim
+    bint diagonal_enabled
+    int64_t diagonal
+    int64_t shape[16]
+    int64_t chunkshape[16]
+    int64_t blockshape[16]
+    int64_t chunkgrid[16]
+    int64_t blockgrid[16]
+    uint8_t *numpy_output
+    const uint8_t *numpy_inputs[128]
+    b2nd_array_t *inputs[128]
+    b2_artifact_buffer signature[128]
+    uint8_t *chunks[128]
+    int chunk_bytes[128]
+    c_bool chunk_owned[128]
+    int ninputs
+    int nworkers
+    menudet_prefilter_worker *workers
+    int64_t size
+    int64_t chunk_items
+    int64_t block_items
+    int status
+    int64_t error_block
+    b2_artifact_error error
+    unsigned fp_flags
+    unsigned fp_supported
+    size_t evaluated_blocks
+    size_t output_zero_fill_bytes
+
+
+cdef void menudet_prefilter_merge(menudet_prefilter_state *state) noexcept:
+    """Merge worker-local status only after synchronous compression has joined."""
+    cdef menudet_prefilter_worker *worker
+    cdef int tid
+    state.fp_flags = 0
+    state.fp_supported = 1
+    state.evaluated_blocks = 0
+    state.output_zero_fill_bytes = 0
+    for tid in range(state.nworkers):
+        worker = &state.workers[tid]
+        if worker.status and (not state.status or worker.error_block < state.error_block):
+            state.status = worker.status
+            state.error = worker.error
+            state.error_block = worker.error_block
+        state.fp_flags |= worker.fp_flags
+        state.fp_supported &= worker.fp_supported
+        state.evaluated_blocks += worker.evaluated_blocks
+        state.output_zero_fill_bytes += worker.output_zero_fill_bytes
+
+
+cdef extern from "fenv.h":
+    ctypedef struct fenv_t:
+        pass
+    int feholdexcept(fenv_t *) noexcept nogil
+    int fesetenv(const fenv_t *) noexcept nogil
+
+
+cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nogil:
+    cdef menudet_prefilter_state *state = <menudet_prefilter_state *>params.user_data
+    cdef menudet_prefilter_worker *worker = &state.workers[params.tid]
+    cdef b2_artifact_descriptor descriptor
+    cdef b2_artifact_error error
+    cdef b2_artifact_fp_status fp
+    cdef blosc2_dparams dparams
+    cdef int i, rc = 0, read_status
+    cdef int32_t block_bytes
+    cdef int64_t origin = params.nchunk * state.chunk_items + params.nblock * state.block_items
+    cdef int64_t count = min(state.block_items, state.size - origin)
+    cdef int64_t block_id = origin // state.block_items
+    cdef int64_t logical_shape = state.size
+    cdef int64_t block_origin = origin
+    cdef int64_t block_extent = count
+    cdef size_t written_bytes = max(count, 0) * params.output_typesize
+    cdef void *destination = params.output
+    cdef fenv_t environment
+    cdef int d
+    cdef int64_t chunk_index, block_index, lane, offset, physical, stride, relative
+    cdef int64_t origins[16]
+    cdef int64_t extents[16]
+    cdef bint edge = False
+    if state.grid_ndim > 1:
+        chunk_index = params.nchunk
+        block_index = params.nblock
+        count = 1
+        block_id = params.nchunk * (state.chunk_items // state.block_items) + params.nblock
+        for d in range(state.grid_ndim - 1, -1, -1):
+            origins[d] = (chunk_index % state.chunkgrid[d]) * state.chunkshape[d]
+            chunk_index //= state.chunkgrid[d]
+            relative = (block_index % state.blockgrid[d]) * state.blockshape[d]
+            origins[d] += relative
+            block_index //= state.blockgrid[d]
+            extents[d] = max(0, min(state.blockshape[d], state.shape[d] - origins[d],
+                                    state.chunkshape[d] - relative))
+            count *= extents[d]
+            edge |= extents[d] != state.blockshape[d]
+        if not params.output_is_disposable:
+            worker.output_zero_fill_bytes += params.output_size
+        elif edge:
+            memset(params.output, 0, params.output_size)
+            worker.output_zero_fill_bytes += params.output_size
+        if not count:
+            return 0
+        # An eye constructor owns this scheduling hint: blocks outside its
+        # diagonal contain only zeros and need no artifact evaluation.
+        if state.diagonal_enabled and (state.diagonal < origins[1] - origins[0] - extents[0] + 1
+                or state.diagonal > origins[1] + extents[1] - 1 - origins[0]):
+            if params.output_is_disposable:
+                memset(params.output, 0, params.output_size)
+            return 0
+        destination = params.output
+        if edge:
+            if worker.edge_output == NULL:
+                worker.edge_output = malloc(state.block_items * params.output_typesize)
+            if worker.edge_output == NULL:
+                worker.status = -6
+                worker.error_block = block_id
+                strcpy(worker.error.message, "Cannot allocate Menudet prefilter edge output")
+                return -1
+            destination = worker.edge_output
+        memset(&descriptor, 0, sizeof(descriptor))
+        memset(&error, 0, sizeof(error))
+        memset(&fp, 0, sizeof(fp))
+        descriptor.struct_size = sizeof(descriptor)
+        descriptor.version = 1
+        descriptor.nitems = count
+        descriptor.output_capacity = count * params.output_typesize
+        descriptor.ndim = state.ndim
+        if state.ndim:
+            descriptor.logical_shape = state.shape
+            descriptor.block_origin = origins
+            descriptor.block_extent = extents
+        if feholdexcept(&environment):
+            worker.status = -5
+            strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
+            return -1
+        rc = b2_artifact_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
+        if fesetenv(&environment):
+            rc = -5
+            strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
+        if rc:
+            worker.status = rc
+            worker.error = error
+            worker.error_block = block_id
+            memset(params.output, 0, params.output_size)
+            return -1
+        if edge:
+            for lane in range(count):
+                offset = lane
+                physical = 0
+                stride = 1
+                for d in range(state.grid_ndim - 1, -1, -1):
+                    relative = offset % extents[d]
+                    offset //= extents[d]
+                    physical += relative * stride
+                    stride *= state.blockshape[d]
+                memcpy(params.output + physical * params.output_typesize,
+                       <uint8_t *>destination + lane * params.output_typesize, params.output_typesize)
+        worker.fp_flags |= fp.flags
+        worker.fp_supported &= fp.supported
+        worker.evaluated_blocks += 1
+        return 0
+    memset(&error, 0, sizeof(error))
+    memset(&fp, 0, sizeof(fp))
+    if state.numpy_output != NULL and count <= 0:
+        return 1
+    # Elementwise evaluation overwrites all live lanes. Only padded lanes in
+    # the final physical chunk must be cleared before storing/compressing them.
+    if state.numpy_output != NULL:
+        destination = state.numpy_output + origin * params.output_typesize
+    elif not params.output_is_disposable:
+        # C-Blosc2 itself clears non-disposable prefilter outputs.
+        worker.output_zero_fill_bytes += params.output_size
+    elif written_bytes < <size_t>params.output_size:
+        memset(params.output + written_bytes, 0, params.output_size - written_bytes)
+        worker.output_zero_fill_bytes += params.output_size - written_bytes
+    if count <= 0:
+        return 0
+    if feholdexcept(&environment):
+        memset(params.output, 0, params.output_size)
+        worker.status = -5
+        worker.error_block = block_id
+        strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
+        return -1
+    for i in range(state.ninputs):
+        if state.numpy_inputs[i] != NULL:
+            worker.bindings[i].data = state.numpy_inputs[i] + origin * worker.bindings[i].itemsize
+            worker.bindings[i].capacity = count * worker.bindings[i].itemsize
+            continue
+        block_bytes = state.block_items * worker.bindings[i].itemsize
+        # Allocate lazily: small chunks may use only a subset of the configured
+        # compression workers. Each active worker reuses these across chunks.
+        if worker.bindings[i].data == NULL:
+            worker.bindings[i].data = malloc(block_bytes)
+            if worker.bindings[i].data == NULL:
+                rc = -6
+                strcpy(error.message, "Cannot allocate Menudet prefilter input block")
+                break
+        if worker.decoders[i] == NULL:
+            dparams = state.inputs[i].sc.storage.dparams[0]
+            dparams.nthreads = 1
+            dparams.schunk = state.inputs[i].sc
+            dparams.typesize = state.inputs[i].sc.typesize
+            worker.decoders[i] = blosc2_create_dctx(dparams)
+            if worker.decoders[i] == NULL:
+                rc = -6
+                strcpy(error.message, "Cannot allocate Menudet prefilter decoder")
+                break
+        worker.bindings[i].capacity = count * worker.bindings[i].itemsize
+        read_status = blosc2_getitem_bytes_ctx(worker.decoders[i], state.chunks[i], state.chunk_bytes[i],
+            params.nblock * block_bytes, block_bytes, <void *>worker.bindings[i].data, block_bytes)
+        if read_status != block_bytes:
+            rc = -5
+            error.native_status = read_status
+            strcpy(error.message, "Menudet prefilter input decompression failed")
+            break
+    if not rc:
+        memset(&descriptor, 0, sizeof(descriptor))
+        descriptor.struct_size = sizeof(descriptor)
+        descriptor.version = 1
+        descriptor.nitems = count
+        descriptor.output_capacity = count * params.output_typesize
+        if state.ndim:
+            descriptor.ndim = 1
+            descriptor.logical_shape = &logical_shape
+            descriptor.block_origin = &block_origin
+            descriptor.block_extent = &block_extent
+        # Decoder/postfilter work must not contribute to numerical FP flags.
+        rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
+                                    destination, &descriptor, 0, &fp, &error)
+    if fesetenv(&environment):
+        rc = -5
+        strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
+    if rc and (worker.status == 0 or block_id < worker.error_block):
+        worker.status = rc
+        worker.error = error
+        worker.error_block = block_id
+    if rc:
+        # Disposable prefilters do not propagate failures through C-Blosc2;
+        # return deterministic bytes until the caller raises worker status.
+        memset(params.output, 0, params.output_size)
+    if not rc:
+        worker.fp_flags |= fp.flags
+        worker.fp_supported &= fp.supported
+        worker.evaluated_blocks += 1
+    # External destinations need no filter/compressor work. With disposable
+    # output this return value skips filters; Blosc2 emits a tiny zero-run chunk.
+    return -1 if rc else (1 if state.numpy_output != NULL else 0)
+
+
+def menudet_prefilter_available():
+    return bool(b2_artifact_descriptor_available())
+
+
+def menudet_resident_available():
+    return bool(b2_artifact_descriptor_available())
+
+
+def native_array_sources_available():
+    return bool(b2_array_sources_available())
+
+
+cdef int storage_reader_callback(void *opaque, const size_t *indices, size_t count,
+                                void *destination, size_t capacity) noexcept with gil:
+    cdef object state = <object>opaque
+    cdef np.npy_intp dimensions[1]
+    cdef np.ndarray requested, values
+    try:
+        dimensions[0] = count
+        requested = np.PyArray_SimpleNewFromData(1, dimensions, np.NPY_UINTP, <void *>indices)
+        # Exceptions/tracebacks may outlive the native invocation scratch.
+        requested = requested.copy()
+        requested.flags.writeable = False
+        values = np.ascontiguousarray(state.reader.read(requested), dtype=state.dtype)
+        if values.size != count or <size_t>values.nbytes != capacity:
+            raise ValueError("Storage reader returned an invalid value count")
+        memcpy(destination, np.PyArray_DATA(values), capacity)
+        state.max_items = max(state.max_items, count)
+        state.read_bytes += capacity
+        return 0
+    except BaseException as error:
+        state.error = error
+        return 1
+
+
+cdef struct graph_span_reader_state:
+    b2nd_array_t *array
+    blosc2_context *dctx
+    int64_t origin
+    int64_t extent
+    int64_t chunk_id
+    uint8_t *chunk
+    int chunk_bytes
+    c_bool needs_free
+    size_t maximum_items
+    size_t read_bytes
+
+
+cdef int graph_span_reader_callback(void *opaque, const size_t *indices, size_t count,
+                                     void *destination, size_t capacity) noexcept nogil:
+    """Invocation-owned decoder/chunk cache; no Python or full-array buffers."""
+    cdef graph_span_reader_state *state = <graph_span_reader_state *>opaque
+    cdef size_t i, done = 0, take
+    cdef int64_t first, chunk_id, offset
+    cdef int rc
+    cdef int32_t decoded, encoded, block_bytes, wanted
+    cdef int typesize = state.array.sc.typesize
+    if not count:
+        return 0
+    if typesize <= 0 or count > 2147483647 or count > capacity // typesize or capacity != count * typesize:
+        return 1
+    if indices[0] >= <size_t>state.extent or count > <size_t>state.extent - indices[0]:
+        return 1
+    for i in range(1, count):
+        if indices[i] != indices[0] + i:
+            return 1
+    first = state.origin + indices[0]
+    while done < count:
+        chunk_id = (first + done) // state.array.chunknitems
+        offset = (first + done) % state.array.chunknitems
+        take = min(count - done, <size_t>(state.array.chunknitems - offset))
+        if state.chunk == NULL or state.chunk_id != chunk_id:
+            if state.needs_free:
+                free(state.chunk)
+            state.chunk = NULL
+            state.needs_free = False
+            state.chunk_bytes = blosc2_schunk_get_lazychunk(state.array.sc, chunk_id,
+                                                         &state.chunk, &state.needs_free)
+            state.chunk_id = chunk_id
+            if state.chunk_bytes < 0 or state.chunk == NULL:
+                return 1
+        rc = blosc2_cbuffer_sizes(state.chunk, &decoded, &encoded, &block_bytes)
+        if rc < 0 or decoded < 0 or block_bytes <= 0 or block_bytes % typesize or offset + take > <size_t>(decoded // typesize):
+            return 1
+        # Keep each request inside one physical block. Besides avoiding the
+        # decoder's multi-block copy, this prevents an unaligned block-sized
+        # request from taking C-Blosc2's single-block destination shortcut on
+        # its second block and overwriting already-decoded leading values.
+        take = min(take, <size_t>(block_bytes // typesize - offset % (block_bytes // typesize)))
+        wanted = take * typesize
+        rc = blosc2_getitem_bytes_ctx(state.dctx, state.chunk, state.chunk_bytes,
+                                      offset * typesize, wanted,
+                                      <uint8_t *>destination + done * typesize, wanted)
+        if rc != wanted:
+            return 1
+        done += take
+    state.maximum_items = max(state.maximum_items, count)
+    state.read_bytes += capacity
+    return 0
+
+cdef object array_view_binding(np.ndarray array, b2_array_view *view):
+    cdef np.ndarray root
+    cdef object owner = array
+    cdef object base
+    cdef int i
+    # Follow ndarray/DummyArray owners; bounds are the allocation, never an
+    # as_strided view's possibly fictitious logical byte extent.
+    while getattr(owner, "base", None) is not None:
+        owner = owner.base
+    if not isinstance(owner, np.ndarray):
+        try:
+            owner = np.frombuffer(owner, dtype=np.uint8)
+        except (TypeError, ValueError, BufferError):
+            array = np.array(array, copy=True, order="K")
+            owner = array
+    elif not owner.flags.owndata:
+        array = np.array(array, copy=True, order="K")
+        owner = array
+    root = owner
+    if array.ndim > 16:
+        raise ValueError("Native logical arrays support at most 16 axes")
+    view.dtype = _me_dtype_from_numpy_dtype(array.dtype.newbyteorder('='))
+    view.base = np.PyArray_DATA(root)
+    view.capacity = root.nbytes
+    if <uintptr_t>np.PyArray_DATA(array) < <uintptr_t>view.base:
+        raise ValueError("Array offset precedes owning allocation")
+    view.offset = <uintptr_t>np.PyArray_DATA(array) - <uintptr_t>view.base
+    view.rank = array.ndim
+    for i in range(view.rank):
+        view.shape[i] = array.shape[i]
+        view.strides[i] = array.strides[i]
+    view.byte_order = 1 if array.dtype.byteorder == '<' else 2 if array.dtype.byteorder == '>' else 0
+    return array
+
+
+cdef extern from "dsl_graph_bridge.h":
+    ctypedef void (*b2_graph_task_fn)(void *, size_t) noexcept nogil
+    ctypedef int (*b2_graph_fork_join_fn)(void *, size_t, b2_graph_task_fn, void *) noexcept nogil
+    int b2_graph_native_executor_available()
+    int b2_graph_native_fork_join(void *, size_t, b2_graph_task_fn, void *) noexcept nogil
+    unsigned b2_graph_execution_capabilities(const void *) nogil
+    int b2_graph_execute_parallel_into(const void *, const b2_array_view *, int,
+        const b2_array_view *, unsigned, size_t, b2_graph_fork_join_fn, void *,
+        b2_graph_report *, b2_graph_error *) nogil
+    int b2_graph_output_available() nogil
+    int b2_graph_execute_into(const void *, const b2_array_view *, const b2_array_source *, int,
+                             const b2_array_view *, unsigned, b2_graph_report *, b2_graph_error *) nogil
+    ctypedef struct b2_graph_metadata:
+        const char *name
+        me_dtype dtype
+        int rank
+        int64_t shape[16]
+    ctypedef struct b2_graph_error:
+        int node
+        int stage
+        b2_artifact_error native
+    ctypedef struct b2_graph_report:
+        b2_array_report array
+        size_t stages
+        size_t jit_stages
+        size_t interpreter_stages
+        size_t tasks
+    int b2_graph_prepare(const char *, size_t, int, int, const char *, void **, b2_graph_error *) nogil
+    int b2_graph_prepare_text(const char *, size_t, const b2_graph_metadata *, int, int, int, const char *, void **, b2_graph_error *) nogil
+    int b2_graph_specialize(const void *, const b2_graph_metadata *, int, size_t, size_t, void **, b2_graph_error *) nogil
+    int b2_graph_execute(const void *, const b2_array_view *, int, void *, size_t, unsigned, b2_graph_report *, b2_graph_error *) nogil
+    int b2_graph_sources_available()
+    int b2_graph_execute_sources(const void *, const b2_array_source *, int, void *, size_t, unsigned, b2_graph_report *, b2_graph_error *) nogil
+    void b2_graph_free(void *)
+    void b2_graph_schedule_free(void *)
+    int b2_graph_ninputs(const void *)
+    const char *b2_graph_name(const void *, int)
+    me_dtype b2_graph_dtype(const void *, int)
+    me_dtype b2_graph_inferred(const void *)
+    int b2_graph_jit(const void *)
+    const char *b2_graph_reduction_op(const void *)
+    int b2_graph_reduction_axis_count(const void *)
+    int b2_graph_reduction_axis(const void *, int)
+    int b2_graph_reduction_keepdims(const void *)
+    int b2_graph_reduction_has_initial(const void *)
+    int b2_graph_reduction_has_where(const void *)
+    const char *b2_graph_json(const void *)
+    const char *b2_graph_map_json(const void *)
+    const void *b2_graph_map_artifact(const void *)
+    size_t b2_graph_stages(const void *)
+    size_t b2_graph_intermediate(const void *)
+    size_t b2_graph_plan_bytes(const void *)
+    size_t b2_graph_schedule_bytes(const void *)
+    size_t b2_graph_scratch(const void *)
+    int b2_graph_stage_info(const void *, int, int64_t *, me_dtype *, size_t *, int *)
+    int b2_graph_shape(const void *, int64_t *, me_dtype *)
+    int b2_graph_map_shape(const void *, int64_t *)
+
+
+cdef void raise_graph_error(int rc, b2_graph_error *error, b2_array_report *report=NULL) except *:
+    if rc == -100:
+        raise NotImplementedError("Build with miniexpr native graph preparation support")
+    if rc == -7:
+        raise MemoryError((<bytes>error.native.message).decode("utf-8", "replace"))
+    from blosc2.menudet_kernel import MenudetError
+    statuses = {-1: "invalid_graph", -2: "unsupported_requirement", -3: "invalid_signature",
+                -4: "shape_error", -5: "binding_error", -6: "evaluation_error", -8: "unavailable_capability"}
+    exception = MenudetError(
+        f"{(<bytes>error.native.message).decode('utf-8', 'replace')} (node={error.node}, stage={error.stage})",
+        status=statuses.get(rc, "native_error"), native_status=error.native.native_status,
+        line=error.native.line, column=error.native.column)
+    exception.node = error.node
+    exception.stage = error.stage
+    if report != NULL:
+        exception.fp_status = {"flags": report.fp_flags, "supported": bool(report.fp_supported)}
+    raise exception
+
+
+cdef class _GraphHostInvocation:
+    cdef bint closed
+    cdef size_t active
+    cdef object waiter
+
+
+def _execute_graph_host_task(uintptr_t callback, uintptr_t invocation, size_t index,
+                             _GraphHostInvocation state):
+    cdef b2_graph_task_fn task = <b2_graph_task_fn>callback
+    if state.closed:
+        return
+    state.active += 1
+    try:
+        with nogil:
+            task(<void *>invocation,index)
+    finally:
+        state.active -= 1
+        if not state.active and state.closed:
+            state.waiter.set()
+
+
+cdef int graph_host_fork_join(void *host, size_t count, b2_graph_task_fn task, void *invocation) noexcept with gil:
+    cdef _GraphHostInvocation state = None
+    futures = []
+    try:
+        from threading import Event
+        state = _GraphHostInvocation()
+        state.waiter = Event()  # Allocate join state before any job can be enqueued.
+        from .resident_execution import resident_pool
+        for index in range(count - 1):
+            futures.append(resident_pool().submit(_execute_graph_host_task,
+                <uintptr_t>task,<uintptr_t>invocation,index,state))
+        # The synchronous caller is a worker too. This removes one pool
+        # submission and avoids idling it while short native tasks run.
+        with nogil:
+            task(invocation,count - 1)
+    except BaseException as error:
+        if state is not None:
+            state.closed = True
+        (<object>host).append(error)
+    finally:
+        # result() is an inexpensive join when caller work let the future finish.
+        # Join every started task even after submission/worker failures or an
+        # interrupted wait: native invocation pointers must not outlive this call.
+        for future in futures:
+            while True:
+                try:
+                    future.result()
+                    break
+                except BaseException as error:
+                    state.closed = True
+                    (<object>host).append(error)
+                    if future.done():
+                        break
+        # submit() can enqueue work and THEN fail while starting a thread. Such
+        # a task has no returned Future. Close its gate before freeing native
+        # state; join any native calls already entered, and let late jobs skip.
+        if state is not None:
+            state.closed = True
+            while state.active:
+                try:
+                    state.waiter.wait()
+                except BaseException as error:
+                    (<object>host).append(error)
+    return 1 if <object>host else 0
+
+
+def native_graph_output_available():
+    return bool(b2_graph_output_available())
+
+
+def native_graph_executor_available():
+    return bool(b2_graph_native_executor_available())
+
+
+def native_graph_sources_available():
+    return bool(b2_graph_sources_available())
+
+
+cdef class NativeGraphHandle:
+    cdef void *_handle
+
+    def __cinit__(self, graph=None, int jit_mode=2, bint require_jit=False):
+        cdef b2_graph_error error
+        cdef bytes encoded
+        cdef const char *json
+        cdef size_t size
+        cdef int rc
+        cdef bytes math_bytes = (blosc2.jit_config.execution_options()["math_backend"] or "").encode("ascii")
+        cdef const char *math_backend = <const char *>math_bytes if math_bytes else NULL
+        self._handle = NULL
+        if graph is None:
+            return
+        encoded = graph
+        json = encoded
+        size = len(encoded)
+        with nogil:
+            rc = b2_graph_prepare(json, size, jit_mode, require_jit, math_backend, &self._handle, &error)
+        if rc:
+            raise_graph_error(rc, &error)
+
+    def __dealloc__(self):
+        b2_graph_free(self._handle)
+
+    def info(self):
+        cdef int i
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        return {"inputs": {(<bytes>b2_graph_name(self._handle, i)).decode('utf-8'):
+                           _numpy_dtype_from_me_dtype(b2_graph_dtype(self._handle, i))
+                           for i in range(b2_graph_ninputs(self._handle))},
+                "inferred_dtype": _numpy_dtype_from_me_dtype(b2_graph_inferred(self._handle)),
+                "has_jit": bool(b2_graph_jit(self._handle)), "stages": b2_graph_stages(self._handle),
+                "plan_metadata_bytes": b2_graph_plan_bytes(self._handle),
+                "partitionable": bool(b2_graph_execution_capabilities(self._handle) & 1)}
+
+    def reduction_info(self):
+        """Borrowed root-reduction metadata; None for non-reduction graphs."""
+        cdef const char *op
+        cdef int count, i
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        op = b2_graph_reduction_op(self._handle)
+        if op == NULL:
+            return None
+        count = b2_graph_reduction_axis_count(self._handle)
+        axes = None if count < 0 else tuple(
+            b2_graph_reduction_axis(self._handle, i) for i in range(count)
+        )
+        return {
+            "op": (<bytes>op).decode("ascii"),
+            "axes": axes,
+            "keepdims": bool(b2_graph_reduction_keepdims(self._handle)),
+            "initial": bool(b2_graph_reduction_has_initial(self._handle)),
+            "where": bool(b2_graph_reduction_has_where(self._handle)),
+        }
+
+    def to_json(self):
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        return (<bytes>b2_graph_json(self._handle)).decode('utf-8')
+
+    def map_json(self):
+        cdef const char *json = b2_graph_map_json(self._handle)
+        if json == NULL:
+            raise ValueError("Root reductions/final conversions cannot be exported as elementwise artifacts")
+        return (<bytes>json).decode('utf-8')
+
+    def resident_artifact(self):
+        """Borrow the prepared map artifact, retaining this native plan owner."""
+        if self._handle == NULL or b2_graph_map_json(self._handle) == NULL:
+            return None
+        cdef const void *artifact = b2_graph_map_artifact(self._handle)
+        if artifact == NULL:
+            return None
+        cdef MenudetArtifactHandle result = MenudetArtifactHandle()
+        result._borrowed = True
+        result._handle = <void *>artifact
+        result._owner = self
+        return result
+
+    @staticmethod
+    def from_expression(bytes expression, input_dtypes, int jit_mode=2, bint require_jit=False):
+        cdef b2_graph_metadata metadata[128]
+        cdef b2_graph_error error
+        cdef int n = len(input_dtypes), i, rc
+        cdef bytes name
+        cdef list names = [key.encode('utf-8') for key in input_dtypes]
+        cdef const char *text = expression
+        cdef size_t length = len(expression)
+        cdef NativeGraphHandle result = NativeGraphHandle()
+        cdef bytes math_bytes = (blosc2.jit_config.execution_options()["math_backend"] or "").encode("ascii")
+        cdef const char *math_backend = <const char *>math_bytes if math_bytes else NULL
+        if n > 128:
+            raise ValueError("Native graph binding limit exceeded")
+        memset(metadata, 0, sizeof(metadata))
+        for i, dtype in enumerate(input_dtypes.values()):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            metadata[i].name = name
+            metadata[i].dtype = _me_dtype_from_numpy_dtype(np.dtype(dtype).newbyteorder('='))
+        with nogil:
+            rc = b2_graph_prepare_text(text, length, metadata, n, jit_mode, require_jit, math_backend, &result._handle, &error)
+        if rc:
+            raise_graph_error(rc, &error)
+        return result
+
+    def specialize(self, inputs, size_t tile_items=1024, size_t intermediate_budget=0):
+        """inputs maps names to (dtype, shape); no buffers or array reads."""
+        cdef b2_graph_metadata metadata[128]
+        cdef b2_graph_error error
+        cdef int n = len(inputs), i, j, rc
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef bytes name
+        cdef NativeGraphSchedule result = NativeGraphSchedule()
+        if self._handle == NULL:
+            raise ValueError("Uninitialized graph handle")
+        memset(metadata, 0, sizeof(metadata))
+        if n > 128:
+            raise ValueError("Native graph binding limit exceeded")
+        for i, (dtype, shape) in enumerate(inputs.values()):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            metadata[i].name = name
+            metadata[i].dtype = _me_dtype_from_numpy_dtype(np.dtype(dtype).newbyteorder('='))
+            metadata[i].rank = len(shape)
+            if len(shape) > 16:
+                raise ValueError("Native graph rank limit exceeded")
+            for j in range(len(shape)):
+                metadata[i].shape[j] = shape[j]
+        with nogil:
+            rc = b2_graph_specialize(self._handle, metadata, n, tile_items, intermediate_budget, &result._handle, &error)
+        if rc:
+            raise_graph_error(rc, &error)
+        return result
+
+
+cdef class NativeGraphSchedule:
+    cdef void *_handle
+
+    def __cinit__(self):
+        self._handle = NULL
+
+    def __dealloc__(self):
+        b2_graph_schedule_free(self._handle)
+
+    def info(self):
+        cdef int64_t shape[16], domain[16]
+        cdef me_dtype dtype
+        cdef int rank = b2_graph_shape(self._handle, shape, &dtype)
+        cdef int domain_rank = b2_graph_map_shape(self._handle, domain)
+        if rank < 0:
+            raise ValueError("Uninitialized graph schedule")
+        return {"shape": tuple(shape[i] for i in range(rank)),
+                "map_shape": tuple(domain[i] for i in range(domain_rank)),
+                "dtype": _numpy_dtype_from_me_dtype(dtype),
+                "intermediate_bytes": b2_graph_intermediate(self._handle),
+                "schedule_metadata_bytes": b2_graph_schedule_bytes(self._handle),
+                "iterator_scratch_bound": b2_graph_scratch(self._handle)}
+
+    def stage_info(self, int stage):
+        cdef int64_t shape[16]
+        cdef me_dtype dtype
+        cdef size_t capacity
+        cdef int last
+        cdef int rank = b2_graph_stage_info(self._handle, stage, shape, &dtype, &capacity, &last)
+        if rank < 0:
+            raise ValueError("Invalid stage or unavailable stage descriptions")
+        return {"shape": tuple(shape[i] for i in range(rank)), "dtype": _numpy_dtype_from_me_dtype(dtype),
+                "bytes": capacity, "last_consumer": last}
+
+    def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1):
+        cdef b2_array_view views[128]
+        cdef b2_array_view destination
+        cdef b2_graph_report report
+        cdef b2_graph_error error
+        cdef int n = len(inputs), i, rc
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef list owned = []
+        cdef list executor_errors = []
+        cdef bytes name
+        cdef np.ndarray array, bound, output
+        cdef size_t normalized = 0, capacity
+        cdef b2_graph_fork_join_fn executor = graph_host_fork_join
+        if workers > 1 and native_graph_executor_available():
+            executor = b2_graph_native_fork_join
+        if n > 128:
+            raise ValueError("Native graph binding limit exceeded")
+        memset(views, 0, sizeof(views))
+        memset(&report,0,sizeof(report))
+        info = self.info()
+        output = np.empty(info['shape'], dtype=info['dtype']) if out is None else out
+        if (<object>output).shape != info['shape'] or output.dtype != info['dtype']:
+            raise ValueError("Graph output shape/dtype disagree with schedule")
+        if not output.flags.writeable or not output.flags.aligned or not output.dtype.isnative:
+            raise ValueError("Graph output must be writable, aligned and native-endian")
+        if out is not None or workers > 1:
+            if not b2_graph_output_available():
+                raise NotImplementedError("Build with native destination descriptor support")
+            memset(&destination,0,sizeof(destination))
+            if array_view_binding(output,&destination) is not output:
+                raise ValueError("Cannot establish output allocation bounds")
+        capacity = output.nbytes
+        for i, value in enumerate(inputs.values()):
+            if not isinstance(value, np.ndarray):
+                raise TypeError("Graph execution requires explicit NumPy buffers")
+            array = value
+            bound = array_view_binding(array, &views[i])
+            if bound is not array:
+                normalized += bound.nbytes
+            owned.append(bound)
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            views[i].name = name
+        with nogil:
+            if workers > 1:
+                rc = b2_graph_execute_parallel_into(self._handle,views,n,&destination,raise_mask,workers,
+                    executor,<void *>executor_errors,&report,&error)
+            elif out is None:
+                rc = b2_graph_execute(self._handle, views, n, np.PyArray_DATA(output), capacity,
+                                      raise_mask, &report, &error)
+            else:
+                rc = b2_graph_execute_into(self._handle,views,NULL,n,&destination,raise_mask,&report,&error)
+        if executor_errors:
+            raise executor_errors[0]
+        if rc:
+            raise_graph_error(rc, &error, &report.array)
+        return output, {"temporary_bytes": report.array.temporary_bytes, "gathered_bytes": report.array.gathered_bytes,
+                        "normalization_bytes": normalized, "zero_copy_tiles": report.array.zero_copy_tiles,
+                        "evaluated_tiles": report.array.evaluated_tiles, "fp_flags": report.array.fp_flags,
+                        "fp_supported": bool(report.array.fp_supported), "stages": report.stages,
+                        "jit_stages": report.jit_stages, "interpreter_stages": report.interpreter_stages,
+                        "intermediate_bytes": b2_graph_intermediate(self._handle),
+                        "tasks": report.tasks or 1}
+
+    def execute_sources(self, inputs, readers, unsigned raise_mask=0, *, bint native_spans=False, out=None):
+        """Bind invocation-local metadata readers; native traversal owns all requests."""
+        cdef b2_array_source sources[128]
+        cdef graph_span_reader_state spans[128]
+        cdef int n = len(inputs), i
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef list owned = [], states = []
+        cdef np.ndarray output
+        if not b2_graph_sources_available():
+            raise NotImplementedError("Native runtime does not support graph storage readers")
+        if n > 128 or set(readers) - set(inputs):
+            raise ValueError("Invalid graph storage-reader bindings")
+        memset(sources, 0, sizeof(sources))
+        memset(spans, 0, sizeof(spans))
+        info = self.info()
+        if out is None:
+            output = np.empty(info['shape'], dtype=info['dtype'])
+        else:
+            if not isinstance(out, np.ndarray):
+                raise TypeError("Graph output requires a NumPy array")
+            output = out
+            if out.shape != info['shape'] or out.dtype != info['dtype']:
+                raise ValueError("Graph output shape/dtype disagree with schedule")
+            if (not output.flags.aligned or not output.flags.writeable or not output.dtype.isnative
+                    or (not output.flags.c_contiguous and not b2_graph_output_available())):
+                raise ValueError("Graph output must be writable, aligned and supported by the runtime")
+            if any(isinstance(value, np.ndarray) and np.shares_memory(output, value) for value in inputs.values()):
+                raise ValueError("Graph output must not overlap resident inputs")
+        try:
+            return self._execute_sources_bound(inputs, readers, raise_mask, native_spans,
+                                               sources, spans, names, owned, states, output)
+        finally:
+            for i in range(n):
+                if spans[i].dctx != NULL:
+                    blosc2_free_ctx(spans[i].dctx)
+                if spans[i].needs_free:
+                    free(spans[i].chunk)
+
+    cdef object _execute_sources_bound(self, object inputs, object readers, unsigned raise_mask,
+                                      bint native_spans, b2_array_source *sources,
+                                      graph_span_reader_state *spans, list names, list owned,
+                                      list states, np.ndarray output):
+        cdef b2_graph_report report
+        cdef b2_graph_error error
+        cdef int n = len(inputs), i, j, rc
+        cdef b2_array_view destination
+        cdef bytes name
+        cdef object state, value
+        cdef np.ndarray array, bound
+        cdef size_t normalized = 0, capacity = output.nbytes
+        cdef blosc2_dparams dparams
+        cdef NDArray compressed
+        memset(&destination,0,sizeof(destination))
+        if b2_graph_output_available() and array_view_binding(output,&destination) is not output:
+            raise ValueError("Cannot establish output allocation bounds")
+        for i, (key, value) in enumerate(inputs.items()):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names cannot contain NUL")
+            if key in readers:
+                state = readers[key]
+                states.append(state)
+                sources[i].view.dtype = _me_dtype_from_numpy_dtype(state.dtype)
+                sources[i].view.rank = len(state.reader.shape)
+                if sources[i].view.rank > 16:
+                    raise ValueError("Storage reader rank limit exceeded")
+                for j in range(sources[i].view.rank):
+                    sources[i].view.shape[j] = state.reader.shape[j]
+                sources[i].read = storage_reader_callback
+                sources[i].owner = <void *>state
+                if native_spans:
+                    if not isinstance(value, NDArray) or sources[i].view.rank != 1:
+                        raise ValueError("Native span readers require 1-D compressed arrays")
+                    compressed = value
+                    if compressed.ndim != 1:
+                        raise ValueError("Native span readers require 1-D compressed arrays")
+                    spans[i].array = compressed.array
+                    spans[i].origin = state.reader.start
+                    spans[i].extent = state.reader.shape[0]
+                    if spans[i].origin < 0 or spans[i].extent < 0 or spans[i].origin + spans[i].extent > compressed.array.shape[0]:
+                        raise ValueError("Native span reader extent exceeds input shape")
+                    dparams = compressed.array.sc.storage.dparams[0]
+                    dparams.nthreads = 1
+                    dparams.schunk = compressed.array.sc
+                    dparams.typesize = compressed.array.sc.typesize
+                    spans[i].dctx = blosc2_create_dctx(dparams)
+                    if spans[i].dctx == NULL:
+                        raise MemoryError("Cannot allocate native graph decoder")
+                    sources[i].read = graph_span_reader_callback
+                    sources[i].owner = &spans[i]
+            else:
+                if not isinstance(value, np.ndarray):
+                    raise TypeError("Resident graph inputs require NumPy buffers")
+                array = value
+                bound = array_view_binding(array, &sources[i].view)
+                if bound is not array:
+                    normalized += bound.nbytes
+                owned.append(bound)
+            sources[i].view.name = name
+        with nogil:
+            if b2_graph_output_available():
+                rc = b2_graph_execute_into(self._handle,NULL,sources,n,&destination,raise_mask,&report,&error)
+            else:
+                rc = b2_graph_execute_sources(self._handle, sources, n, np.PyArray_DATA(output), capacity,
+                                              raise_mask, &report, &error)
+        for state in states:
+            if state.error is not None:
+                raise state.error
+        if rc:
+            raise_graph_error(rc, &error, &report.array)
+        return output, {"temporary_bytes": report.array.temporary_bytes,
+                        "gathered_bytes": report.array.gathered_bytes, "normalization_bytes": normalized,
+                        "zero_copy_tiles": report.array.zero_copy_tiles, "evaluated_tiles": report.array.evaluated_tiles,
+                        "fp_flags": report.array.fp_flags, "fp_supported": bool(report.array.fp_supported),
+                        "stages": report.stages, "jit_stages": report.jit_stages,
+                        "interpreter_stages": report.interpreter_stages,
+                        "intermediate_bytes": b2_graph_intermediate(self._handle),
+                        "maximum_reader_items": max(max((state.max_items for state in states), default=0),
+                                                     max((spans[i].maximum_items for i in range(n)), default=0)),
+                         "reader_bytes": sum(state.read_bytes for state in states) + sum(spans[i].read_bytes for i in range(n)),
+                         "native_decoder_contexts": sum(spans[i].dctx != NULL for i in range(n)),
+                         "input_materialization_bytes": 0}
+
+
+def menudet_artifact_available():
+    return bool(b2_artifact_available())
+
+
+def menudet_auto_jit_mode():
+    return b2_artifact_auto_jit_mode()
+
+
+def menudet_descriptor_available():
+    return bool(b2_artifact_descriptor_available())
+
+
+cdef void raise_artifact_error(int rc, b2_artifact_error *error) except *:
+    from blosc2.menudet_kernel import MenudetError
+
+    if rc == -100:
+        raise NotImplementedError("Build with miniexpr Menudet artifact support")
+    if rc == -6:
+        raise MemoryError((<bytes>error.message).decode("utf-8", "replace"))
+    statuses = {-1: "invalid_artifact", -2: "unsupported_requirement", -3: "invalid_source",
+                -4: "binding_error", -5: "evaluation_error"}
+    raise MenudetError(
+        (<bytes>error.message).decode("utf-8", "replace"),
+        status=statuses.get(rc, "native_error"), native_status=error.native_status,
+        line=error.line, column=error.column)
+
+
+cdef class MenudetArtifactHandle:
+    """Owned immutable native handle; no Python artifact decoding or source execution."""
+    cdef void *_handle
+    cdef object _owner
+    cdef bint _borrowed
+
+    def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
+        cdef b2_artifact_error error
+        cdef int rc
+        cdef const char *json
+        cdef size_t size
+        cdef me_jit_options native_options
+        options = blosc2.jit_config.execution_options()
+        cdef bytes math_bytes = (options["math_backend"] or "").encode("utf-8")
+        cdef bytes compiler = (options["compiler"] or "").encode()
+        cdef bytes flags = (options["cflags"] or "").encode()
+        cdef bytes cache = (options["cache_dir"] or "").encode()
+        native_options.compiler = <const char *>compiler if compiler else NULL
+        native_options.cflags = <const char *>flags if flags else NULL
+        native_options.cache_dir = <const char *>cache if cache else NULL
+        native_options.math_backend = <const char *>math_bytes if math_bytes else NULL
+        native_options.trace = int(options["trace"])
+        native_options.compiler_output = int(options["compiler_output"])
+        self._handle = NULL
+        if artifact is None:
+            return
+        json = artifact
+        size = len(artifact)
+        if infer_output and not b2_artifact_load_inferred_available():
+            raise NotImplementedError(
+                "Build with miniexpr inferred-output artifact support"
+            )
+        with nogil:
+            if infer_output:
+                rc = b2_artifact_load_inferred(json, size, jit_mode, &native_options, &self._handle, &error)
+            else:
+                rc = b2_artifact_load_options(json, size, jit_mode, &native_options, &self._handle, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+
+    def __dealloc__(self):
+        # Cyclic GC may clear _owner before __dealloc__. Native ownership must
+        # not depend on a Python reference which tp_clear can replace with None.
+        if not self._borrowed:
+            b2_artifact_free(self._handle)
+
+    def info(self):
+        cdef int i
+        return {
+            "source": (<bytes>b2_artifact_source(self._handle)).decode("utf-8"),
+            "entry_point": (<bytes>b2_artifact_entry(self._handle)).decode("utf-8"),
+            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
+                       _numpy_dtype_from_me_dtype(b2_artifact_dtype(self._handle, i))
+                       for i in range(b2_artifact_ninputs(self._handle))},
+            "output_dtype": _numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)),
+            "jit": bool(b2_artifact_jit(self._handle)),
+            "execution_kind": (<bytes>b2_artifact_execution_kind(self._handle)).decode("ascii"),
+            "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
+            "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
+            "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
+        }
+
+    cdef object signature_dtype(self, int index):
+        cdef me_dtype dtype = b2_artifact_output(self._handle) if index < 0 else b2_artifact_dtype(self._handle, index)
+        cdef size_t width = b2_artifact_width(self._handle, index)
+        if dtype == ME_STRING:
+            return np.dtype(f"U{width // 4}")
+        if dtype == ME_BYTES:
+            return np.dtype(f"S{width}")
+        return _numpy_dtype_from_me_dtype(dtype)
+
+    def descriptor_info(self):
+        """Authoritative draft native signature; unavailable on older pinned builds."""
+        if not b2_artifact_descriptor_available():
+            raise NotImplementedError("Build with draft miniexpr descriptor support")
+        return {
+            "schema_version": (<bytes>b2_artifact_version(self._handle)).decode("ascii"),
+            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
+                       self.signature_dtype(i) for i in range(b2_artifact_ninputs(self._handle))},
+            "output_dtype": self.signature_dtype(-1),
+            "inferred_dtype": (None if b2_artifact_inferred(self._handle) == ME_AUTO else
+                               _numpy_dtype_from_me_dtype(b2_artifact_inferred(self._handle))),
+            "cardinality": "block_scalar" if b2_artifact_cardinality(self._handle) == 1 else "elementwise",
+            "ndim": b2_artifact_rank(self._handle),
+            "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
+            "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
+            "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
+        }
+
+    def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None,
+                       bint return_status=False, unsigned fp_raise=0, _output=None):
+        """Evaluate one explicit logical block; never infer ND coordinates from a physical tile."""
+        cdef b2_artifact_fp_status fp_status
+        from math import prod
+
+        if not b2_artifact_descriptor_available():
+            raise NotImplementedError("Build with draft miniexpr descriptor support")
+        cdef Py_ssize_t n = len(inputs), i
+        if n > 128:
+            raise ValueError("Too many Menudet artifact inputs")
+        block_shape = tuple(block_shape)
+        if any(type(size) is not int or size < 0 for size in block_shape):
+            raise ValueError("Block shape must contain nonnegative Python integers")
+        count = prod(block_shape)
+        if count > 2147483647:
+            raise ValueError("Native block exceeds the supported lane count")
+        cdef b2_artifact_buffer *bindings = NULL
+        cdef b2_artifact_descriptor descriptor
+        cdef b2_artifact_error error
+        cdef np.ndarray array, output, mask, shape_array, origin_array, extent_array
+        cdef list names = [key.encode("utf-8") for key in inputs]
+        cdef list arrays = list(inputs.values())
+        cdef bytes name
+        cdef int rc
+        memset(&descriptor, 0, sizeof(descriptor))
+        descriptor.struct_size = sizeof(descriptor)
+        descriptor.version = 1
+        descriptor.nitems = count
+        descriptor.ndim = b2_artifact_rank(self._handle)
+        if descriptor.ndim:
+            if logical_shape is None or block_origin is None or len(block_shape) != descriptor.ndim:
+                raise ValueError("Explicit logical shape, block origin and matching block rank are required")
+            shape_array = np.ascontiguousarray(logical_shape, dtype=np.int64)
+            origin_array = np.ascontiguousarray(block_origin, dtype=np.int64)
+            extent_array = np.ascontiguousarray(block_shape, dtype=np.int64)
+            if shape_array.ndim != 1 or origin_array.ndim != 1 or shape_array.shape[0] != descriptor.ndim or origin_array.shape[0] != descriptor.ndim:
+                raise ValueError("Logical context rank mismatch")
+            descriptor.logical_shape = <const int64_t *>np.PyArray_DATA(shape_array)
+            descriptor.block_origin = <const int64_t *>np.PyArray_DATA(origin_array)
+            descriptor.block_extent = <const int64_t *>np.PyArray_DATA(extent_array)
+        elif logical_shape is not None or block_origin is not None:
+            raise ValueError("This artifact does not declare ND context")
+        if valid_mask is not None:
+            mask = np.asarray(valid_mask)
+            if mask.dtype not in (np.dtype(np.bool_), np.dtype(np.uint8)) or mask.size != count:
+                raise ValueError("Valid mask must have one Boolean/uint8 slot per block lane")
+            mask = np.ascontiguousarray(mask, dtype=np.uint8)
+            descriptor.valid_mask = <const uint8_t *>np.PyArray_DATA(mask)
+            descriptor.valid_mask_capacity = mask.nbytes
+        output_shape = () if b2_artifact_cardinality(self._handle) == 1 else block_shape
+        output = (np.empty(output_shape, dtype=self.signature_dtype(-1))
+                  if _output is None else _output)
+        if ((<object>output).shape != output_shape or output.dtype != self.signature_dtype(-1)
+                or not output.flags.c_contiguous or not output.flags.aligned
+                or not output.flags.writeable):
+            raise ValueError("Output must be writable, aligned, contiguous and match the result signature")
+        if _output is not None and any(np.shares_memory(output, value) for value in arrays):
+            raise ValueError("Menudet block output must not alias inputs")
+        descriptor.output_capacity = output.nbytes
+        if n:
+            bindings = <b2_artifact_buffer *>calloc(n, sizeof(b2_artifact_buffer))
+            if bindings == NULL:
+                raise MemoryError()
+        try:
+            for i in range(n):
+                array = arrays[i]
+                if not array.flags.c_contiguous or not array.flags.aligned or not array.dtype.isnative or array.size != count:
+                    raise ValueError("Block inputs must be aligned, contiguous, host-endian and match the block extent")
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names must not contain NUL")
+                bindings[i].name = name
+                bindings[i].dtype = _me_dtype_from_numpy_dtype(array.dtype)
+                bindings[i].itemsize = array.dtype.itemsize
+                bindings[i].data = np.PyArray_DATA(array)
+                bindings[i].capacity = array.nbytes
+            with nogil:
+                if return_status or fp_raise:
+                    rc = b2_artifact_eval_status(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, fp_raise, &fp_status, &error)
+                else:
+                    rc = b2_artifact_eval_ex(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, &error)
+            if rc:
+                try:
+                    raise_artifact_error(rc, &error)
+                except Exception as exc:
+                    if return_status or fp_raise:
+                        exc.fp_status = {"flags": fp_status.flags, "supported": bool(fp_status.supported)}
+                    raise
+            return (output, {"flags": fp_status.flags, "supported": bool(fp_status.supported)}) if return_status else output
+        finally:
+            free(bindings)
+
+    def evaluate_array(self, inputs, shape, reduction=None, axes=None, bint keepdims=False,
+                       accumulator=None, initial=None, where=None, size_t tile_items=1024):
+        cdef b2_array_view *views = NULL
+        cdef b2_array_view mask_view
+        cdef b2_array_options options
+        cdef b2_array_report report
+        cdef b2_artifact_error error
+        cdef int64_t domain[16]
+        cdef int64_t result_shape[16]
+        cdef int rank = len(shape), result_rank, rc, n = len(inputs), i, j
+        cdef me_dtype result_dtype
+        cdef size_t output_bytes
+        cdef np.ndarray array, output, initial_array
+        cdef bytes name
+        cdef list names = [value.encode('utf-8') for value in inputs]
+        cdef list owned = []
+        cdef size_t normalization_bytes = 0
+        cdef np.ndarray bound
+        memset(&options, 0, sizeof(options))
+        memset(&error, 0, sizeof(error))
+        if rank > 16 or n > 128:
+            raise ValueError("Native array rank/input limit exceeded")
+        for i in range(rank):
+            domain[i] = shape[i]
+        options.version = 1
+        options.reduction = {None: 0, 'sum': 1, 'prod': 2, 'min': 3, 'max': 4, 'any': 5, 'all': 6}[reduction]
+        options.naxes = 0 if reduction is None else -1 if axes is None else len(axes)
+        if options.naxes > 16:
+            raise ValueError("Too many reduction axes")
+        if axes is not None:
+            for i in range(options.naxes):
+                options.axes[i] = axes[i]
+        options.keepdims = keepdims
+        options.accumulator = ME_AUTO if accumulator is None else _me_dtype_from_numpy_dtype(np.dtype(accumulator))
+        options.tile_items = tile_items
+        with nogil:
+            rc = b2_array_shape(self._handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+        output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
+        output_bytes = output.nbytes
+        if initial is not None:
+            initial_array = np.asarray(initial, dtype=output.dtype)
+            if initial_array.ndim != 0:
+                raise ValueError("initial must be a scalar")
+            options.initial = np.PyArray_DATA(initial_array)
+        if where is not None:
+            array = np.asarray(where)
+            if array.dtype != np.dtype('bool'):
+                raise TypeError("Participating mask must have bool dtype")
+            bound = array_view_binding(array, &mask_view)
+            if bound is not array:
+                normalization_bytes += bound.nbytes
+            owned.append(bound)
+            options.where = &mask_view
+        if n:
+            views = <b2_array_view *>calloc(n, sizeof(b2_array_view))
+            if views == NULL:
+                raise MemoryError()
+        try:
+            for i, value in enumerate(inputs.values()):
+                array = np.asarray(value)
+                bound = array_view_binding(array, &views[i])
+                if bound is not array:
+                    normalization_bytes += bound.nbytes
+                owned.append(bound)
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names cannot contain NUL")
+                views[i].name = name
+            with nogil:
+                rc = b2_array_eval(self._handle, views, n, rank, domain, &options,
+                                   np.PyArray_DATA(output), output_bytes, &report, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output, {"temporary_bytes": report.temporary_bytes, "gathered_bytes": report.gathered_bytes,
+                            "normalization_bytes": normalization_bytes,
+                            "zero_copy_tiles": report.zero_copy_tiles, "evaluated_tiles": report.evaluated_tiles,
+                            "fp_flags": report.fp_flags, "fp_supported": bool(report.fp_supported)}
+        finally:
+            free(views)
+
+    def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
+                           _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
+                           _chunk_indices=None):
+        """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
+        if not menudet_prefilter_inputs_eligible(
+                inputs, allow_numpy=numpy_out is not None or out is not None, output=out):
+            raise NotImplementedError("Inputs are not eligible for Menudet prefilter execution")
+        signature = self.descriptor_info()
+        if set(inputs) != set(signature["inputs"]):
+            raise ValueError("Menudet prefilter input names disagree with signature")
+        if (signature["cardinality"] != "elementwise"
+                or signature["ndim"] not in (0, (out.ndim if not inputs and out is not None else 1))):
+            raise ValueError("Menudet prefilters require matching-rank elementwise kernels")
+        if any(value.dtype != signature["inputs"][name] for name, value in inputs.items()):
+            raise TypeError("Menudet prefilter input dtype disagrees with signature")
+        first = next((value for value in inputs.values() if isinstance(value, NDArray)), out)
+        if first is None:
+            raise ValueError("An output NDArray is required to schedule an input-free prefilter")
+        if first.ndim > 1 and numpy_out is not None:
+            raise ValueError("N-D Menudet prefilters require an NDArray output")
+        if _diagonal is not None and (inputs or first.ndim != 2 or out is None):
+            raise ValueError("Diagonal scheduling requires input-free 2-D NDArray output")
+        block_items = first.blocks[0]
+        if _block_items is not None:
+            if (numpy_out is None or out is not None or _block_items <= 0
+                    or first.chunks[0] % _block_items or _block_items % block_items):
+                raise ValueError("Invalid NumPy prefilter batch layout")
+            block_items = _block_items
+        block_bytes = sum(block_items * value.dtype.itemsize for value in inputs.values()
+                          if isinstance(value, NDArray))
+        threads = (max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
+                   if block_bytes else blosc2.nthreads)
+        if _nthreads is not None:
+            if numpy_out is None or not 1 <= _nthreads <= threads:
+                raise ValueError("Invalid NumPy prefilter thread count")
+            threads = _nthreads
+        if _chunk_range is not None:
+            if numpy_out is None or out is not None:
+                raise ValueError("Prefilter chunk ranges require a direct NumPy output")
+            begin, end = _chunk_range
+            if not 0 <= begin < end <= first.schunk.nchunks:
+                raise ValueError("Invalid prefilter chunk range")
+            threads = 1
+        if _chunk_indices is not None:
+            if numpy_out is None or out is not None or _chunk_range is not None:
+                raise ValueError("Dynamic prefilter chunks require a direct NumPy output")
+            threads = 1
+        if out is None and numpy_out is None:
+            numpy_out = np.empty(first.shape, dtype=self.signature_dtype(-1))
+        if numpy_out is not None:
+            if out is not None:
+                raise ValueError("Cannot specify both Blosc2 and NumPy prefilter outputs")
+            if (type(numpy_out) is not np.ndarray or numpy_out.shape != first.shape
+                    or numpy_out.dtype != self.signature_dtype(-1)):
+                raise ValueError("NumPy prefilter output must match the input shape and result dtype")
+            if (not numpy_out.flags.c_contiguous or not numpy_out.flags.aligned
+                    or not numpy_out.flags.writeable):
+                raise ValueError("NumPy prefilter output must be writable, aligned and C-contiguous")
+            if any(type(value) is np.ndarray and np.shares_memory(numpy_out, value)
+                   for value in inputs.values()):
+                raise ValueError("NumPy prefilter output must not overlap an input")
+        if _driver_input is not None:
+            if (numpy_out is None or type(_driver_input) is not np.ndarray
+                    or _driver_input.dtype != np.dtype("uint8")
+                    or not _driver_input.flags.c_contiguous
+                    or _driver_input.nbytes != first.chunks[0] * self.signature_dtype(-1).itemsize):
+                raise ValueError("Invalid shared prefilter driver buffer")
+        if out is None:
+            # Only a scheduling context is needed: no full-domain placeholder
+            # container and no result chunks are stored for a NumPy sink.
+            output = blosc2.uninit(first.chunks, dtype=self.signature_dtype(-1),
+                                  chunks=first.chunks, blocks=(block_items,),
+                                  cparams=blosc2.CParams(clevel=1, nthreads=threads))
+            if _chunk_range is None:
+                _chunk_range = (0, first.schunk.nchunks)
+        else:
+            if (type(out) is not blosc2.NDArray or out.shape != first.shape
+                    or out.dtype != self.signature_dtype(-1)
+                    or out.chunks != first.chunks or out.blocks != first.blocks):
+                raise ValueError("Menudet prefilter output must match the input grid and result dtype")
+            if any(out is source for source in inputs.values()):
+                raise ValueError("Menudet prefilter output must not alias an input")
+            output = out
+        return output._execute_menudet_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
+                                                 driver_input=_driver_input, diagonal=_diagonal,
+                                                 chunk_indices=_chunk_indices)
+
+    def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
+        cdef b2_array_source *sources = NULL
+        cdef b2_array_options options
+        cdef b2_array_report report
+        cdef b2_artifact_error error
+        cdef int64_t domain[16]
+        cdef int64_t result_shape[16]
+        cdef int rank = len(shape), result_rank, rc, n = len(inputs), i, j
+        cdef me_dtype result_dtype
+        cdef size_t output_bytes
+        cdef np.ndarray array, bound, output
+        cdef bytes name
+        cdef object state, value
+        cdef list names = [key.encode('utf-8') for key in inputs]
+        cdef list owned = []
+        cdef list states = []
+        if not b2_array_sources_available():
+            raise NotImplementedError("Native runtime does not support storage readers")
+        if rank > 16 or n > 128 or tile_items == 0 or tile_items > 2147483647:
+            raise ValueError("Invalid storage-reader rank, input count or tile size")
+        memset(&options, 0, sizeof(options))
+        options.version = 1
+        options.tile_items = tile_items
+        for i in range(rank):
+            domain[i] = shape[i]
+        with nogil:
+            rc = b2_array_shape(self._handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+        output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
+        output_bytes = output.nbytes
+        if n:
+            sources = <b2_array_source *>calloc(n, sizeof(b2_array_source))
+            if sources == NULL:
+                raise MemoryError()
+        try:
+            for i, (key, value) in enumerate(inputs.items()):
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names cannot contain NUL")
+                if key in readers:
+                    state = readers[key]
+                    states.append(state)
+                    sources[i].view.dtype = _me_dtype_from_numpy_dtype(state.dtype)
+                    sources[i].view.rank = len(state.reader.shape)
+                    if sources[i].view.rank > 16:
+                        raise ValueError("Storage reader rank limit exceeded")
+                    for j in range(sources[i].view.rank):
+                        sources[i].view.shape[j] = state.reader.shape[j]
+                    sources[i].read = storage_reader_callback
+                    sources[i].owner = <void *>state
+                else:
+                    array = np.asarray(value)
+                    bound = array_view_binding(array, &sources[i].view)
+                    owned.append(bound)
+                sources[i].view.name = name
+            with nogil:
+                rc = b2_array_eval_sources(self._handle, sources, n, rank, domain, &options,
+                    np.PyArray_DATA(output), output_bytes, &report, &error)
+            for state in states:
+                if state.error is not None:
+                    raise state.error
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output, {"temporary_bytes": report.temporary_bytes,
+                "gathered_bytes": report.gathered_bytes, "evaluated_tiles": report.evaluated_tiles,
+                "zero_copy_tiles": report.zero_copy_tiles, "fp_flags": report.fp_flags,
+                "fp_supported": bool(report.fp_supported), "tile_items": tile_items,
+                "maximum_reader_items": max((state.max_items for state in states), default=0),
+                "reader_bytes": sum(state.read_bytes for state in states)}
+        finally:
+            free(sources)
+
+    def evaluate(self, inputs, shape):
+        cdef Py_ssize_t n = len(inputs)
+        if n > 128:
+            raise ValueError("Too many Menudet artifact inputs")
+        cdef b2_artifact_input *bindings = NULL
+        cdef b2_artifact_error error
+        cdef np.ndarray array, output
+        cdef list names = [key.encode("utf-8") for key in inputs]
+        cdef list arrays = list(inputs.values())
+        cdef bytes name
+        cdef int rc
+        cdef Py_ssize_t i
+        cdef size_t count
+        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)))
+        count = output.size
+        if n:
+            bindings = <b2_artifact_input *> calloc(n, sizeof(b2_artifact_input))
+            if bindings == NULL:
+                raise MemoryError()
+        try:
+            for i in range(n):
+                array = arrays[i]
+                if not array.flags.c_contiguous or not array.flags.aligned or not array.dtype.isnative:
+                    raise ValueError("Native artifact inputs must be aligned, contiguous, and host-endian")
+                name = names[i]
+                if b'\x00' in name:
+                    raise ValueError("Input names must not contain NUL")
+                bindings[i].name = name
+                bindings[i].dtype = _me_dtype_from_numpy_dtype(array.dtype)
+                bindings[i].data = np.PyArray_DATA(array)
+                bindings[i].nitems = array.size
+            with nogil:
+                rc = b2_artifact_eval(self._handle, bindings, <int>n, np.PyArray_DATA(output), count, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            return output
+        finally:
+            free(bindings)
+
+
 def me_output_dtype(expression, operands):
     """Ask miniexpr what dtype *expression* would produce over *operands*.
 
@@ -1011,6 +2618,8 @@ def me_output_dtype(expression, operands):
             var.itemsize = operand_dtype.itemsize if operand_dtype.num in (18, 19) else 0
             built += 1
 
+        from blosc2.utils import canonicalize_miniexpr_functions
+        expression = canonicalize_miniexpr_functions(expression)
         expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
         )
@@ -1059,6 +2668,20 @@ cdef int _me_compile_nd_configured(const char *expression, const me_variable *va
     int n, me_dtype dtype, int ndims, const int64_t *shape, const int32_t *chunkshape,
     const int32_t *blockshape, int jit_mode, int *error, me_expr **out_expr) except *:
     options = blosc2.jit_config.execution_options()
+    cdef bytes math_bytes = options["math_backend"].encode("utf-8") if options["math_backend"] is not None else b""
+    cdef bytes configured_expression
+    cdef str expression_text
+    cdef list parameter_names
+    if math_bytes:
+        # Plain miniexpr expressions do not consult the DSL math policy. A
+        # function wrapper selects the same validated DSL path without a source
+        # pragma, so author pragmas remain authoritative.
+        expression_text = (<bytes>expression).decode("utf-8")
+        if not any(line.lstrip().startswith("def ") for line in expression_text.splitlines()):
+            parameter_names = [(<bytes>variables[i].name).decode("utf-8") for i in range(n)]
+            expression_text = f"def __me_math({', '.join(parameter_names)}):\n    return {expression_text}"
+            configured_expression = expression_text.encode("utf-8")
+            expression = configured_expression
     cdef bytes compiler_bytes = options["compiler"].encode("utf-8") if options["compiler"] is not None else b""
     cdef bytes flags_bytes = options["cflags"].encode("utf-8") if options["cflags"] is not None else b""
     cdef bytes cache_bytes = options["cache_dir"].encode("utf-8") if options["cache_dir"] is not None else b""
@@ -1068,6 +2691,7 @@ cdef int _me_compile_nd_configured(const char *expression, const me_variable *va
     native_options.cache_dir = <const char *>cache_bytes if cache_bytes else NULL
     native_options.trace = int(options["trace"])
     native_options.compiler_output = int(options["compiler_output"])
+    native_options.math_backend = <const char *>math_bytes if math_bytes else NULL
     return me_compile_nd_jit_options(expression, variables, n, dtype, ndims, shape,
                                     chunkshape, blockshape, jit_mode, &native_options, error, out_expr)
 
@@ -1081,8 +2705,6 @@ cdef inline str _me_compile_status_name(int rc):
         return "ME_COMPILE_ERR_PARSE"
     if rc == ME_COMPILE_ERR_INVALID_ARG:
         return "ME_COMPILE_ERR_INVALID_ARG"
-    if rc == ME_COMPILE_ERR_COMPLEX_UNSUPPORTED:
-        return "ME_COMPILE_ERR_COMPLEX_UNSUPPORTED"
     if rc == ME_COMPILE_ERR_REDUCTION_INVALID:
         return "ME_COMPILE_ERR_REDUCTION_INVALID"
     if rc == ME_COMPILE_ERR_VAR_MIXED:
@@ -1302,7 +2924,9 @@ cdef _check_cparams(blosc2_cparams *cparams):
             if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
                 raise ValueError("Cannot use multi-threading with user defined Python filters")
 
-        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter):
+        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter
+                and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter
+                and cparams.prefilter != <blosc2_prefilter_fn>menudet_menudet_prefilter):
             # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
@@ -2232,9 +3856,13 @@ cdef class SChunk:
         cdef Py_buffer chunk_buf
         PyObject_GetBuffer(chunk_data, &chunk_buf, PyBUF_SIMPLE)
         self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
-        cdef int size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
-        PyBuffer_Release(&buf)
-        PyBuffer_Release(&chunk_buf)
+        cdef int size
+        try:
+            with nogil:
+                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
+        finally:
+            PyBuffer_Release(&buf)
+            PyBuffer_Release(&chunk_buf)
         if size < 0:
             raise RuntimeError("Could not compress the data")
         elif size == 0:
@@ -2642,7 +4270,7 @@ cdef class SChunk:
 
 
 # postfilter
-cdef int general_postfilter(blosc2_postfilter_params *params):
+cdef int general_postfilter(blosc2_postfilter_params *params) with gil:
     cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
     cdef int nd = 1
     cdef np.npy_intp dims = params.size // params.typesize
@@ -3262,7 +4890,7 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
     return aux_udf(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
 
 
-cdef int general_udf_postfilter(blosc2_postfilter_params *params):
+cdef int general_udf_postfilter(blosc2_postfilter_params *params) with gil:
     cdef udf_udata *udata = <udf_udata *> params.user_data
     return aux_udf(udata, params.nchunk, params.nblock, True, params.output, params.typesize)
 
@@ -3915,13 +5543,15 @@ cdef class NDArray:
 
         return arr
 
-    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
+    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems, int nthreads=0):
         if self.ndim != 1:
             raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
         if nchunk < 0 or nchunk >= self.array.sc.nchunks:
             raise IndexError("chunk index out of range")
         if start < 0 or nitems < 0:
             raise ValueError("start and nitems must be >= 0")
+        if nthreads < 0 or nthreads > 32767:
+            raise ValueError("span nthreads must be between 0 and 32767")
         if start + nitems > self.array.chunknitems:
             raise ValueError("requested span exceeds chunk size")
 
@@ -3964,6 +5594,10 @@ cdef class NDArray:
         # since some codecs/filters resolve per-schunk state (e.g.
         # dictionaries) through dparams.schunk during decompression.
         cdef blosc2_dparams dparams = dereference(self.array.sc.storage.dparams)
+        # Small bounded-reader spans should not repeatedly start large worker
+        # teams. Zero preserves the existing caller/storage decompression policy.
+        if nthreads:
+            dparams.nthreads = nthreads
         dparams.schunk = self.array.sc
         dparams.typesize = self.array.sc.typesize
         dctx = blosc2_create_dctx(dparams)
@@ -3979,9 +5613,13 @@ cdef class NDArray:
         # The getitem entry points need the full lazy chunk size returned by
         # blosc2_schunk_get_lazychunk().
         want_nbytes = nitems * self.array.sc.typesize
-        rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
-                                      start * self.array.sc.typesize, want_nbytes,
-                                      view.buf, view.len)
+        # This invocation owns its context, chunk reference and destination;
+        # release the GIL so independent bounded graph readers can decompress
+        # concurrently instead of serializing all native source callbacks.
+        with nogil:
+            rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
+                                          start * self.array.sc.typesize, want_nbytes,
+                                          view.buf, view.len)
         blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)
         if needs_free:
@@ -4298,7 +5936,7 @@ cdef class NDArray:
         eval_params.disable_simd = False
         eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1
         if jit is None:
-            eval_params.jit_mode = ME_JIT_DEFAULT
+            eval_params.jit_mode = <me_jit_mode>b2_artifact_auto_jit_mode()
         elif jit:
             eval_params.jit_mode = ME_JIT_ON
         else:
@@ -4362,7 +6000,7 @@ cdef class NDArray:
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        cdef int jit_mode = ME_JIT_DEFAULT
+        cdef int jit_mode = b2_artifact_auto_jit_mode()
         if jit is True:
             jit_mode = ME_JIT_ON
         elif jit is False:
@@ -4410,6 +6048,8 @@ cdef class NDArray:
         cdef int error = 0
         cdef bytes expression_bytes
         cdef str expression_display
+        from blosc2.utils import canonicalize_miniexpr_functions
+        expression = canonicalize_miniexpr_functions(expression)
         if isinstance(expression, str):
             expression_display = expression
             expression_bytes = (<str>expression).encode("utf-8")
@@ -4511,6 +6151,8 @@ cdef class NDArray:
         if backend in ("tcc", "cc"):
             from blosc2.lazyexpr import _apply_jit_backend_pragma
             expression = _apply_jit_backend_pragma(expression, inputs, backend)
+        from blosc2.utils import canonicalize_miniexpr_functions
+        expression = canonicalize_miniexpr_functions(expression)
         cdef bytes expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
         )
@@ -4557,6 +6199,207 @@ cdef class NDArray:
         self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
+
+    def _menudet_chunk_buffer(self):
+        """Decode one physical chunk without leaking codec floating flags."""
+        cdef fenv_t environment
+        buffer = np.empty(self.array.sc.chunksize // self.dtype.itemsize, dtype=self.dtype)
+        if feholdexcept(&environment):
+            raise RuntimeError("Cannot isolate Menudet chunk decoder floating environment")
+        try:
+            self.schunk.decompress_chunk(0, dst=buffer)
+        finally:
+            if fesetenv(&environment):
+                raise RuntimeError("Cannot restore Menudet chunk decoder floating environment")
+        return buffer[:self.array.shape[0]]
+
+    def _execute_menudet_prefilter(self, MenudetArtifactHandle kernel, inputs,
+                                    np.ndarray numpy_out=None, chunk_range=None, driver_input=None,
+                                    diagonal=None, chunk_indices=None):
+        cdef menudet_prefilter_state state
+        cdef menudet_prefilter_worker *worker
+        cdef blosc2_prefilter_params parameters
+        cdef blosc2_cparams *cparams = self.array.sc.storage.cparams
+        cdef NDArray value
+        cdef int i, tid, rc
+        cdef int32_t decoded_bytes, encoded_bytes, block_bytes
+        cdef size_t decoder_contexts = 0, input_buffer_allocations = 0, input_chunk_fetches = 0
+        cdef size_t placeholder_bytes = 0
+        cdef int64_t chunk
+        cdef int64_t begin = 0, end = self.array.sc.nchunks
+        if chunk_range is not None:
+            begin, end = chunk_range
+        memset(&state, 0, sizeof(state))
+        memset(&parameters, 0, sizeof(parameters))
+        state.artifact = kernel._handle
+        state.ndim = b2_artifact_rank(kernel._handle)
+        if diagonal is not None:
+            state.diagonal_enabled = True
+            state.diagonal = diagonal
+        state.ninputs = len(inputs)
+        state.size = numpy_out.shape[0] if numpy_out is not None else self.array.shape[0]
+        state.chunk_items = self.array.chunkshape[0]
+        state.block_items = self.array.blockshape[0]
+        state.grid_ndim = self.array.ndim
+        if state.grid_ndim > 1:
+            state.size = 1
+            state.chunk_items = 1
+            state.block_items = 1
+            for i in range(state.grid_ndim):
+                state.shape[i] = self.array.shape[i]
+                state.chunkshape[i] = self.array.chunkshape[i]
+                state.blockshape[i] = self.array.blockshape[i]
+                state.chunkgrid[i] = (state.shape[i] + state.chunkshape[i] - 1) // state.chunkshape[i]
+                state.blockgrid[i] = (state.chunkshape[i] + state.blockshape[i] - 1) // state.blockshape[i]
+                state.size *= state.shape[i]
+                state.chunk_items *= state.blockgrid[i] * state.blockshape[i]
+                state.block_items *= state.blockshape[i]
+        state.fp_supported = 1
+        if numpy_out is not None:
+            state.numpy_output = <uint8_t *>numpy_out.data
+        # All names and source arrays stay owned by kernel/inputs until the
+        # synchronous compression workers have joined and the context is freed.
+        for i, (name, source) in enumerate(inputs.items()):
+            if type(source) is np.ndarray:
+                state.numpy_inputs[i] = <const uint8_t *>(<np.ndarray>source).data
+            else:
+                value = source
+                state.inputs[i] = value.array
+            state.signature[i].name = b2_artifact_name(kernel._handle, i)
+            # Mapping order may differ from the artifact's signature order.
+            encoded_name = name.encode("utf-8")
+            for j in range(state.ninputs):
+                if encoded_name == <bytes>b2_artifact_name(kernel._handle, j):
+                    state.signature[i].name = b2_artifact_name(kernel._handle, j)
+                    state.signature[i].dtype = b2_artifact_dtype(kernel._handle, j)
+                    state.signature[i].itemsize = b2_artifact_width(kernel._handle, j)
+                    break
+        data = (np.empty(self.array.sc.chunksize, dtype=np.uint8)
+                if driver_input is None else driver_input)
+        # One block offset plus one zero-run marker per byte stream. Small
+        # chunks can take Blosc2's memcpy shortcut, so retain at least 128 bytes.
+        placeholder_capacity = BLOSC2_MAX_OVERHEAD + max(
+            128, ((self.array.sc.chunksize + self.array.sc.blocksize - 1)
+                  // self.array.sc.blocksize) * (4 + 4 * self.array.sc.typesize))
+        chunk_buffer = (np.empty(placeholder_capacity, dtype=np.uint8)
+                        if numpy_out is not None else None)
+        state.nworkers = cparams.nthreads
+        # One compact allocation holds worker records and only the bindings
+        # actually used by this signature, rather than 128 slots per worker.
+        state.workers = <menudet_prefilter_worker *>calloc(state.nworkers,
+            sizeof(menudet_prefilter_worker) + state.ninputs * (sizeof(b2_artifact_buffer) + sizeof(void *)))
+        if state.workers == NULL:
+            raise MemoryError()
+        parameters.user_data = &state
+        # With clevel=0 keep the memcpy payload without a prefilter memset.
+        # External NumPy output instead uses clevel=1 and disposable zero-run
+        # placeholders: the callback skips filters and writes the real sink.
+        # Never discard the payload of a caller's Blosc2 output.
+        parameters.output_is_disposable = numpy_out is not None or cparams.clevel == 0
+        cparams.prefilter = menudet_menudet_prefilter
+        cparams.preparams = &parameters
+        try:
+            # Active workers allocate their private scratch on first use.
+            for tid in range(state.nworkers):
+                worker = &state.workers[tid]
+                worker.bindings = <b2_artifact_buffer *>(state.workers + state.nworkers) + tid * state.ninputs
+                worker.decoders = <blosc2_context **>(<b2_artifact_buffer *>(state.workers + state.nworkers)
+                    + state.nworkers * state.ninputs) + tid * state.ninputs
+                worker.fp_supported = 1
+                for i in range(state.ninputs):
+                    worker.bindings[i] = state.signature[i]
+            if self.array.sc.cctx != NULL:
+                blosc2_free_ctx(self.array.sc.cctx)
+            self.array.sc.cctx = blosc2_create_cctx(cparams[0])
+            if self.array.sc.cctx == NULL:
+                raise MemoryError("Cannot create Menudet prefilter compression context")
+            try:
+                # Reuse this worker's native context and decoder scratch while
+                # claiming chunks from an invocation-local synchronized queue.
+                for chunk in (range(begin, end) if chunk_indices is None else chunk_indices):
+                    if chunk < begin or chunk >= end:
+                        raise ValueError("Dynamic prefilter chunk is outside the output domain")
+                    # Fetch/validate each compressed input chunk once. The
+                    # synchronous update joins all workers before these shared
+                    # read-only pointers advance to the next chunk.
+                    for i in range(state.ninputs):
+                        if state.numpy_inputs[i] != NULL:
+                            continue
+                        if state.chunk_owned[i]:
+                            free(state.chunks[i])
+                        state.chunks[i] = NULL
+                        state.chunk_owned[i] = False
+                        state.chunk_bytes[i] = blosc2_schunk_get_chunk(state.inputs[i].sc, chunk,
+                            &state.chunks[i], &state.chunk_owned[i])
+                        input_chunk_fetches += 1
+                        if state.chunk_bytes[i] < 0:
+                            state.status = -5
+                            state.error.native_status = state.chunk_bytes[i]
+                            strcpy(state.error.message, "Menudet prefilter could not read an input chunk")
+                            raise_artifact_error(state.status, &state.error)
+                        rc = blosc2_cbuffer_sizes(state.chunks[i], &decoded_bytes, &encoded_bytes, &block_bytes)
+                        if rc < 0 or block_bytes != state.inputs[i].blockshape[0] * state.signature[i].itemsize:
+                            state.status = -5
+                            state.error.native_status = rc
+                            strcpy(state.error.message, "Menudet prefilter input block layout mismatch")
+                            raise_artifact_error(state.status, &state.error)
+                    if numpy_out is not None:
+                        # Always releases the GIL, including single-threaded
+                        # contexts driven by independent coarse workers.
+                        placeholder_bytes += self.schunk._prefilter_data(chunk, data, chunk_buffer)
+                    else:
+                        self.schunk.update_data(chunk, data, copy=False)
+                    # In the uncompressed/disposable route callback failures
+                    # are captured locally rather than propagated by Blosc2.
+                    for tid in range(state.nworkers):
+                        if state.workers[tid].status:
+                            menudet_prefilter_merge(&state)
+                            raise_artifact_error(state.status, &state.error)
+            except Exception:
+                menudet_prefilter_merge(&state)
+                if state.status:
+                    raise_artifact_error(state.status, &state.error)
+                raise
+            menudet_prefilter_merge(&state)
+            if state.status:
+                raise_artifact_error(state.status, &state.error)
+        finally:
+            if self.array.sc.cctx != NULL:
+                blosc2_free_ctx(self.array.sc.cctx)
+            cparams.prefilter = NULL
+            cparams.preparams = NULL
+            self.array.sc.cctx = blosc2_create_cctx(cparams[0])
+            for tid in range(state.nworkers):
+                worker = &state.workers[tid]
+                free(worker.edge_output)
+                for i in range(state.ninputs):
+                    if state.numpy_inputs[i] != NULL:
+                        continue
+                    if worker.decoders[i] != NULL:
+                        decoder_contexts += 1
+                        blosc2_free_ctx(worker.decoders[i])
+                    if worker.bindings[i].data != NULL:
+                        input_buffer_allocations += 1
+                    free(<void *>worker.bindings[i].data)
+            free(state.workers)
+            for i in range(state.ninputs):
+                if state.chunk_owned[i]:
+                    free(state.chunks[i])
+        result = numpy_out if numpy_out is not None else self
+        return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
+                         "output_destination": "numpy" if numpy_out is not None else "blosc2",
+                         "discarded_output_bytes": placeholder_bytes,
+                        "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
+                         "threads": cparams.nthreads,
+                         "native_decoder_contexts": decoder_contexts,
+                         "input_buffer_allocations": input_buffer_allocations,
+                         "input_chunk_fetches": input_chunk_fetches,
+                         "output_zero_fill_bytes": state.output_zero_fill_bytes,
+                         "output_chunk_buffer_bytes": (chunk_buffer.nbytes if numpy_out is not None
+                                                       else self.array.sc.chunksize),
+                         "input_buffer_bytes": cparams.nthreads * sum(
+                             state.block_items * source.dtype.itemsize for source in inputs.values()
+                             if isinstance(source, NDArray))}
 
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
@@ -4979,3 +6822,53 @@ def get_loaded_matmul_cblas_library():
     if path == NULL:
         return None
     return path.decode("utf-8")
+
+
+def menudet_artifact_options_available():
+    return bool(b2_artifact_options_available())
+
+
+def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
+    """Metadata-only gate for bounded resident 1-D Menudet prefilters."""
+    cdef NDArray value
+    if not b2_artifact_descriptor_available() or blosc2.IS_WASM or len(inputs) > 128:
+        return False
+    if not inputs and not isinstance(output, NDArray):
+        return False
+    first = next((source for source in inputs.values() if isinstance(source, NDArray)), None)
+    if first is None and (allow_numpy or not inputs):
+        first = output
+    if not isinstance(first, NDArray) or not first.size:
+        return False
+    if not inputs and first.ndim > 1:
+        return (first.ndim <= 16 and first.schunk.chunksize <= 32 * 1024**2)
+    if first.ndim != 1:
+        return False
+    if first.chunks[0] % first.blocks[0]:
+        return False
+    # The scheduling dummy chunk is host scratch, separate from input blocks.
+    # A supplied destination provides the exact output width; otherwise eight
+    # bytes covers every numeric output dtype admitted by the Python gate.
+    output_width = output.dtype.itemsize if isinstance(output, NDArray) else 8
+    if first.chunks[0] * output_width > 32 * 1024**2:
+        return False
+    block_bytes = 0
+    for source in inputs.values():
+        if allow_numpy and type(source) is np.ndarray:
+            if (source.shape != first.shape or source.dtype.kind not in "biuf" or not source.dtype.isnative
+                    or not source.flags.c_contiguous or not source.flags.aligned):
+                return False
+            continue
+        if not isinstance(source, NDArray):
+            return False
+        value = source
+        if source.shape != first.shape or source.chunks != first.chunks or source.blocks != first.blocks:
+            return False
+        if source.dtype.kind not in "biuf" or not source.dtype.isnative:
+            return False
+        if value.array.sc.storage.urlpath != NULL or value.array.sc.storage.dparams.postfilter != NULL:
+            return False
+        if source.schunk.cparams.use_dict:
+            return False
+        block_bytes += source.blocks[0] * source.dtype.itemsize
+    return block_bytes <= 32 * 1024**2

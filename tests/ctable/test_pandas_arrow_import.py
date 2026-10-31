@@ -13,6 +13,9 @@ from blosc2._utf8_array import UTF8Array
 pd = pytest.importorskip("pandas")
 pa = pytest.importorskip("pyarrow")
 
+if not hasattr(np.dtypes, "StringDType"):
+    pytest.skip("utf8 columns require NumPy >= 2.0 (StringDType)", allow_module_level=True)
+
 
 def make_frame(arrow_backed, missing=False):
     df = pd.DataFrame(

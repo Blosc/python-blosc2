@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import sys
 import warnings
 
 import numpy as np
@@ -42,6 +41,17 @@ DTYPES = [blosc2.bool_, blosc2.int32, blosc2.int64, blosc2.float32, blosc2.float
 STR_DTYPES = ["bool", "int32", "int64", "float32", "float64", "complex128"]
 SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
 SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
+
+
+def _function_dtype_layout_cases(function_pairs):
+    # Dtype support is function-specific, so retain every function/dtype pair.
+    # Rank and chunk traversal are shared: rotate 1-D/2-D layouts instead of
+    # duplicating every pair. Each function and dtype still sees both ranks.
+    return [
+        (np_func, blosc_func, dtype, *SHAPES_CHUNKS[(function_index + dtype_index) % len(SHAPES_CHUNKS)])
+        for function_index, (np_func, blosc_func) in enumerate(function_pairs)
+        for dtype_index, dtype in enumerate(DTYPES)
+    ]
 
 
 def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
@@ -179,15 +189,6 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
                 dtype, "integral"
             ):  # overflow causes disagreement, no problem
                 assert True
-            elif np_func.__name__ in ("maximum", "minimum") and blosc2.isdtype(dtype, "real floating"):
-                warnings.showwarning(
-                    "minimum and maximum for numexpr do not match NaN behaviour for numpy",
-                    UserWarning,
-                    __file__,
-                    0,
-                    file=sys.stderr,
-                )
-                pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
                 raise
 
@@ -294,22 +295,14 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
                 dtype, "integral"
             ):  # overflow causes disagreement, no problem
                 assert True
-            elif np_func.__name__ in ("maximum", "minimum") and blosc2.isdtype(dtype, "real floating"):
-                warnings.showwarning(
-                    "minimum and maximum for numexpr do not match NaN behaviour for numpy",
-                    UserWarning,
-                    __file__,
-                    0,
-                    file=sys.stderr,
-                )
-                pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
                 raise
 
 
-@pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
+@pytest.mark.parametrize(
+    ("np_func", "blosc_func", "dtype", "shape", "chunkshape"),
+    _function_dtype_layout_cases(UNARY_FUNC_PAIRS),
+)
 def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
     _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 
@@ -332,9 +325,10 @@ def test_unary_funcs_heavy(np_func, blosc_func, dtype, shape, chunkshape):
     _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 
 
-@pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
+@pytest.mark.parametrize(
+    ("np_func", "blosc_func", "dtype", "shape", "chunkshape"),
+    _function_dtype_layout_cases(BINARY_FUNC_PAIRS),
+)
 def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
     _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 

@@ -9,8 +9,10 @@ import ast
 import builtins
 import contextlib
 import inspect
+import io
 import math
 import sys
+import tokenize
 import warnings
 from itertools import product
 
@@ -20,6 +22,58 @@ from ndindex.subindex_helpers import ceiling
 from numpy import broadcast_shapes
 
 import blosc2
+
+# NumPy frontend spellings; native miniexpr uses the Array API/C names only.
+MINIEXPR_FUNCTION_ALIASES = {
+    "arccos": "acos",
+    "arccosh": "acosh",
+    "arcsin": "asin",
+    "arcsinh": "asinh",
+    "arctan": "atan",
+    "arctan2": "atan2",
+    "arctanh": "atanh",
+}
+
+
+def canonicalize_miniexpr_functions(source):
+    """Normalize bare frontend calls without changing strings, comments or names.
+
+    This is authoring adaptation, never artifact-import migration. Native syntax
+    errors are left to the compiler rather than repaired here.
+    """
+    if not isinstance(source, str | bytes):
+        return source
+    binary = isinstance(source, bytes)
+    try:
+        text = source.decode("utf-8") if binary else source
+    except UnicodeDecodeError:
+        return source
+    if not any(name in text for name in MINIEXPR_FUNCTION_ALIASES):
+        return source
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, IndentationError):
+        return source
+    lines = text.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    replacements = []
+    for i, token in enumerate(tokens[:-1]):
+        if token.type != tokenize.NAME or token.string not in MINIEXPR_FUNCTION_ALIASES:
+            continue
+        if i and tokens[i - 1].string in {".", "def"}:
+            continue
+        following = next((t for t in tokens[i + 1 :] if t.type not in {tokenize.NL, tokenize.COMMENT}), None)
+        if following is None or following.string != "(":
+            continue
+        start = offsets[token.start[0] - 1] + token.start[1]
+        end = offsets[token.end[0] - 1] + token.end[1]
+        replacements.append((start, end, MINIEXPR_FUNCTION_ALIASES[token.string]))
+    for start, end, name in reversed(replacements):
+        text = text[:start] + name + text[end:]
+    return text.encode("utf-8") if binary else text
+
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
@@ -115,6 +169,7 @@ elementwise_funcs = [
     "broadcast_to",
     "ceil",
     "clip",
+    "complex",
     "conj",
     "contains",
     "copysign",
@@ -127,6 +182,7 @@ elementwise_funcs = [
     "expm1",
     "floor",
     "floor_divide",
+    "fmod",
     "greater",
     "greater_equal",
     "hypot",
@@ -233,6 +289,17 @@ constructors = [
 constructors += ["reshape"]
 
 
+def _complex_from_parts(real, imag, *, out=None):
+    """Compatibility two-real-array complex constructor, without inf * 1j artifacts."""
+    real, imag = np.broadcast_arrays(real, imag)
+    if np.iscomplexobj(real) or np.iscomplexobj(imag):
+        raise TypeError("complex() real and imaginary parts must be real")
+    result = np.empty(real.shape, dtype="complex128") if out is None else out
+    result.real = real
+    result.imag = imag
+    return result
+
+
 _NUMPY_ALIASES = {
     "acos": np.arccos,
     "acosh": np.arccosh,
@@ -242,6 +309,7 @@ _NUMPY_ALIASES = {
     "atanh": np.arctanh,
     "atan2": np.arctan2,
     "concat": getattr(np, "concat", np.concatenate),
+    "complex": _complex_from_parts,
     "contains": _string_contains,
     "cumulative_prod": npcumprod,
     "cumulative_sum": npcumsum,
@@ -603,6 +671,8 @@ class ShapeInferencer(ast.NodeVisitor):
             return slice_shape(obj_shape, slices)
 
         # --- Handle common chained methods on array objects ---
+        if base_name == "copy":
+            return obj_shape if obj_shape is not None else args[0]
         if attr_name in ("astype", "copy"):
             return obj_shape
         elif attr_name in ("flatten", "ravel"):
@@ -1050,19 +1120,19 @@ def process_key(key, shape):
     return key, mask
 
 
-def is_inside_ne_evaluate() -> bool:
+def is_inside_evaluate_chunk() -> bool:
     """
-    Whether the current code is being executed from an ne_evaluate call
+    Whether execution is inside the chunk evaluator.
     """
     # Get the current call stack
     stack = inspect.stack()
-    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
+    return builtins.any(frame_info.function == "evaluate_chunk" for frame_info in stack)
 
 
 def incomplete_lazyfunc(func) -> None:
-    """Decorator for lazy functions with incomplete numexpr/miniexpr coverage.
+    """Decorator for lazy functions requiring explicit NumPy fallback coverage.
 
-    This function will force eager execution when called from ne_evaluate.
+    This function will force eager execution when called from evaluate_chunk.
 
     Returns
     -------
@@ -1079,7 +1149,7 @@ def incomplete_lazyfunc(func) -> None:
     """
 
     def wrapper(*args, **kwargs):
-        if is_inside_ne_evaluate():  # haven't been able to use miniexpr so use numpy
+        if is_inside_evaluate_chunk():  # haven't been able to use miniexpr so use numpy
             return safe_numpy_globals[func.__name__](*args, **kwargs)
         return func(*args, **kwargs)
 
@@ -1148,8 +1218,8 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
         # A length-1 axis broadcasts, so take its only entry whatever the
         # larger slice asked for -- but keep the entry's *kind*, because an
         # integer drops the axis and a slice keeps it.  Substituting a slice
-        # for an integer here left the operand one rank too high, and numexpr
-        # then broadcast that phantom axis back into the result.
+        # for an integer here left the operand one rank too high, and expression
+        # broadcasting then introduced a phantom axis into the result.
         if smaller_shape[j_small] != 1:
             smaller_slice.append(s)
         else:

@@ -16,8 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.3.0)
-set(BLOSC2_BUNDLED_VERSION v3.3.5)
-#set(BLOSC2_BUNDLED_VERSION a54e259aeb1c0e62d6bbea28934369d4831e4046)
+#set(BLOSC2_BUNDLED_VERSION v3.4.1)
+set(BLOSC2_BUNDLED_VERSION e5086bf5b23cbffc409c55ba19df0bf46b978f06)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -65,6 +65,8 @@ add_custom_command(
   COMMAND Python::Interpreter -m cython
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx" --output-file blosc2_ext.c
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
   VERBATIM)
 
 add_custom_command(
@@ -117,6 +119,7 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
+option(MINIEXPR_BUILD_ARTIFACT "Build Menudet artifact support" ON)
 # Keep miniexpr's and C-Blosc2's bundled files inside the blosc2 package.
 # Without this, their install rules use the default CMAKE_INSTALL_LIBDIR
 # ("lib"), which scikit-build places at site-packages/lib.
@@ -140,13 +143,41 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 3f4db93a628aedc662b7d27a5f35c97ffaeb0424
+    GIT_TAG 6413c800984ff1b8c63953e336b3b8b245b1c3a5
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
 
+# Reject an old source override instead of mixing beta Python bindings with a
+# different native ABI.
+file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr.h" B2_MENUDET_VERSION
+  REGEX "^#define ME_MENUDET_DSL_VERSION \"0\\.1\"")
+if(NOT B2_MENUDET_VERSION)
+  message(FATAL_ERROR "Python-Blosc2 requires Menudet 0.1 beta native sources. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+endif()
+
 # Link against miniexpr static library
 target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
+if(TARGET miniexpr_artifact)
+  target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
+  target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_MENUDET_ARTIFACT=1)
+  file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_ARRAY_SOURCE_DECLARATION
+    REGEX "^me_artifact_status me_artifact_eval_array_sources\\(")
+  if(B2_ARRAY_SOURCE_DECLARATION)
+    target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_ARRAY_SOURCES=1)
+  endif()
+  if(EXISTS "${miniexpr_SOURCE_DIR}/src/miniexpr_graph.h")
+    target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_NATIVE_GRAPH=1)
+    file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_graph.h" B2_GRAPH_SOURCE_DECLARATION
+      REGEX "^me_graph_status me_graph_execute_sources\\(")
+    if(B2_GRAPH_SOURCE_DECLARATION AND B2_ARRAY_SOURCE_DECLARATION)
+      target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_GRAPH_SOURCES=1)
+    endif()
+  endif()
+  FetchContent_GetProperties(yyjson SOURCE_DIR B2_YYJSON_SOURCE_DIR)
+  install(FILES "${B2_YYJSON_SOURCE_DIR}/LICENSE"
+    DESTINATION ${SKBUILD_METADATA_DIR}/licenses/miniexpr RENAME LICENSE-YYJSON)
+endif()
 if(APPLE)
   target_link_libraries(blosc2_ext PRIVATE "-framework Accelerate")
 endif()

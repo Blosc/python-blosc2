@@ -111,7 +111,14 @@ html_theme_options = {
     ],
 }
 
-exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints", "tutorials/images/**"]
+exclude_patterns = [
+    "_build",
+    ".DS_Store",
+    "**.ipynb_checkpoints",
+    "tutorials/images/**",
+    "html/**",
+    "**/autofiles-stash/**",
+]
 
 html_show_sourcelink = False
 
@@ -306,7 +313,7 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
 # ``-W`` (as CI does) to turn that warning into a failure.
 
 _AUTODOC_DIRECTIVE = re.compile(
-    r"^\s*\.\.\s+(?:autoclass|autofunction|autodata|autoexception|autodecorator)::"
+    r"^\s*\.\.\s+(?:autoclass|autofunction|autodata|autoexception|autodecorator|py:class)::"
     r"\s*([\w.]+)"
 )
 _CURRENTMODULE = re.compile(r"^\s*\.\.\s+(?:currentmodule|module)::\s*([\w.]+)")
@@ -415,7 +422,18 @@ def check_undocumented(app, exception):
         )
 
 
+def normalize_numpydoc_exclusions(app, what, name, obj, options, lines):
+    """Let numpydoc honor explicit exclusions with Sphinx 9 option objects."""
+    # numpydoc expects the directive's hyphenated key, whereas Sphinx 9 exposes
+    # exclude_members in options.__dict__. Without this bridge, excluded methods
+    # disappear from autodoc but remain in numpydoc's generated summary table.
+    excluded = getattr(options, "exclude_members", None)
+    if excluded is not None:
+        options.__dict__["exclude-members"] = excluded
+
+
 def setup(app):
+    app.connect("autodoc-process-docstring", normalize_numpydoc_exclusions, priority=400)
     app.connect("autodoc-process-signature", process_sig)
     app.connect("builder-inited", gather_documented)
     app.connect("build-finished", check_undocumented)

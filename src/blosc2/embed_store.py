@@ -273,6 +273,9 @@ class EmbedStore:
         self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray
     ) -> None:
         """Add a node to the embed store."""
+        from blosc2.b2objects import preflight_persistence
+
+        preflight_persistence(value)
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")
         with self._write_bracket():

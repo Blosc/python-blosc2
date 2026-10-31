@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import shutil
 import tempfile
@@ -603,6 +604,10 @@ class DictStore:
     def _value_nbytes(value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray) -> int:
         if isinstance(value, blosc2.ObjectArray | blosc2.BatchArray):
             return value.schunk.nbytes
+        if isinstance(value, blosc2.LazyArray):
+            # Choose a storage tier from logical metadata, without evaluating
+            # a deferred expression merely to estimate its result size.
+            return math.prod(value.shape) * np.dtype(value.dtype).itemsize
         return value.nbytes
 
     @staticmethod
@@ -625,6 +630,9 @@ class DictStore:
         self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray
     ) -> None:
         """Add a node to the DictStore."""
+        from blosc2.b2objects import preflight_persistence
+
+        preflight_persistence(value)
         self._modified = True
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)

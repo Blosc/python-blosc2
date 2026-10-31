@@ -19,9 +19,27 @@ jobs:
       # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
       # cibuildwheel runs the suite automatically in the node/pyodide runtime
-      CIBW_TEST_COMMAND: "pytest {project}/tests"
+      CIBW_TEST_COMMAND: >-
+        pytest {project}/tests &&
+        python {project}/scripts/certify_menudet_math.py &&
+        python {project}/scripts/verify_safe_lazyexpr.py
     steps:
       - uses: actions/checkout@v7
+      # Qualify the experimental pair without changing the shipping native pin.
+      - name: Select experimental native revision
+        if: github.ref == 'refs/heads/numpy-compat' || github.ref == 'refs/heads/portable-jit-improvements'
+        id: native_ref
+        run: echo "sha=$(cat .github/menudet-native-ref)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: github.ref == 'refs/heads/numpy-compat' || github.ref == 'refs/heads/portable-jit-improvements'
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ steps.native_ref.outputs.sha }}
+          path: ci-native
+      - name: Override experimental native source
+        if: github.ref == 'refs/heads/numpy-compat' || github.ref == 'refs/heads/portable-jit-improvements'
+        run: |
+          echo "CMAKE_ARGS=$CMAKE_ARGS -DFETCHCONTENT_SOURCE_DIR_MINIEXPR=$PWD/ci-native" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
@@ -30,4 +48,31 @@ jobs:
       - name: Install cibuildwheel
         run: pip install "cibuildwheel==4.1.*"
       - name: Build and test wheel
-        run: cibuildwheel --platform pyodide   # platform=pyodide is CLI-only
+        run: |
+          set -o pipefail
+          cibuildwheel --platform pyodide 2>&1 | tee wasm-ci.log
+      - name: Extract safe-graph runtime evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          log = Path("wasm-ci.log")
+          if log.exists():
+              text = log.read_text()
+              marker = '{\n  "scope": "bounded experimental safe-graph corpus;'
+              start = text.rfind(marker)
+              if start >= 0:
+                  report, _ = json.JSONDecoder().raw_decode(text[start:])
+                  Path("safe-lazyexpr-wasm.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
+      - name: Upload WASM platform evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-lazyexpr-wasm
+          path: |
+            safe-lazyexpr-wasm.json
+            wasm-ci.log
+          if-no-files-found: ignore

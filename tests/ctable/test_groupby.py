@@ -13,6 +13,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @dataclass
@@ -852,7 +853,7 @@ def test_agg_udf_accepts_dsl_kernel_decorated_function():
     in, one scalar out" convention this aggregation path calls with -- the
     underlying plain function must be used instead."""
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def udf_range(a):
         return a.max() - a.min()
 

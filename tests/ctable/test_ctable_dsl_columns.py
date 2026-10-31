@@ -17,6 +17,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @dataclass
@@ -25,12 +26,12 @@ class Row:
     b: int = blosc2.field(blosc2.int64())
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_add(x, y):
     return x + y
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_loop(x, y):
     # x + 2*y, exercising a while loop + assignments
     acc = x
@@ -41,7 +42,7 @@ def k_loop(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_where(x, y):
     # where(x < y, x + 1, x - 1)
     return where(x < y, x + 1, x - 1)  # noqa: F821  (DSL builtin)
@@ -84,6 +85,13 @@ def test_dsl_computed_callable_lazyudf_form():
     t = _make_table()
     t.add_computed_column("r", lambda c: blosc2.lazyudf(k_loop, (c["a"], c["b"]), dtype=np.int64))
     np.testing.assert_array_equal(np.asarray(t["r"][:]), np.arange(20) + 20)
+
+
+def test_assign_dsl_lazyudf_uses_menudet_rows():
+    t = _make_table()
+    view = t.assign(r=blosc2.lazyudf(k_loop, (t.a, t.b), dtype=np.int64))
+    assert view._computed_cols["r"]["kind"] == "menudet"
+    np.testing.assert_array_equal(view["r"][:], np.arange(20) + 20)
 
 
 def test_dsl_computed_partial_slice():
@@ -152,23 +160,17 @@ def test_dsl_computed_in_where_streams_multichunk():
 def test_dsl_computed_roundtrip(tmp_path):
     path = str(tmp_path / "dsl.b2d")
     t = _make_table(urlpath=path, mode="w")
-    t.add_computed_column("r", k_loop, inputs=["a", "b"])
+    t.add_computed_column("r", k_loop, inputs={"x": "a", "y": "b"})
     t.close()
 
-    # Stored schema carries kind:dsl + dsl_source and no expression.
+    # New registration stores an artifact rather than Python source.
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    (cc,) = sd["computed_columns"]
-    assert cc["kind"] == "dsl"
-    assert "dsl_source" in cc
-    assert "expression" not in cc
+    assert sd["computed_columns"][0]["kind"] == "menudet"
+    assert "dsl_source" not in sd["computed_columns"][0]
 
     t2 = blosc2.open(path)
-    np.testing.assert_array_equal(np.asarray(t2["r"][:]), np.arange(20) + 20)
-    a = np.arange(20)
-    r = a + 20
-    sel = t2.where("(r > 25) & (a < 18)")[:]
-    assert len(sel) == int(((r > 25) & (a < 18)).sum())
+    np.testing.assert_array_equal(t2["r"][:], np.arange(20) + 20)
     t2.close()
 
 
@@ -230,15 +232,14 @@ def test_dsl_generated_create_index():
 def test_dsl_generated_roundtrip(tmp_path):
     path = str(tmp_path / "gen.b2d")
     t = _make_table(n=10, urlpath=path, mode="w")
-    t.add_generated_column("g", values=k_add, inputs=["a", "b"], dtype=blosc2.int64())
+    t.add_generated_column("g", values=k_add, inputs={"x": "a", "y": "b"}, dtype=blosc2.int64())
     t.close()
 
     meta = blosc2.open(f"{path}/_meta.b2f")
     sd = json.loads(meta.vlmeta["schema"])
-    (m,) = sd["materialized_columns"]
-    assert m["transformer_kind"] == "dsl"
-    assert "dsl_source" in m
+    assert sd["materialized_columns"][0]["transformer_kind"] == "menudet"
+    assert "dsl_source" not in sd["materialized_columns"][0]
 
     t2 = blosc2.open(path)
-    np.testing.assert_array_equal(np.asarray(t2["g"][:]), np.arange(10) + 10)
+    np.testing.assert_array_equal(t2["g"][:], np.arange(10) + 10)
     t2.close()

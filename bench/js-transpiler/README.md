@@ -1,5 +1,10 @@
 # DSL → JavaScript transpiler benches
 
+> **Historical, non-runnable against the current authoring API.** These demos
+> target the retired alpha decorator and historical wheels. They are not Menudet
+> examples or platform qualification. See the
+> [migration guide](https://blosc.org/python-blosc2/guides/migrating_to_menudet.html).
+
 Benches/demos for `blosc2.dsl_js`, which transpiles a `@blosc2.dsl_kernel` to JavaScript so
 kernels run at V8-optimized native speed in the browser/Pyodide (the `jit_backend="js"`
 path). Design and findings: [`plans/dsl-js.md`](../../plans/dsl-js.md).

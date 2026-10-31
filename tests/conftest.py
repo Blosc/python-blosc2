@@ -7,13 +7,17 @@
 
 import gc
 import os
+import socketserver
 import sys
+import threading
 import time
+import traceback
 
 import httpx
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 _NETWORK_ERRORS = (httpx.HTTPError,)
 try:
@@ -34,8 +38,116 @@ _GC_COLLECT_INTERVAL = 500  # collect every N tests
 _test_counter = 0
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--native-semantics",
+        action="store_true",
+        help="Run optional native semantic reference matrices (qualified primarily in miniexpr).",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--native-semantics"):
+        return
+    selected = [item for item in items if item.get_closest_marker("native_semantics") is None]
+    deselected = [item for item in items if item.get_closest_marker("native_semantics") is not None]
+    items[:] = selected
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+
+
 def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
+
+
+def source_kernel_from_python(source, name=None):
+    """Build test-authored functions for internal normalization tests, never files."""
+    import ast
+    import linecache
+
+    import numpy as np
+
+    from blosc2.dsl_kernel import SourceKernel
+
+    tree = ast.parse(source)
+    if name is None:
+        name = next(node.name for node in tree.body if isinstance(node, ast.FunctionDef))
+    filename = f"<normalization-test-{hash(source)}>"
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    namespace = {"np": np, "blosc2": blosc2}
+    exec(compile(tree, filename, "exec"), namespace)
+    return SourceKernel(namespace[name])
+
+
+def orthogonal_cases(*dimensions):
+    """Sample independent parameter axes without their full Cartesian product.
+
+    Sweep each axis with the others at their first (baseline) value, then add
+    a rotating diagonal to exercise mixed settings. Every value is retained,
+    but this deliberately does not promise exhaustive pairwise coverage.
+    Keep interaction-specific regressions in explicit parameter tables instead.
+    """
+    baseline = tuple(values[0] for values in dimensions)
+    cases = [baseline]
+    for axis, values in enumerate(dimensions):
+        for value in values[1:]:
+            case = list(baseline)
+            case[axis] = value
+            cases.append(tuple(case))
+    for index in range(1, max(map(len, dimensions))):
+        case = tuple(values[index % len(values)] for values in dimensions)
+        if case not in cases:
+            cases.append(case)
+    return cases
+
+
+def report_http_server_error(log_path, client_address):
+    """Record the active request exception before parallel output can hide it."""
+    exception_type, error, tb = sys.exc_info()
+    summary = "".join(traceback.format_exception_only(exception_type, error)).strip()
+    test = os.environ.get("PYTEST_CURRENT_TEST", "outside a running test")
+    message = f"HTTP request error: {summary}\nTest: {test}\nClient: {client_address!r}\n" + "".join(
+        traceback.format_exception(exception_type, error, tb)
+    )
+    # Persist first: xdist/capture/teardown can interrupt or hide stderr output.
+    with log_path.open("a", encoding="utf-8") as stream:
+        stream.write(message + "\n")
+    sys.stderr.write(f"{message}\nFull HTTP error log: {log_path}\n")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _http_server_diagnostics(pytestconfig, tmp_path_factory):
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    cache = getattr(pytestconfig, "cache", None)
+    log_dir = (
+        cache.mkdir("http-server-errors")
+        if cache is not None
+        else tmp_path_factory.mktemp("http-server-errors")
+    )
+    log_path = log_dir / f"{worker}.log"
+    log_path.write_text("", encoding="utf-8")
+    lock = threading.Lock()
+
+    def handle_error(server, request, client_address):
+        with lock:
+            report_http_server_error(log_path, client_address)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(socketserver.BaseServer, "handle_error", handle_error)
+        yield
+
+
+@pytest.fixture(scope="session")
+def native_graph_runtime():
+    """Optional dependency feature; qualification jobs must require its presence."""
+    try:
+        NativeGraph.from_expression("x", {"x": "float32"})
+    except NotImplementedError as error:
+        if os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME") or os.environ.get(
+            "MENUDET_REQUIRE_ARRAY_RUNTIME"
+        ):
+            pytest.fail(str(error))
+        pytest.skip("Installed miniexpr dependency does not implement native graph preparation")
 
 
 @pytest.fixture
@@ -67,6 +179,20 @@ def _fast_textual_idle():
     textual_wait.SLEEP_GRANULARITY = 0.008  # 20 ms -> 8 ms
     yield
     textual_wait.SLEEP_GRANULARITY = saved
+
+
+@pytest.fixture(autouse=True)
+def isolate_releasegil():
+    """Keep process-global GIL policy from leaking into Python callback tests.
+
+    Compression tests exercise both policies. Their final parameter must not
+    determine whether a later filler/prefilter runs Python without the GIL.
+    """
+    previous = blosc2.set_releasegil(False)
+    try:
+        yield
+    finally:
+        blosc2.set_releasegil(previous)
 
 
 @pytest.fixture(autouse=True, scope="session")

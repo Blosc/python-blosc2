@@ -23,6 +23,7 @@ import pytest
 
 import blosc2
 from blosc2.dsl_js import build_js_module, dsl_to_js
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 # `blosc2.lazyexpr` (attribute) is the re-exported function, not the module; grab the module.
 lx = sys.modules["blosc2.lazyexpr"]
@@ -284,12 +285,12 @@ def test_misc_matches_python():
 
 # --- prefer-js-with-fallback backend selection (logic only; the bridge isn't *run* here, so
 # no real WASM is needed -- IS_WASM is monkeypatched and js_kernel only transpiles) ----------
-@blosc2.dsl_kernel
+@DSLKernel
 def _add(a, b):
     return a + b
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def _idx(a):
     return a + float(_i0)  # noqa: F821  index symbol -> needs the output shape to transpile
 

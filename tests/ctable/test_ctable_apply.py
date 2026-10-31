@@ -16,6 +16,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @dataclass
@@ -90,7 +91,7 @@ def test_apply_accepts_all_engine_values(engine):
 
 
 def test_apply_with_dsl_kernel_infers_dtype():
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k_revenue(x, y):
         return x * y
 

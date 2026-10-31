@@ -14,20 +14,19 @@ import concurrent.futures
 import contextlib
 import copy
 import enum
-import inspect
-import linecache
 import math
 import operator
 import os
 import pathlib
 import re
 import sys
-import textwrap
 import threading
 from abc import ABC, abstractmethod, abstractproperty
+from collections import OrderedDict
 from collections.abc import MutableMapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any
@@ -48,12 +47,28 @@ from blosc2.info import InfoReporter
 
 from .b2objects import (
     encode_b2object_payload,
+    encode_operand_reference,
     make_b2object_carrier,
     read_b2object_user_vlmeta,
     write_b2object_payload,
     write_b2object_user_vlmeta,
 )
-from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
+from .dsl_kernel import DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
+from .dsl_kernel import SourceKernel as DSLKernel
+from .expression_graph import (
+    arithmetic_names,
+    evaluate_expression,
+    evaluation_mode,
+    expression_constructor,
+    expression_evaluation,
+    expression_method,
+    expression_syntax,
+    normalize_operands,
+    parse_expression,
+    record_expression_metadata,
+    validate_operands,
+)
+from .prepared_evaluate import remember_evaluation
 from .proxy_source import convert_dtype
 from .utils import (
     check_smaller_shape,
@@ -77,19 +92,15 @@ from .utils import (
     try_miniexpr,
 )
 
-if not blosc2.IS_WASM:
-    import numexpr
-
-global safe_blosc2_globals
-safe_blosc2_globals = {}
+# Canonical expression text has no quoted strings or attribute names to rewrite.
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
 
 
 def _int64_datetime_operands(local_dict):
     """Return `local_dict` with datetime64/timedelta64 values viewed as int64.
 
-    numexpr has no datetime types, but both are int64 counts underneath, so a
-    comparison is exact in that representation -- and much faster than the
-    NumPy fallback.  Returns None when the substitution would not be faithful:
+    Both are int64 counts underneath, so a comparison against a count is exact
+    in that representation. Returns None when the substitution would not be faithful:
 
     * mixed units, because the counts are then on different scales (NumPy
       promotes to the finer unit instead);
@@ -104,7 +115,7 @@ def _int64_datetime_operands(local_dict):
     for key, value in local_dict.items():
         dtype = getattr(value, "dtype", None)
         # Frame locals get merged in below, so `local_dict` also carries blosc2
-        # containers that numexpr could not consume in the first place; leave
+        # containers that cannot be reinterpreted as resident counts; leave
         # anything that is not a NumPy value alone.
         if dtype is None or dtype.kind not in "Mm" or not isinstance(value, np.ndarray | np.generic):
             converted[key] = value
@@ -126,108 +137,121 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
     else keeps NumPy's error.
     """
     try:
-        return eval(expression, _globals, local_dict)
+        return evaluate_expression(expression, _globals, local_dict)
     except TypeError:
         int_dict = _int64_datetime_operands(local_dict)
         if int_dict is None:
             raise
-        res = eval(expression, _globals, int_dict)
+        res = evaluate_expression(expression, _globals, int_dict)
         if getattr(res, "dtype", None) != np.bool_:
             raise
         return res
 
 
-def ne_evaluate(expression, local_dict=None, **kwargs):
-    """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
-    if local_dict is None:
-        local_dict = {}
-    # Get local vars dict from the stack frame
-    _frame_depth = kwargs.pop("_frame_depth", 1)
-    local_dict |= {
-        k: v
-        for k, v in dict(sys._getframe(_frame_depth).f_locals).items()
-        if (
-            (hasattr(v, "shape") or np.isscalar(v))
-            and
-            # Do not overwrite the local_dict with the expression variables
-            not (k in local_dict or k in ("_where_x", "_where_y"))
+def evaluate_chunk(expression, local_dict=None, **kwargs):
+    """Evaluate an invocation-local chunk with native numerical or NumPy semantics.
+
+    Native admission is metadata-only. Unsupported signatures decline before
+    execution; runtime failures are never replayed through NumPy.
+    """
+    from .native_graph import _native_first_syntax, lower_native_graph
+
+    operands = {} if local_dict is None else dict(local_dict)
+    depth = kwargs.pop("_frame_depth", 0)
+    graph = parse_expression(expression)
+    if graph.names - operands.keys():
+        frame = sys._getframe(depth + 1)
+        try:
+            for name in graph.names - operands.keys():
+                if name in frame.f_locals:
+                    operands[name] = frame.f_locals[name]
+                elif name in frame.f_globals:
+                    operands[name] = frame.f_globals[name]
+        finally:
+            del frame
+    validate_operands(operands)
+    output = kwargs.pop("out", None)
+    validate_evaluate_options(kwargs)
+    policy = blosc2.jit_config.execution_options()
+    native = None
+    if (
+        operands
+        and _native_first_syntax(expression)
+        and all(type(value) is np.ndarray and value.dtype.kind in "biuf" for value in operands.values())
+        and not (output is not None and any(np.shares_memory(output, value) for value in operands.values()))
+    ):
+        stub = LazyExpr(None)
+        stub.expression, stub.operands = expression, operands
+        try:
+            # Chunk fallback must not silently force the scalar interpreter for
+            # numerical graphs that already have qualified native C lowering.
+            # Explicit no-JIT policy still wins; native compilation remains
+            # best effort and cached by expression/signature, never by arrays.
+            graph_jit = (
+                policy["jit"]
+                if policy["jit_backend"] is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+                else False
+            )
+            native = lower_native_graph(stub, jit=graph_jit, allow_output=True)
+        except (NotImplementedError, ValueError, TypeError):
+            native = None
+        except blosc2.MenudetError as error:
+            if error.status not in {"invalid_signature", "unsupported"}:
+                raise
+    if native is not None:
+        plan, arrays, _ = native
+        # Match the native executor's bounded map tiles without starting another
+        # pool inside a caller-owned chunk/compression worker. Checked recipes
+        # and reductions retain their existing numerical traversal.
+        tile_items = 65536 if plan.info().get("partitionable", False) else 1024
+        schedule = plan.specialize(
+            {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items=tile_items
         )
-    }
-    if blosc2.IS_WASM:
-        global safe_numpy_globals
-        populate_safe_numpy_globals(expression)
-        if "out" in kwargs:
-            out = kwargs.pop("out")
-            out[:] = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
-            return out
-        res = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
-        return np.asarray(res) if not hasattr(res, "shape") else res
-    try:
-        return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
-    except ValueError as e:
-        msg = e.args[0] if e.args else ""
-        if msg == "NumExpr 2 does not support Unicode as a dtype.":
-            pass
-        elif msg.startswith(("unknown type datetime64", "unknown type timedelta64")):
-            int_dict = _int64_datetime_operands(local_dict)
-            if int_dict is not None:
-                with contextlib.suppress(Exception):
-                    result = numexpr.evaluate(expression, local_dict=int_dict, **kwargs)
-                    if result.dtype == np.bool_:
-                        return result
-            # Only comparisons are exact as raw int64 counts; arithmetic
-            # (datetime64 - datetime64 -> timedelta64) needs NumPy's own type
-            # rules, so let it reach the fallback below.
-        else:
-            raise  # unsafe expression
-    except Exception:
-        pass
-    # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
-    # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp,
-    # startswith, matmul) that are implemented incompletely in numexpr/miniexpr or not implemented at all
-    global safe_blosc2_globals
-    if len(safe_blosc2_globals) == 0:
-        # First eval call, fill blosc2_safe_globals
-        safe_blosc2_globals = {"blosc2": blosc2}
-        # Add all first-level blosc2 functions
-        safe_blosc2_globals.update(
-            {
-                name: getattr(blosc2, name)
-                for name in dir(blosc2)
-                if callable(getattr(blosc2, name)) and not name.startswith("_")
-            }
+        info = schedule.info()
+        direct = (
+            output is not None
+            and type(output) is np.ndarray
+            and output.shape == info["shape"]
+            and output.dtype == info["dtype"]
+            and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
         )
-        # Expression strings can carry non-finite float literals ("nan",
-        # "inf" — the repr of such scalars, or typed by the user); numexpr
-        # has no such constants, so this python-eval fallback must.
-        safe_blosc2_globals.update({"nan": math.nan, "inf": math.inf})
-    res = eval(expression, safe_blosc2_globals, local_dict)
-    if "out" in kwargs:
-        out = kwargs.pop("out")
-        out[:] = res  # will handle calc/decomp if res is lazyarray
-        return out
-    return res[()] if isinstance(res, blosc2.Operand) else res
+        result, _ = schedule.execute(arrays, out=output) if direct else schedule.execute(arrays)
+    else:
+        # Native chunk execution collects FP status without emitting Python
+        # warnings by default. Preserve that policy in the explicit fallback.
+        with np.errstate(all="ignore"):
+            result = _numpy_eval_datetime_aware(expression, safe_numpy_globals, operands)
+    result = np.asarray(result)
+    if output is not None:
+        if result is not output:
+            np.copyto(output, result, casting=kwargs.get("casting", "same_kind"))
+        return output
+    return result
 
 
-def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
+# Temporary compatibility alias; a direct alias preserves caller-scope lookup.
+ne_evaluate = evaluate_chunk
+
+
+def _get_result(expression, chunk_operands, eval_kwargs, where=None, indices=None, _order=None):
     chunk_indices = None
 
     # Apply the where condition (in result) — fusion path, evaluate before shortcut
     if where is not None and len(where) == 2:
         # x = chunk_operands["_where_x"]
         # y = chunk_operands["_where_y"]
-        # numexpr is a bit faster than np.where, and we can fuse operations in this case
+        # Preserve a fused native select when the expression is supported.
         new_expr = f"where({expression}, _where_x, _where_y)"
-        return ne_evaluate(new_expr, chunk_operands, **ne_args), None
+        return evaluate_chunk(new_expr, chunk_operands, **eval_kwargs), None
 
     # If the expression is a simple operand reference (e.g. "key", "o0"),
-    # grab it directly from chunk_operands instead of calling ne_evaluate.
-    # This avoids ~150 µs of numexpr parsing/setup overhead per chunk.
+    # grab it directly from chunk_operands instead of calling evaluate_chunk.
+    # This avoids unnecessary expression preparation for identity chunks.
     _expr = expression.strip("()")
     if _expr in chunk_operands:
         result = chunk_operands[_expr]
     else:
-        result = ne_evaluate(expression, chunk_operands, **ne_args)
+        result = evaluate_chunk(expression, chunk_operands, **eval_kwargs)
     if where is None:
         return result, None
     elif len(where) == 1:
@@ -353,6 +377,9 @@ funcs_2args = (
 
 def get_expr_globals(expression):
     """Build a dictionary of functions needed for evaluating the expression."""
+    if evaluation_mode() == "safe":
+        parse_expression(expression)
+        return {"blosc2": blosc2}
     _globals = {"np": np, "blosc2": blosc2, "nan": math.nan, "inf": math.inf}
     # Only check for functions that actually appear in the expression.
     for func in functions:
@@ -583,6 +610,10 @@ class LazyArray(ABC, blosc2.Operand):
             These arguments will be set in the resulting :ref:`NDArray`.
             Additionally, the following special kwargs are supported:
 
+            - ``eval_kwargs`` (dict): for :ref:`LazyExpr`, override the expression
+              evaluation options supplied to :func:`lazyexpr` for this call.
+              ``ne_args`` is a compatibility alias; do not pass both names.
+
             - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
               failures are raised instead of silently falling back to regular chunked eval
               for non-DSL expressions.  Setting it ``True`` also opts a DSL kernel out of the
@@ -607,7 +638,7 @@ class LazyArray(ABC, blosc2.Operand):
               ``jit_backend="tcc"``/``"cc"``.
 
             - ``"js"`` backend (WebAssembly/Pyodide only): transpiles a
-              :func:`blosc2.dsl_kernel` to JavaScript so it runs at the browser engine's
+              compatibility DSLKernel to JavaScript so it runs at the browser engine's
               optimized native speed.  It tends to beat the WASM miniexpr JIT (~2x) for
               float kernels dominated by arithmetic and control flow, and is roughly a
               wash for transcendental-heavy or trivial kernels.  Outside WebAssembly,
@@ -623,7 +654,7 @@ class LazyArray(ABC, blosc2.Operand):
             - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
               ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
               showing which compute engine was selected (``miniexpr`` or
-              ``ne_evaluate``), the JIT mode and backend if applicable, and the
+              ``evaluate_chunk``), the JIT mode and backend if applicable, and the
               expression being evaluated.
 
         Returns
@@ -723,7 +754,7 @@ class LazyArray(ABC, blosc2.Operand):
           section for more info). A :ref:`RemoteArray` is persisted as its
           portable source descriptor rather than embedding its carrier cache.
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
-          (including kernels decorated with :func:`blosc2.dsl_kernel`).
+          (including internally normalized source kernels).
         * User metadata can be attached via :attr:`vlmeta`. For in-memory LazyArrays
           this stays in memory; for persisted LazyArrays it is serialized and restored
           on reopen.
@@ -891,6 +922,9 @@ def validate_expr(expr: str) -> None:
     -------
     None
     """
+    if evaluation_mode() == "safe":
+        parse_expression(expr)
+        return
     # Remove whitespace and skip quoted strings
     no_whitespace = re.sub(r"\s+", "", expr)
     skip_quotes = re.sub(r"(\'[^\']*\')", "", no_whitespace)
@@ -1030,6 +1064,8 @@ def conserve_functions(  # noqa: C901
     expression: str,
     operands_old: dict[str, blosc2.Array],
     operands_new: dict[str, blosc2.Array],
+    *,
+    tree=None,
 ) -> tuple[str, dict[str, blosc2.Array]]:
     """
     Given an expression in string form, return its operands.
@@ -1090,7 +1126,7 @@ def conserve_functions(  # noqa: C901
                 return self.operandmap[k]
 
         def visit_Name(self, node):
-            if node.id == "np":  # Skip NumPy namespace (e.g. np.int8, which will be treated separately)
+            if node.id in {"np", "numpy", "blosc2"}:  # Registered namespaces are not operands
                 return
             if node.id in self.function_names:  # Skip function names
                 return
@@ -1122,7 +1158,18 @@ def conserve_functions(  # noqa: C901
                 self.function_names.add(node.func.id)
             self.generic_visit(node)
 
-    tree = ast.parse(expression)
+    if tree is None:
+        tree = ast.parse(expression)
+    else:
+        # Renaming must not mutate syntax shared by other expressions or threads.
+        def clone(node):
+            if isinstance(node, ast.AST):
+                return type(node)(**{name: clone(value) for name, value in ast.iter_fields(node)})
+            if isinstance(node, list):
+                return [clone(value) for value in node]
+            return node
+
+        tree = clone(tree)
     visitor = OperandVisitor()
     visitor.visit(tree)
     newexpression, newoperands = ast.unparse(tree), visitor.operands
@@ -1151,7 +1198,11 @@ def convert_to_slice(expression):
             k = expression[i:].find("]")  # start checking from after [
             slice_convert = expression[i : i + k + 1]  # include [ and ]
             try:
-                slicer = eval(f"np.s_{slice_convert}")
+                slicer = parse_expression(f"a{slice_convert}").root[2]
+                # Build the slice tuple directly without indexing an actual array.
+                from .expression_graph import evaluate_index
+
+                slicer = evaluate_index(slicer)
                 slicer = (slicer,) if not isinstance(slicer, tuple) else slicer  # standardise to tuple
                 if any(isinstance(el, str) for el in slicer):  # handle fields
                     raise ValueError("Cannot handle fields for slicing lazy expressions.")
@@ -1530,6 +1581,10 @@ def fill_chunk_operands(
 
 
 def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | None) -> str:
+    # Author-written pragmas are authoritative. Python's synthesized pragma is
+    # only a local default and must not override the native environment policy.
+    if "# me:compiler=" in expression:
+        return expression
     if jit_backend is None:
         return expression
     if jit_backend == "js":
@@ -1538,11 +1593,15 @@ def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | 
     if jit_backend not in ("tcc", "cc"):
         raise ValueError("jit_backend must be one of: None, 'tcc', 'cc', 'js'")
 
+    env_backend = os.environ.get("ME_DSL_JIT_COMPILER", "").strip().lower()
+    if env_backend in ("tcc", "cc"):
+        jit_backend = env_backend
+
     pragma = f"# me:compiler={jit_backend}\n"
-    stripped = expression.lstrip()
+    stripped = "\n".join(
+        line for line in expression.splitlines() if not line.lstrip().startswith("#")
+    ).lstrip()
     if stripped.startswith("def "):
-        if "# me:compiler=" in expression:
-            return expression
         return pragma + expression
     params = ", ".join(k for k, v in inputs.items() if hasattr(v, "dtype"))
     return f"{pragma}def __me_auto({params}):\n    return {expression}"
@@ -1567,7 +1626,7 @@ def _as_js_udf(expression, shape=None):
     *shape* (the whole-array output shape) is forwarded to the transpiler so kernels using
     index/shape symbols can reconstruct global coordinates per block."""
     if not _is_dsl_kernel_expression(expression):
-        raise ValueError('jit_backend="js" requires a blosc2.dsl_kernel-decorated kernel')
+        raise ValueError('jit_backend="js" requires a compatibility DSLKernel')
     if not blosc2.IS_WASM:
         raise RuntimeError('jit_backend="js" is only available under WebAssembly/Pyodide')
     from .dsl_js import js_kernel
@@ -1747,9 +1806,9 @@ def fast_eval(  # noqa: C901
         use_miniexpr = False
 
     out = kwargs.pop("_output", None)
-    ne_args: dict = kwargs.pop("_ne_args", {})
-    if ne_args is None:
-        ne_args = {}
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
+    if eval_kwargs is None:
+        eval_kwargs = {}
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     jit = kwargs.pop("jit", None)
     jit_backend = kwargs.pop("jit_backend", None)
@@ -1778,7 +1837,7 @@ def fast_eval(  # noqa: C901
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
-    elif isinstance(out, np.ndarray):
+    elif isinstance(out, np.ndarray) and not any(hasattr(o, "chunks") for o in operands.values()):
         # If 'out' is a NumPy array, create a NDArray with the same shape and dtype
         basearr = blosc2.empty(out.shape, dtype=out.dtype, **kwargs)
     else:
@@ -1874,8 +1933,8 @@ def fast_eval(  # noqa: C901
             if isinstance(op, np.ndarray):
                 # Raw NumPy operands are only miniexpr-eligible for DSL kernels (the
                 # jit control-flow dispatch route). Plain string expressions and traced
-                # `jit` calls keep the old NDArray-only gate, so their numeric behavior
-                # (e.g. transcendentals matching numexpr bit-for-bit) is unchanged.
+                # `jit` calls keep the established NDArray-only gate, preserving
+                # existing numerical and dtype behavior.
                 return (
                     is_dsl
                     and op.ndim > 0
@@ -1892,7 +1951,18 @@ def fast_eval(  # noqa: C901
                 dsl_disable_reason = (
                     "all DSL operands must be NDArray or NumPy inputs sharing shape/chunks/blocks."
                 )
-        if not (all_eligible_miniexpr and out is None):
+        numpy_output = (
+            (getitem or isinstance(out, np.ndarray))
+            and len(shape) == 1
+            and chunks[0] % blocks[0] == 0
+            and not prune_chunks
+            and (out is None or not is_dsl)
+            # Rebinding an existing LazyExpr can leave unused operand names.
+            # Retain its established fallback rather than compiling extra inputs.
+            and (is_dsl or set(operands_miniexpr) == set(get_expr_operands(expr_string)))
+            and (out is None or (out.dtype == dtype and out.flags.writeable))
+        )
+        if not (all_eligible_miniexpr and (out is None or numpy_output)):
             use_miniexpr = False
             if is_dsl and dsl_disable_reason is None:
                 dsl_disable_reason = (
@@ -1902,16 +1972,14 @@ def fast_eval(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands_miniexpr.values()
         )
-        if isinstance(expr_string_miniexpr, str) and has_complex:
-            if sys.platform == "win32" or blosc2.IS_WASM:
-                # On Windows and WebAssembly, miniexpr has issues with complex numbers
-                use_miniexpr = False
-                if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "complex DSL kernels are disabled on Windows and WebAssembly."
-            if any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">")):
-                use_miniexpr = False
-                if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "complex comparisons are not supported by miniexpr."
+        if (
+            isinstance(expr_string_miniexpr, str)
+            and has_complex
+            and any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">"))
+        ):
+            use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = "complex comparisons are not supported by miniexpr."
 
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
@@ -1922,7 +1990,9 @@ def fast_eval(  # noqa: C901
         "on",
     ):
         engine = (
-            "miniexpr" if use_miniexpr else ("ne_evaluate" if isinstance(expr_string, str) else "python-udf")
+            "miniexpr"
+            if use_miniexpr
+            else ("evaluate_chunk" if isinstance(expr_string, str) else "python-udf")
         )
         jit_info = f"jit={jit}, backend={jit_backend}" if use_miniexpr else ""
         expr_short = str(expr_string)[:120].replace("\n", " ")
@@ -1931,9 +2001,10 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", None)
-        if cparams is None and getitem:
-            # getitem output is throwaway scratch (returned as a NumPy array and
-            # discarded), so compressing it buys nothing but a round trip.
+        if numpy_output:
+            # NumPy output needs only an uncompressed, reusable chunk payload.
+            cparams = blosc2.CParams(clevel=0)
+        elif cparams is None and getitem:
             cparams = blosc2.CParams(clevel=0)
         # Otherwise leave cparams unset rather than passing CParams(): its
         # filters_meta defaults to all zeros, which *overrides* the dtype-aware
@@ -1968,6 +2039,22 @@ def fast_eval(  # noqa: C901
             # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            if numpy_output:
+                output_storage = None
+                if out is None:
+                    # Reserve a header prefix and at most one chunk of tail
+                    # padding. C-Blosc2 can then write each uncompressed payload
+                    # directly into the final NumPy allocation, in parallel.
+                    output_storage = np.empty(
+                        res_eval.schunk.nchunks * data.size + blosc2.EXTENDED_HEADER_LENGTH, dtype=np.uint8
+                    )
+                    out = np.ndarray(
+                        shape, dtype=dtype, buffer=output_storage, offset=blosc2.EXTENDED_HEADER_LENGTH
+                    )
+                else:
+                    # Caller-owned output has no reserved header prefix. Keep
+                    # the existing buffer and reuse bounded chunk scratch.
+                    chunk_data = np.empty(data.size + blosc2.MAX_OVERHEAD, dtype=np.uint8)
             # Exercise prefilter for each chunk.  With a candidate bitmap the
             # prefilter zeroes non-candidate blocks without decompressing inputs
             # or running miniexpr, which is where the savings come from.  With
@@ -1982,12 +2069,36 @@ def fast_eval(  # noqa: C901
             for nchunk in range(res_eval.schunk.nchunks):
                 if chunk_has_candidate is not None and not chunk_has_candidate[nchunk]:
                     continue
-                res_eval.schunk.update_data(nchunk, data, copy=False)
+                if numpy_output:
+                    start = nchunk * chunks[0]
+                    count = min(chunks[0], shape[0] - start)
+                    if output_storage is not None:
+                        byte_start = nchunk * data.size
+                        chunk_data = output_storage[
+                            byte_start : byte_start + data.size + blosc2.EXTENDED_HEADER_LENGTH
+                        ]
+                        # Beyond the first chunk the header overlaps the end of
+                        # the preceding result. Preserve it while this synchronous
+                        # call runs, then restore before advancing to the next chunk.
+                        header = chunk_data[: blosc2.EXTENDED_HEADER_LENGTH].copy()
+                        try:
+                            res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                        finally:
+                            chunk_data[: blosc2.EXTENDED_HEADER_LENGTH] = header
+                    else:
+                        res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                        values = np.frombuffer(
+                            chunk_data, dtype=dtype, count=count, offset=blosc2.EXTENDED_HEADER_LENGTH
+                        )
+                        out[start : start + count] = values
+                else:
+                    res_eval.schunk.update_data(nchunk, data, copy=False)
             # _cb_anchor (if any) stays referenced until fast_eval returns, which
             # is after the finally below removes the prefilter — so the buffer
             # safely outlives every prefilter dereference.
         except Exception as e:
-            use_miniexpr = False
+            if blosc2.jit_config.execution_options()["math_backend"] is not None:
+                raise
             if is_dsl:
                 reason = (
                     f"miniexpr compilation or execution failed for this DSL kernel:\n{expression.dsl_source}"
@@ -2002,6 +2113,12 @@ def fast_eval(  # noqa: C901
                 raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
             if strict_miniexpr:
                 raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
+            # Only preparation may decline to NumPy. Once installed, the native
+            # prefilter may have written caller output or compressed chunks;
+            # replaying an execution failure would hide errors/partial writes.
+            if prefilter_set:
+                raise
+            use_miniexpr = False
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
@@ -2014,6 +2131,8 @@ def fast_eval(  # noqa: C901
             # (continue to the manual chunked evaluation below)
             pass
         else:
+            if numpy_output:
+                return out
             if getitem:
                 return res_eval[()]
             return res_eval
@@ -2031,14 +2150,14 @@ def fast_eval(  # noqa: C901
             operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
 
-        # Since ne_evaluate() can return a dtype larger than the one in computed in the expression,
+        # Since evaluate_chunk() can return a dtype larger than the one computed in the expression,
         # we cannot take this fast path
         # if isinstance(out, np.ndarray) and not where:
         #     # Fast path: put the result straight in the output array (avoiding a memory copy)
         #     if callable(expression):
         #         expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
         #     else:
-        #         ne_evaluate(expression, chunk_operands, out=out[slice_])
+        #         evaluate_chunk(expression, chunk_operands, out=out[slice_])
         #     continue
         if out is None:
             # We can enter here when using any of the compute() or __getitem__() methods
@@ -2063,23 +2182,23 @@ def fast_eval(  # noqa: C901
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             if where is None:
-                result = ne_evaluate(expression, chunk_operands, **ne_args)
+                result = evaluate_chunk(expression, chunk_operands, **eval_kwargs)
             else:
                 # Apply the where condition (in result)
                 if len(where) == 2:
                     new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = ne_evaluate(new_expr, chunk_operands, **ne_args)
+                    result = evaluate_chunk(new_expr, chunk_operands, **eval_kwargs)
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
 
         # Store the result in the output array
-        if getitem:
+        if getitem or isinstance(out, np.ndarray):
             try:
                 out[cslice] = result
             except ComplexWarning:
-                # The result is a complex number, so we need to convert it to real.
-                # This is a workaround for rigidness of NumExpr with type casting.
+                # The result is complex while the destination is real; preserve
+                # the established explicit destination-conversion behavior.
                 result = result.real.astype(out.dtype)
                 out[cslice] = result
         else:
@@ -2167,9 +2286,9 @@ def slices_eval(  # noqa: C901
         The output array.
     """
     out: blosc2.NDArray | None = kwargs.pop("_output", None)
-    ne_args: dict = kwargs.pop("_ne_args", {})
-    if ne_args is None:
-        ne_args = {}
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
+    if eval_kwargs is None:
+        eval_kwargs = {}
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     use_index = kwargs.pop("_use_index", True)
@@ -2304,13 +2423,13 @@ def slices_eval(  # noqa: C901
                 return coords
             if index_plan.bucket_masks is not None:
                 _, coords = indexing.evaluate_bucket_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return coords
             if index_plan.candidate_units is not None and index_plan.segment_len is not None:
                 _, coords = indexing.evaluate_segment_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return coords
@@ -2321,13 +2440,13 @@ def slices_eval(  # noqa: C901
                 return indexing.evaluate_full_query(where, index_plan)
             if index_plan.bucket_masks is not None:
                 result, coords = indexing.evaluate_bucket_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return result
             if index_plan.candidate_units is not None and index_plan.segment_len is not None:
                 result, coords = indexing.evaluate_segment_query(
-                    expression, operands, ne_args, where, index_plan, return_positions=True
+                    expression, operands, eval_kwargs, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return result
@@ -2408,9 +2527,11 @@ def slices_eval(  # noqa: C901
         if _indices or _order:
             indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(cslice_shape)
             leninputs += len_chunk
-            result, chunk_indices = _get_result(expression, chunk_operands, ne_args, where, indices, _order)
+            result, chunk_indices = _get_result(
+                expression, chunk_operands, eval_kwargs, where, indices, _order
+            )
         else:
-            result, _ = _get_result(expression, chunk_operands, ne_args, where)
+            result, _ = _get_result(expression, chunk_operands, eval_kwargs, where)
         # Enforce contiguity of result (necessary to fill the out array)
         # but avoid copy if already contiguous
         result = np.require(result, requirements="C")
@@ -2505,10 +2626,10 @@ def slices_eval_getitem(
         The output array.
     """
     out: np.ndarray | None = kwargs.pop("_output", None)
-    ne_args: dict = kwargs.pop("_ne_args", {})
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
     _in_place = kwargs.pop("in_place", False)
-    if ne_args is None:
-        ne_args = {}
+    if eval_kwargs is None:
+        eval_kwargs = {}
     where: dict | None = kwargs.pop("_where_args", None)
 
     dtype = kwargs.pop("dtype", None)
@@ -2528,8 +2649,8 @@ def slices_eval_getitem(
     # A UDF writes into an output of slice_shape, which keeps the integer-indexed
     # axes as length 1; slicing its operands with the raw index would drop those
     # axes and leave the kernel unable to write its result (e.g. `udf[:, 0]` on a
-    # 2-dim array: operand (10,) into output (10, 1)).  numexpr has no output
-    # buffer to agree with, so it keeps the raw index.
+    # 2-dim array: operand (10,) into output (10, 1)). Plain expressions keep
+    # the raw index; their result no longer carries an explicit UDF destination.
     op_slice = _slice_bcast if callable(expression) else _slice
 
     # Get the slice of each operand
@@ -2564,7 +2685,7 @@ def slices_eval_getitem(
             result = np.empty(slice_shape, dtype=dtype)
             expression(tuple(slice_operands.values()), result, offset=offset)
     else:
-        result, _ = _get_result(expression, slice_operands, ne_args, where)
+        result, _ = _get_result(expression, slice_operands, eval_kwargs, where)
 
     if out is None:  # avoid copying unnecessarily
         try:
@@ -2729,12 +2850,13 @@ def reduce_slices(  # noqa: C901
 
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
-    ne_args: dict = kwargs.pop("_ne_args", {})
-    if ne_args is None:
-        ne_args = {}
+    eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
+    if eval_kwargs is None:
+        eval_kwargs = {}
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
-    jit = kwargs.pop("jit", None)
-    jit_backend = kwargs.pop("jit_backend", None)
+    # Scalar native reductions cannot use elementwise DSL JIT output buffers.
+    kwargs.pop("jit", None)
+    kwargs.pop("jit_backend", None)
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
     reduce_op_str = reduce_args.pop("op_str", None)
@@ -2868,9 +2990,6 @@ def reduce_slices(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
         )
-        if has_complex and (sys.platform == "win32" or blosc2.IS_WASM):
-            # On Windows and WebAssembly, miniexpr has issues with complex numbers
-            use_miniexpr = False
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
         if where is not None and len(where) != 2:
@@ -2912,8 +3031,13 @@ def reduce_slices(  # noqa: C901
                 expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
             else:
                 expression_miniexpr = f"{reduce_op_str}({expression})"
-            expression_miniexpr = _apply_jit_backend_pragma(expression_miniexpr, operands, jit_backend)
-            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=jit)
+            # Keep reductions as native scalar expressions. A DSL return
+            # broadcasts a reduced value across the output block, whereas this
+            # prefilter supplies only one accumulator slot per block. Explicit
+            # JIT_ON also auto-lifts plain expressions in the native compiler,
+            # so use the scalar interpreter until reduction JIT has a separate
+            # output-cardinality contract.
+            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=False)
             prefilter_set = True
             # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
@@ -2923,7 +3047,8 @@ def reduce_slices(  # noqa: C901
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
         except Exception as e:
-            use_miniexpr = False
+            if blosc2.jit_config.execution_options()["math_backend"] is not None:
+                raise
             if callable(expression) and _is_dsl_kernel_expression(expression):
                 reason = "miniexpr compilation or execution failed for this DSL kernel."
                 backend_error = str(e)
@@ -2934,6 +3059,9 @@ def reduce_slices(  # noqa: C901
                 if parse_hint is not None:
                     reason = f"{reason}\n{parse_hint}"
                 raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
+            if prefilter_set:
+                raise
+            use_miniexpr = False
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
@@ -3039,7 +3167,7 @@ def reduce_slices(  # noqa: C901
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
             continue
 
-        result, _ = _get_result(expression, chunk_operands, ne_args, where)
+        result, _ = _get_result(expression, chunk_operands, eval_kwargs, where)
         # Enforce contiguity of result (necessary to fill the out array)
         # but avoid copy if already contiguous
         result = np.require(result, requirements="C")
@@ -3297,8 +3425,8 @@ def chunked_eval(  # noqa: C901
             Default is False.
         _output: blosc2.Array, optional
             The output array to store the result.
-        _ne_args: dict, optional
-            Additional arguments to be passed to `numexpr.evaluate()` function.
+        _eval_kwargs: dict, optional
+            Expression evaluation options, validated independently of backend.
         _where_args: dict, optional
             Additional arguments for conditional evaluation.
     """
@@ -3400,11 +3528,10 @@ def chunked_eval(  # noqa: C901
                     **kwargs,
                 )
             elif (kwargs.get("chunks") is None and kwargs.get("blocks") is None) and (
-                out is None or isinstance(out, blosc2.NDArray)
+                out is None or isinstance(out, (blosc2.NDArray, np.ndarray))
             ):
                 # If not, the conditions to use the fast path are a bit more restrictive
-                # e.g. the user cannot specify chunks or blocks, or an output that is not
-                # a blosc2.NDArray
+                # e.g. the user cannot specify chunks or blocks here.
                 return fast_eval(
                     expression,
                     operands,
@@ -3563,6 +3690,27 @@ def result_type(
     return np.result_type(*arrs)
 
 
+def _arithmetic_recipe_text(expression, operands):
+    """Canonical operand text for an eligible binary arithmetic expression.
+
+    Returns ``None`` unless every operand is an exact expression name and the
+    graph is plain binary arithmetic with ASCII names. Canonical text comes from
+    the shared syntax tree, so no graph lowering is needed.
+    """
+    names = arithmetic_names(expression)
+    if (
+        names is None
+        or len(names) != len(operands)
+        or not all(type(name) is str for name in operands)
+        or names != tuple(sorted(operands))
+    ):
+        return None
+    tree, _ = expression_syntax(expression)
+    if not isinstance(tree.body, ast.BinOp) or not all(name.isascii() for name in names):
+        return None
+    return ast.unparse(tree.body)
+
+
 def can_cast(from_: blosc2.dtype | blosc2.NDArray, to: blosc2.dtype) -> bool:
     """
     Determines if one data type can be cast to another data type according to (NumPy) type promotion rules.
@@ -3592,6 +3740,7 @@ class LazyExpr(LazyArray):
     Once the lazy expression is created, it can be evaluated via :func:`LazyExpr.compute`.
     """
 
+    @expression_constructor
     def __init__(self, new_op):  # noqa: C901
         if new_op is None:
             self.expression = ""
@@ -3621,7 +3770,7 @@ class LazyExpr(LazyArray):
                 self.operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    value1 = ne_evaluate(f"{op}({value1!r})")
+                    value1 = evaluate_chunk(f"{op}({value1!r})")
                     op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
@@ -3634,7 +3783,8 @@ class LazyExpr(LazyArray):
 
         # Reset values represented as np.int64 etc. to be set as Python natives,
         # BUT preserve numpy integer scalars that require explicit typing (unsigned or
-        # 64-bit) so that dtype-sensitive backends (numexpr) don't downcast them to int32.
+        # 64-bit) so that expression preparation preserves their explicit dtype
+        # instead of normalizing them to a narrower Python integer.
         def _to_native_if_safe(v):
             if not (np.isscalar(v) and hasattr(v, "item")):
                 return v
@@ -3672,7 +3822,7 @@ class LazyExpr(LazyArray):
                 self.expression = "o0"
                 svalue1 = format_expr_scalar(value1)
                 svalue2 = format_expr_scalar(value2)
-                self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
+                self.operands = {"o0": evaluate_chunk(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
                 if isinstance(value2, np.floating) and not math.isfinite(value2):
                     # nan/inf have no expression literal — keep as named operand
@@ -3696,7 +3846,7 @@ class LazyExpr(LazyArray):
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = "o0"
-            self.operands = {"o0": ne_evaluate(f"({value1!r} {op} {value2!r})")}  # eager evaluation
+            self.operands = {"o0": evaluate_chunk(f"({value1!r} {op} {value2!r})")}  # eager evaluation
         elif np.isscalar(value2):
             if hasattr(value2, "dtype"):  # typed numpy scalar — keep as named operand
                 self.operands = {"o0": value1, "o1": value2}
@@ -3727,97 +3877,93 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
 
+    @expression_method
     def update_expr(self, new_op):
-        prev_flag = blosc2._disable_overloaded_equal
-        # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
-        blosc2._disable_overloaded_equal = True
-        # One of the two operands are LazyExpr instances
-        try:
-            value1, op, value2 = new_op
-            value1 = value1._raw_col if hasattr(value1, "_raw_col") else value1
-            value2 = value2._raw_col if hasattr(value2, "_raw_col") else value2
-            dtype_ = check_dtype(op, value1, value2)  # conserve dtype
-            # The new expression and operands
-            expression = None
-            new_operands = {}
-            # where() handling requires evaluating the expression prior to merge.
-            # This is different from reductions, where the expression is evaluated
-            # and returned a NumPy array (for usability convenience).
-            # We do things like this to enable the fusion of operations like
-            # `a.where(0, 1).sum()`.
-            # Another possibility would have been to always evaluate where() and produce
-            # an NDArray, but that would have been less efficient for the case above.
-            if hasattr(value1, "_where_args"):
-                value1 = value1.compute()
-            if hasattr(value2, "_where_args"):
-                value2 = value2.compute()
+        # Operand deduplication uses identity; never change global equality
+        # behavior while other threads may be constructing expressions.
+        value1, op, value2 = new_op
+        value1 = value1._raw_col if hasattr(value1, "_raw_col") else value1
+        value2 = value2._raw_col if hasattr(value2, "_raw_col") else value2
+        dtype_ = check_dtype(op, value1, value2)  # conserve dtype
+        # The new expression and operands
+        expression = None
+        new_operands = {}
+        # where() handling requires evaluating the expression prior to merge.
+        # This is different from reductions, where the expression is evaluated
+        # and returned a NumPy array (for usability convenience).
+        # We do things like this to enable the fusion of operations like
+        # `a.where(0, 1).sum()`.
+        # Another possibility would have been to always evaluate where() and produce
+        # an NDArray, but that would have been less efficient for the case above.
+        if hasattr(value1, "_where_args"):
+            value1 = value1.compute()
+        if hasattr(value2, "_where_args"):
+            value2 = value2.compute()
 
-            if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
-                # We converted some of the operands to NDArray (where() handling above)
-                new_operands = {"o0": value1, "o1": value2}
-                expression = "op(o0, o1)" if op in funcs_2args else f"(o0 {op} o1)"
-                return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
-            elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
-                # Expression fusion
-                # Fuse operands in expressions and detect duplicates
-                new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
-                # Take expression 2 and rebase the operands while removing duplicates
-                new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-                expression = (
-                    f"{op}({value1.expression}, {new_expr})"
-                    if op in funcs_2args
-                    else f"({value1.expression} {op} {new_expr})"
-                )
-                def_operands = value1.operands
-            elif isinstance(value1, LazyExpr):
-                if np.isscalar(value2):
-                    v2 = format_expr_scalar(value2)
-                elif hasattr(value2, "shape") and value2.shape == ():
-                    v2 = format_expr_scalar(value2[()])
-                else:
-                    operand_to_key = {id(v): k for k, v in value1.operands.items()}
-                    try:
-                        v2 = operand_to_key[id(value2)]
-                    except KeyError:
-                        v2 = f"o{len(value1.operands)}"
-                        new_operands = {v2: value2}
-                if op == "~":
-                    expression = f"({op}{value1.expression})"
-                else:
-                    expression = (
-                        f"{op}({value1.expression}, {v2})"
-                        if op in funcs_2args
-                        else f"({value1.expression} {op} {v2})"
-                    )
-                def_operands = value1.operands
+        if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
+            # We converted some of the operands to NDArray (where() handling above)
+            new_operands = {"o0": value1, "o1": value2}
+            expression = "op(o0, o1)" if op in funcs_2args else f"(o0 {op} o1)"
+            return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
+        elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
+            # Expression fusion
+            # Fuse operands in expressions and detect duplicates
+            new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
+            # Take expression 2 and rebase the operands while removing duplicates
+            new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
+            expression = (
+                f"{op}({value1.expression}, {new_expr})"
+                if op in funcs_2args
+                else f"({value1.expression} {op} {new_expr})"
+            )
+            def_operands = value1.operands
+        elif isinstance(value1, LazyExpr):
+            if np.isscalar(value2):
+                v2 = format_expr_scalar(value2)
+            elif hasattr(value2, "shape") and value2.shape == ():
+                v2 = format_expr_scalar(value2[()])
             else:
-                if np.isscalar(value1):
-                    v1 = format_expr_scalar(value1)
-                elif hasattr(value1, "shape") and value1.shape == ():
-                    v1 = format_expr_scalar(value1[()])
-                else:
-                    operand_to_key = {id(v): k for k, v in value2.operands.items()}
-                    try:
-                        v1 = operand_to_key[id(value1)]
-                    except KeyError:
-                        v1 = f"o{len(value2.operands)}"
-                        new_operands = {v1: value1}
-                if op == "[]":  # syntactic sugar for slicing
-                    expression = f"({v1}[{value2.expression}])"
-                else:
-                    expression = (
-                        f"{op}({v1}, {value2.expression})"
-                        if op in funcs_2args
-                        else f"({v1} {op} {value2.expression})"
-                    )
-                    def_operands = value2.operands
-            # Return a new expression
-            operands = def_operands | new_operands
-            expr = self._new_expr(expression, operands, guess=False, out=None, where=None)
-            expr._dtype = dtype_  # override dtype with preserved dtype
-            return expr
-        finally:
-            blosc2._disable_overloaded_equal = prev_flag
+                operand_to_key = {id(v): k for k, v in value1.operands.items()}
+                try:
+                    v2 = operand_to_key[id(value2)]
+                except KeyError:
+                    v2 = f"o{len(value1.operands)}"
+                    new_operands = {v2: value2}
+            if op == "~":
+                expression = f"({op}{value1.expression})"
+            else:
+                expression = (
+                    f"{op}({value1.expression}, {v2})"
+                    if op in funcs_2args
+                    else f"({value1.expression} {op} {v2})"
+                )
+            def_operands = value1.operands
+        else:
+            if np.isscalar(value1):
+                v1 = format_expr_scalar(value1)
+            elif hasattr(value1, "shape") and value1.shape == ():
+                v1 = format_expr_scalar(value1[()])
+            else:
+                operand_to_key = {id(v): k for k, v in value2.operands.items()}
+                try:
+                    v1 = operand_to_key[id(value1)]
+                except KeyError:
+                    v1 = f"o{len(value2.operands)}"
+                    new_operands = {v1: value1}
+            if op == "[]":  # syntactic sugar for slicing
+                expression = f"({v1}[{value2.expression}])"
+            else:
+                expression = (
+                    f"{op}({v1}, {value2.expression})"
+                    if op in funcs_2args
+                    else f"({v1} {op} {value2.expression})"
+                )
+                def_operands = value2.operands
+        # Return a new expression
+        operands = def_operands | new_operands
+        expr = self._new_expr(expression, operands, guess=False, out=None, where=None)
+        expr._dtype = dtype_  # override dtype with preserved dtype
+        return expr
 
     def _miniexpr_string_dtype(self):
         """Width of a string-valued result, as inferred by miniexpr itself.
@@ -3861,6 +4007,7 @@ class LazyExpr(LazyArray):
         return out
 
     @property
+    @expression_method
     def dtype(self):
         # miniexpr owns string widths; see _miniexpr_string_dtype.
         string_dtype = self._miniexpr_string_dtype()
@@ -3892,6 +4039,7 @@ class LazyExpr(LazyArray):
         return len(self.shape)
 
     @property
+    @expression_method
     def shape(self):
         # Honor self._shape; it can be set during the building of the expression
         if hasattr(self, "_shape"):
@@ -3925,6 +4073,7 @@ class LazyExpr(LazyArray):
         return _shape
 
     @property
+    @expression_method
     def chunks(self):
         if hasattr(self, "_chunks"):
             return self._chunks
@@ -3941,6 +4090,7 @@ class LazyExpr(LazyArray):
         return self._chunks
 
     @property
+    @expression_method
     def blocks(self):
         if hasattr(self, "_blocks"):
             return self._blocks
@@ -3956,6 +4106,7 @@ class LazyExpr(LazyArray):
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
         return self._blocks
 
+    @expression_method
     def where(self, value1=None, value2=None):
         """
         Select value1 or value2 values based on the condition of the current expression.
@@ -3972,6 +4123,8 @@ class LazyExpr(LazyArray):
         out: LazyExpr
             A new expression with the where condition applied.
         """
+        if evaluation_mode() == "safe":
+            validate_operands({"value1": value1, "value2": value2})
         if not np.issubdtype(self.dtype, np.bool_):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
@@ -3997,12 +4150,16 @@ class LazyExpr(LazyArray):
         new_expr.operands = self.operands
         new_expr._where_args = args
         new_expr._dtype = dtype
+        if evaluation_mode() == "safe":
+            record_expression_metadata(new_expr)
         return new_expr
 
     @staticmethod
     def _normalize_where(where):
         if where is None:
             return None
+        if evaluation_mode() == "safe":
+            validate_operands({"where": where})
         raw_col = getattr(where, "_raw_col", None)
         if raw_col is not None:
             where = raw_col
@@ -4034,6 +4191,7 @@ class LazyExpr(LazyArray):
             return np.inf if op == "min" else -np.inf
         raise TypeError(f"where= for {op} is not supported for dtype {dtype!r}")
 
+    @expression_method
     def sum(
         self,
         axis=None,
@@ -4056,6 +4214,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def prod(
         self,
         axis=None,
@@ -4102,6 +4261,7 @@ class LazyExpr(LazyArray):
         axis = tuple(a if a >= 0 else a + len(shape) for a in axis)  # handle negative indexing
         return math.prod([shape[i] for i in axis])
 
+    @expression_method
     def mean(
         self,
         axis=None,
@@ -4141,6 +4301,7 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    @expression_method
     def std(
         self,
         axis=None,
@@ -4204,6 +4365,7 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    @expression_method
     def var(
         self,
         axis=None,
@@ -4265,6 +4427,7 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    @expression_method
     def min(
         self,
         axis=None,
@@ -4286,6 +4449,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def max(
         self,
         axis=None,
@@ -4307,6 +4471,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def any(
         self,
         axis=None,
@@ -4322,6 +4487,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def all(
         self,
         axis=None,
@@ -4337,6 +4503,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def argmax(
         self,
         axis=None,
@@ -4351,6 +4518,7 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
+    @expression_method
     def argmin(
         self,
         axis=None,
@@ -4441,13 +4609,23 @@ class LazyExpr(LazyArray):
         _globals |= dtype_symbols
         evalcons = f"{constructor}({args})"
 
+        # Constructor results that read operands are values, not immutable
+        # plans. Rebuild them on each safe evaluation, even if metadata did not
+        # change. Constant-only constructors may keep their existing cache.
+        cacheable = evaluation_mode() == "full" or not parse_expression(evalcons).names
+
         # Internal constructors will be cached for avoiding multiple computations
         if not hasattr(self, "cons_cache"):
             self.cons_cache = {}
-        if evalcons in self.cons_cache:
-            return self.cons_cache[evalcons], expression[idx:idx2]
-        value = eval(evalcons, _globals, operands)
-        self.cons_cache[evalcons] = value
+        if cacheable and evalcons in self.cons_cache:
+            value = self.cons_cache[evalcons]
+            if evaluation_mode() == "safe":
+                validate_operands({"constructor": value})
+            return value, expression[idx:idx2]
+        _globals["blosc2"] = blosc2
+        value = evaluate_expression(evalcons, _globals, operands)
+        if cacheable:
+            self.cons_cache[evalcons] = value
 
         return value, expression[idx:idx2]
 
@@ -4559,6 +4737,46 @@ class LazyExpr(LazyArray):
         return indexing.evaluate_full_query(self._where_args, plan)
 
     def _compute_expr(self, item, kwargs):  # noqa: C901
+        output = kwargs.get("_output")
+        if (
+            type(output) is np.ndarray
+            and output.dtype.kind == "c"
+            and type(item) is tuple
+            and not item
+            and not any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
+        ):
+            root = parse_expression(self.expression).root
+            if (
+                root[0] == "call"
+                and root[1] == "complex"
+                and not root[3]
+                and all(node[0] == "name" for node in root[2])
+            ):
+                casting = (kwargs.get("_eval_kwargs") or {}).get("casting", "same_kind")
+                if not np.can_cast(np.dtype("complex128"), output.dtype, casting=casting):
+                    raise TypeError("Cannot cast complex construction into destination")
+                return safe_numpy_globals["complex"](
+                    *(self.operands[node[1]] for node in root[2]), out=output
+                )
+        if (
+            (
+                (type(output) is np.ndarray and not output.flags.c_contiguous)
+                or any(type(value) is np.ndarray and value.size == 0 for value in self.operands.values())
+            )
+            and (output is None or type(output) is np.ndarray)
+            and type(item) is tuple
+            and not item
+            and not any(name in kwargs for name in ("_where_args", "_indices", "_order", "_reduce_args"))
+            and all(type(value) is np.ndarray or np.isscalar(value) for value in self.operands.values())
+        ):
+            # Layout is a destination contract, not a reason to select NumExpr.
+            # Until native sinks support strided writes, the approved NumPy graph
+            # supplies semantics; copyto preserves the caller's layout and identity.
+            result = parse_expression(self.expression).evaluate(self.operands, prefer_blosc=False)
+            if output is None:
+                return np.asarray(result)
+            np.copyto(output, result, casting=(kwargs.get("_eval_kwargs") or {}).get("casting", "same_kind"))
+            return output
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
@@ -4584,7 +4802,7 @@ class LazyExpr(LazyArray):
                 # lazyexpr("mean(a + b)")[:10] means mean((a + b)[:10]).
                 operands = _slice_operands_for_eager(operands, item)
                 item = ()
-            lazy_expr = eval(self.expression, _globals, operands)
+            lazy_expr = evaluate_expression(self.expression, _globals, operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
                 key, mask = process_key(item, lazy_expr.shape)
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
@@ -4602,7 +4820,7 @@ class LazyExpr(LazyArray):
                 out = kwargs.get("_output", None)
                 if out is not None:
                     # This is not exactly optimized, but it works for now
-                    out[:] = lazy_expr[key]
+                    out[...] = lazy_expr[key]
                     return out
                 arr = lazy_expr[key]
                 if builtins.sum(mask) > 0:
@@ -4633,8 +4851,8 @@ class LazyExpr(LazyArray):
                     newexpr = newexpr.replace(constexpr, newop)
 
             _globals = get_expr_globals(newexpr)
-            lazy_expr = eval(newexpr, _globals, newops)
-            if isinstance(lazy_expr, blosc2.NDArray):
+            lazy_expr = evaluate_expression(newexpr, _globals, newops)
+            if isinstance(lazy_expr, blosc2.NDArray | np.ndarray):
                 # Almost done (probably the expression is made of only constructors)
                 # We only have to define the trivial expression ("o0")
                 lazy_expr = blosc2.LazyExpr(new_op=(lazy_expr, None, None))
@@ -4710,28 +4928,113 @@ class LazyExpr(LazyArray):
 
         return indexing.explain_query(self)
 
-    def compute(
+    @expression_method
+    @blosc2.jit_config.math_execution
+    def compute(  # noqa: C901 -- native-first/strict dispatch plus legacy output policies
         self,
         item=(),
         fp_accuracy: blosc2.FPAccuracy | None = None,
         jit=None,
         jit_backend: str | None = None,
+        math_backend: str | None = None,
+        _require_native=None,
+        _native_tile_items=1024,
         **kwargs,
     ) -> blosc2.NDArray:
+        self.__dict__.pop("_native_execution_report", None)
+        if "ne_args" in kwargs:
+            if "eval_kwargs" in kwargs:
+                raise TypeError("Pass only one of 'eval_kwargs' and the legacy 'ne_args' alias")
+            kwargs["eval_kwargs"] = kwargs.pop("ne_args")
+        if "eval_kwargs" in kwargs:
+            kwargs["_eval_kwargs"] = kwargs.pop("eval_kwargs")
+        if _require_native:
+            from .native_graph import compute_native_graph
+
+            if jit_backend is not None or fp_accuracy is not None:
+                raise ValueError(
+                    "Native-required Menudet execution does not accept acceleration/accuracy overrides"
+                )
+            return compute_native_graph(self, item, tile_items=_native_tile_items, jit=jit is True, **kwargs)
+        jit, jit_backend = _jit_from_env(jit, jit_backend)
+        if _require_native is None:
+            from .native_graph import (
+                compute_native_graph,
+                compute_native_prefilter_if_eligible,
+                compute_resident_if_eligible,
+                prepare_native_first,
+            )
+
+            # Legacy chunked execution resolves inherited policy in its JIT
+            # decorator. Automatic dispatch must respect that same policy
+            # before choosing a route that cannot honor backend/accuracy
+            # overrides. Keep the original kwargs for legacy resolution.
+            policy = blosc2.jit_config.execution_options()
+            native_jit = policy["jit"] if jit is None else jit
+            native_backend = policy["jit_backend"] if jit_backend is None else jit_backend
+            native_accuracy = fp_accuracy
+            if native_accuracy is None and policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
+                native_accuracy = policy["fp_accuracy"]
+
+            resident = (
+                compute_resident_if_eligible(
+                    self,
+                    item,
+                    jit=native_jit,
+                    jit_backend=native_backend,
+                    fp_accuracy=native_accuracy,
+                    options=kwargs,
+                )
+                if _native_tile_items == 1024
+                else None
+            )
+            if resident is not None:
+                return resident
+
+            stored = compute_native_prefilter_if_eligible(
+                self,
+                item,
+                jit=native_jit,
+                jit_backend=native_backend,
+                fp_accuracy=native_accuracy,
+                options=kwargs,
+            )
+            if stored is not None:
+                return stored
+
+            native_options = dict(kwargs)
+            if hasattr(self, "_output"):
+                native_options.setdefault("out", self._output)
+            if type(native_options.get("out")) is np.ndarray:
+                native_options["_getitem"] = True
+
+            prepared = prepare_native_first(
+                self,
+                item,
+                jit=native_jit,
+                jit_backend=native_backend,
+                fp_accuracy=native_accuracy,
+                options=native_options,
+            )
+            if prepared is not None:
+                return compute_native_graph(
+                    self,
+                    tile_items=_native_tile_items,
+                    prepared=prepared,
+                    parallel_reductions=True,
+                    **native_options,
+                )
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")
         elif hasattr(self, "_output"):
             kwargs["_output"] = self._output
 
-        if "ne_args" in kwargs:
-            kwargs["_ne_args"] = kwargs.pop("ne_args")
-        if hasattr(self, "_ne_args"):
-            kwargs["_ne_args"] = self._ne_args
+        if "_eval_kwargs" not in kwargs and hasattr(self, "_eval_kwargs"):
+            kwargs["_eval_kwargs"] = self._eval_kwargs
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs.setdefault("fp_accuracy", fp_accuracy)
-        jit, jit_backend = _jit_from_env(jit, jit_backend)
         if jit is not None:
             kwargs["jit"] = jit
         if jit_backend is not None:
@@ -4758,7 +5061,7 @@ class LazyExpr(LazyArray):
                 "_where_args",
                 "_indices",
                 "_order",
-                "_ne_args",
+                "_eval_kwargs",
                 "_use_index",
                 "dtype",
                 "shape",
@@ -4768,10 +5071,28 @@ class LazyExpr(LazyArray):
             result = blosc2.asarray(result, **kwargs)
         return result
 
+    def native_kernel(self):
+        """Export the eligible elementwise safe graph as an immutable native Menudet 0.1 beta plan.
+
+        Unsupported syntax/signatures reject; no Python numerical fallback. Root
+        logical reduction options are separate from this elementwise artifact.
+        """
+        from .native_graph import lower_native_graph
+
+        plan, _, reduction = lower_native_graph(self)
+        if reduction:
+            raise ValueError("Root logical reductions require native compute, not an elementwise export")
+        return blosc2.MenudetKernel.from_json(plan.map_json())
+
     def __getitem__(self, item):
+        safe = evaluation_mode() == "safe" or getattr(self, "_evaluation", "full") == "safe"
+        # Use admitted pre-read geometry for axis removal. A remote refresh may
+        # invalidate the handle after its read completed; do not re-enter that
+        # dependency merely to reshape the already independent result.
+        shape = self.shape if safe else None
         kwargs = {"_getitem": True}
         result = self.compute(item, **kwargs)
-        return _drop_indexed_axes(result, self.shape, item)
+        return _drop_indexed_axes(result, shape if safe else self.shape, item)
 
     def slice(self, item):
         return self.compute(item)  # should do a slice since _getitem = False
@@ -4817,15 +5138,24 @@ class LazyExpr(LazyArray):
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
 
-    def _to_b2object_carrier(self, **kwargs):
+    @expression_method
+    def _expression_recipe(self):
         expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
         operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
+        validate_expr(expression)
+        return expression, operands_
+
+    def _to_b2object_carrier(self, **kwargs):
+        expression, operands_ = self._expression_recipe()
         validate_expr(expression)
 
         payload = {"kind": "lazyexpr", "version": 1, "expression": expression, "operands": {}}
         carrier_urlpath = kwargs.get("urlpath")
         carrier_parent = Path(carrier_urlpath).parent if carrier_urlpath is not None else None
         for key, value in operands_.items():
+            if type(value) is blosc2.NDField:
+                payload["operands"][key] = encode_operand_reference(value, base_path=carrier_parent)
+                continue
             if isinstance(value, blosc2.C2Array):
                 payload["operands"][key] = encode_b2object_payload(value)
                 continue
@@ -4866,9 +5196,151 @@ class LazyExpr(LazyArray):
         return array
 
     @classmethod
-    def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
-        # Validate the expression
-        validate_expr(expression)
+    def _new_expr(cls, expression, operands, guess, out=None, where=None, eval_kwargs=None):  # noqa: C901
+        native_metadata = (
+            guess
+            and type(expression) is str
+            and type(operands) is dict
+            and operands
+            and out is None
+            and where is None
+            and eval_kwargs is None
+            and evaluation_mode() == "full"
+        )
+        text = _arithmetic_recipe_text(expression, operands) if native_metadata else None
+        if text is None or "#" in expression or _blacklist_re.search(expression):
+            validate_expr(expression)
+        if native_metadata:
+            from .native_graph import (
+                _native_first_array,
+                _native_first_syntax,
+                _native_plan_cache_key,
+            )
+
+            if all(_native_first_array(value) for value in operands.values()):
+                graph = None
+                renamed = bindings = None
+                if text is None:
+                    try:
+                        graph = parse_expression(expression)
+                    except (exceptions.UnsafeDeserializationError, ValueError):
+                        graph = (
+                            None  # Trusted expressions outside the reviewed grammar keep legacy preparation.
+                        )
+                    if (
+                        graph is not None
+                        and graph.names == operands.keys()
+                        and (graph.arithmetic or _native_first_syntax(expression))
+                    ):
+                        tree, nodes = expression_syntax(expression)
+                        if (
+                            graph.root[0] == "binary"
+                            and all(name.isascii() for name in graph.names)
+                            and (graph.arithmetic or not any(isinstance(node, ast.Call) for node in nodes))
+                        ):
+                            text = graph.text
+                        else:
+                            renamed, bindings = conserve_functions(
+                                expression, operands, dict(operands), tree=tree
+                            )
+                if text is not None:
+                    bindings, aliases = {}, {}
+
+                    def rebase(match):
+                        name = match[0]
+                        if name not in operands:
+                            return name
+                        value = operands[name]
+                        key = aliases.get(id(value))
+                        if key is None:
+                            key = aliases[id(value)] = f"o{len(bindings)}"
+                            bindings[key] = value
+                        return key
+
+                    # Canonical numeric text has no quoted strings or attribute names to rewrite.
+                    renamed = _IDENTIFIER_RE.sub(rebase, text)
+                if renamed is not None:
+                    root_kind = "binary" if text is not None else graph.root[0]
+                    result = cls(None)
+                    result.expression = f"({renamed})"
+                    result.operands = bindings
+                    result.expression_tosave = expression
+                    result.operands_tosave = operands
+                    result._eval_kwargs = eval_kwargs
+                    result._evaluation = "full"
+                    policy = blosc2.jit_config.execution_options()
+                    native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
+                    if (
+                        native_backend is None
+                        and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+                        and root_kind in {"binary", "unary", "compare"}
+                        and not re.search(r"\bcopy\s*\(", expression)
+                    ):
+                        try:
+                            from .graph_plan import NativeGraph
+                            from .native_graph import native_weak_scalars_eligible, prepare_resident
+
+                            # The reviewed arithmetic subset can get metadata from its execution plan.
+                            inputs = result.operands
+                            resident = prepare_resident(result.expression, inputs, jit=native_jit)
+                            if resident is not None:
+                                result._resident_native = resident
+                                _, plan, schedule = resident
+                                info = {"dtype": plan.inferred_dtype, "shape": resident[0][2]}
+                            else:
+                                plan = NativeGraph.from_expression(
+                                    result.expression,
+                                    {name: value.dtype.name for name, value in inputs.items()},
+                                    jit=native_jit,
+                                )
+                                plan._frontend = "native-expression"
+                                if not native_weak_scalars_eligible(plan, result.expression, inputs):
+                                    raise NotImplementedError(
+                                        "Checked scalar metadata requires legacy preparation"
+                                    )
+                                schedule = plan.specialize(
+                                    {name: (value.dtype, value.shape) for name, value in inputs.items()}
+                                )
+                                info = schedule.info()
+                            if plan.stages == 1 and info["dtype"].kind in "biuf":
+                                result._dtype = info["dtype"]
+                                result._shape = info["shape"]
+                                key = _native_plan_cache_key(
+                                    result,
+                                    native_jit,
+                                    {"_getitem": True},
+                                    configuration=None if resident is None else resident[0][-1][0],
+                                )
+                                prepared = (key, (plan, tuple(inputs), False))
+                                if all(type(value) is np.ndarray for value in inputs.values()):
+                                    result._prepared_native = prepared
+                                else:
+                                    # Compressed inputs must still pass execution/layout admission before reuse.
+                                    result._metadata_native = prepared
+                                return result
+                        except (NotImplementedError, blosc2.MenudetError, TypeError, ValueError):
+                            pass
+                    if graph is None:
+                        graph = parse_expression(expression)
+                    shape = graph.infer_shape(operands)
+                    dtype = graph.infer_dtype(operands)
+                    if shape is not None and dtype is not None:
+                        # Reviewed metadata avoids evaluating synthetic operands.
+                        result._dtype = dtype
+                        result._shape = shape
+                        return result
+        graph_shape, graph_dtype = None, None
+        if evaluation_mode() == "safe":
+            graph = parse_expression(expression)
+            operands = normalize_operands(operands)
+            validate_operands(operands)
+            graph_shape = graph.infer_shape(operands)
+            graph_dtype = graph.infer_dtype(operands)
+            binding = graph.bind_root_reduction(operands)
+            if binding is not None:
+                normalized, root_shape, graph_dtype = binding
+                graph_shape = root_shape if root_shape is not None else graph_shape
+                expression = normalized or expression
         expression = convert_to_slice(expression)
         chunks, blocks = None, None
         if guess:
@@ -4883,13 +5355,24 @@ class LazyExpr(LazyArray):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
-            _shape = infer_shape(_expression, opshapes)  # infer shape, includes constructors
-            # have to handle slices since a[10] on a dummy variable of shape (1,1) doesn't work
-            desliced_expr, desliced_ops = extract_and_replace_slices(_expression, _operands)
+            _shape = graph_shape if graph_shape is not None else infer_shape(_expression, opshapes)
             # substitutes with dummy operands (cheap for reductions) and
             # defaults to blosc2 functions (cheap for constructors)
-            new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
-            _dtype = new_expr.dtype if hasattr(new_expr, "dtype") else np.dtype(type(new_expr))
+            if graph_shape is not None and graph_dtype is not None:
+                # Data-free graph rules supplied metadata. Do not
+                # execute that reduction on all-one dummies (ddof may exceed
+                # their size even when the real input is perfectly valid).
+                new_expr = np.empty((), dtype=graph_dtype)
+            else:
+                # Handle slices before dummy evaluation: a[10] cannot index a
+                # synthetic array of shape (1, 1).
+                desliced_expr, desliced_ops = extract_and_replace_slices(_expression, _operands)
+                new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
+            _dtype = (
+                graph_dtype
+                if graph_dtype is not None
+                else (new_expr.dtype if hasattr(new_expr, "dtype") else np.dtype(type(new_expr)))
+            )
             if isinstance(new_expr, blosc2.LazyExpr):
                 # DO NOT restore the original expression and operands
                 # Instead rebase operands and restore only constructors
@@ -4898,7 +5381,7 @@ class LazyExpr(LazyArray):
                 )
             elif _shape == () and not _operands:  # passed scalars
                 expression_ = "o0"
-                operands_ = {"o0": ne_evaluate(_expression)}
+                operands_ = {"o0": evaluate_chunk(_expression)}
             else:
                 # An immediate evaluation happened
                 # (e.g. all operands are numpy arrays or constructors)
@@ -4910,6 +5393,7 @@ class LazyExpr(LazyArray):
                     chunks = new_expr.chunks
                     blocks = new_expr.blocks
             new_expr = cls(None)
+            new_expr._evaluation = evaluation_mode()
             new_expr.expression = f"({expression_})"  # force parenthesis
             new_expr.operands = operands_
             new_expr.expression_tosave = expression
@@ -4928,7 +5412,10 @@ class LazyExpr(LazyArray):
             new_expr._output = out
         if where is not None:
             new_expr._where_args = where
-        new_expr._ne_args = ne_args
+        new_expr._eval_kwargs = eval_kwargs
+        new_expr._evaluation = evaluation_mode()
+        if evaluation_mode() == "safe":
+            record_expression_metadata(new_expr)
         return new_expr
 
 
@@ -5091,6 +5578,10 @@ class LazyUDF(LazyArray):
     @property
     def dtype(self):
         return self._dtype
+
+    @property
+    def nbytes(self):
+        return math.prod(self.shape) * np.dtype(self.dtype).itemsize
 
     @property
     def ndim(self) -> int:
@@ -5257,9 +5748,19 @@ class LazyUDF(LazyArray):
         aux_kwargs.update(kwargs)
 
         # aux_kwargs includes self.shape and self.dtype
+        from .dsl_execution import evaluate_dsl_udf
+
+        handled, result = evaluate_dsl_udf(self, item, getitem=False, options=aux_kwargs)
+        if handled:
+            return result
         return chunked_eval(self.func, self.inputs_dict, item, _getitem=False, **aux_kwargs)
 
     def __getitem__(self, item):
+        from .dsl_execution import evaluate_dsl_udf
+
+        handled, result = evaluate_dsl_udf(self, item, getitem=True, options=self.kwargs)
+        if handled:
+            return result
         result = chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
         return _drop_indexed_axes(result, self.shape, item)
 
@@ -5282,65 +5783,20 @@ class LazyUDF(LazyArray):
         -----
         * All operands must be :ref:`NDArray` or :ref:`C2Array` objects stored on
           disk or a remote server (i.e. they must have a ``urlpath``).
-        * When the :ref:`LazyUDF` wraps a :func:`blosc2.dsl_kernel`-decorated
-          function, the DSL source is preserved verbatim in the saved metadata.
-          On reload via :func:`blosc2.open`, the function is restored as a full
-          :class:`~blosc2.dsl_kernel.DSLKernel` so the miniexpr JIT fast path
-          remains available without any extra work from the caller.
+        * Internally normalized source kernels validate as Menudet
+          0.1 before saving. Python UDFs and noncompliant kernels reject before
+          writing. Block-scalar kernels require the explicit Menudet API.
+          Historical source-backed files are unsupported under all loading
+          policies; materialize them in a previous release before upgrading.
         """
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        kwargs["urlpath"] = urlpath
-        kwargs["mode"] = "w"  # always overwrite the file in urlpath
-        try:
-            self._to_b2object_carrier(**kwargs)
-        except (TypeError, ValueError):
-            meta = kwargs.get("meta", {})
-            meta["LazyArray"] = LazyArrayEnum.UDF.value
-            kwargs["meta"] = meta
+        from blosc2.menudet_lazy import menudet_from_lazyudf
 
-            # Create an empty array; useful for providing the shape and dtype of the outcome
-            array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-            # Save the expression and operands in the metadata
-            operands = {}
-            operands_ = self.inputs_dict
-            for i, (_key, value) in enumerate(operands_.items()):
-                pos_key = f"o{i}"  # always use positional keys for consistent loading
-                if isinstance(value, blosc2.C2Array):
-                    operands[pos_key] = {
-                        "path": str(value.path),
-                        "urlbase": value.urlbase,
-                    }
-                    continue
-                if isinstance(value, blosc2.Proxy):
-                    # Take the required info from the Proxy._cache container
-                    value = value._cache
-                if not hasattr(value, "schunk"):
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                    ) from None
-                if value.schunk.urlpath is None:
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be stored on disk/network"
-                    ) from None
-                operands[pos_key] = value.schunk.urlpath
-            udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
-            udf_name = getattr(udf_func, "__name__", self.func.__name__)
-            try:
-                udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
-            except Exception:
-                udf_source = None
-            meta = {
-                "UDF": udf_source,
-                "operands": operands,
-                "name": udf_name,
-            }
-            if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
-                meta["dsl_source"] = self.func.dsl_source
-            array.schunk.vlmeta["_LazyArray"] = meta
-            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+        menudet_result = menudet_from_lazyudf(self)
+        menudet_result.save(urlpath, **kwargs)
+        self.array, self.schunk = menudet_result.array, menudet_result.schunk
 
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
@@ -5367,8 +5823,12 @@ class LazyUDF(LazyArray):
                 ref_urlpath = operand_urlpath.as_posix()
             operand_payload["urlpath"] = ref_urlpath
 
+        from blosc2.msgpack_utils import msgpack_packb
+
+        msgpack_packb(payload)
+        msgpack_packb(self._get_user_vlmeta())
         array = make_b2object_carrier(
-            "lazyudf",
+            "menudet",
             self.shape,
             self.dtype,
             chunks=self.chunks,
@@ -5410,16 +5870,23 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     if prefer_blosc:
         _globals = get_expr_globals(expression)
         _globals |= dtype_symbols
+        if all(type(value) is np.ndarray or np.isscalar(value) for value in ops.values()):
+            # Blosc2's bare where/copy expect lazy or stored receivers, while
+            # these synthetic operands represent ordinary resident NumPy values.
+            _globals.update(where=np.where, copy=np.copy)
     else:
         _globals = safe_numpy_globals
     try:
-        _out = _numpy_eval_datetime_aware(expression, _globals, ops)
+        # Dummy values are only for shape/dtype inference. Their artificial
+        # domain boundaries must not emit diagnostics for the actual operands.
+        with np.errstate(all="ignore"):
+            _out = _numpy_eval_datetime_aware(expression, _globals, ops)
     except RuntimeWarning:
         # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
-        # with synthetic operands (1's). Let's try with numexpr, which is not so picky
+        # with synthetic operands (1's). Try the native/NumPy chunk evaluator.
         # about this.
         ops = npops if blosc2.IS_WASM else ops
-        _out = ne_evaluate(expression, local_dict=ops)
+        _out = evaluate_chunk(expression, local_dict=ops)
     return _out
 
 
@@ -5457,11 +5924,8 @@ def lazyudf(
         any other object is supported too, and it will be passed as-is to the
         user-defined function. If not needed, this can be empty, but `shape` must
         be provided.
-    dtype: np.dtype, optional
-        The resulting ndarray dtype in NumPy format.  When omitted and *func*
-        is a :class:`DSLKernel`, the dtype is inferred by NumPy type promotion
-        of the input dtypes.  For type-changing kernels (comparisons, casts)
-        pass *dtype* explicitly.  Required for plain Python UDFs.
+    dtype: np.dtype
+        The resulting ndarray dtype in NumPy format. Required.
     shape: tuple, optional
         The shape of the resulting array. If None, the shape will be guessed from inputs.
     chunked_eval: bool, optional
@@ -5476,8 +5940,8 @@ def lazyudf(
         float DSL kernels and falls back to miniexpr otherwise (``jit=True`` prefers ``"js"``
         too, since it is JIT-compiled by the JS engine). ``"tcc"`` selects bundled
         libtcc without a disk cache, ``"cc"`` selects an installed C compiler with
-        persistent caching, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
-        to JavaScript (browser/Pyodide only; raises elsewhere). Native JIT requests
+        persistent caching, and ``"js"`` is reserved for internal source-kernel
+        transpilation to JavaScript (browser/Pyodide only; raises elsewhere). Native JIT requests
         remain best effort and use the interpreter if compilation or loading fails.
         See :ref:`JITOptions` for requirements, diagnostics, and environment settings.
     kwargs: Any, optional
@@ -5498,6 +5962,13 @@ def lazyudf(
     -------
     out: :ref:`LazyUDF`
         A :ref:`LazyUDF` is returned.
+
+    Notes
+    -----
+    Menudet functions and kernels are not accepted by this constructor. Call a
+    decorated function as ``function(*inputs)``, or bind a specialized kernel
+    with ``kernel.lazy({name: operand, ...})``. See
+    https://blosc.org/python-blosc2/guides/migrating_to_menudet.html.
 
     Examples
     --------
@@ -5524,6 +5995,16 @@ def lazyudf(
             [17.5 20.  22.5]
             [25.  27.5 30. ]]
     """
+    if isinstance(func, blosc2.MenudetFunction):
+        raise TypeError(
+            "lazyudf() does not accept a MenudetFunction; call function(*inputs) directly. "
+            "See https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+        )
+    if isinstance(func, blosc2.MenudetKernel):
+        raise TypeError(
+            "lazyudf() does not accept a MenudetKernel; use kernel.lazy({name: operand, ...}). "
+            "See https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+        )
     if isinstance(func, DSLKernel) and func.dsl_error is not None:
         udf_name = getattr(func.func, "__name__", func.__name__)
         raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{func.dsl_error}") from None
@@ -5580,6 +6061,15 @@ def seek_operands(names, local_dict=None, global_dict=None, _frame_depth: int = 
     return op_dict
 
 
+def _resolve_eval_kwargs(eval_kwargs, ne_args):
+    """Normalize the public legacy option name without changing caller frames."""
+    if ne_args is None:
+        return eval_kwargs
+    if eval_kwargs is not None:
+        raise TypeError("Pass only one of 'eval_kwargs' and the legacy 'ne_args' alias")
+    return ne_args
+
+
 def lazyexpr(
     expression: str | bytes | LazyArray | blosc2.NDArray,
     operands: dict | None = None,
@@ -5587,8 +6077,11 @@ def lazyexpr(
     where: tuple | list | None = None,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
-    ne_args: dict | None = None,
+    eval_kwargs: dict | None = None,
     _frame_depth: int = 2,
+    *,
+    evaluation: str | None = None,
+    ne_args: dict | None = None,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
@@ -5596,8 +6089,8 @@ def lazyexpr(
     Parameters
     ----------
     expression: str or bytes or LazyExpr or NDArray
-        The expression to evaluate. This can be any valid expression that numexpr
-        can ingest. If a LazyExpr is passed, the expression will be
+        The expression to evaluate, using supported numerical and array operations.
+        If a LazyExpr is passed, the expression will be
         updated with the new operands.
     operands: dict[blosc2.Array], optional
         The dictionary with operands. Supported values are Python scalars,
@@ -5606,6 +6099,10 @@ def lazyexpr(
     out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
+        Eligible one-dimensional compressed inputs use the miniexpr prefilter
+        to write directly into this new NumPy allocation, without storing an
+        intermediate Blosc2 result. A supplied NumPy output uses bounded chunk
+        scratch instead. Other layouts retain the regular evaluation paths.
     where: tuple, list, optional
         A sequence of arguments for the where clause in the expression.
     local_dict: dict, optional
@@ -5614,8 +6111,10 @@ def lazyexpr(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
+    eval_kwargs: dict, optional
+        Expression evaluation options, validated independently of backend.
     ne_args: dict, optional
-        Additional arguments to be passed to `numexpr.evaluate()` function.
+        Compatibility alias for ``eval_kwargs``. Do not pass both names.
     _frame_depth: int, optional
         The depth of the frame to use when looking for operands in the expression.
         The default value is 2.
@@ -5651,6 +6150,21 @@ def lazyexpr(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    eval_kwargs = _resolve_eval_kwargs(eval_kwargs, ne_args)
+    if evaluation is not None:
+        with expression_evaluation(evaluation):
+            return lazyexpr(
+                expression,
+                operands,
+                out,
+                where,
+                local_dict,
+                global_dict,
+                eval_kwargs,
+                _frame_depth=_frame_depth + 1,
+            )
+    if isinstance(expression, str) and evaluation_mode() == "safe":
+        parse_expression(expression)
     if operands is not None and isinstance(expression, str):
         # A UTF8Array is variable-width, so it cannot be an expression operand.
         # It only duck-types as one: LazyExpr would wrap it in a SimpleProxy,
@@ -5666,21 +6180,21 @@ def lazyexpr(
                     "'out' and 'where' are not supported for expressions over a bare "
                     "UTF8Array; use a CTable column, which supports both."
                 )
-            return UTF8LazyExpr(expression, operands, ne_args=ne_args)
+            return UTF8LazyExpr(expression, operands, eval_kwargs=eval_kwargs)
 
     if isinstance(expression, LazyExpr):
         if operands is not None:
             expression.operands.update(operands)
         if out is not None:
             expression._output = out
-        expression._ne_args = ne_args
+        expression._eval_kwargs = eval_kwargs
         if where is not None:
             where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
     elif isinstance(expression, blosc2.NDArray):
         operands = {"o0": expression}
-        return LazyExpr._new_expr("o0", operands, guess=False, out=out, where=where, ne_args=ne_args)
+        return LazyExpr._new_expr("o0", operands, guess=False, out=out, where=where, eval_kwargs=eval_kwargs)
 
     if operands is None:
         # Try to get operands from variables in the stack
@@ -5692,58 +6206,36 @@ def lazyexpr(
         else:
             # No operands found in the expression. Maybe a constructor?
             constructor = any(_has_constructor_call(expression, constructor) for constructor in constructors)
-            if not constructor:
+            if not constructor and parse_expression(expression).names:
+                # Approved constant-only numerical expressions are valid too;
+                # parsing, rather than Python eval, decides whether to admit them.
                 raise ValueError("No operands nor constructors found in the expression")
             # _new_expr will take care of the constructor, but needs an empty dict in operands
             operands = {}
 
-    return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where, ne_args=ne_args)
-
-
-def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
-    """Reconstruct a LazyUDF (including DSL kernels) from saved metadata."""
-    local_ns = {}
-    name = lazyarray["name"]
-    filename = f"<{name}>"  # any unique name
-    SAFE_GLOBALS = {
-        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
-        "np": np,
-        "blosc2": blosc2,
-    }
-    if blosc2._HAS_NUMBA:
-        import numba
-
-        SAFE_GLOBALS["numba"] = numba
-
-    # Register the source so inspect can find it
-    linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
-
-    exec(compile(expr, filename, "exec"), SAFE_GLOBALS, local_ns)
-    func = local_ns[name]
-    # If the saved LazyUDF was a DSL kernel, re-wrap and restore the dsl_source
-    if "dsl_source" in lazyarray:
-        if not isinstance(func, DSLKernel):
-            func = DSLKernel(func)
-        if func.dsl_source is None:
-            # Re-extraction from linecache failed; use the saved verbatim dsl_source
-            func.dsl_source = lazyarray["dsl_source"]
-    # TODO: make more robust for general kwargs (not just cparams)
-    return blosc2.lazyudf(
-        func,
-        tuple(operands_dict[f"o{n}"] for n in range(len(operands_dict))),
-        shape=array.shape,
-        dtype=array.dtype,
-        cparams=array.cparams,
+    return LazyExpr._new_expr(
+        expression, operands, guess=True, out=out, where=where, eval_kwargs=eval_kwargs
     )
 
 
+def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
+    """Recognize the retired source recipe without executing Python."""
+    raise blosc2.UnsupportedLegacyRecipeError()
+
+
 def open_lazyarray(array):
+    from blosc2.deserialization import DeserializeMode, get_deserialize
+    from blosc2.exceptions import UnsafeDeserializationError
+
     value = array.schunk.meta["LazyArray"]
+    if value == LazyArrayEnum.UDF.value:
+        raise blosc2.UnsupportedLegacyRecipeError()
+    policy = get_deserialize(array)
+    if policy is not DeserializeMode.FULL:
+        raise UnsafeDeserializationError("legacy LazyArray")
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     if value == LazyArrayEnum.Expr.value:
         expr = lazyarray["expression"]
-    elif value == LazyArrayEnum.UDF.value:
-        expr = lazyarray["UDF"]
     else:
         raise ValueError("Argument `array` is not LazyExpr or LazyUDF instance.")
 
@@ -5755,7 +6247,7 @@ def open_lazyarray(array):
         if isinstance(v, str):
             v = parent_path / v
             try:
-                op = blosc2.open(v, mode="r")
+                op = blosc2.open(v, mode="r", deserialize=policy)
             except FileNotFoundError:
                 missing_ops[key] = v
             else:
@@ -5778,8 +6270,6 @@ def open_lazyarray(array):
     # LazyExpr
     if value == LazyArrayEnum.Expr.value:
         new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
-    elif value == LazyArrayEnum.UDF.value:
-        new_expr = _reconstruct_lazyudf(expr, lazyarray, operands_dict, array)
 
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array
@@ -5789,26 +6279,290 @@ def open_lazyarray(array):
     return new_expr
 
 
-# Mimim numexpr's evaluate function
+# NumExpr-style convenience interface with backend-independent contracts.
+@dataclass(frozen=True, slots=True)
+class _EvaluateRecipe:
+    """Operand-free construction metadata and optional immutable resident schedule."""
+
+    expression: str
+    bindings: tuple
+    dtype: np.dtype
+    shape: tuple
+    chunks: tuple | None
+    blocks: tuple | None
+    resident: tuple | None = None
+
+
+_evaluate_recipe_cache = OrderedDict()
+_evaluate_recipe_lock = threading.Lock()
+_EVALUATE_RECIPE_CACHE_SIZE = 128
+
+
+@lru_cache(maxsize=128)
+def _evaluate_recipe_names(expression):
+    """Restrict caching to reviewed elementwise syntax with literal constants."""
+    if type(expression) is not str:
+        return None
+    names = arithmetic_names(expression)
+    if names is not None:
+        return names or None
+    try:
+        graph = parse_expression(expression)
+        if graph.arithmetic:
+            return tuple(sorted(graph.names)) or None
+        tree, nodes = expression_syntax(expression)
+    except (exceptions.UnsafeDeserializationError, ValueError, SyntaxError):
+        return None
+    allowed = (
+        ast.Expression,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Compare,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.LShift,
+        ast.RShift,
+        ast.UAdd,
+        ast.USub,
+        ast.Invert,
+        ast.BitAnd,
+        ast.BitOr,
+        ast.BitXor,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+    )
+    from .native_graph import NATIVE_ELEMENTWISE_CALLS, REDUCERS
+
+    calls = {
+        **NATIVE_ELEMENTWISE_CALLS,
+        **dict.fromkeys(REDUCERS, 1),
+        "complex": 2,
+        "ones_like": 1,
+        "contains": 2,
+    }
+    for node in nodes:
+        if isinstance(node, ast.Call):
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in calls
+                or node.keywords
+                or len(node.args) != calls[node.func.id]
+            ):
+                return None
+        elif not isinstance(node, allowed):
+            return None
+    return tuple(sorted(graph.names)) or None
+
+
+def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="aggressive"):
+    if type(expression) is not str or len(expression) > 65536:
+        return None
+    names = _evaluate_recipe_names(expression)
+    if names is None:
+        return None
+    # seek_operands -> this helper -> evaluate -> user; preserve evaluate's
+    # ordinary caller-local/global resolution, including explicitly supplied dicts.
+    inputs = seek_operands(names, local_dict, global_dict, _frame_depth=3)
+    if any(
+        type(value) not in (np.ndarray, blosc2.NDArray)
+        or value.dtype.kind not in "biufcS"
+        or not value.dtype.isnative
+        or value.dtype.metadata is not None
+        for value in inputs.values()
+    ) or len({id(value) for value in inputs.values()}) != len(inputs):
+        # Avoid ambiguous alias-to-name mappings and scalar capture semantics.
+        return lazyexpr(expression, operands=inputs, eval_kwargs=None)
+    validate_operands(inputs)
+    mode = evaluation_mode()
+    signature = tuple(
+        (
+            name,
+            type(value),
+            value.dtype,
+            tuple(value.shape),
+            value.chunks if type(value) is blosc2.NDArray else None,
+            value.blocks if type(value) is blosc2.NDArray else None,
+        )
+        for name, value in inputs.items()
+    )
+    key = (expression, signature, mode, optimization, blosc2.jit_config.execution_options()["math_backend"])
+    with _evaluate_recipe_lock:
+        recipe = _evaluate_recipe_cache.get(key)
+        if recipe is not None:
+            _evaluate_recipe_cache.move_to_end(key)
+    from .native_graph import prepare_resident
+
+    policy = blosc2.jit_config.execution_options()
+    native_jit, native_backend = _jit_from_env(policy["jit"], policy["jit_backend"])
+    resident = (
+        prepare_resident(
+            expression,
+            inputs,
+            jit=native_jit,
+            cached=recipe.resident if recipe is not None else None,
+            optimization=optimization,
+        )
+        if native_backend is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+        else None
+    )
+    if resident is not None and (recipe is None or resident is not recipe.resident):
+        # Division, comparisons and mixed inputs can produce a different dtype from every operand.
+        info = resident[2].info()
+        recipe = _EvaluateRecipe(
+            expression,
+            tuple((name, name) for name in inputs),
+            info["dtype"],
+            info["shape"],
+            None,
+            None,
+            resident,
+        )
+        with _evaluate_recipe_lock:
+            _evaluate_recipe_cache[key] = recipe
+            _evaluate_recipe_cache.move_to_end(key)
+            while len(_evaluate_recipe_cache) > _EVALUATE_RECIPE_CACHE_SIZE:
+                _evaluate_recipe_cache.popitem(last=False)
+    elif recipe is None:
+        expr = lazyexpr(expression, operands=inputs, eval_kwargs=None)
+        # Match constructor-renamed bindings to original names without retaining
+        # arrays in either the cache key or recipe. Aliased inputs were excluded.
+        source_names = {id(value): name for name, value in inputs.items()}
+        if any(id(value) not in source_names for value in expr.operands.values()):
+            return expr
+        recipe = _EvaluateRecipe(
+            expr.expression,
+            tuple((name, source_names[id(value)]) for name, value in expr.operands.items()),
+            np.dtype(expr.dtype),
+            tuple(expr.shape),
+            tuple(expr._chunks) if hasattr(expr, "_chunks") else None,
+            tuple(expr._blocks) if hasattr(expr, "_blocks") else None,
+        )
+        with _evaluate_recipe_lock:
+            _evaluate_recipe_cache[key] = recipe
+            _evaluate_recipe_cache.move_to_end(key)
+            while len(_evaluate_recipe_cache) > _EVALUATE_RECIPE_CACHE_SIZE:
+                _evaluate_recipe_cache.popitem(last=False)
+        return expr
+    if resident is not None:
+        return resident, inputs
+    expr = LazyExpr(None)
+    expr.expression = recipe.expression
+    expr.operands = {name: inputs[source] for name, source in recipe.bindings}
+    expr.expression_tosave = expression
+    expr.operands_tosave = dict(inputs)
+    expr._dtype, expr._shape = recipe.dtype, recipe.shape
+    if recipe.chunks is not None:
+        expr._chunks, expr._blocks = recipe.chunks, recipe.blocks
+    expr._eval_kwargs = None
+    expr._evaluation = mode
+    if mode == "safe":
+        record_expression_metadata(expr)
+    return expr
+
+
+def validate_evaluate_options(options):
+    """Validate public options before choosing a numerical backend."""
+    unknown = options.keys() - {"order", "casting", "optimization"}
+    if unknown:
+        raise ValueError(f"Unknown keyword argument {sorted(unknown)[0]!r}")
+    order = options.get("order", "K")
+    if not isinstance(order, str) or order.upper() not in {"C", "F", "A", "K"}:
+        raise ValueError("order must be one of 'C', 'F', 'A', or 'K'")
+    if options.get("optimization", "aggressive") not in ("none", "moderate", "aggressive"):
+        raise ValueError("optimization must be 'none', 'moderate', or 'aggressive'")
+    # Ask NumPy to validate the casting spelling even when no output was supplied.
+    np.can_cast(np.dtype("float64"), np.dtype("float64"), casting=options.get("casting", "same_kind"))
+
+
+def _evaluate_ordered_output(expr, order):
+    """Allocate using NumPy's broadcast iteration order without reading operands."""
+    arrays = [value for value in expr.operands.values() if type(value) is np.ndarray]
+    if order == "C" or not arrays:
+        return np.empty(expr.shape, dtype=expr.dtype, order="F" if order == "F" else "C")
+    try:
+        broadcast_shape = np.broadcast_shapes(*(value.shape for value in arrays))
+    except ValueError:
+        broadcast_shape = None  # Reduced intermediates may broadcast even when inputs do not.
+    if broadcast_shape == expr.shape:
+        with np.nditer(
+            [*arrays, None],
+            flags=["zerosize_ok", "refs_ok"],
+            op_flags=[["readonly"] for _ in arrays] + [["writeonly", "allocate"]],
+            op_dtypes=[None for _ in arrays] + [expr.dtype],
+            order=order,
+        ) as iterator:
+            return iterator.operands[-1]
+    # Reductions/shape-changing expressions do not share the input iteration domain.
+    fortran = order == "F" or (order in {"A", "K"} and all(a.flags.f_contiguous for a in arrays))
+    return np.empty(expr.shape, dtype=expr.dtype, order="F" if fortran else "C")
+
+
+def _array_owner(value):
+    while True:
+        base = value.obj if isinstance(value, memoryview) else getattr(value, "base", None)
+        if base is None:
+            return value
+        value = base
+
+
+@remember_evaluation
+@blosc2.jit_config.math_execution
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
     out: blosc2.Array = None,
+    *,
+    math_backend: str | None = None,
     **kwargs: Any,
 ) -> blosc2.Array:
     """
     Evaluate a string expression using the Blosc2 compute engine.
 
-    This is a drop-in replacement for `numexpr.evaluate()`, but using the
-    Blosc2 compute engine.  This allows for:
+    This provides a NumExpr-style expression interface using native miniexpr
+    execution and explicit NumPy fallbacks, without importing NumExpr. It allows:
 
-    1) Use more functionality (e.g. reductions) than numexpr.
+    1) Use additional NumPy/Blosc2 expression functionality.
     2) Follow casting rules of NumPy more closely.
     3) Use both NumPy arrays and Blosc2 NDArrays in the same expression.
 
     As NDArrays can be on-disk, the expression can be evaluated without loading
     the whole array into memory (i.e. using an out-of-core approach).
+
+    Repeated array-only reviewed arithmetic, math and reduction expressions
+    without extra options reuse a bounded, operand-free preparation recipe.
+    Current inputs and any supplied output are rebound on every call; otherwise
+    a fresh NumPy output is allocated. Neither operand/output arrays nor numerical
+    results are retained in the cache.
+
+    Aligned C-contiguous native numeric maps with matching operand shapes bind
+    directly to immutable native schedules, avoiding general lazy/storage dispatch.
+    Large partitionable maps retain parallel execution with the current thread count.
+
+    Eligible numeric arithmetic and elementwise math calls use the native
+    Menudet kernels, including explicit NumPy or Blosc2 destinations. Compressed
+    destinations retain bounded input tiles; matching floating storage grids use
+    the compression prefilter. Unsupported signatures, aliasing and explicit
+    backend/accuracy policies retain the existing dispatch rules.
+
+    Eligible expressions default to native interpretation through the shared
+    native structural policy (single-return expression versus program), also used
+    by Menudet kernels and graph-generated maps. Explicit JIT settings from
+    :func:`blosc2.set_jit_options`, :func:`blosc2.jit_options` or ``ME_DSL_JIT``
+    retain their existing precedence. For example, use
+    ``with blosc2.jit_options(jit=True):`` to opt into best-effort JIT execution.
 
     Parameters
     ----------
@@ -5823,8 +6577,34 @@ def evaluate(
     out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
+    math_backend: str, optional
+        Math library: ``"system"``, ``"sleef"`` or ``"accelerate"``. None inherits
+        the current Python/native defaults. Explicit choices override the native
+        environment default and require a build supporting the requested library.
+        Accelerate is macOS-only and uses tiled vector interpretation, independently
+        of JIT selection. Prepared plans are cached separately for each policy.
     kwargs: Any, optional
-        Additional arguments to be passed to `numexpr.evaluate()` function.
+        Accepted options are ``order``, ``casting`` and ``optimization``.
+        ``optimization`` defaults to ``"aggressive"``, matching NumExpr's default.
+        Constant real floating-point squares use multiplication. Aggressive optimization allows
+        native multiplication chains for constant integer powers, including negative
+        exponents. These can change rounding and floating-point status, but do not
+        enable global fast-math or alter integer/complex base semantics. Explicit
+        ``"moderate"`` or ``"none"`` retains general power for other exponents;
+        constant squares still use multiplication.
+        ``casting`` defaults to ``"same_kind"`` and controls conversion into an
+        explicit destination, not arithmetic precision.
+        ``order`` controls newly allocated NumPy output: ``"C"`` or ``"F"``
+        requests contiguous row-major or column-major storage, ``"A"`` follows
+        Fortran-contiguous operands when possible, and ``"K"`` (default)
+        follows operand iteration order. An explicit output retains its layout
+        and identity, including when it is empty. Blosc2 consumes ``order`` as
+        an allocation policy; it is not forwarded to NumExpr. Resident strided
+        outputs use native destination descriptors when supported. Unsupported
+        operations use an explicit NumPy fallback.
+        The legacy ``truediv``, ``sanitize`` and ``disable_cache`` options are no
+        longer accepted. Division follows NumPy semantics, validation follows
+        the expression evaluation policy, and preparation caches are automatic.
 
     Returns
     -------
@@ -5848,12 +6628,77 @@ def evaluate(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
-    lexpr = lazyexpr(
-        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=kwargs, _frame_depth=3
-    )
+    if kwargs:
+        validate_evaluate_options(kwargs)
+    optimization = kwargs.pop("optimization", "aggressive")
+    order = kwargs.pop("order", "K")
+    order = order.upper()
+    lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict, optimization) if not kwargs else None
+    if isinstance(lexpr, tuple):
+        resident, inputs = lexpr
+        if out is None and order in {"C", "A", "K"}:
+            from .native_graph import execute_resident
+
+            # Admission and policy were resolved for these current arrays; execution never falls back.
+            return execute_resident(resident, inputs)[0]
+        # Layout/casting/storage requests retain the public output preflight and the same native plan.
+        lexpr = LazyExpr(None)
+        lexpr.expression = ex
+        lexpr.operands = inputs
+        lexpr.expression_tosave, lexpr.operands_tosave = ex, dict(inputs)
+        info = resident[2].info()
+        lexpr._dtype, lexpr._shape = info["dtype"], info["shape"]
+        lexpr._eval_kwargs, lexpr._evaluation = None, evaluation_mode()
+        lexpr._resident_native = resident
+        if lexpr._evaluation == "safe":
+            record_expression_metadata(lexpr)
+    if lexpr is None:
+        lexpr = lazyexpr(
+            ex,
+            local_dict=local_dict,
+            global_dict=global_dict,
+            out=out,
+            eval_kwargs=kwargs or None,
+            _frame_depth=3,
+        )
+    lexpr._optimization = optimization
+    if out is None and (
+        order == "F"
+        or (
+            order in {"A", "K"}
+            and any(
+                type(value) is np.ndarray and not value.flags.c_contiguous
+                for value in lexpr.operands.values()
+            )
+        )
+    ):
+        out = _evaluate_ordered_output(lexpr, order)
     if out is not None:
+        if type(out) is np.ndarray:
+            if not out.flags.writeable:
+                raise ValueError("output array is read-only")
+            casting = kwargs.get("casting", "same_kind")
+            if not np.can_cast(lexpr.dtype, out.dtype, casting=casting):
+                raise TypeError(
+                    f"Cannot cast result from {lexpr.dtype} to {out.dtype} with casting={casting!r}"
+                )
+            if np.broadcast_shapes(lexpr.shape, out.shape) != out.shape:
+                raise ValueError("output shape cannot hold the expression result")
+            # Snapshot overlapping inputs before any writes, including shifted
+            # views. NumExpr's copy opcode itself is not overlap-safe.
+            lexpr.operands = {
+                name: value.copy()
+                if type(value) is np.ndarray
+                and (_array_owner(value) is _array_owner(out) or np.shares_memory(value, out))
+                else value
+                for name, value in lexpr.operands.items()
+            }
+        lexpr._output = out
         # The user specified an output array
-        return lexpr.compute()
+        result = lexpr.compute()
+        if type(out) is np.ndarray and out.size == 0 and np.shape(result) == out.shape:
+            return out
+        return result
     # The user did not specify an output array, so return a NumPy array
     return lexpr[()]
 
@@ -5880,8 +6725,8 @@ if __name__ == "__main__":
     nres = na1 + na2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = ne_evaluate("na1 + na2")
-    print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
+    nres = evaluate_chunk("na1 + na2")
+    print(f"Elapsed time (native/NumPy, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
     res = expr.compute(item=sl)
@@ -5903,8 +6748,8 @@ if __name__ == "__main__":
     # nres = np.sin(na1[:]) + 2 * na1[:] + 1 + 2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
-    print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
+    nres = evaluate_chunk("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    print(f"Elapsed time (native/NumPy, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
     res = expr.compute(sl)

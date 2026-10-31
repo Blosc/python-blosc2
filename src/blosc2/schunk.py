@@ -51,7 +51,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
       :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore`
     - structured references and lazy objects such as :class:`blosc2.Ref`,
       :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
-      :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`
+      lazy Menudet results authored with :func:`blosc2.menudet`
 
     Lazy expressions and supported lazy UDFs still require durable operand
     references only; purely in-memory operands are intentionally rejected.
@@ -1976,7 +1976,11 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
             return proxy
 
     if "b2o" in meta:
-        if deserialize is DeserializeMode.SAFE:
+        if isinstance(meta["b2o"], dict) and meta["b2o"].get("kind") == "lazyudf":
+            raise blosc2.UnsupportedLegacyRecipeError()
+        if deserialize is DeserializeMode.SAFE and (
+            not isinstance(meta["b2o"], dict) or meta["b2o"].get("kind") not in {"menudet", "lazyexpr"}
+        ):
             marker = meta["b2o"]
             kind = marker.get("kind", "b2o") if isinstance(marker, dict) else "b2o"
             raise UnsafeDeserializationError(str(kind))
@@ -1998,6 +2002,8 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
         return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
+        if res.schunk.meta["LazyArray"] == 1:
+            raise blosc2.UnsupportedLegacyRecipeError()
         if deserialize is DeserializeMode.SAFE:
             raise UnsafeDeserializationError("LazyArray")
         return blosc2.open_lazyarray(res)

@@ -1,5 +1,106 @@
 # Release notes
 
+## Changes from 4.14.2 to 4.15.0 (in development)
+
+### Introducing Menudet 0.1 beta
+
+**Menudet — a little language for portable computation on arrays and tables.**
+
+- Establish Menudet 0.1 beta as the supported computation language going forward.
+  Use `@blosc2.menudet` (`MenudetFunction`) for decorated authors, `MenudetKernel`
+  for executable specializations, `MenudetError` for errors, and `validate_menudet`
+  for source validation. During beta, API and artifact changes remain possible and
+  will be documented with migration guidance.
+- Keep kernel authoring (`@menudet`) distinct from NumPy-style eager/tracing
+  convenience (`@jit`). Existing `@jit` return types, `strict`, `out=`, `disable=`
+  and pandas contracts are unchanged. Scoped compiler backend defaults now reach
+  Menudet artifact preparation without being embedded in serialized author source.
+- Materialize eligible input-free numeric 1-D Menudet generators through native
+  block workers when output blocks match their logical partitions. Contiguous
+  partial reads also avoid building per-lane index grids; other layouts retain
+  partition-preserving execution.
+- Retire the unqualified alpha `@blosc2.dsl_kernel`: importing it still works,
+  but using it raises actionable migration guidance to `@blosc2.menudet`. Direct
+  `DSLKernel(...)` and `DSLKernel.from_source(...)` also raise retirement guidance.
+  Shared source normalization is internal, not a legacy authoring API.
+  See the [migration guide](https://blosc.org/python-blosc2/guides/migrating_to_menudet.html).
+  Generic Python LazyUDFs and supported LazyExpr computations are unaffected.
+- Reject historical source-backed DSL/Python UDF recipes and legacy table-kernel
+  metadata with `UnsupportedLegacyRecipeError`, even with `deserialize="full"`.
+  Before upgrading, use a previous release to materialize ordinary arrays,
+  reauthor with Menudet, and compare results in an isolated candidate environment.
+  No source reconstruction, silent column dropping or automatic migration occurs.
+- `lazyudf()` rejects MenudetFunction/MenudetKernel with guidance to call the
+  function directly or use `kernel.lazy(...)`; it is not a second Menudet API.
+- Strengthen NumExpr-removal qualification: runtime/install behavior is independent
+  of NumExpr, including native interpretation without JIT. Remove the
+  `blosc2.numexpr` compatibility placeholder; accessing it now raises
+  `AttributeError`. Rename internal chunk evaluation and options to
+  `evaluate_chunk` and `eval_kwargs`; retain temporary `ne_evaluate` and public
+  `ne_args=` compatibility aliases.
+  - Native compression/reduction prefilter failures now propagate instead of
+    replaying a partially executed operation through NumPy.
+  - Serial bounded stored-output maps accept interpreter artifacts as well as JIT.
+  - CI requires NumExpr-free environments; comparison tooling treats it as optional.
+- Use native structural classification for automatic execution policy: interpret
+  single-return expressions and prefer JIT for multi-statement Menudet programs.
+  Explicit JIT settings and source compiler pragmas retain priority. Expose
+  `MenudetKernel.execution_kind`; `evaluate()` no longer needs a special default
+  override. This requires the paired native classification API; older runtimes
+  retain their existing default behavior. Remove the legacy
+  `truediv`, `sanitize` and `disable_cache` keywords; supplying them now raises an
+  error. Keep `order`, `casting` and the `optimization` compatibility hint.
+- Enable complex64/complex128 miniexpr expressions and Menudet interpretation
+  on Windows (clang-cl), and remove the remaining WebAssembly complex expression
+  and reduction exclusions. Complex Menudet kernels remain interpreter-only.
+  Scalar string-expression reductions on WASM retain the existing chunked
+  fallback for all dtypes; portable Menudet block reductions remain supported.
+- C-order `arange` with real bounds and complex output, and complex `linspace`,
+  now use Menudet interpretation, including `lazy=True`. Complex `linspace`
+  preserves the requested endpoint across slicing and rechunking.
+- Menudet source pragmas now select math libraries and floating-point modes:
+  `me:math=auto|system|sleef|accelerate`, `me:ulp=u10|u35`, and
+  `me:fp=strict|contract|fast` (with `me:compiler=cc`). Exported artifacts
+  preserve explicit policy through JSON round trips; omitted fields inherit
+  `ME_SIMD_MATH_BACKEND`/`ME_DSL_FP_MODE` at preparation. Unavailable explicit
+  backends fail before execution, and `auto` now follows system math instead of
+  preferring SLEEF.
+- Export normalized Menudet authoring as validated, standalone JSON artifacts
+  with typed signatures and exact captured constants. Native miniexpr executes
+  imports without reconstructing Python functions or falling back to Python.
+- Support checked integer arithmetic, operand-typed floating computation, control
+  flow, fixed-width strings, logical array coordinates and ordered block reductions.
+- Keep logical reduction groups stable through persistence, partial reads and
+  output rechunking. True block-scalar results expose the logical block-grid shape.
+- Validate kernel inputs to `CTable.add_computed_column()` and
+  `add_generated_column()` as Menudet artifacts with implicit independent-row
+  semantics, including fixed-shape row reductions. Named bindings are supported;
+  internal source normalization uses the same semantics.
+  New cross-row computations must use array partitions or table aggregation,
+  rather than implicit execution blocks or append batches.
+- Remove the draft `add_portable_*` column methods and `row_domain` argument.
+  Fixed-shape row reductions use `cardinality="block_scalar"`.
+- New Menudet lazy results persist validated artifacts; unsupported saves fail
+  before writing the destination. MessagePack decoding is safe by default,
+  including nested containers. Historical source recipes remain unsupported under
+  both policies, not re-enabled by trusted deserialization permission.
+- Ordinary LazyExpr persistence retains supported numerical calls, reductions,
+  methods and indexing under default loading, with existing expression validation.
+  Full-only nested payloads remain gated. String/lazy expressions and non-kernel
+  row transformers retain their existing table registration behavior.
+
+Menudet 0.1 is **beta**: the core API and semantics are expected to remain
+relatively stable, but may change before a 1.0 compatibility commitment. The typed
+interpreter defines behavior and supported kernels can use JIT; required JIT
+rejects unsupported acceleration. Complex computation is supported through the
+interpreter on all supported platforms. Callbacks and arbitrary memory access
+remain outside the language contract.
+
+See the [Menudet reference](https://www.blosc.org/python-blosc2/reference/menudet.html)
+for array/table examples, persistence policy and current limitations. Release
+certification is tracked separately; this development entry is not an announcement
+that 4.15.0 has been published.
+
 ## Changes from 4.14.1 to 4.14.2
 
 XXX version-specific blurb XXX

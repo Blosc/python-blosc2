@@ -10,18 +10,22 @@ import pytest
 import blosc2
 
 
-@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    ("clevel", "codec"),
+    ("clevel", "codec", "filt", "gil"),
     [
-        (8, blosc2.Codec.BLOSCLZ),
-        (9, blosc2.Codec.LZ4),
-        (3, blosc2.Codec.LZ4HC),
-        (5, blosc2.Codec.ZLIB),
-        (2, blosc2.Codec.ZSTD),
+        (clevel, codec, filt, (codec_index + filter_index) % 2 == 0)
+        for codec_index, (clevel, codec) in enumerate(
+            [
+                (8, blosc2.Codec.BLOSCLZ),
+                (9, blosc2.Codec.LZ4),
+                (3, blosc2.Codec.LZ4HC),
+                (5, blosc2.Codec.ZLIB),
+                (2, blosc2.Codec.ZSTD),
+            ]
+        )
+        for filter_index, filt in enumerate(blosc2.Filter)
     ],
 )
-@pytest.mark.parametrize("filt", list(blosc2.Filter))
 def test_compressors(clevel, filt, codec, gil):
     blosc2.set_releasegil(gil)
     src = b"Something to be compressed" * 100

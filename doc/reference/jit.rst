@@ -7,6 +7,24 @@ Blosc2 can compile eligible computations at runtime (JIT compilation). Native
 builds use the bundled Tiny C Compiler (TCC) by default, so installing a system
 compiler is **not** necessary to use Blosc2 or its default JIT.
 
+Authoring and execution are separate
+------------------------------------
+
+``@blosc2.menudet`` authors lazy, typed kernels with specialization and validated
+artifact persistence; the Python body is never executed. ``@blosc2.jit`` remains
+the NumPy-style eager/tracing convenience decorator, including ``out=``,
+``disable=`` and pandas integration. ``strict=True`` retains its existing
+control-flow parsing contract; it is not an alias for Menudet.
+
+Both can use native interpretation or JIT. For Menudet, choose ``jit=False`` to
+interpret, ``jit=True`` to prefer compilation, or ``require_jit=True`` to require
+JIT. Select backend/compiler options with ``blosc2.jit_options(...)`` when
+specializing/calling the function. A prepared kernel's policy is fixed; call or
+specialize again to select a different one. Runtime backend defaults reach
+artifact preparation but are not written into serialized author source. Existing
+source-pragma/environment precedence remains authoritative. See
+:doc:`../guides/menudet` for types, captures, domains and persistence.
+
 Global defaults and scoped options
 ----------------------------------
 
@@ -40,6 +58,11 @@ Both functions accept the same keyword-only parameters:
     * - ``jit_backend``
       - ``None``
       - ``"tcc"``, ``"cc"``, or ``"js"``. JavaScript is WebAssembly/Pyodide-only.
+    * - ``math_backend``
+      - ``None``
+      - Math library: ``"system"``, ``"sleef"``, or ``"accelerate"``. An explicit
+        choice requires a build supporting it; ``accelerate`` is macOS-only.
+        Independent of ``jit``; prepared kernels are cached per policy.
     * - ``fp_accuracy``
       - ``FPAccuracy.DEFAULT``
       - Existing floating-point function accuracy policy, not a compiler flag.
@@ -98,6 +121,7 @@ inherit their creation context but do not affect unrelated tasks. Thread context
 propagation follows Python's ``contextvars`` rules (including explicit copied
 contexts, ``asyncio.to_thread()``, and Python's thread-context inheritance setting).
 Process-wide setters still affect all threads without a contextual override.
+Menudet functions resolve their policy at preparation time as described above.
 
 Compiler command/flags and explicit cache directories participate in native cache
 identity, including process-local positive/negative caches. Changing them must not
@@ -109,8 +133,9 @@ Existing nonempty environment overrides remain authoritative: ``CC`` overrides
 ``compiler``, ``CFLAGS`` overrides ``cflags``, ``ME_DSL_TRACE`` overrides ``trace``,
 ``ME_DSL_JIT_DEBUG_CC`` overrides ``compiler_output``, and
 ``ME_DSL_JIT_CACHE_DIR`` overrides ``cache_dir``. ``TMPDIR`` is used only when no
-explicit cache directory is selected. The JIT enable/backend environment rules
-below remain unchanged. Configuration does not require changing environment
+explicit cache directory is selected. An explicit ``math_backend`` overrides
+``ME_SIMD_MATH_BACKEND`` for that evaluation. The JIT enable/backend environment
+rules below remain unchanged. Configuration does not require changing environment
 variables; native compilation receives a call-local settings snapshot.
 
 .. autofunction:: blosc2.set_jit_options
@@ -144,11 +169,34 @@ accept them through ``**kwargs``. Eligible lazy-expression reductions, such as
 ``expr.sum(jit=True, jit_backend="cc")``, forward them to evaluation. These
 settings tune execution rather than array storage; they are not options to
 :func:`blosc2.empty`.
+For portable Menudet lazy results, select execution policy when preparing the
+kernel instead; their ``compute()`` options are storage/materialization options.
+
+Automatic policy uses miniexpr's validated structural classification: a single
+``return <expression>`` defaults to interpretation, while programs with multiple
+statements, assignments, branches or loops prefer JIT. Physical source line count
+does not determine the classification. Explicit ``jit`` settings and source
+compiler pragmas retain priority. The policy is selected before compilation.
+This is a conservative structural heuristic, not a profitability guarantee;
+explicit overrides remain useful for unusual or repeatedly executed workloads.
+
+This applies consistently to eligible string expressions, graph-generated maps
+and Menudet artifacts. ``evaluate()`` accepts ``math_backend=`` per call but not
+the JIT keywords; use ``blosc2.jit_options(jit=True)`` or
+``blosc2.set_jit_options(jit=True)`` to opt into JIT. Native metadata is exposed as
+``MenudetKernel.execution_kind``. Older native runtimes report ``"unknown"`` and
+retain their existing native default behavior.
+
+Scalar miniexpr reductions currently use the native interpreter, even when JIT
+is requested. Elementwise DSL returns (including automatically lifted expressions)
+write a block of values and cannot safely target a single reduction accumulator.
+Other execution options still apply, and non-scalar reduction paths retain their
+usual evaluation policies.
 
 ``jit=None`` (default)
-    Use the entry point's default policy. DSL kernels, including the real-valued
-    ramps used by ``arange`` and ``linspace``, try JIT. Plain expressions do not
-    automatically become DSL kernels unless JIT is requested. Ordinary Python
+    Select automatic structural policy: interpret single-return expressions and
+    prefer JIT for multi-statement programs. An explicit source compiler pragma
+    requests compilation even for a single-return expression. Ordinary Python
     callback UDFs are not compiled by TCC/CC through this option.
 
 ``jit=True``
@@ -159,6 +207,11 @@ settings tune execution rather than array storage; they are not options to
     Disable JIT for the computation. Applicable environment overrides are
     described below. Depending on the expression, the non-JIT route can be the
     miniexpr interpreter or another existing compute engine.
+
+    Native interpretation can use bounded vector arithmetic primitives already
+    compiled into miniexpr. This does not generate or compile code at runtime.
+    Unsupported or checked recipes retain scalar interpretation, preserving
+    their validation, masking and error behavior.
 
 ``jit_backend=None`` (default)
     Use the default backend: TCC on supported native targets. Under
@@ -184,9 +237,9 @@ settings tune execution rather than array storage; they are not options to
 
 ``jit_backend="js"``
     Select the JavaScript bridge, available only under WebAssembly/Pyodide.
-    Explicit selection on native builds raises an error. Eligibility and explicit
-    unsupported-kernel errors are described in the
-    `DSL syntax reference <dsl_syntax.html#execution-backends>`_.
+    Explicit selection on native builds raises an error. This compatibility
+    backend is not an option on ``@blosc2.menudet``; use its native interpreter/JIT
+    policy instead.
 
 ``fp_accuracy`` controls numerical accuracy independently of the backend.
 TCC currently supports the strict miniexpr compiler floating-point mode;
@@ -212,12 +265,12 @@ Examples
     result = expr.compute(jit=True, jit_backend="cc")  # NDArray
 
 
-    @blosc2.dsl_kernel
+    @blosc2.menudet(jit=True)
     def squared(x):
         return x * x
 
 
-    udf = blosc2.lazyudf(squared, (a,), dtype=a.dtype, jit_backend="tcc")
+    udf = squared(a)
     values = udf[:]  # NumPy values
 
 Environment settings and precedence
@@ -268,9 +321,17 @@ controls have different scopes; neither is an indication that JIT actually ran.
       - Disable applicable process-local positive-cache reuse. This does not
         disable persistent CC disk-cache reuse.
     * - ``ME_DSL_JIT_COMPILER``
-      - Advanced miniexpr-wide compiler override, ``tcc`` or ``cc``. It overrides
-        native compiler selection in DSL pragmas, including the selection emitted
-        by Python's ``jit_backend`` option. Prefer per-call options ordinarily.
+      - Advanced miniexpr-wide compiler default, ``tcc`` or ``cc``. It overrides
+        Python's ``jit_backend`` selection, but an explicit author-written
+        ``# me:compiler=tcc|cc`` pragma remains authoritative.
+    * - ``ME_SIMD_MATH_BACKEND``
+      - Default math library, ``auto|system|sleef|accelerate|scalar``. ``auto``
+        and ``system`` select system math; ``scalar`` forces system scalar math.
+        Explicit ``sleef``/``accelerate`` requests fail when unavailable.
+    * - ``ME_DSL_FP_MODE``
+      - Default floating-point mode, ``strict|contract|fast`` (``relaxed`` is an
+        alias of ``fast``). An explicit ``# me:fp=...`` pragma remains
+        authoritative. ``contract``/``fast`` require the ``cc`` backend.
 
 Tracing and restricted environments
 -----------------------------------

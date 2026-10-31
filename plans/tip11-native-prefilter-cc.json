@@ -1,0 +1,207 @@
+{
+  "metadata": {
+    "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+    "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so",
+    "python": "3.14.4 | packaged by conda-forge | (main, Apr  8 2026, 02:33:53) [Clang 20.1.8 ]",
+    "numpy": "2.5.4",
+    "blosc2": "4.15.0.dev0",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M4 Pro",
+    "arguments": {
+      "items": 20000000,
+      "repeat": 7,
+      "threads": 12,
+      "compiler": "cc",
+      "chunks": 4194304,
+      "blocks": 262144,
+      "quality_items": 20000000,
+      "output": "plans/tip11-native-prefilter-cc.json",
+      "plot": true,
+      "worker": null,
+      "memory_only": false
+    },
+    "environment": {
+      "ME_DSL_JIT_LIBTCC_PATH": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/lib/libtcc.dylib",
+      "ME_DSL_JIT_COMPILER": "cc"
+    },
+    "extension_sha256": "aa474d0743d9c07cc50954dd59486e02d807c898d4b5c1b81fe68087acc348e2",
+    "execution_options": {
+      "jit": null,
+      "jit_backend": null,
+      "math_backend": null,
+      "fp_accuracy": "FPAccuracy.MEDIUM",
+      "trace": false,
+      "compiler": null,
+      "cflags": null,
+      "cache_dir": null,
+      "compiler_output": false
+    },
+    "protocol": "Separate subprocess per route and memory run; preparation, first compute, then warm samples. Timings include allocation and clevel=0 storage, exclude imports. Memory is OS process peak RSS during first compute; also report growth over preparation.",
+    "revisions": {
+      "python_blosc2": {
+        "head": "6a6027457aa6693fcd7d9d2a6c4ff50ef8297453",
+        "tracked_changes": " bench/optim_tips/README.md                  |  12 +\n bench/optim_tips/tip_11_dsl_random.py       | 366 ++++++++++++++++++++++------\n doc/guides/optim_tips/tip_11_dsl_random.png | Bin 27287 -> 33185 bytes\n doc/guides/optimization_tips.md             |  10 +-\n src/blosc2/menudet_lazy.py                  |  48 ++++\n src/blosc2/storage_readers.py               |  62 +++++\n tests/test_menudet_lazy.py                  |  28 ++-\n 7 files changed, 446 insertions(+), 80 deletions(-)\n"
+      },
+      "miniexpr": {
+        "head": "7ba6d40fdb5084526fc1750d7a30c4125caa332f",
+        "tracked_changes": " src/dsl_menudet_jit.c           | 10 ++++++++++\n tests/test_menudet_jit_parity.c |  2 +-\n 2 files changed, 11 insertions(+), 1 deletion(-)\n"
+      }
+    }
+  },
+  "results": [
+    {
+      "variant": "numpy",
+      "preparation_s": 1.2507662177085876e-06,
+      "first_compute_s": 0.048359415493905544,
+      "samples_s": [
+        0.03528566658496857,
+        0.035181041806936264,
+        0.035965667106211185,
+        0.03674733452498913,
+        0.03545812517404556,
+        0.03586966637521982,
+        0.03679291717708111
+      ],
+      "median_s": 0.03586966637521982,
+      "peak_rss_bytes": 254230528,
+      "peak_growth_bytes": 183861248,
+      "has_jit": null,
+      "legacy_jit_probe": null,
+      "execution_report": null,
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+      "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "legacy-engine",
+      "preparation_s": 2.6166439056396484e-05,
+      "first_compute_s": 0.008494166657328606,
+      "samples_s": [
+        0.0045044999569654465,
+        0.004480208270251751,
+        0.00454708281904459,
+        0.004573957994580269,
+        0.004389625042676926,
+        0.004387249238789082,
+        0.0045190416276454926
+      ],
+      "median_s": 0.0045044999569654465,
+      "peak_rss_bytes": 169377792,
+      "peak_growth_bytes": 98107392,
+      "has_jit": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": true,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "execution_report": null,
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+      "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "legacy-adapter",
+      "preparation_s": 2.7124769985675812e-05,
+      "first_compute_s": 0.04267083387821913,
+      "samples_s": [
+        0.04057624936103821,
+        0.04082679282873869,
+        0.04030329268425703,
+        0.040474540553987026,
+        0.03987754136323929,
+        0.039844708517193794,
+        0.03991999942809343
+      ],
+      "median_s": 0.04030329268425703,
+      "peak_rss_bytes": 189923328,
+      "peak_growth_bytes": 119865344,
+      "has_jit": null,
+      "legacy_jit_probe": null,
+      "execution_report": {
+        "route": "menudet-lazyudf",
+        "jit": true
+      },
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+      "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "menudet-serial",
+      "preparation_s": 0.0011897077783942223,
+      "first_compute_s": 0.045574416406452656,
+      "samples_s": [
+        0.04446058347821236,
+        0.043470583856105804,
+        0.04308245796710253,
+        0.043144707567989826,
+        0.042858666740357876,
+        0.04411474987864494,
+        0.04340254236012697
+      ],
+      "median_s": 0.04340254236012697,
+      "peak_rss_bytes": 196034560,
+      "peak_growth_bytes": 124583936,
+      "has_jit": true,
+      "legacy_jit_probe": null,
+      "execution_report": null,
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+      "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so"
+    },
+    {
+      "variant": "menudet",
+      "preparation_s": 0.001194584183394909,
+      "first_compute_s": 0.007974292151629925,
+      "samples_s": [
+        0.006087374873459339,
+        0.006081167608499527,
+        0.006053167395293713,
+        0.006064083427190781,
+        0.005999707616865635,
+        0.006093374453485012,
+        0.006057041697204113
+      ],
+      "median_s": 0.006064083427190781,
+      "peak_rss_bytes": 155566080,
+      "peak_growth_bytes": 84672512,
+      "has_jit": true,
+      "legacy_jit_probe": null,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 77,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 0,
+        "input_buffer_allocations": 0,
+        "input_chunk_fetches": 0,
+        "output_zero_fill_bytes": 3886080,
+        "output_chunk_buffer_bytes": 16777216,
+        "input_buffer_bytes": 0,
+        "logical_partitions": [
+          262144
+        ],
+        "output_copy_bytes": 0
+      },
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+      "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so"
+    }
+  ],
+  "quality": {
+    "hash": {
+      "mean": 18477.89243955,
+      "std_scaled": 0.5773559089633035,
+      "chi2": 192.53921279999997,
+      "lag1": 0.00020423727666235583,
+      "duplicates": 0,
+      "duplicate_sample": 1000000
+    },
+    "pcg64": {
+      "mean": -240454.0909978,
+      "std_scaled": 0.5773385230164279,
+      "chi2": 230.4646912,
+      "lag1": -7.205876169187966e-05,
+      "duplicates": 124,
+      "duplicate_sample": 1000000
+    }
+  }
+}

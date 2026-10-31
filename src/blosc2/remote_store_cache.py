@@ -1,10 +1,12 @@
 """Exclusive ownership and atomic discovery manifests for disposable store caches."""
 
+import errno
 import json
 import os
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,8 +35,21 @@ def lock_cache_file(file, *, blocking=False):
         # Windows permits locking a byte beyond EOF. Do not initialize the byte:
         # another owner may already have locked it, making even a write fail
         # before LK_LOCK gets a chance to wait for ownership.
-        file.seek(0)
-        msvcrt.locking(file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+        while True:
+            file.seek(0)
+            try:
+                msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as exc:
+                if not blocking or (
+                    exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK)
+                    and getattr(exc, "winerror", None) != 33
+                ):
+                    raise
+                # LK_LOCK stops after ten one-second retries. Shared cache
+                # operations need the same unbounded wait as POSIX LOCK_EX;
+                # slow discovery/publication must not look like lifetime ownership.
+                time.sleep(0.05)
     else:
         import fcntl
 

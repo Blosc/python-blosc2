@@ -9,24 +9,25 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def _wasm_kernel(x, y):
     return (x + y) * 1.5 - 0.25
 
 
-@blosc2.dsl_kernel  # integer *output* -> the float64 JS bridge is unsafe -> must fall back to miniexpr
+@DSLKernel  # integer *output* -> the float64 JS bridge is unsafe -> must fall back to miniexpr
 def _wasm_int_kernel(x, y):
     return x * 2 + y * 3
 
 
-@blosc2.dsl_kernel  # integer *inputs*, float output -> JS is safe (bridge float64-converts operands)
+@DSLKernel  # integer *inputs*, float output -> JS is safe (bridge float64-converts operands)
 def _wasm_int_input_kernel(x, y):
     return (x + y) * 0.5
 
 
-@blosc2.dsl_kernel  # index/shape symbols -> JS reconstructs global coords per block
+@DSLKernel  # index/shape symbols -> JS reconstructs global coords per block
 def _wasm_ramp_kernel(x):
     return float(_i0) * _n1 + _i1  # noqa: F821
 
