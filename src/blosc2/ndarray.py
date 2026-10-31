@@ -34,6 +34,7 @@ import numpy as np
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
 from blosc2.core import fsspec_open, is_fsspec_url, normalize_urlpath
+from blosc2.dsl_kernel import SourceKernel
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.schunk import SChunk
 
@@ -6196,12 +6197,12 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
         start = float(start)
         step = float(step)
 
-    @blosc2.dsl_kernel
+    @SourceKernel
     def ramp(start, step):
         return start + _flat_idx * step  # noqa: F821
 
     if dtype.kind == "f":
-        ramp = blosc2.DSLKernel.from_source(
+        ramp = SourceKernel.from_source(
             "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
         )
 
@@ -6209,7 +6210,7 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
     if endpoint_stop is not None:
         # Avoid accumulated rounding at the endpoint, also for partial reads
         # and rechunked materialization of a complex lazy linspace.
-        ramp = blosc2.DSLKernel.from_source(
+        ramp = SourceKernel.from_source(
             "def ramp(start, step, stop, last):\n"
             "    if _flat_idx == last:\n"
             "        return stop\n"
@@ -6359,7 +6360,7 @@ def arange(  # noqa: C901
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
 
-    @blosc2.dsl_kernel
+    @SourceKernel
     def ramp_arange(start, step):
         return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
@@ -6520,7 +6521,7 @@ def linspace(  # noqa: C901
         else:
             output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
-    @blosc2.dsl_kernel
+    @SourceKernel
     def ramp_linspace(start, step):
         return float(start) + _flat_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
@@ -6679,7 +6680,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
         lazyarr = blosc2.lazyudf(fill_eye, (k,), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
 
-    @blosc2.dsl_kernel
+    @SourceKernel
     def diagonal(k):
         return _i1 - _i0 == k  # noqa: F821
 

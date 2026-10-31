@@ -8,13 +8,14 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 from conftest import orthogonal_cases
 
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
 def test_reduction_metadata_avoids_graph_json():
-    plan = blosc2.NativeGraph.from_expression("sum(x, axis=-1, keepdims=True)", {"x": "float64"})
+    plan = NativeGraph.from_expression("sum(x, axis=-1, keepdims=True)", {"x": "float64"})
     assert plan.reduction_info() == {
         "op": "sum",
         "axes": (-1,),
@@ -22,7 +23,7 @@ def test_reduction_metadata_avoids_graph_json():
         "initial": False,
         "where": False,
     }
-    mapped = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"})
+    mapped = NativeGraph.from_expression("x + 1", {"x": "float64"})
     assert mapped.reduction_info() is None
 
 
@@ -32,9 +33,9 @@ def test_reduction_metadata_avoids_graph_json():
 @pytest.mark.parametrize("dtype", ["int8", "float32", "float64"])
 def test_automatic_native_stages(expression, dtype):
     x = np.arange(1, 13, dtype=dtype).reshape(3, 4)
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": dtype})
+    plan = NativeGraph.from_expression(expression, {"x": dtype})
     assert plan.info()["stages"] >= 2
-    imported = blosc2.NativeGraph.from_json(plan.to_json())
+    imported = NativeGraph.from_json(plan.to_json())
     assert json.loads(imported.to_json())["format"] == "menudet-staged-graph-1"
     expected = (
         x - np.sum(x, axis=0, dtype="int64" if dtype == "int8" else dtype)
@@ -78,7 +79,7 @@ def test_shared_stage_value_and_budget():
         "root": 2,
         "output": {"dtype": "auto", "casting": "unsafe"},
     }
-    plan = blosc2.NativeGraph.from_json(graph)
+    plan = NativeGraph.from_json(graph)
     with pytest.raises(blosc2.MenudetError, match="budget"):
         plan.specialize({"x": ("float32", (3,))}, intermediate_budget=11)
     schedule = plan.specialize({"x": ("float32", (3,))}, intermediate_budget=12)
@@ -114,12 +115,12 @@ def test_conditional_stage_domains_reject(expression):
     if "mask" in expression:
         inputs["mask"] = "bool"
     with pytest.raises(blosc2.MenudetError, match=r"conditional|masked"):
-        blosc2.NativeGraph.from_expression(expression, inputs)
+        NativeGraph.from_expression(expression, inputs)
 
 
 def trusted_document():
-    artifact = json.loads(blosc2.NativeGraph.from_expression("x * 2", {"x": "float32"}).map_json())
-    graph = json.loads(blosc2.NativeGraph.from_expression("sum(y)", {"y": "float32"}).to_json())
+    artifact = json.loads(NativeGraph.from_expression("x * 2", {"x": "float32"}).map_json())
+    graph = json.loads(NativeGraph.from_expression("sum(y)", {"y": "float32"}).to_json())
     return {
         "format": "menudet-staged-graph-1",
         "semantics": "menudet-numpy-0.1",
@@ -145,8 +146,8 @@ def trusted_document():
 
 
 def test_trusted_menudet_stage_and_roundtrip():
-    plan = blosc2.NativeGraph(trusted_document())
-    imported = blosc2.NativeGraph(plan.to_json())
+    plan = NativeGraph(trusted_document())
+    imported = NativeGraph(plan.to_json())
     x = np.arange(5, dtype="float32")
     result = imported.evaluate({"x": x})
     assert result == np.sum(x * 2)
@@ -160,11 +161,11 @@ def test_unqualified_trusted_contract_rejects(field, value):
     document = trusted_document()
     document["stages"][0]["contract"][field] = value
     with pytest.raises(blosc2.MenudetError, match="contract"):
-        blosc2.NativeGraph(document)
+        NativeGraph(document)
 
 
 def test_late_stage_status_recovery():
-    plan = blosc2.NativeGraph.from_expression("sqrt(x) + sum(y)", {"x": "float64", "y": "float64"})
+    plan = NativeGraph.from_expression("sqrt(x) + sum(y)", {"x": "float64", "y": "float64"})
     schedule = plan.specialize({"x": ("float64", (3,)), "y": ("float64", (3,))})
     with pytest.raises(blosc2.MenudetError) as failure:
         schedule.execute({"x": np.array([-1.0, 1.0, 4.0]), "y": np.ones(3)}, 1)
@@ -197,7 +198,7 @@ def test_staged_reducers_and_layouts(name, layout):
     elif layout == "swapped":
         x = x.astype(">f4")
     expression = f"{name}(x, axis=-1, keepdims=True) + x"
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": "float32"})
+    plan = NativeGraph.from_expression(expression, {"x": "float32"})
     expected = getattr(np, name)(x.astype("float32"), axis=-1, keepdims=True) + x
     for tile in [1, 7]:
         result = plan.evaluate({"x": x}, tile_items=tile)
@@ -208,7 +209,7 @@ def test_staged_reducers_and_layouts(name, layout):
 @pytest.mark.parametrize("shape", [(0, 4), (2, 0), ()])
 def test_empty_and_rank_zero_stages(shape):
     x = np.zeros(shape, dtype="float64")
-    plan = blosc2.NativeGraph.from_expression("sum(x) + x", {"x": "float64"})
+    plan = NativeGraph.from_expression("sum(x) + x", {"x": "float64"})
     result = plan.evaluate({"x": x})
     np.testing.assert_array_equal(result, np.sum(x) + x)
     assert result.shape == shape
@@ -234,18 +235,18 @@ def test_staged_dependency_validation(mutation):
     else:
         document["stages"][1]["graph"] = trusted_document()
     with pytest.raises(blosc2.MenudetError):
-        blosc2.NativeGraph(document)
+        NativeGraph(document)
 
 
 def test_staged_map_export_and_required_jit():
     expression = "x - sum(x)"
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, jit=True)
+    plan = NativeGraph.from_expression(expression, {"x": "float32"}, jit=True)
     if plan.has_jit:
-        plan = blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
+        plan = NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
         assert plan.has_jit
     else:
         with pytest.raises(blosc2.MenudetError, match="required map JIT"):
-            blosc2.NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
+            NativeGraph.from_expression(expression, {"x": "float32"}, require_jit=True)
     with pytest.raises(ValueError, match="elementwise"):
         plan.map_json()
     result, report = plan.evaluate({"x": np.arange(5, dtype="float32")}, return_report=True)

@@ -58,6 +58,7 @@ from blosc2.ctable_storage import (
     join_field_path,
     split_field_path,
 )
+from blosc2.dsl_kernel import SourceKernel
 from blosc2.info import InfoReporter, format_nbytes_human, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
@@ -12530,17 +12531,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if cc_meta.get("kind") == "menudet":
                 self._computed_cols[name] = self._validate_menudet_table_metadata(cc_meta)
             elif cc_meta.get("kind") == "dsl":
-                from blosc2.dsl_kernel import kernel_from_source
-
-                dsl_source = cc_meta["dsl_source"]
-                self._computed_cols[name] = {
-                    "kind": "dsl",
-                    "dsl_source": dsl_source,
-                    "kernel": kernel_from_source(dsl_source),
-                    "col_deps": col_deps,
-                    "dtype": dtype,
-                    "jit_backend": cc_meta.get("jit_backend"),
-                }
+                raise blosc2.UnsupportedLegacyRecipeError("legacy DSL table columns")
             else:
                 expression = cc_meta["expression"]
                 from blosc2.expression_graph import select_evaluation
@@ -12580,8 +12571,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if self._cols[meta["name"]].dtype != desc["dtype"]:
                     raise ValueError("Stored Menudet output dtype disagrees with native signature")
                 loaded.update({key: desc[key] for key in ("artifact", "bindings", "row_shape", "kernel")})
-            if meta.get("dsl_source") is not None:
-                loaded["dsl_source"] = meta["dsl_source"]
             if meta.get("jit_backend") is not None:
                 loaded["jit_backend"] = meta["jit_backend"]
             self._materialized_cols[meta["name"]] = loaded
@@ -12599,7 +12588,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _check_legacy_dsl_policy(self, schema_dict):
         from blosc2.deserialization import DeserializeMode, normalize_deserialize
-        from blosc2.exceptions import UnsafeDeserializationError
         from blosc2.expression_graph import parse_expression
 
         if normalize_deserialize(self._expression_recipe_policy()) is DeserializeMode.SAFE:
@@ -12617,19 +12605,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             meta.get("dsl_source") is not None or meta.get("transformer_kind") == "dsl"
             for meta in schema_dict.get("materialized_columns", [])
         )
-        storage = self._storage
-        policy = getattr(
-            storage,
-            "_deserialize_mode",
-            getattr(getattr(storage, "_store", None), "_deserialize_mode", "safe"),
-        )
-        if legacy and normalize_deserialize(policy) is not DeserializeMode.FULL:
-            raise UnsafeDeserializationError(
-                "legacy DSL table columns with block/batch-dependent evaluation",
-                location="CTable column recipes",
-                hint="Reopen with deserialize='full' only if you trust this data and "
-                "intend to retain legacy table-kernel behavior.",
-            )
+        if legacy:
+            raise blosc2.UnsupportedLegacyRecipeError("legacy DSL table columns")
 
     def _preflight_menudet_persistence(self):
         for meta in [*self._computed_cols.values(), *self._materialized_cols.values()]:
@@ -12642,8 +12619,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise TypeError(
                 "Source-authored vector table columns have no explicit row-domain contract; "
                 "use add_computed_column or add_generated_column with "
-                "the DSLKernel, named inputs, and dtype=.... "
-                "Legacy source metadata is not automatically migrated."
+                "a specialized MenudetKernel and named inputs. "
+                "Legacy source metadata is unsupported."
             )
 
     def _require_computed_column(self, name: str) -> dict:
@@ -13042,15 +13019,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             {"kind": "expression", "lazy": <LazyExpr>, "col_deps": [...]}
             {"kind": "menudet", "kernel": <MenudetKernel>, "bindings": {...}, ...}
 
-        A ``@blosc2.dsl_kernel`` is accepted either directly (with *inputs*
+        An internal source kernel is accepted either directly (with *inputs*
         naming one source column per kernel parameter) or as a ``LazyUDF``
         returned by a callable (then operands are matched to columns by
         identity and *inputs* is ignored).
         New kernel registrations always validate/export Menudet and evaluate
-        independent rows; only loaded legacy recipes use vector-column execution.
+        independent rows. Historical source-backed recipes are unsupported.
         """
-        if isinstance(expr, blosc2.DSLKernel | blosc2.MenudetKernel):
-            names = expr.input_names if isinstance(expr, blosc2.DSLKernel) else list(expr.input_dtypes)
+        if isinstance(expr, SourceKernel | blosc2.MenudetKernel):
+            names = expr.input_names if isinstance(expr, SourceKernel) else list(expr.input_dtypes)
             if inputs is None:
                 raise TypeError("A table kernel requires inputs= naming one source column per parameter")
             if isinstance(inputs, Mapping):
@@ -13060,16 +13037,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raise ValueError(f"Kernel expects {len(names)} inputs, but received {len(inputs)}")
                 bindings = dict(zip(names, inputs, strict=True))
             self._guard_utf8_kernel_deps(bindings.values())
-            if isinstance(expr, blosc2.DSLKernel):
+            if isinstance(expr, SourceKernel):
                 output_dtype = dtype if isinstance(dtype, type) else getattr(dtype, "dtype", dtype)
                 dtype = self._dsl_result_dtype(expr, list(bindings.values()), output_dtype)
             return self._menudet_table_descriptor(expr, bindings, dtype=dtype, cardinality=cardinality)
         # Resolve a callable once (a lambda may return a LazyExpr or a LazyUDF).
         obj = expr(self._cols) if (callable(expr) and not isinstance(expr, blosc2.LazyExpr)) else expr
         if isinstance(obj, blosc2.LazyUDF):
-            if not isinstance(obj.func, blosc2.DSLKernel):
+            if not isinstance(obj.func, SourceKernel):
                 raise TypeError(
-                    "Only LazyUDFs backed by a @blosc2.dsl_kernel are supported as CTable columns."
+                    "Only internally normalized source-kernel LazyUDFs are supported as CTable columns; "
+                    "for new code, specialize a @blosc2.menudet function and pass named inputs."
                 )
             kernel = obj.func
             if kernel.dsl_error is not None:
@@ -13125,16 +13103,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _build_computed_lazy(self, cc: dict):
         """Return the readable array-like for a computed-column entry *cc*.
 
-        Expression entries return their cached :class:`blosc2.LazyExpr` (which
-        supports partial-slice evaluation directly).  DSL entries build a fresh
-        :class:`blosc2.LazyUDF` from the current column NDArrays and **eagerly
-        materialize** it to a concrete :class:`blosc2.NDArray` via
-        ``compute()``: the miniexpr DSL path only supports full-array getitem,
-        so a partial slice (used by reads and by ``where()`` per-chunk operand
-        access) cannot be evaluated lazily.  Materializing also lets a DSL
-        computed column participate in ``where()`` as a plain NDArray operand
-        (the all-NDArray miniexpr fast path).  The full column is recomputed on
-        each access — acceptable for a virtual, unstored column.
+        Expression entries return their cached LazyExpr. Menudet entries evaluate
+        independent rows into a concrete array. Historical source recipes reject.
         """
         if cc.get("kind") == "menudet":
             positions = np.flatnonzero(self._valid_rows[:])
@@ -13144,14 +13114,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             output[positions] = values
             return blosc2.asarray(output)
         if cc.get("kind") == "dsl":
-            operands = tuple(self._cols[d] for d in cc["col_deps"])
-            cc["kernel"]._legacy_source_recipe = True
-            return blosc2.lazyudf(
-                cc["kernel"],
-                operands,
-                dtype=cc["dtype"],
-                jit_backend=cc.get("jit_backend"),
-            ).compute()
+            raise blosc2.UnsupportedLegacyRecipeError("legacy DSL table columns")
         return cc["lazy"]
 
     def _evaluate_expression_materialized_batch(
@@ -13164,38 +13127,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         values = blosc2.lazyexpr(meta["expression"], operands, evaluation=meta.get("_evaluation", "full"))[:]
         return np.asarray(values, dtype=meta["dtype"])
 
-    def _materialized_dsl_kernel(self, meta: dict):
-        """Return the (cached) DSLKernel for a ``transformer_kind == "dsl"`` entry."""
-        kernel = meta.get("_kernel")
-        if kernel is None:
-            from blosc2.dsl_kernel import kernel_from_source
-
-            kernel = kernel_from_source(meta["dsl_source"])
-            kernel._legacy_source_recipe = True
-            meta["_kernel"] = kernel  # not serialized (schema dump emits known keys only)
-        return kernel
-
     def _evaluate_dsl_materialized_batch(self, meta: dict, raw_columns: Mapping[str, Any]) -> np.ndarray:
-        kernel = self._materialized_dsl_kernel(meta)
-        arrays = [np.asarray(raw_columns[dep], dtype=self._cols[dep].dtype) for dep in meta["col_deps"]]
-        out_dtype = np.dtype(meta["dtype"])
-        n = len(arrays[0]) if arrays else 0
-        if n == 0:
-            return np.asarray([], dtype=out_dtype)
-        # The DSL miniexpr path rejects length-1 (shape ``(1,)``) inputs as
-        # "scalar-like"; pad to length 2 and slice the result back.
-        pad = n == 1
-        if pad:
-            arrays = [np.concatenate([arr, arr]) for arr in arrays]
-        operands = tuple(blosc2.asarray(arr) for arr in arrays)
-        result = blosc2.lazyudf(
-            kernel,
-            operands,
-            dtype=out_dtype,
-            jit_backend=meta.get("jit_backend"),
-        ).compute()[:]
-        result = np.asarray(result, dtype=out_dtype)
-        return result[:1] if pad else result
+        raise blosc2.UnsupportedLegacyRecipeError("legacy DSL table columns")
 
     def _generated_dependency_closure(self, source: str) -> set[str]:
         """Return generated columns transitively depending on *source*."""
@@ -13212,7 +13145,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return affected
 
     def _menudet_table_descriptor(self, kernel, bindings, *, dtype=None, cardinality="elementwise"):
-        if isinstance(kernel, blosc2.DSLKernel):
+        if isinstance(kernel, SourceKernel):
             if dtype is None:
                 raise ValueError("Authored Menudet table kernels require an explicit output dtype")
             bindings = dict(bindings)
@@ -13375,21 +13308,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         func:
             UDF passed straight to :func:`blosc2.lazyudf`; see that function
             for the expected signature (``func(inputs_tuple, output,
-            offset)``) and for how a :func:`blosc2.dsl_kernel`-decorated
-            kernel is transpiled instead of run as plain Python.
+            offset)``). Internal source kernels use native execution
+            rather than ordinary Python callbacks.
         columns:
             Names of *stored* columns to bind as *func*'s inputs, in order
             (computed/generated columns are not supported). Defaults to
             every stored column, in schema order.
         dtype:
             Result dtype. Required unless *func* is a
-            :func:`blosc2.dsl_kernel` kernel, whose dtype can be inferred by
+            internal source kernel, whose dtype can be inferred by
             NumPy type promotion of the input dtypes -- same rule as
             :func:`blosc2.lazyudf`.
         engine:
             Forwarded to :func:`blosc2.lazyudf` as its ``jit`` policy:
             ``"auto"`` (default) lets it choose, ``"jit"`` forces JIT
-            (only effective for a transpilable :func:`blosc2.dsl_kernel`),
+            (only effective for a compatible native kernel),
             ``"numpy"`` disables JIT.
 
         Returns
@@ -13440,7 +13373,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         values: str
         | blosc2.LazyExpr
-        | blosc2.DSLKernel
+        | SourceKernel
         | blosc2.MenudetKernel
         | Callable[[dict[str, Any]], blosc2.LazyExpr]
         | RowTransformer,
@@ -13485,21 +13418,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               per row.
             * :class:`blosc2.LazyExpr`: scalar lazy expression over stored
               columns of this table.  It must produce a 1-D scalar stream.
-            * :class:`blosc2.DSLKernel` or :class:`blosc2.MenudetKernel` with
+            * :class:`blosc2.MenudetKernel` with
               named ``inputs={parameter: column}`` bindings (positional lists
               are also accepted). Menudet artifacts are validated before
               registration and persisted without Python reconstruction.
               Each row is an independent logical group, including its complete
               fixed-shape array inputs. Appended rows are auto-filled and
               :meth:`refresh_generated_column` recomputes after in-place edits.
-            * :class:`blosc2.LazyUDF` built from a :func:`blosc2.dsl_kernel` via
+            * Internally normalized :class:`blosc2.LazyUDF` via
               :func:`blosc2.lazyudf` — column bindings are inferred by identity
               from the operands, so ``inputs=`` is not needed.  Accepts
               :class:`Column` accessors (``t.col1``) or raw NDArrays as
               operands. Same independent-row semantics and persistence as above.
             * callable: called as ``values(self._cols)`` and must return a
               :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
-              :func:`blosc2.dsl_kernel`.
+              internal source kernel. Specialize a :func:`blosc2.menudet`
+              function to obtain a :class:`blosc2.MenudetKernel` for public authoring.
             * :class:`RowTransformer`: row-wise projection/reduction bound to a
               fixed-shape ndarray column, e.g.
               ``t.embedding.row_transformer.norm(axis=0)`` or
@@ -13702,7 +13636,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         name: str,
         expr: str
         | blosc2.LazyExpr
-        | blosc2.DSLKernel
+        | SourceKernel
         | blosc2.MenudetKernel
         | Callable[[dict[str, Any]], blosc2.LazyExpr],
         *,
@@ -13724,8 +13658,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             add_computed_column(name, "price * qty")
             add_computed_column(name, lazy_expr)
-            add_computed_column(name, dsl_kernel, inputs={"price": "price", "qty": "qty"})
-            add_computed_column(name, blosc2.lazyudf(dsl_kernel, (t.price, t.qty)))
+            add_computed_column(name, menudet_kernel, inputs={"price": "price", "qty": "qty"})
             add_computed_column(name, lambda cols: cols["price"] * cols["qty"])
 
         Parameters
@@ -13740,25 +13673,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               ``"price * qty"``.
             * :class:`blosc2.LazyExpr`: lazy expression over stored columns of
               this table.
-            * :class:`blosc2.DSLKernel` or :class:`blosc2.MenudetKernel` with
+            * :class:`blosc2.MenudetKernel` with
               named ``inputs={parameter: column}`` bindings (positional lists
               are also accepted). Kernels are validated as Menudet before
               registration and persist without Python reconstruction.
-            * :class:`blosc2.LazyUDF` built from a :func:`blosc2.dsl_kernel` via
+            * Internally normalized :class:`blosc2.LazyUDF` via
               :func:`blosc2.lazyudf` — column bindings are inferred by identity
               from the operands, so ``inputs=`` is not needed.  Accepted forms
               include ``blosc2.lazyudf(kernel, (t.col1, t.col2))`` (using
               :class:`Column` accessors) or the raw NDArray equivalents.
             * callable: called as ``expr(self._cols)`` and must return a
               :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
-              :func:`blosc2.dsl_kernel`.
+              internal source kernel. For public kernels use :func:`blosc2.menudet`
+              and register its specialized :class:`blosc2.MenudetKernel`.
 
             Kernel columns use independent-row semantics: scalar inputs form
             one-lane groups and fixed-shape inputs supply their complete row.
             Reductions never combine different rows. The column remains virtual
-            and may be referenced inside :meth:`where` predicates. Loaded legacy
-            table recipes require ``deserialize="full"`` and retain their old
-            block/batch-dependent semantics, rather than being reinterpreted.
+            and may be referenced inside :meth:`where` predicates. Historical
+            source-backed table recipes are unsupported even with full loading
+            permission; materialize them in a previous release before upgrading.
 
             Expressions must depend only on stored columns of this table;
             computed columns cannot depend on other computed columns in this
@@ -13910,7 +13844,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     @staticmethod
     def _coerce_assign_operand(value):
         """Reduce an assign() value to a form add_computed_column's transformer
-        machinery accepts: a LazyExpr, DSLKernel, callable, or string."""
+        machinery accepts: a LazyExpr, internal source kernel, callable, or string."""
         if isinstance(value, NullableExpr):
             return value._expr
         if isinstance(value, NullableBoolExpr):
@@ -16525,7 +16459,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         The predicate can be supplied as a boolean :class:`blosc2.LazyExpr`,
         a boolean :class:`blosc2.NDArray`, a boolean NumPy array, a boolean
         ``Column``, an unbound :func:`col` expression, a :class:`blosc2.LazyUDF`
-        (including those backed by a :func:`blosc2.dsl_kernel`), or a string
+        (including internally normalized source kernels), or a string
         expression evaluated against this table's columns.  String expressions
         can reference stored and computed columns directly by name.
 

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 spec = importlib.util.spec_from_file_location(
     "menudet_numpy_compat", Path(__file__).resolve().parents[1] / "tools" / "menudet_numpy_compat.py"
@@ -42,7 +43,7 @@ def test_generator_requires_pinned_numpy(monkeypatch):
 
 def test_initial_array_inventory():
     add = blosc2.MenudetKernel.from_json(
-        blosc2.DSLKernel.from_source("def k(x, y):\n    return x + y\n").export(
+        SourceKernel.from_source("def k(x, y):\n    return x + y\n").export(
             {"x": "float32", "y": "float32"}, "float32"
         ),
         jit=False,
@@ -53,7 +54,7 @@ def test_initial_array_inventory():
     with pytest.raises(blosc2.MenudetError, match="binding_error"):
         add.evaluate({"x": x, "y": y})
     block_sum = blosc2.MenudetKernel.from_json(
-        blosc2.DSLKernel.from_source("def k(x):\n    return block_sum(x)\n").export(
+        SourceKernel.from_source("def k(x):\n    return block_sum(x)\n").export(
             {"x": "int8"}, "int64", cardinality="block_scalar"
         ),
         jit=False,
@@ -65,7 +66,7 @@ def test_initial_array_inventory():
     assert actual == 15
     np.testing.assert_array_equal(np.sum(values, axis=1), [3, 12])
     identity = blosc2.MenudetKernel.from_json(
-        blosc2.DSLKernel.from_source("def k(x):\n    return x\n").export({"x": "float32"}, "float32"),
+        SourceKernel.from_source("def k(x):\n    return x\n").export({"x": "float32"}, "float32"),
         jit=False,
     )
     view = np.arange(8, dtype="float32")[::-2]
@@ -75,14 +76,14 @@ def test_initial_array_inventory():
 @pytest.mark.parametrize("dtype", ["float16"])
 def test_inventory_unsupported_dtypes(dtype):
     with pytest.raises(blosc2.MenudetError, match="unsupported_requirement"):
-        blosc2.DSLKernel.from_source("def k(x):\n    return x\n").export({"x": dtype}, dtype)
+        SourceKernel.from_source("def k(x):\n    return x\n").export({"x": dtype}, dtype)
 
 
 @pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 def test_inventory_complex_dtypes(dtype):
     values = np.array([1 + 2j, -3 + 0.5j, 0 + 0j], dtype=dtype)
     kernel = blosc2.MenudetKernel.from_json(
-        blosc2.DSLKernel.from_source("def k(x):\n    return x * x + 1\n").export({"x": dtype}, dtype),
+        SourceKernel.from_source("def k(x):\n    return x * x + 1\n").export({"x": dtype}, dtype),
         jit=False,
     )
     np.testing.assert_allclose(kernel.evaluate({"x": values}), values * values + 1)
@@ -112,7 +113,7 @@ def test_shared_checkpoint_corpus(monkeypatch):
             assert actual["artifact"] == expected["artifact"]
     for case in corpus["cases"]:
         artifact = json.loads(case["artifact"])
-        author = blosc2.DSLKernel.from_source(artifact["source"])
+        author = SourceKernel.from_source(artifact["source"])
         signature = {item["name"]: item["dtype"] for item in artifact["inputs"]}
         constants = {item["name"]: compat.decode(item)[()] for item in case.get("scalar_operands", [])}
         if case["baseline"]["status"] == -3:

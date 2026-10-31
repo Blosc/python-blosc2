@@ -7,13 +7,14 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 from blosc2.utils import MINIEXPR_FUNCTION_ALIASES, canonicalize_miniexpr_functions
 
 
 @pytest.fixture
 def native_runtime():
     try:
-        blosc2.DSLKernel.from_source("def k(x):\n    return asin(x)\n").export(
+        DSLKernel.from_source("def k(x):\n    return asin(x)\n").export(
             {"x": "float64"}, "float64", version="0.1"
         )
     except blosc2.MenudetError as error:
@@ -38,7 +39,7 @@ def test_normalization_preserves_non_calls(binary):
 @pytest.mark.parametrize("version", ["0.1"])
 def test_authoring_normalizes_but_artifact_import_rejects_alias(native_runtime, alias, canonical, version):
     arguments = "x, 1.0" if canonical == "atan2" else "x"
-    author = blosc2.DSLKernel.from_source(f"def k(x):\n    return {alias}({arguments})\n")
+    author = DSLKernel.from_source(f"def k(x):\n    return {alias}({arguments})\n")
     assert f"{canonical}(" in author.dsl_source
     artifact = json.loads(author.export({"x": "float64"}, "float64", version=version))
     assert f"{alias}(" not in artifact["source"]
@@ -63,7 +64,7 @@ def test_native_graph_numpy_spelling(native_runtime, native_graph_runtime, alias
 
 
 def test_numpy_attribute_authoring(native_runtime):
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k(x):
         return np.arcsin(x) + np.arctan2(x, 1.0)
 

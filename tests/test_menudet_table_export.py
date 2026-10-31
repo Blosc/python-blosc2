@@ -6,6 +6,7 @@ import pytest
 
 import blosc2
 from blosc2 import blosc2_ext
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 pytestmark = pytest.mark.skipif(
     not getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)(),
@@ -74,7 +75,7 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
 
     offset = np.uint64(7)
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def author(x):
         return x + offset
 
@@ -84,7 +85,7 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
     np.testing.assert_array_equal(kernel.evaluate({"x": np.arange(3, dtype="uint64")}), [7, 8, 9])
     text = "ß"
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def string_author(x):
         return x + text
 
@@ -93,13 +94,13 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
     np.testing.assert_array_equal(
         blosc2.MenudetKernel.from_json(record).evaluate({"x": np.array(["a"], dtype="U2")}), ["aß"]
     )
-    static = blosc2.DSLKernel.from_source("def rows(x):\n    return block_sum(x) + _n0\n")
+    static = DSLKernel.from_source("def rows(x):\n    return block_sum(x) + _n0\n")
     record = static.export({"x": "int64"}, "int64", version="0.1", cardinality="block_scalar", ndim=1)
     assert blosc2.MenudetKernel.from_json(record).result_cardinality == "block_scalar"
 
     minimum = np.int64(np.iinfo(np.int64).min)
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def minimum_capture(x):
         return x + minimum
 
@@ -110,11 +111,11 @@ def test_authoring_typed_snapshots(monkeypatch, tmp_path):
     np.testing.assert_array_equal(
         blosc2.MenudetKernel.from_json(record).evaluate({"x": np.array([0.0])}), [-float(2**63)]
     )
-    loop = blosc2.DSLKernel.from_source("def k(x):\n    for i in range(x):\n        y = i\n    return i\n")
+    loop = DSLKernel.from_source("def k(x):\n    for i in range(x):\n        y = i\n    return i\n")
     native_loop = blosc2.MenudetKernel.from_json(loop.export({"x": "int64"}, "int64", version="0.1"))
     np.testing.assert_array_equal(native_loop.evaluate({"x": np.array([2, 4], dtype="int64")}), [1, 3])
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def static_row(row):
         return np.sqrt(row["x"]) + row["y"]
 
@@ -131,7 +132,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     class Row:
         x: int = 0
 
-    source = blosc2.DSLKernel.from_source("def rows(x):\n    return block_sum(x) + _flat_idx + _n0\n")
+    source = DSLKernel.from_source("def rows(x):\n    return block_sum(x) + _flat_idx + _n0\n")
     kernel = blosc2.MenudetKernel.from_json(source.export({"x": "int64"}, "int64", version="0.1", ndim=1))
     table = blosc2.CTable(Row, new_data={"x": [2, 4]}, create_summary_index=False)
     table.add_computed_column("virtual", kernel, inputs={"x": "x"})
@@ -146,11 +147,6 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     table.refresh_generated_column("stored")
     path = tmp_path / "table.b2d"
     table.save(str(path))
-    import blosc2.b2objects as b2objects
-
-    monkeypatch.setattr(
-        b2objects, "kernel_from_source", lambda *a, **k: pytest.fail("Python reconstruction")
-    )
     # The public package attribute is a decorator; import the actual module.
     dsl_module = importlib.import_module("blosc2.dsl_kernel")
     monkeypatch.setattr(
@@ -169,7 +165,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     np.testing.assert_array_equal(copied["derived"][:], [3, 9, 11])
     copied.extend({"x": [12, 14]})
     np.testing.assert_array_equal(copied["stored"][:], [3, 9, 11, 13, 15])
-    constructor = blosc2.DSLKernel.from_source("def constant_row():\n    return _n0\n")
+    constructor = DSLKernel.from_source("def constant_row():\n    return _n0\n")
     constructed = blosc2.MenudetKernel.from_json(constructor.export({}, "int64", version="0.1", ndim=1))
     copied.add_generated_column("constant", values=constructed, inputs={})
     copied.append({"x": 16})
@@ -191,7 +187,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
         label: str = blosc2.field(blosc2.string(max_length=4), default="")
 
     text_table = blosc2.CTable(TextRow, new_data={"label": ["ß a", "ab"]}, create_summary_index=False)
-    upper = blosc2.DSLKernel.from_source("def upper_row(x):\n    return upper(x)\n")
+    upper = DSLKernel.from_source("def upper_row(x):\n    return upper(x)\n")
     text_table.add_generated_column("upper", values=upper, dtype="U4", inputs={"x": "label"})
     text_table.append({"label": "z"})
     np.testing.assert_array_equal(text_table["upper"][:], ["SS A", "AB", "Z"])
@@ -204,7 +200,7 @@ def test_table_native_row_contract_roundtrip(tmp_path, monkeypatch):
     vector_table = blosc2.CTable(
         VectorRow, new_data={"vector": [[1, 2, 3], [4, 5, 6]], "bias": [1, 2]}, create_summary_index=False
     )
-    total = blosc2.DSLKernel.from_source("def total_row(x, bias):\n    return block_sum(x + bias) + _n0\n")
+    total = DSLKernel.from_source("def total_row(x, bias):\n    return block_sum(x + bias) + _n0\n")
     vector_table.add_generated_column(
         "total",
         values=total,
@@ -231,7 +227,7 @@ def test_unified_table_registration_is_row_local_and_validated(tmp_path, generat
         new_data={"amount": [2.0, 4.0, 8.0]},
         create_summary_index=False,
     )
-    kernel = blosc2.DSLKernel.from_source("def center(x):\n    return x - block_mean(x)\n")
+    kernel = DSLKernel.from_source("def center(x):\n    return x - block_mean(x)\n")
     if generated:
         table.add_generated_column("centered", values=kernel, inputs={"x": "amount"}, create_index=True)
     else:
@@ -243,7 +239,7 @@ def test_unified_table_registration_is_row_local_and_validated(tmp_path, generat
     recipe = schema["materialized_columns" if generated else "computed_columns"][0]
     assert "row_domain" not in recipe
     assert "dsl_source" not in recipe
-    invalid = blosc2.DSLKernel.from_source("def invalid(x):\n    return callback(x)\n")
+    invalid = DSLKernel.from_source("def invalid(x):\n    return callback(x)\n")
     if generated:
         with pytest.raises(blosc2.MenudetError):
             table.add_generated_column("invalid", values=invalid, inputs={"x": "amount"})

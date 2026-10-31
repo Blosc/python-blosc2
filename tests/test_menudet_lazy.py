@@ -7,6 +7,7 @@ from test_menudet_descriptor import manifest
 
 import blosc2
 from blosc2 import blosc2_ext
+from blosc2.dsl_kernel import SourceKernel
 
 pytestmark = pytest.mark.skipif(
     not getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)(),
@@ -206,11 +207,6 @@ def test_string_roundtrip_and_native_only_load(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dsl_module, "kernel_from_source", lambda *a, **k: pytest.fail("Python reconstruction")
     )
-    import blosc2.b2objects as b2objects
-
-    monkeypatch.setattr(
-        b2objects, "kernel_from_source", lambda *a, **k: pytest.fail("Python reconstruction")
-    )
     np.testing.assert_array_equal(blosc2.open(tmp_path / "textlazy.b2nd")[:], ["SS A", "AB", "Z"])
 
 
@@ -265,7 +261,7 @@ def test_partial_reads_only_original_groups():
     assert operand.reads == [(slice(4, 8),)]
     assert lazy[1] == 22
     np.testing.assert_array_equal(lazy[::-1], [38, 22, 6])
-    author = blosc2.DSLKernel.from_source("def k(x):\n    return x + block_sum(x)\n")
+    author = SourceKernel.from_source("def k(x):\n    return x + block_sum(x)\n")
     elementwise = blosc2.MenudetKernel.from_json(author.export({"x": "int64"}, "int64", version="0.1"))
     grouped = elementwise.lazy({"x": operand}, partitions=(4,))
     operand.reads.clear()

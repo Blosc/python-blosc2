@@ -11,17 +11,19 @@ from blosc2.lazyexpr import LazyArray
 
 def menudet_from_lazyudf(obj):
     """Preflight a newly authored DSL recipe without executing it or touching storage."""
-    from blosc2.dsl_kernel import DSLKernel
+    from blosc2.dsl_kernel import SourceKernel as DSLKernel
     from blosc2.menudet_kernel import MenudetError, MenudetKernel
 
     if not isinstance(obj.func, DSLKernel):
-        raise TypeError("Python LazyUDF cannot be persisted; use a compliant DSLKernel or MenudetKernel")
+        raise TypeError("Python LazyUDF cannot be persisted; use @blosc2.menudet or MenudetKernel.lazy")
     schunk = getattr(obj, "schunk", None)
     if getattr(obj, "_legacy_source_recipe", False) or (
         schunk is not None
         and (schunk.meta.get("LazyArray") is not None or schunk.meta.get("b2o", {}).get("kind") == "lazyudf")
     ):
-        raise TypeError("Persisting legacy source-backed LazyUDF is unsupported; author a new DSLKernel")
+        raise TypeError(
+            "Persisting legacy source-backed LazyUDF is unsupported; reauthor with @blosc2.menudet"
+        )
     inputs, constants = {}, {}
     for name, value in obj.inputs_dict.items():
         if np.isscalar(value):
@@ -49,8 +51,7 @@ def menudet_from_lazyudf(obj):
         if "return cardinality" in str(error):
             raise ValueError(
                 "LazyUDF declares elementwise shape but the kernel returns a block scalar; "
-                "use DSLKernel.export(cardinality='block_scalar', version='0.1') and "
-                "MenudetKernel.lazy with explicit partitions"
+                "use @menudet(cardinality='block_scalar') with explicit partitions"
             ) from error
         raise
     menudet_result = MenudetLazyArray(

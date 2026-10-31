@@ -17,6 +17,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @dataclass
@@ -25,12 +26,12 @@ class Row:
     b: int = blosc2.field(blosc2.int64())
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_add(x, y):
     return x + y
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_loop(x, y):
     # x + 2*y, exercising a while loop + assignments
     acc = x
@@ -41,7 +42,7 @@ def k_loop(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_where(x, y):
     # where(x < y, x + 1, x - 1)
     return where(x < y, x + 1, x - 1)  # noqa: F821  (DSL builtin)

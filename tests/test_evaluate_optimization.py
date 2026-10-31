@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 
 @pytest.mark.parametrize("expression", ["x**3", "pow(x, 3)"])
@@ -91,7 +92,7 @@ def test_aggressive_caller_resolution_and_staged_policy():
     )
     document = plan.to_json()
     assert document.count('"optimization":"aggressive"') >= 2
-    restored = blosc2.NativeGraph(document, jit=False)
+    restored = NativeGraph(document, jit=False)
     actual, _ = restored.specialize({"x": (x.dtype, x.shape)}).execute({"x": x})
     base = x - np.sum(x * x * x)
     np.testing.assert_allclose(actual, base * base * base, rtol=1e-12)
@@ -103,7 +104,7 @@ def test_aggressive_power_rebinding_and_serialization():
     plan = compile_plan("x**3", False, input_dtypes=(("x", np.dtype("float64")),), optimization="aggressive")
     document = plan.to_json()
     assert '"optimization":"aggressive"' in document
-    restored = blosc2.NativeGraph(document, jit=False)
+    restored = NativeGraph(document, jit=False)
     x = np.full(257, 1.515049231134367)
     result, _ = restored.specialize({"x": (x.dtype, x.shape)}).execute({"x": x})
     np.testing.assert_array_equal(result, x * x * x)

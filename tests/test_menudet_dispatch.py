@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 from blosc2.storage_readers import StorageReader, storage_reader_eligible
 
 
@@ -18,7 +19,7 @@ def dense_dispatch_runtime(dispatch_runtime):
 
 
 def kernel(source="def k(x, y):\n    return x + (y - 1)\n", dtype="float64", output=None, jit=True):
-    author = blosc2.DSLKernel.from_source(source)
+    author = SourceKernel.from_source(source)
     return blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, output or dtype), jit=jit)
 
 

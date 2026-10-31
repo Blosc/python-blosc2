@@ -21,7 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel, DSLSyntaxError
+from blosc2.dsl_kernel import DSLSyntaxError
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 # What a proxy reads from, which lived here until the import graph asked for it
 # further down (see `proxy_source`).  The four classes are re-exported rather
@@ -2249,7 +2250,7 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
           compile: a function that is DSL-shaped but calls something miniexpr
           does not implement passes here and fails later, at call time, with a
           ``RuntimeError``.  See the DSL syntax reference for what the grammar
-          accepts.  (Unrelated to :func:`blosc2.dsl_kernel`, which builds a
+          accepts.  (Unrelated to the retired ``@dsl_kernel``, which built a
           :class:`DSLKernel` object rather than an evaluating wrapper.)
 
           This also works as a pandas engine, which is the only way to reach

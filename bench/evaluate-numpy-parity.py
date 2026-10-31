@@ -23,6 +23,7 @@ from unittest.mock import patch
 import numpy as np
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 try:
     import numexpr as ne
@@ -60,7 +61,7 @@ def make_inputs(size, dtype):
 def execution_route(operation, *, return_report=False):
     native = importlib.import_module("blosc2.native_graph")
     original_native = native.compute_native_graph
-    original_specialize = blosc2.NativeGraph.specialize
+    original_specialize = NativeGraph.specialize
     observed = set()
     reports = []
 
@@ -120,7 +121,7 @@ def execution_route(operation, *, return_report=False):
 
     with (
         patch.object(native, "compute_native_graph", native_call),
-        patch.object(blosc2.NativeGraph, "specialize", specialize),
+        patch.object(NativeGraph, "specialize", specialize),
     ):
         operation()
     route = "+".join(sorted(observed)) if observed else "numpy/eager"
@@ -273,7 +274,7 @@ def main():
         f"NumPy {np.__version__} | NumExpr {ne.__version__ if ne is not None else 'unavailable'} | Blosc2 {blosc2.__version__}"
         f" | {args.dtype} | threads {args.threads} | backend {args.backend} | compiler {args.jit}"
     )
-    probe = blosc2.NativeGraph.from_expression("x + 1", {"x": args.dtype}, jit=True)
+    probe = NativeGraph.from_expression("x + 1", {"x": args.dtype}, jit=True)
     print(
         f"Native JIT available/enabled: {probe.has_jit}; identity maps may use native copies without a kernel."
     )

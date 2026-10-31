@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 
 @pytest.fixture(autouse=True)
@@ -139,7 +140,7 @@ def test_borrowed_artifact_retains_native_owner(parallel_runtime):
 
 def test_borrowed_artifact_collected_with_unreachable_cycle():
     def make_cycle():
-        plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=False)
+        plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=False)
         borrowed = plan._handle.resident_artifact()
         assert borrowed is not None
         cycle = [borrowed]
@@ -155,7 +156,7 @@ def test_borrowed_artifact_collected_with_unreachable_cycle():
 def test_resident_kernel_retains_plan_without_reimport(runtime, monkeypatch):
     from blosc2.native_graph import resident_map_kernel
 
-    plan = blosc2.NativeGraph.from_expression("x + (y - 1)", {"x": "float64", "y": "float64"})
+    plan = NativeGraph.from_expression("x + (y - 1)", {"x": "float64", "y": "float64"})
 
     def forbidden(*args, **kwargs):
         pytest.fail("Resident map reimported a validated graph artifact")

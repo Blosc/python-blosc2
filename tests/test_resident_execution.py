@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 from blosc2.resident_execution import (
     evaluate_resident,
     resident_integer_operations_safe,
@@ -20,7 +21,7 @@ def runtime():
 
 
 def kernel(source="def k(x, y):\n    return x + (y - 1)\n", dtype="float64", output=None, jit=True):
-    author = blosc2.DSLKernel.from_source(source)
+    author = SourceKernel.from_source(source)
     return blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, output or dtype), jit=jit)
 
 
@@ -128,7 +129,7 @@ def test_integer_conservative_fallback(case, monkeypatch):
         other = other.astype("int32")
     elif case == "weak":
         expression = "x + (1 + 2)"
-    author = blosc2.DSLKernel.from_source(f"def k(x, y):\n    return {expression}\n")
+    author = SourceKernel.from_source(f"def k(x, y):\n    return {expression}\n")
     native = blosc2.MenudetKernel.from_json(author.export({"x": values.dtype, "y": other.dtype}, output))
     lazy = native.lazy({"x": values, "y": other})
 

@@ -38,6 +38,7 @@ from pathlib import Path
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 
 @dataclass(frozen=True)
@@ -372,7 +373,7 @@ def measure(kernel, arrays, mask, repeat):
 
 
 def benchmark_reference(case, arrays, mask, repeat):
-    artifact = blosc2.DSLKernel.from_source(case.source()).export(
+    artifact = SourceKernel.from_source(case.source()).export(
         case.inputs,
         case.output,
         constants=case.constants,

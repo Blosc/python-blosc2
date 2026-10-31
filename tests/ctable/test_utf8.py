@@ -17,6 +17,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 if not hasattr(np.dtypes, "StringDType"):
     pytest.skip("utf8 columns require NumPy >= 2.0 (StringDType)", allow_module_level=True)
@@ -2136,7 +2137,7 @@ def test_ctable_utf8_column_assign_persists(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def _shout(name):
     return name.upper()
 
@@ -2186,7 +2187,7 @@ def test_utf8_kernel_refused_at_registration():
 def test_utf8_kernel_refused_whatever_returned():
     """It is the utf8 operand that cannot work, not the string output."""
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def is_long(name):
         return name > "b"
 
@@ -2235,7 +2236,7 @@ def test_utf8_refusal_recipe_actually_works():
 def test_non_utf8_dsl_kernel_column_still_works():
     """The guard must not catch ordinary columns."""
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def double(x):
         return x * 2
 

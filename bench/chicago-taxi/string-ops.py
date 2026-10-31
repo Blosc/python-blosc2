@@ -19,7 +19,7 @@ than the numeric ones.  Three tasks over `company` (`<U36`) and `payment.type`
 All three are timed; only `kernel` is plotted.  It is the shape of the pandas-3
 blog kernel (datapythonista.me/blog/whats-new-in-pandas-3): every other engine
 has to express it as a mask plus two fully-evaluated branches, whereas blosc2
-compiles it to a single masked pass with `@blosc2.dsl_kernel`.
+compiles it to a single masked pass with an internal compatibility DSLKernel.
 
 `blosc2 (raw)` is the same blosc2 path with `clevel=0` on operands *and*
 result.  Same container, same kernel, compression the only variable -- so the
@@ -40,6 +40,7 @@ import time
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Internal normalization benchmark.
 
 PARQUET = "chicago-taxi-flat.parquet"
 COLS = ["company", "payment.type"]
@@ -122,7 +123,7 @@ def load(path, nrows):
 # --------------------------------------------------------------------------
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def taxi_label(company, ptype):
     pay = ptype.lower()
     c = company.lower()
@@ -221,7 +222,7 @@ def pandas_kernel_apply(co, pt):
     """The row-wise spelling of `kernel`, which is how it would first be written.
 
     Off the scale next to everything else, and reported separately for that
-    reason -- it is the baseline `@blosc2.dsl_kernel` exists to replace.
+    reason -- it is the baseline the native compatibility kernel replaces.
     """
     import pandas as pd
 

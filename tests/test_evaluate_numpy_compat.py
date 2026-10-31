@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 
 @pytest.mark.parametrize("shape", [(0,), (2, 0, 3)])
@@ -66,7 +67,7 @@ def test_explicit_c_order_retains_native_admission(monkeypatch, native_graph_run
 
     if blosc2.IS_WASM:
         pytest.skip("Native-first dispatch requires host JIT")
-    probe = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    probe = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
     if not probe.has_jit:
         pytest.skip("Native-first dispatch requires JIT")
     original = native.prepare_resident

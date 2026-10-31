@@ -11,7 +11,7 @@ from types import CellType, FunctionType
 
 import numpy as np
 
-from .dsl_kernel import DSLKernel
+from .dsl_kernel import SourceKernel as DSLKernel
 from .menudet_kernel import capture_analysis, menudet_dtype_descriptor, prepare_menudet_kernel
 
 

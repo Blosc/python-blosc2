@@ -5,6 +5,7 @@ import pytest
 
 import blosc2
 import blosc2.native_graph as native
+from blosc2.graph_plan import NativeGraph
 
 
 @pytest.mark.parametrize("dtype", ["int8", "uint64", "float32", "float64", "bool"])
@@ -141,7 +142,7 @@ def test_native_text_preparation_errors_are_not_replayed(native_graph_runtime, m
     def forbidden(*args, **kwargs):
         pytest.fail("Unexpected JSON replay after native text preparation failed")
 
-    monkeypatch.setattr(blosc2.NativeGraph, "from_expression", failure)
+    monkeypatch.setattr(NativeGraph, "from_expression", failure)
     monkeypatch.setattr(native.GraphAdapter, "visit", forbidden)
     with pytest.raises(RuntimeError, match="native text preparation failed"):
         native.lower_native_graph(expr)

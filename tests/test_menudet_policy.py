@@ -7,6 +7,7 @@ import pytest
 
 import blosc2
 from blosc2.b2objects import decode_b2object_payload
+from blosc2.dsl_kernel import SourceKernel
 
 
 @pytest.mark.parametrize("policy", ["safe", "full"])
@@ -20,20 +21,14 @@ def test_nested_legacy_effective_policy(tmp_path, policy, expression):
         "expression": expression,
         "operands": {"x": {"kind": "urlpath", "version": 1, "urlpath": str(fixture)}},
     }
-    if policy == "safe":
-        with pytest.raises(blosc2.UnsafeDeserializationError):
-            blosc2.from_cframe(carrier.to_cframe(), deserialize=policy)
-    else:
-        opened = blosc2.from_cframe(carrier.to_cframe(), deserialize=policy)
-        nested = next(iter(opened.operands.values()))
-        assert isinstance(nested, blosc2.LazyUDF)
-        np.testing.assert_allclose(nested.compute()[:], (np.arange(5) * 3) ** 2)
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.from_cframe(carrier.to_cframe(), deserialize=policy)
 
 
-def test_structured_legacy_rejects_before_python(monkeypatch):
+@pytest.mark.parametrize("policy", ["safe", "full"])
+def test_structured_legacy_rejects_before_python(monkeypatch, policy):
     from msgpack import ExtType, packb
 
-    import blosc2.b2objects as b2objects
     from blosc2.msgpack_utils import msgpack_unpackb
 
     record = {
@@ -50,21 +45,12 @@ def test_structured_legacy_rejects_before_python(monkeypatch):
     }
     legacy = ExtType(43, packb(record))
     nested = ExtType(46, packb({"values": [legacy], "shape": [1]}))
+    monkeypatch.setattr(SourceKernel, "__init__", lambda *a, **k: pytest.fail("Python reconstruction"))
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        decode_b2object_payload({"kind": "lazyudf", "version": 1}, deserialize=policy)
     for payload in (packb(legacy), packb(nested)):
-        trusted = msgpack_unpackb(payload, deserialize="full")
-        assert isinstance(trusted if isinstance(trusted, blosc2.LazyUDF) else trusted[0], blosc2.LazyUDF)
-        legacy_recipe = trusted if isinstance(trusted, blosc2.LazyUDF) else trusted[0]
-        with pytest.raises(TypeError, match="legacy"):
-            legacy_recipe.to_cframe()
-
-    monkeypatch.setattr(b2objects, "kernel_from_source", lambda *a, **k: pytest.fail("Policy bypass"))
-    with pytest.raises(blosc2.UnsafeDeserializationError):
-        decode_b2object_payload({"kind": "lazyudf", "version": 1}, deserialize="safe")
-    for payload in (packb(legacy), packb(nested)):
-        with pytest.raises(blosc2.UnsafeDeserializationError):
-            msgpack_unpackb(payload)
-        with pytest.raises(blosc2.UnsafeDeserializationError):
-            msgpack_unpackb(payload, deserialize="safe")
+        with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+            msgpack_unpackb(payload, deserialize=policy)
 
 
 @pytest.mark.parametrize("route", ["embed", "dict", "tree"])
@@ -78,12 +64,12 @@ def test_rejected_kernel_does_not_replace_store_value(tmp_path, route):
         np.testing.assert_array_equal(store["/value"][:], np.arange(4))
         operand = blosc2.asarray(np.arange(4), urlpath=tmp_path / "input.b2nd", mode="w")
         for body in ("print(x)\n    return x", "return callback(x)"):
-            kernel = blosc2.DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
+            kernel = SourceKernel.from_source(f"def invalid(x):\n    {body}\n")
             invalid = blosc2.lazyudf(kernel, (operand,), dtype="int64")
             with pytest.raises(blosc2.MenudetError):
                 store["/value"] = invalid
             np.testing.assert_array_equal(store["/value"][:], np.arange(4))
-        valid = blosc2.DSLKernel.from_source("def valid(x):\n    return x + 2\n")
+        valid = SourceKernel.from_source("def valid(x):\n    return x + 2\n")
         store["/recipe"] = blosc2.lazyudf(valid, (operand,), dtype="int64")
         np.testing.assert_array_equal(store["/recipe"][:], np.arange(4) + 2)
 
@@ -98,9 +84,7 @@ def test_ctable_legacy_metadata_policy_before_reconstruction(monkeypatch):
             {"name": "bad", "col_deps": [], "dtype": "int64", "kind": "dsl", "dsl_source": "invalid"}
         ]
     }
-    with pytest.raises(
-        blosc2.UnsafeDeserializationError, match=r"block/batch-dependent.*deserialize='full'"
-    ):
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
         table._load_computed_cols_from_schema(schema)
     table._computed_cols = {"x": {"kind": "dsl"}}
     table._materialized_cols = {}
@@ -109,7 +93,8 @@ def test_ctable_legacy_metadata_policy_before_reconstruction(monkeypatch):
 
 
 @pytest.mark.parametrize("generated", [False, True])
-def test_legacy_table_recipes_retain_full_opt_in(tmp_path, generated):
+@pytest.mark.parametrize("policy", ["safe", "full"])
+def test_legacy_table_recipes_are_unsupported(tmp_path, generated, policy):
     from dataclasses import dataclass
 
     @dataclass
@@ -137,19 +122,5 @@ def test_legacy_table_recipes_retain_full_opt_in(tmp_path, generated):
         schema["computed_columns"] = [recipe]
     table._storage.save_schema(schema)
     table.close()
-    with pytest.raises(
-        blosc2.UnsafeDeserializationError, match=r"block/batch-dependent.*deserialize='full'"
-    ):
-        blosc2.CTable.open(path)
-    trusted = blosc2.CTable.open(path, mode="a", deserialize="full")
-    if generated:
-        expected_batch = trusted._evaluate_dsl_materialized_batch(
-            trusted._materialized_cols["old"], {"x": np.array([8.0])}
-        )
-        trusted.append({"x": 8.0})
-        # Appended batches retain their old groups rather than adopting the new API contract.
-        np.testing.assert_array_equal(trusted["old"][:], [4.0, 6.0, expected_batch[0]])
-    else:
-        # The original two-row execution block, not independent one-lane rows.
-        np.testing.assert_array_equal(trusted["old"][:], [8.0, 10.0])
-    trusted.close()
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError, match="previous release"):
+        blosc2.CTable.open(path, mode="a", deserialize=policy)

@@ -10,9 +10,10 @@ import pytest
 
 import blosc2
 import blosc2.c2array as blosc2_c2array
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def _kernel_add_twice(x, y):
     return x + y * 2
 

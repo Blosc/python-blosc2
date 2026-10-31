@@ -26,15 +26,20 @@ Deserialization policy
 ~~~~~~~~~~~~~~~~~~~~~~
 
 Validated Menudet artifacts load natively without reconstructing Python code.
-Historical Python-specific recipes require explicit ``deserialize="full"``;
-the selected policy propagates through nested containers and references.
+Historical source-backed DSL/Python UDF recipes are unsupported under both safe
+and full policies. They raise :class:`UnsupportedLegacyRecipeError`; materialize
+them using a previous release before upgrading, as described in
+:doc:`../guides/migrating_to_menudet`. The selected deserialization policy still
+propagates through nested containers and references for supported formats.
 Ordinary LazyExpr expressions, including supported numerical calls, reductions,
 methods and indexing, load under the default ``deserialize="safe"`` policy
-with the existing expression validation. Full-only nested operands (such as
-legacy kernels or proxies) still require explicit opt-in. Legacy table-kernel
-recipes loaded with ``"full"`` retain their old block/batch-dependent grouping;
-new registrations use independent-row Menudet semantics.
+with the existing expression validation. Full-only supported nested operands
+(such as proxies) still require explicit opt-in. Legacy table-kernel recipes are
+rejected, not silently dropped or reinterpreted. New registrations use
+independent-row Menudet semantics.
 
 .. autodata:: DeserializeMode
 
 .. autoexception:: UnsafeDeserializationError
+
+.. autoexception:: UnsupportedLegacyRecipeError

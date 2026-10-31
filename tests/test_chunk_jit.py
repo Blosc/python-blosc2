@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 pytestmark = pytest.mark.skipif(
     blosc2.IS_WASM, reason="Native graph JIT and host threads are unavailable on WASM"
@@ -83,7 +84,7 @@ def test_integral_math_uses_native_parallel_tasks(native_graph_runtime):
     x = np.arange(600_003, dtype="int64") % 97
     y = (x % 31) + 1
     for expression, expected in [("minimum(x,y)", np.minimum(x, y)), ("fmod(x,y)", np.fmod(x, y))]:
-        plan = blosc2.NativeGraph.from_expression(expression, {"x": x.dtype, "y": y.dtype}, jit=True)
+        plan = NativeGraph.from_expression(expression, {"x": x.dtype, "y": y.dtype}, jit=True)
         assert plan.info()["partitionable"]
         out = np.empty_like(x)
         result, report = plan.evaluate({"x": x, "y": y}, out=out, workers=4, return_report=True)
@@ -107,7 +108,7 @@ def test_small_transcendental_map_uses_caller_and_workers(native_graph_runtime, 
 
     monkeypatch.setattr(resident, "resident_pool", RecordingPool)
     x = np.linspace(0.1, 1.0, 100_003)
-    plan = blosc2.NativeGraph.from_expression("sin(x) + cos(x)", {"x": x.dtype}, jit=False)
+    plan = NativeGraph.from_expression("sin(x) + cos(x)", {"x": x.dtype}, jit=False)
     expected = plan.evaluate({"x": x})
     result, report = plan.evaluate({"x": x}, workers=8, return_report=True)
     assert report["tasks"] == 4
@@ -146,7 +147,7 @@ def test_native_executor_joins_after_interrupted_wait(native_graph_runtime, monk
 
     monkeypatch.setattr(resident, "resident_pool", InterruptedPool)
     x = np.arange(600_003.0)
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype})
     with pytest.raises(KeyboardInterrupt, match="interrupted join"):
         plan.evaluate({"x": x}, workers=4)
     assert len(submitted) == 3
@@ -175,7 +176,7 @@ def test_native_executor_rejects_late_job_after_enqueue_failure(native_graph_run
     monkeypatch.setattr(resident, "resident_pool", EnqueueThenFailPool)
     x = np.arange(600_003.0)
     out = np.full_like(x, -999.0)
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype})
     try:
         with pytest.raises(RuntimeError, match="failed after enqueue"):
             plan.evaluate({"x": x}, out=out, workers=4)

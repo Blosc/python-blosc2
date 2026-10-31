@@ -10,7 +10,7 @@ You can get an object following the LazyArray API in any of the following ways:
 * Any expression that involves one or more NDArray objects, e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see `the lazyarray expressions tutorial <../tutorials/02.lazyarray-expressions.html>`_).
 * Using the ``lazyexpr`` constructor.
 * Using the ``lazyudf`` constructor (see `a tutorial <../tutorials/03.lazyarray-udf.html>`_).
-* Using ``@dsl_kernel`` and ``lazyudf`` for miniexpr-backed DSL kernels (see `the DSL kernels tutorial <../tutorials/03.lazyarray-udf-kernels.html>`_).
+* Calling a ``@blosc2.menudet`` function (see :doc:`../guides/menudet`).
 
 The LazyArray object is a thin wrapper around the expression or user-defined function that allows for lazy computation. This means that the expression is not computed until the ``compute`` or ``__getitem__`` methods are called. The ``compute`` method will return a new NDArray object with the result of the expression evaluation. The ``__getitem__`` method will return a NumPy object instead.
 
@@ -86,11 +86,13 @@ This object follows the `LazyArray`_ API for computation and storage.
 
 .. _DSLKernelReference:
 
-DSL Kernels
------------
+Legacy DSL compatibility
+------------------------
 
-For miniexpr-backed kernels, see `the dedicated tutorial <../tutorials/03.lazyarray-udf-kernels.html>`_.
-For the full DSL syntax, see the `DSL syntax reference <dsl_syntax.html>`_.
+The alpha ``@dsl_kernel`` decorator is retired and raises migration guidance.
+Use :doc:`menudet` for supported authoring and
+:doc:`../guides/migrating_to_menudet` for migration. The validators below remain
+compatibility helpers; syntax acceptance alone does not certify Menudet support.
 
 .. autofunction:: dsl_kernel
 

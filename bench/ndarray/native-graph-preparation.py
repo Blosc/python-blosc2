@@ -14,7 +14,8 @@ import time
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
+from blosc2.graph_plan import NativeGraph
 
 
 def old_prepare(dtype):
@@ -42,12 +43,12 @@ def main():
     if args.items < 0 or args.repeats < 1:
         parser.error("items must be nonnegative and repeats positive")
     signature = {"x": args.dtype, "y": args.dtype}
-    seed = blosc2.NativeGraph.from_expression("x * 2 + y", signature).to_json()
+    seed = NativeGraph.from_expression("x * 2 + y", signature).to_json()
     timings = {"old_export_twice_us": [], "native_json_us": [], "native_text_us": []}
     routes = {
         "old_export_twice_us": lambda: old_prepare(args.dtype),
-        "native_json_us": lambda: blosc2.NativeGraph.from_json(seed),
-        "native_text_us": lambda: blosc2.NativeGraph.from_expression("x * 2 + y", signature),
+        "native_json_us": lambda: NativeGraph.from_json(seed),
+        "native_text_us": lambda: NativeGraph.from_expression("x * 2 + y", signature),
     }
     for repeat in range(args.repeats):
         names = list(routes)
@@ -55,7 +56,7 @@ def main():
         for name in names:
             _, elapsed = timed(routes[name])
             timings[name].append(elapsed)
-    plan = blosc2.NativeGraph.from_json(seed)
+    plan = NativeGraph.from_json(seed)
     metadata = {"x": (args.dtype, (args.items,)), "y": (args.dtype, ())}
     schedule, specialize = timed(lambda: plan.specialize(metadata))
     values = {"x": np.arange(args.items, dtype=args.dtype), "y": np.array(3, dtype=args.dtype)}

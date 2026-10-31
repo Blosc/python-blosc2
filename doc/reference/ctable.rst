@@ -721,30 +721,21 @@ available for display, export, or occasional reads.  Use a generated column
 derived value frequently — the index pays for itself after the first few
 queries.
 
-Both forms accept plain expression strings, :func:`blosc2.dsl_kernel`-decorated
-functions, and :class:`blosc2.LazyUDF` objects.  DSL kernels support full Python
-control flow (``if``/``else``, ``where()``, loops) and have their source
-persisted and recompiled on open.
+Both forms accept expression strings and :class:`blosc2.MenudetKernel` objects
+with named input bindings. Author a function with :func:`blosc2.menudet`, obtain
+its kernel with ``specialize()``, and pass it to the registration method. Kernels
+support Menudet's defined control flow, not arbitrary Python, and persist as
+validated artifacts without Python function reconstruction. See
+:doc:`../guides/migrating_to_menudet` for an example.
 
 .. warning::
 
-    Because DSL kernel source is persisted in the table metadata and re-executed
-    during :func:`blosc2.open`, **do not open** ``.b2d`` files from untrusted
-    sources if they may contain DSL computed or generated columns.  The kernel
-    source runs with restricted builtins (no ``__import__``), but arbitrary
-    Python code execution still carries risk.
-
-When passing a :class:`blosc2.LazyUDF` built with an explicit ``jit_backend=``
-(e.g. ``jit_backend="cc"`` to use the system C compiler instead of the default
-TCC), that choice is persisted in the column metadata and automatically restored
-on :func:`blosc2.open`.  This matters for kernels where one backend produces
-measurably faster code — the optimised backend stays active for the lifetime of
-the table without any extra configuration::
-
-    t.add_generated_column(
-        "score",
-        values=blosc2.lazyudf(my_kernel, (t.col_a, t.col_b), jit_backend="cc"),
-    )
+    Historical source-backed table columns are unsupported, even with
+    ``deserialize="full"``. Before upgrading, export their values with a previous
+    release and reauthor/compare as described in the migration guide. Legacy
+    columns are not silently dropped or reinterpreted. New Menudet columns use
+    independent-row semantics. Menudet itself is not a general sandbox for
+    arbitrary untrusted source or data.
 
 When a computed result should become a stored snapshot rather than a live
 virtual column, use :meth:`CTable.materialize_computed_column` to convert it

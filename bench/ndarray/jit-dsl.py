@@ -18,6 +18,7 @@ import time
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Internal normalization benchmark.
 
 where = np.where
 sin = np.sin
@@ -26,7 +27,7 @@ exp = np.exp
 log = np.log
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_dsl(x, y):
     acc = x
     i = 0
@@ -39,7 +40,7 @@ def k_dsl(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_heavy_dsl(x, y, niter):
     acc = x
     i = 0
@@ -57,7 +58,7 @@ def k_heavy_dsl(x, y, niter):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def k_arith_loop_dsl(x, y, niter):
     acc = x
     i = 0
@@ -73,7 +74,7 @@ def k_arith_loop_dsl(x, y, niter):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def mandelbrot_dsl(cr, ci, max_iter):
     zr = cr * 0.0
     zi = ci * 0.0

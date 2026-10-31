@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
+from blosc2.graph_plan import NativeGraph
 from conftest import orthogonal_cases
 
 
@@ -19,7 +21,7 @@ def map_runtime(native_graph_runtime, monkeypatch, request):
     backend = getattr(request.node, "callspec", None)
     if backend is not None and "backend" in backend.params:
         monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend.params["backend"])
-    probe = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    probe = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
     if not probe.has_jit:
         pytest.skip("Graph JIT unavailable")
     monkeypatch.setattr(native, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 128 * 1024)
@@ -114,7 +116,7 @@ def test_prefilter_workers_join_failures(monkeypatch):
 
     values = np.arange(4099, dtype="int16")
     x = blosc2.asarray(values, chunks=(256,), blocks=(64,))
-    author = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
+    author = SourceKernel.from_source("def k(x):\n    return x + 1\n")
     native = blosc2.MenudetKernel.from_json(author.export({"x": "int16"}, "int16"), jit=True)
     output = np.empty_like(values)
     completed = []
@@ -248,7 +250,7 @@ def test_parallel_map_worker_failure_is_not_replayed(monkeypatch):
 
 def test_graph_sources_explicit_output_validation():
     values = np.arange(16, dtype=np.float64)
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
     schedule = plan.specialize({"x": (values.dtype, values.shape)})
     out = np.empty_like(values)
     result, _ = schedule.execute_sources({"x": values}, {}, out=out)
@@ -323,7 +325,7 @@ def test_balanced_regions_split_physical_blocks_with_tail_padding():
 
     values = np.arange(4 * 65536 + 1, dtype=np.float64)
     x = blosc2.asarray(values, chunks=(60000,), blocks=(4096,))
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
     units = native._compressed_map_blocks(x, values.size)
     regions = native._compressed_map_schedules(plan, values.shape, 8, 60000, 4096, units, 4096)
     assert regions[0][0] == 0

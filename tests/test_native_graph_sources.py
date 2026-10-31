@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 from conftest import orthogonal_cases
 
 
@@ -37,7 +38,7 @@ def test_graph_sources_axes_broadcast_and_mixed_storage(op, axis, keepdims, monk
     x = blosc2.asarray(values, chunks=(2, 3), blocks=(1, 3))
     y = np.ones((1, 6))
     expression = f"{op}(x + y, axis={axis!r}, keepdims={keepdims!r})"
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": "float64", "y": "float64"}, jit=True)
+    plan = NativeGraph.from_expression(expression, {"x": "float64", "y": "float64"}, jit=True)
 
     def forbidden(*args, **kwargs):
         pytest.fail("Graph source materialized a compressed operand")
@@ -55,7 +56,7 @@ def test_graph_sources_axes_broadcast_and_mixed_storage(op, axis, keepdims, monk
 def test_graph_sources_direct_reduction_dtype(dtype):
     values = np.arange(20).astype(dtype)
     x = blosc2.asarray(values, chunks=(7,), blocks=(3,))
-    plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
+    plan = NativeGraph.from_expression("sum(x)", {"x": dtype})
     result, report = plan.evaluate_sources({"x": x}, tile_items=4, return_report=True)
     # Native graph sums use fixed 64-bit integer accumulators, independently of
     # NumPy's platform-sized defaults (32 bits for bool/int32 on WASM32).
@@ -131,7 +132,7 @@ def test_graph_sources_validation_precedes_reads(monkeypatch):
         pytest.fail("Invalid graph bindings read storage")
 
     monkeypatch.setattr(StorageReader, "read", forbidden)
-    plan = blosc2.NativeGraph.from_expression("sum(x + y)", {"x": "float64", "y": "float64"})
+    plan = NativeGraph.from_expression("sum(x + y)", {"x": "float64", "y": "float64"})
     x = blosc2.asarray(np.ones(8))
     y = blosc2.asarray(np.ones(7))
     with pytest.raises(blosc2.MenudetError):
@@ -161,7 +162,7 @@ def test_graph_sources_staged_rejects_before_reads(monkeypatch):
         pytest.fail("Unsupported staged graph read storage")
 
     monkeypatch.setattr(StorageReader, "read", forbidden)
-    plan = blosc2.NativeGraph.from_expression("x - sum(x)", {"x": "float64"})
+    plan = NativeGraph.from_expression("x - sum(x)", {"x": "float64"})
     with pytest.raises(ValueError, match="single-region"):
         plan.evaluate_sources({"x": blosc2.asarray(np.ones(8))})
 
@@ -211,9 +212,7 @@ def test_graph_sources_resident_mask_participation(monkeypatch):
     values = np.arange(20.0)
     x = blosc2.asarray(values, chunks=(7,), blocks=(3,))
     mask = np.arange(values.size) % 2 == 0
-    plan = blosc2.NativeGraph.from_expression(
-        "sum(x + 1, where=mask)", {"x": "float64", "mask": "bool"}, jit=True
-    )
+    plan = NativeGraph.from_expression("sum(x + 1, where=mask)", {"x": "float64", "mask": "bool"}, jit=True)
 
     def forbidden(*args, **kwargs):
         pytest.fail("Masked graph materialized input")
@@ -233,7 +232,7 @@ def test_graph_sources_compressed_mask_rejected_before_reads(monkeypatch):
 
     monkeypatch.setattr(StorageReader, "read", forbidden)
     inputs = {"x": blosc2.asarray(np.ones(8)), "mask": blosc2.asarray(np.ones(8, dtype=bool))}
-    plan = blosc2.NativeGraph.from_expression("sum(x, where=mask)", {"x": "float64", "mask": "bool"})
+    plan = NativeGraph.from_expression("sum(x, where=mask)", {"x": "float64", "mask": "bool"})
     with pytest.raises(blosc2.MenudetError):
         plan.evaluate_sources(inputs)
 
@@ -245,7 +244,7 @@ def test_graph_sources_empty_domain_does_not_read(monkeypatch):
         pytest.fail("Empty graph read storage")
 
     monkeypatch.setattr(StorageReader, "read", forbidden)
-    plan = blosc2.NativeGraph.from_expression("sum(x + 1)", {"x": "float64"})
+    plan = NativeGraph.from_expression("sum(x + 1)", {"x": "float64"})
     result, report = plan.evaluate_sources({"x": blosc2.asarray(np.empty(0))}, return_report=True)
     assert result == 0
     assert report["reader_bytes"] == report["maximum_reader_items"] == 0
@@ -312,7 +311,7 @@ def test_native_span_unaligned_block_sized_requests(graph_sources_runtime):
             self.start = 3
             self.shape = (384,)
 
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"})
+    plan = NativeGraph.from_expression("x + 1", {"x": "float64"})
     schedule = plan.specialize({"x": (values.dtype, (384,))}, tile_items=128)
     result, report = schedule.execute_sources({"x": x}, {"x": ReaderState(SpanReader())}, native_spans=True)
     np.testing.assert_array_equal(result, values[3:387] + 1)

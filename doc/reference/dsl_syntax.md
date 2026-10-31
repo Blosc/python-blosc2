@@ -1,522 +1,181 @@
-# miniexpr DSL Syntax (Canonical Reference)
+# Menudet syntax
 
-This is the practical reference for the DSL used by `@blosc2.dsl_kernel`
-functions (and checked by `blosc2.validate_dsl()`).
-It focuses on what works today and the most common gotchas.
-The portable subset is named **Menudet**, a little language for portable
-computation on arrays and tables. See the [Menudet reference](menudet.rst)
-for the Menudet 0.1 beta contract and numerical rules. This page also documents ordinary full-DSL features;
-acceptance here does not imply portability.
-For usage walkthroughs and end-to-end examples, see the
-[LazyArray UDF DSL kernels tutorial](../tutorials/03.lazyarray-udf-kernels.ipynb).
+Use `@blosc2.menudet` for portable array kernels. See the
+[guide](../guides/menudet.rst) for usage and the [API reference](menudet.rst) for
+options. The old DSL interface is retired; see the
+[migration guide](../guides/migrating_to_menudet.rst).
 
 ## Quick start
 
-A valid DSL program is one function:
+Decorate a function, call it with arrays, and read the lazy result with `[:]`:
 
 ```python
+import blosc2
+import numpy as np
+
+
+@blosc2.menudet
 def kernel(x, y):
-    temp = sin(x) ** 2
-    return temp + cos(y) ** 2
+    temp = np.sin(x) ** 2
+    return temp + np.cos(y) ** 2
+
+
+x = np.array([0.0, 0.5, 1.0])
+values = kernel(x, x)[:]
+np.testing.assert_allclose(values, [1.0, 1.0, 1.0])
 ```
 
-Use Python-style indentation and always return a value on the paths you execute.
+Calls specialize and validate automatically before execution. `[:]` returns
+NumPy values; `.compute()` materializes a Blosc2 array. The Python body is never
+executed as a fallback.
 
-### Native source without a Python function
+## Captures and persistence
 
-`blosc2.DSLKernel.from_source(source)` constructs a native-only kernel without
-executing source as Python or inspecting Python globals:
-
-```python
-source = """# me:compiler=tcc
-def affine(x):
-    return x * 2.0 + 1.0
-"""
-kernel = blosc2.DSLKernel.from_source(source)
-result = blosc2.lazyudf(kernel, (x,), dtype="float64")[:]
-```
-
-The source and header pragmas are preserved verbatim. Input dtypes come from the
-supplied arrays; pass an explicit output dtype. The native compiler validates the
-body with these types during computation. The constructor inspects only the
-plain positional function header and does not certify Menudet support.
-Frontend conveniences, captured globals, and Python-function fallback are not
-available on this path; use native function spellings such as `sin(x)`.
-
-This is separate from the existing Python-based persistence reconstruction path.
-Menudet artifact export/import is still under development. The full native
-language reference and Menudet profile live in miniexpr's
-`doc/dsl-syntax.md` and `doc/dsl-spec/0.1.md`, respectively. The Menudet profile
-and artifact contract are beta; see [Menudet artifacts](menudet.rst)
-for the release boundary and legacy Python persistence policy.
-
-### Experimental Menudet validation
-
-```python
-info = blosc2.validate_menudet(source, {"x": "float64"}, "float64")
-if not info["valid"]:
-    print(info["status"], info["line"], info["column"], info["error"])
-```
-
-This native-only check uses raw source and explicit logical dtypes, with no
-frontend rewriting or captured globals. It neither executes the kernel nor
-invokes a JIT compiler. It reports version, signature, source, and unsupported
-feature errors separately. Potential runtime errors, including missing returns
-on some paths, do not automatically invalidate a program.
-
-Menudet 0.1 beta admits Boolean, standard integer widths, float32/float64,
-complex64/complex128 and fixed strings,
-NumPy-style numeric typing/arithmetic, block reductions and explicit ND context.
-It is separate from the ordinary full language described below.
-Validation is not a sandbox, backend-support probe, or a guarantee about
-arbitrary runtime data. Python-Blosc2 bundles the paired native implementation;
-custom source overrides must provide the same Menudet 0.1 contract. Validation
-never falls back to executing Python.
-
-### Menudet artifact export and import (beta)
-
-Export with explicit input/output dtypes. Scalar globals and closure values are
-snapshotted into typed manifest constants, not inserted as Python literals:
+Supported scalar globals and closure values are snapshotted at decoration:
 
 ```python
 SCALE = 2.0
 
 
-@blosc2.dsl_kernel
+@blosc2.menudet
 def scaled(x):
     return x * SCALE
 
 
-artifact = scaled.export({"x": "float64"}, "float64")
-SCALE = 99.0  # Does not change the saved artifact.
-kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
-values = kernel.evaluate({"x": np.arange(4, dtype=np.float64)})
-# values: array([0., 2., 4., 6.])
+SCALE = 99.0  # Does not change the captured value.
+values = scaled(np.arange(4, dtype="float64"))[:]
+# array([0., 2., 4., 6.])
 ```
 
-`export()` returns deterministic UTF-8 JSON text; save it with an ordinary file
-write. `from_json()` accepts text or bytes, not a pathname or decoded mapping.
-Import uses the same native JSON loader as C and does not need the author's module,
-function, decorators, globals, Python source reconstruction, or frontend rewrites.
-`evaluate()` returns a new NumPy array; `blosc2.asarray(values)` can materialize
-compressed storage. `kernel.lazy()` binds explicit logical partitions for lazy
-evaluation and portable persistence. Newly authored compliant DSLKernel-backed
-LazyUDF saves also normalize and validate portable native recipes automatically.
+NumPy scalar captures retain their dtype; use `np.float32(2)` when that dtype
+matters. Arrays, arbitrary objects and callbacks cannot be captured. Pass arrays
+as arguments instead.
 
-Python `bool`, `int`, and `float` captures infer `bool`, `int64`, and `float64`.
-Supported NumPy scalar types retain their dtype. Use
-`capture_dtypes={"SCALE": "float32"}` to explicitly specialize a capture; finite
-float narrowing and explicit integer-to-float conversion round to the chosen dtype;
-out-of-range values reject. Arrays (including zero-dimensional arrays), objects, unsupported
-scalar types, unresolved names, and external callbacks cannot be captures.
-Export does not call the kernel or capture conversion hooks. It reuses supported
-authoring normalization, such as `np.sin(x)`, before native profile validation.
-Fixed byte/Unicode scalar snapshots are supported; arbitrary objects and callbacks are not.
-
-Native-only kernels can bind existing parameters as constants explicitly:
+Save a bound lazy computation using persistent operands:
 
 ```python
-author = blosc2.DSLKernel.from_source(
-    "# me:compiler=cc\ndef scaled(x, scale):\n    return x * scale\n"
-)
-artifact = author.export({"x": "float64"}, "float64", constants={"scale": 2.0})
+stored = blosc2.asarray(np.arange(4, dtype="float64"), urlpath="input.b2nd", mode="w")
+recipe = scaled(stored)
+recipe.save("scaled.b2nd")
+reopened = blosc2.open("scaled.b2nd")
+values = reopened[:]
 ```
 
-Every source parameter requires exactly one runtime input or constant binding.
-Parameters and captures may have different supported dtypes; computation is
-operand-driven before output conversion. Manifest float constants preserve
-IEEE bit patterns, including signed zero and non-finite values; integer constants
-are range-checked decimal strings. Comments and retained native pragmas survive
-parameterization. Required strict FP semantics are independent of host defaults;
-compiler pragmas remain preferences. Supported kernels can use JIT; otherwise they
-use the typed interpreter unless JIT is required.
-
-Runtime arrays are bound by name in any mapping order and must have the exact
-declared logical dtype and common shape. The adapter converts endian order,
-alignment, and strides, but does not broadcast arrays or silently change their
-dtype. Constant-only kernels require `evaluate({}, shape=(...))`; empty
-elementwise arrays validate bindings without execution, whereas scalar reductions
-obey their specified empty identities/errors. `MenudetError` provides `status`, `native_status`, `line`, and
-`column` for malformed artifacts, unsupported requirements, source, binding, and
-evaluation failures. The artifact format is not a sandbox or an arbitrary-input
-numerical-correctness guarantee.
-
-Native dependency packaging is still pending. For development builds, use both
-`FETCHCONTENT_SOURCE_DIR_MINIEXPR` and `MINIEXPR_BUILD_ARTIFACT=ON`, for example:
-
-```sh
-conda run -n blosc2 python -m pip install -e . --no-build-isolation --no-deps \
-  --config-settings=cmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=/path/to/miniexpr \
-  --config-settings=cmake.define.MINIEXPR_BUILD_ARTIFACT=ON
-```
-
-The optional adapter links pinned yyjson only when enabled. Builds without the
-adapter remain usable and report `NotImplementedError` for artifact operations,
-without attempting Python validation/execution as a fallback. The native candidate
-format and shared fixtures live in miniexpr's `doc/dsl-spec/artifact-0.1.md` and
-`tests/menudet-artifacts/`.
-
-`@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
-`if`/`for`/`while` and that compiles under this grammar is dispatched here
-automatically, so its branches and loops actually run, once per chunk, instead
-of `jit`'s normal approach of calling the function only once to record a single
-expression — which would otherwise capture just whichever branch that one call
-happened to take, silently dropping the rest. `@blosc2.dsl_kernel` remains the
-explicit form — it always requires the DSL to compile, equivalent to
-`jit(strict=True)`.
+Saved computations preserve their captures, operand references and logical
+partitions. Loading does not reconstruct a Python function.
 
 ## Program shape
 
-- Exactly one top-level `def ...:` function is expected.
-- Leading blank lines and header comments are allowed.
-- Any extra trailing content after the function is a parse error.
-- Nested `def` inside the function body is not allowed.
-- The first statement may be a docstring: single/double-quoted or triple-quoted,
-  including multiline strings and `r`/`u` prefixes. It is ignored during execution;
-  `@blosc2.dsl_kernel` preserves the Python function's `__doc__`.
+- Write one function using Python indentation. A leading docstring is allowed.
+- Use named positional parameters; calls can supply keywords and defaults.
+  `*args`, `**kwargs` and keyword-only parameters are not supported.
+- Array inputs supply their element dtypes and can broadcast. Annotations
+  declare element dtypes, not shapes, and annotated inputs must match exactly.
+- Scalar parameters and nonnumeric returns require dtype annotations.
+- Return a value on every executed path. Local variables get their types from
+  their expressions; no separate declarations are needed.
 
-## Header pragmas
+## Statements and control flow
 
-Supported file-header pragmas:
-
-- `# me:fp=strict|contract|fast`
-- `# me:compiler=tcc|cc`
-- `# me:math=auto|system|sleef|accelerate`
-- `# me:ulp=u10|u35`
-
-Notes:
-
-- Pragma keys must be unique.
-- Unknown `me:*` pragmas are errors.
-- Malformed pragma values are errors.
-- `auto` and `system` both select system math; `auto` is the default and does
-  not consult `ME_SIMD_MATH_BACKEND`. Explicit `sleef`/`accelerate` requests fail
-  during preparation when unavailable.
-- `me:ulp` is valid only with SLEEF; omitted accuracy is `u35`.
-- `contract` and `fast` require the `cc` backend (TCC supports strict only).
-- An explicit pragma overrides the matching environment setting
-  (`ME_DSL_FP_MODE`, `ME_SIMD_MATH_BACKEND`) for that prepared kernel.
+Supported statements include assignments, compound assignments, `return`,
+`if`/`elif`/`else`, `for ... in range(...)`, `while`, `break`, `continue` and
+`pass`.
 
 ```python
-# me:compiler=cc
-# me:fp=fast
-# me:math=sleef
-# me:ulp=u35
-def kernel(x):
-    return sin(x) + cos(x)
-```
-
-## Function signature and inputs
-
-- Parameters are positional names: `def kernel(a, b, c): ...`
-- Parameter names must be unique.
-- At compile time, DSL parameter names must match input variable names by set membership
-  (order may differ, count must match).
-
-## Statements
-
-Supported statement forms:
-
-- Assignment: `a = expr`
-- Compound assignment: `+=`, `-=`, `*=`, `/=`, `//=`
-- Expression statement: `expr`
-- Return: `return expr`
-- Print: `print(...)`
-- Conditionals: `if` / `elif` / `else`
-- While loop: `while cond:`
-- For loop: `for i in range(...):`
-- Loop control: `break`, `continue`
-- No-op: `pass` (also valid as the sole statement in a branch or loop body)
-
-General rules:
-
-- Python-style indentation is required.
-- Empty blocks are invalid.
-- `elif`/`else` must belong to a matching `if`.
-- Deprecated forms like `break if cond` / `continue if cond` are not part of DSL syntax.
-- Simple statements may share a line, separated by `;`, including inside indented
-  blocks. A trailing `;` is allowed; empty statements (`;;`) are not.
-- Compound statements (`if`, `for`, `while`) require their own lines and indented
-  bodies; they cannot follow a semicolon. Inline suites such as `if x: return x`
-  are not supported.
-- Expressions and calls can continue across lines inside parentheses, including
-  comments. This does not add list literals or indexing to the expression grammar.
-
-### Docstrings and semicolon-separated statements
-
-```python
-@blosc2.dsl_kernel
-def kernel(x):
-    """Transform each element.
-
-    Documentation is not evaluated by the interpreter or JIT.
-    """
-    y = x + 1; z = y * y  # fmt: skip
-    if z > 4:
-        z -= 2; z *= 3  # fmt: skip
-    return z
-```
-
-### `if` / `elif` / `else` example
-
-```python
-def kernel(x):
-    if x > 0:
-        y = x
-    elif x == 0:
-        y = 1
-    else:
+@blosc2.menudet
+def adjusted(x):
+    if x < 0:
         y = -x
+    else:
+        y = x
+    for i in range(3):
+        y = y * 0.5
     return y
 ```
 
-### `for` example
-
-```python
-def kernel(n):
-    acc = 0
-    for i in range(0, n, 1):
-        acc += i
-    return acc
-```
-
-### `while` example
-
-```python
-def kernel(x):
-    i = 0
-    y = x
-    while i < 3:
-        y = y * 2
-        i += 1
-    return y
-```
+Conditions and loop control can differ between array elements. `range` accepts
+one, two or three arguments; a zero step raises an error. `while` loops have an
+iteration limit. Unsupported constructs and runtime errors raise rather than
+falling back to Python.
 
 ## Expressions and function calls
 
-Expressions are compiled by miniexpr with DSL checks.
+- Arithmetic, comparisons, Boolean operations (`and`, `or`, `not`) and supported
+  integer bitwise operations are available.
+- Chained comparisons such as `0 <= x < 10` short-circuit left to right.
+- Recognized mathematical calls include `np.sin(x)`, `np.sqrt(x)` and their
+  native spellings. This does not make arbitrary NumPy functions available.
+- `where(condition, yes, no)` evaluates only the selected branch for each element.
+- `int(x)`, `float(x)` and `bool(x)` perform explicit conversions; fixed-width
+  conversions such as `int32(x)` are also available.
+- Numeric literals support digit separators and binary, octal and hexadecimal
+  integer prefixes. Integer arithmetic is fixed-width, not arbitrary precision.
 
-### Numeric literals
+Menudet supports Boolean, standard integer, float32/float64, complex and
+fixed-width bytes/Unicode types. Intermediate types depend on the operands;
+requesting a wider output does not widen intermediate arithmetic. See
+[numerical behavior](menudet_accuracy.md) for overflow, conversion and accuracy
+rules.
 
-Python-style digit separators are accepted in integers and floating-point
-literals: `1_000`, `1_000.2_5`, `.1_25`, and `1e1_0`. Integer literals also accept
-binary (`0b1010`), octal (`0o755`), and hexadecimal (`0xff`) prefixes, including
-uppercase prefixes and separators such as `0x_FF` or `0b10_10`.
+## Block reductions
 
-Malformed separators, invalid base digits, and nonzero decimal integers with
-leading zeros are rejected. Prefixed integer magnitudes must fit in an unsigned
-64-bit value; numeric evaluation retains the existing dtype and precision rules,
-not Python's arbitrary-precision integer arithmetic. Strings and identifiers
-(such as `x_1`) are not modified.
+Use `block_sum`, `block_prod`, `block_min`, `block_max`, `block_mean`, `block_any`
+and `block_all` to reduce elements within a logical partition. Each takes one
+argument, without `axis` or `keepdims`.
 
-Commonly supported:
+These operations do not combine different partitions. Use ordinary lazy
+expressions for whole-array or axis reductions. See the
+[guide](../guides/menudet.rst) for `partitions` and `cardinality` examples.
 
-- Names and numeric constants
-- Unary operators: `+`, `-`, logical not (`not` / `!`)
-- Arithmetic and bitwise binary operators
-- Comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Function calls to supported miniexpr functions
-- User-registered C functions/closures passed in `me_variable`
+## Array coordinates
 
-DSL kernels accept chained comparisons such as `0 <= x < 10` or
-`a < b <= c != d`. Operands are evaluated left-to-right, each at most once;
-later operands are skipped as soon as a comparison fails. Chains work in
-expressions, assignments, branches, and loop conditions (including `continue`).
-The native miniexpr DSL front end lowers them to temporary variables and guarded
-statements for both the interpreter and TCC/CC JIT. C and other callers can pass
-raw chain syntax directly, without Python preprocessing. JavaScript emission
-performs equivalent lowering separately. Existing DSL `and`/`or` Boolean-result
-rules apply. This syntax extension applies to DSL kernels, not the separate
-classic expression API.
+Reserved symbols expose coordinates within the logical array:
 
-Chaining does not expand the supported operand types or functions: existing
-string-comparison and per-element reduction restrictions still apply.
+| Symbol | Meaning |
+| --- | --- |
+| `_i0`, `_i1`, ... | Coordinate along each dimension |
+| `_n0`, `_n1`, ... | Size of each dimension |
+| `_ndim` | Number of dimensions |
+| `_flat_idx` | C-order linear index |
 
-Cast intrinsics:
-
-- `int(expr)`
-- `float(expr)`
-- `bool(expr)`
-
-Cast rules:
-
-- Use function-call form only.
-- Exactly one argument.
-
-## Temporary variable type inference
-
-Local temporaries get their dtype from the expression assigned to them.
-
-Example:
-
-```python
-def kernel(x):
-    temp = sin(x) ** 2
-    return temp + cos(x) ** 2
-```
-
-In this example, `temp` is inferred from `sin(x) ** 2` (typically a floating type).
-
-Notes:
-
-- You do not need to declare local variable types.
-- Boolean output does not force numeric temporaries to Boolean: operand types
-  are inferred independently, and the return value is converted to Boolean.
-- If you assign a value with an incompatible dtype to the same local later, compilation fails.
-
-## Loops
-
-### `for ... in range(...)`
-
-Supported forms:
-
-```python
-for i in range(stop):
-    ...
-for i in range(start, stop):
-    ...
-for i in range(start, stop, step):
-    ...
-```
-
-Rules:
-
-- `range` takes 1, 2, or 3 arguments.
-- `step == 0` raises a runtime evaluation error.
-
-### `while`
-
-- `while` condition is a regular DSL expression.
-- Runtime iteration cap is enforced by `ME_DSL_WHILE_MAX_ITERS`.
-
-### Reductions inside control flow
-
-`sum`, `max`, `min` and other block reductions collapse the whole chunk being
-evaluated to one value, not one value per element. Using one as the
-condition of `if`/`while`, or assigning one to a local that per-element code
-later reads (e.g. `y = max(x)` followed by `if x > 0: y = y + 1`), does
-**not** raise a compile-time or runtime error -- it compiles and runs, and
-produces results that are only correct for element 0 of the block; every
-other element sees a stale/zero value where the reduction result should be.
-This is a rough edge in the underlying
-[miniexpr](https://github.com/Blosc/miniexpr) compiler, not something this
-Python layer validates today. Write the per-element form instead (drop the
-reduction, e.g. `if abs(diff) < tol` rather than `if max(abs(diff)) < tol`)
-whenever the intent is a per-element, not whole-block, decision.
-
-## `print(...)`
-
-`print` is supported as a DSL statement.
-
-Rules:
-
-- At least one argument is required.
-- First argument may be a format string.
-- Placeholder count must match provided values.
-- Printed expressions must be uniform/scalar for the block.
-
-## Reserved names
-
-Do not use these as user variable/function names in DSL:
-
-- `print`, `int`, `float`, `bool`, `def`, `return`
-- `_ndim`
-- `_i<d>` and `_n<d>` (reserved ND symbols)
-- `_flat_idx`
-
-## ND reserved symbols
-
-When referenced, these are synthesized by DSL compiler/runtime:
-
-- `_i0`, `_i1`, ... (index per dimension)
-- `_n0`, `_n1`, ... (shape per dimension)
-- `_ndim`
-- `_flat_idx` (global C-order linear index)
-
-## Typing and return behavior
-
-- Reassigning incompatible dtypes to the same local is a compile-time error.
-- Return dtype must be consistent across all `return` statements.
-- Non-guaranteed return paths may compile; if execution reaches a missing return path, evaluation fails at runtime.
-
-### Compute dtype and integer exactness
-
-The kernel's *output* dtype generally determines the arithmetic compute dtype:
-
-- With an integer output dtype, arithmetic is exact int64. Intermediates must fit in
-  int64: products at or above 2^63 overflow and give wrong results.
-- With a float output dtype, integer arithmetic is generally evaluated in float64,
-  where integer operations are exact only below 2^53. Keep products under that bound
-  (e.g. a 32-bit value times a multiplier below 2^21); larger products silently lose
-  low bits.
-- Native chained-comparison captures retain each operand's inferred dtype, so
-  comparisons of int64 operands can remain exact even with a float output.
-  Automatic JavaScript dispatch therefore leaves 64-bit integer input arrays on
-  miniexpr; the JavaScript bridge converts inputs to float64.
-- Values outside the output dtype's range wrap two's-complement on the final store
-  (e.g. returning a value in `[0, 2^32)` into an int32 output yields the full
-  `[-2^31, 2^31)` range).
-
-## Compound assignment desugaring
-
-- `a += b` -> `a = a + b`
-- `a -= b` -> `a = a - b`
-- `a *= b` -> `a = a * b`
-- `a /= b` -> `a = a / b`
-- `a //= b` -> `a = floor(a / b)`
-
-## Compile-time vs runtime errors
-
-Compile-time error examples:
-
-- Invalid program shape or signature
-- Unsupported statement forms
-- Invalid `range(...)` arity
-- Invalid cast intrinsic arity
-- Reserved-name misuse
-- Return dtype mismatch
-
-Runtime error examples:
-
-- `range(..., step=0)`
-- Missing return on executed control path
-- While-loop iteration cap exceeded
+Set `ndim` on the decorator when using these symbols. Do not use them for your
+own variables. Slicing a lazy result retains its original coordinates and
+reduction groups.
 
 ## Execution backends
 
-A DSL kernel can use the following execution backends. Set `jit` / `jit_backend`
-on `lazyudf()` or `compute()`; indexing uses the configured/default settings.
-See the [JIT options reference](jit.rst) for defaults, environment precedence,
-caching, and diagnostics:
+The default policy chooses native interpretation or JIT. Use `jit=False` for
+interpretation, `jit=True` to prefer JIT, or `require_jit=True` to require it.
+Unsupported JIT features can use the interpreter before execution; numerical
+errors are never retried through another backend. Complex kernels currently
+use the interpreter only. See [JIT options](jit.rst) for advanced controls.
 
-- **miniexpr** (default on native builds): a runtime JIT (TinyCC, `jit_backend="tcc"`)
-  with an interpreter fallback. `jit=False` skips JIT; `jit=True` is best effort
-  and also falls back if executable allocation or compilation is denied. Supports the full DSL described here,
-  including integer/complex dtypes and reductions.
-- **System C compiler** (`jit_backend="cc"`): miniexpr generates optimized shared
-  libraries using an installed compiler and caches them for subsequent processes.
-  Compilation or loading failures also fall back to the interpreter. TCC instead
-  compiles in memory without creating JIT cache artifacts.
-- **JavaScript** (`jit_backend="js"`): transpiles the kernel to JavaScript and runs it
-  through the browser's JIT. **WebAssembly/Pyodide only** — requesting it elsewhere raises.
-  Under WebAssembly it is also the *default* for eligible kernels (set `jit=False` or
-  `strict_miniexpr=True` to opt out), and silently falls back to miniexpr for anything it
-  cannot handle.
+## Unsupported Python features
 
-The JavaScript backend computes in float64 and covers floating-point element-wise kernels:
-arithmetic, comparisons, `where`, `if`/`elif`/`else`, `for ... in range(...)`/`while`
-loops, the index/shape symbols (`_i0`/`_n0`/`_ndim`/`_flat_idx`), and the standard math
-functions. It also accepts **integer inputs** when the output dtype is floating. It does
-**not** support integer/complex *output*, reductions, or constructs outside the transpiled
-subset; those stay on miniexpr (or, with an explicit `jit_backend="js"`, raise).
+Menudet is a restricted language, not arbitrary Python. Unsupported features
+include callbacks, side effects such as `print`, nested function definitions,
+arbitrary dynamic indexing, ternary expressions, and `for`/`while ... else`.
 
-## Python syntax that is out of DSL scope
+## Optional native source validation
 
-These Python features are not part of this DSL:
+Decorated calls validate automatically. Use `validate_menudet()` only when you
+want to check raw native source without executing it:
 
-- Ternary expression: `a if cond else b`
-- `for ... else` and `while ... else`
-- Keyword-argument calls and other call forms outside the supported subset
-- Docstrings (or any other bare string-literal statement) inside the kernel
-  body -- this is a compile-time parse error at the miniexpr level, not a
-  silently-ignored statement.
+```python
+source = "def affine(x):\n    return x * 2.0 + 1.0\n"
+info = blosc2.validate_menudet(source, {"x": "float64"}, "float64")
+if not info["valid"]:
+    print(info["status"], info["line"], info["column"], info["error"])
+```
+
+Raw source validation does not resolve Python globals or rewrite NumPy calls;
+use native spellings such as `sin(x)`. A successful check cannot guarantee that
+all runtime data avoids numerical errors. Menudet is not a sandbox for arbitrary
+untrusted source or data.
+
+## Further reading
+
+- [Menudet user guide](../guides/menudet.rst): authoring, persistence and table integration.
+- [API reference](menudet.rst): decorators, kernels and validation.
+- [Numerical behavior](menudet_accuracy.md): typing, conversions and accuracy.
+- [Migration guide](../guides/migrating_to_menudet.rst): replacing legacy DSL code and files.

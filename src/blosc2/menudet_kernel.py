@@ -335,7 +335,7 @@ def _artifact_semantics(source, version, casting):
 
 
 def export_menudet_kernel(kernel, input_dtypes, output_dtype, **options):
-    """Implementation of :meth:`blosc2.DSLKernel.export`; does not call the kernel."""
+    """Export an internally normalized source kernel without calling its Python body."""
     return prepare_menudet_kernel(kernel, input_dtypes, output_dtype, **options).to_json()
 
 
@@ -494,12 +494,12 @@ def _artifact_with_output(artifact, output_dtype):
 
 
 class MenudetKernel:
-    """An owned, typed native artifact; no originating function or Python fallback.
+    """An already specialized Menudet kernel, with no Python fallback.
 
-    Use ``from_json`` to import and ``evaluate`` to return NumPy values. Inputs
-    are same-shaped logical arrays, bound by name. The installed native adapter
-    enforces its supported profiles. Menudet 0.1 beta descriptor blocks are available
-    only when that runtime exposes the extended ABI; no sibling build is inferred.
+    Obtain a kernel with :meth:`blosc2.MenudetFunction.specialize` and use ``evaluate``
+    to return NumPy values. Persist bound lazy computations with ``save`` and
+    reopen them with :func:`blosc2.open`. Eager inputs are same-shaped logical
+    arrays, bound by name.
     """
 
     @classmethod

@@ -4,13 +4,14 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 
 @pytest.fixture(autouse=True)
 def execution_threads(native_graph_runtime):
     if blosc2.IS_WASM:
         pytest.skip("These automatic map routes require host JIT/thread/prefilter support")
-    probe = blosc2.NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    probe = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
     if not probe.has_jit:
         pytest.skip("Automatic native map dispatch requires an available graph JIT")
     # Compressed-input NumPy maps need at least two workers. Do not inherit a

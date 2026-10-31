@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 SCALE = 2.0
 BIAS = -1.0
@@ -30,14 +31,14 @@ BIAS = -1.0
 def test_explicit_block_reduction_names(version, operation):
     output = "bool" if operation in {"any", "all"} else "float64"
     source = f"def k(x):\n    return block_{operation}(x)\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = DSLKernel.from_source(source).export(
         {"x": "float64"}, output, version=version, cardinality="block_scalar"
     )
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     x = np.array([1.0, 2.0, 3.0])
     np.testing.assert_array_equal(kernel.evaluate({"x": x}), getattr(np, operation)(x))
     with pytest.raises(blosc2.MenudetError):
-        blosc2.DSLKernel.from_source(f"def k(x):\n    return {operation}(x)\n").export(
+        DSLKernel.from_source(f"def k(x):\n    return {operation}(x)\n").export(
             {"x": "float64"}, output, version=version, cardinality="block_scalar"
         )
 
@@ -46,7 +47,7 @@ def test_explicit_block_reduction_names(version, operation):
 @pytest.mark.parametrize("dtype", ["bool", "int64", "uint64", "float32", "float64"])
 def test_block_mean_dtype_and_participation(version, dtype):
     output = dtype if dtype.startswith("float") else "float64"
-    artifact = blosc2.DSLKernel.from_source("def k(x):\n    return block_mean(x)\n").export(
+    artifact = DSLKernel.from_source("def k(x):\n    return block_mean(x)\n").export(
         {"x": dtype}, output, version=version, cardinality="block_scalar"
     )
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
@@ -91,14 +92,14 @@ def assert_execution_mode(kernel, jit):
 def test_typed_arithmetic_without_corpus(native_artifacts, expression, input_dtype, output_dtype, expected):
     source = f"def k(x):\n    return {expression}\n"
     assert blosc2.validate_menudet(source, {"x": input_dtype}, output_dtype)["valid"]
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    artifact = DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
     assert_execution_mode(kernel, True)
     actual = kernel.evaluate({"x": np.array([-2, 0, 2], dtype=input_dtype)})
     np.testing.assert_allclose(actual, np.array(expected, dtype=output_dtype), rtol=1e-6)
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def affine(x):
     return x * SCALE + BIAS
 
@@ -115,7 +116,7 @@ def native_artifacts():
 def test_prepare_infers_output_without_probe_artifact(native_artifacts):
     from blosc2.menudet_kernel import prepare_menudet_kernel
 
-    kernel = blosc2.DSLKernel.from_source("def k(x):\n    return x + 1\n")
+    kernel = DSLKernel.from_source("def k(x):\n    return x + 1\n")
     prepared = prepare_menudet_kernel(kernel, {"x": np.dtype("float32")}, None)
     assert prepared.output_dtype == np.dtype("float32")
     assert prepared.inferred_dtype == np.dtype("float32")
@@ -150,7 +151,7 @@ def test_export_capture_snapshot(native_artifacts, monkeypatch):
 def test_capture_closure_and_frontend_sugar(native_artifacts):
     scale = np.float32(2.0)
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def trig(x):
         return np.sin(x) * scale
 
@@ -162,7 +163,7 @@ def test_capture_closure_and_frontend_sugar(native_artifacts):
 def test_capture_collision_and_comments(native_artifacts):
     scale = 2.0
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def collision(x):
         """scale must not be rewritten in strings."""
         _capture_0 = x  # scale stays in this comment
@@ -191,7 +192,7 @@ def test_capture_collision_and_comments(native_artifacts):
 )
 def test_constant_encodings(native_artifacts, dtype, value, encoding, encoded):
     source = "# me:compiler=cc\ndef constant(value):\n    return value\n"
-    author = blosc2.DSLKernel.from_source(source)
+    author = DSLKernel.from_source(source)
     artifact = author.export({}, dtype, constants={"value": value})
     scalar = json.loads(artifact)["constants"][0]
     assert scalar == {
@@ -216,7 +217,7 @@ def test_constant_encodings(native_artifacts, dtype, value, encoding, encoded):
 def test_explicit_capture_dtype(native_artifacts):
     integer = 2
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k(x):
         return x * integer
 
@@ -236,7 +237,7 @@ def test_capture_value_types(native_artifacts, value):
 
     if type(value) is str:
 
-        @blosc2.dsl_kernel
+        @DSLKernel
         def string_snapshot(x):
             return capture
 
@@ -249,7 +250,7 @@ def test_capture_value_types(native_artifacts, value):
         )
         return
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k(x):
         return x + capture
 
@@ -267,7 +268,7 @@ def test_never_calls_capture_hooks_or_functions(native_artifacts):
 
     capture = Trap()
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k(x):
         return x + capture
 
@@ -277,7 +278,7 @@ def test_never_calls_capture_hooks_or_functions(native_artifacts):
     def callback(x):
         pytest.fail("callback executed")
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def external(x):
         return callback(x)
 
@@ -286,7 +287,7 @@ def test_never_calls_capture_hooks_or_functions(native_artifacts):
 
 
 def test_shadowed_numpy_alias_is_not_rewritten(native_artifacts):
-    @blosc2.dsl_kernel
+    @DSLKernel
     def local_alias(x):
         np = x
         return np.sin(x)
@@ -316,7 +317,7 @@ def test_artifact_backend_and_repeated_calls(native_artifacts, jit):
 
 
 def test_capture_range_checks(native_artifacts):
-    kernel = blosc2.DSLKernel.from_source("def k(c):\n    return c\n")
+    kernel = DSLKernel.from_source("def k(c):\n    return c\n")
     for value, dtype in [(2**63, "int64"), (2**31, "int32"), (1e100, "float32")]:
         with pytest.raises(blosc2.MenudetError):
             kernel.export({}, dtype, constants={"c": value}, capture_dtypes={"c": dtype})
@@ -326,7 +327,7 @@ def test_capture_range_checks(native_artifacts):
 
 
 def test_nan_payload_and_explicit_float_narrowing(native_artifacts):
-    author = blosc2.DSLKernel.from_source("def k(c):\n    return c\n")
+    author = DSLKernel.from_source("def k(c):\n    return c\n")
     value = np.array([0x7FF8000000000042], dtype=np.uint64).view(np.float64)[0]
     artifact = author.export({}, "float64", constants={"c": value})
     assert json.loads(artifact)["constants"][0]["value"] == "7ff8000000000042"
@@ -337,7 +338,7 @@ def test_nan_payload_and_explicit_float_narrowing(native_artifacts):
 
 
 def test_export_bindings_and_metadata_rejections(native_artifacts):
-    author = blosc2.DSLKernel.from_source("def k(x):\n    return x\n")
+    author = DSLKernel.from_source("def k(x):\n    return x\n")
     with pytest.raises(blosc2.MenudetError, match="exactly one"):
         author.export({}, "float64")
     with pytest.raises(blosc2.MenudetError, match="exactly one"):
@@ -354,7 +355,7 @@ def test_export_bindings_and_metadata_rejections(native_artifacts):
 
 
 def test_unresolved_capture_has_location(native_artifacts):
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k(x):
         return x + MISSING_MENUDET_CAPTURE  # noqa: F821
 
@@ -368,7 +369,7 @@ def test_unresolved_capture_has_location(native_artifacts):
 
 def test_binding_shapes_and_storage_adaptation(native_artifacts):
     source = "def subtract(x, y):\n    return x - y\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"y": "float64", "x": "float64"}, "float64")
+    artifact = DSLKernel.from_source(source).export({"y": "float64", "x": "float64"}, "float64")
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     x = np.arange(12, dtype=np.float64).reshape(3, 4)[:, ::2]
     y = np.zeros((3, 2), dtype=">f8")
@@ -450,7 +451,7 @@ def test_native_diagnostics_and_runtime_errors(native_artifacts):
         blosc2.MenudetKernel.from_json(changed, jit=False)
     assert error.value.status == "invalid_artifact"
     source = "def partial(x):\n    if x > 0:\n        return x\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "float64")
+    artifact = DSLKernel.from_source(source).export({"x": "float64"}, "float64")
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
     with pytest.raises(blosc2.MenudetError) as error:
         kernel.evaluate({"x": np.array([-1.0])})
@@ -508,7 +509,7 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
     ]
     for input_dtype, output_dtype, body, samples, expected in cases:
         source = f"# me:compiler={compiler}\ndef k(x):\n{body}"
-        artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+        artifact = DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
         kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
         assert_execution_mode(kernel, jit)
         for _ in range(2):
@@ -538,7 +539,7 @@ def test_numeric_execution_shapes(native_artifacts, compiler, jit, count):
 )
 def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
     compiler, jit, count = "tcc", False, 257
-    artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
+    artifact = DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
         {"x": "bool"}, "bool"
     )
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
@@ -587,7 +588,7 @@ def test_bool_cast_floating_arithmetic(
         expression = expression.replace("bool(x)", "truth")
         body = "    truth = bool(x)\n"
     source = f"# me:compiler={compiler}\ndef k(x):\n{body}    return {expression}\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
+    artifact = DSLKernel.from_source(source).export({"x": input_dtype}, output_dtype)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     samples = [0, 1, -1, 2]
@@ -614,7 +615,7 @@ def test_bool_cast_floating_arithmetic(
 def test_float_cast_arithmetic_rounding(native_artifacts, output_dtype):
     compiler, jit, count = "tcc", False, 257
     source = f"# me:compiler={compiler}\ndef k(x):\n    return (float(x) + 0.1) - float(x)\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
+    artifact = DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     samples = np.array(
@@ -654,7 +655,7 @@ def test_float_arithmetic_constant_rounding(native_artifacts, output_dtype, oper
         "multiply": "(x * 0.1) - x",
     }
     source = f"# me:compiler={compiler}\n# me:fp=strict\ndef k(x):\n    return {expressions[operation]}\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
+    artifact = DSLKernel.from_source(source).export({"x": "float32"}, output_dtype)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0.1, -1, 0, 1, 16777216], dtype="float32"), count)
@@ -677,7 +678,7 @@ def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, cap):
     count = 257
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", cap)
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
+    artifact = DSLKernel.from_source(source).export({"x": "int64"}, "int64")
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     for target in [0, 2, 3, 4]:
@@ -699,7 +700,7 @@ def test_while_cap_policy(native_artifacts, monkeypatch, compiler, jit, cap):
 def test_while_cap_change_after_loading(native_artifacts, monkeypatch, compiler, jit, compile_cap):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", compile_cap)
     source = f"# me:compiler={compiler}\ndef k(x):\n    n = 0\n    while n < x:\n        n = n + 1\n    return n\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64")
+    artifact = DSLKernel.from_source(source).export({"x": "int64"}, "int64")
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.array([4], dtype="int64")
@@ -728,7 +729,7 @@ def test_while_chain_mixed_lane(native_artifacts, monkeypatch, compiler, jit, dt
         f"# me:compiler={compiler}\ndef while_cap_chain(x):\n"
         "    n = 0\n    while 0 <= n < x:\n        n = n + 1\n    return n\n"
     )
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, dtype)
+    artifact = DSLKernel.from_source(source).export({"x": dtype}, dtype)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     # Lane ordering is the actual regression boundary, not every size/backend
@@ -755,7 +756,7 @@ def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, cas
         ),
     }
     source = f"# me:compiler={compiler}\ndef {case}(x):\n{bodies[case]}"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": dtype}, "bool")
+    artifact = DSLKernel.from_source(source).export({"x": dtype}, "bool")
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     assert_execution_mode(kernel, jit)
     values = np.resize(np.array([0, 1, 2, -1], dtype=dtype), count)
@@ -801,7 +802,7 @@ def test_masked_local_constant_chain(native_artifacts, compiler, jit, dtype, cas
 )
 def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, body, expected):
     monkeypatch.setenv("ME_DSL_WHILE_MAX_ITERS", "3")
-    artifact = blosc2.DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
+    artifact = DSLKernel.from_source(f"# me:compiler={compiler}\ndef k(x):\n{body}").export(
         {"x": "int64"}, "int64"
     )
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
@@ -816,7 +817,7 @@ def test_while_cap_control_flow(native_artifacts, monkeypatch, compiler, jit, bo
 def test_value_cast_large_integer(native_artifacts, jit, expression):
     source = f"# me:compiler=tcc\ndef k(x):\n    return {expression}\n"
     output_dtype = "int64" if expression == "int(x)" else "bool"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, output_dtype)
+    artifact = DSLKernel.from_source(source).export({"x": "int64"}, output_dtype)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     values = np.array([-(2**53 + 1), 0, 2**53 + 1, 2**63 - 1], dtype="int64")
     np.testing.assert_array_equal(kernel.evaluate({"x": values}), values.astype(output_dtype))
@@ -825,7 +826,7 @@ def test_value_cast_large_integer(native_artifacts, jit, expression):
 @pytest.mark.parametrize("jit", [False, True])
 def test_value_cast_nonfinite_truth(native_artifacts, jit):
     source = "# me:compiler=tcc\ndef k(x):\n    return bool(x)\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "float64"}, "bool")
+    artifact = DSLKernel.from_source(source).export({"x": "float64"}, "bool")
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     values = np.array([-0.0, 0.0, np.nan, np.inf, -np.inf, 5e-324])
     np.testing.assert_array_equal(kernel.evaluate({"x": values}), values.astype("bool"))

@@ -6,6 +6,25 @@
 
 **Menudet — a little language for portable computation on arrays and tables.**
 
+- Make `@blosc2.menudet` the sole supported computation-language decorator.
+  The unqualified alpha `@blosc2.dsl_kernel` is retired: importing it still
+  works, but using it raises an actionable error. See the
+  [migration guide](https://blosc.org/python-blosc2/guides/migrating_to_menudet.html).
+  Direct `DSLKernel(...)` and `DSLKernel.from_source(...)` also raise retirement
+  guidance. Shared source normalization is internal, not a legacy authoring API.
+  Generic Python LazyUDFs and supported LazyExpr computations are unaffected.
+- Reject historical source-backed DSL/Python UDF recipes and legacy table-kernel
+  metadata with `UnsupportedLegacyRecipeError`, even with `deserialize="full"`.
+  Before upgrading, use a previous release to materialize ordinary arrays,
+  reauthor with Menudet, and compare results in an isolated candidate environment.
+  No source reconstruction, silent column dropping or automatic migration occurs.
+- `lazyudf()` rejects MenudetFunction/MenudetKernel with guidance to call the
+  function directly or use `kernel.lazy(...)`; it is not a second Menudet API.
+- Remove experimental `blosc2.NativeGraph` from the public API. Graph planning
+  remains internal; artifact identifiers and execution formats are unchanged.
+- Menudet is the supported language going forward. During beta, API and artifact
+  changes remain possible and will be documented with migration guidance.
+
 - Establish the unreleased language and artifact contract as Menudet 0.1 beta.
   Use `MenudetFunction` for decorated authors, `MenudetKernel` for executable
   specializations, `MenudetError` for errors, and `validate_menudet` for source
@@ -41,7 +60,7 @@
   `ME_SIMD_MATH_BACKEND`/`ME_DSL_FP_MODE` at preparation. Unavailable explicit
   backends fail before execution, and `auto` now follows system math instead of
   preferring SLEEF.
-- Export normalized `DSLKernel` authoring as validated, standalone JSON artifacts
+- Export normalized Menudet authoring as validated, standalone JSON artifacts
   with typed signatures and exact captured constants. Native miniexpr executes
   imports without reconstructing Python functions or falling back to Python.
 - Support checked integer arithmetic, operand-typed floating computation, control
@@ -51,18 +70,15 @@
 - Validate kernel inputs to `CTable.add_computed_column()` and
   `add_generated_column()` as Menudet artifacts with implicit independent-row
   semantics, including fixed-shape row reductions. Named bindings are supported;
-  positional bindings and column-bound DSL LazyUDFs adopt the same semantics.
+  internal source normalization uses the same semantics.
   New cross-row computations must use array partitions or table aggregation,
   rather than implicit execution blocks or append batches.
 - Remove the draft `add_portable_*` column methods and `row_domain` argument.
   Fixed-shape row reductions use `cardinality="block_scalar"`.
-- New compliant DSLKernel-backed LazyUDF saves export the draft automatically;
-  unsupported saves fail validation before writing the destination.
-- Historical Python-specific recipes require explicit `deserialize="full"`.
-  MessagePack decoding is safe by default, including nested containers.
-- Saved legacy table-kernel recipes retain their old block/batch-dependent
-  behavior only with trusted, explicit `deserialize="full"`; safe-mode errors
-  explain the opt-in. Recipes are never automatically reinterpreted.
+- New Menudet lazy results persist validated artifacts; unsupported saves fail
+  before writing the destination. MessagePack decoding is safe by default,
+  including nested containers. Historical source recipes remain unsupported under
+  both policies, not re-enabled by trusted deserialization permission.
 - Ordinary LazyExpr persistence retains supported numerical calls, reductions,
   methods and indexing under default loading, with existing expression validation.
   Full-only nested payloads remain gated. String/lazy expressions and non-kernel

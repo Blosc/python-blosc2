@@ -14,7 +14,7 @@ from blosc2.native_graph import compile_plan
 
 @pytest.fixture(autouse=True)
 def array_runtime(native_graph_runtime):
-    from blosc2.dsl_kernel import DSLKernel
+    from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
     try:
         source = DSLKernel.from_source("def k(x):\n    return x\n")

@@ -207,6 +207,7 @@ def _safe_msgpack_unpackb(payload):
                 raise ValueError("Invalid remote NumPy extension payload")
             return np.frombuffer(data, dtype=dtype).reshape(shape)
         if code == _BLOSC2_EXT_CODE:
+            _reject_legacy_cframe(data)
             kind = "embedded cframe"
         elif code == _BLOSC2_STRUCTURED_EXT_CODE:
             candidate = None
@@ -216,10 +217,23 @@ def _safe_msgpack_unpackb(payload):
                 kind = candidate if isinstance(candidate, str) else "structured reference"
             except Exception:
                 kind = "structured reference"
-            if candidate in {"menudet", "lazyexpr"}:
+            if candidate in {"menudet", "lazyexpr", "lazyudf"}:
                 return decode_b2object_payload(envelope, deserialize="safe")
         else:
             kind = f"MessagePack extension code {code}"
         raise UnsafeDeserializationError(str(kind))
 
     return unpackb(payload, list_hook=decode_tuple_list_hook, ext_hook=decode_ext)
+
+
+def _reject_legacy_cframe(data):
+    """Inspect only carrier metadata, never reconstruct its executable payload."""
+    import blosc2
+
+    try:
+        schunk = blosc2.schunk_from_cframe(data, copy=False)
+    except (ValueError, RuntimeError, TypeError):
+        return  # The enclosing safe decoder still rejects the opaque cframe.
+    marker = schunk.meta.get("b2o", {})
+    if schunk.meta.get("LazyArray") == 1 or (isinstance(marker, dict) and marker.get("kind") == "lazyudf"):
+        raise blosc2.UnsupportedLegacyRecipeError()

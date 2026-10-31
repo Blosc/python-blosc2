@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 # External conformance is opt-in; never infer an unrelated sibling checkout.
 # Selected historical fixtures also cover behavior shared by public Menudet 0.1 beta.
@@ -157,7 +157,7 @@ def test_from_source_native_body_and_no_python_fallback():
 @pytest.mark.parametrize("jit", [False, True])
 def test_from_source_without_external_corpus(jit):
     source = "# me:compiler=tcc\ndef kernel(x):\n    return !x\n"
-    kernel = blosc2.DSLKernel.from_source(source)
+    kernel = DSLKernel.from_source(source)
     result = blosc2.lazyudf(kernel, (np.array([0.0, 1.0, -1.0]),), dtype=np.bool_, jit=jit)[:]
     np.testing.assert_array_equal(result, [True, False, False])
 

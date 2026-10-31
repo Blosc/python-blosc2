@@ -17,6 +17,7 @@ from time import perf_counter
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 RECIPES = [
     ("add-i8", "int8", "x + y", "int8"),
@@ -70,7 +71,7 @@ def main():  # noqa: C901 -- explicit serial benchmark matrix
                     if args.names and name not in args.names:
                         continue
                     source = f"def k(x, y):\n    return {expression}\n"
-                    author = blosc2.DSLKernel.from_source(source)
+                    author = SourceKernel.from_source(source)
                     kernel = blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, output), jit=True)
                     for count in args.items:
                         x = (np.arange(count) % 3 + 1).astype(dtype)

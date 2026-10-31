@@ -15,6 +15,19 @@ class MissingOperands(ValueError):
         super().__init__(message)
 
 
+class UnsupportedLegacyRecipeError(ValueError):
+    """A retired source-backed computation recipe cannot be loaded."""
+
+    def __init__(self, kind="legacy DSL/Python UDF recipe"):
+        super().__init__(
+            f"Unsupported {kind}: legacy computation recipes have been retired. "
+            "deserialize='full' does not enable them. Use a previous release that "
+            "supports this format to materialize the results as ordinary arrays; "
+            "reauthor with @blosc2.menudet and compare results before upgrading. "
+            "See https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+        )
+
+
 class UnsafeDeserializationError(ValueError):
     """Raised when safe deserialization encounters an active serialized value."""
 

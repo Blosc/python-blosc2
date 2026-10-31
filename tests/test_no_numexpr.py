@@ -92,7 +92,8 @@ def test_runtime_never_imports_numexpr(installed, split_package):
         np.testing.assert_array_equal(
             blosc2.evaluate("dates == dates",local_dict={"dates":dates}),[True,False])
         with blosc2.jit_options(jit=False):
-            graph=blosc2.NativeGraph.from_expression("x * 2 + 1",{"x":"float64"},jit=False)
+            from blosc2.graph_plan import NativeGraph
+            graph=NativeGraph.from_expression("x * 2 + 1",{"x":"float64"},jit=False)
             result,report=graph.evaluate({"x":x},out=np.empty_like(x),return_report=True)
             np.testing.assert_array_equal(result,x*2+1)
             assert not graph.has_jit

@@ -5,13 +5,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# DSL-kernel computed columns: virtual columns backed by a
-# @blosc2.dsl_kernel function instead of a LazyExpr string.
+# Menudet computed columns: virtual columns backed by a portable kernel.
 #
 # Advantages over plain expression strings:
-#   - full Python control flow (loops, if/else, where(...))
-#   - validated at decoration time; errors surface immediately
-#   - source is persisted and recompiled on open — no extra setup needed
+#   - supported native control flow (loops, if/else, where(...))
+#   - typed specialization without reading table values
+#   - artifacts persist without Python function reconstruction
 #
 # This example shows:
 #   1. Adding a DSL computed column with add_computed_column()
@@ -54,16 +53,17 @@ t = blosc2.CTable(Trade, new_data=TRADES)
 # ---------------------------------------------------------------------------
 
 
-@blosc2.dsl_kernel
+@blosc2.menudet
 def net_value(price, shares, fee_pct):
     return price * shares * (1.0 - fee_pct / 100.0)
 
 
-# Pass inputs= to bind kernel parameters to stored columns positionally.
-# dtype is inferred from the input column dtypes when omitted (float64 here).
-t.add_computed_column("net_value", net_value, inputs=["price", "shares", "fee_pct"])
-# This works too; use whatever you prefer
-# t.add_computed_column("net_value", blosc2.lazyudf(net_value, (t.price, t.shares, t.fee_pct)))
+# Specialize using dtype-only empty buffers; no table values are evaluated.
+net_kernel = net_value.specialize(
+    np.empty(0, dtype="float64"), np.empty(0, dtype="int64"), np.empty(0, dtype="float64")
+)
+bindings = {"price": "price", "shares": "shares", "fee_pct": "fee_pct"}
+t.add_computed_column("net_value", net_kernel, inputs=bindings)
 
 print("Computed net_value (virtual, no storage added):")
 for ticker, nv in zip(t.ticker[:], t["net_value"][:], strict=True):
@@ -71,13 +71,14 @@ for ticker, nv in zip(t.ticker[:], t["net_value"][:], strict=True):
 
 
 # Kernels can use if/else and where() — not possible with a plain expression:
-@blosc2.dsl_kernel
+@blosc2.menudet
 def tier(price, shares):
     mv = price * shares
     return where(mv > 50000, 2.0, where(mv > 10000, 1.0, 0.0))  # noqa: F821
 
 
-t.add_computed_column("tier", tier, inputs=["price", "shares"], dtype=np.float64)
+tier_kernel = tier.specialize(np.empty(0, dtype="float64"), np.empty(0, dtype="int64"))
+t.add_computed_column("tier", tier_kernel, inputs={"price": "price", "shares": "shares"})
 print("\nTier (0=small, 1=mid, 2=large):")
 for ticker, tv in zip(t.ticker[:], t.tier[:], strict=True):
     print(f"  {ticker:6s}  {tv:.0f}")
@@ -105,7 +106,7 @@ finally:
 # ---------------------------------------------------------------------------
 
 t3 = blosc2.CTable(Trade, new_data=TRADES)
-t3.add_generated_column("net_value", values=net_value, inputs=["price", "shares", "fee_pct"])
+t3.add_generated_column("net_value", values=net_kernel, inputs=bindings)
 
 print("\nGenerated net_value (stored):")
 print(" ", t3["net_value"][:])
@@ -125,11 +126,12 @@ try:
     t4 = blosc2.CTable(Trade, new_data=TRADES)
     t4.add_generated_column(
         "net_value",
-        values=blosc2.lazyudf(net_value, (t4.price, t4.shares, t4.fee_pct)),
+        values=net_kernel,
+        inputs=bindings,
     )
     t4.save(path2)
 
-    # Reopen in append mode — the DSL kernel is reconstructed from stored source.
+    # Reopen in append mode — the Menudet artifact is validated natively.
     t5 = blosc2.open(path2, mode="a")
     print("\nReopened table net_value:")
     print(" ", t5["net_value"][:])
@@ -142,25 +144,23 @@ finally:
     shutil.rmtree(tmpdir2)
 
 # ---------------------------------------------------------------------------
-# 5. Persisting jit_backend — use cc compiler for better code on this kernel
+# 5. Reuse the same portable kernel in another table
 # ---------------------------------------------------------------------------
 
 tmpdir3 = tempfile.mkdtemp()
 path3 = f"{tmpdir3}/trades_cc.b2d"
 try:
     t6 = blosc2.CTable(Trade, new_data=TRADES)
-    # jit_backend="cc" uses the system C compiler (gcc/clang) instead of TCC.
-    # This choice is persisted in the column metadata and restored on open —
-    # no need to set BLOSC_ME_JIT=cc or repeat jit_backend= after reloading.
     t6.add_generated_column(
         "net_value",
-        values=blosc2.lazyudf(net_value, (t6.price, t6.shares, t6.fee_pct), jit_backend="cc"),
+        values=net_kernel,
+        inputs=bindings,
     )
     t6.save(path3)
 
     t7 = blosc2.open(path3, mode="a")
     t7.append({"ticker": "TSLA", "price": 248.0, "shares": 120, "fee_pct": 0.10})
-    print("\nAfter reload (jit_backend=cc persisted) — auto-filled row:")
+    print("\nAfter reload — auto-filled row:")
     print(" ", t7["net_value"][:])
 finally:
     shutil.rmtree(tmpdir3)

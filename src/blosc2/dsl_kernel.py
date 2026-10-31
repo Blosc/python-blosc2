@@ -25,7 +25,7 @@ _DSL_USAGE_DOC_URL = "https://github.com/Blosc/python-blosc2/blob/main/doc/refer
 
 
 class DSLSyntaxError(ValueError):
-    """Raised when a @dsl_kernel function uses unsupported DSL syntax."""
+    """Raised when source normalization encounters unsupported DSL syntax."""
 
 
 # NumPy function names that the DSL grammar recognizes only under a different
@@ -692,11 +692,15 @@ class DSLValidator:
         self._err(op, "Unsupported comparison in DSL")
 
 
-class DSLKernel:
-    """Wrap a Python function, or construct a native-only kernel with ``from_source``."""
+class SourceKernel:
+    """Internal source normalization for Menudet and numerical execution helpers.
+
+    This implementation object is not a public legacy authoring API and is never
+    reconstructed from persisted Python-source recipes.
+    """
 
     @classmethod
-    def from_source(cls, source: str) -> DSLKernel:
+    def from_source(cls, source: str) -> SourceKernel:
         """Construct a native-only kernel without executing Python source.
 
         Preserve the source, including header pragmas, verbatim. Only the function
@@ -1022,16 +1026,29 @@ class DSLKernel:
             return None
 
 
-def dsl_kernel(func):
-    """Decorator to wrap a function in a DSLKernel.
+class DSLKernel:
+    """Retired public constructor; use :func:`blosc2.menudet` instead."""
 
-    Default argument values in *func*'s signature are accepted as ordinary named
-    inputs, but they are honored (filled in when omitted) only through the
-    ``@blosc2.jit`` call path.  Calling a :class:`DSLKernel` directly (e.g. via
-    :func:`lazyudf`) requires every input to be passed positionally.
+    def __new__(cls, *args, **kwargs):
+        return dsl_kernel()
+
+    @classmethod
+    def from_source(cls, *args, **kwargs):
+        return dsl_kernel()
+
+
+def dsl_kernel(func=None, **kwargs):
+    """Retired alpha decorator. Use :func:`blosc2.menudet` for new computations.
+
+    This name remains importable to provide migration guidance, not to enable
+    new legacy authoring. Source normalization remains internal to Menudet.
     """
-
-    return DSLKernel(func)
+    raise RuntimeError(
+        "Legacy DSL authoring (@blosc2.dsl_kernel and DSLKernel) has been retired. "
+        "Use @blosc2.menudet instead. "
+        "See the migration guide: "
+        "https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+    )
 
 
 def validate_dsl(func):
@@ -1040,7 +1057,7 @@ def validate_dsl(func):
     Parameters
     ----------
     func
-        A Python callable or :class:`DSLKernel`.
+        A Python callable (or an internal normalized source kernel).
 
     Returns
     -------
@@ -1054,8 +1071,7 @@ def validate_dsl(func):
     Examples
     --------
     >>> import blosc2
-    >>> @blosc2.dsl_kernel
-    ... def k(a, b):
+    >>> def k(a, b):
     ...     return a * a + b * b
     >>> info = blosc2.validate_dsl(k)
     >>> info["valid"]
@@ -1065,8 +1081,7 @@ def validate_dsl(func):
 
     An unsupported construct is reported instead of raising:
 
-    >>> @blosc2.dsl_kernel
-    ... def bad(a):
+    >>> def bad(a):
     ...     return 1 if a > 0 else 0
     >>> blosc2.validate_dsl(bad)["valid"]
     False
@@ -1077,7 +1092,7 @@ def validate_dsl(func):
         back to the interpreter) for given operand/output dtypes.
     """
 
-    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    kernel = func if isinstance(func, SourceKernel) else SourceKernel(func)
     err = kernel.dsl_error
     return {
         "valid": err is None,
@@ -1156,7 +1171,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     Parameters
     ----------
     func
-        A Python callable or :class:`DSLKernel`.
+        A Python callable (or an internal normalized source kernel).
     operands
         One spec per kernel input.  A NumPy dtype (e.g. ``np.float64``, ``"f8"``)
         marks an *array* operand; a Python ``int``/``float``/``bool`` marks a *scalar*
@@ -1181,8 +1196,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> @blosc2.dsl_kernel
-    ... def k(a, b):
+    >>> def k(a, b):
     ...     return a * a + b * b
     >>> status = blosc2.validate_dsl_jit(k, [np.float64, np.float64], np.float64)
     >>> status["jit"]
@@ -1193,8 +1207,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     Pass array operands as dtypes and scalar parameters as values (the scalar is
     inlined as a constant, as at run time):
 
-    >>> @blosc2.dsl_kernel
-    ... def scaled(a, n):
+    >>> def scaled(a, n):
     ...     return a * float(n)
     >>> blosc2.validate_dsl_jit(scaled, {"a": np.float64, "n": 3}, np.float64)["jit"]
     True
@@ -1207,7 +1220,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
 
     import blosc2
 
-    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    kernel = func if isinstance(func, SourceKernel) else SourceKernel(func)
     if kernel.dsl_error is not None:
         return {
             "valid": False,
@@ -1254,76 +1267,11 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     return status
 
 
-def kernel_from_source(source: str, name: str | None = None) -> DSLKernel:
-    """Reconstruct a :class:`DSLKernel` from its stored source text.
+def kernel_from_source(source: str, name: str | None = None):
+    """Reject retired Python-source reconstruction without parsing or execution."""
+    from .exceptions import UnsupportedLegacyRecipeError
 
-    Executes *source* in a restricted namespace (builtins minus ``__import__``,
-    plus ``np`` and ``blosc2``), extracts the defined function, and wraps it in
-    a :class:`DSLKernel`.  This is the inverse of persisting
-    :attr:`DSLKernel.dsl_source` and is shared by the persisted-``LazyUDF``
-    decoder and the CTable DSL-column loaders.
-
-    Parameters
-    ----------
-    source
-        Complete, standalone function-definition source (as produced by
-        :attr:`DSLKernel.dsl_source` or :func:`inspect.getsource`).
-    name
-        Name of the function to extract from *source*.  When omitted, the
-        single top-level function definition in *source* is used.
-    """
-    import builtins
-    import linecache
-
-    import numpy as np
-
-    import blosc2
-
-    tree = ast.parse(source)
-    func_defs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
-    if name is None:
-        if len(func_defs) != 1:
-            raise ValueError(
-                "kernel_from_source requires an explicit 'name' when 'source' does not "
-                "contain exactly one top-level function definition"
-            )
-        name = func_defs[0].name
-
-    # Security: reject sources that include top-level statements with
-    # side effects (assignments, calls, loops, etc.) beyond the function
-    # definition itself.  Imports and docstrings are permitted.
-    allowed_nodes = (ast.FunctionDef, ast.Import, ast.ImportFrom)
-    for node in tree.body:
-        if isinstance(node, allowed_nodes):
-            continue
-        # A bare string literal at module level is a docstring — safe.
-        if (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        ):
-            continue
-        raise ValueError(
-            f"kernel_from_source source must contain only a function definition "
-            f"(optionally preceded by imports), but found: {ast.dump(node)[:120]}"
-        )
-
-    local_ns: dict = {}
-    filename = f"<{name}>"
-    safe_globals = {
-        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
-        "np": np,
-        "blosc2": blosc2,
-    }
-    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
-    exec(compile(source, filename, "exec"), safe_globals, local_ns)
-    try:
-        func = local_ns[name]
-    except KeyError:
-        raise ValueError(f"kernel_from_source: source did not define function {name!r}") from None
-    if not isinstance(func, DSLKernel):
-        func = DSLKernel(func)
-    return func
+    raise UnsupportedLegacyRecipeError()
 
 
 class DSLBuilder:

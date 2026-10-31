@@ -19,6 +19,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @pytest.mark.skipif(sys.platform in {"emscripten", "wasi"}, reason="Runtime does not provide Python threads")
@@ -1029,17 +1030,17 @@ def test_computed_column_compact():
 # Shared DSL kernels used across the DSL tests
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def total(price, qty):
     return price * qty
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def total_with_tax(price, qty, tax):
     return price * qty * (1.0 + tax)
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def is_large(price, qty):
     return price * qty > 10
 

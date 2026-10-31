@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-import blosc2
+from blosc2.graph_plan import NativeGraph
 
 
 def timed(function):
@@ -43,7 +43,7 @@ def main():
         parser.error("dimensions and repeats must be positive")
     expression = "x - sum(x, axis=0)"
     plan, preparation = timed(
-        lambda: blosc2.NativeGraph.from_expression(expression, {"x": args.dtype}, jit=args.jit)
+        lambda: NativeGraph.from_expression(expression, {"x": args.dtype}, jit=args.jit)
     )
     schedule, specialization = timed(lambda: plan.specialize({"x": (args.dtype, (args.rows, args.columns))}))
     values = {"x": np.ones((args.rows, args.columns), dtype=args.dtype)}

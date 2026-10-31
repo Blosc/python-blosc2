@@ -9,6 +9,8 @@ import pytest
 from blosc2.blosc2_ext import NativeGraphHandle
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
+from blosc2.graph_plan import NativeGraph
 from blosc2.native_graph import lower_native_graph, scalar_descriptor
 from conftest import orthogonal_cases
 
@@ -23,7 +25,7 @@ pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 )
 def test_direct_input_reduction_bypasses_map(dtype, op, tile):
     x = np.arange(1, 13, dtype=dtype).reshape(3, 4)
-    plan = blosc2.NativeGraph.from_expression(f"{op}(x, axis=-1)", {"x": dtype}, jit=True)
+    plan = NativeGraph.from_expression(f"{op}(x, axis=-1)", {"x": dtype}, jit=True)
     actual, report = plan.evaluate({"x": x}, tile_items=tile, return_report=True)
     np.testing.assert_array_equal(actual, getattr(np, op)(x, axis=-1))
     assert report["evaluated_tiles"] == 0
@@ -34,7 +36,7 @@ def test_direct_input_reduction_bypasses_map(dtype, op, tile):
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_direct_sum_order_status_initial_and_fallback(dtype):
     large = 2 ** (24 if dtype == "float32" else 53)
-    plan = blosc2.NativeGraph.from_expression("sum(x, initial=2)", {"x": dtype})
+    plan = NativeGraph.from_expression("sum(x, initial=2)", {"x": dtype})
     x = np.array([large, 1, -large, 3], dtype=dtype)
     # Serial accumulation includes initial before the first input, not after
     # a tile partial sum. Compute the expected rounding step by step.
@@ -71,12 +73,10 @@ def test_computed_reduction_typed_matches_masked_generic(dtype, op, tile):
     initial = ", initial=0" if op in ("min", "max") else ""
     expression = f"{op}(x + zero{initial})"
     inputs = {"x": x, "zero": np.zeros_like(x)}
-    plan = blosc2.NativeGraph.from_expression(
-        expression, {name: value.dtype for name, value in inputs.items()}
-    )
+    plan = NativeGraph.from_expression(expression, {name: value.dtype for name, value in inputs.items()})
     actual, report = plan.evaluate(inputs, tile_items=tile, return_report=True)
     inputs["mask"] = np.ones(x.shape, dtype=bool)
-    generic = blosc2.NativeGraph.from_expression(
+    generic = NativeGraph.from_expression(
         f"{op}(x + zero, where=mask{initial})", {name: value.dtype for name, value in inputs.items()}
     )
     expected, reference = generic.evaluate(inputs, tile_items=tile, return_report=True)
@@ -122,11 +122,11 @@ def test_computed_reduction_float_edge_parity(dtype, op, case):
         )
     initial = ", initial=0" if op in ("min", "max") else ""
     inputs = {"x": x, "one": np.ones_like(x)}
-    plan = blosc2.NativeGraph.from_expression(
+    plan = NativeGraph.from_expression(
         f"{op}(x * one{initial})", {name: value.dtype for name, value in inputs.items()}
     )
     masked_inputs = {**inputs, "mask": np.ones(x.shape, dtype=bool)}
-    generic = blosc2.NativeGraph.from_expression(
+    generic = NativeGraph.from_expression(
         f"{op}(x * one, where=mask{initial})", {name: value.dtype for name, value in masked_inputs.items()}
     )
     for tile in (1, 3, 64):
@@ -143,7 +143,7 @@ def test_computed_reduction_float_edge_parity(dtype, op, case):
 
 
 def make_menudet_sum(dtype, body="return block_sum(x)", cardinality="block_scalar", *, output_dtype=None):
-    artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
+    artifact = SourceKernel.from_source(f"def k(x):\n    {body}\n").export(
         {"x": dtype}, output_dtype or dtype, version="0.1", cardinality=cardinality
     )
     return blosc2.MenudetKernel.from_json(artifact, jit=False)
@@ -186,7 +186,7 @@ def test_typed_reductions_match_generic(dtype, op):
     assert actual.tobytes() == expected.tobytes()
     assert status == reference
     np.testing.assert_array_equal(actual, getattr(np, op)(x))
-    plan = blosc2.NativeGraph.from_expression(f"{op}(x)", {"x": dtype})
+    plan = NativeGraph.from_expression(f"{op}(x)", {"x": dtype})
     strided = np.repeat(x, 2)[::2]
     for tile in (1, 4, 64):
         actual, report = plan.evaluate({"x": x}, tile_items=tile, return_report=True)
@@ -249,7 +249,7 @@ def test_typed_float_reduction_edge_parity(dtype, op, case):
         assert actual.tobytes() == expected.tobytes()
     assert status == reference
     expression = f"{op}(x, initial=1)" if op in ("min", "max") else f"{op}(x)"
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": dtype})
+    plan = NativeGraph.from_expression(expression, {"x": dtype})
     for tile in (1, 3, 64):
         actual, report = plan.evaluate({"x": x}, tile_items=tile, return_report=True)
         expected, reference = plan.evaluate({"x": np.repeat(x, 2)[::2]}, tile_items=tile, return_report=True)
@@ -278,7 +278,7 @@ def test_typed_product_prefix_overflow(dtype, values):
         with pytest.raises(blosc2.MenudetError):
             kernel.evaluate_block({"x": data}, valid_mask=mask)
     assert kernel.evaluate_block({"x": np.array([2, 3], dtype=dtype)}) == 6
-    plan = blosc2.NativeGraph.from_expression("prod(x)", {"x": dtype})
+    plan = NativeGraph.from_expression("prod(x)", {"x": dtype})
     for tile in (1, 64):
         assert plan.evaluate({"x": x}, tile_items=tile) == 0
 
@@ -290,7 +290,7 @@ def test_typed_integer_extrema_bounds(dtype, op):
     x = np.array([limits.max, 0, limits.min, 1], dtype=dtype)
     kernel = make_menudet_sum(dtype, f"return block_{op}(x)")
     assert kernel.evaluate_block({"x": x}) == getattr(np, op)(x)
-    plan = blosc2.NativeGraph.from_expression(f"{op}(x, initial=1)", {"x": dtype})
+    plan = NativeGraph.from_expression(f"{op}(x, initial=1)", {"x": dtype})
     for tile in (1, 64):
         assert plan.evaluate({"x": x}, tile_items=tile) == getattr(np, op)(x, initial=1)
 
@@ -309,11 +309,11 @@ def test_typed_reductions_initialized_locals_and_masks(dtype, op):
 @pytest.mark.parametrize("dtype", ["float32", "float64", "int64", "uint64"])
 def test_typed_product_initial_and_conversion_fallback(dtype):
     x = np.array([1, 2, 3, 4], dtype=dtype)
-    plan = blosc2.NativeGraph.from_expression("prod(x, initial=3)", {"x": dtype})
+    plan = NativeGraph.from_expression("prod(x, initial=3)", {"x": dtype})
     for tile in (1, 3, 64):
         assert plan.evaluate({"x": x}, tile_items=tile) == 72
     accumulator = ("float64" if dtype == "float32" else "float32") if dtype.startswith("float") else "int8"
-    plan = blosc2.NativeGraph.from_expression(f"prod(x, dtype={accumulator}, initial=3)", {"x": dtype})
+    plan = NativeGraph.from_expression(f"prod(x, dtype={accumulator}, initial=3)", {"x": dtype})
     x = np.array([12, 12, 12], dtype=dtype)
     result = plan.evaluate({"x": x})
     assert result.dtype == np.dtype(accumulator)
@@ -335,7 +335,7 @@ def test_integer_bool_direct_sums(dtype, tile):
     x = np.array(values, dtype=dtype)
     direct = make_menudet_sum(dtype, output_dtype=output_dtype)
     generic = make_menudet_sum(dtype, "return block_sum(x + 0)", output_dtype=output_dtype)
-    graph_plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
+    graph_plan = NativeGraph.from_expression("sum(x)", {"x": dtype})
     expected = np.sum(x, dtype=output_dtype)
     for kernel in (direct, generic):
         result, status = kernel.evaluate_block({"x": x}, return_status=True)
@@ -368,17 +368,17 @@ def test_direct_integer_sum_preserves_route_overflow(dtype, values, expected):
             kernel.evaluate_block({"x": x})
         # Failure must not poison subsequent use of the same immutable kernel.
         assert kernel.evaluate_block({"x": np.array([1, 2], dtype=dtype)}) == 3
-    plan = blosc2.NativeGraph.from_expression("sum(x)", {"x": dtype})
+    plan = NativeGraph.from_expression("sum(x)", {"x": dtype})
     for tile in (1, 64):
         assert plan.evaluate({"x": x}, tile_items=tile) == expected
 
 
 def test_direct_integer_sum_initial_and_nondefault_accumulator():
     x = np.array([True], dtype=bool)
-    plan = blosc2.NativeGraph.from_expression("sum(x, initial=9223372036854775807)", {"x": "bool"})
+    plan = NativeGraph.from_expression("sum(x, initial=9223372036854775807)", {"x": "bool"})
     assert plan.evaluate({"x": x}) == -(2**63)
     x = np.array([120, 120, 120], dtype="int64")
-    plan = blosc2.NativeGraph.from_expression("sum(x, dtype=int8)", {"x": "int64"})
+    plan = NativeGraph.from_expression("sum(x, dtype=int8)", {"x": "int64"})
     actual = plan.evaluate({"x": x})
     assert actual.dtype == np.dtype("int8")
     assert actual == np.sum(x, dtype="int8")
@@ -445,7 +445,7 @@ def test_preparation_without_python_semantic_planning(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Python semantic planning/source generation was called")
 
-    from blosc2.dsl_kernel import DSLKernel
+    from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
     monkeypatch.setattr(DSLKernel, "from_source", forbidden)
     monkeypatch.setattr(DSLKernel, "export", forbidden)
@@ -591,9 +591,9 @@ def test_root_mask_initial_and_recovery():
     assert not report["fp_flags"]
 
 
-def test_public_plan_and_root_initial_adapter():
+def test_internal_plan_and_root_initial_adapter():
     nodes = [{"op": "input", "name": "x", "dtype": "float32"}]
-    plan = blosc2.NativeGraph.from_json(graph(nodes))
+    plan = NativeGraph.from_json(graph(nodes))
     assert plan.input_dtypes == {"x": np.dtype("float32")}
     values = np.arange(6, dtype="float32")
     np.testing.assert_array_equal(plan.evaluate({"x": values}), values)
@@ -603,8 +603,8 @@ def test_public_plan_and_root_initial_adapter():
 
 
 def test_native_text_frontend_and_json_equivalence():
-    text = blosc2.NativeGraph.from_expression("where(x != 0, y / x, y)", {"x": "float32", "y": "float32"})
-    imported = blosc2.NativeGraph.from_json(text.to_json())
+    text = NativeGraph.from_expression("where(x != 0, y / x, y)", {"x": "float32", "y": "float32"})
+    imported = NativeGraph.from_json(text.to_json())
     values = {"x": np.array([0, 2, 4], dtype="float32"), "y": np.array(8, dtype="float32")}
     a, report = text.evaluate(values, return_report=True)
     b = imported.evaluate(values)
@@ -615,9 +615,7 @@ def test_native_text_frontend_and_json_equivalence():
 
 
 def test_explicit_conversion_budget_preflight():
-    plan = blosc2.NativeGraph.from_json(
-        graph([{"op": "input", "name": "x", "dtype": "float32"}], output="float64")
-    )
+    plan = NativeGraph.from_json(graph([{"op": "input", "name": "x", "dtype": "float32"}], output="float64"))
     with pytest.raises(blosc2.MenudetError, match="budget"):
         plan.specialize({"x": ("float32", (3,))}, intermediate_budget=4)
     schedule = plan.specialize({"x": ("float32", (3,))}, intermediate_budget=12)
@@ -628,7 +626,7 @@ def test_explicit_conversion_budget_preflight():
 def test_required_jit_fails_closed(monkeypatch):
     monkeypatch.setenv("CFLAGS", "-ffast-math")
     with pytest.raises(blosc2.MenudetError, match="JIT"):
-        blosc2.NativeGraph.from_expression("x + 1", {"x": "float32"}, require_jit=True)
+        NativeGraph.from_expression("x + 1", {"x": "float32"}, require_jit=True)
 
 
 @pytest.mark.parametrize("layout", ["c", "f", "reverse", "step", "unaligned", "swapped"])
@@ -647,7 +645,7 @@ def test_native_graph_layouts(layout):
         source = unaligned
     elif layout == "swapped":
         source = source.astype(source.dtype.newbyteorder("S"))
-    plan = blosc2.NativeGraph.from_expression("x * 2 + 1", {"x": "float64"})
+    plan = NativeGraph.from_expression("x * 2 + 1", {"x": "float64"})
     result, report = plan.evaluate({"x": source}, tile_items=5, return_report=True)
     np.testing.assert_array_equal(result, source * 2 + 1)
     assert report["normalization_bytes"] == 0
@@ -656,8 +654,8 @@ def test_native_graph_layouts(layout):
 @pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "any", "all"])
 def test_reduction_shape_tile_and_roundtrip(op):
     source = np.arange(1, 13, dtype="int8").reshape(3, 4)
-    plan = blosc2.NativeGraph.from_expression(f"{op}(x, axis=-1, keepdims=True)", {"x": "int8"})
-    imported = blosc2.NativeGraph.from_json(plan.to_json())
+    plan = NativeGraph.from_expression(f"{op}(x, axis=-1, keepdims=True)", {"x": "int8"})
+    imported = NativeGraph.from_json(plan.to_json())
     options = {"dtype": "int64"} if op in ("sum", "prod") else {}
     expected = getattr(np, op)(source, axis=-1, keepdims=True, **options)
     for tile in [1, 3, 8]:
@@ -668,23 +666,23 @@ def test_reduction_shape_tile_and_roundtrip(op):
 
 
 def test_empty_broadcast_and_axis_preflight():
-    plan = blosc2.NativeGraph.from_expression("x + y", {"x": "float32", "y": "float32"})
+    plan = NativeGraph.from_expression("x + y", {"x": "float32", "y": "float32"})
     result = plan.evaluate({"x": np.empty((0, 3), dtype="float32"), "y": np.ones((1, 3), dtype="float32")})
     assert result.shape == (0, 3)
     for expression in ["sum(x, axis=[0, -2])", "sum(x, axis=2)"]:
-        reduction = blosc2.NativeGraph.from_expression(expression, {"x": "float32"})
+        reduction = NativeGraph.from_expression(expression, {"x": "float32"})
         with pytest.raises(blosc2.MenudetError, match=r"axis|axes"):
             reduction.specialize({"x": ("float32", (2, 3))})
 
 
 @pytest.mark.parametrize(("expression", "expected"), [("-2 ** 2", -4), ("2.0 ** -2", 0.25)])
 def test_native_text_power_precedence(expression, expected):
-    plan = blosc2.NativeGraph.from_expression(expression, {})
+    plan = NativeGraph.from_expression(expression, {})
     assert plan.evaluate({}) == expected
 
 
 def test_weak_initial_range_error_is_runtime_only():
-    plan = blosc2.NativeGraph.from_expression("min(x, initial=-1)", {"x": "uint8"})
+    plan = NativeGraph.from_expression("min(x, initial=-1)", {"x": "uint8"})
     schedule = plan.specialize({"x": ("uint8", (1,))})
     # Native Menudet semantics target NumPy 2.x, independently of the installed
     # host NumPy ABI; 1.26 instead warns and wraps this weak initial value.

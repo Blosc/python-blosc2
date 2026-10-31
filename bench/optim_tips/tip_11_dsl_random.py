@@ -7,14 +7,15 @@
 
 # Tip 11: generate arrays with DSL kernels. A stateless counter-based
 # pseudo-random generator (value = hash(flat index)) written as a
-# @blosc2.dsl_kernel fills the NDArray chunk by chunk, in parallel,
+# Historical internal DSLKernel fills the NDArray chunk by chunk, in parallel,
 # instead of materializing the full array with np.random first and
 # compressing it via asarray().
 
 import numpy as np
+from common import fmt_bytes, measure, save_plot
 
 import blosc2
-from common import fmt_bytes, measure, save_plot
+from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Historical internal benchmark.
 
 N = 200_000_000  # 200M int32 = ~0.75 GiB as a plain NumPy array
 
@@ -40,7 +41,7 @@ CPARAMS = {"clevel": 0}
 # index, so it samples without replacement — expect ~0 duplicates (a true
 # random sample of 1M draws expects ~116) and a 256-bin chi-square a bit
 # below the i.i.d. 255+-23 band (bins come out "too even").
-@blosc2.dsl_kernel
+@DSLKernel
 def random_int32(seed):
     x = _flat_idx ^ seed  # noqa: F821
     x = (((x >> 16) ^ x) * 0x45D9F3B) & 0xFFFFFFFF

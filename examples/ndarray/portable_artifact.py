@@ -11,13 +11,13 @@ import blosc2
 SCALE = 2.0
 
 
-@blosc2.dsl_kernel
+@blosc2.menudet
 def scaled(x):
     return x * SCALE
 
 
 if __name__ == "__main__":
-    artifact = scaled.export({"x": "float64"}, "float64")
+    artifact = scaled.specialize(np.empty(0, dtype="float64")).to_json()
     SCALE = 99.0
     imported = blosc2.MenudetKernel.from_json(artifact, jit=False)
     values = imported.evaluate({"x": np.arange(4, dtype=np.float64)})

@@ -8,18 +8,20 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
+from blosc2.graph_plan import NativeGraph
 
 pytestmark = [pytest.mark.usefixtures("native_graph_runtime"), pytest.mark.native_semantics]
 
 
 def menudet_kernel(source, inputs, output, *, jit=True, constants=None, cardinality="elementwise"):
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = SourceKernel.from_source(source).export(
         inputs, output, constants=constants, version="0.1", cardinality=cardinality
     )
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit)
     # Probe backend availability with universally eligible arithmetic. Boolean
     # addition itself is not an eligible graph map, although Boolean reductions are.
-    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=jit)
+    oracle = NativeGraph.from_expression("x + x", {"x": "float64"}, jit=jit)
     if jit and os.environ.get("MENUDET_REQUIRE_JIT") == "1":
         assert oracle.has_jit, "Requested backend must compile the eligibility oracle"
     if oracle.has_jit:
@@ -453,7 +455,7 @@ def test_scalar_lazy_reduction_with_capture(select):
     ],
 )
 def test_scalar_recipes_outside_scope_keep_fallback(body):
-    artifact = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n").export(
+    artifact = SourceKernel.from_source(f"def k(x):\n    {body}\n").export(
         {"x": "float64"}, "float64", version="0.1", cardinality="block_scalar"
     )
     assert not blosc2.MenudetKernel.from_json(artifact, jit=True).has_jit
@@ -461,11 +463,11 @@ def test_scalar_recipes_outside_scope_keep_fallback(body):
 
 def test_scalar_mean_logical_context():
     source = "def k(x):\n    s = block_mean(float64(_flat_idx))\n    return s + 1\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = SourceKernel.from_source(source).export(
         {"x": "float64"}, "float64", version="0.1", cardinality="block_scalar", ndim=1
     )
     kernels = [blosc2.MenudetKernel.from_json(artifact, jit=jit) for jit in (True, False)]
-    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "float64"}, jit=True)
+    oracle = NativeGraph.from_expression("x + x", {"x": "float64"}, jit=True)
     assert kernels[0].has_jit == oracle.has_jit
     for mask in (None, np.array([True, False, True]), np.zeros(3, dtype=bool)):
         results = [
@@ -635,7 +637,7 @@ def test_integer_reduction_modular_map_checked_accumulator(op):
     ],
 )
 def test_reductions_in_varying_branches_or_loops_still_rejected(body):
-    dsl = blosc2.DSLKernel.from_source(f"def k(x):\n    {body}\n")
+    dsl = SourceKernel.from_source(f"def k(x):\n    {body}\n")
     with pytest.raises(blosc2.MenudetError, match="not supported inside"):
         dsl.export({"x": "float64"}, "float64", version="0.1", cardinality="block_scalar")
 
@@ -663,7 +665,7 @@ def test_explicit_modular_range_cast_remains_explicit():
 
 def test_possible_empty_loop_local_still_falls_back():
     source = "def k(x):\n    for i in range(x):\n        y = i\n    return y\n"
-    artifact = blosc2.DSLKernel.from_source(source).export({"x": "int64"}, "int64", version="0.1")
+    artifact = SourceKernel.from_source(source).export({"x": "int64"}, "int64", version="0.1")
     assert not blosc2.MenudetKernel.from_json(artifact, jit=True).has_jit
 
 

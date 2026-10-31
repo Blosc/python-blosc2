@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
+from blosc2.graph_plan import NativeGraph
 
 
 @blosc2.menudet
@@ -119,7 +121,7 @@ def test_interpretation_and_python_never_called(native_graph_runtime, monkeypatc
     def forbidden(*args, **kwargs):
         pytest.fail("Original Python function executed")
 
-    monkeypatch.setattr(blosc2.DSLKernel, "__call__", forbidden)
+    monkeypatch.setattr(SourceKernel, "__call__", forbidden)
     monkeypatch.setattr(k._author, "func", forbidden)
     x = np.arange(4.0)
     np.testing.assert_array_equal(k(x)[:], x * 2)
@@ -364,7 +366,7 @@ def test_arithmetic_retains_explicit_compiler_options(native_graph_runtime, monk
     def forbidden(*args, **kwargs):
         pytest.fail("Arithmetic graph preparation bypassed explicit compiler options")
 
-    monkeypatch.setattr(blosc2.NativeGraph, "from_expression", forbidden)
+    monkeypatch.setattr(NativeGraph, "from_expression", forbidden)
     options = {**options, "cache_dir": tmp_path}
     with blosc2.jit_options(**options):
         np.testing.assert_array_equal(author(x, x)[:], x + (x - 1))

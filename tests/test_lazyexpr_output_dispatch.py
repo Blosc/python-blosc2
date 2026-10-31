@@ -6,14 +6,13 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 
 @pytest.fixture(autouse=True)
 def prefilter_runtime(native_graph_runtime):
     if blosc2.IS_WASM or not blosc2.blosc2_ext.menudet_prefilter_available():
         pytest.skip("Native compressed prefilters require a host runtime")
-    from blosc2.graph_plan import NativeGraph
-
     if not NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True).has_jit:
         pytest.skip("Automatic output dispatch requires a native JIT")
 
@@ -61,8 +60,8 @@ def test_blosc2_output_native_prefilter(monkeypatch, mode, dtype, explicit_grid)
     with monkeypatch.context() as patch:
         patch.setattr(blosc2.NDArray, "__getitem__", forbidden)
         first = expr.compute(**options)
-        patch.setattr(blosc2.NativeGraph, "from_expression", forbidden)
-        patch.setattr(blosc2.NativeGraph, "__init__", forbidden)
+        patch.setattr(NativeGraph, "from_expression", forbidden)
+        patch.setattr(NativeGraph, "__init__", forbidden)
         second = expr.compute(**options)
     assert first is not second
     assert first.chunks == (128,)

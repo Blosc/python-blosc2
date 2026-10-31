@@ -216,9 +216,9 @@ usual evaluation policies.
 
 ``jit_backend="js"``
     Select the JavaScript bridge, available only under WebAssembly/Pyodide.
-    Explicit selection on native builds raises an error. Eligibility and explicit
-    unsupported-kernel errors are described in the
-    `DSL syntax reference <dsl_syntax.html#execution-backends>`_.
+    Explicit selection on native builds raises an error. This compatibility
+    backend is not an option on ``@blosc2.menudet``; use its native interpreter/JIT
+    policy instead.
 
 ``fp_accuracy`` controls numerical accuracy independently of the backend.
 TCC currently supports the strict miniexpr compiler floating-point mode;
@@ -244,12 +244,12 @@ Examples
     result = expr.compute(jit=True, jit_backend="cc")  # NDArray
 
 
-    @blosc2.dsl_kernel
+    @blosc2.menudet(jit=True)
     def squared(x):
         return x * x
 
 
-    udf = blosc2.lazyudf(squared, (a,), dtype=a.dtype, jit_backend="tcc")
+    udf = squared(a)
     values = udf[:]  # NumPy values
 
 Environment settings and precedence

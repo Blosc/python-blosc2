@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
+from blosc2.graph_plan import NativeGraph
 from blosc2.native_graph import scalar_descriptor
 
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
@@ -15,11 +17,11 @@ def test_weak_integral_capture_boundaries(dtype):
     # Weak integer transport is signed int64, even next to uint64 arrays.
     values = (max(int(limits.min), -(2**63)), min(int(limits.max), 2**63 - 1), 1)
     x = np.array([0, 1, 2], dtype=dtype)
-    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": dtype}, jit=True)
+    oracle = NativeGraph.from_expression("x + x", {"x": dtype}, jit=True)
     for value in values:
         expression = f"x + {value}"
-        plan = blosc2.NativeGraph.from_expression(expression, {"x": dtype}, jit=True)
-        reference = blosc2.NativeGraph.from_expression(expression, {"x": dtype}, jit=False)
+        plan = NativeGraph.from_expression(expression, {"x": dtype}, jit=True)
+        reference = NativeGraph.from_expression(expression, {"x": dtype}, jit=False)
         if oracle.has_jit:
             assert plan.has_jit
         for tile in (1, 64):
@@ -29,7 +31,7 @@ def test_weak_integral_capture_boundaries(dtype):
             assert result.tobytes() == expected.tobytes()
             if oracle.has_jit:
                 assert report["jit_stages"] == 1
-        restored = blosc2.NativeGraph.from_json(plan.to_json(), jit=True)
+        restored = NativeGraph.from_json(plan.to_json(), jit=True)
         assert restored.evaluate({"x": x}).tobytes() == expected.tobytes()
 
 
@@ -37,9 +39,9 @@ def test_weak_integral_capture_boundaries(dtype):
     ("dtype", "expression"), [("int32", "x % 7"), ("int32", "x << 2"), ("int8", "int16(x) * 2")]
 )
 def test_graph_benchmark_integer_cases_jit(dtype, expression):
-    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": dtype}, jit=True)
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": dtype}, jit=True)
-    reference = blosc2.NativeGraph.from_expression(expression, {"x": dtype}, jit=False)
+    oracle = NativeGraph.from_expression("x + x", {"x": dtype}, jit=True)
+    plan = NativeGraph.from_expression(expression, {"x": dtype}, jit=True)
+    reference = NativeGraph.from_expression(expression, {"x": dtype}, jit=False)
     if oracle.has_jit:
         assert plan.has_jit
     x = np.array([-10, -3, 0, 5, 20], dtype=dtype)
@@ -48,7 +50,7 @@ def test_graph_benchmark_integer_cases_jit(dtype, expression):
 
 @pytest.mark.parametrize(("dtype", "value"), [("int8", 128), ("int8", -129), ("uint8", -1), ("uint8", 256)])
 def test_out_of_range_weak_capture_keeps_lazy_fallback(dtype, value):
-    plan = blosc2.NativeGraph.from_expression(f"where(x == 0, x, x + {value})", {"x": dtype}, jit=True)
+    plan = NativeGraph.from_expression(f"where(x == 0, x, x + {value})", {"x": dtype}, jit=True)
     assert not plan.has_jit
     zero = np.zeros(3, dtype=dtype)
     np.testing.assert_array_equal(plan.evaluate({"x": zero}), zero)
@@ -73,15 +75,15 @@ def test_bool_capture_is_checked_before_integer_specialization():
         "root": 2,
         "output": {"dtype": "auto", "casting": "unsafe"},
     }
-    plan = blosc2.NativeGraph.from_json(record, jit=True)
+    plan = NativeGraph.from_json(record, jit=True)
     x = np.array([0, 1, 2], dtype="int8")
     np.testing.assert_array_equal(plan.evaluate({"x": x}), [1, 2, 3])
 
 
 def test_capture_values_are_part_of_jit_cache_identity():
-    source = blosc2.DSLKernel.from_source("def k(x, c):\n    return x % c\n")
+    source = SourceKernel.from_source("def k(x, c):\n    return x % c\n")
     x = np.array([-10, -3, 0, 5, 20], dtype="int32")
-    oracle = blosc2.NativeGraph.from_expression("x + x", {"x": "int32"}, jit=True)
+    oracle = NativeGraph.from_expression("x + x", {"x": "int32"}, jit=True)
     kernels = []
     for value in (7, 3, 11, 7):
         artifact = source.export({"x": "int32"}, "int32", constants={"c": value}, version="0.1")

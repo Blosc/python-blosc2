@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 EXPRESSIONS = {
     "sin+cos": "sin(x) + cos(x)",

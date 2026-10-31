@@ -95,7 +95,7 @@ All three are timed; only `kernel` is plotted. It is the point of the exercise:
 the shape of the
 [pandas-3 blog kernel](https://datapythonista.me/blog/whats-new-in-pandas-3),
 row-wise control flow rather than one expression. blosc2 runs it as a
-`@blosc2.dsl_kernel`; the other engines have to rewrite it as a mask plus two
+the internal compatibility DSLKernel (formerly `@blosc2.dsl_kernel`); the other engines have to rewrite it as a mask plus two
 fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
 what you would write first and is ~70x slower than everything else.
 

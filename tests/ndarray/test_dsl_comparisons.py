@@ -7,7 +7,7 @@ import pytest
 
 import blosc2
 from blosc2.dsl_compare import lower_chained_comparisons
-from blosc2.dsl_kernel import kernel_from_source
+from conftest import source_kernel_from_python as kernel_from_source
 
 
 @pytest.mark.parametrize("jit", [False, True])

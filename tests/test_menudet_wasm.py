@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 pytestmark = pytest.mark.skipif(not getattr(blosc2, "IS_WASM", False), reason="wasm32 only")
 
@@ -13,7 +14,7 @@ pytestmark = pytest.mark.skipif(not getattr(blosc2, "IS_WASM", False), reason="w
 def make(expression, dtype, *, inputs=None, output=None, jit=True):
     inputs = inputs or {"x": dtype, "y": dtype}
     source = f"def k({', '.join(inputs)}):\n    return {expression}\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = SourceKernel.from_source(source).export(
         inputs, output or dtype, version="0.1", casting="unsafe"
     )
     return blosc2.MenudetKernel.from_json(artifact, jit=jit)
@@ -69,7 +70,7 @@ def test_exact_integer_boundaries_and_control_flow():
         )
 
     loop = "def k(x, y):\n    v = x\n    for i in range(16):\n        v = v + y\n    return v\n"
-    artifact = blosc2.DSLKernel.from_source(loop).export(
+    artifact = SourceKernel.from_source(loop).export(
         {"x": "float64", "y": "float64"}, "float64", version="0.1", casting="unsafe"
     )
     accelerated = blosc2.MenudetKernel.from_json(artifact, jit=True)
@@ -102,7 +103,7 @@ def test_masks_tiles_and_reuse():
 
     # Reusing the same artifact should keep returning an executable JIT kernel.
     source = "def k(x, y):\n    return x * y + 1.0\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = SourceKernel.from_source(source).export(
         {"x": "float64", "y": "float64"}, "float64", version="0.1", casting="unsafe"
     )
     for _ in range(8):
@@ -191,7 +192,7 @@ def test_decorator_requires_actual_jit():
 def test_nd_context_falls_back():
     require_helpers()
     source = "def k(x, y):\n    return x + _flat_idx + y\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = SourceKernel.from_source(source).export(
         {"x": "float64", "y": "float64"}, "float64", version="0.1", casting="unsafe", ndim=2
     )
     accelerated = blosc2.MenudetKernel.from_json(artifact, jit=True)
@@ -211,7 +212,7 @@ def test_nd_context_falls_back():
 def test_reduction_falls_back():
     require_helpers()
     source = "def k(x):\n    return block_sum(x)\n"
-    artifact = blosc2.DSLKernel.from_source(source).export(
+    artifact = SourceKernel.from_source(source).export(
         {"x": "float64"}, "float64", version="0.1", casting="unsafe", cardinality="block_scalar"
     )
     accelerated = blosc2.MenudetKernel.from_json(artifact, jit=True)

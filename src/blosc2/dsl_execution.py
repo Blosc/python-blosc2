@@ -91,7 +91,7 @@ class _PartitionedDSL(MenudetLazyArray):
 
 def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit compatibility gates
     """Return (handled, result), retaining explicit compatibility exclusions."""
-    from .dsl_kernel import DSLKernel
+    from .dsl_kernel import SourceKernel as DSLKernel
     from .menudet_kernel import MenudetError
 
     if (

@@ -138,18 +138,16 @@ serialization of ``LazyExpr`` reference-preserving rather than value-copying.
 ``LazyUDF``
 -----------
 
-Currently, msgpack support for ``LazyUDF`` is limited to instances backed by a
-``@blosc2.dsl_kernel`` function.
+New computation recipes use validated Menudet artifacts, not Python function
+source. Author them with ``@blosc2.menudet`` and serialize the returned lazy
+array. Compatible internal DSLKernel-backed LazyUDFs normalize to Menudet before
+serialization internally; the retired decorator and constructor are not public
+authoring options.
 
-These are serialized as:
-
-- ``function_kind="dsl"``
-- ``dsl_version`` for the DSL grammar/semantics
-- the UDF source code
-- the preserved DSL source
-- output ``dtype`` and ``shape``
-- durable operand references
-- execution kwargs needed to reconstruct the lazy object
+The payload preserves the artifact, logical domain/partitions and durable operand
+references. Historical source-backed LazyUDF payloads reject under both safe and
+full policies, including nested values. Materialize them in a previous release
+before upgrading; see :doc:`../guides/migrating_to_menudet`.
 
 Supported operands are the same durable reference-style operands used for
 ``LazyExpr``:
@@ -159,5 +157,4 @@ Supported operands are the same durable reference-style operands used for
 - ``RemoteArray`` operands for fsspec, Zarr, or Caterva2 references
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
-Plain Python ``LazyUDF`` callables are intentionally not serialized by
-msgpack yet.
+Plain Python ``LazyUDF`` callables are intentionally not serialized by msgpack.

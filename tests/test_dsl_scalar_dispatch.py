@@ -7,13 +7,14 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
 def scalar_kernel(body, inputs, output="float64", *, jit=False, ndim=0, cardinality="block_scalar"):
     arguments = ", ".join(inputs)
-    artifact = blosc2.DSLKernel.from_source(f"def k({arguments}):\n    {body}\n").export(
+    artifact = SourceKernel.from_source(f"def k({arguments}):\n    {body}\n").export(
         inputs, output, version="0.1", cardinality=cardinality, ndim=ndim
     )
     return blosc2.MenudetKernel.from_json(artifact, jit=jit)

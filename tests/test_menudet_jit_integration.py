@@ -6,12 +6,13 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 pytestmark = pytest.mark.usefixtures("native_graph_runtime")
 
 
 def make_kernel(source, signature, output, **kwargs):
-    artifact = blosc2.DSLKernel.from_source(source).export(signature, output, version="0.1", **kwargs)
+    artifact = SourceKernel.from_source(source).export(signature, output, version="0.1", **kwargs)
     kernel = blosc2.MenudetKernel.from_json(artifact, jit=True)
     if os.environ.get("MENUDET_REQUIRE_JIT") == "1":
         assert kernel.has_jit

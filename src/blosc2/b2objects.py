@@ -10,17 +10,13 @@ from __future__ import annotations
 import pathlib
 from typing import Any
 
-import numpy as np
-
 import blosc2
 from blosc2.deserialization import DeserializeMode, get_deserialize, normalize_deserialize
-from blosc2.dsl_kernel import kernel_from_source
-from blosc2.exceptions import UnsafeDeserializationError
+from blosc2.exceptions import UnsafeDeserializationError, UnsupportedLegacyRecipeError
 from blosc2.expression_graph import bounded_recipe
 
 _B2OBJECT_META_KEY = "b2o"
 _B2OBJECT_VERSION = 1
-_B2OBJECT_DSL_VERSION = 1
 _B2OBJECT_USER_VLMETA_KEY = "_b2o_user_vlmeta"
 
 
@@ -172,9 +168,7 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carri
     if kind == "lazyexpr":
         return decode_structured_lazyexpr(payload, carrier_path=carrier_path, deserialize=deserialize)
     if kind == "lazyudf":
-        if deserialize is not DeserializeMode.FULL:
-            raise UnsafeDeserializationError("legacy DSL LazyUDF")
-        return decode_structured_lazyudf(payload, carrier_path=carrier_path, deserialize=deserialize)
+        raise UnsupportedLegacyRecipeError()
     raise ValueError(f"Unsupported persisted Blosc2 object kind: {kind!r}")
 
 
@@ -205,8 +199,9 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None, deserialize="safe"
 
 
 def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="safe"):
-    if normalize_deserialize(deserialize) is DeserializeMode.SAFE:
-        _preflight_operand_recipes(operands_payload)
+    _preflight_operand_recipes(
+        operands_payload, validate_expressions=normalize_deserialize(deserialize) is DeserializeMode.SAFE
+    )
     operands = {}
     missing_ops = {}
     for key, value in operands_payload.items():
@@ -227,7 +222,7 @@ def decode_operand_mapping(operands_payload, *, base_path=None, deserialize="saf
     return operands, missing_ops
 
 
-def _preflight_operand_recipes(mapping, active=()):
+def _preflight_operand_recipes(mapping, active=(), *, validate_expressions=True):
     """Check the entire inline recipe closure before resolving any sibling refs."""
     from blosc2.expression_graph import parse_expression
 
@@ -243,59 +238,21 @@ def _preflight_operand_recipes(mapping, active=()):
         if type(kind) is not str:
             raise TypeError("Structured operand recipe requires a string kind")
         if kind == "lazyudf":
-            raise UnsafeDeserializationError("legacy DSL LazyUDF")
-        if kind == "lazyexpr":
+            raise UnsupportedLegacyRecipeError()
+        if kind == "lazyexpr" and validate_expressions:
             expression = payload.get("expression")
             if type(expression) is not str:
                 raise TypeError("Structured LazyExpr payload requires a string 'expression'")
             parse_expression(expression)
         if kind in {"lazyexpr", "menudet"}:
-            _preflight_operand_recipes(payload.get("operands"), active)
+            _preflight_operand_recipes(
+                payload.get("operands"), active, validate_expressions=validate_expressions
+            )
 
 
 def decode_structured_lazyudf(payload, *, carrier_path=None, deserialize="safe"):
-    if normalize_deserialize(deserialize) is not DeserializeMode.FULL:
-        raise UnsafeDeserializationError("legacy DSL LazyUDF")
-    function_kind = payload.get("function_kind")
-    if function_kind != "dsl":
-        raise ValueError(f"Unsupported structured LazyUDF function kind: {function_kind!r}")
-    dsl_version = payload.get("dsl_version")
-    if dsl_version != _B2OBJECT_DSL_VERSION:
-        raise ValueError(f"Unsupported structured LazyUDF DSL version: {dsl_version!r}")
-    udf_source = payload.get("udf_source")
-    if not isinstance(udf_source, str):
-        raise TypeError("Structured LazyUDF payload requires a string 'udf_source'")
-    name = payload.get("name")
-    if not isinstance(name, str):
-        raise TypeError("Structured LazyUDF payload requires a string 'name'")
-    dtype = payload.get("dtype")
-    if not isinstance(dtype, str):
-        raise TypeError("Structured LazyUDF payload requires a string 'dtype'")
-    shape_payload = payload.get("shape")
-    if not isinstance(shape_payload, list):
-        raise TypeError("Structured LazyUDF payload requires a list 'shape'")
-    operands_payload = payload.get("operands")
-    if not isinstance(operands_payload, dict):
-        raise TypeError("Structured LazyUDF payload requires a mapping 'operands'")
-    kwargs = payload.get("kwargs", {})
-    if not isinstance(kwargs, dict):
-        raise TypeError("Structured LazyUDF payload requires a mapping 'kwargs'")
-
-    func = kernel_from_source(udf_source, name)
-    ordered_operands_payload = {f"o{n}": operands_payload[f"o{n}"] for n in range(len(operands_payload))}
-    operands, missing_ops = decode_operand_mapping(
-        ordered_operands_payload, base_path=carrier_path, deserialize=deserialize
-    )
-    if missing_ops:
-        exc = blosc2.exceptions.MissingOperands(name, missing_ops)
-        exc.expr = name
-        exc.missing_ops = missing_ops
-        raise exc
-    result = blosc2.lazyudf(
-        func, tuple(operands.values()), dtype=np.dtype(dtype), shape=tuple(shape_payload), **kwargs
-    )
-    result._legacy_source_recipe = True
-    return result
+    """Recognize the historical format without reconstructing Python source."""
+    raise UnsupportedLegacyRecipeError()
 
 
 def read_b2object_marker(obj) -> dict[str, Any] | None:

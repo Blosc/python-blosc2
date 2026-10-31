@@ -422,7 +422,18 @@ def check_undocumented(app, exception):
         )
 
 
+def normalize_numpydoc_exclusions(app, what, name, obj, options, lines):
+    """Let numpydoc honor explicit exclusions with Sphinx 9 option objects."""
+    # numpydoc expects the directive's hyphenated key, whereas Sphinx 9 exposes
+    # exclude_members in options.__dict__. Without this bridge, excluded methods
+    # disappear from autodoc but remain in numpydoc's generated summary table.
+    excluded = getattr(options, "exclude_members", None)
+    if excluded is not None:
+        options.__dict__["exclude-members"] = excluded
+
+
 def setup(app):
+    app.connect("autodoc-process-docstring", normalize_numpydoc_exclusions, priority=400)
     app.connect("autodoc-process-signature", process_sig)
     app.connect("builder-inited", gather_documented)
     app.connect("build-finished", check_undocumented)

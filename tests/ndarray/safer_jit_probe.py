@@ -5,9 +5,10 @@ import sys
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel(x):
     acc = x
     for i in range(3):

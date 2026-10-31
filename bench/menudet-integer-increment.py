@@ -14,6 +14,7 @@ from time import perf_counter
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Internal normalization benchmark.
 
 
 @blosc2.menudet
@@ -21,7 +22,7 @@ def portable(x):
     return x + 1
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def legacy(x):
     return x + 1
 

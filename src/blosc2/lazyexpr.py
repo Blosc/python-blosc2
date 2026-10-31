@@ -14,7 +14,6 @@ import concurrent.futures
 import contextlib
 import copy
 import enum
-import linecache
 import math
 import operator
 import os
@@ -54,7 +53,8 @@ from .b2objects import (
     write_b2object_payload,
     write_b2object_user_vlmeta,
 )
-from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
+from .dsl_kernel import DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
+from .dsl_kernel import SourceKernel as DSLKernel
 from .expression_graph import (
     arithmetic_names,
     evaluate_expression,
@@ -638,7 +638,7 @@ class LazyArray(ABC, blosc2.Operand):
               ``jit_backend="tcc"``/``"cc"``.
 
             - ``"js"`` backend (WebAssembly/Pyodide only): transpiles a
-              :func:`blosc2.dsl_kernel` to JavaScript so it runs at the browser engine's
+              compatibility DSLKernel to JavaScript so it runs at the browser engine's
               optimized native speed.  It tends to beat the WASM miniexpr JIT (~2x) for
               float kernels dominated by arithmetic and control flow, and is roughly a
               wash for transcendental-heavy or trivial kernels.  Outside WebAssembly,
@@ -754,7 +754,7 @@ class LazyArray(ABC, blosc2.Operand):
           section for more info). A :ref:`RemoteArray` is persisted as its
           portable source descriptor rather than embedding its carrier cache.
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
-          (including kernels decorated with :func:`blosc2.dsl_kernel`).
+          (including internally normalized source kernels).
         * User metadata can be attached via :attr:`vlmeta`. For in-memory LazyArrays
           this stays in memory; for persisted LazyArrays it is serialized and restored
           on reopen.
@@ -1626,7 +1626,7 @@ def _as_js_udf(expression, shape=None):
     *shape* (the whole-array output shape) is forwarded to the transpiler so kernels using
     index/shape symbols can reconstruct global coordinates per block."""
     if not _is_dsl_kernel_expression(expression):
-        raise ValueError('jit_backend="js" requires a blosc2.dsl_kernel-decorated kernel')
+        raise ValueError('jit_backend="js" requires a compatibility DSLKernel')
     if not blosc2.IS_WASM:
         raise RuntimeError('jit_backend="js" is only available under WebAssembly/Pyodide')
     from .dsl_js import js_kernel
@@ -5775,11 +5775,11 @@ class LazyUDF(LazyArray):
         -----
         * All operands must be :ref:`NDArray` or :ref:`C2Array` objects stored on
           disk or a remote server (i.e. they must have a ``urlpath``).
-        * Newly authored DSLKernel functions normalize and validate as Menudet
-          1.0 before saving. Python UDFs and noncompliant kernels reject before
+        * Internally normalized source kernels validate as Menudet
+          0.1 before saving. Python UDFs and noncompliant kernels reject before
           writing. Block-scalar kernels require the explicit Menudet API.
-          Historical source-backed files require ``deserialize='full'`` on open
-          and are not automatically migrated by saving.
+          Historical source-backed files are unsupported under all loading
+          policies; materialize them in a previous release before upgrading.
         """
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
@@ -5917,10 +5917,9 @@ def lazyudf(
         user-defined function. If not needed, this can be empty, but `shape` must
         be provided.
     dtype: np.dtype, optional
-        The resulting ndarray dtype in NumPy format.  When omitted and *func*
-        is a :class:`DSLKernel`, the dtype is inferred by NumPy type promotion
-        of the input dtypes.  For type-changing kernels (comparisons, casts)
-        pass *dtype* explicitly.  Required for plain Python UDFs.
+        The resulting ndarray dtype in NumPy format. Required for Python UDFs.
+        Internal numerical constructors can infer it from normalized source;
+        this is not a public legacy-kernel authoring interface.
     shape: tuple, optional
         The shape of the resulting array. If None, the shape will be guessed from inputs.
     chunked_eval: bool, optional
@@ -5935,8 +5934,8 @@ def lazyudf(
         float DSL kernels and falls back to miniexpr otherwise (``jit=True`` prefers ``"js"``
         too, since it is JIT-compiled by the JS engine). ``"tcc"`` selects bundled
         libtcc without a disk cache, ``"cc"`` selects an installed C compiler with
-        persistent caching, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
-        to JavaScript (browser/Pyodide only; raises elsewhere). Native JIT requests
+        persistent caching, and ``"js"`` is reserved for internal source-kernel
+        transpilation to JavaScript (browser/Pyodide only; raises elsewhere). Native JIT requests
         remain best effort and use the interpreter if compilation or loading fails.
         See :ref:`JITOptions` for requirements, diagnostics, and environment settings.
     kwargs: Any, optional
@@ -5957,6 +5956,13 @@ def lazyudf(
     -------
     out: :ref:`LazyUDF`
         A :ref:`LazyUDF` is returned.
+
+    Notes
+    -----
+    Menudet functions and kernels are not accepted by this constructor. Call a
+    decorated function as ``function(*inputs)``, or bind a specialized kernel
+    with ``kernel.lazy({name: operand, ...})``. See
+    https://blosc.org/python-blosc2/guides/migrating_to_menudet.html.
 
     Examples
     --------
@@ -5983,6 +5989,16 @@ def lazyudf(
             [17.5 20.  22.5]
             [25.  27.5 30. ]]
     """
+    if isinstance(func, blosc2.MenudetFunction):
+        raise TypeError(
+            "lazyudf() does not accept a MenudetFunction; call function(*inputs) directly. "
+            "See https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+        )
+    if isinstance(func, blosc2.MenudetKernel):
+        raise TypeError(
+            "lazyudf() does not accept a MenudetKernel; use kernel.lazy({name: operand, ...}). "
+            "See https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+        )
     if isinstance(func, DSLKernel) and func.dsl_error is not None:
         udf_name = getattr(func.func, "__name__", func.__name__)
         raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{func.dsl_error}") from None
@@ -6182,55 +6198,23 @@ def lazyexpr(
 
 
 def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
-    """Reconstruct a LazyUDF (including DSL kernels) from saved metadata."""
-    local_ns = {}
-    name = lazyarray["name"]
-    filename = f"<{name}>"  # any unique name
-    SAFE_GLOBALS = {
-        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
-        "np": np,
-        "blosc2": blosc2,
-    }
-    if blosc2._HAS_NUMBA:
-        import numba
-
-        SAFE_GLOBALS["numba"] = numba
-
-    # Register the source so inspect can find it
-    linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
-
-    exec(compile(expr, filename, "exec"), SAFE_GLOBALS, local_ns)
-    func = local_ns[name]
-    # If the saved LazyUDF was a DSL kernel, re-wrap and restore the dsl_source
-    if "dsl_source" in lazyarray:
-        if not isinstance(func, DSLKernel):
-            func = DSLKernel(func)
-        if func.dsl_source is None:
-            # Re-extraction from linecache failed; use the saved verbatim dsl_source
-            func.dsl_source = lazyarray["dsl_source"]
-    # TODO: make more robust for general kwargs (not just cparams)
-    return blosc2.lazyudf(
-        func,
-        tuple(operands_dict[f"o{n}"] for n in range(len(operands_dict))),
-        shape=array.shape,
-        dtype=array.dtype,
-        cparams=array.cparams,
-    )
+    """Recognize the retired source recipe without executing Python."""
+    raise blosc2.UnsupportedLegacyRecipeError()
 
 
 def open_lazyarray(array):
     from blosc2.deserialization import DeserializeMode, get_deserialize
     from blosc2.exceptions import UnsafeDeserializationError
 
+    value = array.schunk.meta["LazyArray"]
+    if value == LazyArrayEnum.UDF.value:
+        raise blosc2.UnsupportedLegacyRecipeError()
     policy = get_deserialize(array)
     if policy is not DeserializeMode.FULL:
         raise UnsafeDeserializationError("legacy LazyArray")
-    value = array.schunk.meta["LazyArray"]
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     if value == LazyArrayEnum.Expr.value:
         expr = lazyarray["expression"]
-    elif value == LazyArrayEnum.UDF.value:
-        expr = lazyarray["UDF"]
     else:
         raise ValueError("Argument `array` is not LazyExpr or LazyUDF instance.")
 
@@ -6265,9 +6249,6 @@ def open_lazyarray(array):
     # LazyExpr
     if value == LazyArrayEnum.Expr.value:
         new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
-    elif value == LazyArrayEnum.UDF.value:
-        new_expr = _reconstruct_lazyudf(expr, lazyarray, operands_dict, array)
-        new_expr._legacy_source_recipe = True
 
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array

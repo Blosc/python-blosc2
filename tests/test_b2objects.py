@@ -14,9 +14,10 @@ import pytest
 
 import blosc2
 import blosc2.c2array as blosc2_c2array
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_add_square(x, y):
     return x * x + y * y + 2 * x * y
 
@@ -136,13 +137,12 @@ def test_legacy_lazyexpr_open_backward_compat():
     np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
 
 
-def test_legacy_lazyudf_open_backward_compat():
+@pytest.mark.parametrize("policy", ["safe", "full"])
+def test_legacy_lazyudf_open_is_unsupported(policy):
     fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
 
-    restored = blosc2.open(fixture, mode="r", deserialize="full")
-
-    assert isinstance(restored, blosc2.LazyUDF)
-    np.testing.assert_allclose(restored.compute()[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.open(fixture, mode="r", deserialize=policy)
 
 
 def test_lazyudf_from_cframe_roundtrip(tmp_path):
@@ -155,7 +155,7 @@ def test_lazyudf_from_cframe_roundtrip(tmp_path):
 
     offset = np.float32(2)
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def captured(x, scale):
         return x * scale + offset
 
@@ -187,16 +187,15 @@ def test_lazyudf_open_roundtrip(tmp_path):
         ("return callback(x)", "invalid_source"),
         ("return block_sum(x)", "block scalar"),
     ):
-        invalid = blosc2.DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
+        invalid = DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
         bad = blosc2.lazyudf(invalid, (a,), dtype="float64")
         before = urlpath.read_bytes()
         with pytest.raises((blosc2.MenudetError, ValueError), match=expected):
             bad.save(urlpath, mode="w")
         assert urlpath.read_bytes() == before
     fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
-    legacy = blosc2.open(fixture, deserialize="full")
-    with pytest.raises(TypeError, match="legacy"):
-        legacy.save(urlpath, mode="w")
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.open(fixture, deserialize="full")
     assert urlpath.read_bytes() == before
 
 

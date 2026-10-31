@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 _NETWORK_ERRORS = (httpx.HTTPError,)
 try:
@@ -57,6 +58,25 @@ def pytest_collection_modifyitems(config, items):
 
 def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
+
+
+def source_kernel_from_python(source, name=None):
+    """Build test-authored functions for internal normalization tests, never files."""
+    import ast
+    import linecache
+
+    import numpy as np
+
+    from blosc2.dsl_kernel import SourceKernel
+
+    tree = ast.parse(source)
+    if name is None:
+        name = next(node.name for node in tree.body if isinstance(node, ast.FunctionDef))
+    filename = f"<normalization-test-{hash(source)}>"
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    namespace = {"np": np, "blosc2": blosc2}
+    exec(compile(tree, filename, "exec"), namespace)
+    return SourceKernel(namespace[name])
 
 
 def orthogonal_cases(*dimensions):
@@ -121,7 +141,7 @@ def _http_server_diagnostics(pytestconfig, tmp_path_factory):
 def native_graph_runtime():
     """Optional dependency feature; qualification jobs must require its presence."""
     try:
-        blosc2.NativeGraph.from_expression("x", {"x": "float32"})
+        NativeGraph.from_expression("x", {"x": "float32"})
     except NotImplementedError as error:
         if os.environ.get("MENUDET_REQUIRE_GRAPH_RUNTIME") or os.environ.get(
             "MENUDET_REQUIRE_ARRAY_RUNTIME"

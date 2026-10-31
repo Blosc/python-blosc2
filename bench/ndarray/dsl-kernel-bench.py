@@ -13,6 +13,7 @@ import time
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Internal normalization benchmark.
 
 lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
 where = np.where
@@ -30,7 +31,7 @@ DSL_JIT = True
 DSL_JIT_BACKEND = "tcc"
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_loop1(x, y):
     acc = 0.0
     for i in range(1):
@@ -42,7 +43,7 @@ def kernel_loop1(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_loop2(x, y):
     acc = 0.0
     for i in range(2):
@@ -54,7 +55,7 @@ def kernel_loop2(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_loop4(x, y):
     acc = 0.0
     for i in range(4):
@@ -66,7 +67,7 @@ def kernel_loop4(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_loop4_heavy(x, y):
     acc = 0.0
     for i in range(4):
@@ -78,7 +79,7 @@ def kernel_loop4_heavy(x, y):
     return acc
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_nested2(x, y):
     acc = 0.0
     for i in range(2):
@@ -144,27 +145,27 @@ def expr_sincos_identity() -> str:
     return "sin(x) ** 2 + cos(x) ** 2"
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_transcend1(x):
     return log(exp(x))
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_transcend2(x):
     return tanh(x)
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_transcend3(x):
     return log1p(abs(x))
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_transcend4(x):
     return log(exp(x) + tanh(x) + log1p(abs(x)) + sqrt(abs(x)) + expm1(x))
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_sincos_identity(x):
     return sin(x) ** 2 + cos(x) ** 2
 

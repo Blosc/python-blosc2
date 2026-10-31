@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 from conftest import orthogonal_cases
 
 DTYPES = [
@@ -25,7 +26,7 @@ DTYPES = [
 
 def kernel(expression="x", inputs=None, output="float64"):
     inputs = inputs or {"x": output}
-    author = blosc2.DSLKernel.from_source(f"def k({', '.join(inputs)}):\n    return {expression}\n")
+    author = SourceKernel.from_source(f"def k({', '.join(inputs)}):\n    return {expression}\n")
     return blosc2.MenudetKernel.from_json(author.export(inputs, output, version="0.1", casting="unsafe"))
 
 

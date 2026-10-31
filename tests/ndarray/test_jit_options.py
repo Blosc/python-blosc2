@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @pytest.fixture(autouse=True)
@@ -260,7 +261,7 @@ def test_ramp_metadata_shortcut_strips_execution_options(constructor, monkeypatc
     np.testing.assert_array_equal(result[:], 0)
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel(x):
     return x * 2 + 1
 

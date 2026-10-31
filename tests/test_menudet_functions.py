@@ -10,11 +10,12 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 from tools import menudet_conformance as compat
 
 
 def kernel(expression, dtype="float64", output=None, version="0.1"):
-    author = blosc2.DSLKernel.from_source(f"def k(x):\n    return {expression}\n")
+    author = SourceKernel.from_source(f"def k(x):\n    return {expression}\n")
     return blosc2.MenudetKernel.from_json(author.export({"x": dtype}, output or dtype, version=version))
 
 
@@ -127,7 +128,7 @@ def test_new_spellings_do_not_change_legacy_routing(name):
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_extrema_zero_contract_and_nan_policy(dtype):
-    author = blosc2.DSLKernel.from_source("def k(x, y):\n    return minimum(x, y)\n")
+    author = SourceKernel.from_source("def k(x, y):\n    return minimum(x, y)\n")
     k = blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, dtype, version="0.1"))
     result = k.evaluate(
         {

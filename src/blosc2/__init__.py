@@ -573,7 +573,7 @@ from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
 from .deserialization import DeserializeMode
-from .exceptions import UnsafeDeserializationError
+from .exceptions import UnsafeDeserializationError, UnsupportedLegacyRecipeError
 
 from .c2array import c2context, C2Array, C2NDSource, ChunkAlreadyWritten, URLPath
 
@@ -586,7 +586,6 @@ from .dsl_kernel import (
     validate_menudet,
 )
 from .menudet_kernel import MenudetError, MenudetKernel
-from .graph_plan import NativeGraph
 from .jit_config import get_jit_options, jit_options, set_jit_options
 from .expression_graph import expression_evaluation
 from .lazyexpr import (
@@ -912,9 +911,9 @@ __all__ = [  # noqa : RUF022
     "Index",
     "LazyArray",
     "DSLKernel",
+    "UnsupportedLegacyRecipeError",
     "validate_menudet",
     "MenudetKernel",
-    "NativeGraph",
     "MenudetError",
     "DSLSyntaxError",
     "LazyExpr",

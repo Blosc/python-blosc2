@@ -9,7 +9,8 @@ Public API:
     build_js_module(k, ndim)  -> js_source string          # ndim needed for index symbols
     js_kernel(kernel, shape)  -> callable for lazyudf(...)  # needs Pyodide `js` to *run*
 
-`kernel` may be a blosc2 DSLKernel (has .dsl_source), a plain function, or a source string.
+`kernel` may be an internal normalized source kernel (has .dsl_source), a plain
+function, or a source string. This internal transpiler is not public legacy authoring.
 
 Kernels may use index/shape symbols (`_i0`/`_i1`/.., `_n0`/.., `_flat_idx`); they become
 trailing kernel parameters and the runtime driver reconstructs each element's global

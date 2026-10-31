@@ -9,12 +9,13 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 
 
 def make(expression, dtype, *, jit, output=None, inputs=None):
     inputs = inputs or {"x": dtype, "y": dtype}
     source = f"def k({', '.join(inputs)}):\n    return {expression}\n"
-    author = blosc2.DSLKernel.from_source(source)
+    author = SourceKernel.from_source(source)
     artifact = author.export(inputs, output or dtype, version="0.1", casting="unsafe")
     return blosc2.MenudetKernel.from_json(artifact, jit=jit)
 
@@ -376,7 +377,7 @@ def test_unary_math_lowering(backend, dtype):
 )
 @pytest.mark.native_semantics
 def test_local_and_branch_lowering(backend, dtype, body):
-    artifact = blosc2.DSLKernel.from_source("def k(x, y):\n" + body).export(
+    artifact = SourceKernel.from_source("def k(x, y):\n" + body).export(
         {"x": dtype, "y": dtype}, dtype, version="0.1"
     )
     compiled = blosc2.MenudetKernel.from_json(artifact, jit=True)

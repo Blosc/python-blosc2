@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.graph_plan import NativeGraph
 
 pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unavailable on WASM")
 
@@ -25,7 +26,7 @@ def test_native_graph_destination(jit, layout):
         output = storage[6:2:-1, 10:4:-1]
     else:
         output = storage[::2, ::2]
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype}, jit=jit)
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype}, jit=jit)
     schedule = plan.specialize({"x": (x.dtype, x.shape)}, tile_items=7)
     result, report = schedule.execute({"x": x}, out=output)
     assert result is output
@@ -45,7 +46,7 @@ def test_native_graph_destination(jit, layout):
 def test_native_graph_strided_reduction_and_staged_final():
     x = np.arange(24.0).reshape(4, 6)
     for expression, expected in [("sum(x, axis=1)", x.sum(axis=1)), ("x - sum(x)", x - x.sum())]:
-        plan = blosc2.NativeGraph.from_expression(expression, {"x": x.dtype})
+        plan = NativeGraph.from_expression(expression, {"x": x.dtype})
         schedule = plan.specialize({"x": (x.dtype, x.shape)})
         storage = np.empty(expected.size * 2)
         output = storage[::2].reshape(expected.shape)
@@ -58,7 +59,7 @@ def test_self_overlapping_output_rejected_before_write():
     x = np.ones((2, 3))
     storage = np.full(6, -999.0)
     output = np.lib.stride_tricks.as_strided(storage, shape=x.shape, strides=(8, 8))
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype})
     schedule = plan.specialize({"x": (x.dtype, x.shape)})
     with pytest.raises(blosc2.MenudetError):
         schedule.execute({"x": x}, out=output)
@@ -68,7 +69,7 @@ def test_self_overlapping_output_rejected_before_write():
 @pytest.mark.parametrize("jit", [False, True])
 def test_native_host_executor_partitions_strided_output(jit):
     x = np.arange(600_003.0, dtype="float64")
-    plan = blosc2.NativeGraph.from_expression("x * 2 + 1", {"x": x.dtype}, jit=jit)
+    plan = NativeGraph.from_expression("x * 2 + 1", {"x": x.dtype}, jit=jit)
     assert plan.info()["partitionable"]
     schedule = plan.specialize({"x": (x.dtype, x.shape)}, tile_items=4096)
     storage = np.full(x.size * 2, -999.0)
@@ -97,7 +98,7 @@ def test_native_executor_joins_on_submission_failure(monkeypatch):
 
     monkeypatch.setattr(resident, "resident_pool", FailingPool)
     x = np.arange(600_003.0)
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype})
     schedule = plan.specialize({"x": (x.dtype, x.shape)})
     with pytest.raises(ArithmeticError, match="submission failed"):
         schedule.execute({"x": x}, workers=4)
@@ -118,7 +119,7 @@ def test_native_executor_reuses_schedule_concurrently(monkeypatch, jit):
 
     monkeypatch.setattr("blosc2.resident_execution.resident_pool", forbidden)
     x = np.arange(600_003.0)
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype}, jit=jit)
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype}, jit=jit)
     schedule = plan.specialize({"x": (x.dtype, x.shape)})
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
@@ -160,7 +161,7 @@ def test_public_native_sources_preserve_strided_output():
     x = np.arange(24.0).reshape(4, 6)
     stored = blosc2.asarray(x, chunks=(2, 3), blocks=(1, 3))
     output = np.empty(x.shape, order="F")
-    plan = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
+    plan = NativeGraph.from_expression("x + 1", {"x": x.dtype})
     result, report = plan.evaluate_sources({"x": stored}, out=output, tile_items=7, return_report=True)
     assert result is output
     np.testing.assert_array_equal(result, x + 1)
@@ -181,7 +182,7 @@ def test_native_identity_copy_without_interpreter_or_jit(layout):
         output = np.empty((8, 12))[::2, ::2]
     else:
         output = np.empty_like(x)
-    plan = blosc2.NativeGraph.from_expression("x", {"x": x.dtype})
+    plan = NativeGraph.from_expression("x", {"x": x.dtype})
     result, report = plan.evaluate({"x": x}, out=output, return_report=True)
     assert result is output
     np.testing.assert_array_equal(result, x)
@@ -193,7 +194,7 @@ def test_matching_fortran_maps_avoid_gather_and_scatter(jit):
     x = np.asfortranarray(np.arange(24.0).reshape(4, 6))
     y = np.asfortranarray(x + 2)
     output = np.empty(x.shape, order="F")
-    plan = blosc2.NativeGraph.from_expression("x + y", {"x": x.dtype, "y": y.dtype}, jit=jit)
+    plan = NativeGraph.from_expression("x + y", {"x": x.dtype, "y": y.dtype}, jit=jit)
     result, report = plan.evaluate({"x": x, "y": y}, out=output, return_report=True)
     assert result is output
     np.testing.assert_array_equal(result, x + y)
@@ -205,10 +206,10 @@ def test_native_final_conversion_into_fortran_output():
     import json
 
     x = np.arange(24.0).reshape(4, 6)
-    base = blosc2.NativeGraph.from_expression("x + 1", {"x": x.dtype})
+    base = NativeGraph.from_expression("x + 1", {"x": x.dtype})
     graph = json.loads(base.to_json())
     graph["output"]["dtype"] = "float32"
-    plan = blosc2.NativeGraph(graph)
+    plan = NativeGraph(graph)
     output = np.empty(x.shape, dtype="float32", order="F")
     result = plan.evaluate({"x": x}, out=output)
     assert result is output
@@ -219,7 +220,7 @@ def test_native_staged_final_conversion_into_fortran_output():
     x = np.arange(24.0).reshape(4, 6)
     # Staged regions express conversion as an explicit cast node, not a final
     # output-dtype override; preserve the native format's established contract.
-    plan = blosc2.NativeGraph.from_expression("float32(x - sum(x))", {"x": x.dtype})
+    plan = NativeGraph.from_expression("float32(x - sum(x))", {"x": x.dtype})
     output = np.empty(x.shape, dtype="float32", order="F")
     result = plan.evaluate({"x": x}, out=output)
     assert result is output
@@ -232,7 +233,7 @@ def test_native_staged_final_conversion_into_fortran_output():
 )
 def test_promoted_integer_math_is_native_partitionable(expression):
     x = np.arange(1, 600_004, dtype="int64") % 97
-    plan = blosc2.NativeGraph.from_expression(expression, {"x": x.dtype}, jit=True)
+    plan = NativeGraph.from_expression(expression, {"x": x.dtype}, jit=True)
     assert plan.info()["partitionable"]
     expected = plan.evaluate({"x": x})
     result, report = plan.evaluate({"x": x}, workers=4, return_report=True)

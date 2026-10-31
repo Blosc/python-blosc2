@@ -8,16 +8,15 @@
 import numpy as np
 
 import blosc2
-from blosc2 import where
 
 
 def show(label, value):
     print(f"{label}: {value}")
 
 
-@blosc2.dsl_kernel
+@blosc2.menudet
 def masked_energy(a, b, mask):
-    return where(mask > 0, a * a + 2 * b, 0.0)
+    return where(mask > 0, a * a + 2 * b, 0.0)  # noqa: F821 -- native Menudet function
 
 
 bundle_path = "example_b2o_bundle.b2z"
@@ -36,7 +35,7 @@ with blosc2.DictStore(bundle_path, mode="w", threshold=1) as store:
     mask = store["/data/mask"]
 
     expr = blosc2.lazyexpr("(a - b) / (a + b + 1e-6)", operands={"a": a, "b": b})
-    udf = blosc2.lazyudf(masked_energy, (a, b, mask), dtype=np.float32, shape=a.shape)
+    udf = masked_energy(a, b, mask)
 
     # DictStore currently stores array-like external leaves, so persist the
     # logical lazy objects through their b2o NDArray carriers.

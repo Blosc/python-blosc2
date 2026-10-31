@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel
 from blosc2.storage_readers import StorageReader, storage_reader_eligible
 from conftest import orthogonal_cases
 
@@ -21,7 +22,7 @@ def prefilter_runtime(storage_runtime):
 
 
 def make_kernel(source="def k(x, y):\n    return x + (y - 1)\n", inputs=None, output="float64", jit=True):
-    author = blosc2.DSLKernel.from_source(source)
+    author = SourceKernel.from_source(source)
     return blosc2.MenudetKernel.from_json(
         author.export(inputs or {"x": "float64", "y": "float64"}, output), jit=jit
     )
@@ -141,7 +142,7 @@ def test_block_dependency_preserves_original_groups(storage_runtime):
 def test_context_and_final_cast_retain_original_path(storage_runtime):
     cast = make_kernel("def k(x):\n    return x\n", {"x": "float64"}, "int32")
     assert not storage_reader_eligible(cast)
-    author = blosc2.DSLKernel.from_source("def k(x):\n    return x + _i0\n")
+    author = SourceKernel.from_source("def k(x):\n    return x + _i0\n")
     context = blosc2.MenudetKernel.from_json(author.export({"x": "float64"}, "float64", ndim=1))
     assert not storage_reader_eligible(context)
     np.testing.assert_array_equal(context.lazy({"x": blosc2.asarray(np.ones(4))})[2:], [3, 4])

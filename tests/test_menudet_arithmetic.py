@@ -8,11 +8,12 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 from tools import menudet_conformance as compat
 
 
 def export(source, inputs, output, **kwargs):
-    return blosc2.DSLKernel.from_source(source).export(inputs, output, version="0.1", **kwargs)
+    return DSLKernel.from_source(source).export(inputs, output, version="0.1", **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +30,7 @@ def numpy_runtime():
 
 def test_menudet_1_default_and_metadata_only_inference():
     source = "def k(x):\n    return (x + 1) * 2\n"
-    author = blosc2.DSLKernel.from_source(source)
+    author = DSLKernel.from_source(source)
     default = blosc2.MenudetKernel.from_json(author.export({"x": "int8"}, "int64"))
     new = blosc2.MenudetKernel.from_json(export(source, {"x": "int8"}, "int64"))
     assert default.schema_version == "0.1"
@@ -132,7 +133,7 @@ def test_cast_policy_rejection_is_metadata_only():
 def test_authoring_captured_scalar():
     c = 1
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def k(x):
         return x + c
 

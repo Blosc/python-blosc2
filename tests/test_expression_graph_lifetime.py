@@ -33,7 +33,10 @@ def test_inline_recipe_closure_rejects_before_resolving_siblings(monkeypatch, ba
         "operands": {"x": reference, "y": inner},
     }
     monkeypatch.setattr(blosc2.Ref, "open", lambda *a, **k: pytest.fail("Resolved sibling reference"))
-    with pytest.raises(blosc2.UnsafeDeserializationError):
+    error = (
+        blosc2.UnsupportedLegacyRecipeError if bad_kind == "legacy" else blosc2.UnsafeDeserializationError
+    )
+    with pytest.raises(error):
         objects.decode_b2object_payload(payload)
 
 
