@@ -138,6 +138,14 @@ static size_t b2_artifact_width(const void *handle, int index) {
     return index < 0 ? me_artifact_output_itemsize(handle) : me_artifact_input_itemsize(handle, index);
 }
 static int b2_artifact_rank(const void *handle) { return me_artifact_context_ndim(handle); }
+static int b2_artifact_partitionable(const void *handle) {
+#ifdef ME_ARTIFACT_PARTITIONABLE_VERSION
+    return me_artifact_is_partitionable(handle);
+#else
+    (void)handle;
+    return -1;
+#endif
+}
 static const char *b2_artifact_version(const void *handle) { return me_artifact_schema_version(handle); }
 #ifdef ME_ARTIFACT_MATH_POLICY_VERSION
 static const char *b2_artifact_math(const void *handle) { return me_artifact_math_backend(handle); }
@@ -176,6 +184,7 @@ static int b2_artifact_descriptor_available(void) { return 0; }
 static int b2_artifact_cardinality(const void *handle) { (void)handle; return 0; }
 static size_t b2_artifact_width(const void *handle, int index) { (void)handle; (void)index; return 0; }
 static int b2_artifact_rank(const void *handle) { (void)handle; return 0; }
+static int b2_artifact_partitionable(const void *handle) { (void)handle; return -1; }
 static const char *b2_artifact_version(const void *handle) { (void)handle; return "unsupported"; }
 static const char *b2_artifact_math(const void *handle) { (void)handle; return "unknown"; }
 static const char *b2_artifact_math_ulp(const void *handle) { (void)handle; return ""; }

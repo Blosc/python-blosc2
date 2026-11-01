@@ -17,12 +17,19 @@ def storage_reader_eligible(kernel):
         return False
     if kernel.result_cardinality != "elementwise" or kernel.context_ndim:
         return False
-    if kernel.inferred_dtype != kernel.output_dtype or kernel.output_dtype.kind not in "biuf":
+    if kernel.output_dtype.kind not in "biuf":
         return False
     if any(dtype.kind not in "biuf" for dtype in kernel.input_dtypes.values()):
         return False
-    if hasattr(kernel, "native_partitionable"):
-        return kernel.native_partitionable
+    # Graph rejection is authoritative; an artifact proof must not override it.
+    if hasattr(kernel, "graph_partitionable"):
+        return kernel.graph_partitionable and kernel.inferred_dtype == kernel.output_dtype
+    if getattr(kernel, "native_partitionable", None) is True:
+        return True
+    # Earlier runtimes and programs not covered by the native proof retain the
+    # existing single-expression/modular-integer proof and conversion guards.
+    if kernel.inferred_dtype != kernel.output_dtype:
+        return False
     if any(dtype.kind in "iu" for dtype in kernel.input_dtypes.values()):
         from .resident_execution import resident_integer_operations_safe
 

@@ -1,0 +1,228 @@
+{
+  "metadata": {
+    "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+    "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so",
+    "python": "3.14.4",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "shape": [
+      1000,
+      1000
+    ],
+    "dtype": "<f4",
+    "chunks": [
+      1000,
+      1000
+    ],
+    "blocks": [
+      25,
+      1000
+    ],
+    "cparams": "CParams(codec=<Codec.BLOSCLZ: 0>, codec_meta=0, clevel=1, use_dict=False, typesize=8, nthreads=12, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "threads": 12,
+    "compiler_requested": "tcc",
+    "repeat": 5,
+    "protocol": "validate first output; best of warm allocation/compression samples"
+  },
+  "results": [
+    {
+      "case": "loop1",
+      "route": "menudet",
+      "preparation_s": 0.007560791447758675,
+      "first_s": 0.02259716670960188,
+      "samples_s": [
+        0.01848558336496353,
+        0.018099958077073097,
+        0.018867041915655136,
+        0.017814375460147858,
+        0.018006207421422005
+      ],
+      "best_s": 0.017814375460147858,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop1",
+      "route": "legacy",
+      "preparation_s": 0.00017029140144586563,
+      "first_s": 0.0037978338077664375,
+      "samples_s": [
+        0.002152707427740097,
+        0.00230337493121624,
+        0.0021045422181487083,
+        0.002006916329264641,
+        0.0019387919455766678
+      ],
+      "best_s": 0.0019387919455766678,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop2",
+      "route": "menudet",
+      "preparation_s": 0.00443162489682436,
+      "first_s": 0.030162375420331955,
+      "samples_s": [
+        0.03149395901709795,
+        0.030205249786376953,
+        0.02948733326047659,
+        0.030163207091391087,
+        0.030626083724200726
+      ],
+      "best_s": 0.02948733326047659,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop2",
+      "route": "legacy",
+      "preparation_s": 0.00014679227024316788,
+      "first_s": 0.003351832740008831,
+      "samples_s": [
+        0.003480333834886551,
+        0.0031982501968741417,
+        0.0033162077888846397,
+        0.003156375139951706,
+        0.0030905837193131447
+      ],
+      "best_s": 0.0030905837193131447,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop4",
+      "route": "menudet",
+      "preparation_s": 0.0044296663254499435,
+      "first_s": 0.05336495768278837,
+      "samples_s": [
+        0.054047499783337116,
+        0.054320208728313446,
+        0.05372270755469799,
+        0.05389058403670788,
+        0.054061499424278736
+      ],
+      "best_s": 0.05372270755469799,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop4",
+      "route": "legacy",
+      "preparation_s": 0.00013841688632965088,
+      "first_s": 0.005912291817367077,
+      "samples_s": [
+        0.00567933265119791,
+        0.005517333745956421,
+        0.005723457783460617,
+        0.005620541051030159,
+        0.00546345766633749
+      ],
+      "best_s": 0.00546345766633749,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop4_heavy",
+      "route": "menudet",
+      "preparation_s": 0.004456708207726479,
+      "first_s": 0.0575930830091238,
+      "samples_s": [
+        0.057222167029976845,
+        0.057759624905884266,
+        0.057591875083744526,
+        0.057687750086188316,
+        0.05638274922966957
+      ],
+      "best_s": 0.05638274922966957,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop4_heavy",
+      "route": "legacy",
+      "preparation_s": 0.00013187527656555176,
+      "first_s": 0.006591208279132843,
+      "samples_s": [
+        0.006015290506184101,
+        0.006381917744874954,
+        0.006226833909749985,
+        0.006331125274300575,
+        0.006235874257981777
+      ],
+      "best_s": 0.006015290506184101,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "nested2",
+      "route": "menudet",
+      "preparation_s": 0.00497316662222147,
+      "first_s": 0.0777485417202115,
+      "samples_s": [
+        0.07617529202252626,
+        0.07802908215671778,
+        0.07611716631799936,
+        0.07690991647541523,
+        0.07547437492758036
+      ],
+      "best_s": 0.07547437492758036,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "nested2",
+      "route": "legacy",
+      "preparation_s": 0.00015708338469266891,
+      "first_s": 0.007052375003695488,
+      "samples_s": [
+        0.0065819574519991875,
+        0.0064460840076208115,
+        0.006295874714851379,
+        0.006220333278179169,
+        0.006721249781548977
+      ],
+      "best_s": 0.006220333278179169,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    }
+  ]
+}

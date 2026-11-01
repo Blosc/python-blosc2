@@ -1111,6 +1111,7 @@ cdef extern from "dsl_artifact_bridge.h":
     int b2_artifact_cardinality(const void *)
     size_t b2_artifact_width(const void *, int)
     int b2_artifact_rank(const void *)
+    int b2_artifact_partitionable(const void *)
     const char *b2_artifact_version(const void *)
     const char *b2_artifact_math(const void *)
     const char *b2_artifact_math_ulp(const void *)
@@ -2183,6 +2184,7 @@ cdef class MenudetArtifactHandle:
         """Authoritative draft native signature; unavailable on older pinned builds."""
         if not b2_artifact_descriptor_available():
             raise NotImplementedError("Build with draft miniexpr descriptor support")
+        partitionable = b2_artifact_partitionable(self._handle)
         return {
             "schema_version": (<bytes>b2_artifact_version(self._handle)).decode("ascii"),
             "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
@@ -2192,6 +2194,7 @@ cdef class MenudetArtifactHandle:
                                _numpy_dtype_from_me_dtype(b2_artifact_inferred(self._handle))),
             "cardinality": "block_scalar" if b2_artifact_cardinality(self._handle) == 1 else "elementwise",
             "ndim": b2_artifact_rank(self._handle),
+            "native_partitionable": None if partitionable < 0 else bool(partitionable),
             "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
             "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
             "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),

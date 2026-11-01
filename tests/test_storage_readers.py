@@ -158,9 +158,21 @@ def test_old_runtime_retains_existing_path(monkeypatch):
 
 def test_weak_intermediates_keep_original_error_domain(storage_runtime):
     kernel = make_kernel("def k(x):\n    return x + (2 * 3)\n", {"x": "float64"})
+    # New native metadata may prove the bounded constant expression safe.
+    assert storage_reader_eligible(kernel) == (kernel.native_partitionable is True)
+    kernel = make_kernel("def k(x):\n    return x + (9223372036854775807 + 1)\n", {"x": "float64"})
     assert not storage_reader_eligible(kernel)
     kernel = make_kernel("def k(x):\n    return x + (1 + 2)\n", {"x": "int64"}, "int64")
     assert not storage_reader_eligible(kernel)
+
+
+def test_graph_partitionability_rejection_is_authoritative(storage_runtime):
+    from blosc2.resident_execution import resident_scalar_operations_safe
+
+    kernel = make_kernel("def k(x):\n    return x + 1\n", {"x": "float64"})
+    kernel.graph_partitionable = False
+    assert not storage_reader_eligible(kernel)
+    assert not resident_scalar_operations_safe(kernel)
 
 
 def test_chunk_crossing_span(storage_runtime):
@@ -273,6 +285,43 @@ def test_noncontiguous_nd_grid_rejects_flattening(prefilter_runtime):
     assert not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({"x": x})
     lazy = slab_predicate(x, x)
     np.testing.assert_array_equal(lazy[:], values < values)
+
+
+def test_proven_loop_narrowing_uses_prefilter(prefilter_runtime, monkeypatch):
+    import runpy
+    from pathlib import Path
+
+    benchmark = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "bench/ndarray/dsl-kernel-bench.py")
+    )
+    values = np.resize(np.array([0, 1, -2, 1e20, -1e20, np.nan], dtype=np.float32), (31, 17))
+    other = np.flip(values).copy()
+    author = benchmark["kernel_loop4_heavy"]
+    with blosc2.jit_options(jit=False):
+        kernel = author.specialize(values, other)
+    if kernel.native_partitionable is None:
+        pytest.skip("Native dependency does not provide partitionability metadata")
+    assert kernel.native_partitionable is True
+    assert kernel.inferred_dtype == np.dtype("float64")
+    assert kernel.output_dtype == np.dtype("float32")
+    expected, status = kernel.evaluate({"x": values, "y": other}, return_status=True)
+    x = blosc2.asarray(values, chunks=(12, 17), blocks=(3, 17))
+    y = blosc2.asarray(other, chunks=x.chunks, blocks=x.blocks)
+    lazy = kernel.lazy({"x": x, "y": y})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Proven loop used whole-group execution or sparse readers")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lazy, "_values", forbidden)
+        patch.setattr(StorageReader, "read", forbidden)
+        result = lazy.compute(cparams={"clevel": 1, "nthreads": 2})
+    assert result.chunks == x.chunks
+    assert result.blocks == x.blocks
+    np.testing.assert_array_equal(result[:], expected)
+    report = lazy._source_execution_report
+    assert report["route"] == "menudet-prefilter"
+    assert report["fp_flags"] == status["flags"]
 
 
 @pytest.mark.parametrize("dtype", ["int16", "uint64"])

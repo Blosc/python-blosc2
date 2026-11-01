@@ -624,6 +624,11 @@ class MenudetKernel:
     def context_ndim(self):
         return self._info.get("ndim", 0)
 
+    @property
+    def native_partitionable(self):
+        """Native lane-independence proof: True if proved, False if unproved, None on older runtimes."""
+        return self._info.get("native_partitionable")
+
     def to_json(self):
         """Return the original validated JSON text, without dropping metadata."""
         return self._artifact.decode("utf-8")

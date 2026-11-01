@@ -113,8 +113,8 @@ def resident_integer_operations_safe(kernel):
     weak subtrees, captures, casts and mixed dtypes retain their original
     invocation/error domain.
     """
-    if hasattr(kernel, "native_partitionable"):
-        return kernel.native_partitionable
+    if hasattr(kernel, "graph_partitionable"):
+        return kernel.graph_partitionable
     return _resident_integer_operations_safe_legacy(kernel)
 
 
@@ -253,8 +253,10 @@ def evaluate_resident_selection_if_eligible(lazy, selection):
 
 
 def resident_scalar_operations_safe(kernel):
-    if hasattr(kernel, "native_partitionable"):
-        return kernel.native_partitionable
+    if hasattr(kernel, "graph_partitionable"):
+        return kernel.graph_partitionable
+    if getattr(kernel, "native_partitionable", None) is True:
+        return True
     # The common gate excludes reductions/context/captures/final conversions.
     # Also exclude constant-only arithmetic: its weak result can require a
     # checked conversion even when each literal individually fits the dtype.

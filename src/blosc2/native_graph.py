@@ -1328,7 +1328,7 @@ def resident_map_kernel(plan):
         kernel._info = handle.info()
         if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
             kernel._info.update(handle.descriptor_info())
-        kernel.native_partitionable = bool(plan.info().get("partitionable", False))
+        kernel.graph_partitionable = bool(plan.info().get("partitionable", False))
         return kernel
     artifact = plan.map_json()
     captures = {}
@@ -1379,7 +1379,7 @@ def resident_map_kernel(plan):
         # Keep IEEE payload bits in the executable artifact; the substituted
         # source is used only by metadata-only storage eligibility checks.
         kernel._info["source"] = ast.unparse(CaptureProof().visit(ast.parse(kernel.source)))
-    kernel.native_partitionable = bool(plan.info().get("partitionable", False))
+    kernel.graph_partitionable = bool(plan.info().get("partitionable", False))
     return kernel
 
 
