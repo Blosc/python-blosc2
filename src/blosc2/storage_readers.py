@@ -2,6 +2,7 @@
 
 import ast
 from dataclasses import replace
+from math import prod
 
 import numpy as np
 
@@ -341,6 +342,19 @@ def _compute_generator_prefilter(lazy, kwargs):
     return output, report
 
 
+def _prefilter_inputs_eligible(lazy):
+    from . import blosc2_ext
+
+    # Editable Python sources may be used with an earlier native extension.
+    # Retain its conservative 1-D gate rather than sending a new keyword to it.
+    options = (
+        {"output_dtype": lazy.dtype}
+        if getattr(blosc2_ext, "menudet_prefilter_row_slabs_available", lambda: False)()
+        else {}
+    )
+    return blosc2_ext.menudet_prefilter_inputs_eligible(lazy.inputs, **options)
+
+
 def compute_storage_if_eligible(lazy, kwargs):
     """Stream lane-local maps or exactly aligned generator groups into storage."""
     import blosc2
@@ -355,13 +369,13 @@ def compute_storage_if_eligible(lazy, kwargs):
         return None
     if lazy.inputs and all(type(value) is np.ndarray for value in lazy.inputs.values()):
         return _compute_resident_prefilter(lazy, kwargs)
-    if not _dense_compressed_eligible(lazy) or not extension.menudet_prefilter_inputs_eligible(lazy.inputs):
+    if not _dense_compressed_eligible(lazy) or not _prefilter_inputs_eligible(lazy):
         return None
     first = next(iter(lazy.inputs.values()))
     options = dict(kwargs)
     output = options.pop("out", None)
     if output is not None:
-        block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in lazy.inputs.values())
+        block_bytes = sum(prod(value.blocks) * value.dtype.itemsize for value in lazy.inputs.values())
         for name in ("chunks", "blocks"):
             requested = options.pop(name, None)
             if requested is not None and tuple(requested) != getattr(first, name):
@@ -385,7 +399,7 @@ def compute_storage_if_eligible(lazy, kwargs):
         return None
     options.update(chunks=first.chunks, blocks=first.blocks)
     # Match the existing prefilter's bounded per-worker input scratch budget.
-    block_bytes = sum(value.blocks[0] * value.dtype.itemsize for value in lazy.inputs.values())
+    block_bytes = sum(prod(value.blocks) * value.dtype.itemsize for value in lazy.inputs.values())
     thread_limit = max(1, (32 * 1024**2) // block_bytes)
     cparams = options.get("cparams")
     if cparams is None:
@@ -458,19 +472,20 @@ def evaluate_prefilter_numpy(kernel, inputs, out=None, workers=None):
 
     first = next(value for value in inputs.values() if type(value) is blosc2.NDArray)
     dtype = np.dtype(kernel.output_dtype)
-    driver_bytes = first.chunks[0] * dtype.itemsize
+    chunk_items, source_block_items = prod(first.chunks), prod(first.blocks)
+    driver_bytes = chunk_items * dtype.itemsize
     compressed = [value for value in inputs.values() if type(value) is blosc2.NDArray]
     workers = blosc2.nthreads if workers is None else workers
     input_width = sum(value.dtype.itemsize for value in compressed)
     # Amortize tiny physical blocks without changing the source layout. The
     # same prefilter reads block-aligned spans; its output blocks can group
     # several source blocks when no compressed result needs that block grid.
-    for factor in range(min(first.chunks[0] // first.blocks[0], max(1, 4096 // first.blocks[0])), 0, -1):
-        if first.chunks[0] // first.blocks[0] % factor:
+    for factor in range(min(chunk_items // source_block_items, max(1, 4096 // source_block_items)), 0, -1):
+        if chunk_items // source_block_items % factor:
             continue
-        block_items = factor * first.blocks[0]
+        block_items = factor * source_block_items
         placeholder_bytes = blosc2.MAX_OVERHEAD + max(
-            128, (first.chunks[0] // block_items) * (4 + 4 * dtype.itemsize)
+            128, (chunk_items // block_items) * (4 + 4 * dtype.itemsize)
         )
         available = (DENSE_MATERIALIZATION_BUDGET - driver_bytes) // (
             block_items * input_width + placeholder_bytes
@@ -535,7 +550,7 @@ def evaluate_prefilter_numpy(kernel, inputs, out=None, workers=None):
         driver_buffer_bytes=driver_bytes,
         temporary_bytes=driver_bytes + report["input_buffer_bytes"] + report["output_chunk_buffer_bytes"],
         tile_items=block_items,
-        maximum_reader_items=min(block_items, first.shape[0]),
+        maximum_reader_items=min(block_items, first.size),
         evaluated_tiles=report["evaluated_blocks"],
         output_copy_bytes=0,
     )
@@ -548,7 +563,7 @@ def _evaluate_dense_compressed(lazy):
     extension = blosc2.blosc2_ext
     if not getattr(extension, "menudet_prefilter_available", lambda: False)():
         return lazy.kernel.evaluate_sources(lazy.inputs, shape=lazy._domain, return_report=True)
-    if not extension.menudet_prefilter_inputs_eligible(lazy.inputs):
+    if not _prefilter_inputs_eligible(lazy):
         return lazy.kernel.evaluate_sources(lazy.inputs, shape=lazy._domain, return_report=True)
     values = tuple(lazy.inputs.values())
     if any(value.dtype != lazy.kernel.input_dtypes[name] for name, value in lazy.inputs.items()):
@@ -561,7 +576,7 @@ def _evaluate_dense_compressed(lazy):
         for name, value in lazy.inputs.items():
             operands[name] = value._menudet_chunk_buffer()
         result, status = lazy.kernel.evaluate_block(operands, return_status=True)
-        return result, {
+        return result.reshape(values[0].shape), {
             "route": "single-chunk",
             "input_buffer_bytes": decoded_bytes,
             "fp_flags": status["flags"],
@@ -582,7 +597,11 @@ def _dense_compressed_eligible(lazy):
     if any(dtype.kind not in "biuf" for dtype in lazy.kernel.input_dtypes.values()):
         return False
     first = values[0]
-    if first.ndim != 1 or not first.size or tuple(first.shape) != lazy._domain:
+    if not first.ndim or not first.size or tuple(first.shape) != lazy._domain:
+        return False
+    # Row slabs have identical physical block order and logical C-order lanes.
+    # Other N-D tilings need coordinate-aware readers, not flattened offsets.
+    if first.chunks[1:] != first.shape[1:] or first.blocks[1:] != first.shape[1:]:
         return False
     if any(
         value.shape != first.shape

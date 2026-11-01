@@ -1,0 +1,804 @@
+{
+  "metadata": {
+    "python": "3.14.4",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/__init__.py",
+    "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/blosc2_ext.abi3.so",
+    "blosc2": "4.15.0.dev0",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "numpy": "2.5.4",
+    "numba": "0.68.0",
+    "numexpr": "2.14.2",
+    "shape": [
+      10000,
+      10000
+    ],
+    "dtype": "float32",
+    "chunks": [
+      1250,
+      10000
+    ],
+    "blocks": [
+      2,
+      10000
+    ],
+    "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "threads": 12,
+    "repeat": 3,
+    "cython_openmp": false,
+    "input_layout": "C-order linspaces x=[0,1], y=[-1,1], z=[0,10]; no seed",
+    "protocol": "validate first result; best of warm repeats; compute allocates/compresses NDArray, getitem allocates NumPy; no conversion in timing",
+    "environment": {
+      "ME_DSL_JIT_LIBTCC_PATH": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/lib/libtcc.dylib"
+    },
+    "execution_policies": {
+      "tcc": {
+        "jit": "True",
+        "jit_backend": "tcc",
+        "math_backend": "None",
+        "fp_accuracy": "FPAccuracy.MEDIUM",
+        "trace": "False",
+        "compiler": "None",
+        "cflags": "None",
+        "cache_dir": "None",
+        "compiler_output": "False"
+      },
+      "cc": {
+        "jit": "True",
+        "jit_backend": "cc",
+        "math_backend": "None",
+        "fp_accuracy": "FPAccuracy.MEDIUM",
+        "trace": "False",
+        "compiler": "None",
+        "cflags": "None",
+        "cache_dir": "None",
+        "compiler_output": "False"
+      }
+    }
+  },
+  "results": [
+    {
+      "case": 1,
+      "method": "NumPy",
+      "qualified": true,
+      "first_s": 0.02075520809739828,
+      "samples_s": [
+        0.019698750227689743,
+        0.01990837510675192,
+        0.020271750167012215
+      ],
+      "best_s": 0.019698750227689743
+    },
+    {
+      "case": 1,
+      "method": "NumExpr (out)",
+      "qualified": true,
+      "first_s": 0.00929016713052988,
+      "samples_s": [
+        0.006566458381712437,
+        0.006700499914586544,
+        0.006567874923348427
+      ],
+      "best_s": 0.006566458381712437
+    },
+    {
+      "case": 1,
+      "method": "Numba (out)",
+      "qualified": true,
+      "first_s": 0.3538679163902998,
+      "samples_s": [
+        0.0025495821610093117,
+        0.002368125133216381,
+        0.0025182506069540977
+      ],
+      "best_s": 0.002368125133216381
+    },
+    {
+      "case": 1,
+      "method": "LazyExpr compute",
+      "qualified": true,
+      "first_s": 0.10091554094105959,
+      "samples_s": [
+        0.0974021665751934,
+        0.09328129142522812,
+        0.09279987495392561
+      ],
+      "best_s": 0.09279987495392561
+    },
+    {
+      "case": 1,
+      "method": "LazyExpr getitem",
+      "qualified": true,
+      "first_s": 0.03122341725975275,
+      "samples_s": [
+        0.02223166637122631,
+        0.0212610000744462,
+        0.020988499745726585
+      ],
+      "best_s": 0.020988499745726585
+    },
+    {
+      "case": 1,
+      "method": "Numba UDF compute",
+      "qualified": true,
+      "first_s": 0.16330066695809364,
+      "samples_s": [
+        0.018293791450560093,
+        0.016970916651189327,
+        0.016481791622936726
+      ],
+      "best_s": 0.016481791622936726
+    },
+    {
+      "case": 1,
+      "method": "Numba UDF getitem",
+      "qualified": true,
+      "first_s": 0.01590433344244957,
+      "samples_s": [
+        0.017589249648153782,
+        0.017439750023186207,
+        0.0173269584774971
+      ],
+      "best_s": 0.0173269584774971
+    },
+    {
+      "case": 1,
+      "method": "Cython UDF compute",
+      "qualified": true,
+      "first_s": 0.020788290537893772,
+      "samples_s": [
+        0.02046433463692665,
+        0.019688041880726814,
+        0.019641917198896408
+      ],
+      "best_s": 0.019641917198896408
+    },
+    {
+      "case": 1,
+      "method": "Cython UDF getitem",
+      "qualified": true,
+      "first_s": 0.019569207914173603,
+      "samples_s": [
+        0.019582625478506088,
+        0.019998375326395035,
+        0.019727667793631554
+      ],
+      "best_s": 0.019582625478506088
+    },
+    {
+      "case": 1,
+      "method": "Menudet tcc compute",
+      "preparation_s": 0.003992750309407711,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 12,
+        "input_buffer_allocations": 12,
+        "input_chunk_fetches": 8,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 960000
+      },
+      "qualified": true,
+      "first_s": 0.012234124355018139,
+      "samples_s": [
+        0.011684166267514229,
+        0.011540334671735764,
+        0.011580541729927063
+      ],
+      "best_s": 0.011540334671735764
+    },
+    {
+      "case": 1,
+      "method": "Menudet tcc getitem",
+      "preparation_s": 0.003992750309407711,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 8,
+        "native_decoder_contexts": 8,
+        "input_buffer_allocations": 8,
+        "input_chunk_fetches": 8,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 40256,
+        "input_buffer_bytes": 640000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 400000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 13180256,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "qualified": true,
+      "first_s": 0.014442709274590015,
+      "samples_s": [
+        0.013740124180912971,
+        0.013563957996666431,
+        0.013448874466121197
+      ],
+      "best_s": 0.013448874466121197
+    },
+    {
+      "case": 1,
+      "method": "Menudet cc compute",
+      "preparation_s": 0.0031607095152139664,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 12,
+        "input_buffer_allocations": 12,
+        "input_chunk_fetches": 8,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 960000
+      },
+      "qualified": true,
+      "first_s": 0.010366291739046574,
+      "samples_s": [
+        0.010255999863147736,
+        0.010109125636518002,
+        0.0101280827075243
+      ],
+      "best_s": 0.010109125636518002
+    },
+    {
+      "case": 1,
+      "method": "Menudet cc getitem",
+      "preparation_s": 0.0031607095152139664,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 8,
+        "native_decoder_contexts": 8,
+        "input_buffer_allocations": 8,
+        "input_chunk_fetches": 8,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 40256,
+        "input_buffer_bytes": 640000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 400000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 13180256,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "qualified": true,
+      "first_s": 0.012162208557128906,
+      "samples_s": [
+        0.012230542488396168,
+        0.012092916294932365,
+        0.012018708512187004
+      ],
+      "best_s": 0.012018708512187004
+    },
+    {
+      "case": 2,
+      "method": "NumPy",
+      "qualified": true,
+      "first_s": 0.19531408324837685,
+      "samples_s": [
+        0.18540670815855265,
+        0.18027654197067022,
+        0.18108362518250942
+      ],
+      "best_s": 0.18027654197067022
+    },
+    {
+      "case": 2,
+      "method": "NumExpr (out)",
+      "qualified": true,
+      "first_s": 0.022961082868278027,
+      "samples_s": [
+        0.02113970834761858,
+        0.02139958366751671,
+        0.021246458403766155
+      ],
+      "best_s": 0.02113970834761858
+    },
+    {
+      "case": 2,
+      "method": "Numba (out)",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "LazyExpr compute",
+      "qualified": true,
+      "first_s": 0.16704212501645088,
+      "samples_s": [
+        0.16889737453311682,
+        0.1619881670922041,
+        0.16031883284449577
+      ],
+      "best_s": 0.16031883284449577
+    },
+    {
+      "case": 2,
+      "method": "LazyExpr getitem",
+      "qualified": true,
+      "first_s": 0.03651170898228884,
+      "samples_s": [
+        0.03543404210358858,
+        0.0348858330398798,
+        0.033574833534657955
+      ],
+      "best_s": 0.033574833534657955
+    },
+    {
+      "case": 2,
+      "method": "Numba UDF compute",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Numba UDF getitem",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Cython UDF compute",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Cython UDF getitem",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Menudet tcc compute",
+      "preparation_s": 0.0056068748235702515,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 16,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 1920000
+      },
+      "qualified": true,
+      "first_s": 0.01566458400338888,
+      "samples_s": [
+        0.015119625255465508,
+        0.014838291332125664,
+        0.014994959346950054
+      ],
+      "best_s": 0.014838291332125664
+    },
+    {
+      "case": 2,
+      "method": "Menudet tcc getitem",
+      "preparation_s": 0.0056068748235702515,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 8,
+        "native_decoder_contexts": 16,
+        "input_buffer_allocations": 16,
+        "input_chunk_fetches": 16,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 40256,
+        "input_buffer_bytes": 1280000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 800000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 13820256,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "qualified": true,
+      "first_s": 0.01883479207754135,
+      "samples_s": [
+        0.018426542170345783,
+        0.01824870891869068,
+        0.018195707350969315
+      ],
+      "best_s": 0.018195707350969315
+    },
+    {
+      "case": 2,
+      "method": "Menudet cc compute",
+      "preparation_s": 0.0030654584988951683,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 16,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 1920000
+      },
+      "qualified": true,
+      "first_s": 0.014515332877635956,
+      "samples_s": [
+        0.014737583696842194,
+        0.014677791856229305,
+        0.014717125333845615
+      ],
+      "best_s": 0.014677791856229305
+    },
+    {
+      "case": 2,
+      "method": "Menudet cc getitem",
+      "preparation_s": 0.0030654584988951683,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 8,
+        "native_decoder_contexts": 16,
+        "input_buffer_allocations": 16,
+        "input_chunk_fetches": 16,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 40256,
+        "input_buffer_bytes": 1280000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 800000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 13820256,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "qualified": true,
+      "first_s": 0.018097334541380405,
+      "samples_s": [
+        0.018093124963343143,
+        0.017957083880901337,
+        0.0178227499127388
+      ],
+      "best_s": 0.0178227499127388
+    },
+    {
+      "case": 3,
+      "method": "NumPy",
+      "qualified": true,
+      "first_s": 0.836541417054832,
+      "samples_s": [
+        0.8364006672054529,
+        0.8386560827493668,
+        0.8324220003560185
+      ],
+      "best_s": 0.8324220003560185
+    },
+    {
+      "case": 3,
+      "method": "NumExpr (out)",
+      "qualified": true,
+      "first_s": 0.07731708325445652,
+      "samples_s": [
+        0.07452316675335169,
+        0.074582708068192,
+        0.074198292568326
+      ],
+      "best_s": 0.074198292568326
+    },
+    {
+      "case": 3,
+      "method": "Numba (out)",
+      "qualified": true,
+      "first_s": 0.2071482092142105,
+      "samples_s": [
+        0.03539054188877344,
+        0.04092520847916603,
+        0.043292541056871414
+      ],
+      "best_s": 0.03539054188877344
+    },
+    {
+      "case": 3,
+      "method": "LazyExpr compute",
+      "qualified": true,
+      "first_s": 0.8783142920583487,
+      "samples_s": [
+        0.864805624820292,
+        0.8646904993802309,
+        0.8644094998016953
+      ],
+      "best_s": 0.8644094998016953
+    },
+    {
+      "case": 3,
+      "method": "LazyExpr getitem",
+      "qualified": true,
+      "first_s": 0.15043304208666086,
+      "samples_s": [
+        0.14647033344954252,
+        0.14718133304268122,
+        0.14770016726106405
+      ],
+      "best_s": 0.14647033344954252
+    },
+    {
+      "case": 3,
+      "method": "Numba UDF compute",
+      "qualified": true,
+      "first_s": 0.2647190419957042,
+      "samples_s": [
+        0.0776239586994052,
+        0.07605812512338161,
+        0.07717674970626831
+      ],
+      "best_s": 0.07605812512338161
+    },
+    {
+      "case": 3,
+      "method": "Numba UDF getitem",
+      "qualified": true,
+      "first_s": 0.0763074578717351,
+      "samples_s": [
+        0.07704962510615587,
+        0.07692912500351667,
+        0.07711320836097002
+      ],
+      "best_s": 0.07692912500351667
+    },
+    {
+      "case": 3,
+      "method": "Cython UDF compute",
+      "qualified": true,
+      "first_s": 0.619101875461638,
+      "samples_s": [
+        0.6158520830795169,
+        0.616644250229001,
+        0.6176482094451785
+      ],
+      "best_s": 0.6158520830795169
+    },
+    {
+      "case": 3,
+      "method": "Cython UDF getitem",
+      "qualified": true,
+      "first_s": 0.6155737079679966,
+      "samples_s": [
+        0.6178141664713621,
+        0.6223124582320452,
+        0.6170718325302005
+      ],
+      "best_s": 0.6170718325302005
+    },
+    {
+      "case": 3,
+      "method": "Menudet tcc compute",
+      "preparation_s": 0.00431645754724741,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 36,
+        "input_buffer_allocations": 36,
+        "input_chunk_fetches": 24,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 2880000
+      },
+      "qualified": true,
+      "first_s": 0.16283904016017914,
+      "samples_s": [
+        0.162538125179708,
+        0.16226049978286028,
+        0.16211737506091595
+      ],
+      "best_s": 0.16211737506091595
+    },
+    {
+      "case": 3,
+      "method": "Menudet tcc getitem",
+      "preparation_s": 0.00431645754724741,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 8,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 24,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 40256,
+        "input_buffer_bytes": 1920000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 1200000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 14460256,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "qualified": true,
+      "first_s": 0.19790970813483,
+      "samples_s": [
+        0.19775612466037273,
+        0.19737400021404028,
+        0.19755499996244907
+      ],
+      "best_s": 0.19737400021404028
+    },
+    {
+      "case": 3,
+      "method": "Menudet cc compute",
+      "preparation_s": 0.003561709076166153,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 36,
+        "input_buffer_allocations": 36,
+        "input_chunk_fetches": 24,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 2880000
+      },
+      "qualified": true,
+      "first_s": 0.0874413326382637,
+      "samples_s": [
+        0.08613795787096024,
+        0.08600937575101852,
+        0.08608325012028217
+      ],
+      "best_s": 0.08600937575101852
+    },
+    {
+      "case": 3,
+      "method": "Menudet cc getitem",
+      "preparation_s": 0.003561709076166153,
+      "has_jit": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 8,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 24,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 40256,
+        "input_buffer_bytes": 1920000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 1200000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 14460256,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "qualified": true,
+      "first_s": 0.11233429238200188,
+      "samples_s": [
+        0.11115612462162971,
+        0.11102449987083673,
+        0.11101108230650425
+      ],
+      "best_s": 0.11101108230650425
+    }
+  ]
+}

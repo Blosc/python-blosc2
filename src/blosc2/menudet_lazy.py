@@ -333,7 +333,7 @@ class MenudetLazyArray(LazyArray):
         """Materialize into Blosc2 storage, honoring output storage options.
 
         Eligible lane-local float or proven modular integer kernels over matching
-        compressed 1-D inputs write directly through a native prefilter. Omitted chunks/blocks
+        compressed 1-D or full-width row-slab inputs write directly through a native prefilter. Omitted chunks/blocks
         retain the input grid on this path. Partial selections and different
         output grids keep the general partition-preserving implementation.
         Input-free numeric 1-D kernels also use native block workers when output

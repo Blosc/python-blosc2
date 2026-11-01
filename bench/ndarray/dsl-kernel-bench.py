@@ -5,15 +5,26 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+"""Compare miniexpr-disabled/enabled expressions and public Menudet kernels.
+
+All routes materialize NDArrays with the same storage settings. Preparation and
+first compute are reported separately; warm timings include allocation and
+compression, but not validation or conversion to NumPy. First compute is not a
+guaranteed cold compilation (native/disk caches may already be populated).
+"""
+
 import argparse
 import contextlib
 import importlib
+import json
+import os
+import platform
 import time
+from pathlib import Path
 
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Internal normalization benchmark.
 
 lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
 where = np.where
@@ -27,12 +38,9 @@ log = np.log
 log1p = np.log1p
 abs = np.abs
 
-DSL_JIT = True
-DSL_JIT_BACKEND = "tcc"
 
-
-@DSLKernel
-def kernel_loop1(x, y):
+@blosc2.menudet
+def kernel_loop1(x: np.float32, y: np.float32) -> np.float32:
     acc = 0.0
     for i in range(1):
         if i % 2 == 0:
@@ -43,8 +51,8 @@ def kernel_loop1(x, y):
     return acc
 
 
-@DSLKernel
-def kernel_loop2(x, y):
+@blosc2.menudet
+def kernel_loop2(x: np.float32, y: np.float32) -> np.float32:
     acc = 0.0
     for i in range(2):
         if i % 2 == 0:
@@ -55,8 +63,8 @@ def kernel_loop2(x, y):
     return acc
 
 
-@DSLKernel
-def kernel_loop4(x, y):
+@blosc2.menudet
+def kernel_loop4(x: np.float32, y: np.float32) -> np.float32:
     acc = 0.0
     for i in range(4):
         if i % 2 == 0:
@@ -67,8 +75,8 @@ def kernel_loop4(x, y):
     return acc
 
 
-@DSLKernel
-def kernel_loop4_heavy(x, y):
+@blosc2.menudet
+def kernel_loop4_heavy(x: np.float32, y: np.float32) -> np.float32:
     acc = 0.0
     for i in range(4):
         if i % 2 == 0:
@@ -79,8 +87,8 @@ def kernel_loop4_heavy(x, y):
     return acc
 
 
-@DSLKernel
-def kernel_nested2(x, y):
+@blosc2.menudet
+def kernel_nested2(x: np.float32, y: np.float32) -> np.float32:
     acc = 0.0
     for i in range(2):
         for j in range(2):
@@ -145,28 +153,28 @@ def expr_sincos_identity() -> str:
     return "sin(x) ** 2 + cos(x) ** 2"
 
 
-@DSLKernel
-def kernel_transcend1(x):
+@blosc2.menudet
+def kernel_transcend1(x: np.float32) -> np.float32:
     return log(exp(x))
 
 
-@DSLKernel
-def kernel_transcend2(x):
+@blosc2.menudet
+def kernel_transcend2(x: np.float32) -> np.float32:
     return tanh(x)
 
 
-@DSLKernel
-def kernel_transcend3(x):
+@blosc2.menudet
+def kernel_transcend3(x: np.float32) -> np.float32:
     return log1p(abs(x))
 
 
-@DSLKernel
-def kernel_transcend4(x):
+@blosc2.menudet
+def kernel_transcend4(x: np.float32) -> np.float32:
     return log(exp(x) + tanh(x) + log1p(abs(x)) + sqrt(abs(x)) + expm1(x))
 
 
-@DSLKernel
-def kernel_sincos_identity(x):
+@blosc2.menudet
+def kernel_sincos_identity(x: np.float32) -> np.float32:
     return sin(x) ** 2 + cos(x) ** 2
 
 
@@ -181,75 +189,63 @@ def miniexpr_enabled(enabled: bool):
 
 
 def time_it(fn, niter=3):
-    best = None
+    samples = []
+    out = None
     for _ in range(niter):
+        del out
         t0 = time.perf_counter()
         out = fn()
         dt = time.perf_counter() - t0
-        best = dt if best is None else min(best, dt)
-    return best, out
+        samples.append(dt)
+    return min(samples), out, samples
 
 
-def bench_transcend_case(name, kernel, expr, a):
-    gb = a.nbytes * 2 / 1e9
-
-    with miniexpr_enabled(False):
-        lazy_expr_base = blosc2.lazyexpr(expr, {"x": a})
-        res_base = lazy_expr_base.compute()
-        base_time, _ = time_it(lambda: lazy_expr_base.compute())
-
-    with miniexpr_enabled(True):
-        lazy_expr_fast = blosc2.lazyexpr(expr, {"x": a})
-        res_fast = lazy_expr_fast.compute()
-        expr_time, _ = time_it(lambda: lazy_expr_fast.compute())
-
-        lazy_dsl = blosc2.lazyudf(kernel, (a,), dtype=a.dtype, jit=DSL_JIT, jit_backend=DSL_JIT_BACKEND)
-        res_dsl = lazy_dsl.compute()
-        dsl_time, _ = time_it(lambda: lazy_dsl.compute())
-
-    np.testing.assert_allclose(res_fast[...], res_base[...], rtol=1e-5, atol=2e-6)
-    np.testing.assert_allclose(res_dsl[...], res_base[...], rtol=1e-5, atol=2e-6)
-
-    return {
+def bench_case(name, kernel, expr, inputs, *, repeat=3):
+    a = inputs["x"]
+    storage = {"chunks": a.chunks, "blocks": a.blocks, "cparams": a.cparams}
+    # NumPy is an independent reference, not one of the timed engines.
+    expected = eval(expr, {"__builtins__": {}, **vars(np)}, {k: v[:] for k, v in inputs.items()})
+    gb = (sum(v.nbytes for v in inputs.values()) + expected.nbytes) / 1e9
+    row = {
         "case": name,
-        "baseline": base_time,
-        "lazyexpr": expr_time,
-        "dsl": dsl_time,
-        "baseline_gbps": gb / base_time,
-        "lazyexpr_gbps": gb / expr_time,
-        "dsl_gbps": gb / dsl_time,
+        "preparation_s": {},
+        "first_compute_s": {},
+        "samples_s": {},
+        "execution_reports": {},
     }
 
-
-def bench_case(name, kernel, expr, a, b, dtype, gb):
-    if kernel.dsl_source is None:
-        raise RuntimeError(f"DSL extraction failed for {name}")
-
-    with miniexpr_enabled(False):
-        lazy_expr_base = blosc2.lazyexpr(expr, {"x": a, "y": b})
-        res_base = lazy_expr_base.compute()
-        base_time, _ = time_it(lambda: lazy_expr_base.compute())
-
-    with miniexpr_enabled(True):
-        lazy_expr_fast = blosc2.lazyexpr(expr, {"x": a, "y": b})
-        _ = lazy_expr_fast.compute()
-        expr_time, _ = time_it(lambda: lazy_expr_fast.compute())
-
-        lazy_dsl = blosc2.lazyudf(kernel, (a, b), dtype=dtype, jit=DSL_JIT, jit_backend=DSL_JIT_BACKEND)
-        res_dsl = lazy_dsl.compute()
-        dsl_time, _ = time_it(lambda: lazy_dsl.compute())
-
-    np.testing.assert_allclose(res_dsl[...], res_base[...], rtol=1e-5, atol=2e-6)
-
-    return {
-        "case": name,
-        "baseline": base_time,
-        "lazyexpr": expr_time,
-        "dsl": dsl_time,
-        "baseline_gbps": gb / base_time,
-        "lazyexpr_gbps": gb / expr_time,
-        "dsl_gbps": gb / dsl_time,
-    }
+    for route, enabled in (("baseline", False), ("lazyexpr", True), ("menudet", True)):
+        with miniexpr_enabled(enabled):
+            start = time.perf_counter()
+            if route == "menudet":
+                specialized = kernel.specialize(**inputs)
+                lazy = specialized.lazy(inputs)
+                row["has_jit"] = specialized.has_jit
+            else:
+                lazy = blosc2.lazyexpr(expr, inputs)
+            row["preparation_s"][route] = time.perf_counter() - start
+            start = time.perf_counter()
+            result = lazy.compute(**storage)
+            row["first_compute_s"][route] = time.perf_counter() - start
+            row["execution_reports"][route] = getattr(lazy, "_source_execution_report", None) or getattr(
+                lazy, "_native_execution_report", None
+            )
+            assert isinstance(result, blosc2.NDArray)
+            assert result.shape == a.shape
+            assert result.dtype == a.dtype, f"{name}/{route}: {result.dtype} != {a.dtype}"
+            # Typed native intermediates and NumPy weak scalars round differently;
+            # the heavy loop also cancels near zero. Allow 32 float32 eps there.
+            np.testing.assert_allclose(
+                result[:], expected, rtol=1e-5, atol=32 * np.finfo(a.dtype).eps, err_msg=route
+            )
+            # No timing is reported for a route until it passes correctness.
+            del result
+            elapsed, result, samples = time_it(lambda lazy=lazy: lazy.compute(**storage), niter=repeat)
+            row["samples_s"][route] = samples
+            row[route] = elapsed
+            row[f"{route}_gbps"] = gb / elapsed
+            del result
+    return row
 
 
 def table_formatter():
@@ -259,10 +255,10 @@ def table_formatter():
         "Base GB/s",
         "Expr ms",
         "Expr GB/s",
-        "DSL ms",
-        "DSL GB/s",
+        "Menudet ms",
+        "Menudet GB/s",
         "Expr/Base",
-        "DSL/Base",
+        "Menudet/Base",
     ]
     widths = [
         12,
@@ -288,34 +284,42 @@ def table_formatter():
 def format_row(row):
     base = row["baseline"] * 1000
     expr = row["lazyexpr"] * 1000
-    dsl = row["dsl"] * 1000
+    menudet = row["menudet"] * 1000
     return [
         row["case"],
         f"{base:.2f}",
         f"{row['baseline_gbps']:.2f}",
         f"{expr:.2f}",
         f"{row['lazyexpr_gbps']:.2f}",
-        f"{dsl:.2f}",
-        f"{row['dsl_gbps']:.2f}",
+        f"{menudet:.2f}",
+        f"{row['menudet_gbps']:.2f}",
         f"{row['baseline'] / row['lazyexpr']:.2f}x",
-        f"{row['baseline'] / row['dsl']:.2f}x",
+        f"{row['baseline'] / row['menudet']:.2f}x",
     ]
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--transcend", action="store_true", help="Run only the transcendental lazyexpr cases"
     )
+    parser.add_argument("--size", type=int, default=1_000, help="Side length of the square inputs")
+    parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument("--threads", type=int, default=blosc2.nthreads)
+    parser.add_argument("--compiler", choices=("tcc", "cc"), default="tcc")
+    parser.add_argument("--no-jit", action="store_true", help="Use the native interpreter")
+    parser.add_argument("--output", type=Path, help="Save metadata and raw per-case results as JSON")
     args = parser.parse_args()
+    if min(args.size, args.repeat, args.threads) < 1:
+        parser.error("size, repeat and threads must be positive")
+    blosc2.set_nthreads(args.threads)
 
-    n = 1_000
+    n = args.size
     dtype = np.float32
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
 
     a = blosc2.linspace(0, 1, n * n, shape=(n, n), dtype=dtype, cparams=cparams)
     b = blosc2.linspace(1, 0, n * n, shape=(n, n), dtype=dtype, cparams=cparams)
-    gb = a.nbytes * 3 / 1e9
 
     cases = [
         ("loop1", kernel_loop1, expr_for_steps(1)),
@@ -333,23 +337,52 @@ def main():
         ("sincos_id", kernel_sincos_identity, expr_sincos_identity()),
     ]
 
-    if not args.transcend:
-        headers, fmt, sep = table_formatter()
-        print(fmt.format(*headers), flush=True)
-        print(sep, flush=True)
-        for name, kernel, expr in cases:
-            row = bench_case(name, kernel, expr, a, b, dtype, gb)
-            print(fmt.format(*format_row(row)), flush=True)
-
-    if not args.transcend:
-        print()
-    print("Transcendental lazyexpr cases", flush=True)
-    headers, fmt, sep = table_formatter()
-    print(fmt.format(*headers), flush=True)
-    print(sep, flush=True)
-    for name, kernel, expr in transcendental_cases:
-        row = bench_transcend_case(name, kernel, expr, a)
-        print(fmt.format(*format_row(row)), flush=True)
+    metadata = {
+        "package": blosc2.__file__,
+        "extension": blosc2.blosc2_ext.__file__,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "blosc2": blosc2.__version__,
+        "numpy": np.__version__,
+        "c_blosc2": blosc2.blosclib_version,
+        "shape": a.shape,
+        "dtype": a.dtype.str,
+        "chunks": a.chunks,
+        "blocks": a.blocks,
+        "cparams": repr(a.cparams),
+        "threads": args.threads,
+        "compiler_requested": args.compiler,
+        "jit_requested": not args.no_jit,
+        "repeat": args.repeat,
+        "environment": {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith(("ME_", "BLOSC_ME_")) or k in ("CC", "CFLAGS")
+        },
+        "protocol": "one first compute + best of repeat warm computes; allocation/compression included",
+        "input_layout": "C-order linspace x=[0,1], y=[1,0]; no random seed",
+    }
+    rows = []
+    with blosc2.jit_options(jit=not args.no_jit, jit_backend=args.compiler):
+        metadata["execution_options"] = {k: str(v) for k, v in blosc2.jit_config.execution_options().items()}
+        print("Base: miniexpr disabled; Expr: miniexpr enabled (fallback allowed). Warm best times.")
+        for title, group, inputs in (
+            ("Loop cases", [] if args.transcend else cases, {"x": a, "y": b}),
+            ("Transcendental cases", transcendental_cases, {"x": a}),
+        ):
+            if not group:
+                continue
+            print(f"\n{title}", flush=True)
+            headers, fmt, sep = table_formatter()
+            print(fmt.format(*headers), flush=True)
+            print(sep, flush=True)
+            for name, kernel, expr in group:
+                row = bench_case(name, kernel, expr, inputs, repeat=args.repeat)
+                rows.append(row)
+                print(fmt.format(*format_row(row)), flush=True)
+    if args.output:
+        args.output.write_text(json.dumps({"metadata": metadata, "results": rows}, indent=2) + "\n")
 
 
 if __name__ == "__main__":

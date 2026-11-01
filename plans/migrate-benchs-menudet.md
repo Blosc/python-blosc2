@@ -45,8 +45,8 @@ ordinary Python/Numba/Cython UDFs remain valid and serve different purposes.
 |---|---|---|
 | `bench/optim_tips/tip_11_dsl_random.py` | Migrated to `@menudet`; explicit domain, casts and partitions; 20M/200M host CC measurements. Legacy authoring retained only as labeled internal controls; current `_flat_idx` syntax is native Menudet context. | High |
 | `bench/chicago-taxi/string-ops.py` | Port string kernel, declare output dtype/width, validate conditional/string behavior, rerun engine and codec comparisons. | High |
-| `bench/ndarray/compute_expr_udf.ipynb` | Port three predicates and bindings, restore correctness assertions, regenerate timings and plots. | High |
-| `bench/ndarray/dsl-kernel-bench.py` | Port ten kernels and execution calls; replace `.dsl_source` assumptions; preserve expression/kernel baselines and backend selection. | Medium |
+| `bench/ndarray/compute_expr_udf.ipynb` | Migrated three typed public kernels and bindings; exact checks, fresh 100M timings/plots, preserved historical output, profiled and fixed row-slab/TCC bottlenecks. See [qualification](compute-expr-udf-qualification.md); predicate-2 Numba/Cython routes remain explicitly unqualified. | High |
+| `bench/ndarray/dsl-kernel-bench.py` | Migrated ten kernels to public `@menudet`, explicit float32 contracts and specialization/binding; preserved disabled/enabled expression baselines. Host-qualified at 1M with TCC/CC; see [qualification](dsl-kernel-bench-qualification.md). | Medium |
 | `bench/ndarray/jit-dsl.py` | Port four kernels, annotate scalar parameters, separate specialization/cold/warm timings and retain backend comparisons. | Medium |
 | `bench/ndarray/linear-constructor.py` | Replace legacy context indices and scalar-only domain binding; validate endpoint/rounding semantics against NumPy and `blosc2.linspace`. | Medium |
 | `bench/ndarray/sum-linear-idx.py` | Port index-based generation; preserve and check lazy reduction versus materialize-then-reduce comparisons. | Medium |
@@ -81,6 +81,9 @@ Do not replace the legacy control arm with the same modern implementation:
   as an internal baseline; do not confuse it with supported user authoring.
 
 Keep these comparisons clearly internal, or archive them if no longer useful.
+The new `bench/ndarray/profile-menudet-predicates.py` control was added during
+the notebook qualification (outside the original audited inventory); its
+`SourceKernel`/legacy-engine arm is intentional, internal and JIT-probed.
 Internal compatibility must not restore retired public authoring or source-file
 reconstruction.
 

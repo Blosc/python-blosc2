@@ -227,6 +227,54 @@ def test_compute_returns_prefilter_output_without_numpy_staging(
     np.testing.assert_array_equal(tail[live_items:], 0)
 
 
+@blosc2.menudet
+def slab_predicate(x: np.float32, y: np.float32) -> np.bool_:
+    return x < y
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [((13, 9), (6, 9), (2, 9)), ((3, 9), (6, 9), (2, 9)), ((13, 3, 5), (6, 3, 5), (2, 3, 5))],
+)
+def test_row_slab_prefilter_preserves_order_and_tail(prefilter_runtime, monkeypatch, shape, chunks, blocks):
+    if not getattr(blosc2.blosc2_ext, "menudet_prefilter_row_slabs_available", lambda: False)():
+        pytest.skip("Native extension does not provide row-slab prefilters")
+    values = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    x = blosc2.asarray(values, chunks=chunks, blocks=blocks)
+    y = blosc2.asarray(values[::-1].copy(), chunks=chunks, blocks=blocks)
+    expected = values < values[::-1]
+    lazy = slab_predicate(x, y)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("A contiguous row slab used sparse readers or NumPy staging")
+
+    for clevel in (0, 5):
+        with monkeypatch.context() as patch:
+            patch.setattr(blosc2.NDArray, "_take_sparse_normalized", forbidden)
+            patch.setattr(blosc2.MenudetKernel, "evaluate_sources", forbidden)
+            patch.setattr(lazy, "_values", forbidden)
+            stored = lazy.compute(cparams={"clevel": clevel, "nthreads": 2})
+        assert stored.chunks == x.chunks
+        assert stored.blocks == x.blocks
+        assert lazy._source_execution_report["route"] == "menudet-prefilter"
+        np.testing.assert_array_equal(stored[:], expected)
+        tail = np.frombuffer(stored.schunk.decompress_chunk(stored.schunk.nchunks - 1), dtype=bool)
+        live = np.prod(shape) - (stored.schunk.nchunks - 1) * np.prod(stored.chunks)
+        np.testing.assert_array_equal(tail[live:], False)
+    np.testing.assert_array_equal(lazy[:], expected)
+    assert lazy._source_execution_report["route"] in ("menudet-prefilter", "single-chunk")
+    # Partial selections must retain coordinate-aware fallback semantics.
+    np.testing.assert_array_equal(lazy[::-2, ...], expected[::-2, ...])
+
+
+def test_noncontiguous_nd_grid_rejects_flattening(prefilter_runtime):
+    values = np.arange(13 * 9, dtype=np.float32).reshape(13, 9)
+    x = blosc2.asarray(values, chunks=(6, 6), blocks=(2, 3))
+    assert not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({"x": x})
+    lazy = slab_predicate(x, x)
+    np.testing.assert_array_equal(lazy[:], values < values)
+
+
 @pytest.mark.parametrize("dtype", ["int16", "uint64"])
 def test_integer_literal_compute_uses_prefilter(prefilter_runtime, monkeypatch, dtype):
     values = np.arange(1027, dtype=dtype)

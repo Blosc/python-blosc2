@@ -1426,6 +1426,10 @@ def menudet_prefilter_available():
     return bool(b2_artifact_descriptor_available())
 
 
+def menudet_prefilter_row_slabs_available():
+    return bool(b2_artifact_descriptor_available())
+
+
 def menudet_resident_available():
     return bool(b2_artifact_descriptor_available())
 
@@ -2373,7 +2377,8 @@ cdef class MenudetArtifactHandle:
                            _chunk_indices=None):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not menudet_prefilter_inputs_eligible(
-                inputs, allow_numpy=numpy_out is not None or out is not None, output=out):
+                inputs, allow_numpy=numpy_out is not None or out is not None, output=out,
+                output_dtype=self.signature_dtype(-1)):
             raise NotImplementedError("Inputs are not eligible for Menudet prefilter execution")
         signature = self.descriptor_info()
         if set(inputs) != set(signature["inputs"]):
@@ -2386,14 +2391,15 @@ cdef class MenudetArtifactHandle:
         first = next((value for value in inputs.values() if isinstance(value, NDArray)), out)
         if first is None:
             raise ValueError("An output NDArray is required to schedule an input-free prefilter")
-        if first.ndim > 1 and numpy_out is not None:
-            raise ValueError("N-D Menudet prefilters require an NDArray output")
+        if inputs and first.ndim > 1 and signature["ndim"]:
+            raise ValueError("Row-slab Menudet prefilters require context-free kernels")
         if _diagonal is not None and (inputs or first.ndim != 2 or out is None):
             raise ValueError("Diagonal scheduling requires input-free 2-D NDArray output")
-        block_items = first.blocks[0]
+        block_items = int(np.prod(first.blocks))
+        chunk_items = int(np.prod(first.chunks))
         if _block_items is not None:
             if (numpy_out is None or out is not None or _block_items <= 0
-                    or first.chunks[0] % _block_items or _block_items % block_items):
+                    or chunk_items % _block_items or _block_items % block_items):
                 raise ValueError("Invalid NumPy prefilter batch layout")
             block_items = _block_items
         block_bytes = sum(block_items * value.dtype.itemsize for value in inputs.values()
@@ -2433,13 +2439,13 @@ cdef class MenudetArtifactHandle:
             if (numpy_out is None or type(_driver_input) is not np.ndarray
                     or _driver_input.dtype != np.dtype("uint8")
                     or not _driver_input.flags.c_contiguous
-                    or _driver_input.nbytes != first.chunks[0] * self.signature_dtype(-1).itemsize):
+                    or _driver_input.nbytes != chunk_items * self.signature_dtype(-1).itemsize):
                 raise ValueError("Invalid shared prefilter driver buffer")
         if out is None:
             # Only a scheduling context is needed: no full-domain placeholder
             # container and no result chunks are stored for a NumPy sink.
-            output = blosc2.uninit(first.chunks, dtype=self.signature_dtype(-1),
-                                  chunks=first.chunks, blocks=(block_items,),
+            output = blosc2.uninit((chunk_items,), dtype=self.signature_dtype(-1),
+                                  chunks=(chunk_items,), blocks=(block_items,),
                                   cparams=blosc2.CParams(clevel=1, nthreads=threads))
             if _chunk_range is None:
                 _chunk_range = (0, first.schunk.nchunks)
@@ -6211,7 +6217,7 @@ cdef class NDArray:
         finally:
             if fesetenv(&environment):
                 raise RuntimeError("Cannot restore Menudet chunk decoder floating environment")
-        return buffer[:self.array.shape[0]]
+        return buffer[:self.size]
 
     def _execute_menudet_prefilter(self, MenudetArtifactHandle kernel, inputs,
                                     np.ndarray numpy_out=None, chunk_range=None, driver_input=None,
@@ -6237,10 +6243,18 @@ cdef class NDArray:
             state.diagonal_enabled = True
             state.diagonal = diagonal
         state.ninputs = len(inputs)
-        state.size = numpy_out.shape[0] if numpy_out is not None else self.array.shape[0]
+        state.size = numpy_out.size if numpy_out is not None else self.array.shape[0]
         state.chunk_items = self.array.chunkshape[0]
         state.block_items = self.array.blockshape[0]
         state.grid_ndim = self.array.ndim
+        if inputs and state.grid_ndim > 1:
+            # The eligibility gate admits only full-width row slabs. Their
+            # physical blocks are contiguous logical spans; flatten scheduling
+            # without changing the artifact's (context-free) semantics.
+            state.size = self.size
+            state.chunk_items = int(np.prod(self.chunks))
+            state.block_items = int(np.prod(self.blocks))
+            state.grid_ndim = 1
         if state.grid_ndim > 1:
             state.size = 1
             state.chunk_items = 1
@@ -6338,7 +6352,7 @@ cdef class NDArray:
                             strcpy(state.error.message, "Menudet prefilter could not read an input chunk")
                             raise_artifact_error(state.status, &state.error)
                         rc = blosc2_cbuffer_sizes(state.chunks[i], &decoded_bytes, &encoded_bytes, &block_bytes)
-                        if rc < 0 or block_bytes != state.inputs[i].blockshape[0] * state.signature[i].itemsize:
+                        if rc < 0 or block_bytes != state.inputs[i].sc.blocksize:
                             state.status = -5
                             state.error.native_status = rc
                             strcpy(state.error.message, "Menudet prefilter input block layout mismatch")
@@ -6828,8 +6842,8 @@ def menudet_artifact_options_available():
     return bool(b2_artifact_options_available())
 
 
-def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
-    """Metadata-only gate for bounded resident 1-D Menudet prefilters."""
+def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None, output_dtype=None):
+    """Metadata-only gate for bounded 1-D/full-width row-slab Menudet prefilters."""
     cdef NDArray value
     if not b2_artifact_descriptor_available() or blosc2.IS_WASM or len(inputs) > 128:
         return False
@@ -6842,15 +6856,16 @@ def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
         return False
     if not inputs and first.ndim > 1:
         return (first.ndim <= 16 and first.schunk.chunksize <= 32 * 1024**2)
-    if first.ndim != 1:
+    if not first.ndim or first.chunks[1:] != first.shape[1:] or first.blocks[1:] != first.shape[1:]:
         return False
     if first.chunks[0] % first.blocks[0]:
         return False
     # The scheduling dummy chunk is host scratch, separate from input blocks.
     # A supplied destination provides the exact output width; otherwise eight
     # bytes covers every numeric output dtype admitted by the Python gate.
-    output_width = output.dtype.itemsize if isinstance(output, NDArray) else 8
-    if first.chunks[0] * output_width > 32 * 1024**2:
+    output_width = (output.dtype.itemsize if isinstance(output, NDArray)
+                    else (np.dtype(output_dtype).itemsize if output_dtype is not None else 8))
+    if int(np.prod(first.chunks)) * output_width > 32 * 1024**2:
         return False
     block_bytes = 0
     for source in inputs.values():
@@ -6870,5 +6885,5 @@ def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None):
             return False
         if source.schunk.cparams.use_dict:
             return False
-        block_bytes += source.blocks[0] * source.dtype.itemsize
+        block_bytes += int(np.prod(source.blocks)) * source.dtype.itemsize
     return block_bytes <= 32 * 1024**2

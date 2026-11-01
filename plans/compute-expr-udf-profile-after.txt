@@ -1,0 +1,31 @@
+PACKAGE /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/__init__.py EXTENSION /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/blosc2_ext.abi3.so
+{"case": 1, "route": "menudet", "mode": "compute", "preparation_s": 0.004348208196461201, "execution_report": {"route": "menudet-prefilter", "evaluated_blocks": 1582, "output_destination": "blosc2", "discarded_output_bytes": 0, "fp_flags": 0, "fp_supported": true, "threads": 4, "native_decoder_contexts": 4, "input_buffer_allocations": 4, "input_chunk_fetches": 3, "output_zero_fill_bytes": 11861250, "output_chunk_buffer_bytes": 3953750, "input_buffer_bytes": 101216}, "legacy_jit_probe": null, "qualified": true, "first_s": 0.003544500097632408, "samples_s": [0.0031345821917057037], "best_s": 0.0031345821917057037}
+         697 function calls (667 primitive calls) in 0.003 seconds
+
+   Ordered by: cumulative time
+   List reduced from 97 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.003    0.003 bench/ndarray/profile-menudet-predicates.py:96(<lambda>)
+        1    0.000    0.000    0.003    0.003 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/menudet_lazy.py:332(compute)
+        1    0.000    0.000    0.003    0.003 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/storage_readers.py:358(compute_storage_if_eligible)
+        3    0.003    0.001    0.003    0.001 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/schunk.py:1150(update_data)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/ndarray.py:5968(uninit)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/storage_readers.py:12(storage_reader_eligible)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/ndarray.py:7318(_check_ndarray_kwargs)
+        2    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/dataclasses.py:1475(asdict)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/storage_readers.py:36(_source_is_lane_local)
+     32/2    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/dataclasses.py:1499(_asdict_inner)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/ndarray.py:3817(__init__)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/schunk.py:268(__init__)
+        9    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/copy.py:110(deepcopy)
+        8    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/numpy/_core/fromnumeric.py:3325(prod)
+        1    0.000    0.000    0.000    0.000 /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-wheel-package/blosc2/storage_readers.py:345(_prefilter_inputs_eligible)
+        8    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/numpy/_core/fromnumeric.py:66(_wrapreduction)
+        1    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/ast.py:26(parse)
+        6    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/ast.py:386(walk)
+        1    0.000    0.000    0.000    0.000 {built-in method builtins.compile}
+        2    0.000    0.000    0.000    0.000 <string>:2(__init__)
+
+
+{"case": 1, "route": "menudet", "mode": "getitem", "preparation_s": 0.004348208196461201, "execution_report": {"route": "menudet-prefilter", "evaluated_blocks": 1582, "output_destination": "numpy", "discarded_output_bytes": 96, "fp_flags": 0, "fp_supported": true, "threads": 3, "native_decoder_contexts": 3, "input_buffer_allocations": 3, "input_chunk_fetches": 3, "output_zero_fill_bytes": 0, "output_chunk_buffer_bytes": 15096, "input_buffer_bytes": 75912, "scheduling": "dynamic-chunks", "stages": 1, "jit_stages": 1, "interpreter_stages": 0, "intermediate_bytes": 0, "gathered_bytes": 0, "normalization_bytes": 0, "reader_bytes": 40018276, "input_materialization_bytes": 0, "driver_buffer_bytes": 3953750, "temporary_bytes": 4044758, "tile_items": 6326, "maximum_reader_items": 6326, "evaluated_tiles": 1582, "output_copy_bytes": 0}, "legacy_jit_probe": null, "qualified": true, "first_s": 0.004847667180001736, "samples_s": [0.004650291986763477], "best_s": 0.004650291986763477}

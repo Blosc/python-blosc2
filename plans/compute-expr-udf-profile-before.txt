@@ -1,0 +1,28 @@
+Sun Nov  1 09:31:15 2026    /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/predicates-before.pstats
+
+         6316 function calls (6217 primitive calls) in 0.278 seconds
+
+   Ordered by: cumulative time
+   List reduced from 151 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.278    0.278 /Users/faltet/blosc/python-blosc2/bench/ndarray/profile-menudet-predicates.py:87(<lambda>)
+        1    0.000    0.000    0.278    0.278 /Users/faltet/blosc/python-blosc2/src/blosc2/menudet_lazy.py:332(compute)
+        3    0.000    0.000    0.276    0.092 /Users/faltet/blosc/python-blosc2/src/blosc2/menudet_lazy.py:122(_values)
+        3    0.000    0.000    0.276    0.092 /Users/faltet/blosc/python-blosc2/src/blosc2/storage_readers.py:224(evaluate_storage_if_eligible)
+        3    0.000    0.000    0.276    0.092 /Users/faltet/blosc/python-blosc2/src/blosc2/menudet_kernel.py:800(evaluate_sources)
+        3    0.034    0.011    0.276    0.092 /Users/faltet/blosc/python-blosc2/src/blosc2/storage_readers.py:598(evaluate_storage_sources)
+      154    0.050    0.000    0.242    0.002 /Users/faltet/blosc/python-blosc2/src/blosc2/storage_readers.py:151(read)
+      154    0.180    0.001    0.180    0.001 /Users/faltet/blosc/python-blosc2/src/blosc2/ndarray.py:4495(_take_sparse_normalized)
+      157    0.005    0.000    0.005    0.000 {built-in method numpy.asarray}
+      154    0.004    0.000    0.004    0.000 {method 'copy' of 'numpy.ndarray' objects}
+      154    0.003    0.000    0.003    0.000 {built-in method numpy.zeros}
+        3    0.001    0.000    0.002    0.001 /Users/faltet/blosc/python-blosc2/src/blosc2/ndarray.py:4738(__setitem__)
+        7    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/storage_readers.py:11(storage_reader_eligible)
+        7    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/storage_readers.py:35(_source_is_lane_local)
+        3    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/proxy.py:1866(as_simpleproxy)
+        3    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/proxy.py:1790(__init__)
+        4    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/core.py:1915(compute_chunks_blocks)
+        1    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/ndarray.py:5901(empty)
+      625    0.000    0.000    0.000    0.000 /Users/faltet/blosc/python-blosc2/src/blosc2/ndarray.py:4050(shape)
+        7    0.000    0.000    0.000    0.000 /Users/faltet/miniforge3/envs/blosc2/lib/python3.14/ast.py:26(parse)

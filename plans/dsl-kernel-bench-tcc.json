@@ -1,0 +1,468 @@
+{
+  "metadata": {
+    "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+    "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so",
+    "python": "3.14.4",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "blosc2": "4.15.0.dev0",
+    "numpy": "2.5.4",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "shape": [
+      1000,
+      1000
+    ],
+    "dtype": "<f4",
+    "chunks": [
+      1000,
+      1000
+    ],
+    "blocks": [
+      25,
+      1000
+    ],
+    "cparams": "CParams(codec=<Codec.BLOSCLZ: 0>, codec_meta=0, clevel=1, use_dict=False, typesize=4, nthreads=4, blocksize=100000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "threads": 4,
+    "compiler_requested": "tcc",
+    "jit_requested": true,
+    "repeat": 3,
+    "environment": {
+      "ME_DSL_JIT_LIBTCC_PATH": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/lib/libtcc.dylib"
+    },
+    "protocol": "one first compute + best of repeat warm computes; allocation/compression included",
+    "input_layout": "C-order linspace x=[0,1], y=[1,0]; no random seed",
+    "execution_options": {
+      "jit": "True",
+      "jit_backend": "tcc",
+      "math_backend": "None",
+      "fp_accuracy": "FPAccuracy.MEDIUM",
+      "trace": "False",
+      "compiler": "None",
+      "cflags": "None",
+      "cache_dir": "None",
+      "compiler_output": "False"
+    }
+  },
+  "results": [
+    {
+      "case": "loop1",
+      "preparation_s": {
+        "baseline": 0.004680749960243702,
+        "lazyexpr": 0.0024519162252545357,
+        "menudet": 0.012030959129333496
+      },
+      "first_compute_s": {
+        "baseline": 0.11287875007838011,
+        "lazyexpr": 0.1156124584376812,
+        "menudet": 0.02093775011599064
+      },
+      "samples_s": {
+        "baseline": [
+          0.11616383399814367,
+          0.1182069992646575,
+          0.11494887433946133
+        ],
+        "lazyexpr": [
+          0.11579033359885216,
+          0.11450437549501657,
+          0.11997558269649744
+        ],
+        "menudet": [
+          0.019443082623183727,
+          0.02046729251742363,
+          0.018892167136073112
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.11494887433946133,
+      "baseline_gbps": 0.10439423673312533,
+      "lazyexpr": 0.11450437549501657,
+      "lazyexpr_gbps": 0.10479948864942948,
+      "has_jit": true,
+      "menudet": 0.018892167136073112,
+      "menudet_gbps": 0.6351838787773024
+    },
+    {
+      "case": "loop2",
+      "preparation_s": {
+        "baseline": 0.0029860837385058403,
+        "lazyexpr": 0.002582707442343235,
+        "menudet": 0.004468957893550396
+      },
+      "first_compute_s": {
+        "baseline": 0.25177379231899977,
+        "lazyexpr": 0.25456275045871735,
+        "menudet": 0.03130041714757681
+      },
+      "samples_s": {
+        "baseline": [
+          0.24851233325898647,
+          0.24980670865625143,
+          0.25234554149210453
+        ],
+        "lazyexpr": [
+          0.253580916672945,
+          0.25353999994695187,
+          0.2493077078834176
+        ],
+        "menudet": [
+          0.03239249996840954,
+          0.03203487489372492,
+          0.032207708805799484
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.24851233325898647,
+      "baseline_gbps": 0.04828734189016781,
+      "lazyexpr": 0.2493077078834176,
+      "lazyexpr_gbps": 0.04813328918659625,
+      "has_jit": true,
+      "menudet": 0.03203487489372492,
+      "menudet_gbps": 0.3745917547613271
+    },
+    {
+      "case": "loop4",
+      "preparation_s": {
+        "baseline": 0.005170959047973156,
+        "lazyexpr": 0.004567457363009453,
+        "menudet": 0.005872749723494053
+      },
+      "first_compute_s": {
+        "baseline": 0.5512358332052827,
+        "lazyexpr": 0.5601010415703058,
+        "menudet": 0.0578830000013113
+      },
+      "samples_s": {
+        "baseline": [
+          0.5519234165549278,
+          0.5536652496084571,
+          0.5580608332529664
+        ],
+        "lazyexpr": [
+          0.5662005422636867,
+          0.5510242078453302,
+          0.5519049167633057
+        ],
+        "menudet": [
+          0.058545165695250034,
+          0.05845949985086918,
+          0.05887129157781601
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.5519234165549278,
+      "baseline_gbps": 0.021742146899479762,
+      "lazyexpr": 0.5510242078453302,
+      "lazyexpr_gbps": 0.021777627605370727,
+      "has_jit": true,
+      "menudet": 0.05845949985086918,
+      "menudet_gbps": 0.20527031587016878
+    },
+    {
+      "case": "loop4_heavy",
+      "preparation_s": {
+        "baseline": 0.012239750474691391,
+        "lazyexpr": 0.011644624173641205,
+        "menudet": 0.0044530825689435005
+      },
+      "first_compute_s": {
+        "baseline": 1.6808611247688532,
+        "lazyexpr": 1.6806974587962031,
+        "menudet": 0.059744542464613914
+      },
+      "samples_s": {
+        "baseline": [
+          1.6597129171714187,
+          1.6748023750260472,
+          1.657334708608687
+        ],
+        "lazyexpr": [
+          1.6597519172355533,
+          1.6500536669045687,
+          1.6660991255193949
+        ],
+        "menudet": [
+          0.05968012474477291,
+          0.06108816619962454,
+          0.05932270921766758
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 1.657334708608687,
+      "baseline_gbps": 0.007240541055266899,
+      "lazyexpr": 1.6500536669045687,
+      "lazyexpr_gbps": 0.007272490732081155,
+      "has_jit": true,
+      "menudet": 0.05932270921766758,
+      "menudet_gbps": 0.20228341150046705
+    },
+    {
+      "case": "nested2",
+      "preparation_s": {
+        "baseline": 0.00445583276450634,
+        "lazyexpr": 0.004307459108531475,
+        "menudet": 0.004480917006731033
+      },
+      "first_compute_s": {
+        "baseline": 0.5338830417022109,
+        "lazyexpr": 0.5371554587036371,
+        "menudet": 0.08300341665744781
+      },
+      "samples_s": {
+        "baseline": [
+          0.5411441251635551,
+          0.5377915417775512,
+          0.5323951244354248
+        ],
+        "lazyexpr": [
+          0.5414098333567381,
+          0.5363088753074408,
+          0.5397518342360854
+        ],
+        "menudet": [
+          0.0800307085737586,
+          0.0802162503823638,
+          0.08036554139107466
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.5323951244354248,
+      "baseline_gbps": 0.022539650438619864,
+      "lazyexpr": 0.5363088753074408,
+      "lazyexpr_gbps": 0.02237516579064809,
+      "has_jit": true,
+      "menudet": 0.0800307085737586,
+      "menudet_gbps": 0.14994244351767116
+    },
+    {
+      "case": "transcend1",
+      "preparation_s": {
+        "baseline": 0.0001643747091293335,
+        "lazyexpr": 0.00011279154568910599,
+        "menudet": 0.003952542319893837
+      },
+      "first_compute_s": {
+        "baseline": 0.0038289157673716545,
+        "lazyexpr": 0.003642875701189041,
+        "menudet": 0.02530487533658743
+      },
+      "samples_s": {
+        "baseline": [
+          0.0036967089399695396,
+          0.0034307921305298805,
+          0.0036692917346954346
+        ],
+        "lazyexpr": [
+          0.003783000633120537,
+          0.003420749679207802,
+          0.003573250025510788
+        ],
+        "menudet": [
+          0.024752166122198105,
+          0.024284999817609787,
+          0.024272415786981583
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.0034307921305298805,
+      "baseline_gbps": 2.3318230005279896,
+      "lazyexpr": 0.003420749679207802,
+      "lazyexpr_gbps": 2.338668639984405,
+      "has_jit": true,
+      "menudet": 0.024272415786981583,
+      "menudet_gbps": 0.32959224455485675
+    },
+    {
+      "case": "transcend2",
+      "preparation_s": {
+        "baseline": 0.00041358452290296555,
+        "lazyexpr": 0.0003637084737420082,
+        "menudet": 0.0039881253615021706
+      },
+      "first_compute_s": {
+        "baseline": 0.002638665959239006,
+        "lazyexpr": 0.002453708089888096,
+        "menudet": 0.02542070858180523
+      },
+      "samples_s": {
+        "baseline": [
+          0.002793082967400551,
+          0.002269749529659748,
+          0.002324082888662815
+        ],
+        "lazyexpr": [
+          0.0026179999113082886,
+          0.002353374846279621,
+          0.002306959591805935
+        ],
+        "menudet": [
+          0.024207833223044872,
+          0.023051499389111996,
+          0.024058167822659016
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.002269749529659748,
+      "baseline_gbps": 3.524617978971124,
+      "lazyexpr": 0.002306959591805935,
+      "lazyexpr_gbps": 3.4677677183489104,
+      "has_jit": true,
+      "menudet": 0.023051499389111996,
+      "menudet_gbps": 0.3470490081776924
+    },
+    {
+      "case": "transcend3",
+      "preparation_s": {
+        "baseline": 0.0004793331027030945,
+        "lazyexpr": 0.0005162917077541351,
+        "menudet": 0.003796583041548729
+      },
+      "first_compute_s": {
+        "baseline": 0.0037992075085639954,
+        "lazyexpr": 0.003977582789957523,
+        "menudet": 0.024375458247959614
+      },
+      "samples_s": {
+        "baseline": [
+          0.0038384171202778816,
+          0.0035629598423838615,
+          0.0034052925184369087
+        ],
+        "lazyexpr": [
+          0.0035199997946619987,
+          0.003501459024846554,
+          0.0036947494372725487
+        ],
+        "menudet": [
+          0.02366237435489893,
+          0.025211875326931477,
+          0.023978499695658684
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.0034052925184369087,
+      "baseline_gbps": 2.3492842264464686,
+      "lazyexpr": 0.003501459024846554,
+      "lazyexpr_gbps": 2.284761850197744,
+      "has_jit": true,
+      "menudet": 0.02366237435489893,
+      "menudet_gbps": 0.3380894867105221
+    },
+    {
+      "case": "transcend4",
+      "preparation_s": {
+        "baseline": 0.0013104584068059921,
+        "lazyexpr": 0.0011842912063002586,
+        "menudet": 0.004290499724447727
+      },
+      "first_compute_s": {
+        "baseline": 0.010621833615005016,
+        "lazyexpr": 0.010257000103592873,
+        "menudet": 0.033270916901528835
+      },
+      "samples_s": {
+        "baseline": [
+          0.010149958543479443,
+          0.010235083289444447,
+          0.010235666297376156
+        ],
+        "lazyexpr": [
+          0.010038959793746471,
+          0.0103604169562459,
+          0.010085875168442726
+        ],
+        "menudet": [
+          0.03214487433433533,
+          0.03335020877420902,
+          0.03196412418037653
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.010149958543479443,
+      "baseline_gbps": 0.7881805591353254,
+      "lazyexpr": 0.010038959793746471,
+      "lazyexpr_gbps": 0.796895312299528,
+      "has_jit": true,
+      "menudet": 0.03196412418037653,
+      "menudet_gbps": 0.2502805944206466
+    },
+    {
+      "case": "sincos_id",
+      "preparation_s": {
+        "baseline": 0.0007214173674583435,
+        "lazyexpr": 0.000664999708533287,
+        "menudet": 0.00407437514513731
+      },
+      "first_compute_s": {
+        "baseline": 0.005393958650529385,
+        "lazyexpr": 0.005242208018898964,
+        "menudet": 0.02983195800334215
+      },
+      "samples_s": {
+        "baseline": [
+          0.005447542294859886,
+          0.00501458253711462,
+          0.004905082285404205
+        ],
+        "lazyexpr": [
+          0.00505845807492733,
+          0.005162958987057209,
+          0.004975208081305027
+        ],
+        "menudet": [
+          0.02942045871168375,
+          0.029746083542704582,
+          0.02963541727513075
+        ]
+      },
+      "execution_reports": {
+        "baseline": null,
+        "lazyexpr": null,
+        "menudet": null
+      },
+      "baseline": 0.004905082285404205,
+      "baseline_gbps": 1.6309614262344136,
+      "lazyexpr": 0.004975208081305027,
+      "lazyexpr_gbps": 1.6079729469127153,
+      "has_jit": true,
+      "menudet": 0.02942045871168375,
+      "menudet_gbps": 0.2719196215938999
+    }
+  ]
+}
