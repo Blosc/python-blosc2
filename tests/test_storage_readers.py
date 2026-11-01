@@ -177,8 +177,8 @@ def test_graph_partitionability_rejection_is_authoritative(storage_runtime):
 
 @pytest.mark.parametrize(("compiler", "jit"), [("tcc", True), ("cc", True), ("cc", False)])
 def test_lazyexpr_nd_prefilter_honors_compiler(prefilter_runtime, monkeypatch, compiler, jit):
-    values = np.linspace(-2, 2, 31 * 17, dtype=np.float32).reshape(31, 17)
-    x = blosc2.asarray(values, chunks=(12, 17), blocks=(3, 17))
+    values = np.linspace(-2, 2, 129 * 67, dtype=np.float32).reshape(129, 67)
+    x = blosc2.asarray(values, chunks=(12, 67), blocks=(3, 67))
     y = blosc2.asarray(-values, chunks=x.chunks, blocks=x.blocks)
     lazy = blosc2.lazyexpr("where(x < y, y + 1, x - 1) * 2", {"x": x, "y": y})
 
@@ -210,8 +210,8 @@ def test_lazyexpr_prefilter_cache_tracks_compiler_options(prefilter_runtime, mon
         return original(*args, **kwargs)
 
     monkeypatch.setattr(blosc2.MenudetKernel, "from_json", tracked)
-    values = np.arange(12, dtype=np.float32).reshape(3, 4)
-    x = blosc2.asarray(values, chunks=(3, 4), blocks=(1, 4))
+    values = np.arange(129 * 67, dtype=np.float32).reshape(129, 67)
+    x = blosc2.asarray(values, chunks=(129, 67), blocks=(9, 67))
     lazy = blosc2.lazyexpr("x + 37", {"x": x})
     for flags in ("-O1", "-O1", "-O2"):
         with blosc2.jit_options(jit=True, jit_backend="cc", cflags=flags):
@@ -228,8 +228,8 @@ def test_lazyexpr_prefilter_cache_tracks_compiler_options(prefilter_runtime, mon
 def test_lazyexpr_configured_prefilter_preserves_fp_status(prefilter_runtime):
     from blosc2.native_graph import lower_native_graph
 
-    values = np.resize(np.array([0, -0.0, 1, 1e30, np.inf, np.nan], dtype=np.float32), (13, 7))
-    x = blosc2.asarray(values, chunks=(6, 7), blocks=(2, 7))
+    values = np.resize(np.array([0, -0.0, 1, 1e30, np.inf, np.nan], dtype=np.float32), (129, 67))
+    x = blosc2.asarray(values, chunks=(6, 67), blocks=(2, 67))
     lazy = blosc2.lazyexpr("(x * x) / (x - x)", {"x": x})
     plan, inputs, _ = lower_native_graph(lazy, jit=False, allow_output=True)
     schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})

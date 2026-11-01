@@ -300,10 +300,20 @@ def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, s
             blosc2.set_jit_options(**policy)
             result = expr.compute()
         np.testing.assert_array_equal(result[:], values + 1)
-        if policy == {"jit": False} and hasattr(expr, "_native_execution_report"):
-            assert expr._native_execution_report["backend"] == "menudet-interpreter"
-        elif policy != {"jit": False}:
-            assert not hasattr(expr, "_native_execution_report")
+        report = getattr(expr, "_native_execution_report", None)
+        if policy == {"jit": False}:
+            if report is not None:
+                assert report["backend"] == "menudet-interpreter"
+        elif policy == {"jit_backend": "tcc"}:
+            # An explicit backend is now eligible for the native prefilter, but
+            # graph preparation must still run without JIT: the option-aware
+            # Menudet compiler owns the requested backend.
+            assert not any(calls)
+            if report is not None:
+                assert report["route"] == "menudet-prefilter"
+        else:
+            # Nondefault accuracy still keeps the legacy route.
+            assert report is None
     finally:
         blosc2.set_jit_options(**previous)
 

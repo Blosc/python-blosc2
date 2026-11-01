@@ -26,6 +26,10 @@ PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
 TRUTH_GRAPH_REDUCERS = {"any", "all"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 MINIMUM_COMPRESSED_MAP_ITEMS = 2_000_000
+# The compression prefilter pays fixed worker and decoder-context setup. Below
+# this size the legacy chunked route is at least as fast and keeps its own JIT
+# tracing, so the adapter must not claim these requests.
+MINIMUM_PREFILTER_ITEMS = 4_096
 _NATIVE_PLAN_CACHE_SIZE = 128
 _MINIMUM_PARALLEL_ITEMS = 2 * 128 * 1024
 _native_plan_cache = OrderedDict()
@@ -665,6 +669,14 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     if any(not isinstance(s, slice) or s != slice(None) for s in selection):
         return None
     values = tuple(expr.operands.values())
+    if (
+        configured
+        and any(type(value) is blosc2.NDArray for value in values)
+        and max(value.size for value in values) < MINIMUM_PREFILTER_ITEMS
+    ):
+        # With an explicit compiler configuration small compressed maps keep the
+        # legacy route, which owns their JIT tracing and disk-cache behavior.
+        return None
     resident = bool(values) and all(
         type(value) is np.ndarray
         and value.ndim == 1
