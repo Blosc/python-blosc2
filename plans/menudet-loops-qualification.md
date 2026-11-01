@@ -71,3 +71,10 @@ retain the prior restrictions. CMake now pins the native loop implementation
 at `3eae28dbddbf7866cd9315130109508c46ae3790`. Qualification used the local
 `FETCHCONTENT_SOURCE_DIR_MINIEXPR` override and rebuilt extensions. The shared
 editable installation was left untouched.
+
+## Follow-up
+
+`menudet-interpreter-batching.md` documents a later no-JIT improvement: the
+vector interpreter now admits lazy `where` selections, so expressions containing
+selections keep batching instead of falling back to per-element scalar dispatch.
+Masks and guards preserve branch laziness and IEEE-flag parity.

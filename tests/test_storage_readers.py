@@ -175,6 +175,70 @@ def test_graph_partitionability_rejection_is_authoritative(storage_runtime):
     assert not resident_scalar_operations_safe(kernel)
 
 
+@pytest.mark.parametrize(("compiler", "jit"), [("tcc", True), ("cc", True), ("cc", False)])
+def test_lazyexpr_nd_prefilter_honors_compiler(prefilter_runtime, monkeypatch, compiler, jit):
+    values = np.linspace(-2, 2, 31 * 17, dtype=np.float32).reshape(31, 17)
+    x = blosc2.asarray(values, chunks=(12, 17), blocks=(3, 17))
+    y = blosc2.asarray(-values, chunks=x.chunks, blocks=x.blocks)
+    lazy = blosc2.lazyexpr("where(x < y, y + 1, x - 1) * 2", {"x": x, "y": y})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Eligible LazyExpr used serial chunk fallback")
+
+    import importlib
+
+    with monkeypatch.context() as patch:
+        patch.setattr(importlib.import_module("blosc2.lazyexpr"), "evaluate_chunk", forbidden)
+        result = lazy.compute(jit=jit, jit_backend=compiler, chunks=x.chunks, blocks=x.blocks)
+    np.testing.assert_array_equal(result[:], np.where(values < -values, -values + 1, values - 1) * 2)
+    report = lazy._native_execution_report
+    assert report["route"] == "menudet-prefilter"
+    assert report["backend"] == ("menudet-jit" if jit else "menudet-interpreter")
+    assert report["input_materialization_bytes"] == 0
+
+
+def test_lazyexpr_prefilter_cache_tracks_compiler_options(prefilter_runtime, monkeypatch):
+    from blosc2.native_graph import configured_map_kernel
+
+    configured_map_kernel.cache_clear()
+    original = blosc2.MenudetKernel.from_json
+    compiled = []
+
+    def tracked(*args, **kwargs):
+        policy = blosc2.jit_config.execution_options()
+        compiled.append((policy["jit_backend"], policy["cflags"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", tracked)
+    values = np.arange(12, dtype=np.float32).reshape(3, 4)
+    x = blosc2.asarray(values, chunks=(3, 4), blocks=(1, 4))
+    lazy = blosc2.lazyexpr("x + 37", {"x": x})
+    for flags in ("-O1", "-O1", "-O2"):
+        with blosc2.jit_options(jit=True, jit_backend="cc", cflags=flags):
+            result = lazy.compute()
+        np.testing.assert_array_equal(result[:], values + 37)
+    assert compiled == [("cc", "-O1"), ("cc", "-O2")]
+    x[:] = values + 1
+    with blosc2.jit_options(jit=True, jit_backend="cc", cflags="-O2"):
+        result = lazy.compute()
+    np.testing.assert_array_equal(result[:], values + 38)
+    assert len(compiled) == 2
+
+
+def test_lazyexpr_configured_prefilter_preserves_fp_status(prefilter_runtime):
+    from blosc2.native_graph import lower_native_graph
+
+    values = np.resize(np.array([0, -0.0, 1, 1e30, np.inf, np.nan], dtype=np.float32), (13, 7))
+    x = blosc2.asarray(values, chunks=(6, 7), blocks=(2, 7))
+    lazy = blosc2.lazyexpr("(x * x) / (x - x)", {"x": x})
+    plan, inputs, _ = lower_native_graph(lazy, jit=False, allow_output=True)
+    schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})
+    expected, reference = schedule.execute(dict.fromkeys(inputs, values))
+    result = lazy.compute(jit=True, jit_backend="cc")
+    np.testing.assert_array_equal(result[:], expected)
+    assert lazy._native_execution_report["fp_flags"] == reference["fp_flags"]
+
+
 def test_chunk_crossing_span(storage_runtime):
     values = np.arange(10003.0)
     x = blosc2.asarray(values, chunks=(3000,), blocks=(300,))

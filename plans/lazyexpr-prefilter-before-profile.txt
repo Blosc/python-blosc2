@@ -1,0 +1,31 @@
+         635741 function calls (608983 primitive calls) in 11.970 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1349 to 25 due to restriction <25>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   12.022   12.022 <frozen runpy>:262(run_path)
+        1    0.000    0.000   12.021   12.021 <frozen runpy>:91(_run_module_code)
+        1    0.000    0.000   12.020   12.020 <frozen runpy>:65(_run_code)
+     28/1    0.000    0.000   12.020   12.020 {built-in method builtins.exec}
+        1    0.000    0.000   12.020   12.020 dsl-kernel-bench.py:1(<module>)
+        1    0.001    0.001   12.008   12.008 dsl-kernel-bench.py:270(main)
+       10    0.010    0.001   11.967    1.197 dsl-kernel-bench.py:190(bench_case)
+ 2078/511    0.002    0.000   11.702    0.023 expression_graph.py:93(wrapped)
+   109/63    0.000    0.000   11.692    0.186 jit_config.py:167(wrapped)
+   109/63    0.001    0.000   11.692    0.186 lazyexpr.py:4931(compute)
+   109/63    0.001    0.000   11.690    0.186 lazyexpr.py:4739(_compute_expr)
+   132/63    0.000    0.000   11.688    0.186 jit_config.py:197(wrapped)
+   109/63    0.011    0.000   11.687    0.186 lazyexpr.py:3402(chunked_eval)
+       40    0.001    0.000   11.641    0.291 lazyexpr.py:2250(slices_eval)
+      109   11.577    0.106   11.592    0.106 lazyexpr.py:151(evaluate_chunk)
+       86    0.000    0.000   11.590    0.135 lazyexpr.py:236(_get_result)
+       20    0.003    0.000    8.765    0.438 dsl-kernel-bench.py:178(time_it)
+       60    0.000    0.000    8.762    0.146 dsl-kernel-bench.py:229(<lambda>)
+    53/22    0.001    0.000    0.102    0.005 {built-in method builtins.eval}
+       10    0.000    0.000    0.072    0.007 lazyexpr.py:6073(lazyexpr)
+    54/10    0.001    0.000    0.072    0.007 lazyexpr.py:5198(_new_expr)
+       20    0.003    0.000    0.071    0.004 utils.py:1671(assert_allclose)
+       20    0.020    0.001    0.068    0.003 utils.py:738(assert_array_compare)
+       40    0.000    0.000    0.061    0.002 menudet_lazy.py:332(compute)
+       40    0.022    0.001    0.061    0.002 storage_readers.py:365(compute_storage_if_eligible)

@@ -624,8 +624,12 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
 
     from .storage_readers import compute_storage_if_eligible
 
-    if jit_backend is not None or fp_accuracy is not None:
+    if fp_accuracy is not None:
         return None
+    policy = blosc2.jit_config.execution_options()
+    configured = jit_backend is not None or any(
+        policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir")
+    )
     if type(expr) is not blosc2.LazyExpr or any(
         hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
     ):
@@ -670,7 +674,8 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         for value in values
     )
     if (
-        output is not None
+        not configured
+        and output is not None
         and not resident
         and not all(
             output.ndim == 1
@@ -696,7 +701,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
         return None
     first = values[0]
     if (
-        first.ndim != 1
+        not first.ndim
         or not first.size
         or any(
             value.shape != first.shape
@@ -715,10 +720,19 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     ):
         return None
     try:
-        plan, inputs, reduction = lower_native_graph(expr, jit=jit, allow_output=True)
+        # Graph preparation currently accepts math policy, not compiler options.
+        # Preserve its NumPy semantic profile and weak captures, then import the
+        # validated map artifact through the option-aware Menudet compiler.
+        plan, inputs, reduction = lower_native_graph(
+            expr, jit=False if configured else jit, allow_output=True
+        )
         if reduction or plan.info()["stages"] != 1:
             return None
-        kernel = resident_map_kernel(plan)
+        kernel = (
+            configured_map_kernel(plan, jit, tuple(policy.items()), _graph_configuration(jit))
+            if configured
+            else resident_map_kernel(plan)
+        )
     except NotImplementedError:
         return None
     except blosc2.MenudetError as error:
@@ -732,14 +746,14 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
     )
     result = compute_storage_if_eligible(lazy, options)
     if result is None:
-        if output is not None:
+        if output is not None and not configured:
             return _compute_native_stored_output(expr, output, options, jit=jit)
         return None
     output, report = result
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-0.1",
-        "backend": "menudet-jit" if plan.has_jit else "menudet-interpreter",
+        "backend": "menudet-jit" if kernel.has_jit else "menudet-interpreter",
         "frontend": getattr(plan, "_frontend", "declarative-json"),
         "plan_cache": compile_plan.cache_info()._asdict(),
         "input_materialization_bytes": 0,
@@ -1312,6 +1326,21 @@ def evaluate_graph_sources(plan, inputs, *, tile_items=65536, raise_mask=0, out=
     result, report = schedule.execute_sources(inputs, readers, raise_mask, out=out)
     report.update(route="graph-bounded-readers", tile_items=tile_items)
     return result, report
+
+
+@lru_cache(maxsize=128)
+def configured_map_kernel(plan, jit, configuration, environment):
+    """Compile a graph map with task-local options; retain native graph safety.
+
+    Configuration/environment are cache identity, never operand/result values.
+    Unlike compatibility capture specialization, import the original graph
+    artifact verbatim so its NumPy profile and weak-scalar rules stay intact.
+    """
+    from .menudet_kernel import MenudetKernel
+
+    kernel = MenudetKernel.from_json(plan.map_json(), jit=jit)
+    kernel.graph_partitionable = plan.partitionable
+    return kernel
 
 
 @lru_cache(maxsize=128)

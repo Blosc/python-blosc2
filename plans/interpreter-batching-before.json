@@ -1,0 +1,777 @@
+{
+  "metadata": {
+    "routes": [
+      "lazyexpr",
+      "menudet"
+    ],
+    "speedup": "lazyexpr_s / menudet_s",
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/lazyexpr-wheel-package/blosc2/__init__.py",
+    "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/lazyexpr-wheel-package/blosc2/blosc2_ext.abi3.so",
+    "python": "3.14.4",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "blosc2": "4.15.0.dev0",
+    "numpy": "2.5.4",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "shape": [
+      1000,
+      1000
+    ],
+    "dtype": "<f4",
+    "chunks": [
+      1000,
+      1000
+    ],
+    "blocks": [
+      25,
+      1000
+    ],
+    "cparams": "CParams(codec=<Codec.BLOSCLZ: 0>, codec_meta=0, clevel=1, use_dict=False, typesize=4, nthreads=12, blocksize=100000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "threads": 12,
+    "jit_backend_requested": null,
+    "jit_requested": false,
+    "samples": 3,
+    "warmups": 3,
+    "mode": "warm",
+    "statistic": "median",
+    "qualification_timings": "preparation_s and first_compute_s are diagnostics excluded from sample medians",
+    "environment": {
+      "ME_DSL_JIT_LIBTCC_PATH": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/lazyexpr-wheel-package/blosc2/lib/libtcc.dylib"
+    },
+    "protocol": "qualification + untimed warmups + median of prepared-engine samples; allocation/compression included",
+    "input_layout": "C-order linspace x=[0,1], y=[1,0]; no random seed",
+    "execution_options": {
+      "jit": "False",
+      "jit_backend": "None",
+      "math_backend": "None",
+      "fp_accuracy": "FPAccuracy.MEDIUM",
+      "trace": "False",
+      "compiler": "None",
+      "cflags": "None",
+      "cache_dir": "None",
+      "compiler_output": "False"
+    }
+  },
+  "results": [
+    {
+      "case": "loop1",
+      "preparation_s": {
+        "lazyexpr": 0.005776708014309406,
+        "menudet": 0.00031166523694992065
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.014385582879185677,
+        "menudet": 0.01852608285844326
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.01228525023907423,
+          0.012325000017881393,
+          0.012207749299705029
+        ],
+        "menudet": [
+          0.019787625409662724,
+          0.0205977912992239,
+          0.01953549962490797
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 0,
+            "misses": 0,
+            "maxsize": 128,
+            "currsize": 0
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.01228525023907423,
+      "lazyexpr_gbps": 0.9767810802773094,
+      "has_jit": false,
+      "menudet": 0.019787625409662724,
+      "menudet_gbps": 0.6064396182747699
+    },
+    {
+      "case": "loop2",
+      "preparation_s": {
+        "lazyexpr": 0.00048129167407751083,
+        "menudet": 0.00029854197055101395
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.027812667191028595,
+        "menudet": 0.03926162514835596
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.027126874774694443,
+          0.028386207297444344,
+          0.027474124915897846
+        ],
+        "menudet": [
+          0.038334124721586704,
+          0.038982583209872246,
+          0.039726915769279
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 0,
+            "misses": 0,
+            "maxsize": 128,
+            "currsize": 0
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.027474124915897846,
+      "lazyexpr_gbps": 0.43677460289394787,
+      "has_jit": false,
+      "menudet": 0.038982583209872246,
+      "menudet_gbps": 0.3078297796581379
+    },
+    {
+      "case": "loop4",
+      "preparation_s": {
+        "lazyexpr": 0.0006387075409293175,
+        "menudet": 0.0003420831635594368
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.06403729040175676,
+        "menudet": 0.07753391657024622
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.061210292391479015,
+          0.06137795839458704,
+          0.06041904166340828
+        ],
+        "menudet": [
+          0.07792566623538733,
+          0.07357683312147856,
+          0.07675404101610184
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 0,
+            "misses": 0,
+            "maxsize": 128,
+            "currsize": 0
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.061210292391479015,
+      "lazyexpr_gbps": 0.19604546116611102,
+      "has_jit": false,
+      "menudet": 0.07675404101610184,
+      "menudet_gbps": 0.15634355978055386
+    },
+    {
+      "case": "loop4_heavy",
+      "preparation_s": {
+        "lazyexpr": 0.0015132920816540718,
+        "menudet": 0.00033895857632160187
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.20484862569719553,
+        "menudet": 0.08061812538653612
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.2037996258586645,
+          0.20160683430731297,
+          0.19646116718649864
+        ],
+        "menudet": [
+          0.07484612427651882,
+          0.07482320908457041,
+          0.07474120799452066
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 0,
+            "misses": 0,
+            "maxsize": 128,
+            "currsize": 0
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.20160683430731297,
+      "lazyexpr_gbps": 0.05952179171519643,
+      "has_jit": false,
+      "menudet": 0.07482320908457041,
+      "menudet_gbps": 0.1603780450854061
+    },
+    {
+      "case": "nested2",
+      "preparation_s": {
+        "lazyexpr": 0.0006832089275121689,
+        "menudet": 0.0003948742523789406
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.0626417500898242,
+        "menudet": 0.10935041680932045
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.061643749475479126,
+          0.06161083374172449,
+          0.06060937512665987
+        ],
+        "menudet": [
+          0.10400229040533304,
+          0.10637925006449223,
+          0.10872783325612545
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 0,
+            "misses": 0,
+            "maxsize": 128,
+            "currsize": 0
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 24,
+          "input_buffer_allocations": 24,
+          "input_chunk_fetches": 2,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 2400000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.06161083374172449,
+      "lazyexpr_gbps": 0.19477093996657413,
+      "has_jit": false,
+      "menudet": 0.10637925006449223,
+      "menudet_gbps": 0.11280395371019275
+    },
+    {
+      "case": "transcend1",
+      "preparation_s": {
+        "lazyexpr": 0.000990333966910839,
+        "menudet": 0.00010795798152685165
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.001350250095129013,
+        "menudet": 0.0015428755432367325
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.0010652914643287659,
+          0.0008625835180282593,
+          0.0009710825979709625
+        ],
+        "menudet": [
+          0.0010675005614757538,
+          0.0006682081148028374,
+          0.0015649590641260147
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 0,
+            "misses": 1,
+            "maxsize": 128,
+            "currsize": 1
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.0009710825979709625,
+      "lazyexpr_gbps": 8.238228155581897,
+      "has_jit": false,
+      "menudet": 0.0010675005614757538,
+      "menudet_gbps": 7.494141257350247
+    },
+    {
+      "case": "transcend2",
+      "preparation_s": {
+        "lazyexpr": 0.00045045744627714157,
+        "menudet": 0.00011137500405311584
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.0014549996703863144,
+        "menudet": 0.0018231254070997238
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.0009557073935866356,
+          0.002504291944205761,
+          0.0011120419949293137
+        ],
+        "menudet": [
+          0.0007387911900877953,
+          0.001590833067893982,
+          0.001193249598145485
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 6,
+            "misses": 2,
+            "maxsize": 128,
+            "currsize": 2
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.0011120419949293137,
+      "lazyexpr_gbps": 7.193972922316226,
+      "has_jit": false,
+      "menudet": 0.001193249598145485,
+      "menudet_gbps": 6.704381055257321
+    },
+    {
+      "case": "transcend3",
+      "preparation_s": {
+        "lazyexpr": 0.0005031665787100792,
+        "menudet": 0.00012104213237762451
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.0013829581439495087,
+        "menudet": 0.0029092924669384956
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.0008336249738931656,
+          0.0014960002154111862,
+          0.0007020002231001854
+        ],
+        "menudet": [
+          0.0010003335773944855,
+          0.0006617922335863113,
+          0.0009607505053281784
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 12,
+            "misses": 3,
+            "maxsize": 128,
+            "currsize": 3
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.0008336249738931656,
+      "lazyexpr_gbps": 9.596641476128871,
+      "has_jit": false,
+      "menudet": 0.0009607505053281784,
+      "menudet_gbps": 8.326823619278052
+    },
+    {
+      "case": "transcend4",
+      "preparation_s": {
+        "lazyexpr": 0.001354125328361988,
+        "menudet": 0.00017291586846113205
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.003132791258394718,
+        "menudet": 0.0023097507655620575
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.0021299589425325394,
+          0.002570332959294319,
+          0.002572542056441307
+        ],
+        "menudet": [
+          0.0018471255898475647,
+          0.0020462917163968086,
+          0.002944457344710827
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 18,
+            "misses": 4,
+            "maxsize": 128,
+            "currsize": 4
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.002570332959294319,
+      "lazyexpr_gbps": 3.112437231554774,
+      "has_jit": false,
+      "menudet": 0.0020462917163968086,
+      "menudet_gbps": 3.909511012480037
+    },
+    {
+      "case": "sincos_id",
+      "preparation_s": {
+        "lazyexpr": 0.00025783292949199677,
+        "menudet": 0.0001360001042485237
+      },
+      "first_compute_s": {
+        "lazyexpr": 0.002107124775648117,
+        "menudet": 0.002608458511531353
+      },
+      "samples_s": {
+        "lazyexpr": [
+          0.0017668753862380981,
+          0.003166167065501213,
+          0.0018428750336170197
+        ],
+        "menudet": [
+          0.002157333306968212,
+          0.002118874341249466,
+          0.0029432913288474083
+        ]
+      },
+      "execution_reports": {
+        "lazyexpr": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000,
+          "semantic_revision": "menudet-numpy-0.1",
+          "backend": "menudet-interpreter",
+          "frontend": "native-expression",
+          "plan_cache": {
+            "hits": 24,
+            "misses": 4,
+            "maxsize": 128,
+            "currsize": 4
+          },
+          "input_materialization_bytes": 0,
+          "output_copy_bytes": 0
+        },
+        "menudet": {
+          "route": "menudet-prefilter",
+          "evaluated_blocks": 40,
+          "output_destination": "blosc2",
+          "discarded_output_bytes": 0,
+          "fp_flags": 0,
+          "fp_supported": true,
+          "threads": 12,
+          "native_decoder_contexts": 12,
+          "input_buffer_allocations": 12,
+          "input_chunk_fetches": 1,
+          "output_zero_fill_bytes": 4000000,
+          "output_chunk_buffer_bytes": 4000000,
+          "input_buffer_bytes": 1200000
+        }
+      },
+      "mode": "warm",
+      "lazyexpr": 0.0018428750336170197,
+      "lazyexpr_gbps": 4.341043127758024,
+      "has_jit": false,
+      "menudet": 0.002157333306968212,
+      "menudet_gbps": 3.7082818747385513
+    }
+  ]
+}
