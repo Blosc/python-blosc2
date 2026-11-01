@@ -1,5 +1,139 @@
 # Menudet kernel benchmark qualification
 
+## Current warm/cold CLI
+
+The benchmark now follows `bench/menudet-engines.py` timing modes:
+
+```sh
+python bench/ndarray/dsl-kernel-bench.py --jit cc --warmups 3 --samples 3
+python bench/ndarray/dsl-kernel-bench.py --jit tcc --warmups 0 --samples 3
+python bench/ndarray/dsl-kernel-bench.py --no-jit --warmups 0 --samples 1
+```
+
+`--jit tcc|cc` replaces `--compiler`; omission inherits environment/default JIT
+policy rather than forcing TCC. `--warmups` replaces the old `--repeat` interface
+but now counts **untimed** repetitions. Separate `--samples` counts timed
+repetitions; their **median**, not their minimum, is reported. Both default to 3.
+`--no-jit` and `--jit` are mutually exclusive.
+
+`--warmups 0` measures preparation-cold samples. Before each timed sample, Python
+expression/graph/kernel caches are cleared, the native positive JIT cache is
+disabled, and disk compilation uses a new temporary directory. The timer includes
+fresh LazyExpr construction or Menudet specialization/binding, computation and
+fresh output allocation/compression. Operand construction, module imports,
+cache isolation/cleanup and correctness validation are outside the timer. CPU/OS
+caches are not flushed. A preliminary correctness-qualified run is still made;
+it cannot warm a cold sample's isolated preparation caches. JSON records mode,
+warmups, sample count, median statistic, and raw samples. `preparation_s` and
+`first_compute_s` remain qualification diagnostics, not parts of warm timing.
+
+The profiling wrapper `profile-lazyexpr-prefilter.py` uses the same option names.
+Historical JSON, profiles and measurements below retain their original warm-best
+protocol; they are not relabeled as medians or preparation-cold runs.
+
+### Math backend selection
+
+`--math-backend system|sleef|accelerate` mirrors `bench/menudet-engines.py` and
+applies to **both** routes: the value is placed in the `blosc2.jit_options`
+context that wraps preparation and evaluation. Graph preparation, Menudet
+artifact loading and the interpreter's math dispatch all read the task-local
+policy there, so LazyExpr and Menudet use the same library. Omitting the option
+inherits the current Python/native policy instead of forcing a default.
+
+Availability is checked once, before any table is printed: a `float64` probe
+kernel is specialized under the requested policy, so a build without SLEEF or
+Accelerate exits with status 2 and the native explanation rather than silently
+substituting another library. The probe uses `float64` so it never shares a
+signature or cache entry with the measured `float32` kernels, and it is
+untimed in both warm and preparation-cold modes. The request is recorded in
+JSON as `math_backend_requested` and echoed on stdout as
+`Miniexpr math backend request: ...`.
+
+Effect on warm medians (arm64, 1000 × 1000, jit inherited, ms; LazyExpr/Menudet):
+
+| Case | system | accelerate |
+|---|---:|---:|
+| transcend1 | 0.81 / 0.97 | 0.63 / 0.67 |
+| transcend2 | 1.16 / 0.68 | 0.62 / 0.96 |
+| transcend3 | 0.99 / 0.88 | 0.82 / 0.62 |
+| transcend4 | 1.97 / 1.92 | 1.74 / 1.93 |
+| sincos_id | 1.83 / 1.72 | 1.02 / 0.97 |
+
+These are host samples for checking that the option takes effect, not a
+portable ranking. `sleef` is unavailable in this build and correctly aborts.
+
+#### Accelerated math no longer disables JIT for arithmetic-only kernels
+
+SLEEF/Accelerate previously disabled JIT for every program, because generated
+kernels would bypass the accelerated dispatch and pay a per-lane packing
+callback. That rule was too broad: it also disabled JIT for programs that never
+call a math function, where the math library cannot change any result. Combined
+with the profile authoring a loop, `--math-backend accelerate --jit cc` ran the
+loop cases in the interpreter and showed 10–47 ms.
+
+JIT eligibility is now declined only when the program actually contains a math
+call: a node with a Menudet math name, or a `**`/`pow` node whose semantics can
+resolve through the backend. Programs that are pure arithmetic, comparison and
+`where` keep JIT under accelerated backends; transcendental kernels still keep
+the batched interpreter so accelerated semantics are preserved.
+
+Measured on the same host with `--math-backend accelerate --jit cc` (warm
+medians, ms):
+
+| Case | LazyExpr | Menudet | Menudet mode before | Menudet mode after |
+|---|---:|---:|---|---|
+| loop1 | 1.22 | 1.58 | interp | jit |
+| loop4 | 2.52 | 2.08 | interp | jit |
+| loop4_heavy | 3.15 | 2.94 | interp | jit |
+| nested2 | 1.99 | 3.99 | interp | jit |
+| sincos_id | 1.44 | 1.29 | interp | interp |
+
+The transcendental row is intentionally unchanged: its results are owned by the
+accelerated library. Native coverage asserts both halves of the rule — a
+`sin(x) + y` control is JIT-eligible under system math, `x * 2 + y - 1` stays
+JIT-eligible under accelerated math, and `sin(x) + y` does not.
+
+### Reported engine per route
+
+The table prints the engine each route **actually selected**, not the requested
+policy: `jit`, `interp`, or `other` when neither native Menudet path ran. JSON
+records the same mapping under `execution_modes`, and the per-route
+`execution_reports` retain the underlying backend string.
+
+This matters because auto policy resolves differently by kernel shape. With no
+`--jit` or `--no-jit`, an expanded LazyExpr expression stays on the interpreter
+while a multi-statement Menudet loop auto-enables JIT. A preparation-cold sample
+therefore charges Menudet for TCC compilation that LazyExpr never pays, which
+reads as Menudet being slower:
+
+| Case | LazyExpr mode | LazyExpr ms | Menudet mode | Menudet ms |
+|---|---|---:|---|---:|
+| loop1 | interp | 1.64 | jit | 4.94 |
+| loop4 | interp | 4.53 | jit | 7.84 |
+| nested2 | interp | 4.71 | jit | 8.07 |
+
+With `--jit cc` both routes report `jit`; with `--no-jit` both report `interp`.
+Under a shared policy the cold comparison is meaningful: with `--jit tcc`,
+Menudet is faster cold because the authored loop compiles less code than the
+expanded expression. With `--no-jit`, the remaining Menudet gap is interpreter
+control-flow bookkeeping, described in `menudet-interpreter-batching.md`, not
+compilation.
+
+## Benchmark layout update
+
+The benchmark now compares only normal `blosc2.lazyexpr` execution and public
+Menudet kernels. The benchmark-local `miniexpr_enabled()` helper and redundant
+Base route were removed: the legacy flag does not control newer native dispatch
+and therefore cannot establish a NumPy-only baseline. The console labels are
+`LazyExpr` and `Menudet`, with `Menudet speedup = LazyExpr time / Menudet time`.
+NumPy remains an independent, untimed correctness reference. JSON now contains
+only `lazyexpr` and `menudet` route timings and reports, plus explicit route and
+speedup metadata. Both routes retain matched output storage and warm timing rules.
+
+The measurements and original qualification below are historical; existing
+JSON files are preserved rather than relabeled as results of this updated layout.
+See `menudet-loops-qualification.md` for the later loop fast-path qualification.
+
 ## Scope and reproduction
 
 `bench/ndarray/dsl-kernel-bench.py` now authors all ten workloads with public

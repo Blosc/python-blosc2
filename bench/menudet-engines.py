@@ -92,7 +92,9 @@ def parse_item_count(value):
     """Parse an integer item count with an optional decimal SI suffix (K, M, G)."""
     match = re.fullmatch(r"([0-9]+)([KMG]?)", value, re.IGNORECASE)
     if match is None:
-        raise argparse.ArgumentTypeError("expected an integer item count, optionally suffixed with K, M or G")
+        raise argparse.ArgumentTypeError(
+            "expected an integer item count, optionally suffixed with K, M or G"
+        )
     count, suffix = match.groups()
     return int(count) * {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[suffix.upper()]
 
@@ -293,6 +295,7 @@ def cold_preparation():
         native._native_text_expression,
         native.compile_plan,
         native.resident_map_kernel,
+        native.configured_map_kernel,
         lazy._evaluate_recipe_names,
         graph.parse_expression,
         graph.expression_syntax,
@@ -346,8 +349,7 @@ def assert_float_arrays_close(result, expected):
     if mismatch_count:
         raise AssertionError(
             f"different numerical results: {mismatch_count} mismatches; "
-            f"max absolute error={max_error:.17g}; rtol=atol={tolerance:.17g}; "
-            + "; ".join(examples)
+            f"max absolute error={max_error:.17g}; rtol=atol={tolerance:.17g}; " + "; ".join(examples)
         )
 
 
@@ -374,7 +376,8 @@ def benchmark(engines, expected, samples, warmups, rng, failures=None, cold_fact
                 raise
             message = str(error).strip().splitlines()
             failures[name] = (
-                message[0] if message and message[0].startswith("different numerical results:")
+                message[0]
+                if message and message[0].startswith("different numerical results:")
                 else "different numerical results"
                 if isinstance(error, AssertionError)
                 else f"{type(error).__name__}: {message[0] if message else 'unsupported execution'}"
