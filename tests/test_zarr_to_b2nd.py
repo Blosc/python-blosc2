@@ -245,7 +245,7 @@ def test_zarr_to_b2nd_with_nans(tmp_path):
     np.testing.assert_array_equal(blosc2.open(summary["dst_path"])[:], data)
 
 
-def test_zarr_to_b2nd_skips_unstorable_attrs(tmp_path):
+def test_zarr_to_b2nd_skips_unstorable_attrs(tmp_path, capsys):
     src = tmp_path / "attrs.zarr"
     z = make_zarr(src, np.arange(4, dtype=np.int32))
     # JSON allows integers of any size, but vlmeta only stores 64-bit integers.
@@ -257,6 +257,62 @@ def test_zarr_to_b2nd_skips_unstorable_attrs(tmp_path):
     assert vlmeta["units"] == "K"
     assert vlmeta["nested"] == {"a": [1, 2]}
     assert "huge" not in vlmeta
+    assert "Warning" not in capsys.readouterr().err
+
+    zarr_to_b2nd(src, overwrite=True, verbose=True)
+    assert "Warning: attribute 'huge' was not copied" in capsys.readouterr().err
+
+
+def test_zarr_to_b2nd_fortran_order(tmp_path):
+    src = tmp_path / "fortran.zarr"
+    data = np.arange(200, dtype=np.float64).reshape(10, 20)
+    make_zarr(src, data, zarr_format=2, order="F")
+
+    summary = zarr_to_b2nd(src, full_verify=True)
+    np.testing.assert_array_equal(blosc2.open(summary["dst_path"])[:], data)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        np.array(["a", "bb", "ccc", "dddd"], dtype="<U4"),
+        np.array([b"a", b"bb", b"ccc", b"dddd"], dtype="|S4"),
+        np.array([(1, 2.0), (3, 4.0)], dtype=[("a", "<i4"), ("b", "<f8")]),
+        np.array(["2024-01-01", "NaT", "2024-01-03"], dtype="datetime64[ns]"),
+    ],
+    ids=["unicode", "bytes", "structured", "datetime-nat"],
+)
+def test_zarr_to_b2nd_non_numeric_dtypes(tmp_path, data):
+    src = tmp_path / "data.zarr"
+    make_zarr(src, data, zarr_format=2)
+
+    zarr_to_b2nd(src, verify=True)
+    summary = zarr_to_b2nd(src, overwrite=True, full_verify=True)
+    b = blosc2.open(summary["dst_path"])
+    assert b.dtype == data.dtype
+    np.testing.assert_array_equal(b[:], data)
+
+
+def test_zarr_to_b2nd_rejects_variable_length_strings(tmp_path):
+    src = tmp_path / "strings.zarr"
+    z = zarr.create_array(store=str(src), shape=(3,), dtype=str, zarr_format=2)
+    z[...] = np.array(["a", "bb", "ccc"])
+    dst = tmp_path / "strings.b2nd"
+    dst.write_bytes(b"preserve me")
+
+    with pytest.raises(TypeError, match="fixed-size dtypes"):
+        zarr_to_b2nd(src, overwrite=True)
+    assert dst.read_bytes() == b"preserve me"
+
+
+def test_zarr_to_b2nd_rejects_zarr_2(tmp_path, monkeypatch):
+    src = tmp_path / "data.zarr"
+    make_zarr(src, np.arange(10, dtype=np.int32))
+    monkeypatch.setattr(zarr, "__version__", "2.18.7")
+
+    with pytest.raises(ImportError, match="zarr 3 or newer"):
+        zarr_to_b2nd(src)
+    assert not (tmp_path / "data.b2nd").exists()
 
 
 def test_cli_main(tmp_path):
@@ -282,6 +338,7 @@ def test_cli_main_plain_summary(tmp_path, capsys, monkeypatch):
     assert main([str(src)]) == 0
     out = capsys.readouterr().out
     assert "--- Conversion Summary ---" in out
+    assert "Blocks:           (50,)" in out
     assert "Blosc2 CRatio:" in out
 
 

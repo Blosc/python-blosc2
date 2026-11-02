@@ -157,13 +157,18 @@ def compute_batches(
 
 
 def require_zarr(tool_name: str) -> Any:
-    """Ensure the zarr package is installed."""
+    """Ensure a supported zarr package (3.x or newer) is installed."""
     try:
         import zarr
-
-        return zarr
     except ImportError as exc:
         raise ImportError(f"{tool_name} requires zarr; install it with: pip install 'blosc2[zarr]'") from exc
+    # zarr 2.x has a different API with no Array.shards, Array.compressors or create_array.
+    if int(zarr.__version__.split(".")[0]) < 3:
+        raise ImportError(
+            f"{tool_name} requires zarr 3 or newer (found {zarr.__version__}); "
+            "upgrade it with: pip install -U 'blosc2[zarr]'"
+        )
+    return zarr
 
 
 def copy_batches(
@@ -181,6 +186,7 @@ def copy_batches(
         return 0.0
     t_start = time.perf_counter()
 
+    # Zarr v2 arrays can be Fortran-ordered, but Blosc2 needs C-ordered input.
     if HAVE_RICH and not quiet:
         console = Console()
         with Progress(
@@ -194,14 +200,14 @@ def copy_batches(
         ) as progress:
             task = progress.add_task(f"Converting {copy_direction}...", total=total_bytes)
             for s in batch_slices:
-                data = src[s]
+                data = np.asarray(src[s], order="C")
                 dst[s] = data
                 batch_size = data.nbytes
                 progress.update(task, advance=batch_size)
                 del data
     else:
         for idx, s in enumerate(batch_slices):
-            data = src[s]
+            data = np.asarray(src[s], order="C")
             dst[s] = data
             del data
             if verbose and not quiet:
@@ -209,6 +215,12 @@ def copy_batches(
                 print(f"Batch {idx + 1}/{total_batches} ({pct:.1f}%) written")
 
     return time.perf_counter() - t_start
+
+
+def _arrays_equal(a: Any, b: Any) -> bool:
+    # equal_nan is only valid for dtypes with NaN/NaT; np.isnan fails on strings and records.
+    a = np.asarray(a)
+    return np.array_equal(a, b, equal_nan=a.dtype.kind in "fcmM")
 
 
 def _fast_sample_verify(src: Any, dst: Any, slices_list: list[tuple[slice, ...]], quiet: bool) -> None:
@@ -220,14 +232,14 @@ def _fast_sample_verify(src: Any, dst: Any, slices_list: list[tuple[slice, ...]]
     for idx in corner_indices:
         v_src = src[idx]
         v_dst = dst[idx]
-        if not np.array_equal(v_src, v_dst, equal_nan=True):
+        if not _arrays_equal(v_src, v_dst):
             raise ValueError(f"Verification failed at index {idx}: source={v_src} != destination={v_dst}")
 
     if slices_list:
         for s in (slices_list[0], slices_list[-1]):
             src_chunk = src[s]
             dst_chunk = dst[s]
-            if not np.array_equal(src_chunk, dst_chunk, equal_nan=True):
+            if not _arrays_equal(src_chunk, dst_chunk):
                 raise ValueError(f"Verification failed for slice {s}")
     if not quiet:
         print("✓ Fast sample verification passed!")
@@ -239,7 +251,7 @@ def _full_verify(src: Any, dst: Any, slices_list: list[tuple[slice, ...]], quiet
     for idx, s in enumerate(slices_list):
         src_data = src[s]
         dst_data = dst[s]
-        if not np.array_equal(src_data, dst_data, equal_nan=True):
+        if not _arrays_equal(src_data, dst_data):
             raise ValueError(f"Full verification failed at slice {s} (batch {idx})")
     if not quiet:
         print("✓ Full element verification passed!")
@@ -281,6 +293,8 @@ def print_summary(summary: dict[str, Any], dst_label: str) -> None:
         table.add_row("Destination", f"{summary['dst_path']} ({format_bytes(summary['dst_size_bytes'])})")
         table.add_row("Shape / Dtype", f"{summary['shape']} / {summary['dtype']}")
         table.add_row("Chunks", str(summary["chunks"]))
+        if summary.get("blocks") is not None:
+            table.add_row("Blocks", str(summary["blocks"]))
         if summary.get("shards") is not None:
             table.add_row("Shards", str(summary["shards"]))
         table.add_row("Uncompressed Size", format_bytes(summary["uncompressed_bytes"]))
@@ -299,6 +313,8 @@ def print_summary(summary: dict[str, Any], dst_label: str) -> None:
         print(f"Destination:      {summary['dst_path']} ({format_bytes(summary['dst_size_bytes'])})")
         print(f"Shape / Dtype:    {summary['shape']} / {summary['dtype']}")
         print(f"Chunks:           {summary['chunks']}")
+        if summary.get("blocks") is not None:
+            print(f"Blocks:           {summary['blocks']}")
         if summary.get("shards") is not None:
             print(f"Shards:           {summary['shards']}")
         print(f"Uncompressed:     {format_bytes(summary['uncompressed_bytes'])}")

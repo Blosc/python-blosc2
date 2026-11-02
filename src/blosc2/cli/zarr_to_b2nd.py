@@ -37,7 +37,7 @@ from blosc2.cli.conversion_utils import (
 
 def zarr_to_b2nd(
     input_path: str | Path,
-    output_path=None,
+    output_path: str | Path | None = None,
     *,
     chunks: tuple[int, ...] | None = None,
     blocks: tuple[int, ...] | None = None,
@@ -74,6 +74,8 @@ def zarr_to_b2nd(
     try:
         shape = z_arr.shape
         dtype = np.dtype(z_arr.dtype)
+        if dtype.hasobject or dtype.itemsize == 0:
+            raise TypeError(f"Only fixed-size dtypes can be converted to .b2nd, got {z_arr.dtype}")
         itemsize = dtype.itemsize
         uncompressed_bytes = math.prod(shape) * itemsize
         src_size = get_path_size(src_path)
@@ -100,7 +102,7 @@ def zarr_to_b2nd(
         copy_duration = copy_batches(
             z_arr, b2_arr, batch_slices, uncompressed_bytes, "zarr -> b2nd", quiet=quiet, verbose=verbose
         )
-        copy_attrs(z_arr, b2_arr)
+        copy_attrs(z_arr, b2_arr, verbose=verbose and not quiet)
 
         if verify or full_verify:
             verify_arrays(z_arr, b2_arr, batch_slices, full=full_verify, quiet=quiet)
@@ -245,11 +247,15 @@ def determine_blosc2_cparams(
     )
 
 
-def copy_attrs(z_arr: Any, b2_arr: blosc2.NDArray) -> None:
+def copy_attrs(z_arr: Any, b2_arr: blosc2.NDArray, verbose: bool = False) -> None:
     """Copy the Zarr array's user attributes into the Blosc2 array's vlmeta."""
     for key, value in z_arr.attrs.items():
-        with contextlib.suppress(Exception):
+        try:
             b2_arr.schunk.vlmeta[key] = value
+        except Exception as exc:
+            # Skip what vlmeta cannot store (e.g. integers over 64 bits) rather than failing.
+            if verbose:
+                print(f"Warning: attribute {key!r} was not copied: {exc}", file=sys.stderr)
 
 
 def build_parser(prog: str = "zarr-to-b2nd") -> argparse.ArgumentParser:

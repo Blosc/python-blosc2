@@ -39,6 +39,25 @@ def test_b2nd_to_zarr_basic(tmp_path):
     assert z.attrs.get("custom_key") == "custom_value"
 
 
+def test_b2nd_to_zarr_skips_unstorable_metadata(tmp_path, capsys):
+    src = tmp_path / "meta.b2nd"
+    dst = tmp_path / "meta.zarr"
+    a = blosc2.asarray(np.arange(4), urlpath=str(src), mode="w")
+    a.schunk.vlmeta["units"] = "K"
+    a.schunk.vlmeta["raw"] = b"\x00\x01"  # bytes cannot be stored as JSON
+    a.schunk.vlmeta["long_name"] = "temperature"
+
+    b2nd_to_zarr(src, dst)
+    attrs = zarr.open(store=str(dst), mode="r").attrs
+    assert attrs["units"] == "K"
+    assert attrs["long_name"] == "temperature"
+    assert "raw" not in attrs
+    assert "Warning" not in capsys.readouterr().err
+
+    b2nd_to_zarr(src, dst, overwrite=True, verbose=True)
+    assert "Warning: metadata 'raw' was not copied" in capsys.readouterr().err
+
+
 def test_b2nd_to_zarr_custom_chunks_and_codec(tmp_path):
     src = tmp_path / "cube.b2nd"
     dst = tmp_path / "cube.zarr"
@@ -116,6 +135,17 @@ def test_b2nd_to_zarr_zip_store(tmp_path):
     z = zarr.open(store=store)
     np.testing.assert_allclose(z[:], data)
     store.close()
+
+
+@pytest.mark.parametrize("full_verify", [False, True])
+def test_b2nd_to_zarr_verifies_string_arrays(tmp_path, full_verify):
+    src = tmp_path / "strings.b2nd"
+    dst = tmp_path / "strings.zarr"
+    data = np.array(["a", "bb", "ccc"], dtype="<U3")
+    blosc2.asarray(data, urlpath=str(src), mode="w")
+
+    b2nd_to_zarr(src, dst, verify=True, full_verify=full_verify)
+    np.testing.assert_array_equal(zarr.open(store=str(dst), mode="r")[:], data)
 
 
 def test_b2nd_to_zarr_overwrite_protection(tmp_path):

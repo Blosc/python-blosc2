@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import math
 import shutil
 import sys
@@ -123,7 +124,7 @@ def determine_zarr_codec(
     )
 
 
-def copy_metadata(arr: blosc2.NDArray, z_arr: Any) -> None:
+def copy_metadata(arr: blosc2.NDArray, z_arr: Any, verbose: bool = False) -> None:
     """Copy non-internal metadata and vlmeta from Blosc2 NDArray to Zarr attrs."""
     schunk = getattr(arr, "schunk", None)
     if schunk is None:
@@ -146,8 +147,14 @@ def copy_metadata(arr: blosc2.NDArray, z_arr: Any) -> None:
                     user_meta[k] = vlmeta[k]
 
     for k, v in user_meta.items():
-        with contextlib.suppress(Exception):
+        try:
+            # Zarr keeps a value it failed to save in memory, making every later attrs
+            # write fail too, so reject values that are not JSON-serializable up front.
+            json.dumps(v)
             z_arr.attrs[k] = v
+        except Exception as exc:
+            if verbose:
+                print(f"Warning: metadata {k!r} was not copied: {exc}", file=sys.stderr)
 
 
 def _determine_target_chunks_and_shards(
@@ -273,7 +280,7 @@ def b2nd_to_zarr(
         overwrite=overwrite,
     )
 
-    copy_metadata(arr, z_arr)
+    copy_metadata(arr, z_arr, verbose=verbose and not quiet)
     copy_duration = copy_batches(
         arr, z_arr, batch_slices, uncompressed_bytes, "b2nd -> zarr", quiet=quiet, verbose=verbose
     )
