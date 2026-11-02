@@ -6411,10 +6411,11 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
             expression,
             inputs,
             jit=native_jit,
+            jit_backend=native_backend,
             cached=recipe.resident if recipe is not None else None,
             optimization=optimization,
         )
-        if native_backend is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+        if policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
         else None
     )
     if resident is not None and (recipe is None or resident is not recipe.resident):
@@ -6555,7 +6556,9 @@ def evaluate(
     Menudet kernels, including explicit NumPy or Blosc2 destinations. Compressed
     destinations retain bounded input tiles; matching floating storage grids use
     the compression prefilter. Unsupported signatures, aliasing and explicit
-    backend/accuracy policies retain the existing dispatch rules.
+    accuracy policies retain the existing dispatch rules. Explicit compiler options
+    on eligible resident maps use the option-aware Menudet compiler without
+    routing through general chunk execution.
 
     Eligible expressions default to native interpretation through the shared
     native structural policy (single-return expression versus program), also used
@@ -6581,8 +6584,9 @@ def evaluate(
         Math library: ``"system"``, ``"sleef"`` or ``"accelerate"``. None inherits
         the current Python/native defaults. Explicit choices override the native
         environment default and require a build supporting the requested library.
-        Accelerate is macOS-only and uses tiled vector interpretation, independently
-        of JIT selection. Prepared plans are cached separately for each policy.
+        Accelerate is macOS-only. Calls requiring its vector math retain tiled
+        interpretation; arithmetic and safely lowered powers can use JIT.
+        Prepared plans are cached separately for each policy.
     kwargs: Any, optional
         Accepted options are ``order``, ``casting`` and ``optimization``.
         ``optimization`` defaults to ``"aggressive"``, matching NumExpr's default.

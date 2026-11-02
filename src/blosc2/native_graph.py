@@ -278,7 +278,7 @@ def _native_plan_cache_key(expr, jit, options, configuration=None):
     )
 
 
-def _resident_signature(expression, inputs, jit, optimization="moderate"):
+def _resident_signature(expression, inputs, jit, optimization="moderate", *, jit_backend=None):
     import blosc2
 
     if not inputs:
@@ -306,9 +306,12 @@ def _resident_signature(expression, inputs, jit, optimization="moderate"):
         elif value.shape != first.shape:
             return None
         dtypes.append((name, dtype.str))
+    policy = blosc2.jit_config.execution_options()
+    if jit_backend is not None:
+        policy["jit_backend"] = jit_backend
     configuration = (
         _graph_configuration(jit),
-        tuple(blosc2.jit_config.execution_options().items()),
+        tuple(policy.items()),
         optimization,
     )
     return (expression, tuple(dtypes), first.shape, jit, configuration)
@@ -319,13 +322,52 @@ def native_weak_scalars_eligible(plan, expression, inputs):
     return plan.partitionable or (parse_expression(expression).infer_dtype(inputs) is not None)
 
 
-def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None, optimization="moderate"):
+class _ConfiguredResidentSchedule:
+    """Keep graph validation, but execute the option-aware map artifact directly."""
+
+    def __init__(self, schedule, kernel):
+        self.schedule = schedule
+        self.kernel = kernel
+
+    def info(self):
+        return self.schedule.info()
+
+    def execute(self, inputs, *, out=None, workers=1):
+        from .resident_execution import evaluate_resident
+
+        shape = self.info()["shape"]
+        if workers > 1:
+            result, report = evaluate_resident(self.kernel, inputs, shape, workers, out=out)
+        else:
+            result, status = self.kernel._handle.evaluate_block(
+                inputs, shape, return_status=True, _output=out
+            )
+            report = {"fp_flags": status["flags"], "fp_supported": status["supported"]}
+        return result, {
+            **report,
+            "tasks": workers,
+            "stages": 1,
+            "jit_stages": int(self.kernel.has_jit),
+            "interpreter_stages": int(not self.kernel.has_jit),
+            "normalization_bytes": 0,
+        }
+
+
+def prepare_resident(
+    expression, inputs, *, jit=None, jit_backend=None, cached=None, plan=None, optimization="moderate"
+):
     """Prepare an admitted resident map; retain metadata and native owners only."""
     import blosc2
 
-    signature = _resident_signature(expression, inputs, jit, optimization)
+    signature = _resident_signature(expression, inputs, jit, optimization, jit_backend=jit_backend)
     if signature is None:
         return None
+    policy = dict(signature[-1][1])
+    if policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
+        return None
+    configured = policy["jit_backend"] is not None or any(
+        policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir")
+    )
     parallel = math.prod(signature[2]) >= _MINIMUM_PARALLEL_ITEMS
     if parallel and (
         blosc2.IS_WASM
@@ -339,7 +381,7 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None, op
         if plan is None:
             plan = compile_plan(
                 expression,
-                jit,
+                False if configured else jit,
                 signature[-1],
                 input_dtypes=tuple((name, value.dtype) for name, value in inputs.items()),
                 optimization=optimization,
@@ -355,6 +397,13 @@ def prepare_resident(expression, inputs, *, jit=None, cached=None, plan=None, op
             return None
         if not native_weak_scalars_eligible(plan, expression, inputs):
             return None
+        if configured:
+            # Never let a rejected graph proof become parallel-safe merely by
+            # reimporting its artifact. Nonpartitionable maps retain serial order.
+            kernel = configured_map_kernel(plan, jit, tuple(policy.items()), _graph_configuration(jit))
+            if kernel.output_dtype != info["dtype"]:
+                return None
+            schedule = _ConfiguredResidentSchedule(schedule, kernel)
     except (NotImplementedError, blosc2.MenudetError, TypeError, ValueError):
         return None
     return signature, plan, schedule
@@ -373,7 +422,7 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
     import blosc2
 
     prepared = getattr(expr, "_resident_native", None)
-    if prepared is None or jit_backend is not None or fp_accuracy is not None:
+    if prepared is None or fp_accuracy is not None:
         return None
     options = options or {}
     output = options.get("out", getattr(expr, "_output", None))
@@ -392,7 +441,11 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
     ):
         return None
     if prepared[0] != _resident_signature(
-        expr.expression, expr.operands, jit, getattr(expr, "_optimization", "moderate")
+        expr.expression,
+        expr.operands,
+        jit,
+        getattr(expr, "_optimization", "moderate"),
+        jit_backend=jit_backend,
     ):
         return None
     _, plan, schedule = prepared
@@ -1348,9 +1401,12 @@ def configured_map_kernel(plan, jit, configuration, environment):
     Unlike compatibility capture specialization, import the original graph
     artifact verbatim so its NumPy profile and weak-scalar rules stay intact.
     """
+    import blosc2
+
     from .menudet_kernel import MenudetKernel
 
-    kernel = MenudetKernel.from_json(plan.map_json(), jit=jit)
+    with blosc2.jit_options(**dict(configuration)):
+        kernel = MenudetKernel.from_json(plan.map_json(), jit=jit)
     kernel.graph_partitionable = plan.partitionable
     return kernel
 
