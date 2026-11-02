@@ -34,6 +34,8 @@ _NATIVE_PLAN_CACHE_SIZE = 128
 _MINIMUM_PARALLEL_ITEMS = 2 * 128 * 1024
 _native_plan_cache = OrderedDict()
 _native_plan_cache_lock = threading.Lock()
+_resident_prefilter_contexts = threading.local()
+_RESIDENT_PREFILTER_CONTEXTS = 2
 NATIVE_ELEMENTWISE_CALLS = {
     **dict.fromkeys(
         (
@@ -322,22 +324,67 @@ def native_weak_scalars_eligible(plan, expression, inputs):
     return plan.partitionable or (parse_expression(expression).infer_dtype(inputs) is not None)
 
 
+def clear_resident_prefilter_cache():
+    """Release this caller's idle native workspaces, never another thread's work."""
+    _resident_prefilter_contexts.contexts = OrderedDict()
+
+
+def _execute_resident_kernel(kernel, inputs, shape, workers, *, out=None, plan=None):
+    from .resident_execution import evaluate_resident
+
+    handle = kernel._handle
+    factory = getattr(handle, "resident_prefilter", None)
+    if factory is not None:
+        graph = None if plan is None else plan._handle
+        contexts = getattr(_resident_prefilter_contexts, "contexts", None)
+        if contexts is None:
+            contexts = _resident_prefilter_contexts.contexts = OrderedDict()
+        key = workers, handle, graph, shape
+        executor = contexts.pop(key, None)
+        if executor is None:
+            rebind = (
+                getattr(handle, "rebind_resident_prefilter", None)
+                if len(contexts) >= _RESIDENT_PREFILTER_CONTEXTS
+                else None
+            )
+            if rebind is not None:
+                _, evicted = contexts.popitem(last=False)
+                executor = rebind(evicted, shape, workers, graph=graph)
+            else:
+                executor = factory(shape, workers, graph=graph)
+        contexts[key] = executor
+        # Native worker scratch/pools are more expensive than graph
+        # metadata: bound these per caller, not per cached expression.
+        while len(contexts) > _RESIDENT_PREFILTER_CONTEXTS:
+            contexts.popitem(last=False)
+        # Factory/admission precede execution. Native errors propagate;
+        # an operation that started is never replayed on another engine.
+        return executor.evaluate(inputs, out=out)
+    return evaluate_resident(kernel, inputs, shape, workers, out=out)
+
+
 class _ConfiguredResidentSchedule:
     """Keep graph validation, but execute the option-aware map artifact directly."""
 
-    def __init__(self, schedule, kernel):
+    def __init__(self, schedule, kernel, *, plan):
         self.schedule = schedule
         self.kernel = kernel
+        self.plan = plan
+        self.partitionable = plan.partitionable
+        self._info = schedule.info()
+        self.shape = self._info["shape"]
 
     def info(self):
-        return self.schedule.info()
+        return self._info
 
     def execute(self, inputs, *, out=None, workers=1):
-        from .resident_execution import evaluate_resident
-
-        shape = self.info()["shape"]
+        shape = self.shape
         if workers > 1:
-            result, report = evaluate_resident(self.kernel, inputs, shape, workers, out=out)
+            if not self.partitionable:
+                raise ValueError("A rejected graph cannot use partitioned resident execution")
+            result, report = _execute_resident_kernel(
+                self.kernel, inputs, shape, workers, out=out, plan=self.plan
+            )
         else:
             result, status = self.kernel._handle.evaluate_block(
                 inputs, shape, return_status=True, _output=out
@@ -345,7 +392,7 @@ class _ConfiguredResidentSchedule:
             report = {"fp_flags": status["flags"], "fp_supported": status["supported"]}
         return result, {
             **report,
-            "tasks": workers,
+            "tasks": report.get("tasks", workers),
             "stages": 1,
             "jit_stages": int(self.kernel.has_jit),
             "interpreter_stages": int(not self.kernel.has_jit),
@@ -362,6 +409,8 @@ def prepare_resident(
     signature = _resident_signature(expression, inputs, jit, optimization, jit_backend=jit_backend)
     if signature is None:
         return None
+    if cached is not None and cached[0] == signature and not blosc2.IS_WASM:
+        return cached
     policy = dict(signature[-1][1])
     if policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
         return None
@@ -403,7 +452,7 @@ def prepare_resident(
             kernel = configured_map_kernel(plan, jit, tuple(policy.items()), _graph_configuration(jit))
             if kernel.output_dtype != info["dtype"]:
                 return None
-            schedule = _ConfiguredResidentSchedule(schedule, kernel)
+            schedule = _ConfiguredResidentSchedule(schedule, kernel, plan=plan)
     except (NotImplementedError, blosc2.MenudetError, TypeError, ValueError):
         return None
     return signature, plan, schedule
@@ -489,9 +538,8 @@ def _native_cached_output_ok(expr, schedule, output):
         and not getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
     ):
         return False
-    return not any(
-        type(value) is np.ndarray and np.shares_memory(output, value) for value in expr.operands.values()
-    )
+    operands = expr.values() if isinstance(expr, dict) else expr.operands.values()
+    return not any(type(value) is np.ndarray and np.shares_memory(output, value) for value in operands)
 
 
 def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):  # noqa: C901 -- conservative metadata-only admission gates
@@ -1523,7 +1571,13 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
     ):
         kernel = resident_map_kernel(plan)
         if kernel is not None:
-            values, report = evaluate_resident(kernel, inputs, shape, workers, out=out)
+            owner_plan = plan if getattr(kernel._handle, "_owner", None) is plan._handle else None
+            if owner_plan is not None or getattr(kernel, "native_partitionable", None) is True:
+                values, report = _execute_resident_kernel(
+                    kernel, inputs, shape, workers, out=out, plan=owner_plan
+                )
+            else:
+                values, report = evaluate_resident(kernel, inputs, shape, workers, out=out)
             return values, {
                 **report,
                 "route": "parallel-resident",

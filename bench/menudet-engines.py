@@ -290,6 +290,8 @@ def cold_preparation():
     lazy = importlib.import_module("blosc2.lazyexpr")
     graph = importlib.import_module("blosc2.expression_graph")
     native._native_plan_cache.clear()
+    if hasattr(native, "clear_resident_prefilter_cache"):
+        native.clear_resident_prefilter_cache()
     for function in (
         native._native_first_syntax,
         native._native_text_expression,

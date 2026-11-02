@@ -1195,6 +1195,9 @@ cdef struct menudet_prefilter_state:
     int64_t size
     int64_t chunk_items
     int64_t block_items
+    bint resident
+    int64_t resident_origin
+    int64_t resident_chunk_items
     int status
     int64_t error_block
     b2_artifact_error error
@@ -1240,7 +1243,8 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     cdef blosc2_dparams dparams
     cdef int i, rc = 0, read_status
     cdef int32_t block_bytes
-    cdef int64_t origin = params.nchunk * state.chunk_items + params.nblock * state.block_items
+    cdef int64_t origin = ((state.resident_origin if state.resident else params.nchunk * state.chunk_items)
+                           + params.nblock * state.block_items)
     cdef int64_t count = min(state.block_items, state.size - origin)
     cdef int64_t block_id = origin // state.block_items
     cdef int64_t logical_shape = state.size
@@ -1254,6 +1258,24 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     cdef int64_t origins[16]
     cdef int64_t extents[16]
     cdef bint edge = False
+    if state.resident:
+        # Disposable chunks carry no numerical payload, so physical scheduling
+        # blocks may visit logical spans in striped order. Spread first-touch
+        # writes across the allocation instead of faulting adjacent VM pages
+        # concurrently on every worker (particularly expensive on macOS).
+        physical = params.nblock
+        block_index = (state.resident_chunk_items + state.block_items - 1) // state.block_items
+        stride = physical % state.nworkers
+        relative = physical // state.nworkers
+        offset = (stride * (block_index // state.nworkers)
+                  + min(stride, block_index % state.nworkers) + relative)
+        origin = state.resident_origin + offset * state.block_items
+        count = min(state.block_items, state.resident_chunk_items - offset * state.block_items,
+                    state.size - origin)
+        block_id = origin // state.block_items
+        block_origin = origin
+        block_extent = count
+        written_bytes = max(count, 0) * params.output_typesize
     if state.grid_ndim > 1:
         chunk_index = params.nchunk
         block_index = params.nblock
@@ -1352,10 +1374,12 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     if count <= 0:
         return 0
     if feholdexcept(&environment):
-        memset(params.output, 0, params.output_size)
-        worker.status = -5
-        worker.error_block = block_id
-        strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
+        if params.output_size:
+            memset(params.output, 0, params.output_size)
+        if worker.status == 0 or block_id < worker.error_block:
+            worker.status = -5
+            worker.error_block = block_id
+            strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
         return -1
     for i in range(state.ninputs):
         if state.numpy_inputs[i] != NULL:
@@ -1413,7 +1437,8 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     if rc:
         # Disposable prefilters do not propagate failures through C-Blosc2;
         # return deterministic bytes until the caller raises worker status.
-        memset(params.output, 0, params.output_size)
+        if params.output_size:
+            memset(params.output, 0, params.output_size)
     if not rc:
         worker.fp_flags |= fp.flags
         worker.fp_supported &= fp.supported
@@ -1433,6 +1458,10 @@ def menudet_prefilter_row_slabs_available():
 
 def menudet_resident_available():
     return bool(b2_artifact_descriptor_available())
+
+
+def menudet_resident_prefilter_available():
+    return bool(b2_artifact_descriptor_available()) and not blosc2.IS_WASM
 
 
 def native_array_sources_available():
@@ -1799,6 +1828,7 @@ cdef class NativeGraphHandle:
         result._borrowed = True
         result._handle = <void *>artifact
         result._owner = self
+        result._artifact_document = <bytes>b2_graph_map_json(self._handle)
         return result
 
     @staticmethod
@@ -2114,6 +2144,9 @@ cdef class MenudetArtifactHandle:
     cdef void *_handle
     cdef object _owner
     cdef bint _borrowed
+    cdef bytes _artifact_document
+    cdef object _attested_graph
+    cdef object _resident_meta
 
     def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
         cdef b2_artifact_error error
@@ -2135,6 +2168,7 @@ cdef class MenudetArtifactHandle:
         self._handle = NULL
         if artifact is None:
             return
+        self._artifact_document = artifact
         json = artifact
         size = len(artifact)
         if infer_output and not b2_artifact_load_inferred_available():
@@ -2375,6 +2409,21 @@ cdef class MenudetArtifactHandle:
         finally:
             free(views)
 
+    def resident_prefilter(self, shape, workers=1, block_items=32768, chunk_items=0, graph=None):
+        """Private reusable native scheduler for proven contiguous resident maps."""
+        return MenudetResidentPrefilter(self, shape, workers, block_items, chunk_items, graph)
+
+    def rebind_resident_prefilter(self, context, shape, int workers=1, int block_items=32768,
+                                  int64_t chunk_items=0, NativeGraphHandle graph=None):
+        """Rebind an idle resident prefilter context when worker/itemsize geometry matches."""
+        cdef MenudetResidentPrefilter prefilter
+        if isinstance(context, MenudetResidentPrefilter):
+            prefilter = <MenudetResidentPrefilter>context
+            if not prefilter.running and prefilter._rebind(
+                    self, shape, workers, block_items, chunk_items, graph):
+                return prefilter
+        return MenudetResidentPrefilter(self, shape, workers, block_items, chunk_items, graph)
+
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
                            _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
                            _chunk_indices=None):
@@ -2575,6 +2624,306 @@ cdef class MenudetArtifactHandle:
             return output
         finally:
             free(bindings)
+
+
+cdef class MenudetResidentPrefilter:
+    """Own native worker resources, never numerical inputs or result arrays.
+
+    Each instance is exclusively leased to one invocation at a time. The Python
+    configured schedule keeps one instance per calling thread, not one global
+    mutable context. All callbacks and chunk traversal run without the GIL.
+    """
+    cdef MenudetArtifactHandle owner
+    cdef NativeGraphHandle graph
+    cdef blosc2_context *context
+    cdef menudet_prefilter_state state
+    cdef blosc2_prefilter_params parameters
+    cdef uint8_t *placeholder
+    cdef int32_t placeholder_capacity
+    cdef int workers_capacity
+    cdef object shape, output_dtype, input_dtypes, names
+    cdef int itemsize, nworkers, block_items
+    cdef int64_t count, chunk_items
+    cdef bint running
+    cdef size_t invocations
+
+    def __cinit__(self):
+        self.context = NULL
+        self.placeholder = NULL
+        self.workers_capacity = 0
+        memset(&self.state, 0, sizeof(self.state))
+        memset(&self.parameters, 0, sizeof(self.parameters))
+
+    def __init__(self, MenudetArtifactHandle owner, shape, int workers=1, int block_items=32768,
+                 int64_t chunk_items=0, NativeGraphHandle graph=None):
+        cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
+        if self.owner is not None:
+            raise RuntimeError("Resident prefilter context is already initialized")
+        self._rebind(owner, shape, workers, block_items, chunk_items, graph)
+        self.parameters.user_data = &self.state
+        self.parameters.output_is_disposable = True
+        self.parameters.output_typesize = self.itemsize
+        cparams.clevel = 1
+        cparams.typesize = self.itemsize
+        cparams.nthreads = self.nworkers
+        cparams.blocksize = block_items * self.itemsize
+        cparams.splitmode = blosc2.SplitMode.NEVER_SPLIT.value
+        memset(cparams.filters, 0, sizeof(cparams.filters))
+        memset(cparams.filters_meta, 0, sizeof(cparams.filters_meta))
+        cparams.prefilter = menudet_menudet_prefilter
+        cparams.preparams = &self.parameters
+        self.context = blosc2_create_cctx(cparams)
+        if self.context == NULL:
+            raise MemoryError("Cannot create resident prefilter context")
+
+    cdef bint _rebind(self, MenudetArtifactHandle owner, object shape, int workers, int block_items,
+                      int64_t chunk_items, NativeGraphHandle graph) except -1:
+        cdef int i, tid, ninputs, nworkers, itemsize
+        cdef int32_t needed_placeholder
+        cdef int64_t count = 1, dim, maximum_chunk_items, resolved_chunk_items, maximum_blocks
+        cdef uint8_t *new_placeholder
+        cdef menudet_prefilter_worker *new_workers
+        if owner is None or owner._handle == NULL:
+            raise ValueError("Resident prefilters require an initialized artifact")
+        if blosc2.IS_WASM or not b2_artifact_descriptor_available():
+            raise NotImplementedError("Resident prefilters require the host descriptor runtime")
+        if not 1 <= workers <= 32 or not 128 <= block_items <= 1048576 or block_items % 128:
+            raise ValueError("Invalid resident prefilter worker count or block geometry")
+        if owner._resident_meta is None:
+            if b2_artifact_rank(owner._handle):
+                raise NotImplementedError("Resident prefilters require a proven context-free artifact")
+            info = owner.descriptor_info()
+            if info["cardinality"] != "elementwise" or not 1 <= len(info["inputs"]) <= 128:
+                raise NotImplementedError("Resident prefilters require an elementwise numeric signature")
+            output_dtype = owner.signature_dtype(-1)
+            input_dtypes = info["inputs"]
+            if any(dtype.kind not in "biuf" or dtype.itemsize > 8
+                   for dtype in (*input_dtypes.values(), output_dtype)):
+                raise NotImplementedError("Resident prefilters require native numeric dtypes")
+            owner._resident_meta = (output_dtype, input_dtypes, tuple(input_dtypes))
+        else:
+            output_dtype, input_dtypes, _ = owner._resident_meta
+        if graph is None:
+            if b2_artifact_partitionable(owner._handle) <= 0:
+                raise NotImplementedError("Resident prefilters require an authoritative partitioning proof")
+        elif owner._attested_graph is not graph:
+            # Configured kernels are imported from this very graph's map JSON.
+            # A conservative artifact rejection of checked weak captures does
+            # not replace the graph's stronger whole-expression proof.
+            graph_info = graph.info()
+            if not graph_info["partitionable"] or graph_info["stages"] != 1:
+                raise NotImplementedError("The native graph rejected partitioned execution")
+            if graph_info["inputs"] != input_dtypes or graph_info["inferred_dtype"] != output_dtype:
+                raise ValueError("Graph proof and resident artifact signatures disagree")
+            map_doc = <bytes>b2_graph_map_json(graph._handle)
+            if owner._artifact_document != map_doc:
+                import json
+                expected = json.loads(map_doc)
+                actual = json.loads(owner._artifact_document)
+                expected_source = expected.pop("source")
+                actual_source = actual.pop("source")
+                expected_source = "\n".join(
+                    line for line in expected_source.splitlines()
+                    if not line.lstrip().startswith("# me:compiler=")).strip()
+                actual_source = "\n".join(
+                    line for line in actual_source.splitlines()
+                    if not line.lstrip().startswith("# me:compiler=")).strip()
+                # Only compiler selection may differ from the proven recipe. In
+                # particular, equal source text alone would not attest captures.
+                if expected != actual or expected_source != actual_source:
+                    raise ValueError("Graph proof and resident artifact documents disagree")
+            owner._attested_graph = graph
+        normalized_shape = tuple(d.__index__() for d in shape)
+        for dim in normalized_shape:
+            if dim <= 0:
+                raise ValueError("Resident prefilters require a nonempty domain")
+            count *= dim
+        if count > 2**63 - 1:
+            raise ValueError("Resident prefilter domain is too large")
+        itemsize = output_dtype.itemsize
+        nworkers = min(workers, (count + block_items - 1) // block_items)
+        # There is no full-chunk driver allocation: only bounded per-block
+        # worker scratch and a small placeholder/index table. Use the valid
+        # NumPy sink's address range up to the ordinary Blosc2 chunk-size limit.
+        maximum_chunk_items = (((INT_MAX - BLOSC2_MAX_OVERHEAD) // itemsize)
+                               // block_items) * block_items
+        if (chunk_items < 0 or chunk_items > (INT_MAX - BLOSC2_MAX_OVERHEAD) // itemsize
+                or (0 < chunk_items < count and chunk_items % block_items)):
+            raise ValueError("Invalid resident prefilter chunk geometry")
+        resolved_chunk_items = min(count, chunk_items if chunk_items else maximum_chunk_items)
+        if self.context != NULL and (self.itemsize != itemsize or self.nworkers != nworkers
+                                     or self.block_items != block_items):
+            return False
+        maximum_blocks = (resolved_chunk_items + block_items - 1) // block_items
+        needed_placeholder = BLOSC2_MAX_OVERHEAD + max(128, maximum_blocks * (4 + 4 * itemsize))
+        if needed_placeholder > self.placeholder_capacity or self.placeholder == NULL:
+            new_placeholder = <uint8_t *>malloc(needed_placeholder)
+            if new_placeholder == NULL:
+                raise MemoryError()
+            free(self.placeholder)
+            self.placeholder = new_placeholder
+            self.placeholder_capacity = needed_placeholder
+        names = owner._resident_meta[2]
+        ninputs = len(names)
+        if ninputs > self.workers_capacity or self.state.workers == NULL:
+            new_workers = <menudet_prefilter_worker *>calloc(nworkers,
+                sizeof(menudet_prefilter_worker) + ninputs * sizeof(b2_artifact_buffer))
+            if new_workers == NULL:
+                raise MemoryError()
+            free(self.state.workers)
+            self.state.workers = new_workers
+            self.workers_capacity = ninputs
+        self.owner = owner
+        self.graph = graph
+        self.shape = normalized_shape
+        self.output_dtype = output_dtype
+        self.input_dtypes = input_dtypes
+        self.names = names
+        self.count = count
+        self.itemsize = itemsize
+        self.nworkers = nworkers
+        self.block_items = block_items
+        self.chunk_items = resolved_chunk_items
+        self.state.artifact = owner._handle
+        self.state.resident = True
+        self.state.grid_ndim = 1
+        self.state.size = count
+        self.state.chunk_items = resolved_chunk_items
+        self.state.block_items = block_items
+        self.state.ninputs = ninputs
+        self.state.nworkers = nworkers
+        for i in range(ninputs):
+            self.state.signature[i].name = b2_artifact_name(owner._handle, i)
+            self.state.signature[i].dtype = b2_artifact_dtype(owner._handle, i)
+            self.state.signature[i].itemsize = b2_artifact_width(owner._handle, i)
+        for tid in range(nworkers):
+            self.state.workers[tid].bindings = (
+                <b2_artifact_buffer *>(self.state.workers + nworkers) + tid * self.workers_capacity)
+            for i in range(ninputs):
+                self.state.workers[tid].bindings[i] = self.state.signature[i]
+        return True
+
+    def __dealloc__(self):
+        if self.context != NULL:
+            blosc2_free_ctx(self.context)
+        free(self.state.workers)
+        free(self.placeholder)
+
+    def evaluate(self, inputs, out=None):
+        cdef np.ndarray array, output
+        cdef list owned = []
+        cdef int i, tid, rc = 0, active_workers = 0
+        cdef int32_t encoded = 0, nbytes
+        cdef int64_t origin = 0, live
+        cdef size_t discarded = 0, chunks = 0
+        cdef menudet_prefilter_worker *worker
+        cdef blosc2_prefilter_params tail_params
+        if self.context == NULL:
+            raise RuntimeError("Resident prefilter context is not initialized")
+        if self.running:
+            raise RuntimeError("Resident prefilter context is already in use")
+        if set(inputs) != set(self.names):
+            raise ValueError("Resident prefilter inputs disagree with the artifact signature")
+        output = np.empty(self.shape, dtype=self.output_dtype) if out is None else out
+        if (type(output) is not np.ndarray or (<object>output).shape != self.shape
+                or output.dtype != self.output_dtype or not output.flags.c_contiguous
+                or not output.flags.aligned or not output.flags.writeable):
+            raise ValueError("Invalid resident prefilter output shape, dtype or layout")
+        # Complete all Python preflight before binding any borrowed data pointer.
+        for name in self.names:
+            value = inputs[name]
+            if (type(value) is not np.ndarray or value.shape != self.shape
+                    or value.dtype != self.input_dtypes[name] or not value.flags.c_contiguous
+                    or not value.flags.aligned or not value.dtype.isnative):
+                raise ValueError("Invalid resident prefilter input shape, dtype or layout")
+            if np.shares_memory(output, value):
+                raise ValueError("Resident prefilter output must not overlap an input")
+            owned.append(value)
+        self.running = True
+        try:
+            self.state.status = 0
+            self.state.error_block = 0
+            memset(&self.state.error, 0, sizeof(self.state.error))
+            self.state.numpy_output = <uint8_t *>output.data
+            for i in range(self.state.ninputs):
+                array = owned[i]
+                self.state.numpy_inputs[i] = <const uint8_t *>array.data
+            for tid in range(self.nworkers):
+                worker = &self.state.workers[tid]
+                worker.status = 0
+                worker.error_block = 0
+                worker.fp_flags = 0
+                worker.fp_supported = 1
+                worker.evaluated_blocks = 0
+                worker.output_zero_fill_bytes = 0
+                memset(&worker.error, 0, sizeof(worker.error))
+            # The disposable prefilter ignores its scheduling source and writes
+            # directly to the real sink. Borrow that same sink's valid address
+            # range as the driver: no dummy input allocation or numerical copy.
+            with nogil:
+                while origin < self.count:
+                    live = min(self.chunk_items, self.count - origin)
+                    nbytes = <int32_t>(live * self.itemsize)
+                    self.state.resident_origin = origin
+                    self.state.resident_chunk_items = live
+                    if live <= self.state.block_items:
+                        # A single-block chunk needs no thread pool and must not
+                        # let C-Blosc2's tuner shrink context->blocksize.
+                        tail_params = self.parameters
+                        tail_params.tid = 0
+                        tail_params.nchunk = <int32_t>chunks
+                        tail_params.nblock = 0
+                        tail_params.output = self.placeholder
+                        tail_params.output_size = 0
+                        menudet_menudet_prefilter(&tail_params)
+                        encoded = BLOSC2_MAX_OVERHEAD
+                    else:
+                        encoded = blosc2_compress_ctx(self.context,
+                            self.state.numpy_output + origin * self.itemsize, nbytes,
+                            self.placeholder, self.placeholder_capacity)
+                    chunks += 1
+                    if encoded <= 0:
+                        rc = encoded
+                        break
+                    discarded += encoded
+                    for tid in range(self.nworkers):
+                        if self.state.workers[tid].status:
+                            rc = self.state.workers[tid].status
+                            break
+                    if rc:
+                        break
+                    origin += live
+            menudet_prefilter_merge(&self.state)
+            if self.state.status:
+                try:
+                    raise_artifact_error(self.state.status, &self.state.error)
+                except Exception as error:
+                    error.fp_status = {"flags": self.state.fp_flags, "supported": bool(self.state.fp_supported)}
+                    raise
+            if encoded <= 0:
+                raise RuntimeError(f"Resident prefilter scheduling failed: {rc}")
+            for tid in range(self.nworkers):
+                active_workers += self.state.workers[tid].evaluated_blocks != 0
+            return output, {"route": "resident-prefilter", "tasks": self.nworkers,
+                "threads": self.nworkers, "threads_used": active_workers,
+                "evaluated_blocks": self.state.evaluated_blocks, "chunk_calls": chunks,
+                "block_items": self.state.block_items, "chunk_items": self.chunk_items,
+                "first_touch_order": "striped", "driver_buffer_bytes": 0,
+                "discarded_output_bytes": discarded, "context_reused": self.invocations != 0,
+                "fp_flags": self.state.fp_flags, "fp_supported": bool(self.state.fp_supported),
+                "input_buffer_bytes": 0, "output_copy_bytes": 0, "normalization_bytes": 0}
+        finally:
+            # Neither cached native contexts nor their bindings retain operands,
+            # even after partial execution or a worker error. compress_ctx joins.
+            self.state.numpy_output = NULL
+            for i in range(self.state.ninputs):
+                self.state.numpy_inputs[i] = NULL
+            for tid in range(self.nworkers):
+                for i in range(self.state.ninputs):
+                    self.state.workers[tid].bindings[i].data = NULL
+                    self.state.workers[tid].bindings[i].capacity = 0
+            self.invocations += 1
+            self.running = False
 
 
 def me_output_dtype(expression, operands):

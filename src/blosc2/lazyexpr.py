@@ -6639,12 +6639,21 @@ def evaluate(
     order = order.upper()
     lexpr = _prepare_cached_evaluate(ex, local_dict, global_dict, optimization) if not kwargs else None
     if isinstance(lexpr, tuple):
-        resident, inputs = lexpr
-        if out is None and order in {"C", "A", "K"}:
-            from .native_graph import execute_resident
+        from .native_graph import _native_cached_output_ok, execute_resident
 
+        resident, inputs = lexpr
+        if order in {"C", "A", "K"} and (
+            out is None
+            or (
+                type(out) is np.ndarray
+                and out.flags.c_contiguous
+                and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+                and _native_cached_output_ok(inputs, resident[2], out)
+                and not any(_array_owner(value) is _array_owner(out) for value in inputs.values())
+            )
+        ):
             # Admission and policy were resolved for these current arrays; execution never falls back.
-            return execute_resident(resident, inputs)[0]
+            return execute_resident(resident, inputs, out=out)[0]
         # Layout/casting/storage requests retain the public output preflight and the same native plan.
         lexpr = LazyExpr(None)
         lexpr.expression = ex

@@ -103,6 +103,16 @@ def evaluate_resident_if_eligible(lazy, selection, out=None):
         for name, value in lazy.inputs.items()
     ):
         return None
+    if (
+        getattr(lazy.kernel, "native_partitionable", None) is True
+        and count >= workers * 32768
+        and getattr(lazy.kernel._handle, "resident_prefilter", None) is not None
+    ):
+        from .native_graph import _execute_resident_kernel
+
+        values, report = _execute_resident_kernel(lazy.kernel, lazy.inputs, lazy._domain, workers, out=out)
+        report["route"] = "parallel-resident"
+        return values, report
     return evaluate_resident(lazy.kernel, lazy.inputs, lazy._domain, workers, out=out)
 
 
@@ -238,7 +248,16 @@ def evaluate_resident_selection_if_eligible(lazy, selection):
         and not blosc2.IS_WASM
         and getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)()
     ):
-        values, report = evaluate_resident(lazy.kernel, operands, shape, workers)
+        if (
+            getattr(lazy.kernel, "native_partitionable", None) is True
+            and count >= workers * 32768
+            and getattr(lazy.kernel._handle, "resident_prefilter", None) is not None
+        ):
+            from .native_graph import _execute_resident_kernel
+
+            values, report = _execute_resident_kernel(lazy.kernel, operands, shape, workers)
+        else:
+            values, report = evaluate_resident(lazy.kernel, operands, shape, workers)
         report["route"] = "parallel-resident-selection"
     else:
         values, status = lazy.kernel.evaluate_block(operands, block_shape=shape, return_status=True)
