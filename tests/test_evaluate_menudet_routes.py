@@ -192,8 +192,9 @@ def test_configured_resident_respects_graph_rejection(monkeypatch):
 
 
 def test_evaluate_configured_resident_weak_scalar_error():
+    expected = OverflowError if int(np.__version__.split(".")[0]) >= 2 else blosc2.MenudetError
     with blosc2.jit_options(jit=True, jit_backend="cc"):
-        with pytest.raises(OverflowError):
+        with pytest.raises(expected):
             blosc2.evaluate("x + 256", {"x": np.ones(33, dtype="uint8")})
 
 
