@@ -1887,13 +1887,23 @@ def fast_eval(  # noqa: C901
 
     expr_string_miniexpr = expr_string
     operands_miniexpr = operands
+    # Fuse where(cond, x, y) before specializing, so that scalar x/y get inlined as well;
+    # fusing afterwards would reference a dropped operand and make miniexpr fail to compile.
+    where_fused = (
+        use_miniexpr
+        and isinstance(expr_string, str)
+        and not is_dsl
+        and where is not None
+        and len(where) == 2
+    )
+    if where_fused:
+        expr_string_miniexpr = f"where({expr_string}, _where_x, _where_y)"
     if use_miniexpr and isinstance(expr_string, str):
-        try:
-            expr_string_miniexpr, operands_miniexpr = specialize_miniexpr_inputs(expr_string, operands)
-        except Exception:
-            # If specialization fails, keep original expression/operands and let normal checks decide.
-            expr_string_miniexpr = expr_string
-            operands_miniexpr = operands
+        # If specialization fails, keep original expression/operands and let normal checks decide.
+        with contextlib.suppress(Exception):
+            expr_string_miniexpr, operands_miniexpr = specialize_miniexpr_inputs(
+                expr_string_miniexpr, operands
+            )
 
     # Check whether we can use miniexpr
     if use_miniexpr:
@@ -2025,7 +2035,7 @@ def fast_eval(  # noqa: C901
                     k: (np.ascontiguousarray(v) if isinstance(v, np.ndarray) else v)
                     for k, v in _pref_ops.items()
                 }
-            if where is not None and len(where) == 2:
+            if where is not None and len(where) == 2 and not where_fused:
                 _pref_expr = f"where({_pref_expr}, _where_x, _where_y)"
             # _cb_anchor keeps the contiguous bitmap alive for the whole
             # update_data loop (the prefilter dereferences it per block).  Pass
@@ -3774,6 +3784,9 @@ class LazyExpr(LazyArray):
                     op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
+                if op is None and isinstance(value1, blosc2.NDArray):
+                    # A bare array (as the NDArray reductions build): no need to infer the dtype
+                    self._dtype = value1.dtype
             return
         value2 = (
             blosc2.SimpleProxy(value2)
@@ -4301,6 +4314,88 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
+    def _can_full_var(self, dtype):
+        """Whether _full_var computes the variance in `dtype`: for float32/float64 operands, where
+        miniexpr evaluates it without per-element conversions, into their own dtype (the inlined
+        mean would not make the deviations of float32 operands float64)."""
+        own = np.dtype(self.dtype)
+        return own.kind == "f" and own.itemsize in (4, 8) and (dtype is None or np.dtype(dtype) == own)
+
+    def _full_var(self, dtype, keepdims, fp_accuracy, execution_kwargs):
+        """Variance (ddof=0) over all the elements, as two full reductions over the operands.
+
+        The mean goes into the second pass as a Python scalar, which gets inlined into the
+        expression; a (1, ..., 1) array would be an operand to broadcast, and keep that reduction
+        off its fast paths.  d * d rather than d ** 2 spares a pow() per element.  Only for
+        float32/float64 into the same dtype (see _can_full_var).
+        """
+        mean_value = np.asarray(self.mean(dtype=dtype, fp_accuracy=fp_accuracy, **execution_kwargs)).item()
+        # Fold the sign into the operator: miniexpr reductions mis-evaluate a negative literal on
+        # the right of a binary operator, as in "(o0 - -0.5)"
+        dev = self + (-mean_value) if math.copysign(1.0, mean_value) < 0 else self - mean_value
+        out = (dev * dev).mean(dtype=dtype, fp_accuracy=fp_accuracy, **execution_kwargs)
+        # Evaluators other than miniexpr may compute against the Python scalar in float64
+        out = np.dtype(self.dtype if dtype is None else dtype).type(out)
+        return np.reshape(out, (1,) * self.ndim) if keepdims else out
+
+    def _var(self, axis, dtype, keepdims, ddof, where, fp_accuracy, kwargs, finish=None):
+        """The variance, as var() returns it; std() passes np.sqrt as `finish`."""
+        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
+        where = self._normalize_where(where)
+        item = kwargs.pop("item", ())
+        if item == () and axis is None and where is None and self._can_full_var(dtype):
+            out = self._full_var(dtype, keepdims, fp_accuracy, execution_kwargs)
+        else:
+            if item == ():  # fast path
+                mean_value = self.mean(
+                    axis=axis,
+                    dtype=dtype,
+                    keepdims=True,
+                    where=where,
+                    fp_accuracy=fp_accuracy,
+                    **execution_kwargs,
+                )
+                expr = (self - mean_value) ** 2
+            else:
+                mean_value = self.mean(
+                    axis=axis,
+                    dtype=dtype,
+                    keepdims=True,
+                    where=where,
+                    item=item,
+                    fp_accuracy=fp_accuracy,
+                    **execution_kwargs,
+                )
+                # TODO: Not optimal because we load the whole slice in memory. Would have to write
+                #  a bespoke var function that executed within slice_eval to avoid this probably.
+                expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
+            out = expr.mean(
+                axis=axis,
+                dtype=dtype,
+                keepdims=keepdims,
+                where=where,
+                fp_accuracy=fp_accuracy,
+                **execution_kwargs,
+            )
+        if ddof != 0:
+            num_elements = (
+                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
+                if where is None
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
+                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
+                )
+            )
+            out = out * num_elements / (num_elements - ddof)
+        if finish is not None:
+            out = finish(out)
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
+        if kwargs != {} and not np.isscalar(out):
+            out = blosc2.asarray(out, **kwargs)
+        return out
+
     @expression_method
     def std(
         self,
@@ -4312,58 +4407,7 @@ class LazyExpr(LazyArray):
         fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
-        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
-        where = self._normalize_where(where)
-        item = kwargs.pop("item", ())
-        if item == ():  # fast path
-            mean_value = self.mean(
-                axis=axis,
-                dtype=dtype,
-                keepdims=True,
-                where=where,
-                fp_accuracy=fp_accuracy,
-                **execution_kwargs,
-            )
-            expr = (self - mean_value) ** 2
-        else:
-            mean_value = self.mean(
-                axis=axis,
-                dtype=dtype,
-                keepdims=True,
-                where=where,
-                item=item,
-                fp_accuracy=fp_accuracy,
-                **execution_kwargs,
-            )
-            # TODO: Not optimal because we load the whole slice in memory. Would have to write
-            #  a bespoke std function that executed within slice_eval to avoid this probably.
-            expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
-        out = expr.mean(
-            axis=axis,
-            dtype=dtype,
-            keepdims=keepdims,
-            where=where,
-            fp_accuracy=fp_accuracy,
-            **execution_kwargs,
-        )
-        if ddof != 0:
-            num_elements = (
-                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
-                if where is None
-                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
-                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
-                )
-            )
-            out = np.sqrt(out * num_elements / (num_elements - ddof))
-        else:
-            out = np.sqrt(out)
-        out2 = kwargs.pop("out", None)
-        if out2 is not None:
-            out2[:] = out
-            return out2
-        if kwargs != {} and not np.isscalar(out):
-            out = blosc2.asarray(out, **kwargs)
-        return out
+        return self._var(axis, dtype, keepdims, ddof, where, fp_accuracy, kwargs, np.sqrt)
 
     @expression_method
     def var(
@@ -4376,56 +4420,7 @@ class LazyExpr(LazyArray):
         fp_accuracy: blosc2.FPAccuracy | None = None,
         **kwargs,
     ):
-        execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
-        where = self._normalize_where(where)
-        item = kwargs.pop("item", ())
-        if item == ():  # fast path
-            mean_value = self.mean(
-                axis=axis,
-                dtype=dtype,
-                keepdims=True,
-                where=where,
-                fp_accuracy=fp_accuracy,
-                **execution_kwargs,
-            )
-            expr = (self - mean_value) ** 2
-        else:
-            mean_value = self.mean(
-                axis=axis,
-                dtype=dtype,
-                keepdims=True,
-                where=where,
-                item=item,
-                fp_accuracy=fp_accuracy,
-                **execution_kwargs,
-            )
-            # TODO: Not optimal because we load the whole slice in memory. Would have to write
-            #  a bespoke var function that executed within slice_eval to avoid this probably.
-            expr = (self.compute(item, fp_accuracy=fp_accuracy, **execution_kwargs) - mean_value) ** 2
-        out = expr.mean(
-            axis=axis,
-            dtype=dtype,
-            keepdims=keepdims,
-            where=where,
-            fp_accuracy=fp_accuracy,
-            **execution_kwargs,
-        )
-        if ddof != 0:
-            num_elements = (
-                self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
-                if where is None
-                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(
-                    axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
-                )
-            )
-            out = out * num_elements / (num_elements - ddof)
-        out2 = kwargs.pop("out", None)
-        if out2 is not None:
-            out2[:] = out
-            return out2
-        if kwargs != {} and not np.isscalar(out):
-            out = blosc2.asarray(out, **kwargs)
-        return out
+        return self._var(axis, dtype, keepdims, ddof, where, fp_accuracy, kwargs)
 
     @expression_method
     def min(

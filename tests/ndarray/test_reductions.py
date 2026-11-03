@@ -983,3 +983,49 @@ def test_reductions_where_ndarray_and_lazyexpr():
     np.testing.assert_allclose(a.std(axis=0, where=mask), np.std(na, axis=0, where=nmask))
     np.testing.assert_allclose(a.min(axis=0, where=mask), np.min(na, axis=0, where=nmask, initial=np.inf))
     np.testing.assert_allclose(a.max(axis=0, where=mask), np.max(na, axis=0, where=nmask, initial=-np.inf))
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("op", ["std", "var"])
+@pytest.mark.parametrize("ddof", [0, 1])
+@pytest.mark.parametrize("keepdims", [False, True])
+@pytest.mark.parametrize("offset", [0, 1e4, -1e4])
+@pytest.mark.parametrize("miniexpr", [True, False])
+def test_std_var_full_reduction(monkeypatch, dtype, op, ddof, keepdims, offset, miniexpr):
+    # Full std/var reduce (x - mean) * (x - mean) with the mean inlined as a scalar
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", miniexpr)
+    rng = np.random.default_rng(42)
+    na = (offset + rng.normal(scale=3, size=(37, 40, 50))).astype(dtype)
+    a = blosc2.asarray(na, chunks=(10, 20, 50), blocks=(5, 10, 25))
+    res = getattr(a, op)(ddof=ddof, keepdims=keepdims)
+    expected = getattr(na.astype(np.float64), op)(ddof=ddof, keepdims=keepdims)
+    assert np.asarray(res).dtype == getattr(na, op)().dtype
+    assert np.shape(res) == np.shape(expected)
+    np.testing.assert_allclose(res, expected, rtol=1e-5 if dtype == np.float32 else 1e-12)
+    # Same through a lazy expression and the module-level functions
+    res = getattr(blosc2, op)(a + 1, ddof=ddof, keepdims=keepdims)
+    assert np.asarray(res).dtype == getattr(na, op)().dtype
+    np.testing.assert_allclose(res, expected, rtol=1e-5 if dtype == np.float32 else 1e-12)
+
+
+@pytest.mark.parametrize("op", ["std", "var"])
+def test_std_var_full_reduction_wider_dtype(op):
+    # A float64 result of float32 data takes float64 deviations from the mean, as NumPy does
+    rng = np.random.default_rng(1)
+    na = (rng.random(400_000) + 1e6).astype(np.float32)
+    a = blosc2.asarray(na)
+    res = getattr(a, op)(dtype=np.float64)
+    assert np.asarray(res).dtype == np.float64
+    np.testing.assert_allclose(res, getattr(np, op)(na, dtype=np.float64), rtol=1e-6)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf])
+def test_std_var_full_reduction_nonfinite(value):
+    na = np.arange(1000, dtype=np.float64).reshape(10, 100)
+    na[3, 7] = value
+    a = blosc2.asarray(na, chunks=(5, 50), blocks=(5, 10))
+    with np.errstate(invalid="ignore"):
+        np.testing.assert_array_equal(a.std(), np.std(na))
+        np.testing.assert_array_equal(a.var(), np.var(na))

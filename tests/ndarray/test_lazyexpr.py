@@ -2436,3 +2436,43 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     expected = np.cumsum(data, axis=0)
     np.testing.assert_array_equal(result[:], expected)
     np.testing.assert_array_equal(out[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "x", "y"),
+    [
+        (np.float32, "a", 0),
+        (np.float32, 1.5, "a"),
+        (np.int32, "a", 0.5),
+        (np.int16, "a", -1),
+        (np.float64, "a", "b"),
+    ],
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    compiled = []
+
+    def wrapped_set_pref_expr(self, expression, inputs, *args, **kwargs):
+        res = original_set_pref_expr(self, expression, inputs, *args, **kwargs)
+        compiled.append(expression)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+    na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
+    nb = (na // 3).astype(dtype)
+    a = blosc2.asarray(na, chunks=(16, 30), blocks=(4, 30))
+    b = blosc2.asarray(nb, chunks=(16, 30), blocks=(4, 30))
+    ops, nops = {"a": a, "b": b}, {"a": na, "b": nb}
+    expr = blosc2.where(a > 500, ops.get(x, x), ops.get(y, y))
+    expected = np.where(na > 500, nops.get(x, x), nops.get(y, y))
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
+    assert len(compiled) == 1
+    assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
