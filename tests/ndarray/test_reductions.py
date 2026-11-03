@@ -1122,3 +1122,28 @@ def test_numeric_reduction_retains_miniexpr(monkeypatch, automatic_native_runtim
         np.testing.assert_array_equal(a.sum(), data.sum())
         assert len(compiled) == 1
         assert compiled[0].startswith("sum(")
+
+
+@pytest.mark.parametrize("pos", [None, (0, 0), (36, 40), (18, 3)])
+@pytest.mark.parametrize("fill", [False, True])
+@pytest.mark.parametrize("reduce_op", ["min", "max", "any", "all"])
+def test_reduce_bool_padded_blocks(fill, reduce_op, pos, request):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    # Chunks and blocks that do not tile the shape leave unwritten padding blocks, whose
+    # starting value must be the reduction's identity: True for min, False for max. The
+    # result stays bool on every path.
+    legacy_miniexpr = not typed_evaluator_enabled() and not blosc2.IS_WASM
+    if legacy_miniexpr and reduce_op == "min" and fill and pos in ((36, 40), (18, 3)):
+        # The legacy evaluator reduces with the bundled miniexpr, which computes min of a padded
+        # bool block as the low byte of its count of true values (Blosc/miniexpr#29 fixes it)
+        request.applymarker(pytest.mark.xfail(strict=True, reason="miniexpr bool min over a padded block"))
+    na = np.full((37, 41), fill)
+    if pos is not None:
+        na[pos] = not fill
+    a = blosc2.asarray(na, chunks=(20, 25), blocks=(8, 10))
+    for arr, narr in ((a, na), (~a, ~na)):
+        for axis in (None, 0):
+            res = getattr(arr, reduce_op)(axis=axis)
+            np.testing.assert_array_equal(res, getattr(narr, reduce_op)(axis=axis))
+            assert np.asarray(res).dtype == np.bool_
