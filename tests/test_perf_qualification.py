@@ -14,6 +14,10 @@ import blosc2
 pytestmark = pytest.mark.skipif(
     blosc2.IS_WASM, reason="Qualification workers require host subprocess execution"
 )
+HOST_WORKER_TESTS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Qualification profiles target Linux/macOS runners with native JIT support",
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "bench" / "qualification"
@@ -126,6 +130,7 @@ def test_cache_isolation_does_not_configure_auto_route(qualification, monkeypatc
     assert os.environ["ME_DSL_JIT_CACHE_DIR"] == "previous"
 
 
+@HOST_WORKER_TESTS
 def test_auto_and_configured_routes_are_distinct(qualification, tmp_path):
     request = {
         "case_id": "evaluate-polynomial-auto-new",
@@ -251,6 +256,7 @@ def test_manifest_revisions(qualification, tmp_path):
         qualification.load_manifest(path)
 
 
+@HOST_WORKER_TESTS
 def test_real_worker_smoke(qualification, tmp_path):
     # Interpreter-independent numerical semantics remain native tests' concern.
     # Here a missing required compiler is a recorded failure, never a skip/pass.
@@ -365,6 +371,7 @@ def test_pair_records_failed_process_and_artifacts(qualification, monkeypatch, t
         "evaluate-strided-fallback",
     ],
 )
+@HOST_WORKER_TESTS
 def test_curated_route_smoke(qualification, tmp_path, case_id):
     row = qualification.worker(
         {

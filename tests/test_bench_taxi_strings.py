@@ -85,6 +85,20 @@ def test_route_control_script_is_loadable():
     assert route_control["legacy_label"] is not None
 
 
+def test_numpy_reference_fallback_without_vectorized_slice(benchmark, monkeypatch):
+    co = np.array(["Yellow Cab", "Taxi", ""], dtype="U44")
+    pt = np.array(["Cash", "Credit", ""], dtype="U11")
+    monkeypatch.setitem(benchmark, "_STRING_OPS", None)
+    np.testing.assert_array_equal(
+        benchmark["numpy_transform"](co, pt),
+        ["co=Yellow Cab|pay=cash", "co=Taxi|pay=credit", "co=|pay="],
+    )
+    np.testing.assert_array_equal(
+        benchmark["numpy_kernel"](co, pt),
+        ["cab|yellow|cash", "other|taxi|credit", "other||"],
+    )
+
+
 def test_bench_retains_raw_samples(benchmark):
     calls = []
 

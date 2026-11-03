@@ -51,11 +51,11 @@ PARQUET = Path(__file__).with_name("chicago-taxi-flat.parquet")
 COLS = ["company", "payment.type"]
 
 try:
-    _STRING_OPS = np.strings
+    # NumPy 1.26 lacks the namespace entirely; some Pyodide builds expose it
+    # without slice(). Keep the benchmark importable/testable there; only its
+    # opt-in NumPy engine uses this slower row-wise fallback for string results.
+    _STRING_OPS = np.strings if hasattr(np.strings, "slice") else None
 except AttributeError:
-    # NumPy 1.26 lacks the vectorized strings namespace. Keep the benchmark
-    # importable and testable there; only its opt-in NumPy engine uses this
-    # slower row-wise fallback for concatenation/slicing.
     _STRING_OPS = None
 
 # One chunk/block geometry for every blosc2 operand.  Expressions combining two
@@ -232,7 +232,10 @@ def numpy_transform(co, pt):
     if _STRING_OPS is None:
         width = co.dtype.itemsize // 4 + pt.dtype.itemsize // 4 + 8
         return np.array(
-            [f"co={company}|pay={payment.lower()}" for company, payment in zip(co.tolist(), pt.tolist())],
+            [
+                f"co={company}|pay={payment.lower()}"
+                for company, payment in zip(co.tolist(), pt.tolist(), strict=True)
+            ],
             dtype=f"U{width}",
         )
     return _STRING_OPS.add(_STRING_OPS.add("co=" + co, "|pay="), _STRING_OPS.lower(pt))
@@ -242,7 +245,7 @@ def numpy_kernel(co, pt):
     if _STRING_OPS is None:
         width = co.dtype.itemsize // 4 + pt.dtype.itemsize // 4 + 7
         values = []
-        for company, payment in zip(co.tolist(), pt.tolist()):
+        for company, payment in zip(co.tolist(), pt.tolist(), strict=True):
             company, payment = company.lower(), payment.lower()
             if " cab" in company:
                 values.append("cab|" + company.removesuffix(" cab") + "|" + payment)
