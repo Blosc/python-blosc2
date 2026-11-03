@@ -822,6 +822,12 @@ ctypedef struct me_input_cache_s:
     PyThread_type_lock state_lock
     PyThread_type_lock ready_lock
 
+ctypedef struct me_worker_s:
+    void** input_buffers
+    void** owned_buffers
+    int32_t* owned_capacities
+    blosc2_context** decoders
+
 ctypedef struct me_udata:
     b2nd_array_t** inputs
     uint8_t** np_data          # per-input raw base pointer; NULL entry = b2nd input
@@ -841,6 +847,7 @@ ctypedef struct me_udata:
     # means "evaluate every block" (the default, fully inert).
     const uint8_t* candidate_blocks
     int64_t candidate_blocks_len
+    me_worker_s workers[256]
 
 ctypedef struct mm_udata:
     b2nd_array_t** inputs
@@ -4543,7 +4550,7 @@ cdef class SChunk:
         cdef mm_udata* mm_data
         cdef me_udata* me_data
         cdef me_input_cache_s* input_cache
-        cdef int i
+        cdef int i, tid
 
         if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
@@ -4553,6 +4560,21 @@ cdef class SChunk:
             if self.schunk.storage.cparams.preparams != NULL:
                 me_data = <me_udata*>self.schunk.storage.cparams.preparams.user_data
                 if me_data != NULL:
+                    for tid in range(256):
+                        if me_data.workers[tid].owned_buffers != NULL:
+                            for i in range(me_data.ninputs):
+                                if me_data.workers[tid].owned_buffers[i] != NULL:
+                                    free(me_data.workers[tid].owned_buffers[i])
+                            free(me_data.workers[tid].owned_buffers)
+                        if me_data.workers[tid].decoders != NULL:
+                            for i in range(me_data.ninputs):
+                                if me_data.workers[tid].decoders[i] != NULL:
+                                    blosc2_free_ctx(me_data.workers[tid].decoders[i])
+                            free(me_data.workers[tid].decoders)
+                        if me_data.workers[tid].owned_capacities != NULL:
+                            free(me_data.workers[tid].owned_capacities)
+                        if me_data.workers[tid].input_buffers != NULL:
+                            free(me_data.workers[tid].input_buffers)
                     if me_data.input_chunk_caches != NULL:
                         for i in range(me_data.ninputs):
                             input_cache = &me_data.input_chunk_caches[i]
@@ -4673,7 +4695,8 @@ cdef int general_filler(blosc2_prefilter_params *params):
 # Auxiliary function for miniexpr as a prefilter
 # Only meant for (input and output) arrays that are blosc2.NDArray objects.
 cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
-                      c_bool is_postfilter, uint8_t *params_output, int32_t typesize) nogil:
+                      c_bool is_postfilter, uint8_t *params_output, int32_t typesize,
+                      int32_t tid) nogil:
     # Declare all C variables at the beginning
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
     cdef int64_t block_ndim[B2ND_MAX_DIM]
@@ -4692,7 +4715,8 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     cdef b2nd_array_t* ndarr
     cdef int rc
-    cdef void** input_buffers = <void**> malloc(udata.ninputs * sizeof(uint8_t*))
+    cdef me_worker_s* worker = &udata.workers[tid if 0 <= tid < 256 else 0]
+    cdef void** input_buffers = NULL
     cdef uint8_t* src
     cdef uint8_t* chunk
     cdef c_bool needs_free
@@ -4712,9 +4736,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
-    if input_buffers == NULL:
-        raise MemoryError("miniexpr: cannot allocate input buffer table")
-    memset(input_buffers, 0, udata.ninputs * sizeof(uint8_t*))
 
     # Query valid (unpadded) items for this block
     rc = me_nd_valid_nitems(miniexpr_handle, nchunk, nblock, &valid_nitems)
@@ -4725,7 +4746,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # For reductions, keep aux_reduc neutral values untouched.
         if udata.aux_reduc_ptr == NULL:
             memset(params_output, 0, udata.array.blocknitems * typesize)
-        free(input_buffers)
         return 0
 
     # Candidate-block pruning (1-D arrays only): when a bitmap is supplied and
@@ -4736,8 +4756,18 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         global_block = nchunk * udata.blocks_in_chunk[0] + nblock
         if global_block < udata.candidate_blocks_len and udata.candidate_blocks[global_block] == 0:
             memset(params_output, 0, udata.array.blocknitems * typesize)
-            free(input_buffers)
             return 0
+
+    if udata.ninputs > 0:
+        if worker.input_buffers == NULL:
+            worker.input_buffers = <void**> calloc(udata.ninputs, sizeof(void*))
+            worker.owned_buffers = <void**> calloc(udata.ninputs, sizeof(void*))
+            worker.owned_capacities = <int32_t*> calloc(udata.ninputs, sizeof(int32_t))
+            worker.decoders = <blosc2_context**> calloc(udata.ninputs, sizeof(blosc2_context*))
+            if (worker.input_buffers == NULL or worker.owned_buffers == NULL or
+                worker.owned_capacities == NULL or worker.decoders == NULL):
+                raise MemoryError("miniexpr: cannot allocate input buffer table")
+        input_buffers = worker.input_buffers
 
     for i in range(udata.ninputs):
         if udata.np_data != NULL and udata.np_data[i] != NULL:
@@ -4751,15 +4781,25 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                 expected_blocknitems = blocknitems
             elif blocknitems != expected_blocknitems:
                 raise ValueError("miniexpr: inconsistent block element counts across inputs")
-            input_buffers[i] = malloc(block_nbytes)
-            if input_buffers[i] == NULL:
-                raise MemoryError("miniexpr: cannot allocate input block buffer")
+            np_ndim = udata.array.ndim
+            if np_ndim == 1 and valid_nitems == blocknitems:
+                start_ndim[0] = nchunk * udata.array.chunkshape[0] + nblock * udata.array.blockshape[0]
+                input_buffers[i] = udata.np_data[i] + start_ndim[0] * np_ts
+                continue
+            if worker.owned_capacities[i] < block_nbytes:
+                if worker.owned_buffers[i] != NULL:
+                    free(worker.owned_buffers[i])
+                worker.owned_buffers[i] = malloc(block_nbytes)
+                if worker.owned_buffers[i] == NULL:
+                    worker.owned_capacities[i] = 0
+                    raise MemoryError("miniexpr: cannot allocate input block buffer")
+                worker.owned_capacities[i] = block_nbytes
+            input_buffers[i] = worker.owned_buffers[i]
             if valid_nitems < blocknitems:
                 # Partial blocks need zero-filled padding. Full blocks are
                 # overwritten byte-for-byte by the raw NumPy gather below.
                 memset(input_buffers[i], 0, block_nbytes)
 
-            np_ndim = udata.array.ndim
             blosc2_unidim_to_multidim(np_ndim, udata.chunks_in_array, nchunk, chunk_ndim)
             blosc2_unidim_to_multidim(np_ndim, udata.blocks_in_chunk, nblock, block_ndim)
 
@@ -4866,21 +4906,26 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             raise ValueError("miniexpr: error getting cbuffer sizes")
         if block_nbytes <= 0:
             raise ValueError("miniexpr: invalid block size")
-        input_buffers[i] = malloc(block_nbytes)
-        if input_buffers[i] == NULL:
-            raise MemoryError("miniexpr: cannot allocate input block buffer")
+        if worker.owned_capacities[i] < block_nbytes:
+            if worker.owned_buffers[i] != NULL:
+                free(worker.owned_buffers[i])
+            worker.owned_buffers[i] = malloc(block_nbytes)
+            if worker.owned_buffers[i] == NULL:
+                worker.owned_capacities[i] = 0
+                raise MemoryError("miniexpr: cannot allocate input block buffer")
+            worker.owned_capacities[i] = block_nbytes
+        input_buffers[i] = worker.owned_buffers[i]
         input_typesize = ndarr.sc.typesize
         blocknitems = block_nbytes // input_typesize
         if expected_blocknitems == -1:
             expected_blocknitems = blocknitems
         elif blocknitems != expected_blocknitems:
             raise ValueError("miniexpr: inconsistent block element counts across inputs")
-        # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
-        # In the future, perhaps one can create a specific (serial) context just for
-        # blosc2_getitem_ctx, but this is probably never going to be necessary.
-        dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-        # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be used for profiling
-        # dctx = ndarr.sc.dctx
+        if worker.decoders[i] == NULL:
+            worker.decoders[i] = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+            if worker.decoders[i] == NULL:
+                raise MemoryError("miniexpr: cannot allocate decompression context")
+        dctx = worker.decoders[i]
         if valid_nitems > blocknitems:
             raise ValueError("miniexpr: valid items exceed padded block size")
         # Ask in bytes: blosc2_getitem_ctx() counts in the typesize the *chunk*
@@ -4890,7 +4935,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # block offset is already one.
         rc = blosc2_getitem_bytes_ctx(dctx, src, chunk_cbytes, nblock * block_nbytes,
                                       block_nbytes, input_buffers[i], block_nbytes)
-        blosc2_free_ctx(dctx)
         if rc != block_nbytes:
             raise ValueError("miniexpr: error decompressing the chunk")
     # For reduction operations, we need to track which block we're processing
@@ -4911,6 +4955,8 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int output_blocknitems = udata.array.blocknitems
 
     if udata.aux_reduc_ptr == NULL:
+        if valid_nitems < output_blocknitems:
+            memset(params_output, 0, <size_t>output_blocknitems * <size_t>typesize)
         aux_reduc_ptr = <void *> params_output
     else:
         # Reduction operation: evaluate only valid items into a single output element.
@@ -4920,11 +4966,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                     aux_reduc_ptr, output_blocknitems, nchunk, nblock, udata.eval_params)
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
-
-    # Free resources
-    for i in range(udata.ninputs):
-        free(input_buffers[i])
-    free(input_buffers)
 
     return 0
 
@@ -5227,7 +5268,7 @@ cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
 
 cdef int miniexpr_prefilter(blosc2_prefilter_params *params):
     return aux_miniexpr(<me_udata *> params.user_data, params.nchunk, params.nblock, False,
-                        params.output, params.output_typesize)
+                        params.output, params.output_typesize, params.tid)
 
 cdef int matmul_prefilter(blosc2_prefilter_params *params):
     cdef int typecode
@@ -6449,7 +6490,7 @@ cdef class NDArray:
 
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         preparams.user_data = udata
-        preparams.output_is_disposable = False if aux_reduc is None else True
+        preparams.output_is_disposable = True if (aux_reduc is not None or cparams.clevel == 0) else False
         cparams.preparams = preparams
         _check_cparams(cparams)
 

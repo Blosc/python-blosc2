@@ -8,7 +8,6 @@
 import ast
 import builtins
 import contextlib
-import inspect
 import io
 import math
 import sys
@@ -1124,9 +1123,12 @@ def is_inside_evaluate_chunk() -> bool:
     """
     Whether execution is inside the chunk evaluator.
     """
-    # Get the current call stack
-    stack = inspect.stack()
-    return builtins.any(frame_info.function == "evaluate_chunk" for frame_info in stack)
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_name == "evaluate_chunk":
+            return True
+        frame = frame.f_back
+    return False
 
 
 def incomplete_lazyfunc(func) -> None:
