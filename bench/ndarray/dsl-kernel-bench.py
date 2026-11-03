@@ -388,7 +388,7 @@ def main():
     parser.add_argument(
         "--transcend", action="store_true", help="Run only the transcendental lazyexpr cases"
     )
-    parser.add_argument("--size", type=int, default=1_000, help="Side length of the square inputs")
+    parser.add_argument("--size", type=int, default=4_000, help="Side length of the square inputs")
     parser.add_argument("--samples", type=int, default=3, help="timed repetitions; report the median")
     parser.add_argument(
         "--warmups",
