@@ -45,6 +45,62 @@ def test_arctan2_preserves_fractional_results(dtype, fused):
     np.testing.assert_allclose(blosc2.lazyexpr("arctan2(a, b)")[:], expected, rtol=1e-6)
 
 
+_RESULT_DTYPE_EXPRESSIONS = [
+    "hypot({n}, b)",
+    "copysign({n}, b)",
+    "nextafter({n}, b)",
+    "arctan2({n}, b)",
+    "hypot(a, b * 1)",
+    "hypot({n}, 2)",
+    "arctan2({n}, 2.5)",
+    "(a < b) / b",
+    "a / 2",
+    "a / b",
+    "{n} / b",
+    "{n} // b",
+    "{n} % b",
+    "a ** b",
+    "{n} ** 2",
+    "sin({n})",
+    "sqrt(a)",
+]
+
+
+@pytest.mark.parametrize("dtype", [np.bool_, np.int8, np.uint16, np.int32, np.int64])
+@pytest.mark.parametrize("expression", _RESULT_DTYPE_EXPRESSIONS)
+@pytest.mark.parametrize("build", ["functions", "string"])
+def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build):
+    # Float functions and true division of integer (or bool) subexpressions were given an integer
+    # (or bool) result dtype, and bool //, % and ** a bool one, so their results were truncated
+    if dtype is np.int32 and expression in ("a / b", "{n} / b"):
+        pytest.skip("int32 / int32 gives float32 on purpose")
+    if "nextafter" in expression and dtype not in (np.int32, np.int64):
+        pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
+    # A subexpression of the operand dtype (bool + bool is an or in NumPy)
+    expression = expression.format(n="(a & b)" if dtype is np.bool_ else "(a + b)")
+    na = (np.arange(1200).reshape(30, 40) % 5).astype(dtype)
+    nb = (np.arange(1200).reshape(30, 40) % 3 + 1).astype(dtype)
+    a = blosc2.asarray(na, chunks=(10, 40), blocks=(5, 40))
+    b = blosc2.asarray(nb, chunks=(10, 40), blocks=(5, 40))
+    namespace = {"hypot": np.hypot, "copysign": np.copysign, "nextafter": np.nextafter}
+    namespace.update(arctan2=np.arctan2, sin=np.sin, sqrt=np.sqrt)
+    with np.errstate(all="ignore"):
+        expected = eval(expression, namespace, {"a": na, "b": nb})
+        if build == "string":
+            expr = blosc2.lazyexpr(expression, {"a": a, "b": b})
+        else:
+            expr = eval(expression, {name: getattr(blosc2, name) for name in namespace}, {"a": a, "b": b})
+        assert expr.dtype == expected.dtype
+        for res in (expr[:], expr[...], expr.compute()[:], expr[:7]):
+            assert res.dtype == expected.dtype
+        # Values on the paths whose typing follows NumPy here; expr[:] and reductions of integer
+        # true division and two-argument float functions still compute in integer arithmetic in
+        # the bundled miniexpr
+        rtol = 1e-3 if expected.dtype == np.float16 else 1e-6
+        np.testing.assert_allclose(expr.compute()[:], expected, rtol=rtol)
+        np.testing.assert_allclose(expr[:7], expected[:7], rtol=rtol)
+
+
 _UNARY_FUNCTIONS = [
     "sin",
     "cos",
