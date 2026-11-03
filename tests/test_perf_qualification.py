@@ -9,6 +9,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import blosc2
+
+pytestmark = pytest.mark.skipif(
+    blosc2.IS_WASM, reason="Qualification workers require host subprocess execution"
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "bench" / "qualification"
 
@@ -581,3 +587,11 @@ def test_confirmation_runs_once_and_stops(qualification, monkeypatch, tmp_path):
     assert len(result["blocks"]) == 8
     assert result["comparisons"][0]["verdict"] == "warning"
     assert result["escalation"][args.cases[0]]["confirmation"]
+
+
+def test_resource_fingerprint_never_raises():
+    from qualification.resources import cpu_count, memory_limit, physical_memory
+
+    assert cpu_count() >= 1
+    assert physical_memory() is None or physical_memory() > 0
+    assert memory_limit() is None or memory_limit() > 0

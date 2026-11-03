@@ -33,7 +33,8 @@ def test_mandelbrot_captures_iteration_bound(benchmark, dtype):
             result = lazy.compute()
             assert result.dtype == np.dtype(dtype)
             assert result.shape == cr.shape
-            assert lazy._source_execution_report["route"] == "menudet-prefilter"
+            expected_route = "bounded-readers" if blosc2.IS_WASM else "menudet-prefilter"
+            assert lazy._source_execution_report["route"] == expected_route
             zr, zi = cr * 0.0, ci * 0.0
             for _ in range(count):
                 zr, zi = zr * zr - zi * zi + cr, zr * zi * 2.0 + ci

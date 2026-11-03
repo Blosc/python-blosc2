@@ -28,6 +28,7 @@ def test_ramp_matches_linspace_across_chunks(benchmark, shape):
         np.testing.assert_array_equal(result[:], np.linspace(start, stop, count).reshape(shape))
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native N-D generator prefilters are host-only")
 def test_native_materializer_preserves_coordinates_and_storage(benchmark):
     shape = (7, 9)
     storage = {"chunks": (3, 4), "blocks": (1, 2), "cparams": blosc2.CParams(clevel=1)}

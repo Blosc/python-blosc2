@@ -26,11 +26,39 @@ def cpu_count():
     return count
 
 
-def memory_limit():
+def physical_memory():
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("length", ctypes.c_ulong),
+                    ("load", ctypes.c_ulong),
+                    ("total_phys", ctypes.c_ulonglong),
+                    ("avail_phys", ctypes.c_ulonglong),
+                    ("total_pagefile", ctypes.c_ulonglong),
+                    ("avail_pagefile", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("avail_virtual", ctypes.c_ulonglong),
+                    ("avail_extended", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.total_phys)
+        except (AttributeError, OSError):
+            pass
+        return None
     try:
-        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (OSError, ValueError):
-        physical = None
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def memory_limit():
+    physical = physical_memory()
     limits = [
         physical,
         cgroup_limit("/sys/fs/cgroup/memory.max"),
