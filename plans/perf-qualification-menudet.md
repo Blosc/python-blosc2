@@ -2,8 +2,62 @@
 
 ## Status and purpose
 
-Implementation proposal for later consideration. This document does not enable a
-workflow, establish performance guarantees, or approve particular thresholds.
+Observation/calibration infrastructure is implemented in `bench/qualification/`
+(see its README for commands and limitations). Manual and opt-in scheduled
+workflows are defined. No remote workflow was dispatched or repository variable
+changed; the approved baseline remains unset. No calibrated performance guarantee
+or timing gate is approved.
+
+### Initial implementation progress (2026-11-02)
+
+- Added 12 deterministic contiguous-NumPy `evaluate()` cases: comparison and
+  polynomial, auto/CC/TCC requests, fresh and explicit NumPy destinations.
+- Added serial smoke and two-worker observation profiles, strict output and
+  resident-route contracts, one private-report adapter, and exact references.
+- Added isolated sequential process blocks, fresh per-process compiler caches,
+  first/warm timing, bounded batching, budgets, manifest/import checks, raw JSON
+  and Markdown summaries. Timing observations never fail a run.
+- Added deterministic harness tests and an actual Menudet smoke test. A local
+  same-install control completed 12 cases / 48 subprocesses in approximately
+  20 seconds with reduced sampling (one warmup, two samples, 5 ms batch target).
+  This verifies mechanics only, not independent-build A/A behavior or calibration.
+
+### Expanded implementation and local qualification (2026-11-02)
+
+- Expanded the catalog to 23 cases; curated profiles select 17 Ubuntu-compatible
+  and 19 macOS ARM cases. Added authored row-slab compressed/NumPy sinks,
+  LazyExpr prefilters, bounded interpreter/JIT loops, system/Accelerate predicates,
+  accelerated constant squares, and intentional compressed/strided fallbacks.
+- Implemented exact-revision archived-source wheel builds, fetched native SHA
+  verification, wheel/installed-file hashing, compiler/build manifests, isolated
+  conda CI installs, shared dependency locks, and exact-key wheel caching.
+- Added bounded geometric calibration, A/A and benchmark-only extra-copy controls,
+  a reproducible historical control, per-case mechanism eligibility, held-out
+  allocation accounting, descriptive intervals and one capped confirmation batch.
+- Added Ubuntu/macOS ARM manual CI, guarded nightly/weekly rotation, artifact/job
+  summaries and a read-only 48-hour freshness watchdog. Scheduled execution
+  requires an explicitly reviewed anchor and repository-variable enablement.
+- Built the current integrated revision twice independently, and the preceding
+  historical regression revision once. Verified that the historical explicit-CC
+  maps lose configured resident admission while the current revision passes;
+  rejected arms receive no timing ranking.
+- A local five-size sweep rejected serial sizes for parallel throughput and
+  admitted the expected mechanisms at larger sizes. The extra-copy control
+  produced a warning and exactly one confirmation batch. These observations are
+  not held-out population evidence and do not approve the provisional profiles.
+- Final local default-policy qualification completed all 19 macOS ARM cases in
+  57.72 seconds (76 sequential processes). Targeted tests passed (144), both
+  workflows passed Actionlint, and real artifacts passed JSON schema validation.
+  See `plans/menudet-perf-local-qualification.md` for revision identities,
+  resource costs, controls, raw evidence locations and limitations.
+
+Remaining acceptance work is hosted-runner execution and calibration across fresh
+and held-out allocations, baseline/profile approval, and later evidence-based
+timing gates. Effective compiler identity remains unavailable in the native ABI;
+artifact math/FP policy is recorded where exposed. Public `evaluate()` preparation
+is explicitly included in first execution, while authored/lazy preparation is
+separate. No production numerical or dispatch policy was changed. Local isolated
+wheel checks use conda Python with `-S`; production CI uses isolated conda installs.
 
 Build a small, regularly executed qualification suite that makes Menudet execution
 choices and performance regressions visible without turning nightly CI into a

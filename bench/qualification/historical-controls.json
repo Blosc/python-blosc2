@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "controls": [
+    {
+      "control_id": "explicit-cc-resident-admission",
+      "known_good_revision": "74d49fbfce16c2c67fd44f19b4abf5f39c6f46ee",
+      "regression_revision": "257b78e3170675fda1e0473e0f8eb3c6328f87ff",
+      "cases": ["evaluate-comparison-cc-new", "evaluate-polynomial-cc-new"],
+      "expected_signal": "Required configured resident execution contract fails; no timing ranking for rejected arm",
+      "note": "A reproducible historical control, not an approved production baseline or automatic promotion."
+    }
+  ]
+}

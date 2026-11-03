@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "approved_baseline": null,
+  "timing_gates_enabled": false,
+  "note": "Populate an explicitly reviewed exact Python SHA before enabling scheduled qualification. Manual runs require an explicit baseline SHA."
+}

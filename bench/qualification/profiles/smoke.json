@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "profile_id": "smoke",
+  "calibrated": false,
+  "size": 4096,
+  "threads": 1,
+  "max_memory_bytes": 268435456,
+  "cases": ["evaluate-comparison-cc-new", "evaluate-polynomial-cc-out"]
+}
