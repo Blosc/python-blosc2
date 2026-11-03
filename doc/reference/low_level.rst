@@ -43,6 +43,7 @@ Set / get compression params
     register_filter
     set_blocksize
     set_nthreads
+    set_prefetch
     set_releasegil
     set_compressor
     get_compressor
