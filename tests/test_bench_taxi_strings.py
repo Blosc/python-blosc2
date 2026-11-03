@@ -1,5 +1,6 @@
 """Public authoring and storage contracts for the Chicago Taxi string benchmark."""
 
+import importlib.util
 import runpy
 from pathlib import Path
 
@@ -68,9 +69,12 @@ def test_string_author_width_specializations_and_input_contract(benchmark):
 
 
 def test_dependency_versions_are_recorded_for_selected_engines(benchmark):
-    versions = benchmark["dependency_versions"](["blosc2", "pandas", "polars", "duckdb"])
+    modules = {"blosc2": "blosc2", "pandas": "pandas", "polars": "polars", "duckdb": "duckdb"}
+    engines = [engine for engine, module in modules.items() if importlib.util.find_spec(module) is not None]
+    assert engines
+    versions = benchmark["dependency_versions"](engines)
     assert versions["numpy"] == np.__version__
-    assert all(versions[name] for name in ("pyarrow", "blosc2", "pandas", "polars", "duckdb"))
+    assert all(versions[modules[engine]] for engine in engines)
 
 
 def test_route_control_script_is_loadable():

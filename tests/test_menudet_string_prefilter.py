@@ -81,7 +81,10 @@ def test_contextual_indices_and_rejection_are_authoritative(monkeypatch):
     source = blosc2.asarray(values, chunks=(8,), blocks=(4,))
     lazy = contextual_label.specialize(source).lazy({"text": source}, partitions=source.blocks)
     result = lazy.compute()
-    expected = np.where(np.arange(values.size) % 2 == 0, np.strings.upper(values), np.strings.lower(values))
+    expected = np.array(
+        [value.upper() if index % 2 == 0 else value.lower() for index, value in enumerate(values.tolist())],
+        dtype=values.dtype,
+    )
     np.testing.assert_array_equal(result[:], expected)
     assert lazy._source_execution_report["route"] == "menudet-prefilter"
     _, source = grouped_input()
@@ -155,9 +158,9 @@ def test_wide_unicode_and_byte_string_buffers():
         expected = (
             values
             if author is wide
-            else np.strings.slice(values, 0, 1)
+            else np.array([value[:1] for value in values.tolist()], dtype=values.dtype)
             if author is first
-            else np.strings.lower(values)
+            else np.array([value.lower() for value in values.tolist()], dtype=values.dtype)
         )
         np.testing.assert_array_equal(result[:], expected)
         if author is wide:

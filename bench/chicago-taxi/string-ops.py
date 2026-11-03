@@ -50,6 +50,14 @@ import blosc2
 PARQUET = Path(__file__).with_name("chicago-taxi-flat.parquet")
 COLS = ["company", "payment.type"]
 
+try:
+    _STRING_OPS = np.strings
+except AttributeError:
+    # NumPy 1.26 lacks the vectorized strings namespace. Keep the benchmark
+    # importable and testable there; only its opt-in NumPy engine uses this
+    # slower row-wise fallback for concatenation/slicing.
+    _STRING_OPS = None
+
 # One chunk/block geometry for every blosc2 operand.  Expressions combining two
 # NDArrays only take the (miniexpr) fast path when the operands share a chunk
 # grid, and asarray() picks the grid from the itemsize -- which differs between
@@ -102,19 +110,23 @@ ALL_ENGINES = [*ENGINES, "numpy"]
 
 def dependency_versions(engines):
     """Record versions that materially affect cross-engine rankings."""
-    versions = {"numpy": np.__version__, "pyarrow": importlib.import_module("pyarrow").__version__}
-    modules = {
+    versions = {"numpy": np.__version__}
+    module_names = {
         "blosc2": "blosc2",
         "blosc2 (raw)": "blosc2",
         "pandas": "pandas",
         "polars": "polars",
         "duckdb": "duckdb",
     }
-    for engine in engines:
-        module = modules.get(engine)
-        if module is None or module in versions:
+    modules = ["pyarrow"] + [module_names[engine] for engine in engines if engine in module_names]
+    for module in modules:
+        if module in versions:
             continue
-        versions[module] = importlib.import_module(module).__version__
+        try:
+            versions[module] = importlib.import_module(module).__version__
+        except ImportError:
+            # Optional competitor/reference stack absent or incompatible.
+            continue
     return versions
 
 
@@ -213,21 +225,39 @@ def numpy_setup(co, pt):
 
 
 def numpy_filter(co, pt):
-    return np.strings.startswith(co, "Taxi") & (pt != "Cash")
+    return np.char.startswith(co, "Taxi") & (pt != "Cash")
 
 
 def numpy_transform(co, pt):
-    return np.strings.add(np.strings.add("co=" + co, "|pay="), np.strings.lower(pt))
+    if _STRING_OPS is None:
+        width = co.dtype.itemsize // 4 + pt.dtype.itemsize // 4 + 8
+        return np.array(
+            [f"co={company}|pay={payment.lower()}" for company, payment in zip(co.tolist(), pt.tolist())],
+            dtype=f"U{width}",
+        )
+    return _STRING_OPS.add(_STRING_OPS.add("co=" + co, "|pay="), _STRING_OPS.lower(pt))
 
 
 def numpy_kernel(co, pt):
-    c = np.strings.lower(co)
-    tail = np.strings.add("|", np.strings.lower(pt))
+    if _STRING_OPS is None:
+        width = co.dtype.itemsize // 4 + pt.dtype.itemsize // 4 + 7
+        values = []
+        for company, payment in zip(co.tolist(), pt.tolist()):
+            company, payment = company.lower(), payment.lower()
+            if " cab" in company:
+                values.append("cab|" + company.removesuffix(" cab") + "|" + payment)
+            else:
+                values.append("other|" + company + "|" + payment)
+        return np.array(values, dtype=f"U{width}")
+    c = _STRING_OPS.lower(co)
+    tail = _STRING_OPS.add("|", _STRING_OPS.lower(pt))
     # np.strings has no removesuffix(); endswith + slice is the same thing.
-    trimmed = np.where(np.strings.endswith(c, " cab"), np.strings.slice(c, 0, np.strings.str_len(c) - 4), c)
-    cab = np.strings.add("cab|" + trimmed, tail)
-    other = np.strings.add("other|" + c, tail)
-    return np.where(np.strings.find(c, " cab") >= 0, cab, other)
+    trimmed = np.where(
+        _STRING_OPS.endswith(c, " cab"), _STRING_OPS.slice(c, 0, _STRING_OPS.str_len(c) - 4), c
+    )
+    cab = _STRING_OPS.add("cab|" + trimmed, tail)
+    other = _STRING_OPS.add("other|" + c, tail)
+    return np.where(_STRING_OPS.find(c, " cab") >= 0, cab, other)
 
 
 # --------------------------------------------------------------------------
@@ -392,7 +422,7 @@ def digest(x, n):
             h.update(np.ascontiguousarray(w).tobytes())
         else:
             s = w.astype(str)
-            h.update(np.strings.str_len(s).astype(np.int32).tobytes())
+            h.update(np.char.str_len(s).astype(np.int32).tobytes())
             h.update("\x00".join(s[::97].tolist()).encode())
     return h.hexdigest()
 
