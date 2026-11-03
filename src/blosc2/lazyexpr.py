@@ -21,6 +21,7 @@ import pathlib
 import re
 import sys
 import threading
+import warnings
 from abc import ABC, abstractmethod, abstractproperty
 from collections import OrderedDict
 from collections.abc import MutableMapping
@@ -1766,6 +1767,153 @@ def _miniexpr_integer_atan2(expression, operands):
     )
 
 
+def _literal_value(node):
+    """The number a literal AST node stands for (signs included), or None."""
+    sign = 1
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub | ast.UAdd):
+        sign = -1 if isinstance(node.op, ast.USub) else 1
+        node = node.operand
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool | int | float):
+        return sign * node.value
+    return None
+
+
+def _scalar_operand_value(value):
+    """The number a scalar operand stands for, or None for arrays (and anything else)."""
+    if hasattr(value, "shape"):
+        if value.shape != ():
+            return None
+        value = value[()]
+    if isinstance(value, np.generic):
+        value = value.item()
+    return value if isinstance(value, bool | int | float) else None
+
+
+def _exact_in_dtype(value, dtype) -> bool:
+    """Whether `dtype`, and the C double miniexpr keeps literals in, hold the number exactly."""
+    if dtype.kind not in "biuf" or float(value) != value:
+        return False
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return dtype.type(value).item() == value
+    except (OverflowError, ValueError):
+        return False
+
+
+@lru_cache(maxsize=1024)
+def _parse_expression(expression: str) -> ast.Expression | None:
+    """The AST of an expression (None if it is not Python syntax); the callers do not modify it."""
+    try:
+        return ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return None
+
+
+@lru_cache(maxsize=1024)
+def _miniexpr_inexact_int_literal(expression: str) -> bool:
+    """Whether the expression holds an integer literal beyond 2**53.
+
+    miniexpr parses numeric literals into C doubles, which round such integers.
+    """
+    tree = _parse_expression(expression)
+    return tree is not None and any(
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+        and float(node.value) != node.value
+        for node in ast.walk(tree)
+    )
+
+
+def _miniexpr_where_matches_numpy(cond: str, operands: dict, dtype) -> bool:  # noqa: C901
+    """Whether miniexpr computes where(cond, x, y) as NumPy does, once the where() is fused in.
+
+    miniexpr types the literals of the fused expression by its output dtype, and computes in it,
+    while NumPy evaluates the condition in the dtypes of its operands, with Python scalars as weak
+    scalars (NEP 50).  With a float32 `a`, NumPy compares ``a > 0.1`` against float32(0.1), but
+    miniexpr compares ``where(a > 0.1, 1, 0)`` against the double 0.1, and adds ``a + b`` in
+    ``where(a + b == c, 1, 0)`` in a wider type.  The two agree when computing in the output dtype
+    changes nothing: when every operand of the condition has the output dtype, or when the
+    condition only compares operands that cast safely to it, against literals that their dtypes
+    hold exactly.  Inside where(), miniexpr also passes 64-bit integers through doubles, so
+    where() on them stays with NumPy.
+    """
+    if dtype is None:
+        return False
+    out_dtype = np.dtype(dtype)
+    dtypes = [out_dtype] + [
+        np.dtype(op.dtype)
+        for op in operands.values()
+        if hasattr(op, "dtype") and _scalar_operand_value(op) is None
+    ]
+    if any(dt.kind in "iu" and dt.itemsize > 4 for dt in dtypes):
+        return False
+    tree = _parse_expression(cond)
+    if tree is None:
+        return False
+
+    def term(node):
+        """("literal", number) or ("array", dtype) for a leaf of the condition, else None."""
+        value = _literal_value(node)
+        if value is not None:
+            return "literal", value
+        if isinstance(node, ast.Name) and node.id in operands:
+            op = operands[node.id]
+            value = _scalar_operand_value(op)
+            if value is not None:
+                return "literal", value
+            if hasattr(op, "dtype"):
+                return "array", np.dtype(op.dtype)
+        return None
+
+    comparisons = []
+
+    def only_compares(node):
+        """Whether `node` combines comparisons of leaves with & | ~ only (collected into comparisons)."""
+        if isinstance(node, ast.Compare):
+            terms = [term(n) for n in (node.left, *node.comparators)]
+            if len(node.ops) > 1 or None in terms:
+                return False
+            comparisons.append(terms)
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd | ast.BitOr | ast.BitXor):
+            return only_compares(node.left) and only_compares(node.right)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert | ast.Not):
+            return only_compares(node.operand)
+        if isinstance(node, ast.BoolOp):
+            return all(only_compares(value) for value in node.values)
+        leaf = term(node)
+        if leaf is not None and leaf[0] == "array" and leaf[1].kind == "b":
+            comparisons.append([leaf])
+            return True
+        return False
+
+    if only_compares(tree.body):
+        for terms in comparisons:
+            dtypes = [dt for kind, dt in terms if kind == "array"]
+            if not all(np.can_cast(dt, out_dtype, "safe") for dt in dtypes):
+                return False
+            literals = [value for kind, value in terms if kind == "literal"]
+            if not all(_exact_in_dtype(value, dt) for value in literals for dt in (*dtypes, out_dtype)):
+                return False
+        return True
+
+    # With arithmetic, the condition is computed as in NumPy only in its own dtype
+    def same_dtype(node):
+        leaf = term(node)
+        if leaf is not None:
+            kind, value = leaf
+            return value == out_dtype if kind == "array" else _exact_in_dtype(value, out_dtype)
+        if isinstance(node, ast.Name):  # a function name
+            return True
+        if isinstance(node, ast.Constant):  # strings and other non-numbers
+            return False
+        return all(same_dtype(child) for child in ast.iter_child_nodes(node))
+
+    return same_dtype(tree.body)
+
+
 @blosc2.jit_config.jit_execution
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
@@ -1896,6 +2044,8 @@ def fast_eval(  # noqa: C901
         and where is not None
         and len(where) == 2
     )
+    if where_fused and not _miniexpr_where_matches_numpy(expr_string, operands, dtype):
+        use_miniexpr = where_fused = False
     if where_fused:
         expr_string_miniexpr = f"where({expr_string}, _where_x, _where_y)"
     if use_miniexpr and isinstance(expr_string, str):
@@ -1904,6 +2054,9 @@ def fast_eval(  # noqa: C901
             expr_string_miniexpr, operands_miniexpr = specialize_miniexpr_inputs(
                 expr_string_miniexpr, operands
             )
+        if not is_dsl and _miniexpr_inexact_int_literal(expr_string_miniexpr):
+            # Typed literals and inlined scalars alike
+            use_miniexpr = False
 
     # Check whether we can use miniexpr
     if use_miniexpr:
