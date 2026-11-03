@@ -977,3 +977,23 @@ def test_reductions_where_ndarray_and_lazyexpr():
     np.testing.assert_allclose(a.std(axis=0, where=mask), np.std(na, axis=0, where=nmask))
     np.testing.assert_allclose(a.min(axis=0, where=mask), np.min(na, axis=0, where=nmask, initial=np.inf))
     np.testing.assert_allclose(a.max(axis=0, where=mask), np.max(na, axis=0, where=nmask, initial=-np.inf))
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.complex64, np.int32, np.bool_])
+@pytest.mark.parametrize("axis", [None, 0])
+@pytest.mark.parametrize("keepdims", [False, True])
+@pytest.mark.parametrize("use_where", [False, True])
+def test_mean_dtype_matches_numpy(dtype, axis, keepdims, use_where):
+    # A float32 mean stays float32: NumPy 1.x makes a float32 scalar over a Python int float64
+    # (and an array over a count above 65535), and the int64 counts of where= do so in any version
+    rng = np.random.default_rng(0)
+    na = (10 * rng.normal(size=(70_000, 3))).astype(dtype)
+    nmask = rng.random(na.shape) < 0.7
+    a, mask = blosc2.asarray(na), blosc2.asarray(nmask)
+    kwargs = {"axis": axis, "keepdims": keepdims, **({"where": nmask} if use_where else {})}
+    res = a.mean(**{**kwargs, "where": mask} if use_where else kwargs)
+    assert np.asarray(res).dtype == np.mean(na, **kwargs).dtype
+    # Values against a float64 reference: these means are close to 0
+    expected = np.mean(na.astype(np.result_type(na.dtype, np.float64)), **kwargs)
+    assert np.shape(res) == np.shape(expected)
+    np.testing.assert_allclose(res, expected, rtol=1e-5, atol=1e-5)

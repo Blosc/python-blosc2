@@ -4133,6 +4133,12 @@ class LazyExpr(LazyArray):
         if np.isscalar(num_elements) and num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
+        # NumPy's dtype for a floating `dtype` or input: NumPy 1.x makes a float32 scalar over a
+        # Python int float64 (and an array over an int above 65535), and the int64 counts of
+        # `where` make it float64 with any NumPy
+        mean_dtype = np.dtype(self.dtype if dtype is None else dtype)
+        if mean_dtype.kind in "fc" and isinstance(out, (np.ndarray, np.generic)):
+            out = out.astype(mean_dtype, copy=False)
         out2 = kwargs.pop("out", None)
         if out2 is not None:
             out2[:] = out
