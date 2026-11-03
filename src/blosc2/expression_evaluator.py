@@ -55,7 +55,8 @@ def binary_result_dtype(op, value1, value2):
         dtype = convert_dtype(value.dtype) if hasattr(value, "dtype") else np.asarray(value).dtype
         if dtype.kind not in "biufc":
             return None
-        probes.append(value if np.isscalar(value) and not both_scalars else np.empty(0, dtype))
+        scalar_operand = np.isscalar(value) or (isinstance(value, np.ndarray) and value.ndim == 0)
+        probes.append(value if scalar_operand and not both_scalars else np.empty(0, dtype))
     try:
         with np.errstate(all="ignore"):
             return function(*probes).dtype

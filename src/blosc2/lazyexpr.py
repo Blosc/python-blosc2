@@ -4060,7 +4060,11 @@ def result_type(
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
         (np.array(value).dtype if isinstance(value, str | bytes) else value)
-        if (np.isscalar(value) or not hasattr(value, "dtype"))
+        if (
+            np.isscalar(value)
+            or not hasattr(value, "dtype")
+            or (isinstance(value, np.ndarray) and value.ndim == 0)
+        )
         else np.array([0], dtype=convert_dtype(value.dtype))
         for value in arrays_and_dtypes
     ]

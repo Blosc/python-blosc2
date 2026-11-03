@@ -49,11 +49,16 @@ def test_typed_map_and_reduction_semantics(monkeypatch, force_wasm, case):
     np.testing.assert_allclose(expr.sum(axis=0), expected.sum(axis=0))
 
 
-def test_typed_strong_and_weak_scalar():
+@pytest.mark.parametrize("operation", ["compare", "add"])
+def test_typed_strong_and_weak_scalar(operation):
     na = np.full(24, 0.1, dtype=np.float32)
     a = blosc2.asarray(na, chunks=(12,), blocks=(4,))
     for scalar in (0.1, np.float64(0.1), np.array(0.1, dtype=np.float64)):
-        expr, expected = (a + 0) > scalar, (na + 0) > scalar
+        if operation == "compare":
+            expr, expected = (a + 0) > scalar, (na + 0) > scalar
+        else:
+            expr, expected = (a + 0) + scalar, (na + 0) + scalar
+        assert expr.dtype == expected.dtype
         np.testing.assert_array_equal(expr[:], expected)
         np.testing.assert_array_equal(expr.compute()[:], expected)
         np.testing.assert_array_equal(expr.sum(), expected.sum())
@@ -140,6 +145,7 @@ def test_typed_unsupported_signature_uses_numpy(monkeypatch):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Typed compression prefilters are not admitted on WASM yet")
+@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy 1 uses the typed NumPy fallback")
 def test_typed_prefilter_failure_is_not_replayed(monkeypatch, native_graph_runtime):
     values = np.arange(24, dtype=np.float64)
     a = blosc2.asarray(values, chunks=(12,), blocks=(4,))
