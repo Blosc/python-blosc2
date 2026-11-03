@@ -5,7 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import itertools
 import math
+import operator
 import pathlib
 import warnings
 
@@ -2436,3 +2438,218 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     expected = np.cumsum(data, axis=0)
     np.testing.assert_array_equal(result[:], expected)
     np.testing.assert_array_equal(out[:], expected)
+
+
+def _record_miniexpr(monkeypatch):
+    """Force miniexpr on, and return the list the expressions it compiles get appended to."""
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    compiled = []
+
+    def wrapped_set_pref_expr(self, expression, inputs, *args, **kwargs):
+        res = original_set_pref_expr(self, expression, inputs, *args, **kwargs)
+        compiled.append(expression)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+    return compiled
+
+
+@pytest.mark.parametrize(
+    ("dtype", "x", "y"),
+    [
+        (np.float32, "a", 0),
+        (np.float32, 1.5, "a"),
+        (np.int32, "a", 0.5),
+        (np.int16, "a", -1),
+        (np.float64, "a", "b"),
+    ],
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
+    compiled = _record_miniexpr(monkeypatch)
+    na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
+    nb = (na // 3).astype(dtype)
+    a = blosc2.asarray(na, chunks=(16, 30), blocks=(4, 30))
+    b = blosc2.asarray(nb, chunks=(16, 30), blocks=(4, 30))
+    ops, nops = {"a": a, "b": b}, {"a": na, "b": nb}
+    expr = blosc2.where(a > 500, ops.get(x, x), ops.get(y, y))
+    expected = np.where(na > 500, nops.get(x, x), nops.get(y, y))
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
+    assert len(compiled) == 1
+    assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
+
+
+@pytest.mark.parametrize(
+    "case", ["mask", "mask_and_threshold", "labels", "labels_arrays", "wider_output", "int16"]
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_mixed_dtypes_use_miniexpr(monkeypatch, case, getitem):
+    # Conditions whose operands cast safely to the output dtype stay on miniexpr
+    compiled = _record_miniexpr(monkeypatch)
+    rng = np.random.default_rng(1)
+    na = rng.normal(100, 50, (40, 30)).astype(np.float32)
+    nb = rng.normal(size=(40, 30)).astype(np.float32)
+    nm = na > 120
+    nl = rng.integers(0, 5, (40, 30)).astype(np.uint8)
+    ni = rng.integers(-100, 100, (40, 30)).astype(np.int16)
+    a, b, m, lbl, i = (blosc2.asarray(v, chunks=(16, 30), blocks=(4, 30)) for v in (na, nb, nm, nl, ni))
+    cond, x, y, ncond, nx, ny = {
+        "mask": (m, a, 0, nm, na, 0),
+        "mask_and_threshold": (m & (a > 100), a, 0, nm & (na > 100), na, 0),
+        "labels": (lbl == 3, a, 0, nl == 3, na, 0),
+        "labels_arrays": (lbl == 3, a, b, nl == 3, na, nb),
+        "wider_output": (a > 100, 1.0, 0.0, na > 100, 1.0, 0.0),
+        "int16": (i > 5, a, i, ni > 5, na, ni),
+    }[case]
+    expr = blosc2.where(cond, x, y)
+    expected = np.where(ncond, nx, ny)
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    assert len(compiled) == 1
+    assert "where(" in compiled[0]
+
+
+def test_where_float32_condition_inexact_literal():
+    # NumPy compares float32 against float32(0.1), so nothing is > 0.1 here.  A fused where() must
+    # not compare against the double 0.1 (or against 0, the literal typed by an int64 output).
+    a = blosc2.asarray(np.full(12, 0.1, dtype=np.float32), chunks=(6,), blocks=(3,))
+    b = blosc2.asarray(np.full(12, 0.5, dtype=np.float32), chunks=(6,), blocks=(3,))
+    for x, y in ((1, 0), (a, 0), (a, b), (1.0, b)):
+        expr = blosc2.where(a > 0.1, x, y)
+        expected = np.full(12, y if np.isscalar(y) else 0.5)
+        np.testing.assert_array_equal(expr[:], expected)
+        np.testing.assert_array_equal(expr.compute()[:], expected)
+        expr = blosc2.where(a <= 0.1, x, y)
+        expected = np.full(12, x if np.isscalar(x) else 0.1, dtype=expr.dtype)
+        np.testing.assert_array_equal(expr[:], expected)
+        np.testing.assert_array_equal(expr.compute()[:], expected)
+
+
+def test_where_large_uint64_scalar():
+    a = blosc2.asarray(np.arange(12, dtype=np.uint64), chunks=(6,), blocks=(3,))
+    big = np.uint64(2**63 + 1)
+    expr = blosc2.where(a > 5, big, a)
+    expected = np.array(list(range(6)) + [2**63 + 1] * 6, dtype=np.uint64)
+    for res in (expr[:], expr.compute()[:]):
+        assert res.dtype == np.uint64
+        np.testing.assert_array_equal(res, expected)
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.uint64])
+@pytest.mark.parametrize(
+    "case", ["eq_literal", "add_literal", "add_scalar", "where_scalar", "where_literal_condition"]
+)
+def test_large_integer_constants_exact(dtype, case):
+    # miniexpr parses literals into C doubles, so integers beyond 2**53 must not reach it
+    na = (2**53 + np.arange(-6, 6, dtype=np.int64)).astype(dtype)  # the default int is int32 on wasm32
+    a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
+    big = 2**53 + 1
+    huge = dtype(2**63 + 1 if dtype == np.uint64 else 2**62 + 1)
+    expr, expected = {
+        "eq_literal": (a == big, na == big),
+        "add_literal": (a + big, na + big),
+        "add_scalar": (a + huge, na + huge),
+        "where_scalar": (blosc2.where(a > 2**53, huge, a), np.where(na > 2**53, huge, na)),
+        "where_literal_condition": (blosc2.where(a == big, a, 0), np.where(na == big, na, 0)),
+    }[case]
+    for res in (expr[:], expr.compute()[:]):
+        assert res.dtype == expected.dtype
+        np.testing.assert_array_equal(res, expected)
+
+
+def _values_around(literal, dtype):
+    """12 values of `dtype` at and next to `literal`, where comparing with it gets decided."""
+    dtype = np.dtype(dtype)
+    if dtype.kind == "f":
+        v = dtype.type(literal)
+        values = [v, np.nextafter(v, dtype.type(np.inf)), np.nextafter(v, dtype.type(-np.inf)), 0]
+    else:
+        info = np.iinfo(dtype)
+        lo, hi = math.floor(literal), math.ceil(literal)
+        values = [v for v in (lo - 1, lo, hi, hi + 1, 0) if info.min <= v <= info.max]
+    return np.resize(np.array(values, dtype=dtype), 12)
+
+
+def _where_branches(kind, out_dtype):
+    """NumPy branches x, y for where(): `out_dtype` scalars, arrays, or an array and a Python 0."""
+    if kind == "python":
+        return (1, 0) if out_dtype == "int" else (0.5, 0.0)
+    dtype = np.dtype(out_dtype)
+    # 64-bit integers next to 2**53, to check that their values do not go through doubles
+    start = 2**53 if dtype.kind in "iu" and dtype.itemsize == 8 else 1
+    # int64 explicitly: the default integer is int32 on wasm32, where 2**53 would overflow it
+    values = np.arange(12, dtype=np.int64)
+    x = (values % 2).astype(dtype) if dtype.kind == "b" else (start + values).astype(dtype)
+    y = np.zeros(12, dtype=dtype)
+    return {"scalars": (x[1], y[0]), "arrays": (x, y), "mixed": (x, 0)}[kind]
+
+
+@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.parametrize(
+    "cond_dtype", [np.float32, np.float64, np.int8, np.int32, np.int64, np.uint8, np.uint64]
+)
+@pytest.mark.parametrize("branches", ["python", "scalars", "arrays", "mixed"])
+def test_where_literal_condition_matches_numpy(cond_dtype, branches):
+    # A fused where() gets typed and computed in its output dtype by miniexpr; comparing against
+    # literals that the condition's dtype (or a double) cannot hold must still give NumPy's results.
+    literals = [0.1, 0.5, -1, 100, 16777217, 2**31 + 1, 2**53 + 1]
+    out_dtypes = (
+        ["int", "float"] if branches == "python" else ["float32", "float64", "int64", "uint8", "bool"]
+    )
+    failures = []
+    for literal, op, out_dtype in itertools.product(literals, (operator.gt, operator.eq), out_dtypes):
+        nc = _values_around(literal, cond_dtype)
+        c = blosc2.asarray(nc, chunks=(6,), blocks=(3,))
+        nx, ny = _where_branches(branches, out_dtype)
+        x, y = (
+            blosc2.asarray(v, chunks=(6,), blocks=(3,)) if isinstance(v, np.ndarray) else v for v in (nx, ny)
+        )
+        expected = np.where(op(nc, literal), nx, ny)
+        expr = blosc2.where(op(c, literal), x, y)
+        for how, res in (("[:]", expr[:]), ("compute()", expr.compute()[:])):
+            if res.dtype != expected.dtype or not np.array_equal(res, expected):
+                failures.append(f"{how} {op.__name__}({literal}) -> {out_dtype}: {res} != {expected}")
+    assert not failures, "\n".join(failures[:10])
+
+
+@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.parametrize("cond", ["float32_sum", "int8_wraparound"])
+@pytest.mark.parametrize("branches", ["python_int", "python_float", "array_scalar", "arrays"])
+def test_where_arithmetic_condition_matches_numpy(cond, branches):
+    # miniexpr would compute the condition in the output dtype: float32 sums in float64, int8 sums
+    # without wrapping around
+    rng = np.random.default_rng(0)
+    if cond == "float32_sum":
+        na = rng.random(24, dtype=np.float32)
+        nb = rng.random(24, dtype=np.float32)
+        operands = (na, nb, na + nb)
+
+        def build(a, b, c):
+            return a + b == c
+    else:
+        na = rng.integers(-128, 128, 24).astype(np.int8)
+        operands = (na,)
+
+        def build(a):
+            return a + a < 0
+
+    to_blosc2 = {id(v): blosc2.asarray(v, chunks=(12,), blocks=(4,)) for v in operands}
+    nx, ny = {
+        "python_int": (1, 0),
+        "python_float": (1.0, 0.0),
+        "array_scalar": (na, 0),
+        "arrays": (na, operands[-1]),
+    }[branches]
+    x, y = (to_blosc2.get(id(v), v) for v in (nx, ny))
+    expected = np.where(build(*operands), nx, ny)
+    expr = blosc2.where(build(*(to_blosc2[id(v)] for v in operands)), x, y)
+    for res in (expr[:], expr.compute()[:]):
+        assert res.dtype == expected.dtype
+        np.testing.assert_array_equal(res, expected)
