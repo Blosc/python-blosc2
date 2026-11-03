@@ -2548,7 +2548,7 @@ def test_where_large_uint64_scalar():
 )
 def test_large_integer_constants_exact(dtype, case):
     # miniexpr parses literals into C doubles, so integers beyond 2**53 must not reach it
-    na = (2**53 + np.arange(-6, 6)).astype(dtype)
+    na = (2**53 + np.arange(-6, 6, dtype=np.int64)).astype(dtype)  # the default int is int32 on wasm32
     a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
     big = 2**53 + 1
     huge = dtype(2**63 + 1 if dtype == np.uint64 else 2**62 + 1)
@@ -2584,7 +2584,9 @@ def _where_branches(kind, out_dtype):
     dtype = np.dtype(out_dtype)
     # 64-bit integers next to 2**53, to check that their values do not go through doubles
     start = 2**53 if dtype.kind in "iu" and dtype.itemsize == 8 else 1
-    x = (np.arange(12) % 2).astype(dtype) if dtype.kind == "b" else (start + np.arange(12)).astype(dtype)
+    # int64 explicitly: the default integer is int32 on wasm32, where 2**53 would overflow it
+    values = np.arange(12, dtype=np.int64)
+    x = (values % 2).astype(dtype) if dtype.kind == "b" else (start + values).astype(dtype)
     y = np.zeros(12, dtype=dtype)
     return {"scalars": (x[1], y[0]), "arrays": (x, y), "mixed": (x, 0)}[kind]
 

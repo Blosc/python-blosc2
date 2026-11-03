@@ -4538,7 +4538,9 @@ class LazyExpr(LazyArray):
                     axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
                 )
             )
-            out = out * num_elements / (num_elements - ddof)
+            # Keep the dtype of the variance: with NumPy 1.x, a float32 scalar times a Python int
+            # becomes float64, and so does a float32 array times an int above 65535
+            out = (out * num_elements / (num_elements - ddof)).astype(np.asarray(out).dtype, copy=False)
         if finish is not None:
             out = finish(out)
         out2 = kwargs.pop("out", None)
