@@ -1029,3 +1029,33 @@ def test_std_var_full_reduction_nonfinite(value):
     with np.errstate(invalid="ignore"):
         np.testing.assert_array_equal(a.std(), np.std(na))
         np.testing.assert_array_equal(a.var(), np.var(na))
+
+
+@pytest.mark.parametrize(
+    ("chunks", "blocks"),
+    [
+        ((10, 20, 50), (5, 20, 50)),  # decompressed chunks are C-order; partial along two axes
+        ((10, 20, 50), (1, 4, 50)),
+        ((10, 20, 50), (5, 10, 25)),  # blocks not contiguous in their chunk
+    ],
+)
+@pytest.mark.parametrize("axis", [0, 1, 2, (0, 2), None])
+@pytest.mark.parametrize("op", ["sum", "max", "argmin", "cumulative_sum"])
+def test_reduction_axis_chunk_layouts(chunks, blocks, axis, op):
+    if op in ("argmin", "cumulative_sum") and not (axis is None or isinstance(axis, int)):
+        pytest.skip("argmin and cumulative_sum take a single axis")
+    if op == "cumulative_sum" and axis is None:
+        pytest.skip("cumulative_sum needs an axis for N-D arrays")
+    rng = np.random.default_rng(3)
+    na = rng.integers(-1000, 1000, size=(37, 45, 50)).astype(np.float64)
+    nb = rng.integers(-1000, 1000, size=(37, 45, 50)).astype(np.float64)
+    a = blosc2.asarray(na, chunks=chunks, blocks=blocks)
+    b = blosc2.asarray(nb, chunks=chunks, blocks=blocks)
+    for expr, nexpr in [(a, na), (a + b, na + nb)]:
+        res = getattr(expr, op)(axis=axis)
+        # npcumsum: np.cumulative_sum is NumPy >= 2.1 only
+        expected = (npcumsum if op == "cumulative_sum" else getattr(np, op))(nexpr, axis=axis)
+        np.testing.assert_array_equal(res[()] if isinstance(res, blosc2.NDArray) else res, expected)
+        if op in ("sum", "max"):
+            res = getattr(expr, op)(axis=axis, keepdims=True)
+            np.testing.assert_array_equal(res, getattr(np, op)(nexpr, axis=axis, keepdims=True))

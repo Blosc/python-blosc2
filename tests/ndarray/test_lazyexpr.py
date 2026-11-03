@@ -2653,3 +2653,55 @@ def test_where_arithmetic_condition_matches_numpy(cond, branches):
     for res in (expr[:], expr.compute()[:]):
         assert res.dtype == expected.dtype
         np.testing.assert_array_equal(res, expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "direct"),
+    [
+        ((100, 100), (100, 100), (25, 100), True),
+        ((10_000,), (3000,), (1000,), True),  # partial last chunk
+        ((5,), (8,), (4,), True),  # a single, partial chunk
+        ((37, 50, 60), (5, 50, 60), (1, 25, 60), True),
+        ((4, 12, 30), (1, 4, 30), (1, 2, 30), True),
+        ((1, 10, 30), (1, 4, 30), (1, 2, 30), True),  # partial, but the very last chunk
+        ((4, 10, 30), (1, 4, 30), (1, 2, 30), False),  # partial chunks inside the array
+        ((40, 30), (16, 30), (4, 10), False),  # blocks not contiguous in their chunk
+        ((40, 30), (16, 15), (4, 15), False),  # chunks not contiguous in the array
+        ((24, 20, 18), (8, 10, 9), (4, 5, 9), False),
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.int16, np.complex128])
+def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, dtype):
+    # getitem writes the miniexpr results straight into the NumPy result when the chunks tile it
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    assert lazyexpr_mod._chunks_tile_flat(shape, chunks, blocks) is direct
+    rng = np.random.default_rng(1)
+    na = (rng.random(shape) * 100).astype(dtype)
+    nb = (rng.random(shape) * 10).astype(dtype)
+    a = blosc2.asarray(na, chunks=chunks, blocks=blocks)
+    b = blosc2.asarray(nb, chunks=chunks, blocks=blocks)
+    if dtype is np.complex128:
+        second = (a * b, na * nb)
+    else:
+        second = ((a - b) > 40, (na - nb) > 40)
+    for expr, expected in [(a + b * 2, na + nb * 2), second]:
+        for res in (expr[:], expr[()]):
+            assert res.dtype == expected.dtype
+            assert res.flags.c_contiguous
+            assert res.flags.writeable
+            np.testing.assert_array_equal(res, expected)
+            base = res
+            while isinstance(getattr(base, "base", None), np.ndarray):
+                base = base.base
+            # The direct path's buffer holds a header prefix and at most one chunk of padding
+            chunk_nbytes = math.prod(chunks) * res.itemsize
+            nchunks = math.prod(-(-s // c) for s, c in zip(shape, chunks, strict=True))
+            in_place = base.dtype == np.uint8 and base.nbytes == nchunks * chunk_nbytes + (
+                blosc2.EXTENDED_HEADER_LENGTH
+            )
+            if dtype is np.complex128 and not in_place:
+                continue  # miniexpr is not used for complex numbers on some platforms
+            assert in_place is direct
