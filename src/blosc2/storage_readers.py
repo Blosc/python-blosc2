@@ -369,20 +369,39 @@ def compute_storage_if_eligible(lazy, kwargs):
     if not lazy.inputs:
         return _compute_generator_prefilter(lazy, kwargs)
     extension = blosc2.blosc2_ext
+    # Like input-free generators, string programs can run on independent workers
+    # without a lane-locality proof only when each callback evaluates one entire
+    # original logical group. Never retile an unproven string program, and never
+    # override an authoritative graph rejection. Keep this admission 1-D until
+    # contextual row-slab/group correspondence is independently qualified.
+    string_groups = (
+        lazy.dtype.kind in "SU"
+        and bool(lazy.inputs)
+        and lazy.kernel.result_cardinality == "elementwise"
+        and lazy.kernel.context_ndim in (0, 1)
+        and not hasattr(lazy.kernel, "graph_partitionable")
+        and len(lazy.shape) == 1
+        and all(type(value) is blosc2.NDArray and value.dtype.kind in "SU" for value in lazy.inputs.values())
+        and lazy.partitions == next(iter(lazy.inputs.values())).blocks
+    )
     if (
-        not storage_reader_eligible(lazy.kernel)
+        not (string_groups or storage_reader_eligible(lazy.kernel))
         or not getattr(extension, "menudet_prefilter_available", lambda: False)()
     ):
         return None
     if lazy.inputs and all(type(value) is np.ndarray for value in lazy.inputs.values()):
         return _compute_resident_prefilter(lazy, kwargs)
-    if not _dense_compressed_eligible(lazy) or not _prefilter_inputs_eligible(lazy):
+    if not _dense_compressed_eligible(lazy, allow_strings=string_groups) or not _prefilter_inputs_eligible(
+        lazy
+    ):
         return None
     first = next(iter(lazy.inputs.values()))
     options = dict(kwargs)
     output = options.pop("out", None)
     if output is not None:
         block_bytes = sum(prod(value.blocks) * value.dtype.itemsize for value in lazy.inputs.values())
+        if string_groups:
+            block_bytes += prod(first.blocks) * lazy.dtype.itemsize
         for name in ("chunks", "blocks"):
             requested = options.pop(name, None)
             if requested is not None and tuple(requested) != getattr(first, name):
@@ -405,8 +424,11 @@ def compute_storage_if_eligible(lazy, kwargs):
     ):
         return None
     options.update(chunks=first.chunks, blocks=first.blocks)
-    # Match the existing prefilter's bounded per-worker input scratch budget.
+    # Match the existing prefilter's bounded per-worker input scratch budget;
+    # wide string results also contribute to the exact-group scheduling budget.
     block_bytes = sum(prod(value.blocks) * value.dtype.itemsize for value in lazy.inputs.values())
+    if string_groups:
+        block_bytes += prod(first.blocks) * lazy.dtype.itemsize
     thread_limit = max(1, (32 * 1024**2) // block_bytes)
     cparams = options.get("cparams")
     if cparams is None:
@@ -595,13 +617,14 @@ def _evaluate_dense_compressed(lazy):
     return lazy.kernel.evaluate_sources(lazy.inputs, shape=lazy._domain, return_report=True)
 
 
-def _dense_compressed_eligible(lazy):
+def _dense_compressed_eligible(lazy, *, allow_strings=False):
     import blosc2
 
     values = tuple(lazy.inputs.values())
     if not values or any(type(value) is not blosc2.NDArray for value in values):
         return False
-    if any(dtype.kind not in "biuf" for dtype in lazy.kernel.input_dtypes.values()):
+    kinds = "biufSU" if allow_strings else "biuf"
+    if any(dtype.kind not in kinds for dtype in lazy.kernel.input_dtypes.values()):
         return False
     first = values[0]
     if not first.ndim or not first.size or tuple(first.shape) != lazy._domain:

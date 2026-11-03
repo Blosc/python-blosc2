@@ -8,8 +8,8 @@
 """String workloads over the Chicago Taxi dataset: Blosc2 vs pandas/polars/DuckDB.
 
 The companion of `compare-query-methods.py`, for the *string* columns rather
-than the numeric ones.  Three tasks over `company` (`<U36`) and `payment.type`
-(`<U11`), the whole 24.3 M-row table by default:
+than the numeric ones. Three tasks over `company` and `payment.type` (fixed-width
+Unicode; widths depend on the loaded rows), the whole 24.3 M-row table by default:
 
   filter     startswith(company, 'Taxi') & (payment_type != 'Cash')  -> bool
   transform  'co=' + company + '|pay=' + lower(payment_type)         -> str
@@ -19,7 +19,8 @@ than the numeric ones.  Three tasks over `company` (`<U36`) and `payment.type`
 All three are timed; only `kernel` is plotted.  It is the shape of the pandas-3
 blog kernel (datapythonista.me/blog/whats-new-in-pandas-3): every other engine
 has to express it as a mask plus two fully-evaluated branches, whereas blosc2
-compiles it to a single masked pass with an internal compatibility DSLKernel.
+executes its branches with a typed public Menudet kernel (native interpretation,
+not execution of the original Python function).
 
 `blosc2 (raw)` is the same blosc2 path with `clevel=0` on operands *and*
 result.  Same container, same kernel, compression the only variable -- so the
@@ -35,14 +36,18 @@ Usage:
 import argparse
 import gc
 import hashlib
+import importlib
+import json
+import platform
 import time
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import SourceKernel as DSLKernel  # Internal normalization benchmark.
 
-PARQUET = "chicago-taxi-flat.parquet"
+PARQUET = Path(__file__).with_name("chicago-taxi-flat.parquet")
 COLS = ["company", "payment.type"]
 
 # One chunk/block geometry for every blosc2 operand.  Expressions combining two
@@ -80,9 +85,7 @@ CHUNKS, BLOCKS = (1 << 16,), (512,)
 #     LZ4-5   SHUFFLE meta=4    12.4     50.5      124.8  2.70 MB      225x
 _SHUFFLE_UCS4 = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
 _UCS4_WIDTH = [0, 0, 0, 0, 0, 4]
-DEFAULT = blosc2.CParams(
-    codec=blosc2.Codec.LZ4, clevel=5, filters=_SHUFFLE_UCS4, filters_meta=_UCS4_WIDTH
-)
+DEFAULT = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filters=_SHUFFLE_UCS4, filters_meta=_UCS4_WIDTH)
 
 # Same filter pipeline as DEFAULT so that clevel is genuinely the only variable.
 RAW = blosc2.CParams(clevel=0, filters=_SHUFFLE_UCS4, filters_meta=_UCS4_WIDTH)
@@ -95,6 +98,24 @@ PLOT_TASK = "kernel"
 # `--engines numpy,...` at a row count that fits.
 ENGINES = ["blosc2", "blosc2 (raw)", "pandas", "polars", "duckdb"]
 ALL_ENGINES = [*ENGINES, "numpy"]
+
+
+def dependency_versions(engines):
+    """Record versions that materially affect cross-engine rankings."""
+    versions = {"numpy": np.__version__, "pyarrow": importlib.import_module("pyarrow").__version__}
+    modules = {
+        "blosc2": "blosc2",
+        "blosc2 (raw)": "blosc2",
+        "pandas": "pandas",
+        "polars": "polars",
+        "duckdb": "duckdb",
+    }
+    for engine in engines:
+        module = modules.get(engine)
+        if module is None or module in versions:
+            continue
+        versions[module] = importlib.import_module(module).__version__
+    return versions
 
 
 def load(path, nrows):
@@ -123,13 +144,25 @@ def load(path, nrows):
 # --------------------------------------------------------------------------
 
 
-@DSLKernel
-def taxi_label(company, ptype):
-    pay = ptype.lower()
-    c = company.lower()
-    if " cab" in c:
-        return "cab|" + c.removesuffix(" cab") + "|" + pay
-    return "other|" + c + "|" + pay
+@lru_cache(maxsize=16)
+def make_taxi_label(company_dtype, ptype_dtype):
+    company_dtype, ptype_dtype = np.dtype(company_dtype), np.dtype(ptype_dtype)
+    if company_dtype.kind != "U" or ptype_dtype.kind != "U":
+        raise TypeError("The taxi benchmark requires fixed-width Unicode inputs")
+    # Longest branch: "other|" + company + "|" + payment. Native lower()
+    # retains each operand's fixed width, matching the NumPy string baseline.
+    width = company_dtype.itemsize // 4 + ptype_dtype.itemsize // 4 + 7
+    output_dtype = np.dtype(f"U{width}")
+
+    @blosc2.menudet(jit=False)
+    def taxi_label(company: company_dtype, ptype: ptype_dtype) -> output_dtype:
+        pay = ptype.lower()
+        c = company.lower()
+        if " cab" in c:
+            return "cab|" + c.removesuffix(" cab") + "|" + pay
+        return "other|" + c + "|" + pay
+
+    return taxi_label
 
 
 def blosc2_setup(co, pt, cparams=DEFAULT):
@@ -151,7 +184,14 @@ def blosc2_transform(a, b, cp):
 
 
 def blosc2_kernel(a, b, cp):
-    return blosc2.lazyudf(taxi_label, (a, b)).compute(**cp)
+    author = make_taxi_label(a.dtype, b.dtype)
+    # Each native callback evaluates one complete original logical group. This
+    # permits parallel string execution without claiming arbitrary programs are
+    # lane-local; both compression arms use this identical path.
+    lazy = author.specialize(a, b).lazy({"company": a, "ptype": b}, partitions=a.blocks)
+    result = lazy.compute(chunks=a.chunks, blocks=a.blocks, **cp)
+    blosc2_kernel.execution_report = getattr(lazy, "_source_execution_report", None)
+    return result
 
 
 def blosc2_raw_setup(co, pt):
@@ -184,9 +224,7 @@ def numpy_kernel(co, pt):
     c = np.strings.lower(co)
     tail = np.strings.add("|", np.strings.lower(pt))
     # np.strings has no removesuffix(); endswith + slice is the same thing.
-    trimmed = np.where(
-        np.strings.endswith(c, " cab"), np.strings.slice(c, 0, np.strings.str_len(c) - 4), c
-    )
+    trimmed = np.where(np.strings.endswith(c, " cab"), np.strings.slice(c, 0, np.strings.str_len(c) - 4), c)
     cab = np.strings.add("cab|" + trimmed, tail)
     other = np.strings.add("other|" + c, tail)
     return np.where(np.strings.find(c, " cab") >= 0, cab, other)
@@ -222,7 +260,7 @@ def pandas_kernel_apply(co, pt):
     """The row-wise spelling of `kernel`, which is how it would first be written.
 
     Off the scale next to everything else, and reported separately for that
-    reason -- it is the baseline the native compatibility kernel replaces.
+    reason -- it is the baseline the native Menudet kernel replaces.
     """
     import pandas as pd
 
@@ -381,13 +419,16 @@ def bench(fn, args, nruns):
     # courtesy.
     out = fn(*args)
     best = float("inf")
+    samples = []
     for _ in range(nruns):
         del out  # never hold two full-size results at once
         gc.collect()
         t0 = time.perf_counter()
         out = fn(*args)
-        best = min(best, time.perf_counter() - t0)
-    return best, out
+        elapsed = time.perf_counter() - t0
+        samples.append(elapsed)
+        best = min(best, elapsed)
+    return best, out, samples
 
 
 def fname(engine, task):
@@ -398,8 +439,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--nrows", type=int, default=0, help="0 = the whole table (24.3 M rows)")
     p.add_argument("--nruns", type=int, default=3)
-    p.add_argument("--plot", default="string-ops.png")
+    p.add_argument("--plot", default="string-ops-menudet.png")
     p.add_argument("--parquet", default=PARQUET)
+    p.add_argument("--output", type=Path, help="Save timings, fingerprints and runtime metadata as JSON")
     p.add_argument("--engines", default=",".join(ENGINES), help=f"any of {ALL_ENGINES}")
     p.add_argument(
         "--apply",
@@ -408,40 +450,104 @@ def main():
     )
     args = p.parse_args()
     engines = [e.strip() for e in args.engines.split(",")]
+    if args.nrows < 0 or args.nruns < 1:
+        p.error("nrows must be nonnegative and nruns must be positive")
+    if (
+        not engines
+        or any(engine not in ALL_ENGINES for engine in engines)
+        or len(set(engines)) != len(engines)
+    ):
+        p.error(f"engines must be distinct entries from {ALL_ENGINES}")
 
     co, pt = load(args.parquet, args.nrows)
     n = len(co)
+    metadata = {
+        "rows": n,
+        "parquet": str(Path(args.parquet).resolve()),
+        "company_dtype": str(co.dtype),
+        "payment_dtype": str(pt.dtype),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "threads": blosc2.nthreads,
+        "package": blosc2.__file__,
+        "blosc2_version": blosc2.__version__,
+        "c_blosc2_version": blosc2.blosclib_version,
+        "dependencies": dependency_versions(engines),
+        "extension": blosc2.blosc2_ext.__file__,
+        "chunks": CHUNKS,
+        "blocks": BLOCKS,
+        "measurement": "one untimed call, then best of nruns; allocation/compression included",
+        "nruns": args.nruns,
+        "kernel": "public Menudet, native interpreter, explicit fixed-width Unicode output",
+        "compression": {
+            "codec": DEFAULT.codec.name,
+            "clevel": DEFAULT.clevel,
+            "filters": [value.name for value in DEFAULT.filters],
+            "filters_meta": DEFAULT.filters_meta,
+            "raw_clevel": RAW.clevel,
+        },
+    }
+    print(f"Package: {blosc2.__file__}")
+    print(f"Extension: {blosc2.blosc2_ext.__file__}")
     print(f"{n:,} rows  company={co.dtype}  payment.type={pt.dtype}")
+    print("Kernel authoring: public @blosc2.menudet; execution: native interpreter")
 
-    times, sizes, seen = {}, {}, {}
+    times, sizes, seen, samples, reports = {}, {}, {}, {}, {}
     # blosc2 (raw) runs last so the NumPy source can be dropped before it
     # allocates its own uncompressed copy of everything.
     for engine in sorted(engines, key=lambda e: e == "blosc2 (raw)"):
         operands = globals()[f"{fname(engine, 'setup')}"](co, pt)
         if engine == "blosc2":
             print(f"  operand cratio: company {operands[0].cratio:.0f}x, ptype {operands[1].cratio:.0f}x")
-        if engine == "blosc2 (raw)":
+        if engine == "blosc2 (raw)" and not args.apply:
             del co, pt
             gc.collect()
         for task in TASKS:
-            secs, out = bench(globals()[fname(engine, task)], operands, args.nruns)
+            secs, out, samples[engine, task] = bench(globals()[fname(engine, task)], operands, args.nruns)
             times[engine, task] = secs
             sizes[engine, task] = footprint(out)
             d = digest(out, n)
             # Every engine must agree with the first one to report a result.
             assert seen.setdefault(task, d) == d, f"{engine} disagrees on {task}"
             print(f"  {engine:<13} {task:<10} {secs * 1000:9.1f} ms  {sizes[engine, task]:9.1f} MB")
+            if engine.startswith("blosc2") and task == "kernel":
+                report = blosc2_kernel.execution_report
+                reports[engine, task] = report
+                if report:
+                    print(
+                        f"    route={report['route']}, threads={report['threads']}, "
+                        f"blocks={report['evaluated_blocks']}"
+                    )
+                else:
+                    print("    route=general partition-preserving execution (no native prefilter report)")
             del out
             gc.collect()
         del operands
         gc.collect()
 
     if args.apply:
-        secs, out = bench(pandas_kernel_apply, pandas_setup(co, pt), 1)
+        secs, out, _ = bench(pandas_kernel_apply, pandas_setup(co, pt), 1)
         assert digest(out, n) == seen["kernel"]
         print(f"  {'pandas .apply':<13} {'kernel':<10} {secs * 1000:9.1f} ms  (row-wise)")
 
     print("\nall engines agree on all three results")
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        records = [
+            {
+                "engine": engine,
+                "task": task,
+                "best_s": times[engine, task],
+                "samples_s": samples[engine, task],
+                "result_mib": sizes[engine, task],
+                "fingerprint": seen[task],
+                "execution_report": reports.get((engine, task)),
+            }
+            for engine in engines
+            for task in TASKS
+        ]
+        args.output.write_text(json.dumps({"metadata": metadata, "results": records}, indent=2) + "\n")
     plot(times, sizes, engines, args.plot, n)
 
 
@@ -485,7 +591,7 @@ def plot(times, sizes, engines, path, nrows):
     panel(axes[1], s, "kernel: result footprint", "MB held in memory", "{:,.0f} MB")
 
     fig.suptitle(
-        f"Chicago Taxi row-wise string kernel, {nrows:,} rows  (Nx = vs blosc2)\n"
+        f"Chicago Taxi public Menudet string kernel, {nrows:,} rows  (Nx = vs blosc2)\n"
         "'blosc2 (raw)' is the identical path at clevel=0: compression is the only variable",
         fontsize=11,
     )

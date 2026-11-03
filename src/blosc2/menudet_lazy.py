@@ -338,6 +338,9 @@ class MenudetLazyArray(LazyArray):
         output grids keep the general partition-preserving implementation.
         Input-free numeric 1-D kernels also use native block workers when output
         blocks exactly match their logical partitions and chunks contain whole blocks.
+        Fixed-width string programs over matching compressed 1-D inputs likewise
+        use native workers only when physical blocks exactly match original
+        logical partitions. Other string layouts retain general group execution.
         """
         if item is not None:
             return blosc2.asarray(self._values(item), **kwargs)

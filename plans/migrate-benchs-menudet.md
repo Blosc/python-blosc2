@@ -32,6 +32,16 @@ storage kwargs, `disable=`, and pandas engine behavior. Existing `strict=True` i
 not an alias for Menudet. Execution policy (interpreter/JIT, compiler/backend) is
 independent of the authoring decorator; native interpretation is not Python fallback.
 
+## Progress snapshot (2026-11-03)
+
+All seven benchmark workload sources in section A now use public Menudet for
+their modern kernel arms. This is source-migration progress, not completion of
+the release gate: the Chicago Taxi port has bounded and current full-table
+six-engine qualification plus follow-up kernel profiling/fixes, but no new codec
+sweep or cross-platform qualification; the three legacy example notebooks still need
+migration/execution, and documentation/artifact/retained-fixture audits remain.
+Historical full-table string results are explicitly separated from current data.
+
 ## Scope and inventory
 
 Baseline: tracked files audited on 2026-10-31. Include Python scripts, notebook
@@ -44,12 +54,12 @@ ordinary Python/Numba/Cython UDFs remain valid and serve different purposes.
 | File | Migration and qualification | Effort |
 |---|---|---|
 | `bench/optim_tips/tip_11_dsl_random.py` | Migrated to `@menudet`; explicit domain, casts and partitions; 20M/200M host CC measurements. Legacy authoring retained only as labeled internal controls; current `_flat_idx` syntax is native Menudet context. | High |
-| `bench/chicago-taxi/string-ops.py` | Port string kernel, declare output dtype/width, validate conditional/string behavior, rerun engine and codec comparisons. | High |
+| `bench/chicago-taxi/string-ops.py` | Ported to typed public `@menudet`, explicit width and exact block-group partitions. Synthetic checks and 100k-row six-engine comparison pass. Profiling led to parallel string-prefilter dispatch plus a sibling miniexpr arena optimization; full-table kernel control is 1.70 s vs 1.31 s legacy. Current full-table six-engine run is recorded under DuckDB 2.0/polars 2.1 and the arena fix is pinned; codec sweeps and other platforms remain open. See [fix report](string-ops-menudet-prefilter.md). | High |
 | `bench/ndarray/compute_expr_udf.ipynb` | Migrated three typed public kernels and bindings; exact checks, fresh 100M timings/plots, preserved historical output, profiled and fixed row-slab/TCC bottlenecks. See [qualification](compute-expr-udf-qualification.md); predicate-2 Numba/Cython routes remain explicitly unqualified. | High |
 | `bench/ndarray/dsl-kernel-bench.py` | Migrated ten kernels to public `@menudet`, explicit float32 contracts and specialization/binding; preserved disabled/enabled expression baselines. Host-qualified at 1M with TCC/CC; see [qualification](dsl-kernel-bench-qualification.md). | Medium |
-| `bench/ndarray/jit-dsl.py` | Port four kernels, annotate scalar parameters, separate specialization/cold/warm timings and retain backend comparisons. | Medium |
-| `bench/ndarray/linear-constructor.py` | Replace legacy context indices and scalar-only domain binding; validate endpoint/rounding semantics against NumPy and `blosc2.linspace`. | Medium |
-| `bench/ndarray/sum-linear-idx.py` | Port index-based generation; preserve and check lazy reduction versus materialize-then-reduce comparisons. | Medium |
+| `bench/ndarray/jit-dsl.py` | Ported four public kernels, typed runtime scalars, retained backend/first/warm comparisons and fresh-cache controls; default 10k. Mandelbrot uses a captured-bound for loop and qualifies for native parallel storage execution. | Medium |
+| `bench/ndarray/linear-constructor.py` | Ported typed contextual generator; 144M float64 NumPy parity, matching native materializers/storage, separate preparation/first/warm timings. The authored path uses a labeled benchmark-only native materialization adapter. | Medium |
+| `bench/ndarray/sum-linear-idx.py` | Ported public index generator, chunk-aligned partitions and exact sum checks; full 100M run passes. Lazy reduction and compute-then-reduce comparisons retain their distinct general materialization path. | Medium |
 
 These are workload benchmarks even where comments currently call their
 `SourceKernel` imports “internal normalization” or “internal constructor” uses.

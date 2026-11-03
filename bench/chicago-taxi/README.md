@@ -67,6 +67,7 @@ yourself if flushing manually):
 | `select-polars-flat.py` | the query via polars lazy scan over parquet |
 | `select-blosc2.py` | the query via `blosc2.open()` + `CTable.where()` over `.b2z` |
 | `string-ops.py` | a separate benchmark: *string* kernels over the same dataset (see below) |
+| `compare-string-kernel-routes.py` | internal same-data profiling control: public prefilter vs serial vs direct legacy |
 
 Each `select-*.py` prints the result, then `open:`/`compute:`/`print:`/`total:`
 timings; the driver parses the `total:` line (query time, excluding interpreter
@@ -94,10 +95,92 @@ python string-ops.py --engines blosc2,numpy --nrows 1000000
 All three are timed; only `kernel` is plotted. It is the point of the exercise:
 the shape of the
 [pandas-3 blog kernel](https://datapythonista.me/blog/whats-new-in-pandas-3),
-row-wise control flow rather than one expression. blosc2 runs it as
-an internal compatibility DSLKernel (formerly `@blosc2.dsl_kernel`); the other engines have to rewrite it as a mask plus two
-fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
-what you would write first and is ~70x slower than everything else.
+row-wise control flow rather than one expression. Blosc2 now authors it with
+public `@blosc2.menudet`, explicit input types and a fixed-width Unicode return
+type. Execution uses the native interpreter, not the original Python function.
+The other engines express it as a mask plus two fully-evaluated branches.
+`--apply` adds the row-wise pandas spelling as a separately reported baseline.
+
+### Public Menudet migration
+
+The kernel specializes to the loaded input widths. Its output reserves
+`company width + payment width + 7` Unicode characters (the longest `other|`
+branch). Logical partitions match input/output storage blocks, so an updated
+extension can evaluate complete original groups on native compression workers
+without claiming arbitrary string programs are lane-local. Both compressed and
+raw arms use identical authoring and execution paths, with the original
+storage/filter settings retained.
+Other layouts and older extensions retain general partition-preserving execution.
+The driver prints the actual route and worker report when available.
+
+Small tests check branch selection, suffix versus interior matches, empty strings,
+full-width output, non-ASCII one-to-one case conversion, chunk/block tails and
+agreement with independent Python/NumPy references. These are not exhaustive
+Unicode casing semantics tests.
+
+Reproduce a bounded current comparison from the repository root:
+
+```bash
+python bench/chicago-taxi/string-ops.py \
+  --parquet bench/chicago-taxi/chicago-taxi-flat.parquet \
+  --nrows 100000 --nruns 3 \
+  --engines 'blosc2,blosc2 (raw),numpy,pandas,polars,duckdb' \
+  --plot bench/chicago-taxi/string-ops-menudet-prefilter-100k.png \
+  --output bench/chicago-taxi/string-ops-menudet-prefilter-100k.json
+```
+
+For the same-data two-arm kernel control used by the profiling report:
+
+```bash
+python bench/chicago-taxi/compare-string-kernel-routes.py --rows 0 --skip-serial \
+  --output bench/chicago-taxi/string-ops-menudet-prefilter-full.json
+```
+
+The initial serialized migration's [samples](string-ops-menudet-100k.json) and
+[figure](string-ops-menudet-100k.png) are retained as before-fix evidence. The
+updated [100k-row samples](string-ops-menudet-prefilter-100k.json) and
+[figure](string-ops-menudet-prefilter-100k.png) again pass all six engines' checks.
+See
+[qualification notes](../../plans/string-ops-menudet-qualification.md).
+
+Profiling isolated two costs: loss of native parallel execution and per-element
+native string-temporary allocations. With exact-group dispatch plus the sibling
+miniexpr scratch-arena change, the full-table public kernel measured **1.70 s**
+versus **1.31 s** for a same-build direct legacy control. Dispatch alone measured
+3.12 s. The arena change is pinned through miniexpr revision
+`8c93bb2d912f2b677b576116b4b5da6f1ad9b9e8`. See the
+[profiling/fix report](../../plans/string-ops-menudet-prefilter.md) and
+[full-table control samples](string-ops-menudet-prefilter-full.json).
+
+Current full-table comparison on this 12-core host, with the final wheel and
+Python 3.15 (DuckDB 2.0.0, pandas 3.0.6, polars 2.1.0, PyArrow 26.0.0):
+
+| Engine | filter | transform | kernel | kernel result |
+|---|---:|---:|---:|---:|
+| **Blosc2** | 142 ms | 556 ms | 1.70 s | **68 MB** |
+| Blosc2 raw | 212 ms | 773 ms | 2.30 s | 5 766 MB |
+| pandas | 159 ms | 1.41 s | 3.98 s | 932 MB |
+| polars | 71 ms | 1.16 s | 2.20 s | 935 MB |
+| DuckDB | 38 ms | 311 ms | **0.51 s** | 842 MB |
+
+Both Blosc2 arms report `menudet-prefilter` with 12 workers and 47,489 blocks.
+Blosc2 remains about 12x smaller in kernel-result footprint and faster than
+pandas/polars on `kernel`, but DuckDB 2.0 is substantially faster. Do not compare
+these rankings with the historical table below: the engines and hardware differ.
+
+[Current full-table samples](string-ops-menudet-full.json) and
+[kernel figure](string-ops-menudet-full.png) are recorded separately from the
+historical results. Codec/filter sweeps and other platforms remain unqualified.
+
+The default plot filename is now `string-ops-menudet.png`, so a normal run does not
+overwrite the historical `string-ops.png`. Timings remain best-of-three after one
+untimed pass, including preparation lookup, allocation and output compression.
+
+### Historical legacy-kernel results (not requalified for public Menudet)
+
+The remaining tables, figures and tuning discussion in this section describe the
+earlier compatibility/legacy kernel. They are retained as historical evidence,
+not current Menudet performance recommendations.
 
 **blosc2 uses LZ4 at `clevel=5`**, rather than the stock ZSTD-5 — a
 throughput-for-ratio trade, and the result is still 12x smaller than what the

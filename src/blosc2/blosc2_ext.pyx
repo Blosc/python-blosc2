@@ -7216,7 +7216,11 @@ def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None, ou
     # A supplied destination provides the exact output width; otherwise eight
     # bytes covers every numeric output dtype admitted by the Python gate.
     output_width = (output.dtype.itemsize if isinstance(output, NDArray)
-                    else (np.dtype(output_dtype).itemsize if output_dtype is not None else 8))
+                     else (np.dtype(output_dtype).itemsize if output_dtype is not None else 8))
+    # Wide structured/string records use typesize=1 in C-Blosc2. The artifact
+    # callback needs a complete logical item stride, not that byte-wise stride.
+    if output_width > BLOSC_MAX_TYPESIZE:
+        return False
     if int(np.prod(first.chunks)) * output_width > 32 * 1024**2:
         return False
     block_bytes = 0
@@ -7231,7 +7235,10 @@ def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None, ou
         value = source
         if source.shape != first.shape or source.chunks != first.chunks or source.blocks != first.blocks:
             return False
-        if source.dtype.kind not in "biuf" or not source.dtype.isnative:
+        # The descriptor ABI carries fixed-width string item sizes as well as
+        # numeric types. Python admission must still prove lane independence or
+        # preserve complete original groups before selecting this executor.
+        if source.dtype.kind not in "biufSU" or not source.dtype.isnative:
             return False
         if value.array.sc.storage.urlpath != NULL or value.array.sc.storage.dparams.postfilter != NULL:
             return False
