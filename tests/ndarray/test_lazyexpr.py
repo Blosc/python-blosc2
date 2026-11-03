@@ -66,16 +66,22 @@ _RESULT_DTYPE_EXPRESSIONS = [
 ]
 
 
-# Known failures on WebAssembly: there compute() and slices also run the bundled miniexpr, which
-# computes these in integer arithmetic (0.0 for NumPy's 0.5), and a Python int is int32 on wasm32,
-# so int32 / 2 gets the float32 of int32 / int32. strict, so that a fix shows up as XPASS
+# Known wrong values on WebAssembly: there compute() and slices also run the bundled miniexpr, which
+# computes these in integer arithmetic (0.0 for NumPy's 0.5). strict, so that a fix shows up as XPASS
+_MINIEXPR_TRUE_DIVISION = (
+    "miniexpr computes integer true division in integer arithmetic: "
+    "https://github.com/Blosc/miniexpr/issues/26"
+)
+_MINIEXPR_FLOAT_FUNCTIONS = (
+    "miniexpr computes hypot() and nextafter() of integers in integer arithmetic: "
+    "https://github.com/Blosc/miniexpr/issues/27"
+)
 _WASM_KNOWN_FAILURES = {
-    "hypot({n}, b)": (np.uint16, np.int32, np.int64),
-    "nextafter({n}, b)": (np.int32, np.int64),
-    "(a < b) / b": (np.int8, np.uint16, np.int32, np.int64),
-    "a / b": (np.int8, np.uint16, np.int64),
-    "{n} / b": (np.int8, np.uint16, np.int64),
-    "a / 2": (np.int32,),
+    "hypot({n}, b)": ((np.uint16, np.int32, np.int64), _MINIEXPR_FLOAT_FUNCTIONS),
+    "nextafter({n}, b)": ((np.int32, np.int64), _MINIEXPR_FLOAT_FUNCTIONS),
+    "(a < b) / b": ((np.int8, np.uint16, np.int32, np.int64), _MINIEXPR_TRUE_DIVISION),
+    "a / b": ((np.int8, np.uint16, np.int64), _MINIEXPR_TRUE_DIVISION),
+    "{n} / b": ((np.int8, np.uint16, np.int64), _MINIEXPR_TRUE_DIVISION),
 }
 
 
@@ -89,8 +95,9 @@ def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
         pytest.skip("int32 / int32 gives float32 on purpose")
     if "nextafter" in expression and dtype not in (np.int32, np.int64):
         pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
-    if blosc2.IS_WASM and dtype in _WASM_KNOWN_FAILURES.get(expression, ()):
-        request.applymarker(pytest.mark.xfail(reason="see _WASM_KNOWN_FAILURES", strict=True))
+    known_dtypes, reason = _WASM_KNOWN_FAILURES.get(expression, ((), None))
+    if blosc2.IS_WASM and dtype in known_dtypes:
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
     # A subexpression of the operand dtype (bool + bool is an or in NumPy)
     expression = expression.format(n="(a & b)" if dtype is np.bool_ else "(a + b)")
     na = (np.arange(1200).reshape(30, 40) % 5).astype(dtype)
@@ -101,6 +108,10 @@ def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
     namespace.update(arctan2=np.arctan2, sin=np.sin, sqrt=np.sqrt)
     with np.errstate(all="ignore"):
         expected = eval(expression, namespace, {"a": na, "b": nb})
+        if dtype is np.int32 and expression == "a / 2" and blosc2.result_type(2) == np.int32:
+            # A Python int is int32 here (as on wasm32), so this is int32 / int32, which gives float32
+            # on purpose; elsewhere it is int32 / int64, float64 as in NumPy
+            expected = expected.astype(np.float32)
         if build == "string":
             expr = blosc2.lazyexpr(expression, {"a": a, "b": b})
         else:
