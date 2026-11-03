@@ -101,6 +101,43 @@ def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build):
         np.testing.assert_allclose(expr[:7], expected[:7], rtol=rtol)
 
 
+@pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float64])
+@pytest.mark.parametrize("op", ["&", "|", "^", "<<", ">>", "+", "*", "/", "//", "%", "**", "<", "hypot"])
+def test_lazyexpr_non_native_byte_order(dtype, op):
+    # The operand dtype checks compare against native dtypes: a non-native operand must give the
+    # same result dtype as a native one (no "Invalid operand type for &: >i4", and >i4 / >i4
+    # keeps the float32 of int32 / int32)
+    if dtype is np.float64 and op in ("&", "|", "^", "<<", ">>"):
+        pytest.skip("no float bitwise operators")
+    native = np.dtype(dtype)
+    swapped = native.newbyteorder()
+    na = np.arange(1, 7, dtype=native)
+    nb = np.array([1, 2, 1, 3, 1, 2], dtype=native)
+
+    def build(a, b):
+        return blosc2.hypot(a, b) if op == "hypot" else eval(f"a {op} b")
+
+    reference = build(blosc2.asarray(na), nb)
+    if op == "/" and dtype is np.int32:
+        assert np.dtype(reference.dtype) == np.float32
+    expr = build(blosc2.asarray(na), nb.astype(swapped))
+    assert expr.dtype == reference.dtype
+    np.testing.assert_array_equal(expr[:], reference[:])
+    np.testing.assert_array_equal(expr.compute()[:], reference.compute()[:])
+    # Only the dtype for non-native NDArray operands: their values are a separate problem
+    sa, sb = na.astype(swapped), nb.astype(swapped)
+    for a, b in ((na, sb), (sa, nb), (sa, sb)):
+        assert build(blosc2.asarray(a), blosc2.asarray(b)).dtype == reference.dtype
+
+
+@pytest.mark.parametrize("other", [np.ones(4, dtype=np.int32), 2, 2.5])
+def test_arctan2_rejects_complex_when_built(other):
+    c = blosc2.asarray(np.ones(4, dtype=np.complex128))
+    for x in (c, c + c):
+        with pytest.raises(TypeError):
+            blosc2.arctan2(x, other)
+
+
 _UNARY_FUNCTIONS = [
     "sin",
     "cos",

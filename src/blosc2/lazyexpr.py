@@ -3644,7 +3644,13 @@ def fuse_expressions(expr, new_base, dup_op):
 def _operand_dtype(value):
     """blosc2.result_type(value), without building a NumPy array for an array operand."""
     dtype = None if np.isscalar(value) else getattr(value, "dtype", None)
-    return blosc2.result_type(value) if dtype is None else convert_dtype(dtype)
+    if dtype is not None:
+        dtype = convert_dtype(dtype)
+        if dtype.kind != "V":
+            # np.result_type() gives the native byte order, which the dtype checks below compare against
+            return np.result_type(dtype)
+    # Structured and void dtypes too: blosc2.result_type() rejects some of them
+    return blosc2.result_type(value)
 
 
 def check_dtype(op, value1, value2):
@@ -3679,6 +3685,10 @@ def check_dtype(op, value1, value2):
         ]
         with contextlib.suppress(TypeError, ValueError, OverflowError):
             return ufunc(*probes).dtype
+
+    if op == "arctan2":
+        # Except for arctan2, which rejects what NumPy rejects (complex, datetimes, strings) here
+        return np.arctan2(np.empty(0, v1_dtype), np.empty(0, v2_dtype)).dtype
 
     if (v1_dtype.kind in "Mm" or v2_dtype.kind in "Mm") and op in _datetime_binops:
         # result_type describes promotion, not operator semantics, and the two
