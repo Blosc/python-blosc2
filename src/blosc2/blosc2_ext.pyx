@@ -505,6 +505,8 @@ cdef extern from "blosc2.h":
 
     int blosc2_schunk_get_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                 c_bool *needs_free) nogil
+    int blosc2_schunk_get_chunk_range(blosc2_schunk *schunk, int64_t nchunk, int64_t *offset,
+                                      int64_t *nbytes)
     int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                     c_bool *needs_free) nogil
     int blosc2_schunk_get_vlblock(blosc2_schunk *schunk, int64_t nchunk, int32_t nblock,
@@ -2202,6 +2204,31 @@ cdef class SChunk:
         if needs_free:
             free(chunk)
         return ret_chunk
+
+    @_handle_locked
+    def get_chunk_range(self, nchunk):
+        """Where chunk `nchunk` is in the file of a super-chunk stored as a contiguous frame on disk.
+
+        Returns
+        -------
+        out: tuple of two ints
+            The position of the chunk's first byte in the file and its size there: the distance to the next
+            chunk, which is the compressed size for chunks written in order and otherwise at most the largest
+            possible chunk size.  The size is 0 for chunks stored as special values (zeros, NaNs,
+            uninitialized), which have no bytes in the file.  No chunk is read to find this: it comes from
+            the frame header and the chunk index, which opening the frame has read already.
+
+        Raises
+        ------
+        RuntimeError
+            If the super-chunk is not a contiguous frame on disk, or `nchunk` is out of range.
+        """
+        cdef int64_t offset
+        cdef int64_t nbytes
+        rc = blosc2_schunk_get_chunk_range(self.schunk, nchunk, &offset, &nbytes)
+        if rc < 0:
+            raise RuntimeError(f"Could not get the file range of chunk {nchunk}")
+        return offset, nbytes
 
     @_handle_locked
     def get_lazychunk(self, nchunk):
