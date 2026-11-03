@@ -321,7 +321,8 @@ def _resident_signature(expression, inputs, jit, optimization="moderate", *, jit
 
 def native_weak_scalars_eligible(plan, expression, inputs):
     """Retain NumPy's preparation-time scalar range errors for checked native maps."""
-    return plan.partitionable or (parse_expression(expression).infer_dtype(inputs) is not None)
+    partitionable = getattr(plan, "partitionable", False) or plan.info().get("partitionable", False)
+    return partitionable or (parse_expression(expression).infer_dtype(inputs) is not None)
 
 
 def clear_resident_prefilter_cache():
@@ -1805,6 +1806,8 @@ class GraphAdapter:
                 return args[0]
             if name == "where":
                 return self.add("select", args=args)
+            if name == "pow" and len(args) == 2:
+                return self.add("pow", args=args)
             if name in {
                 "bool",
                 "int8",

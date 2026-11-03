@@ -55,7 +55,19 @@ def test_numpy_prefilter_output(dtype, mode, monkeypatch):
         assert result is out
         if mode == "strided-out":
             np.testing.assert_array_equal(storage[1::2], -99)
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     np.testing.assert_array_equal(result, expected)
+    if typed_evaluator_enabled():
+        if dtype == "complex128" or mode == "strided-out":
+            assert calls == []
+        else:
+            assert [call[0] for call in calls] == [0, 1, 2] * (2 if mode == "evaluate" else 1)
+            assert len({call[1] for call in calls[:3]}) == 1
+            assert not np.shares_memory(result, buffers[0])
+            expected_scratch = blosc2.MAX_OVERHEAD + max(128, 4 * (4 + 4 * np.dtype(dtype).itemsize))
+            assert calls[0][2] == expected_scratch
+        return
     assert [call[0] for call in calls] == [0, 1, 2] * (2 if mode == "evaluate" else 1)
     if mode in ("out", "strided-out"):
         assert len({call[1] for call in calls[:3]}) == 1
@@ -69,6 +81,8 @@ def test_numpy_prefilter_output(dtype, mode, monkeypatch):
 def test_complex_expression_reduction_dispatch(monkeypatch, force_wasm):
     import importlib
 
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     if force_wasm:
         monkeypatch.setattr(blosc2, "IS_WASM", True)
     module = importlib.import_module("blosc2.lazyexpr")
@@ -78,9 +92,10 @@ def test_complex_expression_reduction_dispatch(monkeypatch, force_wasm):
 
     original = module._get_result
     calls = []
+    expect_chunk_fallback = blosc2.IS_WASM or typed_evaluator_enabled()
 
     def fallback(*args, **kwargs):
-        if not blosc2.IS_WASM:
+        if not expect_chunk_fallback:
             pytest.fail("Complex expression reduction must use miniexpr")
         # WASM's scalar reduction prefilter is disabled for all dtypes in
         # reduce_slices; complex arithmetic must still work via chunked evaluation.
@@ -89,7 +104,7 @@ def test_complex_expression_reduction_dispatch(monkeypatch, force_wasm):
 
     monkeypatch.setattr(module, "_get_result", fallback)
     np.testing.assert_allclose(expression.sum(), (values * 2).sum())
-    assert bool(calls) == blosc2.IS_WASM
+    assert bool(calls) == expect_chunk_fallback
 
 
 def test_numpy_prefilter_non_aligned_blocks_fall_back():

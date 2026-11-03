@@ -322,6 +322,18 @@ def blocks_contiguous(chunks, blocks):
     return True
 
 
+def chunks_tile_flat(shape, chunks, blocks):
+    """Whether physical chunks/blocks form consecutive C-order runs, with only tail padding."""
+    if len(shape) == 0 or 0 in shape or 0 in chunks or 0 in blocks or not blocks_contiguous(chunks, blocks):
+        return False
+    axis = 0
+    while axis < len(chunks) - 1 and chunks[axis] == 1:
+        axis += 1
+    if tuple(chunks[axis + 1 :]) != tuple(shape[axis + 1 :]):
+        return False
+    return shape[axis] % chunks[axis] == 0 or math.prod(shape[:axis]) == 1
+
+
 def are_partitions_behaved(shape, chunks, blocks):
     """
     Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.

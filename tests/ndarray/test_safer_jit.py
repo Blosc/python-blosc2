@@ -90,8 +90,10 @@ def test_tcc_compile_failure_is_quiet(tmp_path, trace):
     result = run_probe(tmp_path, trace=trace, ME_DSL_JIT_TCC_OPTIONS="-invalid-safer-jit-option")
     assert result.stdout == ""
     if trace:
-        assert "jit runtime fallback: interpreter" in result.stderr
-        assert "invalid-safer-jit-option" in result.stderr
+        if "jit runtime fallback: interpreter" in result.stderr:
+            assert "invalid-safer-jit-option" in result.stderr
+        else:
+            assert "menudet jit ineligible: explicit compiler flags" in result.stderr
     else:
         assert result.stderr == ""
     assert list(tmp_path.iterdir()) == []
@@ -108,7 +110,7 @@ def test_tcc_explicit_missing_library(tmp_path):
 def test_jit_off_does_not_compile(tmp_path, backend):
     result = run_probe(tmp_path, backend=backend, mode="off", trace=True)
     assert "jit runtime built:" not in result.stderr
-    assert "reason=jit_mode=off" in result.stderr
+    assert "reason=jit_mode=off" in result.stderr or "menudet jit ineligible: request=2" in result.stderr
     assert list(tmp_path.iterdir()) == []
 
 

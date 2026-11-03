@@ -1165,6 +1165,75 @@ cdef extern from "dsl_array_bridge.h":
     int b2_array_eval_sources(const void *, const b2_array_source *, int, int, const int64_t *, const b2_array_options *, void *, size_t, b2_array_report *, b2_artifact_error *) nogil
 
 
+cdef extern from "block_reductions.h":
+    enum:
+        B2_REDUCE_NONE
+        B2_REDUCE_SUM
+        B2_REDUCE_PROD
+        B2_REDUCE_MIN
+        B2_REDUCE_MAX
+        B2_REDUCE_ANY
+        B2_REDUCE_ALL
+        B2_RT_BOOL
+        B2_RT_I8
+        B2_RT_I16
+        B2_RT_I32
+        B2_RT_I64
+        B2_RT_U8
+        B2_RT_U16
+        B2_RT_U32
+        B2_RT_U64
+        B2_RT_F32
+        B2_RT_F64
+    int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) noexcept nogil
+    int b2_block_reduce_supported(int op, int src, int acc) noexcept nogil
+
+
+cdef int _menudet_reduce_type_code(dtype_obj) noexcept:
+    dtype = np.dtype(dtype_obj)
+    if not dtype.isnative:
+        return -1
+    if dtype == np.bool_:
+        return B2_RT_BOOL
+    if dtype == np.int8:
+        return B2_RT_I8
+    if dtype == np.int16:
+        return B2_RT_I16
+    if dtype == np.int32:
+        return B2_RT_I32
+    if dtype == np.int64:
+        return B2_RT_I64
+    if dtype == np.uint8:
+        return B2_RT_U8
+    if dtype == np.uint16:
+        return B2_RT_U16
+    if dtype == np.uint32:
+        return B2_RT_U32
+    if dtype == np.uint64:
+        return B2_RT_U64
+    if dtype == np.float32:
+        return B2_RT_F32
+    if dtype == np.float64:
+        return B2_RT_F64
+    return -1
+
+
+cdef int _menudet_reduce_op_code(op) noexcept:
+    if op == "sum":
+        return B2_REDUCE_SUM
+    if op == "prod":
+        return B2_REDUCE_PROD
+    if op == "min":
+        return B2_REDUCE_MIN
+    if op == "max":
+        return B2_REDUCE_MAX
+    if op == "any":
+        return B2_REDUCE_ANY
+    if op == "all":
+        return B2_REDUCE_ALL
+    return B2_REDUCE_NONE
+
+
 cdef struct menudet_prefilter_worker:
     void *edge_output
     b2_artifact_buffer *bindings
@@ -1190,6 +1259,13 @@ cdef struct menudet_prefilter_state:
     int64_t chunkgrid[16]
     int64_t blockgrid[16]
     uint8_t *numpy_output
+    uint8_t *reduction_output
+    int reduction_op
+    int reduction_src_type
+    int reduction_acc_type
+    int reduction_acc_itemsize
+    const uint8_t *candidate_blocks
+    int64_t candidate_blocks_len
     const uint8_t *numpy_inputs[128]
     b2nd_array_t *inputs[128]
     b2_artifact_buffer signature[128]
@@ -1366,12 +1442,14 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         return 0
     memset(&error, 0, sizeof(error))
     memset(&fp, 0, sizeof(fp))
-    if state.numpy_output != NULL and count <= 0:
+    if (state.numpy_output != NULL or state.reduction_output != NULL) and count <= 0:
         return 1
     # Elementwise evaluation overwrites all live lanes. Only padded lanes in
     # the final physical chunk must be cleared before storing/compressing them.
     if state.numpy_output != NULL:
         destination = state.numpy_output + origin * params.output_typesize
+    elif state.reduction_output != NULL:
+        destination = params.output
     elif not params.output_is_disposable:
         # C-Blosc2 itself clears non-disposable prefilter outputs.
         worker.output_zero_fill_bytes += params.output_size
@@ -1379,6 +1457,16 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         memset(params.output + written_bytes, 0, params.output_size - written_bytes)
         worker.output_zero_fill_bytes += params.output_size - written_bytes
     if count <= 0:
+        return 0
+    if (state.candidate_blocks != NULL and block_id < state.candidate_blocks_len
+            and state.candidate_blocks[block_id] == 0):
+        if state.numpy_output != NULL:
+            memset(destination, 0, written_bytes)
+            worker.output_zero_fill_bytes += written_bytes
+            return 1
+        if params.output_is_disposable:
+            memset(params.output, 0, params.output_size)
+            worker.output_zero_fill_bytes += params.output_size
         return 0
     if feholdexcept(&environment):
         if params.output_size:
@@ -1434,6 +1522,12 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         # Decoder/postfilter work must not contribute to numerical FP flags.
         rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
                                     destination, &descriptor, 0, &fp, &error)
+        if not rc and state.reduction_output != NULL:
+            if b2_block_reduce(state.reduction_op, state.reduction_src_type, state.reduction_acc_type,
+                               destination, count,
+                               state.reduction_output + block_id * state.reduction_acc_itemsize):
+                rc = -4
+                strcpy(error.message, "Menudet prefilter block reduction failed")
     if fesetenv(&environment):
         rc = -5
         strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
@@ -1452,7 +1546,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         worker.evaluated_blocks += 1
     # External destinations need no filter/compressor work. With disposable
     # output this return value skips filters; Blosc2 emits a tiny zero-run chunk.
-    return -1 if rc else (1 if state.numpy_output != NULL else 0)
+    return -1 if rc else (1 if (state.numpy_output != NULL or state.reduction_output != NULL) else 0)
 
 
 def menudet_prefilter_available():
@@ -1460,6 +1554,16 @@ def menudet_prefilter_available():
 
 
 def menudet_prefilter_row_slabs_available():
+    return bool(b2_artifact_descriptor_available())
+
+
+def menudet_prefilter_flat_chunks_available():
+    """Flat C-order block/chunk geometry has been qualified for typed prefilters."""
+    return bool(b2_artifact_descriptor_available())
+
+
+def menudet_prefilter_reductions_available():
+    """Per-block scalar reductions and candidate-block pruning in Menudet prefilters."""
     return bool(b2_artifact_descriptor_available())
 
 
@@ -2433,11 +2537,12 @@ cdef class MenudetArtifactHandle:
 
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
                            _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
-                           _chunk_indices=None):
+                           _chunk_indices=None, _reduction_op=None, _reduction_out=None,
+                           _candidate_blocks=None, _prune_chunks=False):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not menudet_prefilter_inputs_eligible(
-                inputs, allow_numpy=numpy_out is not None or out is not None, output=out,
-                output_dtype=self.signature_dtype(-1)):
+                inputs, allow_numpy=numpy_out is not None or out is not None or _reduction_out is not None,
+                output=out, output_dtype=self.signature_dtype(-1)):
             raise NotImplementedError("Inputs are not eligible for Menudet prefilter execution")
         signature = self.descriptor_info()
         if set(inputs) != set(signature["inputs"]):
@@ -2451,11 +2556,40 @@ cdef class MenudetArtifactHandle:
         if first is None:
             raise ValueError("An output NDArray is required to schedule an input-free prefilter")
         if inputs and first.ndim > 1 and signature["ndim"]:
-            raise ValueError("Row-slab Menudet prefilters require context-free kernels")
+            raise ValueError("N-D Menudet prefilters require context-free kernels")
         if _diagonal is not None and (inputs or first.ndim != 2 or out is None):
             raise ValueError("Diagonal scheduling requires input-free 2-D NDArray output")
         block_items = int(np.prod(first.blocks))
         chunk_items = int(np.prod(first.chunks))
+        reduction_op = B2_REDUCE_NONE
+        reduction_src_type = -1
+        reduction_acc_type = -1
+        if _reduction_op is not None or _reduction_out is not None:
+            if (not inputs or out is not None or numpy_out is not None or _chunk_range is not None
+                    or _chunk_indices is not None or _block_items is not None
+                    or _candidate_blocks is not None or _prune_chunks):
+                raise ValueError("Prefilter reductions require direct full-domain compressed inputs")
+            reduction_op = _menudet_reduce_op_code(_reduction_op)
+            reduction_src_type = _menudet_reduce_type_code(self.signature_dtype(-1))
+            if (type(_reduction_out) is not np.ndarray or _reduction_out.ndim != 1
+                    or _reduction_out.size != (first.size + block_items - 1) // block_items
+                    or not _reduction_out.flags.c_contiguous or not _reduction_out.flags.aligned
+                    or not _reduction_out.flags.writeable):
+                raise ValueError("Prefilter reduction output must be a 1-D writable aligned C-contiguous array")
+            reduction_acc_type = _menudet_reduce_type_code(_reduction_out.dtype)
+            if (reduction_op == B2_REDUCE_NONE or reduction_src_type < 0 or reduction_acc_type < 0
+                    or not b2_block_reduce_supported(reduction_op, reduction_src_type, reduction_acc_type)):
+                raise ValueError("Unsupported Menudet prefilter reduction signature")
+        if _candidate_blocks is not None or _prune_chunks:
+            if (_candidate_blocks is None or not inputs or first.ndim != 1 or _reduction_out is not None
+                    or _chunk_range is not None or _chunk_indices is not None or _block_items is not None):
+                raise ValueError("Candidate-block prefilters require 1-D full-domain inputs")
+            if _prune_chunks and out is None:
+                raise ValueError("Pruned prefilter chunks require a Blosc2 NDArray output")
+            _candidate_blocks = np.ascontiguousarray(_candidate_blocks, dtype=np.uint8)
+            if (_candidate_blocks.ndim != 1
+                    or _candidate_blocks.size < first.schunk.nchunks * (chunk_items // block_items)):
+                raise ValueError("Candidate-block bitmap is shorter than the chunk/block grid")
         if _block_items is not None:
             if (numpy_out is None or out is not None or _block_items <= 0
                     or chunk_items % _block_items or _block_items % block_items):
@@ -2466,7 +2600,7 @@ cdef class MenudetArtifactHandle:
         threads = (max(1, min(blosc2.nthreads, (32 * 1024**2) // block_bytes))
                    if block_bytes else blosc2.nthreads)
         if _nthreads is not None:
-            if numpy_out is None or not 1 <= _nthreads <= threads:
+            if (numpy_out is None and _reduction_out is None) or not 1 <= _nthreads <= threads:
                 raise ValueError("Invalid NumPy prefilter thread count")
             threads = _nthreads
         if _chunk_range is not None:
@@ -2480,7 +2614,7 @@ cdef class MenudetArtifactHandle:
             if numpy_out is None or out is not None or _chunk_range is not None:
                 raise ValueError("Dynamic prefilter chunks require a direct NumPy output")
             threads = 1
-        if out is None and numpy_out is None:
+        if out is None and numpy_out is None and _reduction_out is None:
             numpy_out = np.empty(first.shape, dtype=self.signature_dtype(-1))
         if numpy_out is not None:
             if out is not None:
@@ -2495,7 +2629,7 @@ cdef class MenudetArtifactHandle:
                    for value in inputs.values()):
                 raise ValueError("NumPy prefilter output must not overlap an input")
         if _driver_input is not None:
-            if (numpy_out is None or type(_driver_input) is not np.ndarray
+            if ((numpy_out is None and _reduction_out is None) or type(_driver_input) is not np.ndarray
                     or _driver_input.dtype != np.dtype("uint8")
                     or not _driver_input.flags.c_contiguous
                     or _driver_input.nbytes != chunk_items * self.signature_dtype(-1).itemsize):
@@ -2516,9 +2650,12 @@ cdef class MenudetArtifactHandle:
             if any(out is source for source in inputs.values()):
                 raise ValueError("Menudet prefilter output must not alias an input")
             output = out
-        return output._execute_menudet_prefilter(self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
-                                                 driver_input=_driver_input, diagonal=_diagonal,
-                                                 chunk_indices=_chunk_indices)
+        return output._execute_menudet_prefilter(
+            self, inputs, numpy_out=numpy_out, chunk_range=_chunk_range,
+            driver_input=_driver_input, diagonal=_diagonal, chunk_indices=_chunk_indices,
+            reduction_out=_reduction_out, reduction_op=reduction_op,
+            reduction_src_type=reduction_src_type, reduction_acc_type=reduction_acc_type,
+            candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks))
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -6614,7 +6751,10 @@ cdef class NDArray:
 
     def _execute_menudet_prefilter(self, MenudetArtifactHandle kernel, inputs,
                                     np.ndarray numpy_out=None, chunk_range=None, driver_input=None,
-                                    diagonal=None, chunk_indices=None):
+                                    diagonal=None, chunk_indices=None,
+                                    np.ndarray reduction_out=None, int reduction_op=0,
+                                    int reduction_src_type=-1, int reduction_acc_type=-1,
+                                    np.ndarray candidate_blocks=None, bint prune_chunks=False):
         cdef menudet_prefilter_state state
         cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -6624,8 +6764,10 @@ cdef class NDArray:
         cdef int32_t decoded_bytes, encoded_bytes, block_bytes
         cdef size_t decoder_contexts = 0, input_buffer_allocations = 0, input_chunk_fetches = 0
         cdef size_t placeholder_bytes = 0
-        cdef int64_t chunk
+        cdef int64_t chunk, blocks_per_chunk = 0, block_cursor
         cdef int64_t begin = 0, end = self.array.sc.nchunks
+        cdef bint disposable_sink = numpy_out is not None or reduction_out is not None
+        cdef bint has_candidate
         if chunk_range is not None:
             begin, end = chunk_range
         memset(&state, 0, sizeof(state))
@@ -6636,12 +6778,13 @@ cdef class NDArray:
             state.diagonal_enabled = True
             state.diagonal = diagonal
         state.ninputs = len(inputs)
-        state.size = numpy_out.size if numpy_out is not None else self.array.shape[0]
+        state.size = (next(iter(inputs.values())).size if inputs
+                      else (numpy_out.size if numpy_out is not None else self.array.shape[0]))
         state.chunk_items = self.array.chunkshape[0]
         state.block_items = self.array.blockshape[0]
         state.grid_ndim = self.array.ndim
         if inputs and state.grid_ndim > 1:
-            # The eligibility gate admits only full-width row slabs. Their
+            # The eligibility gate admits only flat C-order chunk/block runs. Their
             # physical blocks are contiguous logical spans; flatten scheduling
             # without changing the artifact's (context-free) semantics.
             state.size = self.size
@@ -6664,6 +6807,16 @@ cdef class NDArray:
         state.fp_supported = 1
         if numpy_out is not None:
             state.numpy_output = <uint8_t *>numpy_out.data
+        if reduction_out is not None:
+            state.reduction_output = <uint8_t *>reduction_out.data
+            state.reduction_op = reduction_op
+            state.reduction_src_type = reduction_src_type
+            state.reduction_acc_type = reduction_acc_type
+            state.reduction_acc_itemsize = reduction_out.dtype.itemsize
+        if candidate_blocks is not None:
+            state.candidate_blocks = <const uint8_t *>candidate_blocks.data
+            state.candidate_blocks_len = candidate_blocks.size
+            blocks_per_chunk = state.chunk_items // state.block_items
         # All names and source arrays stay owned by kernel/inputs until the
         # synchronous compression workers have joined and the context is freed.
         for i, (name, source) in enumerate(inputs.items()):
@@ -6689,7 +6842,7 @@ cdef class NDArray:
             128, ((self.array.sc.chunksize + self.array.sc.blocksize - 1)
                   // self.array.sc.blocksize) * (4 + 4 * self.array.sc.typesize))
         chunk_buffer = (np.empty(placeholder_capacity, dtype=np.uint8)
-                        if numpy_out is not None else None)
+                        if disposable_sink else None)
         state.nworkers = cparams.nthreads
         # One compact allocation holds worker records and only the bindings
         # actually used by this signature, rather than 128 slots per worker.
@@ -6702,7 +6855,7 @@ cdef class NDArray:
         # External NumPy output instead uses clevel=1 and disposable zero-run
         # placeholders: the callback skips filters and writes the real sink.
         # Never discard the payload of a caller's Blosc2 output.
-        parameters.output_is_disposable = numpy_out is not None or cparams.clevel == 0
+        parameters.output_is_disposable = disposable_sink or cparams.clevel == 0
         cparams.prefilter = menudet_menudet_prefilter
         cparams.preparams = &parameters
         try:
@@ -6726,6 +6879,14 @@ cdef class NDArray:
                 for chunk in (range(begin, end) if chunk_indices is None else chunk_indices):
                     if chunk < begin or chunk >= end:
                         raise ValueError("Dynamic prefilter chunk is outside the output domain")
+                    if prune_chunks and state.candidate_blocks != NULL:
+                        has_candidate = False
+                        for block_cursor in range(chunk * blocks_per_chunk, (chunk + 1) * blocks_per_chunk):
+                            if block_cursor < state.candidate_blocks_len and state.candidate_blocks[block_cursor]:
+                                has_candidate = True
+                                break
+                        if not has_candidate:
+                            continue
                     # Fetch/validate each compressed input chunk once. The
                     # synchronous update joins all workers before these shared
                     # read-only pointers advance to the next chunk.
@@ -6750,7 +6911,7 @@ cdef class NDArray:
                             state.error.native_status = rc
                             strcpy(state.error.message, "Menudet prefilter input block layout mismatch")
                             raise_artifact_error(state.status, &state.error)
-                    if numpy_out is not None:
+                    if disposable_sink:
                         # Always releases the GIL, including single-threaded
                         # contexts driven by independent coarse workers.
                         placeholder_bytes += self.schunk._prefilter_data(chunk, data, chunk_buffer)
@@ -6792,9 +6953,10 @@ cdef class NDArray:
             for i in range(state.ninputs):
                 if state.chunk_owned[i]:
                     free(state.chunks[i])
-        result = numpy_out if numpy_out is not None else self
+        result = reduction_out if reduction_out is not None else (numpy_out if numpy_out is not None else self)
         return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
-                         "output_destination": "numpy" if numpy_out is not None else "blosc2",
+                         "output_destination": ("reduction" if reduction_out is not None
+                                                else ("numpy" if numpy_out is not None else "blosc2")),
                          "discarded_output_bytes": placeholder_bytes,
                         "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
                          "threads": cparams.nthreads,
@@ -7236,7 +7398,7 @@ def menudet_artifact_options_available():
 
 
 def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None, output_dtype=None):
-    """Metadata-only gate for bounded 1-D/full-width row-slab Menudet prefilters."""
+    """Metadata-only gate for bounded flat C-order chunk/block Menudet prefilters."""
     cdef NDArray value
     if not b2_artifact_descriptor_available() or blosc2.IS_WASM or len(inputs) > 128:
         return False
@@ -7249,9 +7411,8 @@ def menudet_prefilter_inputs_eligible(inputs, allow_numpy=False, output=None, ou
         return False
     if not inputs and first.ndim > 1:
         return (first.ndim <= 16 and first.schunk.chunksize <= 32 * 1024**2)
-    if not first.ndim or first.chunks[1:] != first.shape[1:] or first.blocks[1:] != first.shape[1:]:
-        return False
-    if first.chunks[0] % first.blocks[0]:
+    from .ndarray import chunks_tile_flat
+    if not chunks_tile_flat(first.shape, first.chunks, first.blocks):
         return False
     # The scheduling dummy chunk is host scratch, separate from input blocks.
     # A supplied destination provides the exact output width; otherwise eight

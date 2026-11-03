@@ -12,6 +12,7 @@ import ast
 import builtins
 import concurrent.futures
 import contextlib
+import contextvars
 import copy
 import enum
 import math
@@ -56,6 +57,12 @@ from .b2objects import (
 )
 from .dsl_kernel import DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
 from .dsl_kernel import SourceKernel as DSLKernel
+from .expression_evaluator import (
+    binary_result_dtype,
+    compute_typed_prefilter,
+    compute_typed_reduction,
+    typed_evaluator_enabled,
+)
 from .expression_graph import (
     arithmetic_names,
     evaluate_expression,
@@ -70,6 +77,7 @@ from .expression_graph import (
     validate_operands,
 )
 from .ndarray import blocks_contiguous
+from .ndarray import chunks_tile_flat as _chunks_tile_flat
 from .prepared_evaluate import remember_evaluation
 from .proxy_source import convert_dtype
 from .utils import (
@@ -129,6 +137,36 @@ def _int64_datetime_operands(local_dict):
     return converted if units else None
 
 
+@lru_cache(maxsize=1024)
+def _numpy_boolean_graph(expression):
+    """Admit array-aware boolean evaluation without rewriting scalar control flow."""
+    if not any(tok in expression for tok in ("and", "or", "not")):
+        return None
+    try:
+        _, nodes = expression_syntax(expression)
+        if any(
+            isinstance(node, ast.BoolOp) or (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not))
+            for node in nodes
+        ):
+            return parse_expression(expression)
+    except (SyntaxError, exceptions.UnsafeDeserializationError):
+        # Trusted full-mode syntax outside the admitted graph keeps Python's
+        # own control flow. No execution has occurred at this admission gate.
+        pass
+    return None
+
+
+def _eval_numpy_expression(expression, globals_, operands):
+    graph = _numpy_boolean_graph(expression) if globals_ is safe_numpy_globals else None
+    if graph is not None and graph.names <= operands.keys():
+        # Graph traversal stays lazy for scalars, including their operand-valued
+        # and/or results. Only actual arrays select NumPy logical operations.
+        return graph.evaluate(operands, numpy_bool_ops=True)
+    # In trusted full mode an unbound name in an unvisited scalar branch need
+    # not resolve at all. Safe-mode evaluation keeps its original binding checks.
+    return evaluate_expression(expression, globals_, operands)
+
+
 def _numpy_eval_datetime_aware(expression, _globals, local_dict):
     """``eval`` an expression with NumPy, reading bare numbers as datetime counts.
 
@@ -139,12 +177,12 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
     else keeps NumPy's error.
     """
     try:
-        return evaluate_expression(expression, _globals, local_dict)
+        return _eval_numpy_expression(expression, _globals, local_dict)
     except TypeError:
         int_dict = _int64_datetime_operands(local_dict)
         if int_dict is None:
             raise
-        res = evaluate_expression(expression, _globals, int_dict)
+        res = _eval_numpy_expression(expression, _globals, int_dict)
         if getattr(res, "dtype", None) != np.bool_:
             raise
         return res
@@ -156,10 +194,11 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
     Native admission is metadata-only. Unsupported signatures decline before
     execution; runtime failures are never replayed through NumPy.
     """
-    from .native_graph import _native_first_syntax, lower_native_graph
+    from .native_graph import _native_first_syntax, lower_native_graph, native_weak_scalars_eligible
 
     operands = {} if local_dict is None else dict(local_dict)
     depth = kwargs.pop("_frame_depth", 0)
+    optimization = kwargs.pop("_optimization", "moderate")
     graph = parse_expression(expression)
     if graph.names - operands.keys():
         frame = sys._getframe(depth + 1)
@@ -180,10 +219,11 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
         operands
         and _native_first_syntax(expression)
         and all(type(value) is np.ndarray and value.dtype.kind in "biuf" for value in operands.values())
+        and not (typed_evaluator_enabled() and np.__version__.startswith("1."))
         and not (output is not None and any(np.shares_memory(output, value) for value in operands.values()))
     ):
         stub = LazyExpr(None)
-        stub.expression, stub.operands = expression, operands
+        stub.expression, stub.operands, stub._optimization = expression, operands, optimization
         try:
             # Chunk fallback must not silently force the scalar interpreter for
             # numerical graphs that already have qualified native C lowering.
@@ -195,6 +235,10 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
                 else False
             )
             native = lower_native_graph(stub, jit=graph_jit, allow_output=True)
+            if typed_evaluator_enabled() and not native_weak_scalars_eligible(
+                native[0], expression, operands
+            ):
+                native = None
         except (NotImplementedError, ValueError, TypeError):
             native = None
         except blosc2.MenudetError as error:
@@ -1498,11 +1542,24 @@ def sync_read_chunks(arrs, info):
 
 
 def read_nchunk(arrs, info):
-    for _, chunks in sync_read_chunks(arrs, info):
-        yield chunks
+    with contextlib.closing(sync_read_chunks(arrs, info)) as reader:
+        for _, chunks in reader:
+            yield chunks
 
 
-iter_chunks = None
+@dataclass
+class _ChunkReadState:
+    """Own one invocation's producer, including deterministic early-close cleanup."""
+
+    iterator: Any = None
+
+    def close(self):
+        iterator, self.iterator = self.iterator, None
+        if iterator is not None:
+            iterator.close()
+
+
+_chunk_read_state = contextvars.ContextVar("chunk_read_state", default=None)
 
 
 def _chunk_buffers(operands, shape, chunks):
@@ -1543,13 +1600,15 @@ def fill_chunk_operands(
     Operands with a buffer in `chunk_buffers` (see `_chunk_buffers`) get their chunk decompressed
     into it, whether the chunk is full or not.
     """
-    global iter_chunks
-
     if iter_disk:
         # Use an environment variable to control the memory usage
         low_mem = os.environ.get("BLOSC_LOW_MEM", False)
         # This method is only useful when all operands are NDArray and shows better
         # performance only when at least one of them is persisted on disk
+        state = _chunk_read_state.get()
+        if state is None:
+            raise RuntimeError("Persisted chunk reads require an invocation-local reader")
+        iter_chunks = state.iterator
         if iter_chunks is None:
             # Initialize the iterator for reading the chunks
             # Take any operand (all should have the same shape and chunks)
@@ -1557,6 +1616,7 @@ def fill_chunk_operands(
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
             info = (reduc, low_mem, chunks_idx, axis)
             iter_chunks = read_nchunk(list(operands.values()), info)
+            state.iterator = iter_chunks
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
 
@@ -1807,6 +1867,14 @@ def _scalar_operand_value(value):
     return value if isinstance(value, bool | int | float) else None
 
 
+def _is_typed_numeric_scalar(value):
+    """A NumPy scalar or scalar array whose strong dtype must survive expression fusion."""
+    if not isinstance(value, np.generic) and getattr(value, "shape", None) != ():
+        return False
+    dtype = getattr(value, "dtype", None)
+    return dtype is not None and convert_dtype(dtype).kind in "biufc"
+
+
 def _exact_in_dtype(value, dtype) -> bool:
     """Whether `dtype`, and the C double miniexpr keeps literals in, hold the number exactly."""
     if dtype.kind not in "biuf" or float(value) != value:
@@ -1932,31 +2000,6 @@ def _miniexpr_where_matches_numpy(cond: str, operands: dict, dtype) -> bool:  # 
     return same_dtype(tree.body)
 
 
-def _c_run_axis(outer, inner) -> int:
-    """Axis along which `inner` tiles are C-contiguous runs of `outer`, or -1 if they are not.
-
-    That is the case when the leading dims of the tile are 1, then one dim is free, and the rest
-    span the container.
-    """
-    k = 0
-    while k < len(inner) - 1 and inner[k] == 1:
-        k += 1
-    return k if tuple(inner[k + 1 :]) == tuple(outer[k + 1 :]) else -1
-
-
-def _chunks_tile_flat(shape, chunks, blocks) -> bool:
-    """Whether the uncompressed chunks of an array, in order, are consecutive runs of its C-order buffer.
-
-    Blocks must be C-contiguous runs of their chunk, and chunks C-contiguous runs of the array; only
-    the very last chunk may be partial, so that its padding spills past the end of the array instead
-    of into another chunk.
-    """
-    if len(shape) == 0 or 0 in shape or 0 in chunks or 0 in blocks or not blocks_contiguous(chunks, blocks):
-        return False
-    k = _c_run_axis(shape, chunks)
-    return k >= 0 and (shape[k] % chunks[k] == 0 or math.prod(shape[:k]) == 1)
-
-
 @blosc2.jit_config.jit_execution
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
@@ -1991,6 +2034,11 @@ def fast_eval(  # noqa: C901
     is_dsl = _is_dsl_kernel_expression(expression)
     expr_string = expression.dsl_source if is_dsl else expression
     dsl_disable_reason = None
+    typed_expression = not is_dsl and isinstance(expression, str) and typed_evaluator_enabled()
+    if typed_expression:
+        # This route may use typed artifacts or explicit NumPy fallback, never
+        # the uniform-output-dtype expression compiler.
+        use_miniexpr = False
 
     # Disable miniexpr for UDFs (callable expressions), except DSL kernels
     if callable(expression) and not is_dsl:
@@ -2003,6 +2051,7 @@ def fast_eval(  # noqa: C901
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     jit = kwargs.pop("jit", None)
     jit_backend = kwargs.pop("jit_backend", None)
+    optimization = kwargs.pop("_optimization", "moderate")
     strict_miniexpr = kwargs.pop("strict_miniexpr", None)
     _in_place = kwargs.pop("in_place", None)
     dtype = kwargs.pop("dtype", None)
@@ -2059,6 +2108,31 @@ def fast_eval(  # noqa: C901
     # Check whether the partitions are behaved
     behaved = blosc2.are_partitions_behaved(shape, chunks, blocks)
 
+    if (
+        typed_expression
+        and try_miniexpr
+        and not eval_kwargs
+        and not _in_place
+        and fp_accuracy == blosc2.FPAccuracy.DEFAULT
+        and (where is None or len(where) == 2)
+    ):
+        typed_source = f"where({expression}, _where_x, _where_y)" if where is not None else expression
+        result = compute_typed_prefilter(
+            typed_source,
+            operands,
+            dtype=dtype,
+            getitem=getitem,
+            out=out,
+            jit=jit,
+            jit_backend=jit_backend,
+            options={**kwargs, "chunks": chunks, "blocks": blocks},
+            candidate_blocks=candidate_blocks,
+            prune_chunks=prune_chunks,
+            optimization=optimization,
+        )
+        if result is not None:
+            return result
+
     # Check that all operands are NDArray for fast path
     all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values())
     # Check that there is some NDArray that is persisted in the disk
@@ -2074,6 +2148,10 @@ def fast_eval(  # noqa: C901
 
     expr_string_miniexpr = expr_string
     operands_miniexpr = operands
+    if not is_dsl and any(_is_typed_numeric_scalar(value) for value in operands.values()):
+        # Scalar specialization erases strong dtypes. Keep them as operands for
+        # the typed graph/NumPy evaluator, rather than compiling weak literals.
+        use_miniexpr = False
     # Fuse where(cond, x, y) before specializing, so that scalar x/y get inlined as well;
     # fusing afterwards would reference a dropped operand and make miniexpr fail to compile.
     where_fused = (
@@ -2331,9 +2409,6 @@ def fast_eval(  # noqa: C901
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
-            global iter_chunks
-            # Ensure any background reading thread is closed
-            iter_chunks = None
 
         if not use_miniexpr:
             # If miniexpr failed, fallback to regular evaluation
@@ -2348,12 +2423,34 @@ def fast_eval(  # noqa: C901
 
     chunk_operands = {}
     chunk_buffers = None if iter_disk else _chunk_buffers(operands, shape, chunks)
+    bitmap = None
+    if typed_expression and candidate_blocks is not None:
+        bitmap = np.asarray(candidate_blocks, dtype=np.uint8)
+        if len(shape) != 1 or bitmap.ndim != 1:
+            raise ValueError("Candidate-block bitmaps require a one-dimensional expression and bitmap")
+        blocks_per_chunk = -(-chunks[0] // blocks[0])
+        if bitmap.size < basearr.schunk.nchunks * blocks_per_chunk:
+            raise ValueError("Candidate-block bitmap is shorter than the chunk/block grid")
+        if out is None:
+            out = (
+                np.empty(shape, dtype=dtype)
+                if getitem
+                else blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
+            )
     # Check which chunks intersect with _slice
     all_chunks = get_intersecting_chunks((), shape, chunks)  # if _slice is (), returns all chunks
     for nchunk, chunk_slice in enumerate(all_chunks):
         cslice = chunk_slice.raw
         offset = tuple(s.start for s in cslice)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in cslice)
+
+        candidates = None
+        if bitmap is not None:
+            candidates = bitmap[nchunk * blocks_per_chunk : (nchunk + 1) * blocks_per_chunk]
+            if not np.any(candidates):
+                if not prune_chunks:
+                    out[cslice] = 0
+                continue
 
         full_chunk = chunks_ == chunks  # slice is same as chunk
         fill_chunk_operands(
@@ -2400,17 +2497,26 @@ def fast_eval(  # noqa: C901
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             if where is None:
-                result = evaluate_chunk(expression, chunk_operands, **eval_kwargs)
+                result = evaluate_chunk(
+                    expression, chunk_operands, _optimization=optimization, **eval_kwargs
+                )
             else:
                 # Apply the where condition (in result)
                 if len(where) == 2:
                     new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = evaluate_chunk(new_expr, chunk_operands, **eval_kwargs)
+                    result = evaluate_chunk(
+                        new_expr, chunk_operands, _optimization=optimization, **eval_kwargs
+                    )
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
 
         # Store the result in the output array
+        if candidates is not None and not np.all(candidates):
+            result = np.array(np.broadcast_to(result, chunks_), copy=True)
+            for block, candidate in enumerate(candidates):
+                if not candidate:
+                    result[block * blocks[0] : (block + 1) * blocks[0]] = 0
         if getitem or isinstance(out, np.ndarray):
             try:
                 out[cslice] = result
@@ -3059,7 +3165,7 @@ def reduce_slices(  # noqa: C901
     global try_miniexpr
 
     # Use a local copy so we don't modify the global
-    use_miniexpr = try_miniexpr  # & False
+    use_miniexpr = try_miniexpr and not typed_evaluator_enabled()
 
     if blosc2.IS_WASM:
         # Reduction miniexpr on wasm is currently unstable for scalar reductions (axis=None).
@@ -3075,6 +3181,7 @@ def reduce_slices(  # noqa: C901
     # Scalar native reductions cannot use elementwise DSL JIT output buffers.
     kwargs.pop("jit", None)
     kwargs.pop("jit_backend", None)
+    optimization = kwargs.pop("_optimization", "moderate")
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
     reduce_op_str = reduce_args.pop("op_str", None)
@@ -3191,6 +3298,34 @@ def reduce_slices(  # noqa: C901
         chunks = temp.chunks
         del temp
 
+    if (
+        typed_evaluator_enabled()
+        and try_miniexpr
+        and isinstance(expression, str)
+        and not _is_dsl_kernel_expression(expression)
+        and fast_path
+        and all_ndarray
+        and reduced_shape == ()
+        and _slice == ()
+        and out is None
+        and not np.any(mask_slice)
+        and not eval_kwargs
+        and "initial" not in reduce_args
+        and fp_accuracy == blosc2.FPAccuracy.DEFAULT
+        and (where is None or len(where) == 2)
+    ):
+        typed_source = f"where({expression}, _where_x, _where_y)" if where is not None else expression
+        result = compute_typed_reduction(
+            typed_source,
+            operands,
+            reduce_op=reduce_op,
+            reduce_op_str=reduce_op_str,
+            explicit_dtype=reduce_args.get("dtype"),
+            optimization=optimization,
+        )
+        if result is not None:
+            return result
+
     # miniexpr reduction path only supported for some cases so far
     if not (fast_path and all_ndarray and reduced_shape == () and _slice == ()):
         use_miniexpr = False
@@ -3202,6 +3337,14 @@ def reduce_slices(  # noqa: C901
     # Check whether we can use miniexpr
     if use_miniexpr and isinstance(expression, str):
         if _miniexpr_integer_atan2(expression, operands):
+            use_miniexpr = False
+        tree = _parse_expression(expression)
+        if _miniexpr_inexact_int_literal(expression) or (
+            tree is not None and any(isinstance(node, ast.Compare) for node in ast.walk(tree))
+        ):
+            # Legacy scalar reductions type intermediate conditions using the
+            # accumulator dtype, losing float32 rounding and int64 precision.
+            # The chunk evaluator retains the condition's own NumPy semantics.
             use_miniexpr = False
         has_complex = any(
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
@@ -3282,9 +3425,6 @@ def reduce_slices(  # noqa: C901
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
-            global iter_chunks
-            # Ensure any background reading thread is closed
-            iter_chunks = None
 
         if not use_miniexpr:
             # If miniexpr failed, fallback to regular evaluation
@@ -3387,6 +3527,8 @@ def reduce_slices(  # noqa: C901
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
             continue
 
+        if optimization != "moderate":
+            eval_kwargs = {**eval_kwargs, "_optimization": optimization}
         result, _ = _get_result(expression, chunk_operands, eval_kwargs, where)
         # Enforce contiguity of result (necessary to fill the out array)
         # but avoid copy if already contiguous
@@ -3650,6 +3792,8 @@ def chunked_eval(  # noqa: C901
         _where_args: dict, optional
             Additional arguments for conditional evaluation.
     """
+    reader = _ChunkReadState()
+    token = _chunk_read_state.set(reader)
     try:
         # standardise slice to be ndindex.Tuple
         item = () if item == slice(None, None, None) else item
@@ -3668,6 +3812,7 @@ def chunked_eval(  # noqa: C901
         # Execution policy for miniexpr JIT paths only; never forward to array constructors.
         jit = kwargs.pop("jit", None)
         jit_backend = kwargs.pop("jit_backend", None)
+        optimization = kwargs.pop("_optimization", "moderate")
 
         where: dict | None = kwargs.get("_where_args")
         if where:
@@ -3697,6 +3842,7 @@ def chunked_eval(  # noqa: C901
                 _slice=item,
                 jit=jit,
                 jit_backend=jit_backend,
+                _optimization=optimization,
                 **kwargs,
             )
 
@@ -3744,6 +3890,7 @@ def chunked_eval(  # noqa: C901
                     getitem=True,
                     jit=jit,
                     jit_backend=jit_backend,
+                    _optimization=optimization,
                     shape=shape,
                     **kwargs,
                 )
@@ -3758,6 +3905,7 @@ def chunked_eval(  # noqa: C901
                     getitem=False,
                     jit=jit,
                     jit_backend=jit_backend,
+                    _optimization=optimization,
                     shape=shape,
                     **kwargs,
                 )
@@ -3769,6 +3917,7 @@ def chunked_eval(  # noqa: C901
                     getitem=False,
                     jit=jit,
                     jit_backend=jit_backend,
+                    _optimization=optimization,
                     shape=shape,
                     **kwargs,
                 )
@@ -3777,9 +3926,12 @@ def chunked_eval(  # noqa: C901
         return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
     finally:
-        global iter_chunks
-        # Ensure any background reading thread is closed
-        iter_chunks = None
+        # Close this invocation's producer even on failure; nested evaluations
+        # restore their caller's still-live reader rather than consuming it.
+        try:
+            reader.close()
+        finally:
+            _chunk_read_state.reset(token)
 
 
 def fuse_operands(operands1, operands2):
@@ -3862,11 +4014,16 @@ def check_dtype(op, value1, value2):
         if v2_dtype not in (np.bool_, np.int32, np.int64):
             raise ValueError(f"Invalid operand type for {op}: {v2_dtype}")
 
-    if op == "/":
-        if v1_dtype == np.int32 and v2_dtype == np.int32:
-            return blosc2.float32
-        if np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
-            return blosc2.float64
+    if op == "/" and v1_dtype == np.int32 and v2_dtype == np.int32:
+        return blosc2.float32
+
+    if typed_evaluator_enabled():
+        result = binary_result_dtype(op, value1, value2)
+        if result is not None:
+            return result
+
+    if op == "/" and np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
+        return blosc2.float64
 
     if op == "arctan2":
         return np.arctan2(np.empty(0, v1_dtype), np.empty(0, v2_dtype)).dtype
@@ -3976,8 +4133,12 @@ class LazyExpr(LazyArray):
             if not (isinstance(value1, blosc2.Operand | np.ndarray) or np.isscalar(value1))
             else value1
         )
-        # Reset values represented as np.int64 etc. to be set as Python natives
-        value1 = value1.item() if np.isscalar(value1) and hasattr(value1, "item") else value1
+        # Keep numeric NumPy scalars strongly typed; normalize only other scalars.
+        value1 = (
+            value1.item()
+            if np.isscalar(value1) and hasattr(value1, "item") and not _is_typed_numeric_scalar(value1)
+            else value1
+        )
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
@@ -4004,20 +4165,15 @@ class LazyExpr(LazyArray):
             else value2
         )
 
-        # Reset values represented as np.int64 etc. to be set as Python natives,
-        # BUT preserve numpy integer scalars that require explicit typing (unsigned or
-        # 64-bit) so that expression preparation preserves their explicit dtype
-        # instead of normalizing them to a narrower Python integer.
-        def _to_native_if_safe(v):
-            if not (np.isscalar(v) and hasattr(v, "item")):
-                return v
-            dt = np.dtype(type(v))
-            # Keep typed when unsigned or itemsize >= 8 to avoid silent int32 truncation.
-            if np.issubdtype(dt, np.unsignedinteger) or dt.itemsize >= 8:
-                return v
-            return v.item()
-
-        value2 = _to_native_if_safe(value2)
+        # Numeric NumPy scalars are strong operands, even when their value fits
+        # in a Python scalar. Normalizing them changes NumPy 2 promotion rules.
+        if (
+            np.isscalar(value2)
+            and hasattr(value2, "item")
+            and not _is_typed_numeric_scalar(value2)
+            and np.dtype(type(value2)).itemsize < 8
+        ):
+            value2 = value2.item()
 
         # Non-finite Python floats repr as bare names ("nan", "inf") that no
         # expression evaluator defines; retype them so they take the
@@ -4043,19 +4199,18 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                svalue1 = format_expr_scalar(value1)
-                svalue2 = format_expr_scalar(value2)
-                self.operands = {"o0": evaluate_chunk(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
+                self.operands = {
+                    "o0": evaluate_chunk(f"{op}(o0, o1)", {"o0": value1, "o1": value2})
+                }  # eager evaluation, preserving strong scalar dtypes
             elif np.isscalar(value2):
-                if isinstance(value2, np.floating) and not math.isfinite(value2):
-                    # nan/inf have no expression literal — keep as named operand
+                if _is_typed_numeric_scalar(value2):
                     self.operands = {"o0": value1, "o1": value2}
                     self.expression = f"{op}(o0, o1)"
                 else:
                     self.operands = {"o0": value1}
                     self.expression = f"{op}(o0, {format_expr_scalar(value2)})"
             elif np.isscalar(value1):
-                if isinstance(value1, np.floating) and not math.isfinite(value1):
+                if _is_typed_numeric_scalar(value1):
                     self.operands = {"o0": value2, "o1": value1}
                     self.expression = f"{op}(o1, o0)"
                 else:
@@ -4069,7 +4224,7 @@ class LazyExpr(LazyArray):
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = "o0"
-            self.operands = {"o0": evaluate_chunk(f"({value1!r} {op} {value2!r})")}  # eager evaluation
+            self.operands = {"o0": evaluate_chunk(f"(o0 {op} o1)", {"o0": value1, "o1": value2})}
         elif np.isscalar(value2):
             if hasattr(value2, "dtype"):  # typed numpy scalar — keep as named operand
                 self.operands = {"o0": value1, "o1": value2}
@@ -4077,7 +4232,7 @@ class LazyExpr(LazyArray):
             else:
                 self.operands = {"o0": value1}
                 self.expression = f"(o0 {op} {value2!r})"
-        elif hasattr(value2, "shape") and value2.shape == ():
+        elif hasattr(value2, "shape") and value2.shape == () and not _is_typed_numeric_scalar(value2):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
@@ -4087,7 +4242,7 @@ class LazyExpr(LazyArray):
             else:
                 self.operands = {"o0": value2}
                 self.expression = f"({value1!r} {op} o0)"
-        elif hasattr(value1, "shape") and value1.shape == ():
+        elif hasattr(value1, "shape") and value1.shape == () and not _is_typed_numeric_scalar(value1):
             self.operands = {"o0": value2}
             self.expression = f"({value1[()]} {op} o0)"
         else:
@@ -4141,9 +4296,9 @@ class LazyExpr(LazyArray):
             )
             def_operands = value1.operands
         elif isinstance(value1, LazyExpr):
-            if np.isscalar(value2):
+            if np.isscalar(value2) and not _is_typed_numeric_scalar(value2):
                 v2 = format_expr_scalar(value2)
-            elif hasattr(value2, "shape") and value2.shape == ():
+            elif hasattr(value2, "shape") and value2.shape == () and not _is_typed_numeric_scalar(value2):
                 v2 = format_expr_scalar(value2[()])
             else:
                 operand_to_key = {id(v): k for k, v in value1.operands.items()}
@@ -4162,9 +4317,9 @@ class LazyExpr(LazyArray):
                 )
             def_operands = value1.operands
         else:
-            if np.isscalar(value1):
+            if np.isscalar(value1) and not _is_typed_numeric_scalar(value1):
                 v1 = format_expr_scalar(value1)
-            elif hasattr(value1, "shape") and value1.shape == ():
+            elif hasattr(value1, "shape") and value1.shape == () and not _is_typed_numeric_scalar(value1):
                 v1 = format_expr_scalar(value1[()])
             else:
                 operand_to_key = {id(v): k for k, v in value2.operands.items()}
@@ -5241,6 +5396,8 @@ class LazyExpr(LazyArray):
             kwargs["_eval_kwargs"] = self._eval_kwargs
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
+        if hasattr(self, "_optimization"):
+            kwargs.setdefault("_optimization", self._optimization)
         kwargs.setdefault("fp_accuracy", fp_accuracy)
         if jit is not None:
             kwargs["jit"] = jit
@@ -5270,6 +5427,7 @@ class LazyExpr(LazyArray):
                 "_order",
                 "_eval_kwargs",
                 "_use_index",
+                "_optimization",
                 "dtype",
                 "shape",
                 "fp_accuracy",

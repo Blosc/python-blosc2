@@ -1227,7 +1227,11 @@ class ExpressionGraph:
         call.keywords = [ast.keyword(arg=key, value=nodes[key]) for key in bound]
         return ast.unparse(tree.body), shape, dtype
 
-    def evaluate(self, operands, *, prefer_blosc=False):  # noqa: C901
+    def evaluate(self, operands, *, prefer_blosc=False, numpy_bool_ops=False):  # noqa: C901
+        """Evaluate admitted nodes, optionally using logical operations for actual arrays.
+
+        Scalar and/or retain Python's lazy, operand-valued semantics in either mode.
+        """
         validate_operands(operands)
         missing = self.names - operands.keys()
         if missing:
@@ -1249,10 +1253,19 @@ class ExpressionGraph:
             elif kind == "binary":
                 result = _BINARY[args[0]](visit(args[1]), visit(args[2]))
             elif kind == "unary":
-                result = _UNARY[args[0]](visit(args[1]))
+                value = visit(args[1])
+                result = (
+                    np.logical_not(value)
+                    if numpy_bool_ops and args[0] is ast.Not and type(value) is np.ndarray and value.ndim
+                    else _UNARY[args[0]](value)
+                )
             elif kind == "boolean":
                 result = visit(args[1][0])
                 for item in args[1][1:]:
+                    if numpy_bool_ops and type(result) is np.ndarray and result.ndim:
+                        operation = np.logical_and if args[0] is ast.And else np.logical_or
+                        result = operation(result, visit(item))
+                        continue
                     if (args[0] is ast.And and not result) or (args[0] is ast.Or and result):
                         break
                     result = visit(item)

@@ -1628,6 +1628,7 @@ def test_numpy_funcs(array_fixture, func):
 def test_string_scalar_keeps_miniexpr_path(monkeypatch):
     import importlib
 
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
@@ -1719,6 +1720,7 @@ def test_miniexpr_failure_falls_back_default(monkeypatch):
 def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
     import importlib
 
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
@@ -2457,6 +2459,20 @@ def _record_miniexpr(monkeypatch):
     return compiled
 
 
+def _record_typed_prefilter(monkeypatch):
+    """Record artifacts scheduled through the typed Menudet prefilter."""
+    original = blosc2.NDArray._execute_menudet_prefilter
+    calls = []
+
+    def wrapped(self, kernel, inputs, *args, **kwargs):
+        res = original(self, kernel, inputs, *args, **kwargs)
+        calls.append(True)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", wrapped)
+    return calls
+
+
 @pytest.mark.parametrize(
     ("dtype", "x", "y"),
     [
@@ -2469,6 +2485,8 @@ def _record_miniexpr(monkeypatch):
 )
 @pytest.mark.parametrize("getitem", [False, True])
 def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     compiled = _record_miniexpr(monkeypatch)
     na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
     nb = (na // 3).astype(dtype)
@@ -2480,9 +2498,12 @@ def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
     res = expr[:] if getitem else expr.compute()[:]
     assert res.dtype == expected.dtype
     np.testing.assert_array_equal(res, expected)
-    # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
-    assert len(compiled) == 1
-    assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
+    if typed_evaluator_enabled():
+        assert not compiled
+    else:
+        # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
+        assert len(compiled) == 1
+        assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
 
 
 @pytest.mark.parametrize(
@@ -2490,6 +2511,8 @@ def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
 )
 @pytest.mark.parametrize("getitem", [False, True])
 def test_where_mixed_dtypes_use_miniexpr(monkeypatch, case, getitem):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     # Conditions whose operands cast safely to the output dtype stay on miniexpr
     compiled = _record_miniexpr(monkeypatch)
     rng = np.random.default_rng(1)
@@ -2512,8 +2535,11 @@ def test_where_mixed_dtypes_use_miniexpr(monkeypatch, case, getitem):
     res = expr[:] if getitem else expr.compute()[:]
     assert res.dtype == expected.dtype
     np.testing.assert_array_equal(res, expected)
-    assert len(compiled) == 1
-    assert "where(" in compiled[0]
+    if typed_evaluator_enabled():
+        assert not compiled
+    else:
+        assert len(compiled) == 1
+        assert "where(" in compiled[0]
 
 
 def test_where_float32_condition_inexact_literal():
@@ -2540,6 +2566,50 @@ def test_where_large_uint64_scalar():
     for res in (expr[:], expr.compute()[:]):
         assert res.dtype == np.uint64
         np.testing.assert_array_equal(res, expected)
+
+
+@pytest.mark.parametrize("scalar_array", [False, True])
+@pytest.mark.parametrize("case", ["compare", "fused_compare", "reverse_compare", "add", "maximum"])
+def test_strong_scalar_survives_expression_fusion(monkeypatch, scalar_array, case):
+    compiled = _record_miniexpr(monkeypatch)
+    na = np.full((4, 6), 0.1, dtype=np.float32)
+    a = blosc2.asarray(na, chunks=(2, 6), blocks=(1, 3))
+    scalar = np.array(0.1, dtype=np.float64) if scalar_array else np.float64(0.1)
+    if case == "compare":
+        expr, expected = a > scalar, na > scalar
+    elif case == "fused_compare":
+        expr, expected = (a + 0) > scalar, (na + 0) > scalar
+    elif case == "reverse_compare":
+        expr, expected = scalar < (a + 0), scalar < (na + 0)
+    elif case == "add":
+        expr, expected = (a + 0) + scalar, (na + 0) + scalar
+    else:
+        expr, expected = blosc2.maximum(a, scalar), np.maximum(na, scalar)
+    # No scalar inlining: strong dtypes remain available to each evaluator.
+    assert any(getattr(value, "dtype", None) == np.float64 for value in expr.operands.values())
+    assert expr.dtype == expected.dtype
+    for result in (expr[:], expr.compute(jit=False)[:], expr.compute(jit=True)[:], expr[:2]):
+        assert result.dtype == expected.dtype
+        np.testing.assert_array_equal(result, expected[:2] if result.shape == (2, 6) else expected)
+    np.testing.assert_array_equal(expr.sum(), expected.sum())
+    assert not compiled
+
+
+def test_python_scalar_remains_weak():
+    na = np.full(12, 0.1, dtype=np.float32)
+    a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
+    for result in ((a > 0.1)[:], ((a + 0) > 0.1)[:]):
+        np.testing.assert_array_equal(result, na > 0.1)
+
+
+def test_float32_scalar_retains_strong_dtype():
+    na = np.ones(12, dtype=np.float16)
+    a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
+    scalar = np.float32(0.1)
+    for expr in (a + scalar, (a + 0) + scalar, scalar + (a + 0)):
+        expected = na + scalar
+        assert expr.dtype == expected.dtype
+        np.testing.assert_array_equal(expr[:], expected)
 
 
 @pytest.mark.parametrize("dtype", [np.int64, np.uint64])
@@ -2675,8 +2745,11 @@ def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, 
     # getitem writes the miniexpr results straight into the NumPy result when the chunks tile it
     import importlib
 
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    typed_sources = _record_typed_prefilter(monkeypatch)
     assert lazyexpr_mod._chunks_tile_flat(shape, chunks, blocks) is direct
     rng = np.random.default_rng(1)
     na = (rng.random(shape) * 100).astype(dtype)
@@ -2688,7 +2761,9 @@ def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, 
     else:
         second = ((a - b) > 40, (na - nb) > 40)
     for expr, expected in [(a + b * 2, na + nb * 2), second]:
-        for res in (expr[:], expr[()]):
+        for accessor in (slice(None), ()):
+            typed_sources.clear()
+            res = expr[accessor]
             assert res.dtype == expected.dtype
             assert res.flags.c_contiguous
             assert res.flags.writeable
@@ -2696,12 +2771,24 @@ def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, 
             base = res
             while isinstance(getattr(base, "base", None), np.ndarray):
                 base = base.base
-            # The direct path's buffer holds a header prefix and at most one chunk of padding
-            chunk_nbytes = math.prod(chunks) * res.itemsize
-            nchunks = math.prod(-(-s // c) for s, c in zip(shape, chunks, strict=True))
-            in_place = base.dtype == np.uint8 and base.nbytes == nchunks * chunk_nbytes + (
-                blosc2.EXTENDED_HEADER_LENGTH
-            )
-            if dtype is np.complex128 and not in_place:
-                continue  # miniexpr is not used for complex numbers on some platforms
-            assert in_place is direct
+            if typed_evaluator_enabled():
+                # The typed prefilter writes directly into an exact-sized NumPy array.
+                assert base is res
+                if (
+                    dtype is not np.complex128
+                    and not blosc2.IS_WASM
+                    and getattr(
+                        blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False
+                    )()
+                ):
+                    assert bool(typed_sources) is direct
+            else:
+                # The direct path's buffer holds a header prefix and at most one chunk of padding
+                chunk_nbytes = math.prod(chunks) * res.itemsize
+                nchunks = math.prod(-(-s // c) for s, c in zip(shape, chunks, strict=True))
+                in_place = base.dtype == np.uint8 and base.nbytes == nchunks * chunk_nbytes + (
+                    blosc2.EXTENDED_HEADER_LENGTH
+                )
+                if dtype is np.complex128 and not in_place:
+                    continue  # miniexpr is not used for complex numbers on some platforms
+                assert in_place is direct

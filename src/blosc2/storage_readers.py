@@ -629,9 +629,13 @@ def _dense_compressed_eligible(lazy, *, allow_strings=False):
     first = values[0]
     if not first.ndim or not first.size or tuple(first.shape) != lazy._domain:
         return False
-    # Row slabs have identical physical block order and logical C-order lanes.
-    # Other N-D tilings need coordinate-aware readers, not flattened offsets.
-    if first.chunks[1:] != first.shape[1:] or first.blocks[1:] != first.shape[1:]:
+    if getattr(blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False)():
+        from .ndarray import chunks_tile_flat
+
+        if not chunks_tile_flat(first.shape, first.chunks, first.blocks):
+            return False
+    elif first.chunks[1:] != first.shape[1:] or first.blocks[1:] != first.shape[1:]:
+        # Earlier bindings only qualify full-width row slabs.
         return False
     if any(
         value.shape != first.shape

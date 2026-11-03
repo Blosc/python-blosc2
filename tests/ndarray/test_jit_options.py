@@ -268,6 +268,7 @@ def kernel(x):
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native miniexpr prefilter observation")
 def test_fp_accuracy_precedence(monkeypatch):
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     observed = []
     original = blosc2.NDArray._set_pref_expr
 
@@ -376,6 +377,8 @@ def test_synthesized_backend_respects_environment_and_source(monkeypatch, backen
 def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, jit):
     import importlib
 
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     lazyexpr = importlib.import_module("blosc2.lazyexpr")
 
     def reject_elementwise_wrapper(*args):
@@ -384,6 +387,7 @@ def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, ji
     monkeypatch.setattr(lazyexpr, "_apply_jit_backend_pragma", reject_elementwise_wrapper)
     original = blosc2.NDArray._set_pref_expr
     calls = []
+    typed_calls = []
 
     def capture(self, expression, inputs, fp_accuracy, aux_reduc=None, **kwargs):
         assert aux_reduc is not None
@@ -391,7 +395,14 @@ def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, ji
         calls.append(expression)
         return original(self, expression, inputs, fp_accuracy, aux_reduc, **kwargs)
 
+    original_menudet = blosc2.NDArray._execute_menudet_prefilter
+
+    def capture_menudet(self, *args, **kwargs):
+        typed_calls.append(kwargs.get("reduction_op"))
+        return original_menudet(self, *args, **kwargs)
+
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", capture)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", capture_menudet)
     values = np.arange(128, dtype=np.float64)
     expr = blosc2.asarray(values) * 2 + 1
     assert expr.sum(jit=jit, jit_backend=backend) == (values * 2 + 1).sum()
@@ -399,6 +410,9 @@ def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, ji
         # WASM currently uses the non-prefilter reduction path. It must still
         # produce correct results without introducing an elementwise wrapper.
         assert not calls
+    elif typed_evaluator_enabled():
+        assert not calls
+        assert typed_calls == [1]
     else:
         assert calls
     assert all(expression.startswith("sum(") for expression in calls)
