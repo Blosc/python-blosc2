@@ -374,3 +374,25 @@ Local validation with `BLOSC2_EXPRESSION_EVALUATOR` removed from the environment
 full default suite **12,687 passed, 98 skipped** using four workers. Ruff lint and
 format checks and workflow YAML parsing pass. Fresh platform CI is still pending;
 these local results do not substitute for actual NumPy 1.26 or Pyodide runs.
+
+#### First default-mode CI follow-up
+
+The first switch-first CI run exposed platform assumptions rather than numerical
+dtype failures:
+
+- Summary-index OR queries could be pruned with one column's candidate-block
+  bitmap. That is sound for a conjunction, not an OR: a block matching only the
+  other branch was skipped. OR now uses the plan's combined candidate segments;
+  conjunctions keep the combined per-column bitmap optimization. This also makes
+  the documented segment path the single owner of OR correctness.
+- NumPy 1 has no string ufuncs, so `np.add` cannot concatenate Unicode/bytes.
+  The pre-2 installed-NumPy policy now applies only to numerical expressions;
+  string/bytes expressions keep their existing miniexpr-backed route.
+- Typed-mode test expectations were corrected where they assumed host native
+  prefilters (none on WASM), native-only square rewriting/disk-cache tracing
+  (unavailable under the NumPy 1 fallback), or compared a `pow` result across two
+  engines rather than against an explicit NumPy reference.
+
+These fixes preserve the fallback/retirement policy; they do not reintroduce
+uniform-dtype numerical execution. Fresh CI results for the follow-up revision
+remain required.

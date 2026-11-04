@@ -48,6 +48,8 @@ def test_aggressive_power_dtype_and_destination(dtype):
 
 @pytest.mark.parametrize("expression", ["x**2", "pow(x, 2)", "x**2.0", "pow(x, 2.0)"])
 def test_default_square(expression):
+    if _NUMPY_VALUE_PROMOTION and expression.startswith("pow"):
+        pytest.skip("Square rewriting is native-only; NumPy 1 uses its own pow")
     x = np.arange(257, dtype="float64") * 0.1
     np.testing.assert_array_equal(blosc2.evaluate(expression, local_dict={"x": x}), x * x)
 

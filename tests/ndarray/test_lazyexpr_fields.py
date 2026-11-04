@@ -163,12 +163,10 @@ def test_iXXX(array_fixture):
     if not blosc2.IS_WASM:
         expr **= 2.3  # __ipow__
     res = expr.compute()
-    if not blosc2.IS_WASM:
-        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
-    else:
-        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)")
-    # NumPy raises: RuntimeWarning: invalid value encountered in power
-    # nres = (((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3
+    with np.errstate(all="ignore"):
+        chain = ((((na1**3 + na2**2 + na3**3 - na4 + 3) + 5) - 15) * 2) / 7
+        # NumPy also raises invalid-value power warnings; compare its values.
+        nres = chain if blosc2.IS_WASM else chain**2.3
     np.testing.assert_allclose(res[:], nres)
 
 

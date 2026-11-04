@@ -14,6 +14,11 @@
   hatch, selected before constructing expressions. Explicit compatibility DSL
   and Python UDF contracts are unchanged. Unsupported typed execution never
   silently retries through the uniform evaluator after numerical execution starts.
+- Summary-index OR queries no longer prune with a single column's candidate-block
+  bitmap; only conjunctions may combine such masks. OR predicates use the plan's
+  combined candidate segments, preserving rows that match only the other branch.
+- On NumPy < 2, non-numeric expressions keep their existing string route because
+  NumPy 1 has no string ufuncs; the installed-NumPy policy is numerical.
 - Some non-flat N-D fallback layouts remain slower than legacy fused execution;
   see `doc/development/expression_evaluator_migration.md` and the migration plan
   for profiling evidence and known limitations. Platform qualification is ongoing.

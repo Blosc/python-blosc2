@@ -59,7 +59,7 @@ def test_numpy_prefilter_output(dtype, mode, monkeypatch):
     from blosc2.expression_evaluator import typed_evaluator_enabled
 
     np.testing.assert_array_equal(result, expected)
-    if _NUMPY_VALUE_PROMOTION:
+    if _NUMPY_VALUE_PROMOTION or (blosc2.IS_WASM and typed_evaluator_enabled()):
         assert calls == []
         return
     if typed_evaluator_enabled():
@@ -124,8 +124,12 @@ def test_numpy_prefilter_non_aligned_blocks_fall_back():
 def test_prefilter_execution_error_is_not_replayed(monkeypatch, reduction, automatic_native_runtime):
     import importlib
 
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
     if reduction and blosc2.IS_WASM:
         pytest.skip("WASM scalar reductions do not install a native prefilter")
+    if not reduction and blosc2.IS_WASM and typed_evaluator_enabled():
+        pytest.skip("WASM does not install a typed compression prefilter")
     module = importlib.import_module("blosc2.lazyexpr")
     values = np.arange(257, dtype=np.float64)
     inputs = {"x": blosc2.asarray(values, chunks=(128,), blocks=(32,))}

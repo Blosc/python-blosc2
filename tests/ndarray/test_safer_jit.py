@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from blosc2.lazyexpr import _jit_from_env
 
 pytestmark = pytest.mark.skipif(
@@ -160,6 +161,8 @@ def test_cc_failure_is_quiet(tmp_path, failure, trace):
 def test_cc_reuses_disk_cache_in_fresh_process(tmp_path):
     if shutil.which("cc") is None:
         pytest.skip("System compiler unavailable")
+    if _NUMPY_VALUE_PROMOTION:
+        pytest.skip("Automatic native chunk execution is disabled on NumPy < 2")
     # One real compiled kernel is enough to prove cross-process disk reuse.
     # Other probes retain the full constructor/expression/UDF/reduction workload.
     cold = run_probe(tmp_path, backend="cc", trace=True, workload="cache", CFLAGS="-O0")

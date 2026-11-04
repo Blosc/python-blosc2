@@ -38,8 +38,10 @@ WASM dispatch has representative host-side tests and actual Pyodide wheel tests.
 Qualification also requires the full Pyodide suite with typed globally selected;
 passing targeted typed tests alone is not that evidence.
 
-On NumPy older than 2, automatic ordinary-expression execution uses the installed
-NumPy with bounded Blosc2 chunk/reduction scheduling. Resident preparation, cached
+On NumPy older than 2, automatic ordinary numerical-expression execution uses the
+installed NumPy with bounded Blosc2 chunk/reduction scheduling. Non-numeric
+(string/bytes) expressions keep their existing miniexpr-backed route because NumPy
+1 has no string ufuncs. Resident preparation, cached
 native preparation, native-first dispatch, and typed prefilters decline native
 execution. This is an intentional compatibility policy, not a temporary promise
 to implement NumPy 1.x value-dependent scalar promotion in the native compiler.

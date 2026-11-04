@@ -2069,8 +2069,17 @@ def fast_eval(  # noqa: C901
     is_dsl = _is_dsl_kernel_expression(expression)
     expr_string = expression.dsl_source if is_dsl else expression
     dsl_disable_reason = None
+    # NumPy 1 has no string ufuncs, so non-numeric expressions keep their
+    # existing (miniexpr-backed) route there. The pre-2 policy is numerical.
+    string_operands = _NUMPY_VALUE_PROMOTION and any(
+        isinstance(value, blosc2.NDArray | np.ndarray) and value.dtype.kind in "SU"
+        for value in operands.values()
+    )
     typed_expression = (
-        not is_dsl and isinstance(expression, str) and (typed_evaluator_enabled() or _NUMPY_VALUE_PROMOTION)
+        not is_dsl
+        and isinstance(expression, str)
+        and not string_operands
+        and (typed_evaluator_enabled() or _NUMPY_VALUE_PROMOTION)
     )
     if typed_expression:
         # This route may use typed artifacts or explicit NumPy fallback, never
