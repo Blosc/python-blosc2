@@ -1994,6 +1994,18 @@ cdef class SChunk:
         return <uintptr_t> self.schunk
 
     @property
+    def _has_prefilter(self):
+        """Whether writes through this handle run a prefilter."""
+        with self._handle_lock:
+            return self.schunk.storage.cparams.prefilter != NULL
+
+    @property
+    def _has_postfilter(self):
+        """Whether reads through this handle run a postfilter."""
+        with self._handle_lock:
+            return self.schunk.storage.dparams.postfilter != NULL
+
+    @property
     def chunksize(self):
         return self.schunk.chunksize
 

@@ -3843,6 +3843,9 @@ def _chunks_interchangeable(dst: NDArray, src: NDArray) -> bool:
     """Whether the compressed chunks of `src` can stand for those of `dst` (and vice versa): they
     lay out the same items the same way (dtype, chunks, blocks) and encode them the same lossless
     way."""
+    # Copying compressed bytes skips both the source postfilter and the destination prefilter.
+    if src.schunk._has_postfilter or dst.schunk._has_prefilter:
+        return False
     if src.dtype != dst.dtype or src.chunks != dst.chunks or src.blocks != dst.blocks:
         return False
     a, b = dst.cparams, src.cparams
@@ -5089,7 +5092,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         meanwhile.  (Holding it across a Python loop would make other handles of the file in this
         process wait for it holding the GIL.)
         """
-        if self.ndim == 0:
+        # Special chunks skip compression, including its prefilter. Keep a single ordinary
+        # set_slice call with callbacks so partial chunks are filtered exactly as before.
+        if self.ndim == 0 or self.schunk._has_prefilter:
             return False
         region = math.prod(sp - st for st, sp in zip(start, stop, strict=True))
         chunk_nitems = math.prod(self.chunks)
@@ -5136,7 +5141,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         with this array or takes the cross-process frame lock (it must be read in full before
         writing then), or when this array takes that lock (see _fill_chunkwise).
         """
-        if self.ndim == 0:
+        # One ordinary write preserves prefilter calls on the containing partial chunks too.
+        if self.ndim == 0 or self.schunk._has_prefilter:
             return False
         region = tuple(sp - st for st, sp in zip(start, stop, strict=True))
         chunk_nitems = math.prod(self.chunks)
