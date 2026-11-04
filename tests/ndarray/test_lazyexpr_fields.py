@@ -167,7 +167,9 @@ def test_iXXX(array_fixture):
         chain = ((((na1**3 + na2**2 + na3**3 - na4 + 3) + 5) - 15) * 2) / 7
         # NumPy also raises invalid-value power warnings; compare its values.
         nres = chain if blosc2.IS_WASM else chain**2.3
-    np.testing.assert_allclose(res[:], nres)
+    # Native and NumPy power implementations can differ in the last bits; compare
+    # each engine's end-to-end expression against the same NumPy reference.
+    np.testing.assert_allclose(res[:], nres, rtol=1e-6)
 
 
 def test_complex_evaluate(array_fixture):
