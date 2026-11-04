@@ -394,5 +394,13 @@ dtype failures:
   engines rather than against an explicit NumPy reference.
 
 These fixes preserve the fallback/retirement policy; they do not reintroduce
-uniform-dtype numerical execution. Fresh CI results for the follow-up revision
-remain required.
+uniform-dtype numerical execution.
+
+#### Follow-up CI result
+
+The follow-up revision passed the complete check rollup: native Linux, macOS,
+Windows, Linux ARM, Python 3.12/3.14, NumPy 1.26, the explicit legacy escape
+hatch, actual Pyodide (3.13/3.14), wheel builds, Python 3.11–3.15 abi3 tests,
+and pre-commit. Typed is therefore the qualified development default for this
+revision. Ordinary-expression legacy deletion and selector removal remain
+separate deferred work, as planned.
