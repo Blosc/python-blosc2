@@ -128,7 +128,7 @@ def test_set_prefetch(prefetch):
         prefetch(1, 0, (64 << 10) - 1)
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork()")
+@pytest.mark.skipif(blosc2.IS_WASM or not hasattr(os, "fork"), reason="needs native fork()")
 def test_fork(on_disk, prefetch):
     path, expected = on_disk
     prefetch(4)
