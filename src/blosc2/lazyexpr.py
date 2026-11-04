@@ -180,6 +180,10 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
             # rules, so let it reach the fallback below.
         else:
             raise  # unsafe expression
+    except SyntaxError as e:
+        # Invalid syntax must not fall through to another evaluator. NumExpr
+        # versions differ in whether they report this as ValueError or SyntaxError.
+        raise ValueError(f"'{expression}' is not a valid expression.") from e
     except Exception:
         pass
     # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure

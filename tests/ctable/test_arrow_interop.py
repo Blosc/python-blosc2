@@ -800,8 +800,8 @@ def test_from_arrow_requires_batches_for_plain_schema():
 def test_duckdb_reads_ctable_directly():
     duckdb = pytest.importorskip("duckdb")
     t = CTable(Row, new_data=DATA10)
-    result = duckdb.sql("SELECT count(*) AS n FROM t").fetchone()
-    assert result[0] == len(DATA10)
+    result = duckdb.sql("SELECT count(*) AS n FROM t").fetchall()
+    assert result == [(len(DATA10),)]
 
 
 def test_polars_reads_ctable_directly():
