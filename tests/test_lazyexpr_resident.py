@@ -8,7 +8,7 @@ from blosc2.graph_plan import NativeGraph
 
 
 @pytest.fixture(autouse=True)
-def runtime():
+def runtime(automatic_native_runtime):
     if not hasattr(blosc2.blosc2_ext.NativeGraphHandle, "resident_artifact"):
         pytest.skip("Requires borrowed graph artifact binding")
     previous = blosc2.nthreads

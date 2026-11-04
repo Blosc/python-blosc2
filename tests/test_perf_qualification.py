@@ -131,7 +131,7 @@ def test_cache_isolation_does_not_configure_auto_route(qualification, monkeypatc
 
 
 @HOST_WORKER_TESTS
-def test_auto_and_configured_routes_are_distinct(qualification, tmp_path):
+def test_auto_and_configured_routes_are_distinct(qualification, tmp_path, automatic_native_runtime):
     request = {
         "case_id": "evaluate-polynomial-auto-new",
         "arm": "candidate",
@@ -257,7 +257,7 @@ def test_manifest_revisions(qualification, tmp_path):
 
 
 @HOST_WORKER_TESTS
-def test_real_worker_smoke(qualification, tmp_path):
+def test_real_worker_smoke(qualification, tmp_path, automatic_native_runtime):
     # Interpreter-independent numerical semantics remain native tests' concern.
     # Here a missing required compiler is a recorded failure, never a skip/pass.
     request = {
@@ -372,7 +372,7 @@ def test_pair_records_failed_process_and_artifacts(qualification, monkeypatch, t
     ],
 )
 @HOST_WORKER_TESTS
-def test_curated_route_smoke(qualification, tmp_path, case_id):
+def test_curated_route_smoke(qualification, tmp_path, case_id, automatic_native_runtime):
     row = qualification.worker(
         {
             "case_id": case_id,

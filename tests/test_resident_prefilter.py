@@ -14,7 +14,7 @@ from blosc2.native_graph import prepare_resident
 
 
 @pytest.fixture(autouse=True)
-def resident_prefilter_runtime(native_graph_runtime):
+def resident_prefilter_runtime(automatic_native_runtime):
     if not getattr(blosc2.blosc2_ext, "menudet_resident_prefilter_available", lambda: False)():
         pytest.skip("Installed extension lacks native resident prefilter scheduling")
 

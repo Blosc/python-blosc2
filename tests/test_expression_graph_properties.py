@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from conftest import orthogonal_cases
 
 
@@ -183,7 +184,7 @@ def test_mixed_backend_intermediates_match_trusted_contract(backends, dtype, tex
     + [("numpy", "uint8", "256"), ("blosc2", "uint8", "256")],
 )
 def test_weak_scalar_value_and_error_contract_matches_trusted(backend, dtype, literal):
-    if np.lib.NumpyVersion(np.__version__) < "2.0.0":
+    if _NUMPY_VALUE_PROMOTION:
         pytest.skip("Menudet follows NumPy 2 weak-scalar overflow diagnostics, not NumPy 1 wrapping")
     data = np.arange(1, 5, dtype=dtype)
     operands = {"x": data if backend == "numpy" else blosc2.asarray(data)}

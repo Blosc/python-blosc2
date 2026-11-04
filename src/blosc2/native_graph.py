@@ -19,7 +19,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from .expression_graph import expression_syntax, parse_expression, validate_operands
+from .expression_graph import _NUMPY_VALUE_PROMOTION, expression_syntax, parse_expression, validate_operands
 
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
 PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
@@ -402,11 +402,25 @@ class _ConfiguredResidentSchedule:
 
 
 def prepare_resident(
-    expression, inputs, *, jit=None, jit_backend=None, cached=None, plan=None, optimization="moderate"
+    expression,
+    inputs,
+    *,
+    jit=None,
+    jit_backend=None,
+    cached=None,
+    plan=None,
+    optimization="moderate",
+    explicit=False,
 ):
-    """Prepare an admitted resident map; retain metadata and native owners only."""
+    """Prepare a resident map, retaining metadata/native owners, never values.
+
+    Explicit Menudet kernels retain their numerical contract on NumPy 1; only
+    automatic ordinary-expression admission follows the NumPy fallback policy.
+    """
     import blosc2
 
+    if _NUMPY_VALUE_PROMOTION and not explicit:
+        return None
     signature = _resident_signature(expression, inputs, jit, optimization, jit_backend=jit_backend)
     if signature is None:
         return None
@@ -471,6 +485,8 @@ def compute_resident_if_eligible(expr, item, *, jit=None, jit_backend=None, fp_a
     """Bind current arrays to a prepared whole-domain map without general graph/storage dispatch."""
     import blosc2
 
+    if _NUMPY_VALUE_PROMOTION:
+        return None
     prepared = getattr(expr, "_resident_native", None)
     if prepared is None or fp_accuracy is not None:
         return None
@@ -553,7 +569,7 @@ def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=
     """
     import blosc2
 
-    if jit_backend is not None or fp_accuracy is not None:
+    if _NUMPY_VALUE_PROMOTION or jit_backend is not None or fp_accuracy is not None:
         return None
     if type(expr) is not blosc2.LazyExpr or any(
         hasattr(expr, name) for name in ("_where_args", "_indices", "_order")
@@ -730,7 +746,7 @@ def compute_native_prefilter_if_eligible(  # noqa: C901 -- metadata-only layout/
 
     from .storage_readers import compute_storage_if_eligible
 
-    if fp_accuracy is not None:
+    if _NUMPY_VALUE_PROMOTION or fp_accuracy is not None:
         return None
     policy = blosc2.jit_config.execution_options()
     configured = jit_backend is not None or any(

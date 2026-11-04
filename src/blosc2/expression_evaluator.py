@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from .expression_graph import _NUMPY_VALUE_PROMOTION
 from .proxy_source import convert_dtype
 
 _BINARY_OPERATIONS = {
@@ -31,7 +32,7 @@ _BINARY_OPERATIONS = {
 
 def typed_evaluator_enabled():
     """Temporary rollout selector; explicit compatibility DSL kernels are unaffected."""
-    value = os.environ.get("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
+    value = os.environ.get("BLOSC2_EXPRESSION_EVALUATOR", "typed")
     if value not in {"legacy", "typed"}:
         raise ValueError("BLOSC2_EXPRESSION_EVALUATOR must be 'legacy' or 'typed'")
     return value == "typed"
@@ -77,7 +78,7 @@ def _prepare_typed_map_kernel(expression, operands, *, jit=None, jit_backend=Non
     from .storage_readers import storage_reader_eligible
 
     extension = blosc2.blosc2_ext
-    if blosc2.IS_WASM or np.__version__.startswith("1."):
+    if blosc2.IS_WASM or _NUMPY_VALUE_PROMOTION:
         return None
     if not getattr(extension, "menudet_prefilter_available", lambda: False)():
         return None

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +17,28 @@ def typed_route(monkeypatch):
         pytest.fail("Ordinary typed expressions reached the uniform-dtype evaluator")
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", forbidden)
+
+
+@pytest.mark.parametrize(("selector", "expected"), [(None, True), ("typed", True), ("legacy", False)])
+def test_default_and_escape_hatch(monkeypatch, selector, expected):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    if selector is None:
+        monkeypatch.delenv("BLOSC2_EXPRESSION_EVALUATOR", raising=False)
+    else:
+        monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", selector)
+    assert typed_evaluator_enabled() is expected
+
+
+def test_unset_selector_uses_typed_execution(monkeypatch):
+    monkeypatch.delenv("BLOSC2_EXPRESSION_EVALUATOR", raising=False)
+    values = np.arange(63, dtype=np.float32).reshape(7, 9)
+    a = blosc2.asarray(values, chunks=(3, 4), blocks=(2, 3))
+    expr = (a + 1) * 2
+    expected = (values + 1) * 2
+    np.testing.assert_array_equal(expr[:], expected)
+    np.testing.assert_array_equal(expr.compute()[:], expected)
+    np.testing.assert_allclose(expr.sum(), expected.sum())
 
 
 @pytest.mark.parametrize("force_wasm", [False, True])
@@ -75,7 +98,7 @@ def test_typed_large_unsigned_branch():
 
 
 def test_typed_weak_scalar_overflow_preserves_error_contract():
-    if np.__version__.startswith("1."):
+    if _NUMPY_VALUE_PROMOTION:
         pytest.skip("NumPy 1 has value-based scalar promotion")
     a = blosc2.asarray(np.arange(4, dtype=np.uint8))
     with pytest.raises(OverflowError):
@@ -108,6 +131,7 @@ def test_typed_output_contract(layout):
 def test_typed_flat_chunk_prefilter(monkeypatch, shape, chunks, blocks, direct):
     if (
         blosc2.IS_WASM
+        or _NUMPY_VALUE_PROMOTION
         or not getattr(blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False)()
     ):
         pytest.skip("Rebuilt native flat-chunk prefilter bindings are required")
@@ -145,7 +169,7 @@ def test_typed_unsupported_signature_uses_numpy(monkeypatch):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Typed compression prefilters are not admitted on WASM yet")
-@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy 1 uses the typed NumPy fallback")
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy 1 uses the typed NumPy fallback")
 def test_typed_prefilter_failure_is_not_replayed(monkeypatch, native_graph_runtime):
     values = np.arange(24, dtype=np.float64)
     a = blosc2.asarray(values, chunks=(12,), blocks=(4,))
@@ -196,7 +220,7 @@ def test_invalid_evaluator_selector(monkeypatch):
 def test_typed_scalar_reduction_prefilter(monkeypatch, dtype, op, explicit_dtype):
     if (
         blosc2.IS_WASM
-        or np.__version__.startswith("1.")
+        or _NUMPY_VALUE_PROMOTION
         or not getattr(blosc2.blosc2_ext, "menudet_prefilter_reductions_available", lambda: False)()
     ):
         pytest.skip("Rebuilt native prefilter reduction bindings are required")
@@ -264,7 +288,7 @@ def test_typed_boolean_accumulator_uses_logical_reduction(monkeypatch, op, value
     assert result == getattr(values, op)(dtype=np.bool_)
     if (
         not blosc2.IS_WASM
-        and not np.__version__.startswith("1.")
+        and not _NUMPY_VALUE_PROMOTION
         and getattr(blosc2.blosc2_ext, "menudet_prefilter_reductions_available", lambda: False)()
     ):
         assert calls == [5 if op == "sum" else 6]  # B2_REDUCE_ANY / B2_REDUCE_ALL
@@ -282,7 +306,7 @@ def test_typed_empty_boolean_accumulator_identity(op):
 def test_typed_candidate_block_prefilter(monkeypatch, prune_chunks):
     if (
         blosc2.IS_WASM
-        or np.__version__.startswith("1.")
+        or _NUMPY_VALUE_PROMOTION
         or not getattr(blosc2.blosc2_ext, "menudet_prefilter_reductions_available", lambda: False)()
     ):
         pytest.skip("Rebuilt native prefilter reduction bindings are required")

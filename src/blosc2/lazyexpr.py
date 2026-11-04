@@ -26,7 +26,7 @@ import warnings
 from abc import ABC, abstractmethod, abstractproperty
 from collections import OrderedDict
 from collections.abc import MutableMapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
@@ -64,6 +64,7 @@ from .expression_evaluator import (
     typed_evaluator_enabled,
 )
 from .expression_graph import (
+    _NUMPY_VALUE_PROMOTION,
     arithmetic_names,
     evaluate_expression,
     evaluation_mode,
@@ -188,13 +189,61 @@ def _numpy_eval_datetime_aware(expression, _globals, local_dict):
         return res
 
 
+def _prepare_chunk_schedule(expression, operands, optimization, policy, state):
+    """Amortize native preparation across one traversal without retaining arrays."""
+    from .native_graph import lower_native_graph, native_weak_scalars_eligible
+
+    cache_key = None
+    if state is not None:
+        cache_key = (
+            expression,
+            optimization,
+            typed_evaluator_enabled(),
+            tuple(policy.items()),
+            tuple((name, value.dtype, value.shape) for name, value in sorted(operands.items())),
+        )
+        prepared = state.schedules.get(cache_key)
+        if prepared is not None:
+            return prepared
+    stub = LazyExpr(None)
+    stub.expression, stub.operands, stub._optimization = expression, operands, optimization
+    try:
+        # Respect explicit no-JIT and unsupported compiler/accuracy policies.
+        graph_jit = (
+            policy["jit"]
+            if policy["jit_backend"] is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+            else False
+        )
+        plan, arrays, _ = lower_native_graph(stub, jit=graph_jit, allow_output=True)
+        if typed_evaluator_enabled() and not native_weak_scalars_eligible(plan, expression, operands):
+            return None
+    except (NotImplementedError, ValueError, TypeError):
+        return None
+    except blosc2.MenudetError as error:
+        if error.status not in {"invalid_signature", "unsupported"}:
+            raise
+        return None
+    # Bound map tiles without starting another pool inside a storage worker.
+    # Checked recipes and reductions retain their existing traversal.
+    tile_items = 65536 if plan.info().get("partitionable", False) else 1024
+    schedule = plan.specialize(
+        {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items=tile_items
+    )
+    prepared = plan, tuple(arrays), schedule, schedule.info()
+    if cache_key is not None:
+        if len(state.schedules) >= 64:
+            state.schedules.pop(next(iter(state.schedules)))
+        state.schedules[cache_key] = prepared
+    return prepared
+
+
 def evaluate_chunk(expression, local_dict=None, **kwargs):
     """Evaluate an invocation-local chunk with native numerical or NumPy semantics.
 
     Native admission is metadata-only. Unsupported signatures decline before
     execution; runtime failures are never replayed through NumPy.
     """
-    from .native_graph import _native_first_syntax, lower_native_graph, native_weak_scalars_eligible
+    from .native_graph import _native_first_syntax
 
     operands = {} if local_dict is None else dict(local_dict)
     depth = kwargs.pop("_frame_depth", 0)
@@ -214,46 +263,33 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
     output = kwargs.pop("out", None)
     validate_evaluate_options(kwargs)
     policy = blosc2.jit_config.execution_options()
-    native = None
+    prepared = None
+    state = _chunk_read_state.get()
     if (
-        operands
+        not _NUMPY_VALUE_PROMOTION
+        and operands
         and _native_first_syntax(expression)
         and all(type(value) is np.ndarray and value.dtype.kind in "biuf" for value in operands.values())
-        and not (typed_evaluator_enabled() and np.__version__.startswith("1."))
+        and not (
+            state is not None
+            and graph.arithmetic
+            and optimization == "moderate"
+            and typed_evaluator_enabled()
+            and policy["jit"] is None
+            and policy["jit_backend"] is None
+            and policy["math_backend"] is None
+            and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+            and not any(
+                policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir")
+            )
+            and all(value.dtype.kind == "f" and value.size < 65536 for value in operands.values())
+        )
         and not (output is not None and any(np.shares_memory(output, value) for value in operands.values()))
     ):
-        stub = LazyExpr(None)
-        stub.expression, stub.operands, stub._optimization = expression, operands, optimization
-        try:
-            # Chunk fallback must not silently force the scalar interpreter for
-            # numerical graphs that already have qualified native C lowering.
-            # Explicit no-JIT policy still wins; native compilation remains
-            # best effort and cached by expression/signature, never by arrays.
-            graph_jit = (
-                policy["jit"]
-                if policy["jit_backend"] is None and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
-                else False
-            )
-            native = lower_native_graph(stub, jit=graph_jit, allow_output=True)
-            if typed_evaluator_enabled() and not native_weak_scalars_eligible(
-                native[0], expression, operands
-            ):
-                native = None
-        except (NotImplementedError, ValueError, TypeError):
-            native = None
-        except blosc2.MenudetError as error:
-            if error.status not in {"invalid_signature", "unsupported"}:
-                raise
-    if native is not None:
-        plan, arrays, _ = native
-        # Match the native executor's bounded map tiles without starting another
-        # pool inside a caller-owned chunk/compression worker. Checked recipes
-        # and reductions retain their existing numerical traversal.
-        tile_items = 65536 if plan.info().get("partitionable", False) else 1024
-        schedule = plan.specialize(
-            {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items=tile_items
-        )
-        info = schedule.info()
+        prepared = _prepare_chunk_schedule(expression, operands, optimization, policy, state)
+    if prepared is not None:
+        _, names, schedule, info = prepared
+        arrays = {name: operands[name] for name in names}
         direct = (
             output is not None
             and type(output) is np.ndarray
@@ -263,6 +299,9 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
         )
         result, _ = schedule.execute(arrays, out=output) if direct else schedule.execute(arrays)
     else:
+        # For small floating arithmetic chunks without a JIT request, NumPy's
+        # vectorized operations beat scalar interpretation. Large chunks and explicit
+        # execution policies retain native admission. Integer policy is unchanged.
         # Native chunk execution collects FP status without emitting Python
         # warnings by default. Preserve that policy in the explicit fallback.
         with np.errstate(all="ignore"):
@@ -1549,11 +1588,13 @@ def read_nchunk(arrs, info):
 
 @dataclass
 class _ChunkReadState:
-    """Own one invocation's producer, including deterministic early-close cleanup."""
+    """Own one traversal's reader and metadata-only schedules, with deterministic cleanup."""
 
     iterator: Any = None
+    schedules: dict = field(default_factory=dict)
 
     def close(self):
+        self.schedules.clear()
         iterator, self.iterator = self.iterator, None
         if iterator is not None:
             iterator.close()
@@ -1621,8 +1662,9 @@ def fill_chunk_operands(
         chunks = next(iter_chunks)
 
         for i, (key, value) in enumerate(operands.items()):
-            # Chunks are already decompressed (unless low_mem), so full ones can be used directly
-            chunk_operands[key] = chunks[i] if full_chunk and not low_mem else value[slice_]
+            # The reader already returns valid-shaped edge chunks (or scalar
+            # zeros for reductions). Do not decompress edge chunks a second time.
+            chunk_operands[key] = chunks[i] if not low_mem else value[slice_]
         return
 
     # Get the starts and stops for the slice
@@ -1641,22 +1683,15 @@ def fill_chunk_operands(
             value.schunk.decompress_chunk(nchunk, buf)
             chunk_operands[key] = buf if full_chunk else buf[tuple(slice(0, n) for n in chunks_)]
             continue
-        if not full_chunk or not isinstance(value, blosc2.NDArray):
-            # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
-            # so we need to go the slow path
+        if not isinstance(value, blosc2.NDArray):
             chunk_operands[key] = value[slice_]
             continue
 
-        # If key is in operands, we can reuse the buffer
-        if (
-            key in chunk_operands
-            and chunks_ == chunk_operands[key].shape
-            and isinstance(value, blosc2.NDArray)
-        ):
-            value.get_slice_numpy(chunk_operands[key], (starts, stops))
-            continue
-
-        chunk_operands[key] = value[slice_]
+        # Read valid-shaped edge chunks directly too. General __getitem__ adds
+        # key/metadata processing that this scheduler has already performed.
+        if key not in chunk_operands or chunks_ != chunk_operands[key].shape:
+            chunk_operands[key] = np.empty(chunks_, dtype=value.dtype)
+        value.get_slice_numpy(chunk_operands[key], (starts, stops))
 
 
 def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | None) -> str:
@@ -2034,7 +2069,9 @@ def fast_eval(  # noqa: C901
     is_dsl = _is_dsl_kernel_expression(expression)
     expr_string = expression.dsl_source if is_dsl else expression
     dsl_disable_reason = None
-    typed_expression = not is_dsl and isinstance(expression, str) and typed_evaluator_enabled()
+    typed_expression = (
+        not is_dsl and isinstance(expression, str) and (typed_evaluator_enabled() or _NUMPY_VALUE_PROMOTION)
+    )
     if typed_expression:
         # This route may use typed artifacts or explicit NumPy fallback, never
         # the uniform-output-dtype expression compiler.
@@ -2045,6 +2082,7 @@ def fast_eval(  # noqa: C901
         use_miniexpr = False
 
     out = kwargs.pop("_output", None)
+    owned_output = False
     eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
     if eval_kwargs is None:
         eval_kwargs = {}
@@ -2480,6 +2518,7 @@ def fast_eval(  # noqa: C901
                 out = np.empty(shape, dtype=dtype)
             else:
                 out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
+                owned_output = type(out) is blosc2.NDArray and out.urlpath is None
 
         if callable(expression):
             if _is_dsl_kernel_expression(expression):
@@ -2529,6 +2568,17 @@ def fast_eval(  # noqa: C901
             if behaved and result.shape == chunks_ and result.dtype == out.dtype:
                 # Fast path only works for results that are full chunks
                 out.schunk.update_data(nchunk, result, copy=False)
+            elif (
+                owned_output
+                and type(result) is np.ndarray
+                and result.shape == chunks_
+                and result.dtype == out.dtype
+                and result.flags.c_contiguous
+            ):
+                # Fresh private outputs have no user indexes/aliases to refresh
+                # or invalidate. Avoid general assignment's proxy construction
+                # and repeated storage-policy inference for every chunk.
+                out.set_slice((offset, tuple(s.stop for s in cslice)), result)
             else:
                 out[cslice] = result
 
@@ -3165,7 +3215,7 @@ def reduce_slices(  # noqa: C901
     global try_miniexpr
 
     # Use a local copy so we don't modify the global
-    use_miniexpr = try_miniexpr and not typed_evaluator_enabled()
+    use_miniexpr = try_miniexpr and not (typed_evaluator_enabled() or _NUMPY_VALUE_PROMOTION)
 
     if blosc2.IS_WASM:
         # Reduction miniexpr on wasm is currently unstable for scalar reductions (axis=None).
@@ -5445,6 +5495,8 @@ class LazyExpr(LazyArray):
 
         Unsupported syntax/signatures reject; no Python numerical fallback. Root
         logical reduction options are separate from this elementwise artifact.
+        This explicit API uses Menudet's NumPy-2-style numerical semantics even
+        when the installed NumPy is older than 2.
         """
         from .native_graph import lower_native_graph
 
@@ -5567,7 +5619,8 @@ class LazyExpr(LazyArray):
     @classmethod
     def _new_expr(cls, expression, operands, guess, out=None, where=None, eval_kwargs=None):  # noqa: C901
         native_metadata = (
-            guess
+            not _NUMPY_VALUE_PROMOTION
+            and guess
             and type(expression) is str
             and type(operands) is dict
             and operands
@@ -6784,7 +6837,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
             cached=recipe.resident if recipe is not None else None,
             optimization=optimization,
         )
-        if policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+        if not _NUMPY_VALUE_PROMOTION and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
         else None
     )
     if resident is not None and (recipe is None or resident is not recipe.resident):

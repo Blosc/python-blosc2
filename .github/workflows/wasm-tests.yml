@@ -14,12 +14,14 @@ jobs:
     name: Build & test WASM/Pyodide wheel (Python 3.14)
     runs-on: ubuntu-latest
     env:
+      # Qualify the typed default in the entire actual Pyodide suite below.
       CIBW_BUILD: "cp314-*"
       CIBW_PYODIDE_VERSION: "314.0.0"
       # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
       # cibuildwheel runs the suite automatically in the node/pyodide runtime
       CIBW_TEST_COMMAND: >-
+        python -c "from blosc2.expression_evaluator import typed_evaluator_enabled; assert typed_evaluator_enabled()" &&
         pytest {project}/tests &&
         python {project}/scripts/certify_menudet_math.py &&
         python {project}/scripts/verify_safe_lazyexpr.py

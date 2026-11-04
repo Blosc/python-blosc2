@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.expression_graph import expression_evaluation
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION, expression_evaluation
 
 
 @pytest.fixture(params=["legacy", "typed"], autouse=True)
@@ -49,7 +49,7 @@ def test_scalar_boolean_returns_array_operand(expression, evaluation):
 @pytest.mark.parametrize("evaluation", ["full", "safe"])
 @pytest.mark.parametrize("expression", ["False or (a + 256)", "True and (a + 256)"])
 def test_scalar_boolean_evaluates_participating_branch(expression, evaluation):
-    if np.__version__.startswith("1."):
+    if _NUMPY_VALUE_PROMOTION:
         pytest.skip("NumPy 1 promotes this weak scalar instead of reporting overflow")
     module = importlib.import_module("blosc2.lazyexpr")
     with expression_evaluation(evaluation), pytest.raises(OverflowError):

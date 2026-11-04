@@ -52,7 +52,7 @@ def test_layout_does_not_select_numexpr(mode, order):
     assert result.strides == expected.strides
 
 
-def test_explicit_c_order_retains_native_admission(monkeypatch, native_graph_runtime):
+def test_explicit_c_order_retains_native_admission(monkeypatch, automatic_native_runtime):
     import blosc2.native_graph as native
 
     if blosc2.IS_WASM:

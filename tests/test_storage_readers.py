@@ -176,7 +176,9 @@ def test_graph_partitionability_rejection_is_authoritative(storage_runtime):
 
 
 @pytest.mark.parametrize(("compiler", "jit"), [("tcc", True), ("cc", True), ("cc", False)])
-def test_lazyexpr_nd_prefilter_honors_compiler(prefilter_runtime, monkeypatch, compiler, jit):
+def test_lazyexpr_nd_prefilter_honors_compiler(
+    prefilter_runtime, monkeypatch, compiler, jit, automatic_native_runtime
+):
     values = np.linspace(-2, 2, 129 * 67, dtype=np.float32).reshape(129, 67)
     x = blosc2.asarray(values, chunks=(12, 67), blocks=(3, 67))
     y = blosc2.asarray(-values, chunks=x.chunks, blocks=x.blocks)
@@ -201,7 +203,9 @@ def test_lazyexpr_nd_prefilter_honors_compiler(prefilter_runtime, monkeypatch, c
     assert report["input_materialization_bytes"] == 0
 
 
-def test_lazyexpr_prefilter_cache_tracks_compiler_options(prefilter_runtime, monkeypatch):
+def test_lazyexpr_prefilter_cache_tracks_compiler_options(
+    prefilter_runtime, monkeypatch, automatic_native_runtime
+):
     from blosc2.native_graph import configured_map_kernel
 
     configured_map_kernel.cache_clear()
@@ -229,7 +233,7 @@ def test_lazyexpr_prefilter_cache_tracks_compiler_options(prefilter_runtime, mon
     assert len(compiled) == 2
 
 
-def test_lazyexpr_configured_prefilter_preserves_fp_status(prefilter_runtime):
+def test_lazyexpr_configured_prefilter_preserves_fp_status(prefilter_runtime, automatic_native_runtime):
     from blosc2.native_graph import lower_native_graph
 
     values = np.resize(np.array([0, -0.0, 1, 1e30, np.inf, np.nan], dtype=np.float32), (129, 67))

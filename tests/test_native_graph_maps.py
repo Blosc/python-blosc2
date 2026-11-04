@@ -13,7 +13,7 @@ from conftest import orthogonal_cases
 
 
 @pytest.fixture(autouse=True)
-def map_runtime(native_graph_runtime, monkeypatch, request):
+def map_runtime(automatic_native_runtime, monkeypatch, request):
     import blosc2.native_graph as native
 
     if blosc2.IS_WASM:

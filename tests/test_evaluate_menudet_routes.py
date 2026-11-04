@@ -8,7 +8,7 @@ from blosc2.graph_plan import NativeGraph
 
 
 @pytest.fixture(autouse=True)
-def execution_threads(native_graph_runtime):
+def execution_threads(automatic_native_runtime):
     if blosc2.IS_WASM:
         pytest.skip("These automatic map routes require host JIT/thread/prefilter support")
     probe = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)

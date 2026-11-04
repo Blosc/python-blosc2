@@ -134,7 +134,7 @@ def test_execution_mode_reports_actual_engine(benchmark, report, has_jit, expect
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native compressed prefilter needs host threads")
-def test_benchmark_records_engine_for_native_routes(benchmark):
+def test_benchmark_records_engine_for_native_routes(benchmark, automatic_native_runtime):
     # Above the compressed-map minimum so both routes actually use native code.
     values = np.linspace(0, 1, 2_000_000, dtype=np.float32)
     a = blosc2.asarray(values, chunks=(250_000,), blocks=(25_000,))

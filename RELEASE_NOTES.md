@@ -2,6 +2,22 @@
 
 ## Changes from 4.14.2 to 4.15.0 (in development)
 
+### Typed ordinary-expression evaluation by default
+
+- Ordinary lazy expressions now default to typed native execution where admitted,
+  with bounded typed-graph/NumPy fallback otherwise. Intermediate computation
+  dtypes remain separate from output and reduction accumulator dtypes.
+- NumPy older than 2 uses the installed NumPy for automatic ordinary-expression
+  evaluation, retaining bounded Blosc2 storage/reduction scheduling. Explicit
+  Menudet/native-only APIs keep their own numerical contract.
+- Keep `BLOSC2_EXPRESSION_EVALUATOR=legacy` as a temporary qualification escape
+  hatch, selected before constructing expressions. Explicit compatibility DSL
+  and Python UDF contracts are unchanged. Unsupported typed execution never
+  silently retries through the uniform evaluator after numerical execution starts.
+- Some non-flat N-D fallback layouts remain slower than legacy fused execution;
+  see `doc/development/expression_evaluator_migration.md` and the migration plan
+  for profiling evidence and known limitations. Platform qualification is ongoing.
+
 ### Introducing Menudet 0.1 beta
 
 **Menudet — a little language for portable computation on arrays and tables.**

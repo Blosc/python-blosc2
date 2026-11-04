@@ -1,15 +1,24 @@
 # Typed expression evaluator rollout
 
-Ordinary expressions have an experimental typed-only execution route. Enable it
-before constructing expressions:
+Ordinary expressions now use the typed evaluator by default. No environment
+variable is needed:
 
 ```sh
-BLOSC2_EXPRESSION_EVALUATOR=typed python your_program.py
+python your_program.py
 ```
 
-The default is currently `legacy`; this temporary selector is intended for
-qualification, not permanent API configuration. Explicit compatibility DSL
-kernels and Python UDFs keep their existing execution contracts.
+During qualification, the previous evaluator remains available as a temporary
+escape hatch. Select it before constructing expressions:
+
+```sh
+BLOSC2_EXPRESSION_EVALUATOR=legacy python your_program.py
+```
+
+Explicit `BLOSC2_EXPRESSION_EVALUATOR=typed` is also accepted. This selector is
+temporary, not permanent API configuration. Explicit compatibility DSL kernels
+and Python UDFs keep their existing execution contracts. The development default
+has switched ahead of fresh full platform CI; that qualification remains required
+before deleting the ordinary-expression legacy path.
 
 The typed route reuses Menudet graph plans and admitted compression prefilters.
 Other layouts/signatures use bounded chunk evaluation through typed graph
@@ -25,15 +34,37 @@ Older installed extensions still work but keep the narrower row-slab admission.
 This addresses condition/reduction typing and integer-input floating operations
 without requiring a second numerical type system. It does **not** yet qualify
 arbitrary noncontiguous N-D native grids, WASM native prefilters, or indexed-query performance.
-WASM dispatch is covered by representative host-side tests; those do not replace
-an actual Pyodide wheel/runtime test. NumPy 1.x chunk evaluation uses NumPy until
-its scalar-promotion compatibility is qualified.
+WASM dispatch has representative host-side tests and actual Pyodide wheel tests.
+Qualification also requires the full Pyodide suite with typed globally selected;
+passing targeted typed tests alone is not that evidence.
 
-Use `bench/ndarray/evaluator_migration.py` for an interleaved timing probe. The
-legacy default must not switch until correctness, output/scratch-memory contracts,
-WASM, and performance gates pass. Some existing tests intentionally inspect the
-legacy prefilter or its allocation format; they are not interchangeable with
-typed-route storage-contract tests.
+On NumPy older than 2, automatic ordinary-expression execution uses the installed
+NumPy with bounded Blosc2 chunk/reduction scheduling. Resident preparation, cached
+native preparation, native-first dispatch, and typed prefilters decline native
+execution. This is an intentional compatibility policy, not a temporary promise
+to implement NumPy 1.x value-dependent scalar promotion in the native compiler.
+It can reduce acceleration but does not require whole-array decompression.
+Explicit `expr.native_kernel()` and `expr.compute(_require_native=True)` remain
+available with Menudet's NumPy-2-style numerical contract, even on NumPy 1.x.
+Explicit Menudet functions/kernels retain that same contract and acceleration.
+Native-only optimization rewrites do not apply to ordinary NumPy 1.x fallback
+evaluation; options are validated, but arithmetic follows the installed NumPy.
+
+Non-flat N-D layouts can still be slower than legacy fused execution. The chunk
+fallback amortizes native schedule preparation, avoids duplicate persisted edge
+reads and unnecessary assignment setup, and uses NumPy for small floating
+arithmetic chunks under the default policy. It does not yet reproduce the fused
+block pipeline for arbitrary N-D geometry. Profile evidence and remaining gaps
+are recorded in the migration plan; performance parity is not claimed for those
+layouts.
+
+Use `bench/ndarray/evaluator_migration.py` for an interleaved timing probe and
+`bench/ndarray/evaluator_fallbacks.py` for route-aware fallback measurements.
+Cross-platform correctness, output/scratch-memory contracts, WASM, and the
+recorded performance tradeoffs are still being qualified under the new default.
+Some tests intentionally inspect the legacy prefilter or its allocation format;
+they are not interchangeable with typed-route storage-contract tests.
 
 The implementation inventory, retirement stages, and acceptance criteria are in
-`plans/retire-uniform-expression-evaluator.md` in the repository.
+`plans/migrate-typed-expression-evaluator.md` in the repository. Historical
+implementation evidence remains in `plans/retire-uniform-expression-evaluator.md`.

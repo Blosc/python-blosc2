@@ -267,7 +267,7 @@ def kernel(x):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native miniexpr prefilter observation")
-def test_fp_accuracy_precedence(monkeypatch):
+def test_fp_accuracy_precedence(monkeypatch, automatic_native_runtime):
     monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     observed = []
     original = blosc2.NDArray._set_pref_expr
@@ -291,7 +291,7 @@ def test_fp_accuracy_precedence(monkeypatch):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM or os.name == "nt", reason="Native POSIX TCC execution")
-def test_evaluation_time_and_udf_policy(capfd):
+def test_evaluation_time_and_udf_policy(capfd, automatic_native_runtime):
     arr = blosc2.asarray(np.arange(32, dtype=np.float64))
     expr = arr + 1
     udf = blosc2.lazyudf(kernel, (arr,), dtype=arr.dtype, jit=False)
@@ -374,7 +374,7 @@ def test_synthesized_backend_respects_environment_and_source(monkeypatch, backen
 
 @pytest.mark.parametrize("backend", ["tcc", "cc"])
 @pytest.mark.parametrize("jit", [False, True])
-def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, jit):
+def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, jit, automatic_native_runtime):
     import importlib
 
     from blosc2.expression_evaluator import typed_evaluator_enabled

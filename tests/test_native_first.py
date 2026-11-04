@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unav
 
 
 @pytest.fixture
-def native_first_runtime(native_graph_runtime):
+def native_first_runtime(automatic_native_runtime):
     expr = blosc2.lazyexpr("x + 1", {"x": np.arange(4.0)})
     plan = prepare_native_first(expr, ())
     if plan is None or not plan[0].has_jit:
@@ -153,7 +153,7 @@ def test_native_first_unsupported_preparation_falls_back(status, monkeypatch):
     np.testing.assert_array_equal(expr[:], np.arange(4.0) + 1)
 
 
-def test_native_first_unexpected_preparation_error_propagates(monkeypatch):
+def test_native_first_unexpected_preparation_error_propagates(monkeypatch, automatic_native_runtime):
     import blosc2.native_graph as native
 
     def failure(*args, **kwargs):
@@ -237,7 +237,7 @@ def test_native_first_jit_request(native_first_runtime):
     assert expr._native_execution_report["backend"] == "menudet-jit"
 
 
-def test_native_first_unavailable_jit_uses_interpreter(native_graph_runtime, monkeypatch):
+def test_native_first_unavailable_jit_uses_interpreter(automatic_native_runtime, monkeypatch):
     import blosc2.native_graph as native
 
     original = native.lower_native_graph
@@ -251,7 +251,7 @@ def test_native_first_unavailable_jit_uses_interpreter(native_graph_runtime, mon
     assert expr._native_execution_report["backend"] == "menudet-interpreter"
 
 
-def test_native_first_jit_false_uses_interpreter(native_graph_runtime, monkeypatch):
+def test_native_first_jit_false_uses_interpreter(automatic_native_runtime, monkeypatch):
     import blosc2.native_graph as native
 
     original = native.lower_native_graph

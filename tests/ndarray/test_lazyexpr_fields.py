@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from blosc2.lazyexpr import ne_evaluate
 
 NITEMS_SMALL = 100
@@ -51,7 +52,7 @@ DEFAULT_ARRAY_SCENARIOS = {
             + (
                 [
                     pytest.mark.skipif(
-                        np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules"
+                        _NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules"
                     )
                 ]
                 if dtypes == (np.int8, np.int16)

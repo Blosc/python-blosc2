@@ -8,9 +8,10 @@ import pytest
 import blosc2
 from blosc2.graph_plan import NativeGraph
 
-pytestmark = pytest.mark.skipif(
-    blosc2.IS_WASM, reason="Native graph JIT and host threads are unavailable on WASM"
-)
+pytestmark = [
+    pytest.mark.usefixtures("automatic_native_runtime"),
+    pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT and host threads are unavailable on WASM"),
+]
 
 
 @pytest.mark.parametrize("jit", [False, True])

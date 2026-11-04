@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from blosc2.graph_plan import NativeGraph
 
 
@@ -15,9 +16,9 @@ def test_aggressive_power_is_default(expression, compressed):
     x = np.full(257, 1.515049231134367)
     inputs = {"x": blosc2.asarray(x) if compressed else x}
     strict = blosc2.evaluate(expression, local_dict=inputs, optimization="moderate")
-    if not compressed:
+    if not compressed and not _NUMPY_VALUE_PROMOTION:
         np.testing.assert_array_equal(strict, np.full_like(x, math.pow(float(x[0]), 3)))
-    chain = (x * x) * x
+    chain = x**3 if _NUMPY_VALUE_PROMOTION else (x * x) * x
     # Alternate policies with the same expression/signature to catch stale plans
     # and cached recipe metadata leaking a relaxed policy into explicit opt-outs.
     for options, expected in [
@@ -62,7 +63,7 @@ def test_aggressive_nonconstant_exponent_retains_power():
     y = np.full_like(x, 3)
     expected = np.full_like(x, math.pow(float(x[0]), 3))
     result = blosc2.evaluate("x**y", local_dict={"x": x, "y": y}, optimization="aggressive")
-    np.testing.assert_array_equal(result, expected)
+    np.testing.assert_array_equal(result, x**y if _NUMPY_VALUE_PROMOTION else expected)
 
 
 def test_aggressive_negative_power_and_compressed_output():
@@ -72,7 +73,8 @@ def test_aggressive_negative_power_and_compressed_output():
     actual = blosc2.evaluate("x**-3", local_dict={"x": compressed}, out=out, optimization="aggressive")
     assert actual is out
     inverse = 1 / x
-    np.testing.assert_array_equal(actual[:], inverse * inverse * inverse)
+    expected = x**-3 if _NUMPY_VALUE_PROMOTION else inverse * inverse * inverse
+    np.testing.assert_array_equal(actual[:], expected)
 
 
 def test_square_keeps_strict_rounding_with_cc():
@@ -86,7 +88,8 @@ def test_aggressive_caller_resolution_and_staged_policy():
     from blosc2.native_graph import compile_plan
 
     x = np.linspace(0.5, 1.5, 257)
-    np.testing.assert_array_equal(blosc2.evaluate("x**3"), x * x * x)
+    expected = x**3 if _NUMPY_VALUE_PROMOTION else x * x * x
+    np.testing.assert_array_equal(blosc2.evaluate("x**3"), expected)
     plan = compile_plan(
         "(x - sum(x**3))**3", False, input_dtypes=(("x", x.dtype),), optimization="aggressive"
     )
@@ -113,7 +116,8 @@ def test_aggressive_power_rebinding_and_serialization():
     for value in [1.515049231134367, 1.25]:
         current = np.full_like(x, value)
         result = blosc2.evaluate("x**3", local_dict={"x": current}, optimization="aggressive")
-        np.testing.assert_array_equal(result, current * current * current)
+        expected = current**3 if _NUMPY_VALUE_PROMOTION else current * current * current
+        np.testing.assert_array_equal(result, expected)
 
 
 def test_optimization_validation():

@@ -155,6 +155,7 @@ class MenudetLazyArray(LazyArray):
                 jit=self.kernel.has_jit,
                 cached=getattr(self, "_resident_native", None),
                 plan=plan,
+                explicit=True,
             )
             if prepared is not None:
                 self._resident_native = prepared

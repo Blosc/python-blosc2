@@ -10,7 +10,7 @@ from blosc2.graph_plan import NativeGraph
 
 
 @pytest.fixture(autouse=True)
-def prefilter_runtime(native_graph_runtime):
+def prefilter_runtime(automatic_native_runtime):
     if blosc2.IS_WASM or not blosc2.blosc2_ext.menudet_prefilter_available():
         pytest.skip("Native compressed prefilters require a host runtime")
     if not NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True).has_jit:

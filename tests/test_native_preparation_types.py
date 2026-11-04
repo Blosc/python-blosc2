@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 
 lazy = importlib.import_module("blosc2.lazyexpr")
 native = importlib.import_module("blosc2.native_graph")
@@ -32,7 +33,7 @@ def runtime(native_graph_runtime):
 
 
 @pytest.mark.parametrize("dtype", NUMERIC_TYPES)
-def test_numeric_resident_dispatch_and_output_type(dtype, monkeypatch):
+def test_numeric_resident_dispatch_and_output_type(dtype, monkeypatch, automatic_native_runtime):
     x = np.arange(17).astype(dtype)
     y = np.arange(1, 18).astype(dtype)
     expression = "x ^ y" if dtype == "bool" else "x + (y - 1)"
@@ -55,7 +56,7 @@ def test_numeric_resident_dispatch_and_output_type(dtype, monkeypatch):
 
 
 @pytest.mark.parametrize("dtype", ["int64", "uint64", "float32", "float64"])
-def test_compressed_metadata_plan_keeps_execution_admission(dtype, monkeypatch):
+def test_compressed_metadata_plan_keeps_execution_admission(dtype, monkeypatch, automatic_native_runtime):
     x = np.arange(257).astype(dtype)
     y = x + 1
     inputs = {
@@ -79,7 +80,7 @@ def test_compressed_metadata_plan_keeps_execution_admission(dtype, monkeypatch):
 
 
 @pytest.mark.parametrize("dtype", NUMERIC_TYPES)
-def test_division_infers_output_separately_from_inputs(dtype):
+def test_division_infers_output_separately_from_inputs(dtype, automatic_native_runtime):
     x = np.array([9, 12], dtype=dtype)
     y = np.array([2, 5], dtype=dtype)
     expected = x / y
@@ -95,7 +96,7 @@ def test_division_infers_output_separately_from_inputs(dtype):
 
 
 @pytest.mark.parametrize(("left", "right"), [("int8", "int64"), ("int64", "uint64"), ("int32", "float32")])
-def test_mixed_input_types_keep_numpy_promotion(left, right):
+def test_mixed_input_types_keep_numpy_promotion(left, right, automatic_native_runtime):
     x, y = np.arange(17).astype(left), np.arange(17).astype(right)
     expected = x + y
     expr = blosc2.lazyexpr("x + y", {"x": x, "y": y})
@@ -117,7 +118,7 @@ def test_integer_extrema_preserve_modular_arithmetic(dtype):
     np.testing.assert_array_equal(actual, x + y)
 
 
-def test_same_width_dtype_change_invalidates_resident_schedule():
+def test_same_width_dtype_change_invalidates_resident_schedule(automatic_native_runtime):
     x = np.arange(17, dtype="int64")
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     signed = expr[:]
@@ -144,7 +145,7 @@ def test_non_elementwise_syntax_keeps_legacy_preparation(expression):
 
 @pytest.mark.parametrize(("dtype", "constant"), [("int8", 128), ("uint8", -1), ("uint64", -1)])
 def test_out_of_range_weak_scalar_keeps_overflow_error(dtype, constant):
-    if np.lib.NumpyVersion(np.__version__) < "2.0.0":
+    if _NUMPY_VALUE_PROMOTION:
         pytest.skip("Menudet follows NumPy 2 weak-scalar overflow diagnostics, not NumPy 1 wrapping")
     x = np.arange(3, dtype=dtype)
     with pytest.raises(OverflowError):

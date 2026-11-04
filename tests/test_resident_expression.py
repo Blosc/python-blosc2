@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 
 lazy = importlib.import_module("blosc2.lazyexpr")
 native = importlib.import_module("blosc2.native_graph")
@@ -19,7 +20,7 @@ def runtime(native_graph_runtime):
 
 
 @pytest.mark.parametrize("size", [100_000, 1_000_000])
-def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch, size):
+def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch, size, automatic_native_runtime):
     if blosc2.IS_WASM and size >= native._MINIMUM_PARALLEL_ITEMS:
         pytest.skip("Large resident fast path requires host threads")
     x = np.arange(size, dtype="int64")
@@ -45,7 +46,9 @@ def test_resident_read_reuses_schedule_and_rebinds_arrays(monkeypatch, size):
 
 @pytest.mark.parametrize("mode", ["full", "safe"])
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident preparation requires host threads")
-def test_parallel_evaluate_reuses_schedule_without_lazy_dispatch(monkeypatch, mode):
+def test_parallel_evaluate_reuses_schedule_without_lazy_dispatch(
+    monkeypatch, mode, automatic_native_runtime
+):
     x = np.arange(1_000_000, dtype="int64")
     y = x + 1
     schedules = []
@@ -72,7 +75,7 @@ def test_parallel_evaluate_reuses_schedule_without_lazy_dispatch(monkeypatch, mo
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
-def test_parallel_resident_uses_current_thread_count(monkeypatch):
+def test_parallel_resident_uses_current_thread_count(monkeypatch, automatic_native_runtime):
     x = np.arange(1_000_000, dtype="int64")
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     schedule = expr._resident_native[2]
@@ -93,7 +96,7 @@ def test_large_checked_map_retains_general_dispatch():
 
 
 def test_large_weak_scalar_overflow_does_not_write():
-    if np.lib.NumpyVersion(np.__version__) < "2.0.0":
+    if _NUMPY_VALUE_PROMOTION:
         pytest.skip("NumPy 2 weak-scalar overflow diagnostics")
     x = np.zeros(300_000, dtype="int8")
     out = np.full_like(x, -1)
@@ -102,7 +105,7 @@ def test_large_weak_scalar_overflow_does_not_write():
     np.testing.assert_array_equal(out, -1)
 
 
-def test_resident_expression_mutation_invalidates_plan():
+def test_resident_expression_mutation_invalidates_plan(automatic_native_runtime):
     x = np.arange(17.0)
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     expr.expression = "o0 + 2"
@@ -113,7 +116,7 @@ def test_resident_expression_mutation_invalidates_plan():
     np.testing.assert_array_equal(actual, x + 2)
 
 
-def test_resident_schedule_tracks_compilation_options():
+def test_resident_schedule_tracks_compilation_options(automatic_native_runtime):
     x = np.arange(17.0)
     with blosc2.jit_options(jit=False, cflags="-O1"):
         first = lazy._prepare_cached_evaluate("x + 1", {"x": x}, None)
@@ -126,7 +129,7 @@ def test_resident_schedule_tracks_compilation_options():
 
 @pytest.mark.parametrize("engine", ["evaluate", "lazyexpr"])
 @pytest.mark.parametrize("size", [17, 1_000_000])
-def test_resident_execution_failure_never_replays(engine, monkeypatch, size):
+def test_resident_execution_failure_never_replays(engine, monkeypatch, size, automatic_native_runtime):
     if blosc2.IS_WASM and size >= native._MINIMUM_PARALLEL_ITEMS:
         pytest.skip("Large resident fast path requires host threads")
     x = np.arange(size, dtype="int64")

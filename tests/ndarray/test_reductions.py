@@ -1086,7 +1086,7 @@ def test_comparison_reduction_preserves_operand_typing(monkeypatch, case):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native scalar reductions are disabled on WASM")
-def test_numeric_reduction_retains_miniexpr(monkeypatch):
+def test_numeric_reduction_retains_miniexpr(monkeypatch, automatic_native_runtime):
     import importlib
 
     from blosc2.expression_evaluator import typed_evaluator_enabled

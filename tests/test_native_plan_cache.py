@@ -11,6 +11,8 @@ import pytest
 import blosc2
 from blosc2 import native_graph
 
+pytestmark = pytest.mark.usefixtures("automatic_native_runtime")
+
 
 def _plan_cache():
     return native_graph._native_plan_cache

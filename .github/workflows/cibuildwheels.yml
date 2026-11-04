@@ -27,6 +27,9 @@ env:
     {project}/tests/test_menudet_policy.py
     {project}/tests/test_menudet_table_export.py
     {project}/tests/test_dsl_menudet.py -q -n 0 &&
+    python -m pytest
+    {project}/tests/test_typed_expression_evaluator.py
+    {project}/tests/test_numpy_value_promotion_policy.py -q -n 0 &&
     python {project}/scripts/certify_menudet_math.py &&
     python {project}/scripts/verify_safe_lazyexpr.py
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long

@@ -138,6 +138,15 @@ def _http_server_diagnostics(pytestconfig, tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def automatic_native_runtime(native_graph_runtime):
+    """Automatic NumPy-2 native routes are deliberately disabled on NumPy 1."""
+    from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
+
+    if _NUMPY_VALUE_PROMOTION:
+        pytest.skip("NumPy < 2 ordinary expressions use bounded NumPy evaluation")
+
+
+@pytest.fixture(scope="session")
 def native_graph_runtime():
     """Optional dependency feature; qualification jobs must require its presence."""
     try:

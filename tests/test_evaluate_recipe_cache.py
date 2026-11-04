@@ -67,7 +67,7 @@ def test_evaluate_cache_signature_and_policy_changes():
     assert len(module._evaluate_recipe_cache) == 4
 
 
-def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, native_graph_runtime):
+def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, automatic_native_runtime):
     x = np.arange(100_000, dtype="float64")
     y = x + 1
 
@@ -82,7 +82,7 @@ def test_simple_numpy_map_prepares_without_dummy_evaluation(monkeypatch, native_
     np.testing.assert_array_equal(blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}), x + (y - 1))
 
 
-def test_plain_arithmetic_shares_preparation(monkeypatch, native_graph_runtime):
+def test_plain_arithmetic_shares_preparation(monkeypatch, automatic_native_runtime):
     x = np.arange(1000, dtype="int64")
     y = x + 1
 
@@ -110,7 +110,7 @@ def test_numpy_rebasing_preserves_numeric_literals_and_aliases(names, native_gra
 
 
 @pytest.mark.parametrize("engine", ["lazyexpr", "evaluate"])
-def test_numpy_preparation_shares_readonly_syntax(monkeypatch, native_graph_runtime, engine):
+def test_numpy_preparation_shares_readonly_syntax(monkeypatch, automatic_native_runtime, engine):
     import ast
 
     import blosc2.expression_graph as graph
@@ -152,7 +152,7 @@ def test_numpy_preparation_shares_readonly_syntax(monkeypatch, native_graph_runt
         assert ast.dump(syntax, include_attributes=True) == snapshot
 
 
-def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, native_graph_runtime):
+def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, automatic_native_runtime):
     import blosc2.native_graph as native
 
     monkeypatch.setenv("BLOSC_ME_JIT", "0")
@@ -192,7 +192,7 @@ def test_prepared_numpy_plan_rebinds_and_invalidates(monkeypatch, native_graph_r
         assert hasattr(blosc2.lazyexpr("x + (y - 1)", {"x": x, "y": y}), "_prepared_native")
 
 
-def test_jit_numpy_read_reuses_resident_schedule(monkeypatch, native_graph_runtime):
+def test_jit_numpy_read_reuses_resident_schedule(monkeypatch, automatic_native_runtime):
     import blosc2.native_graph as native
 
     monkeypatch.delenv("BLOSC_ME_JIT", raising=False)
@@ -224,7 +224,7 @@ def test_jit_numpy_read_reuses_resident_schedule(monkeypatch, native_graph_runti
             assert expr._native_execution_report["backend"] == "menudet-interpreter"
 
 
-def test_prepared_plan_without_destination_does_not_respecialize(monkeypatch, native_graph_runtime):
+def test_prepared_plan_without_destination_does_not_respecialize(monkeypatch, automatic_native_runtime):
     import blosc2.native_graph as native
 
     monkeypatch.setenv("BLOSC_ME_JIT", "0")
@@ -335,7 +335,7 @@ def test_evaluate_cache_does_not_retain_dtype_metadata_owners():
     assert reference() is None
 
 
-def test_evaluate_recipe_has_no_mutable_execution_state():
+def test_evaluate_recipe_has_no_mutable_execution_state(automatic_native_runtime):
     x = np.arange(257, dtype=np.float64)
     first = module._prepare_cached_evaluate("x + 1", {"x": x}, None)
     plan, inputs = first

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from conftest import orthogonal_cases
 
 
@@ -58,6 +59,9 @@ def test_numpy_prefilter_output(dtype, mode, monkeypatch):
     from blosc2.expression_evaluator import typed_evaluator_enabled
 
     np.testing.assert_array_equal(result, expected)
+    if _NUMPY_VALUE_PROMOTION:
+        assert calls == []
+        return
     if typed_evaluator_enabled():
         if dtype == "complex128" or mode == "strided-out":
             assert calls == []
@@ -117,7 +121,7 @@ def test_numpy_prefilter_non_aligned_blocks_fall_back():
 
 
 @pytest.mark.parametrize("reduction", [False, True])
-def test_prefilter_execution_error_is_not_replayed(monkeypatch, reduction):
+def test_prefilter_execution_error_is_not_replayed(monkeypatch, reduction, automatic_native_runtime):
     import importlib
 
     if reduction and blosc2.IS_WASM:
@@ -160,7 +164,7 @@ def test_numpy_prefilter_multidimensional_output_falls_back():
     np.testing.assert_array_equal(result, values + 1)
 
 
-def test_evaluate_without_options_uses_resident_plan(monkeypatch):
+def test_evaluate_without_options_uses_resident_plan(monkeypatch, automatic_native_runtime):
     import importlib
 
     module = importlib.import_module("blosc2.lazyexpr")

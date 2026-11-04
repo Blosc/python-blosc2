@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from blosc2.lazyexpr import ne_evaluate
 from blosc2.utils import get_chunks_idx, npvecdot
 
@@ -1443,7 +1444,7 @@ def test_get_expr_operands(expression, expected_operands):
     assert blosc2.get_expr_operands(expression) == set(expected_operands)
 
 
-@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
 @pytest.mark.parametrize(
     "scalar",
     [
@@ -1625,7 +1626,7 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
-def test_string_scalar_keeps_miniexpr_path(monkeypatch):
+def test_string_scalar_keeps_miniexpr_path(monkeypatch, automatic_native_runtime):
     import importlib
 
     monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
@@ -1717,7 +1718,7 @@ def test_miniexpr_failure_falls_back_default(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
+def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch, automatic_native_runtime):
     import importlib
 
     monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
@@ -2661,7 +2662,7 @@ def _where_branches(kind, out_dtype):
     return {"scalars": (x[1], y[0]), "arrays": (x, y), "mixed": (x, 0)}[kind]
 
 
-@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
 @pytest.mark.parametrize(
     "cond_dtype", [np.float32, np.float64, np.int8, np.int32, np.int64, np.uint8, np.uint64]
 )
@@ -2689,7 +2690,7 @@ def test_where_literal_condition_matches_numpy(cond_dtype, branches):
     assert not failures, "\n".join(failures[:10])
 
 
-@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
 @pytest.mark.parametrize("cond", ["float32_sum", "int8_wraparound"])
 @pytest.mark.parametrize("branches", ["python_int", "python_float", "array_scalar", "arrays"])
 def test_where_arithmetic_condition_matches_numpy(cond, branches):
@@ -2781,7 +2782,7 @@ def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, 
                         blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False
                     )()
                 ):
-                    assert bool(typed_sources) is direct
+                    assert bool(typed_sources) is (direct and not _NUMPY_VALUE_PROMOTION)
             else:
                 # The direct path's buffer holds a header prefix and at most one chunk of padding
                 chunk_nbytes = math.prod(chunks) * res.itemsize
