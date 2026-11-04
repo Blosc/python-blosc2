@@ -648,6 +648,9 @@ cdef extern from "b2nd.h":
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
                                void *buffer, int64_t *buffershape, int64_t buffersize) nogil
+    int b2nd_get_slice_cbuffer_into(b2nd_array_t *array,
+                                    int64_t *start, int64_t *stop,
+                                    void *buffer, int64_t *buffershape, int64_t buffersize) nogil
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
@@ -4386,6 +4389,73 @@ cdef class NDArray:
         _check_rc(rc, "Error while getting the buffer")
         return arr
 
+    def get_basic_into(self, np.ndarray out, key):
+        """NDArray.read_into() for a basic index: decompress ``self[key]`` into the NumPy array
+        `out` and return it, or return None if *key* is not a basic index.
+
+        The data goes straight into `out` if it has the array's dtype and is a box of a C-order
+        buffer (see _box_layout()); otherwise into a new C-contiguous array, which is returned
+        instead for the caller to copy into `out`.  Keys are as in get_basic_numpy(), but without
+        None; any other key, and any key that is out of range, gives None, so that the caller can
+        use the general indexing path, which also raises the appropriate exception.  A selection
+        of another shape than `out` raises ValueError.
+        """
+        cdef tuple items = key if type(key) is tuple else (key,)
+        cdef Py_ssize_t nkey = len(items), i
+        cdef char[_MAX_BASIC_KEY] kinds
+        cdef int64_t[_MAX_BASIC_KEY] ints
+        cdef Py_ssize_t[_MAX_BASIC_KEY] starts, stops
+        cdef Py_ssize_t nidx = self._classify_basic_key(items, kinds, ints, starts, stops)
+        if nidx < 0:
+            return None
+        for i in range(nkey):
+            if kinds[i] == _KEY_NEWAXIS:
+                return None
+
+        cdef int64_t[B2ND_MAX_DIM] start_, stop_, buffershape_
+        cdef c_bool[B2ND_MAX_DIM] int_dims
+        cdef int64_t tick, buffersize = 0
+        cdef int rc = 0, attempt
+        cdef c_bool direct = False
+        target = None
+        with self._handle_lock:
+            # As in get_basic_numpy(): a key resolved against the cached shape is right if the read
+            # does not find shape changes made by another handle (SWMR); otherwise follow them and
+            # try again.  Also follow them first if the selection does not have out's shape (they
+            # may be why) or is empty (there is no read then).
+            for attempt in range(_BASIC_READ_ATTEMPTS):
+                if attempt > 0:
+                    _check_rc(b2nd_refresh(self.array), "Error while refreshing the array")
+                tick = self.array.last_tick
+                out_shape = self._resolve_basic_key(nkey, kinds, ints, starts, stops, nidx, start_, stop_,
+                                                    int_dims)
+                if out_shape is None:
+                    if attempt > 0:
+                        return None
+                    continue
+                if tuple(out_shape) != (<object> out).shape:
+                    if attempt > 0:
+                        raise ValueError(f"out has shape {(<object> out).shape}, but the selection has "
+                                         f"shape {tuple(out_shape)}")
+                    continue
+                if np.PyArray_SIZE(out) == 0:
+                    if attempt > 0:
+                        return out
+                    continue
+                if target is None:
+                    direct = out.dtype == self.dtype and self._box_layout(out, int_dims, buffershape_,
+                                                                          &buffersize)
+                    target = out if direct else np.empty(out_shape, dtype=self.dtype)
+                if direct:
+                    rc = self._read_slice(start_, stop_, np.PyArray_DATA(out), buffershape_, buffersize, True)
+                else:
+                    rc = self._get_slice_cbuffer(target, start_, stop_)
+                if rc >= 0 and self.array.last_tick == tick:
+                    return target
+        # Out of attempts: as the general path, return what the last read gave
+        _check_rc(rc, "Error while getting the slice")
+        return target
+
     cdef _resolve_basic_key(self, Py_ssize_t nkey, const char *kinds, const int64_t *ints,
                             const Py_ssize_t *starts, const Py_ssize_t *stops, Py_ssize_t nidx,
                             int64_t *start_, int64_t *stop_, c_bool *int_dims=NULL):
@@ -4449,7 +4519,6 @@ cdef class NDArray:
 
     cdef int _get_slice_cbuffer(self, arr, int64_t *start_, int64_t *stop_) except? -9999:
         # The caller holds self._handle_lock; returns the rc of b2nd_get_slice_cbuffer()
-        global _nogil_reads
         cdef int64_t[B2ND_MAX_DIM] buffershape_
         cdef int i
         for i in range(self.array.ndim):
@@ -4459,21 +4528,72 @@ cdef class NDArray:
         cdef int rc = 0
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
         try:
-            # Decompress without the GIL, so that threads reading other arrays (or other handles
-            # of the same file) run in parallel; everything else that uses this super-chunk
-            # holds the lock meanwhile.
-            if _can_release_gil(self.array.sc):
-                _nogil_reads += 1
-                with nogil:
-                    rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                                <void *> view.buf, buffershape_, view.len)
-                _nogil_reads -= 1
-            else:
-                rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                            <void *> view.buf, buffershape_, view.len)
+            rc = self._read_slice(start_, stop_, view.buf, buffershape_, view.len, False)
         finally:
             PyBuffer_Release(&view)
         return rc
+
+    cdef int _read_slice(self, int64_t *start_, int64_t *stop_, void *buf, int64_t *buffershape_,
+                         int64_t buffersize, c_bool into) except? -9999:
+        """b2nd_get_slice_cbuffer(), or b2nd_get_slice_cbuffer_into() if `into`; returns its rc.
+        The caller holds self._handle_lock. The decompression runs without the GIL when no Python
+        callback can run on the way, so that threads reading other arrays (or other handles of the
+        same file) run in parallel; everything else that uses this super-chunk holds the lock
+        meanwhile."""
+        global _nogil_reads
+        cdef int rc
+        if _can_release_gil(self.array.sc):
+            _nogil_reads += 1
+            with nogil:
+                if into:
+                    rc = b2nd_get_slice_cbuffer_into(self.array, start_, stop_, buf, buffershape_, buffersize)
+                else:
+                    rc = b2nd_get_slice_cbuffer(self.array, start_, stop_, buf, buffershape_, buffersize)
+            _nogil_reads -= 1
+        elif into:
+            rc = b2nd_get_slice_cbuffer_into(self.array, start_, stop_, buf, buffershape_, buffersize)
+        else:
+            rc = b2nd_get_slice_cbuffer(self.array, start_, stop_, buf, buffershape_, buffersize)
+        return rc
+
+    cdef c_bool _box_layout(self, np.ndarray out, const c_bool *int_dims, int64_t *buffershape_,
+                            int64_t *buffersize):
+        """Whether `out`, of the shape of a selection whose integer-indexed dimensions are
+        `int_dims`, is a box of a C-order buffer that starts at out's first item; if so, fill that
+        buffer's shape and its size in bytes from there (for b2nd_get_slice_cbuffer_into()).
+        Integer-indexed dimensions and the others of length 1 are size-1 axes of the box, whose
+        strides do not matter. Of the longer ones, the innermost must be contiguous, and every
+        other one's stride a whole multiple of the next one's that spans at least that one's
+        length."""
+        cdef np.npy_intp *shape = np.PyArray_DIMS(out)
+        cdef np.npy_intp *strides = np.PyArray_STRIDES(out)
+        cdef int64_t itemsize = np.PyArray_ITEMSIZE(out)
+        cdef int64_t[B2ND_MAX_DIM] lens, steps
+        cdef int64_t size = itemsize
+        cdef int ndim = self.array.ndim, d, j = 0, inner = -1
+        for d in range(ndim):
+            if int_dims[d]:
+                lens[d] = 1
+                steps[d] = 0
+            else:
+                lens[d] = shape[j]
+                steps[d] = strides[j]
+                j += 1
+            buffershape_[d] = lens[d]
+        for d in range(ndim - 1, -1, -1):  # the long dimensions, innermost first
+            if lens[d] <= 1:
+                continue
+            if inner < 0:
+                if steps[d] != itemsize or itemsize <= 0:
+                    return False
+            elif steps[d] % steps[inner] != 0 or steps[d] // steps[inner] < lens[inner]:
+                return False
+            else:
+                buffershape_[inner] = steps[d] // steps[inner]
+            size += (lens[d] - 1) * steps[d]
+            inner = d
+        buffersize[0] = size
+        return True
 
     @_handle_locked
     def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
