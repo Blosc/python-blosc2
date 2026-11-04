@@ -410,8 +410,20 @@ def test_build_native_pins_and_archive_wheel_hashes(qualification, tmp_path):
 
     from qualification.build import exact_sha, native_pins, wheel_files
 
-    pins = native_pins((ROOT / "CMakeLists.txt").read_text())
-    assert all(len(value) == 40 for value in pins.values())
+    # Qualification requires exact revisions, but the working checkout may use
+    # release tags. Test that contract independently of the current build pins.
+    miniexpr_revision = "a" * 40
+    blosc_revision = "b" * 40
+    cmake = (
+        f"FetchContent_Declare(miniexpr GIT_REPOSITORY url GIT_TAG {miniexpr_revision})\n"
+        f"set(BLOSC2_BUNDLED_VERSION {blosc_revision})"
+    )
+    assert native_pins(cmake) == {
+        "miniexpr_revision": miniexpr_revision,
+        "c_blosc2_revision": blosc_revision,
+    }
+    with pytest.raises(ValueError):
+        native_pins(cmake.replace(blosc_revision, "v3.5.0"))
     with pytest.raises(ValueError, match="exact"):
         exact_sha("main; echo unsafe")
     with pytest.raises(ValueError):
