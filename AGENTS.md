@@ -72,6 +72,10 @@ dispatch, scheduling, and a small representative set of end-to-end cases. Check
 existing native coverage before adding parametrized Python matrices; extend the
 native tests rather than duplicating their cross-products here.
 
+Use pytest with the configured parallel workers by default. Reserve the slower
+pytest -n 0 for short, targeted tests requiring single-process execution, or
+isolated-package tests where workers could import the wrong installation
+
 ## Commit & Pull Request Guidelines
 ### GitHub CI Monitoring
 - Use `gh run watch <run-id> --interval 60 --exit-status` (or a longer interval),
