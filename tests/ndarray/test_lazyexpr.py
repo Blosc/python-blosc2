@@ -85,6 +85,13 @@ _LEGACY_RESULT_DTYPE_FAILURES = {
     "a ** b": (np.bool_,),
     "{n} ** 2": (np.bool_,),
 }
+# The string (lazyexpr) path now matches NumPy for bool true division; the
+# ufunc-built (functions) path still keeps the uniform result dtype.
+_LEGACY_STRING_FIXED = {
+    "(a < b) / b",
+    "a / b",
+    "{n} / b",
+}
 
 
 @pytest.mark.parametrize("dtype", [np.bool_, np.int8, np.uint16, np.int32, np.int64])
@@ -99,7 +106,12 @@ def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
         pytest.skip("int32 / int32 gives float32 on purpose")
     if "nextafter" in expression and dtype not in (np.int32, np.int64):
         pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
-    if not typed_evaluator_enabled() and dtype in _LEGACY_RESULT_DTYPE_FAILURES.get(expression, ()):
+    legacy_fixed = build == "string" and dtype is np.bool_ and expression in _LEGACY_STRING_FIXED
+    if (
+        not typed_evaluator_enabled()
+        and not legacy_fixed
+        and dtype in _LEGACY_RESULT_DTYPE_FAILURES.get(expression, ())
+    ):
         reason = "the legacy evaluator keeps its uniform result dtypes and integer true division"
         request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
     # A subexpression of the operand dtype (bool + bool is an or in NumPy)
