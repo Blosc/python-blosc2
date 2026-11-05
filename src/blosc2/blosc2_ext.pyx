@@ -3759,51 +3759,51 @@ def open(urlpath, mode, offset, **kwargs):
     if is_ndarray:
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL), mode=mode)
-        sc = res._schunk
-        sc.mode = mode
+        schunk_obj = res._schunk
+        schunk_obj.mode = mode
     else:
         res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
                             mode=mode, **kwargs)
-        sc = res
-    sc.cparams = _opened_cparams(sc.cparams, cparams, mode)
+        schunk_obj = res
+    if cparams is not None and mode == "w" and not is_ndarray:
+        # A super-chunk opened in mode "w" starts empty (an NDArray keeps its chunks, so its layout)
+        schunk_obj.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+    else:
+        schunk_obj.cparams = _opened_cparams(schunk_obj.cparams, cparams)
     if dparams is not None:
-        sc.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
+        schunk_obj.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
     return res
 
 
-def _opened_cparams(stored, cparams, mode):
-    """The compression parameters of a container that open() returns, given its `stored` ones.
-
-    Without `cparams`, the stored ones with the current blosc2.nthreads (nthreads is not stored in
-    the frame).  In mode "w" the container starts empty, so `cparams` applies as when creating one.
-    Otherwise `cparams` updates those: a dict only the keys it has, a CParams instance every field but
-    typesize and blocksize.  Those two fix how the existing data is laid out (items, blocks), so they
-    keep their stored values; asking for different ones raises ValueError (a CParams instance's
-    defaults, typesize 8 and blocksize 0, count as not asking).  A different codec, level, filters, ...
-    is fine: every chunk records its own.
+def _opened_cparams(stored, cparams):
+    """`stored`, the compression parameters of an opened container, updated with `cparams`: a dict
+    changes only its keys, a CParams every field; nthreads, which is not stored, defaults to the current
+    one.  Typesize and blocksize fix the layout of the stored data: other values raise ValueError (a
+    CParams' default typesize and blocksize count as not given).
     """
-    opened = dataclasses.replace(stored, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
     if cparams is None:
-        return opened
-    if mode == "w":
-        return cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-    if isinstance(cparams, blosc2.CParams):
-        defaults = blosc2.CParams()
-        given = {f.name: getattr(cparams, f.name) for f in dataclasses.fields(cparams)}
-        for name in ("typesize", "blocksize"):
-            if given[name] == getattr(defaults, name):
-                del given[name]
+        changes = {}
+    elif isinstance(cparams, blosc2.CParams):
+        changes = dataclasses.asdict(cparams)
+        default_typesize = blosc2.cparams_dflts["typesize"]
+        if changes["typesize"] == default_typesize:
+            del changes["typesize"]
+            # BYTEDELTA's meta was derived from the default typesize: derive it from the stored one
+            changes["filters_meta"] = [
+                0 if f == blosc2.Filter.BYTEDELTA and m == default_typesize else m
+                for f, m in zip(changes["filters"], changes["filters_meta"], strict=False)
+            ]
     else:
-        given = dict(cparams)
-        if "filters" in given and "filters_meta" not in given:
+        changes = dict(cparams)
+        if "filters" in changes and "filters_meta" not in changes:
             # As in CParams(**cparams): the stored metas belong to the stored filters
-            given["filters_meta"] = [0] * len(given["filters"])
-    if given.pop("typesize", stored.typesize) != stored.typesize:
+            changes["filters_meta"] = [0] * len(changes["filters"])
+    if changes.pop("typesize", stored.typesize) != stored.typesize:
         raise ValueError(f"Cannot change the typesize ({stored.typesize}) of an existing container")
-    if given.pop("blocksize", 0) not in (0, stored.blocksize):
+    if changes.pop("blocksize", 0) not in (0, stored.blocksize):
         raise ValueError(f"Cannot change the blocksize ({stored.blocksize}) of an existing container")
-    return dataclasses.replace(opened, **given)
+    return dataclasses.replace(stored, **{"nthreads": blosc2.storage.default_nthreads(), **changes})
 
 
 def check_access_mode(urlpath, mode):
