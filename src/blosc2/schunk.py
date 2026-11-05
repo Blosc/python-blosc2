@@ -3113,6 +3113,10 @@ def open(  # noqa: C901
 
     * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
+    * Files on network storage (NFS, SMB, ...): turn on read-ahead with
+      :func:`blosc2.set_prefetch` (or the ``BLOSC_PREFETCH`` environment variable), so that
+      slices fetch the chunks they need in parallel instead of one block after the other.
+
     Examples
     --------
     >>> import blosc2

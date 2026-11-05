@@ -274,6 +274,9 @@ cdef extern from "blosc2.h":
     void blosc2_set_threads_callback(blosc2_threads_callback callback, void *callback_data)
 
     int16_t blosc2_set_nthreads(int16_t nthreads)
+    int BLOSC2_PREFETCH_MAX_NTHREADS
+    int BLOSC2_PREFETCH_MIN_PIECE_SIZE
+    int blosc2_set_prefetch(int nthreads, int64_t max_ahead, int64_t piece_size)
 
     const char* blosc1_get_compressor()
 
@@ -1271,6 +1274,13 @@ def free_resources():
     rc = blosc2_free_resources()
     if rc < 0:
         raise ValueError("Could not free the resources")
+
+def set_prefetch(int nthreads, int64_t max_ahead, int64_t piece_size):
+    rc = blosc2_set_prefetch(nthreads, max_ahead, piece_size)
+    if rc < 0:
+        raise ValueError(f"nthreads must be in [0, {BLOSC2_PREFETCH_MAX_NTHREADS}], max_ahead must not be "
+                         f"negative and piece_size must be 0 or at least {BLOSC2_PREFETCH_MIN_PIECE_SIZE}.")
+    return rc
 
 def set_nthreads(nthreads):
     if nthreads > INT_MAX:
