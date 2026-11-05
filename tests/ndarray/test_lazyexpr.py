@@ -94,9 +94,22 @@ _LEGACY_STRING_FIXED = {
 }
 
 
-@pytest.mark.parametrize("dtype", [np.bool_, np.int8, np.uint16, np.int32, np.int64])
-@pytest.mark.parametrize("expression", _RESULT_DTYPE_EXPRESSIONS)
-@pytest.mark.parametrize("build", ["functions", "string"])
+@pytest.mark.parametrize(
+    ("dtype", "expression", "build"),
+    [
+        (dtype, expression, build)
+        for index, expression in enumerate(_RESULT_DTYPE_EXPRESSIONS)
+        for build_index, build in enumerate(("functions", "string"))
+        # Bool has operator-specific result types: keep both authoring routes for
+        # every expression. Rotate other integer widths; their full operator
+        # matrix is native-owned. nextafter needs the int32/int64 signatures.
+        for dtype in (
+            (np.int32, np.int64)
+            if "nextafter" in expression
+            else (np.bool_, (np.int8, np.uint16, np.int64)[(index + build_index) % 3])
+        )
+    ],
+)
 def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
     from blosc2.expression_evaluator import typed_evaluator_enabled
 
@@ -141,8 +154,22 @@ def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
         np.testing.assert_allclose(expr[:7], expected[:7], rtol=rtol)
 
 
-@pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float64])
-@pytest.mark.parametrize("op", ["&", "|", "^", "<<", ">>", "+", "*", "/", "//", "%", "**", "<", "hypot"])
+@pytest.mark.parametrize(
+    ("dtype", "op"),
+    [(np.int32, op) for op in ("&", "|", "^", "<<", ">>")]
+    + [
+        (np.float64, "+"),
+        (np.int64, "*"),
+        (np.int32, "/"),
+        (np.int64, "/"),
+        (np.float64, "/"),
+        (np.int32, "//"),
+        (np.int64, "%"),
+        (np.float64, "**"),
+        (np.int64, "<"),
+        (np.float64, "hypot"),
+    ],
+)
 def test_lazyexpr_non_native_byte_order(dtype, op):
     # The operand dtype checks compare against native dtypes: a non-native operand must give the
     # same result dtype as a native one (no "Invalid operand type for &: >i4", and >i4 / >i4
@@ -239,18 +266,16 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100)])
+@pytest.fixture(params=[(NITEMS,), (NITEMS // 10, 100)])
 def shape_fixture(request):
     return request.param
 
 
-# Keep both precisions at every size/rank, rotating the partition relationship
-# instead of multiplying it across every case. The full grid remains opt-in.
+# Keep both precisions at each rank. Two small 1-D sizes do not exercise distinct
+# schedulers; use the larger one and retain independent partition relationships.
 DEFAULT_ARRAY_SCENARIOS = {
-    (np.float32, (NITEMS_SMALL,), (True, True)),
     (np.float32, (NITEMS,), (True, False)),
     (np.float32, (NITEMS // 10, 100), (True, True)),
-    (np.float64, (NITEMS_SMALL,), (True, False)),
     (np.float64, (NITEMS,), (True, True)),
     (np.float64, (NITEMS // 10, 100), (True, False)),
 }
@@ -264,7 +289,7 @@ DEFAULT_ARRAY_SCENARIOS = {
             id=f"{np.dtype(dtype).name}-{shape}-{partitions}",
         )
         for dtype in (np.float32, np.float64)
-        for shape in ((NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100))
+        for shape in ((NITEMS,), (NITEMS // 10, 100))
         for partitions in ((True, True), (True, False), (False, True), (False, False))
     ]
 )
@@ -590,7 +615,9 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
 # Skip this test for blosc2.IS_WASM
 @pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("function", _UNARY_FUNCTIONS)
-def test_functions(function, dtype_fixture, shape_fixture):
+def test_functions(function, dtype_fixture):
+    # Every wrapper retains both precisions; rank is an independent scheduler axis.
+    shape_fixture = (NITEMS // 10, 100) if len(function) % 2 else (NITEMS,)
     nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -649,10 +676,22 @@ def test_functions(function, dtype_fixture, shape_fixture):
     ["arctan2", "**"],
 )
 @pytest.mark.parametrize(
-    ("value1", "value2"),
-    [("NDArray", "scalar"), ("NDArray", "NDArray"), ("scalar", "NDArray"), ("scalar", "scalar")],
+    ("value1", "value2", "dtype_fixture"),
+    [
+        (left, right, dtype)
+        for left, right in (
+            ("NDArray", "scalar"),
+            ("NDArray", "NDArray"),
+            ("scalar", "NDArray"),
+            ("scalar", "scalar"),
+        )
+        # Python scalar/scalar construction does not use the array dtype fixture.
+        for dtype in ((np.float64,) if left == right == "scalar" else (np.float32, np.float64))
+    ],
+    indirect=["dtype_fixture"],
 )
-def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, value2):
+def test_arctan2_pow(urlpath, dtype_fixture, function, value1, value2):
+    shape_fixture = (NITEMS // 10, 100) if value1 == "NDArray" else (NITEMS,)
     nelems = np.prod(shape_fixture)
     if urlpath is None:
         urlpath1 = urlpath2 = urlpath_save = None
@@ -1000,7 +1039,8 @@ def test_save_unsafe():
         pytest.param("expm1", marks=pytest.mark.heavy),
     ],
 )
-def test_save_functions(function, dtype_fixture, shape_fixture):
+def test_save_functions(function, dtype_fixture):
+    shape_fixture = (NITEMS // 10, 100) if len(function) % 2 else (NITEMS,)
     nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -1732,23 +1772,27 @@ def test_str_arange_non_divisible_step():
 
 
 @pytest.mark.parametrize(
-    "obj",
+    ("obj", "item"),
     [
-        blosc2.arange(10),
-        blosc2.ones(10),
-        blosc2.zeros(10),
-        blosc2.arange(10) + blosc2.ones(10),
-        blosc2.arange(10) + np.ones(10),
-        "arange(10)",
-        "arange(10) + arange(10)",
-        "arange(10) + linspace(0, 1, 10)",
-        "arange(10, shape=(10,))",
-        "arr",
-        "arange(10) + arr",
+        (obj, ((), slice(10), slice(0, 10, 2))[index % 3])
+        for index, obj in enumerate(
+            [
+                blosc2.arange(10),
+                blosc2.ones(10),
+                blosc2.zeros(10),
+                blosc2.arange(10) + blosc2.ones(10),
+                blosc2.arange(10) + np.ones(10),
+                "arange(10)",
+                "arange(10) + arange(10)",
+                "arange(10) + linspace(0, 1, 10)",
+                "arange(10, shape=(10,))",
+                "arr",
+                "arange(10) + arr",
+            ]
+        )
     ],
 )
 @pytest.mark.parametrize("getitem", [True, False])
-@pytest.mark.parametrize("item", [(), slice(10), slice(0, 10, 2)])
 def test_only_ndarrays_or_constructors(obj, getitem, item):
     arr = blosc2.arange(10)  # is a test case
     larr = blosc2.lazyexpr(obj)

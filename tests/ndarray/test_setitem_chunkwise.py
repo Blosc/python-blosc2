@@ -56,28 +56,42 @@ def _make(x, tmp_path, name, **kwargs):
     return blosc2.asarray(x, urlpath=str(tmp_path / name), mode="w", **kwargs)
 
 
+SCALAR_VALUES = [
+    (np.float32, 3.5),
+    (np.float32, 0.0),
+    (np.float32, -0.0),
+    (np.float64, np.nan),
+    (np.int64, -7),
+    (np.uint8, 255),
+    (np.bool_, True),
+    (np.bool_, False),
+    (np.complex128, 1 - 2j),
+    ("U7", "héllo"),
+    ("U100", "a longer string value"),
+    ("S5", b"ab"),
+    ("m8[s]", 5),
+    ("M8[ms]", 1577836800000),
+    ([("a", "f8"), ("b", "i4")], np.array((1.5, 2), dtype=[("a", "f8"), ("b", "i4")])[()]),
+]
+
+
+# Retain every value/region interaction; storage and buffer budgets are independent
+# scheduling dimensions. Each value sees all four settings across the eight regions.
 @pytest.mark.parametrize(
-    ("dtype", "value"),
+    ("dtype", "value", "key", "disk", "budget"),
     [
-        (np.float32, 3.5),
-        (np.float32, 0.0),
-        (np.float32, -0.0),
-        (np.float64, np.nan),
-        (np.int64, -7),
-        (np.uint8, 255),
-        (np.bool_, True),
-        (np.bool_, False),
-        (np.complex128, 1 - 2j),
-        ("U7", "héllo"),
-        ("U100", "a longer string value"),
-        ("S5", b"ab"),
-        ("m8[s]", 5),
-        ("M8[ms]", 1577836800000),
-        ([("a", "f8"), ("b", "i4")], np.array((1.5, 2), dtype=[("a", "f8"), ("b", "i4")])[()]),
+        (
+            dtype,
+            value,
+            key,
+            bool((value_index + region_index) % 2),
+            None if (value_index // 2 + region_index // 2) % 2 == 0 else 3000,
+        )
+        for value_index, (dtype, value) in enumerate(SCALAR_VALUES)
+        for region_index, key in enumerate(REGIONS)
     ],
+    indirect=["budget"],
 )
-@pytest.mark.parametrize("key", REGIONS)
-@pytest.mark.parametrize("disk", [False, True])
 def test_scalar_fill(dtype, value, key, disk, budget, tmp_path):
     x = _random(SHAPE, dtype, np.random.default_rng(0))
     a = _make(x, tmp_path if disk else None, "a.b2nd", chunks=CHUNKS, blocks=BLOCKS)
@@ -179,9 +193,22 @@ SOURCES = [
 ]
 
 
-@pytest.mark.parametrize(("name", "kwargs", "dtype"), SOURCES, ids=[s[0] for s in SOURCES])
-@pytest.mark.parametrize("key", REGIONS)
-@pytest.mark.parametrize(("dst_disk", "src_disk"), [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize(
+    ("name", "kwargs", "dtype", "key", "dst_disk", "src_disk", "budget"),
+    [
+        (
+            name,
+            kwargs,
+            dtype,
+            key,
+            *[(False, False), (True, False), (False, True)][(source_index + region_index) % 3],
+            None if ((source_index + region_index) // 3) % 2 == 0 else 3000,
+        )
+        for source_index, (name, kwargs, dtype) in enumerate(SOURCES)
+        for region_index, key in enumerate(REGIONS)
+    ],
+    indirect=["budget"],
+)
 def test_ndarray_value(name, kwargs, dtype, key, dst_disk, src_disk, budget, tmp_path):
     rng = np.random.default_rng(3)
     x = _random(SHAPE, np.float32, rng)

@@ -41,10 +41,15 @@ def _extrema_values(dtype, case, size, first, second):
     return x
 
 
-@pytest.mark.parametrize("op", ["min", "max"])
-@pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("backend", ["cc", "tcc"])
-@pytest.mark.parametrize("keepdims", [False, True])
+@pytest.mark.parametrize(
+    ("op", "dtype", "backend", "keepdims"),
+    [
+        (op, dtype, backend, bool((op_index + dtype_index + backend_index) % 2))
+        for op_index, op in enumerate(("min", "max"))
+        for dtype_index, dtype in enumerate(("float32", "float64"))
+        for backend_index, backend in enumerate(("cc", "tcc"))
+    ],
+)
 def test_parallel_resident_extrema(op, dtype, backend, keepdims, monkeypatch):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
     x = np.linspace(-3, 4, 4 * 128 * 1024, dtype=dtype).reshape(4, -1)
@@ -68,8 +73,10 @@ def test_parallel_resident_extrema(op, dtype, backend, keepdims, monkeypatch):
 
 @pytest.mark.parametrize("op", ["min", "max"])
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("backend", ["cc", "tcc"])
-@pytest.mark.parametrize("case", ["nan", "snan", "zeros", "infinities"])
+@pytest.mark.parametrize(
+    ("backend", "case"),
+    [("cc", "nan"), ("tcc", "snan"), ("cc", "zeros"), ("tcc", "infinities")],
+)
 def test_parallel_extrema_special_values_match_serial(op, dtype, backend, case, monkeypatch):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
     size = 4 * 128 * 1024

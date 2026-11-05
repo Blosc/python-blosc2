@@ -553,9 +553,9 @@ def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
         assert np.all(actual.view("uint8") <= 1)
 
 
-# Test each dtype/operation once, rotating the independent execution paths and
-# output widths. Backend/length coverage is tested separately below, not crossed
-# with every numeric scenario. Locals and direct expressions both remain covered.
+# Bool has operation-specific semantics; keep each operation there and one cast
+# scenario per other dtype. Native tests own the full numerical matrix. Rotate
+# execution paths/output widths; dedicated tests cover backend and length policy.
 @pytest.mark.parametrize(
     ("input_dtype", "operation", "compiler", "jit", "output_dtype", "local"),
     [
@@ -570,6 +570,7 @@ def test_bool_output_numeric_arithmetic(native_artifacts, body, samples):
         )
         for d, dtype in enumerate(["bool", "int32", "int64", "float32", "float64"])
         for o, operation in enumerate(["sum", "difference", "product", "negation"])
+        if dtype == "bool" or o == (d - 1) % 4
     ],
 )
 def test_bool_cast_floating_arithmetic(

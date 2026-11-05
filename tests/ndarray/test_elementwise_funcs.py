@@ -23,9 +23,9 @@ for name, obj in vars(np).items():
     if isinstance(obj, np.ufunc):
         if hasattr(blosc2, name):
             blosc_func = getattr(blosc2, name)
-            if obj.nin == 1:
+            if obj.nin == 1 and (obj, blosc_func) not in UNARY_FUNC_PAIRS:
                 UNARY_FUNC_PAIRS.append((obj, blosc_func))
-            elif obj.nin == 2:
+            elif obj.nin == 2 and (obj, blosc_func) not in BINARY_FUNC_PAIRS:
                 BINARY_FUNC_PAIRS.append((obj, blosc_func))
         else:
             UNSUPPORTED_UFUNCS.append(obj)
@@ -44,14 +44,41 @@ SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
 def _function_dtype_layout_cases(function_pairs):
-    # Dtype support is function-specific, so retain every function/dtype pair.
-    # Rank and chunk traversal are shared: rotate 1-D/2-D layouts instead of
-    # duplicating every pair. Each function and dtype still sees both ranks.
-    return [
-        (np_func, blosc_func, dtype, *SHAPES_CHUNKS[(function_index + dtype_index) % len(SHAPES_CHUNKS)])
-        for function_index, (np_func, blosc_func) in enumerate(function_pairs)
-        for dtype_index, dtype in enumerate(DTYPES)
-    ]
+    cases = []
+    for function_index, (np_func, blosc_func) in enumerate(function_pairs):
+        for dtype_index, dtype in enumerate(DTYPES):
+            # Narrow integers exercise the same wrapper as wide integers; retain
+            # int64 where true division deliberately has a different dtype policy.
+            # Exact wide-integer values/operators are covered by native corpora.
+            if dtype == blosc2.int64 and np_func is not np.true_divide:
+                continue
+            if isinstance(np_func, np.ufunc):
+                try:
+                    np_func.resolve_dtypes((np.dtype(dtype),) * np_func.nin + (None,) * np_func.nout)
+                except TypeError:
+                    # The old helpers returned without exercising Blosc2 here.
+                    continue
+            shape, chunks = SHAPES_CHUNKS[(function_index + dtype_index) % len(SHAPES_CHUNKS)]
+            cases.append((np_func, blosc_func, dtype, shape, chunks))
+    return cases
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [
+        ("acos", "arccos"),
+        ("acosh", "arccosh"),
+        ("asin", "arcsin"),
+        ("asinh", "arcsinh"),
+        ("atan", "arctan"),
+        ("atanh", "arctanh"),
+        ("atan2", "arctan2"),
+    ],
+)
+def test_ufunc_alias_binding(alias, canonical):
+    if hasattr(np, alias):  # NumPy 1.x does not expose all Array API aliases.
+        assert getattr(np, alias) is getattr(np, canonical)
+    assert getattr(blosc2, alias) is getattr(blosc2, canonical)
 
 
 def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):

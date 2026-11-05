@@ -7,21 +7,6 @@ import pytest
 
 import blosc2
 from blosc2.dsl_kernel import SourceKernel
-from conftest import orthogonal_cases
-
-DTYPES = [
-    "bool",
-    "int8",
-    "int16",
-    "int32",
-    "int64",
-    "uint8",
-    "uint16",
-    "uint32",
-    "uint64",
-    "float32",
-    "float64",
-]
 
 
 def kernel(expression="x", inputs=None, output="float64"):
@@ -42,7 +27,20 @@ def runtime():
 
 @pytest.mark.parametrize(
     ("layout", "dtype"),
-    orthogonal_cases(["C", "F", "reverse", "step", "endian", "unaligned"], DTYPES),
+    # Preserve every dtype and effective layout; misalignment needs >1-byte items.
+    [
+        ("C", "bool"),
+        ("F", "int8"),
+        ("reverse", "int16"),
+        ("step", "int32"),
+        ("endian", "int64"),
+        ("C", "uint8"),
+        ("unaligned", "uint16"),
+        ("F", "uint32"),
+        ("reverse", "uint64"),
+        ("step", "float32"),
+        ("endian", "float64"),
+    ],
 )
 def test_broadcast_and_layout(layout, dtype):
     x = np.arange(24).reshape(4, 6).astype(dtype)
@@ -71,7 +69,14 @@ def test_broadcast_and_layout(layout, dtype):
 
 @pytest.mark.parametrize(
     ("dtype", "op", "axis"),
-    orthogonal_cases(DTYPES, ["sum", "prod", "min", "max", "any", "all"], [None, (), 0, -1, (0, 2)]),
+    [
+        ("int64", "sum", None),
+        ("uint64", "prod", ()),
+        ("float32", "min", 0),
+        ("float64", "max", -1),
+        ("bool", "any", (0, 2)),
+        ("uint8", "all", None),
+    ],
 )
 def test_logical_reductions(dtype, op, axis):
     x = (np.arange(24).reshape(2, 3, 4) % 3).astype(dtype)

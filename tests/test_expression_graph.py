@@ -998,15 +998,17 @@ def test_proxy_field_removed_after_parent_rebinding_rejects():
         expr.compute()
 
 
-@pytest.mark.parametrize("operation", ["+", "-", "*", "/", "**", "=="])
 @pytest.mark.parametrize(
-    ("left", "right"),
+    ("operation", "left", "right"),
     [
-        ("int8", "uint8"),
-        ("int32", "int32"),
-        ("int32", "float32"),
-        ("float32", "float64"),
-        ("complex64", "float32"),
+        ("+", "int8", "uint8"),
+        ("-", "int32", "int32"),
+        ("*", "int32", "float32"),
+        ("/", "float32", "float64"),
+        ("**", "complex64", "float32"),
+        ("==", "int32", "int32"),
+        ("/", "int32", "int32"),
+        ("+", "float32", "float64"),
     ],
 )
 def test_numpy_binary_dtype_rules_match_execution(operation, left, right):

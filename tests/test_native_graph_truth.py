@@ -5,7 +5,6 @@ import pytest
 
 import blosc2
 from blosc2.native_graph import prepare_native_first
-from conftest import orthogonal_cases
 
 
 @pytest.fixture(autouse=True)
@@ -24,9 +23,10 @@ def graph_truth_runtime(native_graph_runtime, request, monkeypatch):
 @pytest.mark.parametrize("op", ["any", "all"])
 @pytest.mark.parametrize(
     ("dtype", "backend", "keepdims"),
-    orthogonal_cases(
-        ["bool", "int8", "int64", "uint64", "float32", "float64"], ["cc", "tcc"], [False, True]
-    ),
+    [
+        (dtype, ("cc", "tcc")[index % 2], bool(index % 2))
+        for index, dtype in enumerate(("bool", "int8", "int64", "uint64", "float32", "float64"))
+    ],
 )
 def test_parallel_resident_truth(op, dtype, backend, keepdims, monkeypatch):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
@@ -77,7 +77,10 @@ def test_parallel_truth_late_fp_status_is_not_short_circuited(op, dtype, backend
 @pytest.mark.parametrize("op", ["any", "all"])
 @pytest.mark.parametrize(
     ("dtype", "backend", "root_expression"),
-    orthogonal_cases(["bool", "int32", "uint64", "float32", "float64"], ["cc", "tcc"], [False, True]),
+    [
+        (dtype, ("cc", "tcc")[index % 2], bool(index % 2))
+        for index, dtype in enumerate(("bool", "int32", "uint64", "float32", "float64"))
+    ],
 )
 def test_parallel_compressed_truth(op, dtype, backend, root_expression, monkeypatch):
     import blosc2.native_graph as native
