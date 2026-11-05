@@ -1529,8 +1529,8 @@ def set_releasegil(gilstate: bool) -> bool:
 
     Compressing keeps the GIL regardless of this setting when a Python callback
     (a prefilter, a filler, or a codec or filter registered from Python) could
-    run.  Decompressing a chunk keeps it while any codec or filter is registered
-    from Python, as the chunk may use one.
+    run.  :func:`decompress2` keeps it when the chunk uses a codec or filter
+    registered from Python.
 
     Examples
     --------

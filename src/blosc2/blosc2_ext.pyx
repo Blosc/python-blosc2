@@ -3522,9 +3522,9 @@ cdef int _compress_ctx(blosc2_context *cctx, const void *src, int32_t srcsize, v
 cdef int _decompress_ctx(blosc2_context *dctx, const void *src, int32_t srcsize, void *dest,
                          int32_t destsize) noexcept:
     """blosc2_decompress_ctx() with a context without postfilter, without the GIL if set_releasegil() asks
-    and no codec or filter is registered from Python (the chunk tells which ones it uses)."""
+    and the chunk uses no codec or filter registered from Python."""
     cdef int rc
-    if RELEASEGIL and not _python_ids_registered:
+    if RELEASEGIL and not _chunk_runs_python(<const uint8_t*>src, srcsize):
         with nogil:
             rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, destsize)
     else:
@@ -4756,9 +4756,7 @@ cdef class SChunk:
 
     @_handle_locked
     def to_cframe(self):
-        # Serializing can decompress (with the postfilter) and recompress chunks and vlmetalayers
-        return schunk_to_cframe(self.schunk, _can_compress_without_gil(self.schunk.cctx)
-                                and _can_release_gil(self.schunk))
+        return schunk_to_cframe(self.schunk, _can_serialize_without_gil(self.schunk))
 
     @_handle_locked
     def _avoid_cframe_free(self, avoid_cframe_free):
@@ -6025,6 +6023,31 @@ cdef schunk_is_ndarray(blosc2_schunk* schunk):
     meta = "b2nd"
     meta = meta.encode("utf-8") if isinstance(meta, str) else meta
     return blosc2_meta_exists(schunk, meta) >= 0
+
+
+cdef c_bool _can_serialize_without_gil(blosc2_schunk *sc) except? False:
+    """Whether to_cframe() may release the GIL as set_releasegil() asks: only if serializing `sc` cannot run
+    a Python callback.  In memory (see blosc2_schunk_to_buffer_alloc()), a contiguous frame is only copied,
+    and a sparse super-chunk without prefilter and postfilter gets its chunks copied as they are and its
+    vlmetalayers decompressed and recompressed with the default cparams, so only their codecs and filters
+    matter.  Anything else keeps the check of compressions and slice reads: a prefilter or postfilter makes
+    C-Blosc2 decompress and recompress every chunk, and a frame on disk can get its vlmetalayers reloaded
+    during the call."""
+    cdef blosc2_cparams cparams
+    cdef blosc2_dparams dparams
+    cdef int i
+    if RELEASEGIL and sc.storage.urlpath == NULL:
+        if sc.frame != NULL and sc.storage.contiguous:
+            return True
+        blosc2_ctx_get_cparams(sc.cctx, &cparams)
+        blosc2_ctx_get_dparams(sc.dctx, &dparams)
+        if (sc.frame == NULL and cparams.prefilter == NULL and dparams.postfilter == NULL
+                and sc.storage.dparams.postfilter == NULL):
+            for i in range(sc.nvlmetalayers):
+                if _chunk_runs_python(sc.vlmetalayers[i].content, sc.vlmetalayers[i].content_len):
+                    return False
+            return True
+    return _can_compress_without_gil(sc.cctx) and _can_release_gil(sc)
 
 
 cdef struct cframe_dest:
