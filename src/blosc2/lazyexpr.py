@@ -3431,12 +3431,17 @@ def reduce_slices(  # noqa: C901
         elif reduce_op in {ReduceOp.PROD, ReduceOp.ALL, ReduceOp.CUMULATIVE_PROD}:
             aux_reduc = np.ones(nblocks, dtype=dtype)
         elif reduce_op == ReduceOp.MIN:
-            if np.issubdtype(dtype, np.integer):
+            # Bool is not an np.integer, and -inf/inf would both be True
+            if dtype == np.bool_:
+                aux_reduc = np.ones(nblocks, dtype=dtype)
+            elif np.issubdtype(dtype, np.integer):
                 aux_reduc = np.full(nblocks, np.iinfo(dtype).max, dtype=dtype)
             else:
                 aux_reduc = np.full(nblocks, np.inf, dtype=dtype)
         elif reduce_op == ReduceOp.MAX:
-            if np.issubdtype(dtype, np.integer):
+            if dtype == np.bool_:
+                aux_reduc = np.zeros(nblocks, dtype=dtype)
+            elif np.issubdtype(dtype, np.integer):
                 aux_reduc = np.full(nblocks, np.iinfo(dtype).min, dtype=dtype)
             else:
                 aux_reduc = np.full(nblocks, -np.inf, dtype=dtype)
@@ -3757,12 +3762,17 @@ def convert_none_out(dtype, reduce_op, reduced_shape, chunks=None):
                 else np.ones(reduced_shape, dtype=dtype)
             )
     elif reduce_op == ReduceOp.MIN:
-        if np.issubdtype(dtype, np.integer):
+        # Bool is not an np.integer, and inf * bool would be float64
+        if dtype == np.bool_:
+            out = np.ones(reduced_shape, dtype=dtype)
+        elif np.issubdtype(dtype, np.integer):
             out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
         else:
             out = np.inf * np.ones(reduced_shape, dtype=dtype)
     elif reduce_op == ReduceOp.MAX:
-        if np.issubdtype(dtype, np.integer):
+        if dtype == np.bool_:
+            out = np.zeros(reduced_shape, dtype=dtype)
+        elif np.issubdtype(dtype, np.integer):
             out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
         else:
             out = -np.inf * np.ones(reduced_shape, dtype=dtype)
