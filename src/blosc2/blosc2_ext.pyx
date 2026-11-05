@@ -14,8 +14,11 @@ import ast
 import atexit
 import pathlib
 import sys
+import functools
 import time
 import warnings
+import weakref
+from threading import RLock
 
 import _ctypes
 
@@ -365,6 +368,8 @@ cdef extern from "blosc2.h":
 
     blosc2_context* blosc2_create_dctx(blosc2_dparams dparams) nogil
 
+    int blosc2_ctx_get_dparams(blosc2_context *ctx, blosc2_dparams *dparams)
+
     void blosc2_free_ctx(blosc2_context * context) nogil
 
     int blosc2_set_maskout(blosc2_context *ctx, c_bool *maskout, int nblocks)
@@ -622,7 +627,7 @@ cdef extern from "b2nd.h":
     int b2nd_free(b2nd_array_t *array)
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
-                               void *buffer, int64_t *buffershape, int64_t buffersize)
+                               void *buffer, int64_t *buffershape, int64_t buffersize) nogil
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
@@ -872,7 +877,13 @@ blosc2_init()
 
 @atexit.register
 def destroy():
-    blosc2_destroy()
+    # Daemon threads can still be inside a slice read without the GIL (see
+    # NDArray.get_slice_numpy), and blosc2_destroy() frees thread pools and plugins such a
+    # read may be using.  If they do not finish soon, leave the cleanup to the OS.
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    if _wait_for_nogil_reads(timeout=1.0):
+        blosc2_destroy()
 
 
 def register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
@@ -1707,11 +1718,105 @@ cdef get_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
         raise RuntimeError("Problems when creating the repeated values chunk")
 
 
+def _handle_locked(method):
+    """Run `method` holding the handle lock of its first argument (an SChunk, NDArray or vlmeta).
+
+    There is one such lock per C super-chunk, shared by the SChunk wrapper, the NDArray built on it
+    and that array's views.  NDArray.get_slice_numpy() decompresses without the GIL, so every other
+    operation that uses the super-chunk's C state (its contexts, frame, metalayers) must hold this
+    lock instead of relying on the GIL.  It is reentrant because Python callbacks (prefilters,
+    postfilters, UDFs) can call back into the same array.
+    """
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._handle_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
+# Every handle lock, so that a forked child can free those that other threads held at the fork
+_all_handle_locks = weakref.WeakSet()
+
+
+def _new_handle_lock():
+    lock = RLock()
+    _all_handle_locks.add(lock)
+    return lock
+
+
+cdef class HandleLocks:
+    """Reusable context manager that holds the handle locks of `arrays` (objects without one are
+    skipped), always in the same order, so that threads locking overlapping sets cannot deadlock.
+    For C code that reads other arrays' super-chunks outside their methods: concat() and the
+    miniexpr prefilter of lazy expressions.
+    """
+    cdef list locks
+
+    def __init__(self, arrays):
+        locks = {id(lock): lock for lock in (getattr(a, "_handle_lock", None) for a in arrays)
+                 if lock is not None}
+        self.locks = [locks[key] for key in sorted(locks)]
+
+    def __enter__(self):
+        cdef Py_ssize_t n = 0
+        try:
+            for lock in self.locks:
+                lock.acquire()
+                n += 1
+        except BaseException:
+            for lock in reversed(self.locks[:n]):
+                lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc_info):
+        for lock in reversed(self.locks):
+            lock.release()
+
+
+# Slice reads running without the GIL (see NDArray.get_slice_numpy), and whether new ones must
+# keep it (> 0).  Both only change with the GIL held.
+cdef int _nogil_reads = 0
+cdef int _nogil_reads_blocked = 0
+
+
+def _wait_for_nogil_reads(timeout=None):
+    """Wait until no slice read runs without the GIL; return False if `timeout` (s) ran out.
+
+    For changes to C state that such reads use (registering a Python codec or filter, exit).
+    The caller increments `_nogil_reads_blocked` first, so that no new ones start meanwhile.
+    """
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while _nogil_reads:
+        if deadline is not None and time.monotonic() > deadline:
+            return False
+        time.sleep(0.0005)  # releases the GIL, so the readers can finish
+    return True
+
+
+def _reset_after_fork():
+    # The threads that held handle locks or read without the GIL at the fork do not exist in
+    # the child, so nothing would ever release those locks there
+    global _nogil_reads, _nogil_reads_blocked
+    _nogil_reads = 0
+    _nogil_reads_blocked = 0
+    for lock in list(_all_handle_locks):
+        if not lock._is_owned():
+            lock._at_fork_reinit()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 cdef class SChunk:
     cdef blosc2_schunk *schunk
     cdef c_bool _is_view
+    cdef readonly object _handle_lock
 
     def __init__(self, _schunk=None, chunksize=2 ** 24, data=None, **kwargs):
+        # Replaced by the NDArray's lock when this is an NDArray's SChunk (see NDArray.__init__)
+        self._handle_lock = _new_handle_lock()
         # hold on to a bytestring of urlpath for the lifetime of the instance
         # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
@@ -1881,6 +1986,7 @@ cdef class SChunk:
     def contiguous(self):
         return self.schunk.storage.contiguous
 
+    @_handle_locked
     def get_cparams(self):
         if self.schunk.storage.cparams.compcode in blosc2.Codec._value2member_map_:
             codec = blosc2.Codec(self.schunk.storage.cparams.compcode)
@@ -1914,6 +2020,7 @@ cdef class SChunk:
 
         return cparams
 
+    @_handle_locked
     def update_cparams(self, new_cparams):
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         codec = new_cparams.codec
@@ -1957,9 +2064,11 @@ cdef class SChunk:
         self.schunk.filters = self.schunk.storage.cparams.filters
         self.schunk.filters_meta = self.schunk.storage.cparams.filters_meta
 
+    @_handle_locked
     def get_dparams(self):
         return blosc2.DParams(nthreads=self.schunk.storage.dparams.nthreads)
 
+    @_handle_locked
     def update_dparams(self, new_dparams):
         cdef blosc2_dparams* dparams = self.schunk.storage.dparams
         dparams.nthreads = new_dparams.nthreads
@@ -1971,6 +2080,7 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
+    @_handle_locked
     def append_data(self, data):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
@@ -1998,6 +2108,7 @@ cdef class SChunk:
             raise RuntimeError("Could not append the chunk")
         return rc
 
+    @_handle_locked
     def fill_special(self, nitems, special_value, value):
         if value is None:
             return blosc2_schunk_fill_special(self.schunk, nitems, special_value, self.chunksize)
@@ -2046,6 +2157,7 @@ cdef class SChunk:
 
         return self.nchunks
 
+    @_handle_locked
     def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t *chunk
         cdef c_bool needs_free
@@ -2079,6 +2191,7 @@ cdef class SChunk:
         if size < 0:
             raise RuntimeError(f"Error while decompressing the specified chunk, error code: {size}")
 
+    @_handle_locked
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
         cdef c_bool needs_free
@@ -2090,6 +2203,7 @@ cdef class SChunk:
             free(chunk)
         return ret_chunk
 
+    @_handle_locked
     def get_lazychunk(self, nchunk):
         cdef uint8_t *chunk
         cdef c_bool needs_free
@@ -2113,6 +2227,7 @@ cdef class SChunk:
             free(chunk)
         return ret_chunk
 
+    @_handle_locked
     def get_vlblock(self, nchunk, nblock):
         cdef uint8_t *block
         cdef int32_t destsize
@@ -2123,12 +2238,14 @@ cdef class SChunk:
         free(block)
         return ret_block
 
+    @_handle_locked
     def delete_chunk(self, nchunk):
         rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
         if rc < 0:
             raise RuntimeError("Could not delete the desired chunk")
         return rc
 
+    @_handle_locked
     def append_chunk(self, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
@@ -2139,6 +2256,7 @@ cdef class SChunk:
             raise RuntimeError("Could not append the desired chunk")
         return rc
 
+    @_handle_locked
     def insert_chunk(self, nchunk, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
@@ -2149,6 +2267,7 @@ cdef class SChunk:
             raise RuntimeError("Could not insert the desired chunk")
         return rc
 
+    @_handle_locked
     def insert_data(self, nchunk, data, copy):
         cdef blosc2_context *cctx
         cdef Py_buffer buf
@@ -2179,6 +2298,7 @@ cdef class SChunk:
             raise RuntimeError("Could not insert the desired chunk")
         return rc
 
+    @_handle_locked
     def update_chunk(self, nchunk, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
@@ -2189,6 +2309,7 @@ cdef class SChunk:
             raise RuntimeError("Could not update the desired chunk")
         return rc
 
+    @_handle_locked
     def reorder_offsets(self, order):
         cdef np.ndarray[np.int64_t, ndim=1] offsets_order = np.ascontiguousarray(order, dtype=np.int64)
         rc = blosc2_schunk_reorder_offsets(self.schunk, <int64_t*> offsets_order.data)
@@ -2196,6 +2317,7 @@ cdef class SChunk:
             raise RuntimeError("Could not reorder the chunk offsets")
         return None
 
+    @_handle_locked
     def update_data(self, nchunk, data, copy):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
@@ -2226,6 +2348,7 @@ cdef class SChunk:
         return rc
 
     # This is used internally for prefiltering
+    @_handle_locked
     def _prefilter_data(self, nchunk, data, chunk_data):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
@@ -2241,6 +2364,7 @@ cdef class SChunk:
             raise RuntimeError("The result could not fit ")
         return size
 
+    @_handle_locked
     def get_slice(self, start=0, stop=None, out=None):
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
         start, stop, _ = slice(start, stop, 1).indices(nitems)
@@ -2265,6 +2389,7 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while getting the slice")
 
+    @_handle_locked
     def set_slice(self, value, start=0, stop=None):
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
         start, stop = self._massage_key(start, stop, nitems)
@@ -2370,6 +2495,7 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while setting the slice")
 
+    @_handle_locked
     def to_cframe(self):
         cdef c_bool needs_free
         cdef uint8_t *cframe
@@ -2387,9 +2513,11 @@ cdef class SChunk:
 
         return out
 
+    @_handle_locked
     def _avoid_cframe_free(self, avoid_cframe_free):
         blosc2_schunk_avoid_cframe_free(self.schunk, avoid_cframe_free)
 
+    @_handle_locked
     def lock(self):
         """Take the exclusive frame lock and hold it across several operations.
 
@@ -2402,12 +2530,14 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not lock the super-chunk frame")
 
+    @_handle_locked
     def unlock(self):
         """Release the frame lock taken with `lock()`."""
         cdef int rc = blosc2_schunk_unlock(self.schunk)
         if rc < 0:
             raise RuntimeError("Could not unlock the super-chunk frame")
 
+    @_handle_locked
     def refresh(self):
         cdef int rc = blosc2_schunk_refresh(self.schunk)
         _check_rc(rc, "Error while refreshing the schunk")
@@ -2433,6 +2563,7 @@ cdef class SChunk:
 
         return start, stop
 
+    @_handle_locked
     def _set_postfilter(self, func, dtype_input, dtype_output=None):
         # Get user data
         func_id = func.__name__
@@ -2467,7 +2598,11 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    cpdef remove_postfilter(self, func_name, _new_ctx=True):
+    @_handle_locked
+    def remove_postfilter(self, func_name, _new_ctx=True):
+        self._remove_postfilter(func_name, _new_ctx)
+
+    cdef _remove_postfilter(self, func_name, _new_ctx):
         if func_name is not None:
             del blosc2.postfilter_funcs[func_name]
 
@@ -2487,6 +2622,7 @@ cdef class SChunk:
             # Avoid creating new dctx when calling this from the __dealloc__
             self.schunk.dctx = NULL
 
+    @_handle_locked
     def _set_filler(self, func, inputs_id, dtype_output):
         if self.schunk.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -2516,6 +2652,7 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    @_handle_locked
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
         if self.schunk.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -2551,7 +2688,11 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    cpdef remove_prefilter(self, func_name, _new_ctx=True):
+    @_handle_locked
+    def remove_prefilter(self, func_name, _new_ctx=True):
+        self._remove_prefilter(func_name, _new_ctx)
+
+    cdef _remove_prefilter(self, func_name, _new_ctx):
         cdef udf_udata* udf_data
         cdef user_filters_udata* udata
         cdef mm_udata* mm_data
@@ -2630,9 +2771,9 @@ cdef class SChunk:
         if self.schunk != NULL and not self._is_view:
             # Free prefilters and postfilters params
             if self.schunk.storage.cparams.prefilter != NULL:
-                self.remove_prefilter(func_name=None, _new_ctx=False)
+                self._remove_prefilter(None, False)
             if self.schunk.storage.dparams.postfilter != NULL:
-                self.remove_postfilter(func_name=None, _new_ctx=False)
+                self._remove_postfilter(None, False)
 
             # Free the C-Blosc2 super-chunk with the GIL held so threadpool
             # teardown cannot race with active miniexpr workers.
@@ -3320,6 +3461,13 @@ cdef class vlmeta:
     def __init__(self, schunk):
         self.schunk = <blosc2_schunk*> <uintptr_t>schunk
 
+    @property
+    def _handle_lock(self):
+        # Looked up on every call: an NDArray swaps its own lock into the owning SChunk after
+        # that SChunk (and this object) were created
+        return self._owner._handle_lock
+
+    @_handle_locked
     def set_vlmeta(self, name, content, **cparams):
         cdef blosc2_cparams ccparams
         create_cparams_from_kwargs(&ccparams, cparams)
@@ -3335,6 +3483,7 @@ cdef class vlmeta:
         if rc < 0:
             raise RuntimeError
 
+    @_handle_locked
     def get_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
         rc = blosc2_vlmeta_exists(self.schunk, name)
@@ -3348,15 +3497,18 @@ cdef class vlmeta:
             raise RuntimeError
         return content[:content_len]
 
+    @_handle_locked
     def del_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
         rc = blosc2_vlmeta_delete(self.schunk, name)
         if rc < 0:
             raise RuntimeError("Could not delete the vlmeta")
 
+    @_handle_locked
     def nvlmetalayers(self):
         return self.schunk.nvlmetalayers
 
+    @_handle_locked
     def get_names(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char *))
         rc = blosc2_vlmeta_get_names(self.schunk, names)
@@ -3365,6 +3517,7 @@ cdef class vlmeta:
         res = [names[i].decode("utf-8") for i in range(rc)]
         return res
 
+    @_handle_locked
     def to_dict(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char*))
         rc = blosc2_vlmeta_get_names(self.schunk, names)
@@ -3376,12 +3529,14 @@ cdef class vlmeta:
         return res
 
 
+@_handle_locked
 def meta__contains__(self, name):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     name = name.encode("utf-8") if isinstance(name, str) else name
     n = blosc2_meta_exists(schunk, name)
     return False if n < 0 else True
 
+@_handle_locked
 def meta__getitem__(self, name):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     name = name.encode("utf-8") if isinstance(name, str) else name
@@ -3393,6 +3548,7 @@ def meta__getitem__(self, name):
 
     return res
 
+@_handle_locked
 def meta__setitem__(self, name, content):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     name = name.encode("utf-8") if isinstance(name, str) else name
@@ -3401,10 +3557,12 @@ def meta__setitem__(self, name, content):
         raise ValueError("The length of the content in a metalayer cannot change.")
     blosc2_meta_update(schunk, name, content, len(content))
 
+@_handle_locked
 def meta__len__(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     return schunk.nmetalayers
 
+@_handle_locked
 def meta_keys(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     keys = []
@@ -3631,12 +3789,21 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     else:
         codec.decoder = <blosc2_codec_decoder_cb> general_decoder
 
-    rc = blosc2_register_codec(&codec)
-    if rc < 0:
-        raise RuntimeError("Error while registering codec")
+    # A slice read that found no Python codec could otherwise meet `decoder` without the GIL: keep
+    # new reads from releasing it and wait for those that did.  Nothing below releases the GIL
+    # before the registry is updated.
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    try:
+        _wait_for_nogil_reads()
+        rc = blosc2_register_codec(&codec)
+        if rc < 0:
+            raise RuntimeError("Error while registering codec")
 
-    if encoder and decoder:
-        blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+        if encoder and decoder:
+            blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+    finally:
+        _nogil_reads_blocked -= 1
 
 
 cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,
@@ -3698,11 +3865,18 @@ def register_filter(id, forward, backward, filter_name):
         filter.name = <char *> malloc(strlen(filter_name_) + 1)
         strcpy(filter.name, filter_name_)
 
-    rc = blosc2_register_filter(&filter)
-    if rc < 0:
-        raise RuntimeError("Error while registering filter")
-    if forward and backward:
-        blosc2.ufilters_registry[id] = (forward, backward)
+    # As in register_codec()
+    global _nogil_reads_blocked
+    _nogil_reads_blocked += 1
+    try:
+        _wait_for_nogil_reads()
+        rc = blosc2_register_filter(&filter)
+        if rc < 0:
+            raise RuntimeError("Error while registering filter")
+        if forward and backward:
+            blosc2.ufilters_registry[id] = (forward, backward)
+    finally:
+        _nogil_reads_blocked -= 1
 
 cdef _check_rc(rc, message):
     if rc < 0:
@@ -3814,24 +3988,40 @@ cdef class slice_flatter:
                 self.done = 1
 
 
+cdef c_bool _can_release_gil(blosc2_schunk *sc) except? False:
+    """Whether decompressing from `sc` may run without the GIL, i.e. no Python callback can run on
+    the way: no postfilter on its decompression context and no codec or filter registered from
+    Python (any chunk could use one, whatever the super-chunk's own cparams say).  Never on wasm32,
+    where releasing the GIL is known to give wrong results (see blosc2.set_releasegil), nor while
+    _wait_for_nogil_reads() callers need the reads to stop."""
+    if _nogil_reads_blocked or blosc2.IS_WASM or blosc2.ucodecs_registry or blosc2.ufilters_registry:
+        return False
+    cdef blosc2_dparams dparams
+    if sc.dctx == NULL or blosc2_ctx_get_dparams(sc.dctx, &dparams) < 0:
+        return False
+    return dparams.postfilter == NULL
+
+
 cdef class NDArray:
     cdef b2nd_array_t* array
-    cdef PyThread_type_lock read_lock
-    cdef c_bool owns_read_lock
+    cdef readonly object _handle_lock
 
     def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
         self.base = base # add reference to base if NDArray is a view
-        if base is None:
-            self.read_lock = PyThread_allocate_lock()
-            if self.read_lock == NULL:
-                raise MemoryError("Could not allocate NDArray read lock")
-            self.owns_read_lock = True
+        # One handle lock per C super-chunk (see _handle_locked): expand_dims/squeeze views share
+        # their base's, and the SChunk wrapper over the same super-chunk (blosc2.NDArray._schunk,
+        # created before this runs) is switched to it.
+        schunk = getattr(self, "_schunk", None)
+        if base is not None:
+            self._handle_lock = (<NDArray?>base)._handle_lock
+        elif schunk is not None:
+            self._handle_lock = (<SChunk?>schunk)._handle_lock
         else:
-            # expand_dims/squeeze views share the base SChunk, so reads through
-            # all aliases must be protected by the same lock.
-            self.read_lock = (<NDArray>base).read_lock
+            self._handle_lock = _new_handle_lock()
+        if schunk is not None:
+            (<SChunk?>schunk)._handle_lock = self._handle_lock
 
     @property
     def c_array(self):
@@ -3889,6 +4079,7 @@ cdef class NDArray:
         return dtype
 
     def get_slice_numpy(self, arr, key):
+        global _nogil_reads
         start, stop = key
 
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -3899,22 +4090,31 @@ cdef class NDArray:
             buffershape_[i] = stop_[i] - start_[i]
 
         cdef Py_buffer view
-        cdef int rc
+        cdef int rc = 0
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
-        # Waiting for a reader already using this SChunk must not retain the
-        # GIL: that reader can need the GIL again from a Python postfilter.
-        with nogil:
-            PyThread_acquire_lock(self.read_lock, 1)
         try:
-            rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                        <void *> view.buf, buffershape_, view.len)
+            # Waiting for the lock releases the GIL (RLock does that), so a holder that needs the
+            # GIL back, e.g. for a Python postfilter, can finish.
+            with self._handle_lock:
+                # Decompress without the GIL, so that threads reading other arrays (or other handles
+                # of the same file) run in parallel; everything else that uses this super-chunk
+                # holds the lock meanwhile.
+                if _can_release_gil(self.array.sc):
+                    _nogil_reads += 1
+                    with nogil:
+                        rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                                    <void *> view.buf, buffershape_, view.len)
+                    _nogil_reads -= 1
+                else:
+                    rc = b2nd_get_slice_cbuffer(self.array, start_, stop_,
+                                                <void *> view.buf, buffershape_, view.len)
         finally:
-            PyThread_release_lock(self.read_lock)
-        PyBuffer_Release(&view)
+            PyBuffer_Release(&view)
         _check_rc(rc, "Error while getting the buffer")
 
         return arr
 
+    @_handle_locked
     def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
         if self.ndim != 1:
             raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
@@ -3997,6 +4197,7 @@ cdef class NDArray:
 
         return arr
 
+    @_handle_locked
     def get_sparse_numpy(self, arr, coords):
         cdef np.ndarray[np.int64_t, ndim=1, mode="c"] coords_ = np.ascontiguousarray(coords, dtype=np.int64)
         cdef Py_buffer view
@@ -4014,6 +4215,7 @@ cdef class NDArray:
         _check_rc(rc, "Error while getting the sparse selection")
         return arr
 
+    @_handle_locked
     def get_oindex_numpy(self, arr, key):
         """
         Orthogonal indexing. Key is a tuple of lists of integer indices.
@@ -4046,6 +4248,7 @@ cdef class NDArray:
         free(key_)
         return arr
 
+    @_handle_locked
     def set_oindex_numpy(self, key, arr):
         """
         Orthogonal indexing. Set elements of self with arr using key.
@@ -4079,6 +4282,7 @@ cdef class NDArray:
         return arr
 
 
+    @_handle_locked
     def get_slice(self, key, mask, **kwargs):
         start, stop = key
         shape = tuple(sp - st for sp, st in zip(stop, start))
@@ -4120,6 +4324,7 @@ cdef class NDArray:
 
         return ndarray
 
+    @_handle_locked
     def set_slice(self, key, ndarray):
         ndim = self.ndim
         start, stop = key
@@ -4138,6 +4343,7 @@ cdef class NDArray:
 
         return self
 
+    @_handle_locked
     def tobytes(self):
         buffersize = self.size * self.array.sc.typesize
         buffer = bytes(buffersize)
@@ -4146,6 +4352,7 @@ cdef class NDArray:
 
         return buffer
 
+    @_handle_locked
     def to_cframe(self):
         cdef c_bool needs_free
         cdef uint8_t *cframe
@@ -4160,6 +4367,7 @@ cdef class NDArray:
 
         return out
 
+    @_handle_locked
     def copy(self, dtype, **kwargs):
         chunks = kwargs.pop("chunks", self.chunks)
         blocks = kwargs.pop("blocks", self.blocks)
@@ -4180,6 +4388,7 @@ cdef class NDArray:
 
         return ndarray
 
+    @_handle_locked
     def resize(self, new_shape):
         cdef int64_t new_shape_[B2ND_MAX_DIM]
         for i, s in enumerate(new_shape):
@@ -4187,6 +4396,7 @@ cdef class NDArray:
         _check_rc(b2nd_resize(self.array, new_shape_, NULL),
                   "Error while resizing the array")
 
+    @_handle_locked
     def refresh(self):
         cdef int rc = b2nd_refresh(self.array)
         _check_rc(rc, "Error while refreshing the array")
@@ -4356,6 +4566,7 @@ cdef class NDArray:
 
         return udata
 
+    @_handle_locked
     def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None,
                        candidate_blocks=None):
         # Set prefilter for miniexpr
@@ -4538,6 +4749,7 @@ cdef class NDArray:
             "status": _me_compile_status_name(rc),
         }
 
+    @_handle_locked
     def _set_pref_matmul(self, inputs, fp_accuracy):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
@@ -4558,6 +4770,7 @@ cdef class NDArray:
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    @_handle_locked
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -4580,6 +4793,7 @@ cdef class NDArray:
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+    @_handle_locked
     def _set_postf_udf(self, func, inputs_id):
         if self.array.sc.storage.dparams.nthreads > 1:
             raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
@@ -4608,8 +4822,6 @@ cdef class NDArray:
     def __dealloc__(self):
         if self.array != NULL:
             _check_rc(b2nd_free(self.array), "Error while freeing the array")
-        if self.owns_read_lock and self.read_lock != NULL:
-            PyThread_free_lock(self.read_lock)
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
@@ -4859,6 +5071,7 @@ def ndarray_from_cframe(cframe, copy=False):
     return ndarray
 
 
+@_handle_locked
 def array_get_slice_nchunks(array: NDArray, key):
     start, stop = key
     cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -4875,6 +5088,7 @@ def array_get_slice_nchunks(array: NDArray, key):
     return res
 
 
+@_handle_locked
 def schunk_get_slice_nchunks(schunk: SChunk, key):
     start, stop = key
     nitems = schunk.nbytes // schunk.typesize
@@ -4904,8 +5118,10 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
         raise RuntimeError("Error while creating the context for concatenation")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array),
-              "Error while concatenating the arrays")
+    cdef int rc = 0
+    with HandleLocks((arr1, arr2)):
+        rc = b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array)
+    _check_rc(rc, "Error while concatenating the arrays")
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
     if copy:
@@ -4916,6 +5132,7 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
         # Return the first array, which now contains the concatenated data
         return arr1
 
+@_handle_locked
 def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2.NDArray:
     """
     Add new dummy axis to NDArray object at specified dimension.
@@ -4933,6 +5150,7 @@ def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
                           _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)
 
+@_handle_locked
 def squeeze(arr1: NDArray, axis_mask: list[bool]) -> blosc2.NDArray:
     """
     Remove axis from NDArray object at specified dimensions.

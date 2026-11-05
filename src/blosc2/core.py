@@ -1449,6 +1449,10 @@ def set_releasegil(gilstate: bool) -> bool:
     small performance penalty with releasing the GIL that will more harshly
     penalize small block sizes.
 
+    Reading slices of an :ref:`NDArray` releases the GIL while decompressing
+    regardless of this setting, unless a Python postfilter, codec or filter
+    could run during the read.
+
     Examples
     --------
     >>> oldReleaseState = blosc2.set_releasegil(True)
