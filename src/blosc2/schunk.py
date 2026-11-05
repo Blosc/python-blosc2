@@ -450,8 +450,9 @@ class SChunk(blosc2_ext.SChunk):
             default = DeserializeMode.SAFE if opens_existing else DeserializeMode.FULL
             set_deserialize(self, default if deserialize is None else deserialize)
         self._vlmeta = vlmeta(self, super().c_schunk)
-        self._cparams = super().get_cparams()
-        self._dparams = super().get_dparams()
+        # Built on first use: most handles (e.g. those of NDArrays) never need them
+        self._cparams = None
+        self._dparams = None
 
     def __enter__(self) -> SChunk:
         """Enter a context manager and return this super-chunk."""
@@ -470,6 +471,8 @@ class SChunk(blosc2_ext.SChunk):
         """
         :class:`blosc2.CParams` instance with the compression parameters.
         """
+        if self._cparams is None:
+            self._cparams = super().get_cparams()
         return self._cparams
 
     @cparams.setter
@@ -484,6 +487,8 @@ class SChunk(blosc2_ext.SChunk):
         """
         :class:`blosc2.DParams` instance with the decompression parameters.
         """
+        if self._dparams is None:
+            self._dparams = super().get_dparams()
         return self._dparams
 
     @dparams.setter

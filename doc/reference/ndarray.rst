@@ -14,7 +14,7 @@ It is a direct alias for ``array.vlmeta`` and uses the same persistent storage.
 .. autoclass:: NDArray
     :members:
     :inherited-members:
-    :exclude-members: get_slice, set_slice, get_slice_numpy, get_oindex_numpy, set_oindex_numpy
+    :exclude-members: get_slice, set_slice, get_slice_numpy, get_basic_numpy, get_basic_start_stop, get_oindex_numpy, set_oindex_numpy
     :member-order: groupwise
 
     :Special Methods:
