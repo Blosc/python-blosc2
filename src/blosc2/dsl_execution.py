@@ -99,7 +99,7 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
         or getattr(udf, "_legacy_source_recipe", False)
         or getattr(udf.func, "_legacy_source_recipe", False)
     ):
-        return _compatibility_result(udf)
+        return False, None
     storage = dict(options)
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(storage))
