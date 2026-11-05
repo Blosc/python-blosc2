@@ -253,7 +253,7 @@ def make_case(
     case = {
         "id": identifier,
         "operation": operation,
-        "semantic_revision": "menudet-numpy-1.0",
+        "semantic_revision": "menudet-numpy-0.1",
         "requires": ["numeric"],
         "artifact": json.dumps(artifact, sort_keys=True),
         "inputs": [describe(a, n, layout) for n, a in zip(names, arrays, strict=True)],
@@ -464,7 +464,7 @@ def validate(corpus):
         ):
             raise ValueError("Invalid or duplicate case ID")
         ids.add(identifier)
-        if case["semantic_revision"] != "menudet-numpy-1.0":
+        if case["semantic_revision"] != "menudet-numpy-0.1":
             raise ValueError("Unsupported semantic revision")
         policy = case["comparison"]
         if (

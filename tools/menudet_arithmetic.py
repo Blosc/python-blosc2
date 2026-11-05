@@ -141,7 +141,7 @@ def make_case(
         artifact["output"]["dtype"] = output or expected.dtype.name
     case.update(
         artifact=json.dumps(artifact, sort_keys=True),
-        semantic_revision="menudet-numpy-1.0",
+        semantic_revision="menudet-numpy-0.1",
         operation=operation,
         reference_kind="native-contract",
         expected={"diagnostic": {"category": diagnostic}} if diagnostic else compat.describe(expected),

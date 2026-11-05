@@ -233,7 +233,7 @@ def make_case(identifier, name, arrays, expected=None, diagnostic=None):
     case.update(
         artifact=json.dumps(artifact, sort_keys=True),
         operation=name,
-        semantic_revision="menudet-numpy-1.0",
+        semantic_revision="menudet-numpy-0.1",
         reference_kind="numpy" if diagnostic is None and name not in EXTRA else "native-contract",
     )
     if diagnostic:

@@ -123,7 +123,7 @@ def generate():
             {
                 "id": identifier,
                 "operation": operation,
-                "semantic_revision": "menudet-numpy-1.0",
+                "semantic_revision": "menudet-numpy-0.1",
                 "requires": ["numeric"],
                 "artifact": json.dumps(artifact, sort_keys=True),
                 "inputs": [buffer(a, n) for n, a in zip(names, arrays, strict=True)],
