@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import concurrent.futures
 import os
 import signal
 import sys
@@ -78,6 +79,15 @@ def read_all_ways(path, mmap_mode):
     return got
 
 
+def assert_same(got, expected):
+    assert len(got) == len(expected)
+    for g, e in zip(got, expected, strict=True):
+        if isinstance(e, bytes):
+            assert g == e
+        else:
+            np.testing.assert_array_equal(g, e)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="read-ahead is a no-op on Windows")
 @pytest.mark.parametrize("mmap_mode", [None, "r"])
 @pytest.mark.parametrize(("nthreads", "max_ahead", "piece_size"), SETTINGS)
@@ -88,13 +98,24 @@ def test_slices(on_disk, prefetch, mmap_mode, nthreads, max_ahead, piece_size):
     prefetch(nthreads, max_ahead, piece_size)
     evict(path)
     for _ in range(2):  # cold, then from the page cache
-        got = read_all_ways(path, mmap_mode)
-        assert len(got) == len(expected)
-        for g, e in zip(got, expected, strict=True):
-            if isinstance(e, bytes):
-                assert g == e
-            else:
-                np.testing.assert_array_equal(g, e)
+        assert_same(read_all_ways(path, mmap_mode), expected)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="read-ahead is a no-op on Windows")
+@pytest.mark.skipif(blosc2.IS_WASM, reason="needs threads")
+@pytest.mark.parametrize("mmap_mode", [None, "r"])
+def test_threads(on_disk, prefetch, mmap_mode):
+    # Several threads read at the same time, each with its own handle: each of their slices gets its own
+    # read-ahead threads, so the pool grows with them
+    path, _ = on_disk
+    prefetch(0)
+    expected = read_all_ways(path, mmap_mode)
+    prefetch(2)
+    evict(path)
+    with concurrent.futures.ThreadPoolExecutor(6) as pool:
+        for _ in range(2):  # cold, then from the page cache
+            for got in pool.map(lambda _: read_all_ways(path, mmap_mode), range(6)):
+                assert_same(got, expected)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="read-ahead is a no-op on Windows")
