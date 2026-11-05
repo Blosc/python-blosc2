@@ -87,6 +87,22 @@ def test_typed_strong_and_weak_scalar(operation):
         np.testing.assert_array_equal(expr.sum(), expected.sum())
 
 
+def test_typed_int32_remainder_across_chunks():
+    # The numerical edge matrix lives in miniexpr; retain one storage/API smoke
+    # test with a batch tail, signed operands and exceptional C divisions.
+    na = np.resize(np.array([-7, 7, np.iinfo(np.int32).min, 1], dtype=np.int32), 513)
+    nb = np.resize(np.array([3, -3, -1, 0], dtype=np.int32), 513)
+    a = blosc2.asarray(na, chunks=(259,), blocks=(65,))
+    b = blosc2.asarray(nb, chunks=(259,), blocks=(65,))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        expected = na % nb
+    expr = a % b
+    assert expr.dtype == np.int32
+    np.testing.assert_array_equal(expr[:], expected)
+    np.testing.assert_array_equal(expr.compute()[:], expected)
+    np.testing.assert_array_equal(expr[31:300], expected[31:300])
+
+
 def test_typed_large_unsigned_branch():
     na = np.arange(24, dtype=np.uint64)
     a = blosc2.asarray(na, chunks=(12,), blocks=(4,))
