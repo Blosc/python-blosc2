@@ -10,6 +10,7 @@ import platform
 import statistics
 import subprocess
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -65,7 +66,13 @@ def main():
     values["y"] = np.array(4, dtype=args.dtype)
     (result, _), rebind = timed(lambda: schedule.execute(values))
     np.testing.assert_array_equal(result, values["x"] * 2 + 4)
-    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        revision = None
     print(
         json.dumps(
             {
