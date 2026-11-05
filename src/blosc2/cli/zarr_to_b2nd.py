@@ -231,12 +231,14 @@ def determine_blosc2_cparams(
     if not 0 <= final_clevel <= 9:
         raise ValueError(f"Compression level must be between 0 and 9, got {final_clevel}")
 
-    blosc2_codec = BLOSC2_CODECS.get(final_cname.lower())
+    cname_str = getattr(final_cname, "value", str(final_cname)).lower()
+    blosc2_codec = BLOSC2_CODECS.get(cname_str)
     if blosc2_codec is None:
         if codec != "auto":
             raise ValueError(f"Unsupported codec '{codec}'. Supported: auto, {', '.join(BLOSC2_CODECS)}")
         blosc2_codec = blosc2.Codec.ZSTD
-    blosc2_filter = BLOSC2_SHUFFLE_FILTERS.get(final_shuffle.lower())
+    shuffle_str = getattr(final_shuffle, "value", str(final_shuffle)).lower()
+    blosc2_filter = BLOSC2_SHUFFLE_FILTERS.get(shuffle_str)
     if blosc2_filter is None:
         raise ValueError(
             f"Unsupported shuffle '{final_shuffle}'. Supported: auto, {', '.join(BLOSC2_SHUFFLE_FILTERS)}"

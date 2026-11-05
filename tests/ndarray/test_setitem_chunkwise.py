@@ -161,8 +161,9 @@ def test_scalar_fill_lossy_or_dict(cparams):
 
 def test_scalar_fill_conversion_errors():
     a = blosc2.zeros((40, 30), dtype=np.uint8, chunks=(10, 10), blocks=(5, 5))
-    with pytest.raises(OverflowError):
-        a[...] = 300
+    if int(np.__version__.split(".")[0]) >= 2:
+        with pytest.raises(OverflowError):
+            a[...] = 300
     with pytest.raises(ValueError):
         a[...] = "abc"
     np.testing.assert_array_equal(a[...], 0)
