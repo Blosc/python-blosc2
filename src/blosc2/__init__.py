@@ -488,6 +488,7 @@ from .core import (
     set_blocksize,
     set_compressor,
     set_nthreads,
+    set_prefetch,
     set_releasegil,
     unpack,
     unpack_array,
@@ -500,6 +501,8 @@ from .core import (
 cpu_info = get_cpu_info()
 nthreads = ncores = cpu_info.get("count", 1)
 """Number of threads to be used in compression/decompression.
+
+It starts from the ``BLOSC_NTHREADS`` environment variable if that is set.
 """
 # Protection against too many threads
 nthreads = min(nthreads, 64)
@@ -512,6 +515,26 @@ else:
     # Experiments say that, when using a large number of threads, it is better to not use them all
     if nthreads > 16:
         nthreads -= nthreads // 8
+    # C-Blosc2 uses BLOSC_NTHREADS, when set to a valid number, for every compression and
+    # decompression, whatever the nthreads in their parameters; start from it (as C-Blosc2 reads
+    # it), so that nthreads and the CParams/DParams defaults say how many threads are used
+    from .blosc2_ext import context_nthreads
+
+    nthreads = context_nthreads(nthreads)
+    try:
+        import numexpr as _numexpr
+    except ImportError:
+        _numexpr = None
+    if _numexpr is not None:
+        numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
+        numexpr_max: int | None = None
+        if numexpr_max_env is not None:
+            with contextlib.suppress(ValueError):
+                numexpr_max = int(numexpr_max_env)
+        if not os.environ.get("NUMEXPR_NUM_THREADS") and (numexpr_max is None or nthreads <= numexpr_max):
+            # BLOSC_NTHREADS can go beyond numexpr's own maximum, which it refuses with an error
+            _numexpr.set_num_threads(min(nthreads, _numexpr.MAX_THREADS))
+        del _numexpr
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
@@ -1126,6 +1149,7 @@ __all__ = [  # noqa : RUF022
     "set_blocksize",
     "set_compressor",
     "set_nthreads",
+    "set_prefetch",
     "set_releasegil",
     "sign",
     "signbit",

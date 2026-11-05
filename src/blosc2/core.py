@@ -24,7 +24,7 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from functools import cache, lru_cache
 from typing import TYPE_CHECKING, ClassVar
 
@@ -1286,9 +1286,11 @@ def set_nthreads(nthreads: int) -> int:
     Notes
     -----
     The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
-    variable (e.g., ``export BLOSC_NTHREADS=1``). Expression execution uses native
-    miniexpr scheduling or explicit NumPy fallbacks; NumExpr thread settings do
-    not affect Blosc2.
+    variable (e.g., ``export BLOSC_NTHREADS=1``), which :attr:`~blosc2.nthreads`
+    then starts from. While it is set, C-Blosc2 uses it for every compression and
+    decompression, over this function and the ``nthreads`` of :class:`CParams` and
+    :class:`DParams`. Expression execution uses native miniexpr scheduling or
+    explicit NumPy fallbacks; NumExpr thread settings do not affect Blosc2.
 
     The maximum number of threads for Blosc is :math:`2^{31} - 1`. In some
     cases, Blosc gets better results if you set the number of threads
@@ -1319,6 +1321,69 @@ def set_nthreads(nthreads: int) -> int:
     rc = blosc2_ext.set_nthreads(nthreads)
     blosc2.nthreads = nthreads
     return rc
+
+
+def set_prefetch(nthreads: int, max_ahead: int = 0, piece_size: int = 0) -> int:
+    """Read ahead when slicing arrays and super-chunks stored as contiguous frames on disk.
+
+    A slice of an on-disk array reads the blocks it needs one after the other, each read at most as large
+    as the kernel's read-ahead window. On a network file system every one of those reads is a round trip,
+    so a cold slice can wait for hundreds of them in a row. With read-ahead, the chunks a slice needs (and
+    that are not in the page cache yet) are read by :paramref:`nthreads` background threads in pieces of
+    at most :paramref:`piece_size` bytes, in the order the slice decompresses them and at most
+    :paramref:`max_ahead` bytes ahead of it, and each chunk is decompressed as soon as it is in. Of a
+    chunk that a slice (``a[...]``, :meth:`NDArray.slice`) covers only in part, only the blocks it needs
+    are read (after the chunk's header). The data goes to the page cache, so ``mmap_mode="r"`` stays
+    zero-copy, and cached pages are not read again.
+
+    It applies to :class:`NDArray` slices (``a[...]``, :meth:`NDArray.slice`), orthogonal selections
+    (``a[[1, 5, 9], ...]``, :meth:`NDArray.get_oselection_numpy`) and :class:`SChunk` slices
+    (``schunk[a:b]``, :meth:`SChunk.get_slice`).
+
+    Which settings to use: reads that are not cached get faster on any storage, most on high-latency
+    ones. The threads mostly wait for the storage, but the kernel spends CPU on every byte they read, and
+    more per byte the more threads read one file at once.
+
+    * 4 threads with the default piece size give most of the speed, on network file systems (NFS,
+      SMB, ...) and on local disks; more threads help a little more on network storage and cost more
+      CPU.
+    * On local disks, fewer threads (1-2) or larger pieces (4-8 MiB) cost less CPU, for some of the
+      speed (how much depends on the disk).
+    * With many reader processes at once, 1-2 threads each are enough; when the CPU is the limit,
+      none may be better.
+
+    Parameters
+    ----------
+    nthreads: int
+        Number of read-ahead threads (at most 256); 0 turns read-ahead off (the default).
+    max_ahead: int
+        Most bytes read ahead of the chunk being decompressed; 0 for the default (64 MiB).
+    piece_size: int
+        Largest read handed to one thread, in bytes; 0 for the default (1 MiB), else at least 64 KiB.
+        Each thread keeps a buffer as large as the largest piece it has read.
+
+    Returns
+    -------
+    out: int
+        The previous number of read-ahead threads.
+
+    Notes
+    -----
+    The setting and the threads are per process; a process created with ``fork()`` starts its own threads
+    on first use. The ``BLOSC_PREFETCH`` environment variable, set to a number of threads, turns read-ahead
+    on when blosc2 is imported. It works with the default and the memory-mapped file I/O on POSIX systems
+    (Linux, macOS); on Windows it has no effect. Skipping cached pages asks the kernel (``cachestat()`` on
+    Linux >= 6.5, else ``mincore()``), which on Linux answers only for files the process owns or may write
+    to (before 6.5: only files it owns); other files are read again even if cached, which is correct but
+    costs a copy.
+
+    Examples
+    --------
+    >>> old = blosc2.set_prefetch(4)  # network storage: 4 threads, 1 MiB pieces, up to 64 MiB ahead
+    >>> _ = blosc2.set_prefetch(2, piece_size=8 << 20)  # less CPU: 2 threads, 8 MiB pieces
+    >>> _ = blosc2.set_prefetch(old)
+    """
+    return blosc2_ext.set_prefetch(nthreads, max_ahead, piece_size)
 
 
 def compressor_list(plugins: bool = False) -> list:
@@ -1446,6 +1511,10 @@ def set_releasegil(gilstate: bool) -> bool:
     Designed to be used with larger chunk sizes and a ThreadPool.  There is a
     small performance penalty with releasing the GIL that will more harshly
     penalize small block sizes.
+
+    Reading slices of an :ref:`NDArray` releases the GIL while decompressing
+    regardless of this setting, unless a Python postfilter, codec or filter
+    could run during the read.
 
     Examples
     --------
@@ -1973,7 +2042,9 @@ def compute_chunks_blocks(  # noqa: C901
 
     cparams = kwargs.get("cparams") or blosc2.CParams()  # just get defaults
     if isinstance(cparams, blosc2.CParams):
-        cparams = asdict(cparams)
+        # Shallow is enough (only keys are set below, filters only on a deep copy), and asdict()
+        # costs more than the rest of this function
+        cparams = {f.name: getattr(cparams, f.name) for f in fields(cparams)}
     # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
@@ -1981,7 +2052,7 @@ def compute_chunks_blocks(  # noqa: C901
         # Get the default blocksize for the compression params
         # Check if we need STUNE for lossy codecs/filters that have specific blocksize requirements
         codec = cparams.get("codec")
-        filters = cparams.get("filters", None)
+        filters = cparams.get("filters")
         needs_stune = codec in (
             blosc2.Codec.ZFP_RATE,
             blosc2.Codec.ZFP_PREC,

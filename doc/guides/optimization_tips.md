@@ -510,6 +510,28 @@ With 8 concurrent readers doing random slice reads over a 269 MB array, mmap was
 
 *Benchmark for this tip: [`tip_10_mmap_many_readers.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_10_mmap_many_readers.py)*
 
+## Reading cold data from disk? Turn on read-ahead
+
+A slice of an on-disk array reads the blocks it needs one after the other, and every read that misses the page cache waits for the storage. On a network file system (NFS, SMB, ...) each of those waits is a round trip to the server. {func}`blosc2.set_prefetch` starts a few background threads that fetch the chunks a slice needs in large, parallel requests, while the slice decompresses the chunks that have already arrived. It works for `a[...]`, {meth}`NDArray.slice <blosc2.NDArray.slice>`, orthogonal selections and {class}`SChunk <blosc2.SChunk>` slices:
+
+```python
+# Avoid (data not in the page cache yet): one read per block, one after the other
+arr = blosc2.open(path, mmap_mode="r")
+patch = arr[:, 10:138, 20:148, 30:158]
+
+# Prefer: let a few threads fetch the chunks ahead of decompression (once per process;
+# BLOSC_PREFETCH=4 in the environment does the same)
+blosc2.set_prefetch(4)
+arr = blosc2.open(path, mmap_mode="r")
+patch = arr[:, 10:138, 20:148, 30:158]
+```
+
+![set_prefetch vs no read-ahead](optim_tips/tip_16_prefetch.png)
+
+On a local NVMe disk, 40 cold patch reads were **~1.7x faster**; on NFS, cold patches of 3D images get 3-5x faster. Chunks already in the page cache are not read again, so warm reads cost about the same as without read-ahead. The threads mostly wait for the storage, but the kernel spends CPU on every byte they read, more so the more threads read one file at once: 4 threads with the default 1 MiB pieces give most of the speed on network and local storage alike; on local disks, `set_prefetch(2, piece_size=8 << 20)` costs less CPU for some of the speed. Of a chunk that `a[...]` or `slice()` covers only in part, only the blocks the slice needs are read. With many reader processes at once, 1-2 threads each are enough; when the CPU is the limit (tens of processes reading cold data on one node), read-ahead can be slower than none. The read-ahead threads are separate from the decompression threads (`nthreads`), so a program with many reader processes can keep `nthreads=1` and still use them.
+
+*Benchmark for this tip: [`tip_16_prefetch.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_16_prefetch.py)*
+
 ## Use `.b2z` to group related data into one memory-mapped file
 
 `.b2z` packs related data — a {class}`~blosc2.CTable`'s columns and indexes, hierarchies of arrays, or both — into a single-file container that blosc2 reads *in place*: opened read-only, nothing is ever unpacked, and with `mmap_mode="r"` every member is memory-mapped at its offset inside the container. Beyond the convenience of one file to copy or archive, this buys you:

@@ -2399,6 +2399,8 @@ def fast_eval(  # noqa: C901
                 nct = res_eval.schunk.nchunks
                 if bpc > 0 and _cb_anchor.shape[0] >= nct * bpc:
                     chunk_has_candidate = _cb_anchor[: nct * bpc].reshape(nct, bpc).any(axis=1)
+            # The prefilter reads the operands' super-chunks from C, outside their methods
+            operand_locks = blosc2.blosc2_ext.HandleLocks(_pref_ops.values())
             for nchunk in range(res_eval.schunk.nchunks):
                 if chunk_has_candidate is not None and not chunk_has_candidate[nchunk]:
                     continue
@@ -2416,17 +2418,20 @@ def fast_eval(  # noqa: C901
                         # call runs, then restore before advancing to the next chunk.
                         header = chunk_data[: blosc2.EXTENDED_HEADER_LENGTH].copy()
                         try:
-                            res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                            with operand_locks:
+                                res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
                         finally:
                             chunk_data[: blosc2.EXTENDED_HEADER_LENGTH] = header
                     else:
-                        res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                        with operand_locks:
+                            res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
                         values = np.frombuffer(
                             chunk_data, dtype=dtype, count=count, offset=blosc2.EXTENDED_HEADER_LENGTH
                         )
                         out_flat[start : start + count] = values
                 else:
-                    res_eval.schunk.update_data(nchunk, data, copy=False)
+                    with operand_locks:
+                        res_eval.schunk.update_data(nchunk, data, copy=False)
             # _cb_anchor (if any) stays referenced until fast_eval returns, which
             # is after the finally below removes the prefilter — so the buffer
             # safely outlives every prefilter dereference.
@@ -3468,8 +3473,11 @@ def reduce_slices(  # noqa: C901
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
             # Exercise prefilter for each chunk
+            # The prefilter reads the operands' super-chunks from C, outside their methods
+            operand_locks = blosc2.blosc2_ext.HandleLocks(operands.values())
             for nchunk in range(res_eval.schunk.nchunks):
-                res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+                with operand_locks:
+                    res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
         except Exception as e:
             if blosc2.jit_config.execution_options()["math_backend"] is not None:
                 raise
@@ -5098,29 +5106,29 @@ class LazyExpr(LazyArray):
             Flat indices of True positions (int64).
         """
         chunk_len = bool_ndarray.chunks[0]
+        nitems = bool_ndarray.shape[0]
         all_indices = []
 
         for info in bool_ndarray.iterchunks_info():
+            offset = info.nchunk * chunk_len
+            # Items of this chunk inside the array: the last chunk's padding is not data, and it
+            # can hold anything (e.g. the fill value of a blosc2.full() array)
+            nvalid = builtins.min(chunk_len, nitems - offset)
             # Skip special-value chunks that are entirely False
             if info.special == blosc2.SpecialValue.ZERO:
                 continue
             if info.special == blosc2.SpecialValue.VALUE:
-                if not info.repeated_value:  # repeated_value is False/0
+                if not bool(info.repeated_value):  # repeated_value is False/0
                     continue
                 # repeated_value is True: all elements in this chunk are True
-                offset = info.nchunk * chunk_len
-                all_indices.append(np.arange(offset, offset + chunk_len, dtype=np.int64))
+                all_indices.append(np.arange(offset, offset + nvalid, dtype=np.int64))
                 continue
 
             # Normal chunk: decompress and scan for True positions
             raw = bool_ndarray.schunk.decompress_chunk(info.nchunk)
-            arr = np.frombuffer(raw, dtype=np.bool_)
-            # Truncate to the logical chunk size (buffer may include padding)
-            if len(arr) > chunk_len:
-                arr = arr[:chunk_len]
+            arr = np.frombuffer(raw, dtype=np.bool_)[:nvalid]
             idx = np.flatnonzero(arr)
             if len(idx) > 0:
-                offset = info.nchunk * chunk_len
                 all_indices.append(idx + offset)
 
         if not all_indices:
