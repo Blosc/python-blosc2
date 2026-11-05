@@ -7,8 +7,10 @@
 
 # Python callbacks (prefilters, fillers, postfilters, codecs and filters registered from Python) need the
 # GIL, so the calls that run them must keep it even when blosc2.set_releasegil(True) asks to release it.
+# An exception raised in a callback must reach the caller as it is.
 
 import collections
+import contextlib
 import threading
 import time
 import zlib
@@ -30,6 +32,7 @@ CPARAMS = {"typesize": DTYPE.itemsize, "nthreads": 1, "blocksize": CHUNKSIZE // 
 DPARAMS = {"nthreads": 1}
 
 calls = collections.Counter()
+failing = set()  # the callbacks that raise KeyError instead (see fail())
 
 
 @pytest.fixture(params=[False, True], ids=["gil-held", "gil-released"])
@@ -41,6 +44,23 @@ def releasegil(request):
 
 def called(name):
     calls[name] += 1
+    if name in failing:
+        raise KeyError(name)
+
+
+@contextlib.contextmanager
+def fail(name):
+    """Make the callback `name` raise KeyError(name) meanwhile.  The KeyError must reach the caller, and
+    the callback must run only once: C-Blosc2 stops at the first failure, so no Python code runs with the
+    exception set."""
+    ncalls = calls[name]
+    failing.add(name)
+    try:
+        with pytest.raises(KeyError, match=name):
+            yield
+    finally:
+        failing.discard(name)
+    assert calls[name] == ncalls + 1
 
 
 def encoder(input, output, meta, schunk):
@@ -215,3 +235,148 @@ def test_write_releases_the_gil_next_to_python_codecs(registered):
     finally:
         blosc2.set_releasegil(old)
     assert gaps[-1] < 0.5, f"longest gaps, as fractions of the write: {gaps}"
+
+
+# The ways of writing one chunk to a super-chunk holding a chunk (or half of one, for setitem-append)
+FAILING_WRITE_PATHS = ["append", "insert", "update", "setitem", "setitem-grow", "setitem-append"]
+
+
+def schunk_for(path, cparams=CPARAMS):
+    return new_schunk(cparams, data=data(N // 2 if path == "setitem-append" else N))
+
+
+def write_chunk(schunk, path):
+    values = data(N, start=1)
+    if path == "append":
+        schunk.append_data(values)
+    elif path == "insert":
+        schunk.insert_data(0, values, copy=False)
+    elif path == "update":
+        schunk.update_data(0, values, copy=True)
+    elif path == "setitem":
+        schunk[: N // 2] = values[: N // 2]
+    else:
+        # setitem-grow updates the second half of the full chunk, setitem-append recompresses the half
+        # chunk in full; both append a chunk then
+        schunk[N // 2 : 2 * N] = data(3 * N // 2, start=1)
+
+
+@pytest.mark.parametrize("path", FAILING_WRITE_PATHS)
+def test_prefilter_raises(releasegil, path):
+    schunk = schunk_for(path)
+    before = read(schunk)
+
+    @schunk.prefilter(DTYPE, DTYPE)
+    def pf_raises_test_releasegil(input, output, offset):
+        called("prefilter")
+        output[:] = input
+
+    with fail("prefilter"):
+        write_chunk(schunk, path)
+    np.testing.assert_array_equal(read(schunk), before)
+
+
+def test_filler_raises(releasegil):
+    schunk = new_schunk()
+    with fail("filler"):
+
+        @schunk.filler(((data(2 * N), DTYPE),), DTYPE)
+        def fill_raises_test_releasegil(inputs, output, offset):
+            called("filler")
+
+    assert schunk.nchunks == 0
+
+
+@pytest.mark.parametrize("path", ["init", *FAILING_WRITE_PATHS])
+def test_python_codec_filter_raises_on_write(releasegil, python_cparams, path):
+    cparams, encode, _ = python_cparams
+    if path == "init":
+        with fail(encode):
+            new_schunk(cparams, data=data(2 * N))
+        return
+    schunk = schunk_for(path, cparams)
+    before = read(schunk)
+    with fail(encode):
+        write_chunk(schunk, path)
+    np.testing.assert_array_equal(read(schunk), before)
+
+
+READ_PATHS = ["decompress_chunk", "decompress_chunk-dst", "get_slice", "get_slice-out", "getitem"]
+
+
+def read_chunk(schunk, path):
+    if path == "decompress_chunk":
+        schunk.decompress_chunk(0)
+    elif path == "decompress_chunk-dst":
+        schunk.decompress_chunk(0, np.empty(N, dtype=DTYPE))
+    elif path == "get_slice":
+        schunk.get_slice(N // 4, N)
+    elif path == "get_slice-out":
+        schunk.get_slice(N // 4, N, out=np.empty(3 * N // 4, dtype=DTYPE))
+    else:
+        schunk[N // 4 : N]
+
+
+@pytest.mark.parametrize("path", READ_PATHS)
+def test_postfilter_raises(releasegil, path):
+    schunk = new_schunk(data=data(2 * N))
+
+    @schunk.postfilter(DTYPE, DTYPE)
+    def post_raises_test_releasegil(input, output, offset):
+        called("postfilter")
+        output[:] = input
+
+    with fail("postfilter"):
+        read_chunk(schunk, path)
+
+
+@pytest.mark.parametrize("path", READ_PATHS)
+def test_python_codec_filter_raises_on_read(releasegil, python_cparams, path):
+    cparams, _, decode = python_cparams
+    schunk = new_schunk(cparams, data=data(2 * N))
+    with fail(decode):
+        read_chunk(schunk, path)
+
+
+def test_python_codec_filter_raises_ndarray(releasegil, python_cparams):
+    cparams, encode, decode = python_cparams
+    kwargs = {
+        "cparams": blosc2.CParams(**cparams),
+        "dparams": blosc2.DParams(**DPARAMS),
+        "chunks": (20, 50),
+        "blocks": (10, 50),
+    }
+    values = data(40 * 50).reshape(40, 50)
+    with fail(encode):
+        blosc2.asarray(values, **kwargs)
+    array = blosc2.asarray(values, **kwargs)
+    with fail(encode):
+        array[5:25] = 0
+    with fail(decode):
+        array[5:25]
+    with fail(decode):
+        array.read_into(np.empty((20, 50), dtype=DTYPE), slice(5, 25))
+    with fail(decode):
+        array[[1, 3]]
+    with fail(decode):
+        blosc2.concat([array, blosc2.asarray(values, **kwargs)], axis=1)
+    np.testing.assert_array_equal(array[:], values)
+
+
+def test_python_codec_filter_without_schunk(releasegil, python_cparams):
+    cparams = python_cparams[0]
+    # The callbacks raise this themselves: Python codecs and filters only work in a super-chunk
+    with pytest.raises(RuntimeError, match="without an SChunk"):
+        blosc2.compress2(data(N), **cparams)
+    with pytest.raises(RuntimeError, match="without an SChunk"):
+        blosc2.blosc2_ext.vlcompress([data(N).tobytes()], **cparams)
+    chunk = new_schunk(cparams, data=data(N)).get_chunk(0)
+    with pytest.raises(RuntimeError, match="without an SChunk"):
+        blosc2.decompress2(chunk, **DPARAMS)
+    old_nthreads = blosc2.set_nthreads(1)  # decompress() uses the global number of threads
+    try:
+        for as_bytearray in (False, True):
+            with pytest.raises(RuntimeError, match="without an SChunk"):
+                blosc2.decompress(chunk, as_bytearray=as_bytearray)
+    finally:
+        blosc2.set_nthreads(old_nthreads)
