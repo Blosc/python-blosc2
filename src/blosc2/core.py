@@ -1519,6 +1519,11 @@ def set_releasegil(gilstate: bool) -> bool:
     regardless of this setting, unless a Python postfilter, codec or filter
     could run during the read.
 
+    Compressing keeps the GIL regardless of this setting when a Python callback
+    (a prefilter, a filler, or a codec or filter registered from Python) could
+    run.  Decompressing a chunk keeps it while any codec or filter is registered
+    from Python, as the chunk may use one.
+
     Examples
     --------
     >>> oldReleaseState = blosc2.set_releasegil(True)
