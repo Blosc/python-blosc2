@@ -86,3 +86,82 @@ def test_postfilters(
         assert np.array_equal(data, res)
 
     blosc2.remove_urlpath(urlpath)
+
+
+# The postfilters below only record their calls and never touch their arrays, so a call with
+# arrays that do not fit the buffers cannot overrun them, with or without the typesize guard.
+# Each test runs with the GIL kept and released around the C calls.
+
+
+@pytest.fixture(params=[False, True], ids=["gil-held", "gil-released"])
+def releasegil(request):
+    old = blosc2.set_releasegil(request.param)
+    yield
+    blosc2.set_releasegil(old)
+
+
+@pytest.mark.parametrize("typesize", [1, 8])
+def test_postfilter_wrong_typesize(releasegil, typesize):
+    # int32 arrays of size // typesize items would overrun a typesize 1 buffer, and cover only
+    # half of a typesize 8 one: the postfilter refuses such chunks
+    data = np.arange(1000, dtype=np.int32)
+    schunk = blosc2.SChunk(
+        chunksize=data.nbytes,
+        data=data,
+        cparams={"typesize": typesize, "nthreads": 1},
+        dparams={"nthreads": 1},
+    )
+    calls = []
+
+    @schunk.postfilter(np.int32)
+    def postf_wrong_typesize(input, output, offset):
+        calls.append(input.size)
+
+    with pytest.raises(
+        ValueError, match=f"postfilter: data typesize {typesize} does not match dtype itemsize 4"
+    ):
+        schunk.decompress_chunk(0)
+    assert calls == []
+
+    schunk.remove_postfilter("postf_wrong_typesize")
+    assert np.array_equal(np.frombuffer(schunk.decompress_chunk(0), dtype=np.int32), data)
+
+
+def test_postfilter_vlmeta(releasegil):
+    # The postfilter is for chunk data, not for the msgpack content (typesize 1) of a vlmetalayer
+    data = np.arange(2000, dtype=np.int32)
+    schunk = blosc2.SChunk(
+        chunksize=4000,
+        data=data,
+        contiguous=False,
+        cparams={"typesize": 4, "nthreads": 1},
+        dparams={"nthreads": 1},
+    )
+    schunk.vlmeta["info"] = {"answer": 42}
+    calls = []
+
+    @schunk.postfilter(np.int32)
+    def postf_vlmeta(input, output, offset):
+        calls.append(input.size)
+
+    # C-Blosc2 before Blosc/c-blosc2#857 decompresses vlmetalayers with the postfilter, which then
+    # refuses them; with it the content is read without the postfilter.  Either way the callback
+    # never sees the content.
+    refused = "postfilter: data typesize 1 does not match dtype itemsize 4"
+    try:
+        info = schunk.vlmeta["info"]
+    except ValueError as e:
+        info = str(e)
+    assert info in ({"answer": 42}, refused)
+    assert calls == []
+
+    # Serializing an in-memory sparse super-chunk copies its vlmetalayers the same way
+    try:
+        copy = blosc2.schunk_from_cframe(schunk.to_cframe(), copy=True)
+        info = copy.vlmeta["info"]
+    except ValueError as e:
+        info = str(e)
+    assert info in ({"answer": 42}, refused)
+
+    schunk.remove_postfilter("postf_vlmeta")
+    assert schunk.vlmeta["info"] == {"answer": 42}

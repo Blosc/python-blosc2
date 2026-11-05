@@ -207,3 +207,61 @@ def test_prefilters(contiguous, urlpath, cparams, dparams, nchunks, func, data_d
         assert np.array_equal(new_data, res)
 
     blosc2.remove_urlpath(urlpath)
+
+
+# The prefilters below only record their calls and never touch their arrays, so a call with
+# arrays that do not fit the buffers cannot overrun them, with or without the typesize guard.
+# Each test runs with the GIL kept and released around the C calls.
+
+
+@pytest.fixture(params=[False, True], ids=["gil-held", "gil-released"])
+def releasegil(request):
+    old = blosc2.set_releasegil(request.param)
+    yield
+    blosc2.set_releasegil(old)
+
+
+@pytest.mark.parametrize("typesize", [1, 8])
+def test_prefilter_wrong_typesize(releasegil, typesize):
+    # int32 arrays of size // typesize items would overrun a typesize 1 buffer, and cover only
+    # half of a typesize 8 one: the prefilter refuses such chunks
+    data = np.arange(1000, dtype=np.int32)
+    schunk = blosc2.SChunk(chunksize=data.nbytes, cparams={"typesize": typesize, "nthreads": 1})
+    calls = []
+
+    @schunk.prefilter(np.int32)
+    def pref_wrong_typesize(input, output, offset):
+        calls.append(input.size)
+
+    with pytest.raises(
+        ValueError, match=f"prefilter: data typesize {typesize} does not match dtype itemsize 4"
+    ):
+        schunk.append_data(data)
+    assert calls == []
+    assert schunk.nchunks == 0
+
+    schunk.remove_prefilter("pref_wrong_typesize")
+    schunk.append_data(data)
+    assert np.array_equal(np.frombuffer(schunk.decompress_chunk(0), dtype=np.int32), data)
+
+
+@pytest.mark.parametrize("typesize", [1, 8])
+def test_filler_wrong_typesize(releasegil, typesize):
+    # Same for a filler, which then must not stay set: it keeps only the id of its inputs
+    data = np.arange(1000, dtype=np.int32)
+    schunk = blosc2.SChunk(chunksize=data.nbytes, cparams={"typesize": typesize, "nthreads": 1})
+    calls = []
+
+    with pytest.raises(
+        ValueError, match=f"filler: data typesize {typesize} does not match dtype itemsize 4"
+    ):
+
+        @schunk.filler(((data, np.int32),), np.int32)
+        def fill_wrong_typesize(inputs_tuple, output, offset):
+            calls.append(output.size)
+
+    assert calls == []
+    assert schunk.nchunks == 0
+    assert "fill_wrong_typesize" not in blosc2.prefilter_funcs
+    schunk.append_data(data)
+    assert schunk.nchunks == 1
