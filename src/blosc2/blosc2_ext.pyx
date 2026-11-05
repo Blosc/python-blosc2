@@ -3754,33 +3754,56 @@ def open(urlpath, mode, offset, **kwargs):
     if mode != "w" and kwargs is not None:
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
-    # nthreads is not stored in the frame; apply the live global when the caller
-    # did not supply an explicit cparams — symmetric with the DParams default below.
     dparams = kwargs.get("dparams", blosc2.DParams())
 
     if is_ndarray:
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL), mode=mode)
-        if cparams is not None:
-            res._schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-        else:
-            res._schunk.cparams = dataclasses.replace(
-                res._schunk.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads)
-            )
-        if dparams is not None:
-            res._schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
-        res._schunk.mode = mode
+        sc = res._schunk
+        sc.mode = mode
     else:
         res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
                             mode=mode, **kwargs)
-        if cparams is not None:
-            res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-        else:
-            res.cparams = dataclasses.replace(res.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
-        if dparams is not None:
-            res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
+        sc = res
+    sc.cparams = _opened_cparams(sc.cparams, cparams, mode)
+    if dparams is not None:
+        sc.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
     return res
+
+
+def _opened_cparams(stored, cparams, mode):
+    """The compression parameters of a container that open() returns, given its `stored` ones.
+
+    Without `cparams`, the stored ones with the current blosc2.nthreads (nthreads is not stored in
+    the frame).  In mode "w" the container starts empty, so `cparams` applies as when creating one.
+    Otherwise `cparams` updates those: a dict only the keys it has, a CParams instance every field but
+    typesize and blocksize.  Those two fix how the existing data is laid out (items, blocks), so they
+    keep their stored values; asking for different ones raises ValueError (a CParams instance's
+    defaults, typesize 8 and blocksize 0, count as not asking).  A different codec, level, filters, ...
+    is fine: every chunk records its own.
+    """
+    opened = dataclasses.replace(stored, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
+    if cparams is None:
+        return opened
+    if mode == "w":
+        return cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+    if isinstance(cparams, blosc2.CParams):
+        defaults = blosc2.CParams()
+        given = {f.name: getattr(cparams, f.name) for f in dataclasses.fields(cparams)}
+        for name in ("typesize", "blocksize"):
+            if given[name] == getattr(defaults, name):
+                del given[name]
+    else:
+        given = dict(cparams)
+        if "filters" in given and "filters_meta" not in given:
+            # As in CParams(**cparams): the stored metas belong to the stored filters
+            given["filters_meta"] = [0] * len(given["filters"])
+    if given.pop("typesize", stored.typesize) != stored.typesize:
+        raise ValueError(f"Cannot change the typesize ({stored.typesize}) of an existing container")
+    if given.pop("blocksize", 0) not in (0, stored.blocksize):
+        raise ValueError(f"Cannot change the blocksize ({stored.blocksize}) of an existing container")
+    return dataclasses.replace(opened, **given)
 
 
 def check_access_mode(urlpath, mode):

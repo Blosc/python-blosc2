@@ -249,3 +249,26 @@ def test_open_schunk_context_manager(tmp_path):
     with blosc2.open(urlpath, mode="r") as schunk:
         assert isinstance(schunk, blosc2.SChunk)
         assert schunk[:] == data.tobytes()
+
+
+@pytest.mark.parametrize("cparams", [{"nthreads": 2}, {"clevel": 1}, blosc2.CParams(nthreads=2)])
+def test_open_cparams_keep_typesize(tmp_path, cparams):
+    # Items of an opened super-chunk keep their size: typesize used to become the default (8)
+    urlpath = tmp_path / "schunk.b2frame"
+    schunk = blosc2.SChunk(
+        chunksize=4000, urlpath=urlpath, cparams={"typesize": 4, "codec": blosc2.Codec.LZ4HC, "clevel": 3}
+    )
+    schunk.append_data(np.arange(1000, dtype=np.int32))
+    del schunk
+    schunk = blosc2.open(urlpath, mode="a", cparams=cparams)
+    assert schunk.typesize == schunk.cparams.typesize == 4
+    if isinstance(cparams, dict) and "clevel" not in cparams:
+        assert (schunk.cparams.codec, schunk.cparams.clevel) == (blosc2.Codec.LZ4HC, 3)
+    schunk.append_data(np.arange(1000, 2000, dtype=np.int32))
+    schunk[10:20] = np.zeros(10, dtype=np.int32)
+    expected = np.arange(2000, dtype=np.int32)
+    expected[10:20] = 0
+    assert np.frombuffer(schunk[:], dtype=np.int32).tolist() == expected.tolist()
+    assert (
+        np.frombuffer(blosc2.open(urlpath)[995:1005], dtype=np.int32).tolist() == expected[995:1005].tolist()
+    )

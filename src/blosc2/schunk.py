@@ -3003,10 +3003,12 @@ def open(  # noqa: C901
             container must enable it) and cannot be combined with `mmap_mode`.
             The ``BLOSC_LOCKING`` environment variable enables it globally.
             For more info, see :class:`blosc2.Storage`.
-        cparams: dict
-            A dictionary with the compression parameters, which are the same that can be
-            used in the :func:`~blosc2.compress2` function.
-            Typesize and blocksize cannot be changed.
+        cparams: dict or :class:`blosc2.CParams`
+            The compression parameters for new and updated chunks, which are the same that can
+            be used in the :func:`~blosc2.compress2` function. Except in mode 'w', they update the
+            stored ones: a dict changes only the parameters it has, a :class:`blosc2.CParams` all but
+            typesize and blocksize. Typesize and blocksize cannot be changed (they fix the layout of
+            the stored data): other values raise a ValueError.
         dparams: dict
             A dictionary with the decompression parameters, which are the same that can
             be used in the :func:`~blosc2.decompress2` function.
