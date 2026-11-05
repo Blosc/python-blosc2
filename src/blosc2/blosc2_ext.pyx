@@ -3681,6 +3681,7 @@ def compress2(src, **kwargs):
     _dest = <void*> <char *> dest
     cctx = blosc2_create_cctx(cparams)
     if cctx == NULL:
+        PyBuffer_Release(&buf)
         raise RuntimeError("Could not create the compression context")
     size = _compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
     blosc2_free_ctx(cctx)
@@ -4426,6 +4427,7 @@ cdef class SChunk:
         if dst is not None:
             PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
             if buf.len == 0:
+                PyBuffer_Release(&buf)
                 raise ValueError("The dst length must be greater than 0")
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)
             PyBuffer_Release(&buf)
@@ -4612,6 +4614,7 @@ cdef class SChunk:
         if out is not None:
             PyObject_GetBuffer(out, &buf, PyBUF_SIMPLE)
             if buf.len < nbytes:
+                PyBuffer_Release(&buf)
                 raise ValueError("Not enough space for writing the slice in out")
             rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, buf.buf)
             PyBuffer_Release(&buf)
@@ -5871,15 +5874,26 @@ def open(urlpath, mode, offset, **kwargs):
 
     is_ndarray = schunk_is_ndarray(schunk)
 
-    cdef b2nd_array_t *array
-    if is_ndarray:
-        _check_rc(b2nd_from_schunk(schunk, &array),
-                  "Could not create array from schunk")
+    cdef b2nd_array_t *array = NULL
+    cdef int rc
+    try:
+        if is_ndarray:
+            rc = b2nd_from_schunk(schunk, &array)
+            if rc < 0:
+                array = NULL  # the schunk is still ours
+            _check_rc(rc, "Could not create array from schunk")
 
-    kwargs["urlpath"] = urlpath
-    kwargs["contiguous"] = schunk.storage.contiguous
-    if mode != "w" and kwargs is not None:
-        check_schunk_params(schunk, kwargs)
+        kwargs["urlpath"] = urlpath
+        kwargs["contiguous"] = schunk.storage.contiguous
+        if mode != "w" and kwargs is not None:
+            check_schunk_params(schunk, kwargs)
+    except BaseException:
+        # Nothing owns the schunk (or the array made from it) yet: free it, which also closes the file
+        if array != NULL:
+            b2nd_free(array)
+        else:
+            blosc2_schunk_free(schunk)
+        raise
     cparams = kwargs.get("cparams")
     dparams = kwargs.get("dparams", blosc2.DParams())
 
@@ -6015,6 +6029,7 @@ def schunk_from_cframe(cframe, copy=False):
     PyObject_GetBuffer(cframe, &buf, PyBUF_SIMPLE)
     cdef blosc2_schunk *schunk_ = blosc2_schunk_from_buffer(<uint8_t *>buf.buf, buf.len, copy)
     if schunk_ == NULL:
+        PyBuffer_Release(&buf)
         raise RuntimeError("Could not get the schunk from the cframe")
     schunk = blosc2.SChunk(_schunk=PyCapsule_New(schunk_, <char *> "blosc2_schunk*", NULL))
     PyBuffer_Release(&buf)
@@ -6873,25 +6888,28 @@ cdef class NDArray:
         cdef int64_t buffersize_ = self.array.sc.typesize
         cdef int64_t[B2ND_MAX_DIM] sel_size
 
-        key_ = <int64_t**> malloc(len(key) * sizeof(int64_t *))
-
-        for i in range(self.array.ndim):
-            buffershape_[i] = len(key[i])
-            buffersize_ *= buffershape_[i]
-            sel_size[i] = len(key[i])
-            key_[i] = <int64_t *> malloc(sel_size[i] * sizeof(int64_t))
-            for j in range(len(key[i])):
-                key_[i][j] = key[i][j]
-
         cdef Py_buffer buf
-        PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+        cdef int rc
+        # calloc: the finally frees every entry, also the ones not allocated yet
+        key_ = <int64_t**> calloc(len(key), sizeof(int64_t *))
+        try:
+            for i in range(self.array.ndim):
+                buffershape_[i] = len(key[i])
+                buffersize_ *= buffershape_[i]
+                sel_size[i] = len(key[i])
+                key_[i] = <int64_t *> malloc(sel_size[i] * sizeof(int64_t))
+                for j in range(len(key[i])):
+                    key_[i][j] = key[i][j]
 
-        _check_rc(b2nd_get_orthogonal_selection(self.array, key_, sel_size, buf.buf,
-                                                buffershape_, buffersize_), "Error while getting orthogonal selection")
-        PyBuffer_Release(&buf)
-        for i in range(len(key)):
-            free(key_[i])  # Free the allocated memory for each key
-        free(key_)
+            PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+            rc = b2nd_get_orthogonal_selection(self.array, key_, sel_size, buf.buf,
+                                               buffershape_, buffersize_)
+            PyBuffer_Release(&buf)
+            _check_rc(rc, "Error while getting orthogonal selection")
+        finally:
+            for i in range(len(key)):
+                free(key_[i])  # Free the allocated memory for each key
+            free(key_)
         return arr
 
     @_handle_locked
@@ -6906,25 +6924,28 @@ cdef class NDArray:
         cdef int64_t buffersize_ = self.array.sc.typesize
         cdef int64_t[B2ND_MAX_DIM] sel_size
 
-        key_ = <int64_t**> malloc(len(key) * sizeof(int64_t *))
-
-        for i in range(self.array.ndim):
-            buffershape_[i] = len(key[i])
-            buffersize_ *= buffershape_[i]
-            sel_size[i] = len(key[i])
-            key_[i] = <int64_t *> malloc(sel_size[i] * sizeof(int64_t))
-            for j in range(len(key[i])):
-                key_[i][j] = key[i][j]
-
         cdef Py_buffer buf
-        PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+        cdef int rc
+        # calloc: the finally frees every entry, also the ones not allocated yet
+        key_ = <int64_t**> calloc(len(key), sizeof(int64_t *))
+        try:
+            for i in range(self.array.ndim):
+                buffershape_[i] = len(key[i])
+                buffersize_ *= buffershape_[i]
+                sel_size[i] = len(key[i])
+                key_[i] = <int64_t *> malloc(sel_size[i] * sizeof(int64_t))
+                for j in range(len(key[i])):
+                    key_[i][j] = key[i][j]
 
-        _check_rc(b2nd_set_orthogonal_selection(self.array, key_, sel_size, buf.buf,
-                                                buffershape_, buffersize_), "Error while getting orthogonal selection")
-        PyBuffer_Release(&buf)
-        for i in range(len(key)):
-            free(key_[i])  # Free the allocated memory for each key
-        free(key_)
+            PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+            rc = b2nd_set_orthogonal_selection(self.array, key_, sel_size, buf.buf,
+                                               buffershape_, buffersize_)
+            PyBuffer_Release(&buf)
+            _check_rc(rc, "Error while getting orthogonal selection")
+        finally:
+            for i in range(len(key)):
+                free(key_[i])  # Free the allocated memory for each key
+            free(key_)
         return arr
 
 
@@ -6945,9 +6966,9 @@ cdef class NDArray:
         chunks, blocks = blosc2.compute_chunks_blocks(shape, chunks, blocks, self.dtype)
 
         # shape will be overwritten by get_slice
-        cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks,
-                                                       self.dtype, kwargs)
-        if ctx == NULL:
+        cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks,
+                                                    self.dtype, kwargs)
+        if ctx.ptr == NULL:
             raise RuntimeError("Error while creating the context")
         ndim = self.ndim
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -6956,14 +6977,18 @@ cdef class NDArray:
             stop_[i] = stop[i]
 
         cdef b2nd_array_t *array
-        _check_rc(b2nd_get_slice(ctx, &array, self.array, start_, stop_),
+        _check_rc(b2nd_get_slice(ctx.ptr, &array, self.array, start_, stop_),
                   "Error while getting the slice")
-        _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
         cdef c_bool mask_[B2ND_MAX_DIM]
         for i in range(ndim):
             mask_[i] = mask[i]
-        _check_rc(b2nd_squeeze_index(array, &array, mask_), "Error while squeezing sliced array")
+        cdef b2nd_array_t *view = NULL
+        cdef int rc = b2nd_squeeze_index(array, &view, mask_)
+        if rc < 0:
+            b2nd_free(array)
+        _check_rc(rc, "Error while squeezing sliced array")
+        array = view
         ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                                  _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
 
@@ -6974,18 +6999,17 @@ cdef class NDArray:
     def set_slice(self, key, ndarray):
         ndim = self.ndim
         start, stop = key
-        cdef Py_buffer buf
-        PyObject_GetBuffer(ndarray, &buf, PyBUF_SIMPLE)
-
         cdef int64_t[B2ND_MAX_DIM] buffershape_, start_, stop_
         for i in range(ndim):
             start_[i] = start[i]
             stop_[i] = stop[i]
             buffershape_[i] = stop[i] - start[i]
 
-        _check_rc(b2nd_set_slice_cbuffer(buf.buf, buffershape_, buf.len, start_, stop_, self.array),
-                  "Error while setting the slice")
+        cdef Py_buffer buf
+        PyObject_GetBuffer(ndarray, &buf, PyBUF_SIMPLE)
+        cdef int rc = b2nd_set_slice_cbuffer(buf.buf, buffershape_, buf.len, start_, stop_, self.array)
         PyBuffer_Release(&buf)
+        _check_rc(rc, "Error while setting the slice")
 
         return self
 
@@ -7009,17 +7033,16 @@ cdef class NDArray:
         kwargs["contiguous"] =  kwargs.get("contiguous", self.array.sc.storage.contiguous)
 
         chunks, blocks = blosc2.compute_chunks_blocks(self.shape, chunks, blocks, dtype, **kwargs)
-        cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
-        if ctx == NULL:
+        cdef _B2ndContext ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
+        if ctx.ptr == NULL:
             raise RuntimeError("Error while creating the context")
 
         cdef b2nd_array_t *array
-        _check_rc(b2nd_copy(ctx, self.array, &array),
+        _check_rc(b2nd_copy(ctx.ptr, self.array, &array),
                   "Error while copying the array")
 
         ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                                  _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-        _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
         return ndarray
 
@@ -7704,7 +7727,24 @@ cdef class NDArray:
             _check_rc(b2nd_free(self.array), "Error while freeing the array")
 
 
-cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
+cdef class _B2ndContext:
+    """A b2nd context, freed with this object, and what it points to: the dparams and the metalayer
+    names and contents (b2nd_create_ctx() copies the storage struct and the cparams only)."""
+    cdef b2nd_context_t *ptr
+    cdef blosc2_dparams dparams
+    cdef blosc2_metalayer metalayers[B2ND_MAX_METALAYERS]
+    cdef int nmetalayers
+
+    def __dealloc__(self):
+        cdef int i
+        if self.ptr != NULL:
+            b2nd_free_ctx(self.ptr)
+        for i in range(self.nmetalayers):
+            free(self.metalayers[i].name)
+            free(self.metalayers[i].content)
+
+
+cdef _B2ndContext create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     if isinstance(dtype, list) and len(dtype) > 0 and isinstance(dtype[0], tuple):
         # Extract just the field names and basic dtype info
         fields = []
@@ -7768,11 +7808,11 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
             raise ValueError("NDArray must already exist")
 
     # Create storage
+    cdef _B2ndContext ctx = _B2ndContext.__new__(_B2ndContext)
     cdef blosc2_storage storage
-    cdef blosc2_cparams *cparams = <blosc2_cparams *>malloc(sizeof(blosc2_cparams))
-    cdef blosc2_dparams *dparams = <blosc2_dparams *>malloc(sizeof(blosc2_dparams))
-    storage.cparams = cparams
-    storage.dparams = dparams
+    cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS  # create_cparams_from_kwargs() leaves some fields alone
+    storage.cparams = &cparams
+    storage.dparams = &ctx.dparams
     create_storage(&storage, kwargs)
 
     # Shapes
@@ -7787,33 +7827,36 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
 
     # Metalayers
     meta = kwargs.get('meta', None)
-    cdef blosc2_metalayer[B2ND_MAX_METALAYERS] metalayers
 
     if meta is None:
-        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
-                              B2ND_DEFAULT_DTYPE_FORMAT, NULL, 0)
+        ctx.ptr = b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
+                                  B2ND_DEFAULT_DTYPE_FORMAT, NULL, 0)
     else:
         nmetalayers = len(meta)
+        if nmetalayers > B2ND_MAX_METALAYERS:
+            raise ValueError(f"An NDArray can have at most {B2ND_MAX_METALAYERS} metalayers, got {nmetalayers}")
         for i, (name, content) in enumerate(meta.items()):
             name2 = name.encode("utf-8") if isinstance(name, str) else name # do a copy
-            metalayers[i].name = strdup(name2)
+            ctx.metalayers[i].name = strdup(name2)
+            ctx.metalayers[i].content = NULL
+            ctx.nmetalayers = i + 1  # freed with ctx from here on
             content = packb(content, default=encode_tuple, strict_types=True, use_bin_type=True)
-            metalayers[i].content = <uint8_t *> malloc(len(content))
-            memcpy(metalayers[i].content, <uint8_t *> content, len(content))
-            metalayers[i].content_len = len(content)
+            ctx.metalayers[i].content = <uint8_t *> malloc(len(content))
+            memcpy(ctx.metalayers[i].content, <uint8_t *> content, len(content))
+            ctx.metalayers[i].content_len = len(content)
 
-        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
-                              B2ND_DEFAULT_DTYPE_FORMAT, metalayers, nmetalayers)
+        ctx.ptr = b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
+                                  B2ND_DEFAULT_DTYPE_FORMAT, ctx.metalayers, nmetalayers)
+    return ctx
 
 
 def uninit(shape, chunks, blocks, dtype, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_uninit(ctx, &array), "Could not build uninit array")
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    _check_rc(b2nd_uninit(ctx.ptr, &array), "Could not build uninit array")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     ndarray._schunk.mode = kwargs.get("mode", "a")
@@ -7822,13 +7865,12 @@ def uninit(shape, chunks, blocks, dtype, **kwargs):
 
 
 def nans(shape, chunks, blocks, dtype, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_nans(ctx, &array), "Could not build nans array")
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    _check_rc(b2nd_nans(ctx.ptr, &array), "Could not build nans array")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     ndarray._schunk.mode = kwargs.get("mode", "a")
@@ -7837,13 +7879,12 @@ def nans(shape, chunks, blocks, dtype, **kwargs):
 
 
 def empty(shape, chunks, blocks, dtype, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_empty(ctx, &array), "Could not build empty array")
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    _check_rc(b2nd_empty(ctx.ptr, &array), "Could not build empty array")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     ndarray._schunk.mode = kwargs.get("mode", "a")
@@ -7852,23 +7893,22 @@ def empty(shape, chunks, blocks, dtype, **kwargs):
 
 
 def zeros(shape, chunks, blocks, dtype, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_zeros(ctx, &array), "Could not build zeros array")
+    _check_rc(b2nd_zeros(ctx.ptr, &array), "Could not build zeros array")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray._schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
 
 
 def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
     dtype = np.dtype(dtype)
@@ -7877,28 +7917,27 @@ def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
     PyObject_GetBuffer(nparr, &val, PyBUF_SIMPLE)
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_full(ctx, &array, val.buf), "Could not create full array")
+    cdef int rc = b2nd_full(ctx.ptr, &array, val.buf)
     PyBuffer_Release(&val)
+    _check_rc(rc, "Could not create full array")
 
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray._schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
 
 
 def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
-    _check_rc(b2nd_from_cbuffer(ctx, &array,  <void*> <char *> buf, len(buf)),
+    _check_rc(b2nd_from_cbuffer(ctx.ptr, &array,  <void*> <char *> buf, len(buf)),
               "Error while creating the NDArray")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray._schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
@@ -7906,25 +7945,23 @@ def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
 
 def asarray(ndarray, chunks, blocks, **kwargs):
     interface = ndarray.__array_interface__
-    cdef Py_buffer buf
-    PyObject_GetBuffer(ndarray, &buf, PyBUF_SIMPLE)
-
     shape = interface["shape"]
     dtype = interface["typestr"]
     if dtype.startswith("|V") and "descr" in interface:
         # Structured dtype
         dtype = interface["descr"]
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context")
 
+    cdef Py_buffer buf
+    PyObject_GetBuffer(ndarray, &buf, PyBUF_SIMPLE)
     cdef b2nd_array_t *array
-    _check_rc(b2nd_from_cbuffer(ctx, &array, <void *> <char *> buf.buf, buf.len),
-              "Error while creating the NDArray")
+    cdef int rc = b2nd_from_cbuffer(ctx.ptr, &array, <void *> <char *> buf.buf, buf.len)
     PyBuffer_Release(&buf)
+    _check_rc(rc, "Error while creating the NDArray")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray._schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
@@ -7941,6 +7978,7 @@ def ndarray_from_cframe(cframe, copy=False):
     cdef int rc
     rc = b2nd_from_cframe(<uint8_t *>buf.buf, buf.len, copy, &array)
     if rc < 0:
+        PyBuffer_Release(&buf)
         raise RuntimeError("Could not get the NDArray from the cframe")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
@@ -7993,16 +8031,15 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
     Concatenate two NDArray objects along a specified axis.
     """
     cdef c_bool copy = kwargs.pop("copy", True)
-    cdef b2nd_context_t *ctx = create_b2nd_context(arr1.shape, arr1.chunks, arr1.blocks, arr1.dtype, kwargs)
-    if ctx == NULL:
+    cdef _B2ndContext ctx = create_b2nd_context(arr1.shape, arr1.chunks, arr1.blocks, arr1.dtype, kwargs)
+    if ctx.ptr == NULL:
         raise RuntimeError("Error while creating the context for concatenation")
 
     cdef b2nd_array_t *array
     cdef int rc = 0
     with HandleLocks((arr1, arr2)):
-        rc = b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array)
+        rc = b2nd_concatenate(ctx.ptr, arr1.array, arr2.array, axis, copy, &array)
         _check_rc(rc, "Error while concatenating the arrays")  # before the locks' release() runs
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
     if copy:
         # We have copied the concatenated data into a new array
