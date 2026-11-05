@@ -21,8 +21,8 @@ def main():
     args = parser.parse_args()
     compilers = {
         "tcc": None,
-        "gcc": os.environ.get("MENUDET_GCC", shutil.which("gcc-16")),
-        "clang": os.environ.get("MENUDET_CLANG", shutil.which("clang")),
+        "gcc": os.environ.get("MENUDET_GCC") or shutil.which("gcc-16") or shutil.which("gcc"),
+        "clang": os.environ.get("MENUDET_CLANG") or shutil.which("clang"),
     }
     if not compilers["gcc"] or not compilers["clang"]:
         parser.error("GCC and Clang are required")
