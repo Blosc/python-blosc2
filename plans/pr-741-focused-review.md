@@ -64,7 +64,7 @@ Recommended closure:
 
 ### Local fix
 
-Native fix revision: `d69c3c8` (local; not pushed).
+Native fix revision: `d69c3c8` (pushed to `Blosc/miniexpr`).
 
 `g_partitionable()` now intersects the integer input ranges and requires weak
 integer literals to fit that conservative range as well as the common promoted
@@ -85,8 +85,8 @@ new requirement that constructing every LazyExpr eagerly raises.
 
 The local-override wheel is isolated from the shared editable install. Its SHA256
 is `ef3615b26c5e6c64c6cf57407eea13709b4c0f44d283b66c301c5b47dfd0de1d`.
-The shipping pin remains `12bf4dad`; no unpublished revision is presented as a
-published native fix or cross-platform qualification.
+The shipping pin is updated to `d69c3c8` to publish the native fix for
+cross-platform qualification.
 
 Fix verification: **455/455 native tests passed**, including interpreter,
 TCC and system-CC gates; **114 focused Python tests passed**, and the final added
