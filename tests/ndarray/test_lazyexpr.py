@@ -48,6 +48,148 @@ def test_arctan2_preserves_fractional_results(dtype, fused):
     np.testing.assert_allclose(blosc2.lazyexpr("arctan2(a, b)")[:], expected, rtol=1e-6)
 
 
+_RESULT_DTYPE_EXPRESSIONS = [
+    "hypot({n}, b)",
+    "copysign({n}, b)",
+    "nextafter({n}, b)",
+    "arctan2({n}, b)",
+    "hypot(a, b * 1)",
+    "hypot({n}, 2)",
+    "arctan2({n}, 2.5)",
+    "(a < b) / b",
+    "a / 2",
+    "a / b",
+    "{n} / b",
+    "{n} // b",
+    "{n} % b",
+    "a ** b",
+    "{n} ** 2",
+    "sin({n})",
+    "sqrt(a)",
+]
+# Cases where BLOSC2_EXPRESSION_EVALUATOR=legacy still gives the uniform evaluator's result dtype, or
+# computes integer true division in integer arithmetic on expr[:]; the typed evaluator is the default
+_ALL_INT_DTYPES = (np.bool_, np.int8, np.uint16, np.int32, np.int64)
+_LEGACY_RESULT_DTYPE_FAILURES = {
+    "hypot({n}, b)": _ALL_INT_DTYPES,
+    "copysign({n}, b)": _ALL_INT_DTYPES,
+    "nextafter({n}, b)": (np.int32, np.int64),
+    "hypot(a, b * 1)": _ALL_INT_DTYPES,
+    "hypot({n}, 2)": _ALL_INT_DTYPES,
+    "(a < b) / b": _ALL_INT_DTYPES,
+    "a / 2": (np.bool_,),
+    "a / b": (np.bool_, np.int8, np.uint16, np.int64),
+    "{n} / b": (np.bool_, np.int8, np.uint16, np.int64),
+    "{n} // b": (np.bool_,),
+    "{n} % b": (np.bool_,),
+    "a ** b": (np.bool_,),
+    "{n} ** 2": (np.bool_,),
+}
+
+
+@pytest.mark.parametrize("dtype", [np.bool_, np.int8, np.uint16, np.int32, np.int64])
+@pytest.mark.parametrize("expression", _RESULT_DTYPE_EXPRESSIONS)
+@pytest.mark.parametrize("build", ["functions", "string"])
+def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    # Float functions and true division of integer (or bool) subexpressions give floats, and bool
+    # //, % and ** give int8, as in NumPy; with the operand dtype, their results were truncated
+    if dtype is np.int32 and expression in ("a / b", "{n} / b"):
+        pytest.skip("int32 / int32 gives float32 on purpose")
+    if "nextafter" in expression and dtype not in (np.int32, np.int64):
+        pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
+    if not typed_evaluator_enabled() and dtype in _LEGACY_RESULT_DTYPE_FAILURES.get(expression, ()):
+        reason = "the legacy evaluator keeps its uniform result dtypes and integer true division"
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+    # A subexpression of the operand dtype (bool + bool is an or in NumPy)
+    expression = expression.format(n="(a & b)" if dtype is np.bool_ else "(a + b)")
+    na = (np.arange(1200).reshape(30, 40) % 5).astype(dtype)
+    nb = (np.arange(1200).reshape(30, 40) % 3 + 1).astype(dtype)
+    a = blosc2.asarray(na, chunks=(10, 40), blocks=(5, 40))
+    b = blosc2.asarray(nb, chunks=(10, 40), blocks=(5, 40))
+    namespace = {"hypot": np.hypot, "copysign": np.copysign, "nextafter": np.nextafter}
+    namespace.update(arctan2=np.arctan2, sin=np.sin, sqrt=np.sqrt)
+    with np.errstate(all="ignore"):
+        expected = eval(expression, namespace, {"a": na, "b": nb})
+        if dtype is np.int32 and expression == "a / 2" and blosc2.result_type(2) == np.int32:
+            # A Python int is int32 here (as on wasm32), so this is int32 / int32, which gives float32
+            # on purpose; elsewhere it is int32 / int64, float64 as in NumPy
+            expected = expected.astype(np.float32)
+        if build == "string":
+            expr = blosc2.lazyexpr(expression, {"a": a, "b": b})
+        else:
+            expr = eval(expression, {name: getattr(blosc2, name) for name in namespace}, {"a": a, "b": b})
+        assert expr.dtype == expected.dtype
+        for res in (expr[:], expr[...], expr.compute()[:], expr[:7]):
+            assert res.dtype == expected.dtype
+        rtol = 1e-3 if expected.dtype == np.float16 else 1e-6
+        np.testing.assert_allclose(expr[:], expected, rtol=rtol)
+        np.testing.assert_allclose(expr.compute()[:], expected, rtol=rtol)
+        np.testing.assert_allclose(expr[:7], expected[:7], rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float64])
+@pytest.mark.parametrize("op", ["&", "|", "^", "<<", ">>", "+", "*", "/", "//", "%", "**", "<", "hypot"])
+def test_lazyexpr_non_native_byte_order(dtype, op):
+    # The operand dtype checks compare against native dtypes: a non-native operand must give the
+    # same result dtype as a native one (no "Invalid operand type for &: >i4", and >i4 / >i4
+    # keeps the float32 of int32 / int32)
+    if dtype is np.float64 and op in ("&", "|", "^", "<<", ">>"):
+        pytest.skip("no float bitwise operators")
+    native = np.dtype(dtype)
+    swapped = native.newbyteorder()
+    na = np.arange(1, 7, dtype=native)
+    nb = np.array([1, 2, 1, 3, 1, 2], dtype=native)
+
+    def build(a, b):
+        return blosc2.hypot(a, b) if op == "hypot" else eval(f"a {op} b")
+
+    reference = build(blosc2.asarray(na), nb)
+    if op == "/" and dtype is np.int32:
+        assert np.dtype(reference.dtype) == np.float32
+    expr = build(blosc2.asarray(na), nb.astype(swapped))
+    assert expr.dtype == reference.dtype
+    np.testing.assert_array_equal(expr[:], reference[:])
+    np.testing.assert_array_equal(expr.compute()[:], reference.compute()[:])
+    # Only the dtype for non-native NDArray operands: their values are a separate problem
+    sa, sb = na.astype(swapped), nb.astype(swapped)
+    for a, b in ((na, sb), (sa, nb), (sa, sb)):
+        assert build(blosc2.asarray(a), blosc2.asarray(b)).dtype == reference.dtype
+
+
+@pytest.mark.parametrize("other", [np.ones(4, dtype=np.int32), 2, 2.5])
+def test_arctan2_rejects_complex_when_built(other):
+    c = blosc2.asarray(np.ones(4, dtype=np.complex128))
+    for x in (c, c + c):
+        with pytest.raises(TypeError):
+            blosc2.arctan2(x, other)
+
+
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.parametrize("how", ["getitem", "compute", "sum"])
+def test_comparison_with_out_of_range_python_int(how, request):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    # NumPy 2 compares an int8 array with a Python int outside the int8 range (all True here);
+    # only arithmetic with such an int raises
+    if typed_evaluator_enabled():
+        # Raised by expression_graph._numpy_binary_dtype(), which treats the comparison as arithmetic
+        reason = "the typed evaluator raises OverflowError: Python integer 300 out of bounds for int8"
+        request.applymarker(pytest.mark.xfail(raises=OverflowError, reason=reason, strict=True))
+    elif how != "sum":
+        reason = "the legacy evaluator casts 300 to int8 (44): 144 True of 200"
+        request.applymarker(pytest.mark.xfail(raises=AssertionError, reason=reason, strict=True))
+    na = np.arange(-100, 100, dtype=np.int8)
+    a = blosc2.asarray(na, chunks=(50,), blocks=(10,))
+    expected = na < 300
+    expr = blosc2.lazyexpr("a < 300", {"a": a})
+    if how == "sum":
+        assert expr.sum() == expected.sum()
+    else:
+        np.testing.assert_array_equal(expr[:] if how == "getitem" else expr.compute()[:], expected)
+
+
 _UNARY_FUNCTIONS = [
     "sin",
     "cos",
