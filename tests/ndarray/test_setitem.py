@@ -89,6 +89,37 @@ def test_setitem_different_dtype(shape, slices):
     np.testing.assert_almost_equal(a[slices], nparray_[slices])
 
 
+def non_contiguous_values(dtype):
+    """(shape of the target, key, value) per layout of a NumPy value that is not C-contiguous."""
+    src = np.arange(20 * 30 * 40, dtype=dtype).reshape(20, 30, 40)
+    box = (slice(2, 9), slice(3, 17))
+    return {
+        "strided_view": ((20, 30, 40), box, src[5:12, 10:24]),
+        "reversed_view": ((20, 30, 40), box, src[11:4:-1, 23:9:-1]),
+        "fortran": ((20, 30, 40), box, np.asfortranarray(src[5:12, 10:24])),
+        "permuted_axes": ((20, 30, 40), box, src.transpose(1, 0, 2)[3:10, 5:19]),
+        "1d_strided": ((100,), slice(10, 30), src.ravel()[:40:2]),
+    }
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.int64], ids=["same_dtype", "other_dtype"])
+@pytest.mark.parametrize(
+    "layout", ["strided_view", "reversed_view", "fortran", "permuted_axes", "1d_strided"]
+)
+@pytest.mark.parametrize("on_disk", [False, True], ids=["memory", "disk"])
+def test_setitem_non_contiguous_value(tmp_path, on_disk, layout, dtype):
+    # set_slice() needs a C-contiguous buffer; these values raised "ndarray is not C-contiguous"
+    shape, key, value = non_contiguous_values(dtype)[layout]
+    assert not value.flags.c_contiguous
+    urlpath = str(tmp_path / "a.b2nd") if on_disk else None
+    chunks = (5, 10, 40) if len(shape) == 3 else (16,)
+    a = blosc2.zeros(shape, dtype=np.float32, chunks=chunks, urlpath=urlpath, mode="w")
+    expected = np.zeros(shape, dtype=np.float32)
+    a[key] = value
+    expected[key] = value
+    np.testing.assert_array_equal(a[:], expected)
+
+
 def test_ndfield():
     # Create a structured NumPy array
     shape = (50, 50)

@@ -5140,6 +5140,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # numexpr type inference can lead to unnecessary type promotions
                 # when using complex functions (e.g. conj) with real arrays
                 value = value.real.astype(self.dtype)
+        # set_slice() takes one C-contiguous buffer: copy views with gaps or negative strides and
+        # Fortran-ordered arrays (a no-op for C-contiguous ones)
+        value = np.ascontiguousarray(value)
 
         return self._mark_indexes_stale(super().set_slice((start, stop), value))
 
