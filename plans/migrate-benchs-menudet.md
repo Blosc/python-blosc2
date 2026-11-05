@@ -32,15 +32,17 @@ storage kwargs, `disable=`, and pandas engine behavior. Existing `strict=True` i
 not an alias for Menudet. Execution policy (interpreter/JIT, compiler/backend) is
 independent of the authoring decorator; native interpretation is not Python fallback.
 
-## Progress snapshot (2026-11-03)
+## Progress snapshot (2026-11-05)
 
 All seven benchmark workload sources in section A now use public Menudet for
-their modern kernel arms. This is source-migration progress, not completion of
-the release gate: the Chicago Taxi port has bounded and current full-table
-six-engine qualification plus follow-up kernel profiling/fixes, but no new codec
-sweep or cross-platform qualification; the three legacy example notebooks still need
-migration/execution, and documentation/artifact/retained-fixture audits remain.
-Historical full-table string results are explicitly separated from current data.
+their modern kernel arms, and the three section E example notebooks are migrated,
+executed at their published sizes and checked against independent references
+([qualification](example-notebooks-menudet-qualification.md)). This is not
+completion of the release gate: the Chicago Taxi port has bounded and current
+full-table six-engine qualification plus follow-up kernel profiling/fixes, but no
+new codec sweep or cross-platform qualification; documentation/artifact/
+retained-fixture audits remain. Historical full-table string results are
+explicitly separated from current data.
 
 ## Scope and inventory
 
@@ -125,6 +127,21 @@ All three contain published execution output, so changing source cells alone is
 insufficient. The Black–Scholes notebook also contains obsolete prose claiming
 DSL kernels are necessarily elementwise: explain current cardinality contracts
 without implying that a histogram is automatically supported by block reduction.
+
+**Status (2026-11-05):** all three are migrated, executed at their published sizes
+and checked. See
+[example-notebooks-menudet-qualification.md](example-notebooks-menudet-qualification.md)
+for environment, exactness checks, measurements and residual limitations.
+
+- Black–Scholes/histogram: pricing and histogram counts/edges are exact; captured
+  scalars keep the dense storage prefilter available; the histogram still uses a
+  generic Numba counting UDF.
+- `mandelbrot-dsl`: escape counts match exactly only with explicit `float32`
+  seeds; the early-exit loop is not admitted by the native partition proof, so the
+  port does not reproduce the old DSL's block-parallel Mandelbrot throughput.
+- `mandelbrot-pure-dsl`: the old "1 thread" arm was replaced by
+  interpreter/`tcc`/`cc`, because `CParams.nthreads` does not partition Menudet
+  execution.
 
 ### F. Existing Menudet material to retain and audit, not re-port
 
@@ -275,12 +292,15 @@ not supported user authoring. Both repositories' fixes are required.
 2. Tip 11's hash recommendation/figure is host-qualified; keep any future `blosc2.random` study separate.
 3. Port the standalone arithmetic/loop/generator benchmarks and validate timing
    boundaries before collecting representative results.
-4. Port Chicago Taxi and the four legacy notebooks (one benchmark, three
-   examples), budgeting separately for full runs and interpretation.
+4. Chicago Taxi is ported; codec sweeps and cross-platform qualification remain.
+   The four legacy notebooks (one benchmark, three examples) are ported, and the
+   three examples are now executed at published sizes.
 5. Clean up artifact authoring where justified; document intentional controls.
 6. Leave archived JS revival out of the main migration unless separately funded.
 
-The core legacy workload scope is **10 files: 7 benchmarks and 3 example
-notebooks**. There is no active legacy-authoring tutorial to port, but the modern
-kernel tutorial already uses the chosen public entry point. Figure regeneration and
-interpretation are explicit deliverables, not follow-up polish.
+The core legacy workload source scope is **10 files: 7 benchmarks and 3 example
+notebooks**. All ten sources now use public Menudet authoring where they use
+portable kernels. There is no active legacy-authoring tutorial to port, but the
+modern kernel tutorial already uses the chosen public entry point. Figure
+regeneration, interpretation, remaining documentation audits and cross-platform
+evidence are explicit deliverables, not follow-up polish.
