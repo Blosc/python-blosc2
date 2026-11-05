@@ -186,6 +186,15 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
     blosc2.remove_urlpath(urlpath)
 
 
+def test_schunk_meta_setitem_missing_name():
+    # This used to copy and free an uninitialized pointer, which aborted the process
+    schunk = blosc2.SChunk(meta={"test": 1})
+    with pytest.raises(KeyError, match="missing not found"):
+        schunk.meta["missing"] = 2
+    assert "missing" not in schunk.meta
+    assert schunk.meta["test"] == 1
+
+
 def test_schunk_info_has_human_sizes():
     schunk = blosc2.SChunk(chunksize=32)
     schunk.append_data(b"a" * 32)

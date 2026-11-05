@@ -136,6 +136,21 @@ def test_vlmeta_follows(tmp_path):
     assert r.schunk.vlmeta["heartbeat"] == "brand-new and longer"
 
 
+def test_vlmeta_to_dict_follows(tmp_path):
+    # to_dict() used to keep pointers to the cached names across its first read, which re-syncs
+    # (frees and reloads) the vlmetalayers after another handle has rewritten them
+    urlpath = tmp_path / "vlmeta_to_dict.b2nd"
+    w = create_array(urlpath)
+    for i in range(8):
+        w.schunk.vlmeta[f"name{i}"] = i
+    r = blosc2.open(str(urlpath))
+
+    w.schunk.vlmeta["name0"] = "brand-new and longer"
+    expected = {f"name{i}".encode(): i for i in range(8)}
+    expected[b"name0"] = "brand-new and longer"
+    assert r.schunk.vlmeta.to_dict() == expected
+
+
 WRITER_SCRIPT = """
 import sys
 import numpy as np
