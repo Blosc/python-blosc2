@@ -115,24 +115,30 @@ not the compiled edge/index kernels.
 
 | Route | First run | Best |
 |---|---:|---:|
-| Native Numba | 0.444 | 0.020 |
-| Blosc2+Numba UDF | 0.200 | 0.021 |
-| Menudet `cc` | 0.289 | 0.296 |
-| Menudet `tcc` | 0.545 | 0.539 |
+| Native Numba | 0.372 | 0.020 |
+| Blosc2+Numba UDF | 0.187 | 0.021 |
+| Menudet `cc` | 0.039 | 0.036 |
+| Menudet `tcc` | 0.073 | 0.065 |
 
-Menudet `cc` is about 15x slower than native Numba and `tcc` about 27x slower.
+With early-exit loops admitted to the partition proof, Menudet partitions across
+storage worker threads: Menudet `cc` is now only 1.85x slower than native Numba
+(down from 15x slower previously), and `tcc` is 3.31x slower (down from 27x
+slower). Menudet `cc` also has a very low first-run cost (0.039 s vs 0.372 s for
+native Numba and 0.187 s for Blosc2+Numba).
 
 ### Mandelbrot pure Blosc2, 1200x800, max_iter = 200
 
 | Route | First run | Best |
 |---|---:|---:|
-| Blosc2+NumPy UDF | 1.735 | 1.691 |
-| Menudet interpreter (`jit=False`) | 15.773 | 15.626 |
-| Menudet `tcc` | 0.547 | 0.540 |
-| Menudet `cc` | 0.288 | 0.282 |
+| Blosc2+NumPy UDF | 1.584 | 1.599 |
+| Menudet interpreter (`jit=False`) | 1.692 | 1.630 |
+| Menudet `tcc` | 0.082 | 0.067 |
+| Menudet `cc` | 0.041 | 0.038 |
 
-The JIT backends are 3.1x (`tcc`) and 6.0x (`cc`) faster than the NumPy UDF. Native
-interpretation is about 9x slower because it is scalar interpretation here.
+The JIT backends are 23.7x (`tcc`) and 41.7x (`cc`) faster than the NumPy UDF
+(up from 3.1x and 6.0x previously). Partitioned interpretation is also ~10x
+faster than before (1.63 s vs 15.6 s), running neck-and-neck with the vectorized
+NumPy UDF.
 
 ## Discussion changes and open limitations
 
@@ -144,11 +150,10 @@ interpretation is about 9x slower because it is scalar interpretation here.
 - Scalar *arguments* currently prevent the dense storage prefilter. Captures are
   used in these notebooks. If scalar arguments become admissible, the capture
   workaround can be simplified and re-measured.
-- Menudet's native partition proof does not admit the early-exit Mandelbrot loop
-  (`native_partitionable=False`), so the 2-D kernel runs as one native block. This
-  is why the port does not reproduce the retired DSL's block-parallel throughput.
-  The numerical results are exact, but the performance story changed materially.
-  Re-run the Mandelbrot notebooks if early-exit loops become partitionable.
+- Early-exit loops (`break`) are now admitted by Menudet's native partition proof
+  (`native_partitionable=True`), allowing the 2-D kernel to partition across
+  storage workers. This restores multi-threaded throughput and brings Menudet `cc`
+  within 1.85x of native Numba (with a much faster cold start).
 - The old saved DSL timings and the old "1 thread" comparison were not reused.
 
 ## Reproduction
