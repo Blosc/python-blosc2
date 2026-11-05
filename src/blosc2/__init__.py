@@ -521,20 +521,6 @@ else:
     from .blosc2_ext import context_nthreads
 
     nthreads = context_nthreads(nthreads)
-    try:
-        import numexpr as _numexpr
-    except ImportError:
-        _numexpr = None
-    if _numexpr is not None:
-        numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
-        numexpr_max: int | None = None
-        if numexpr_max_env is not None:
-            with contextlib.suppress(ValueError):
-                numexpr_max = int(numexpr_max_env)
-        if not os.environ.get("NUMEXPR_NUM_THREADS") and (numexpr_max is None or nthreads <= numexpr_max):
-            # BLOSC_NTHREADS can go beyond numexpr's own maximum, which it refuses with an error
-            _numexpr.set_num_threads(min(nthreads, _numexpr.MAX_THREADS))
-        del _numexpr
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
