@@ -1994,6 +1994,18 @@ cdef class SChunk:
         return <uintptr_t> self.schunk
 
     @property
+    def _has_prefilter(self):
+        """Whether writes through this handle run a prefilter."""
+        with self._handle_lock:
+            return self.schunk.storage.cparams.prefilter != NULL
+
+    @property
+    def _has_postfilter(self):
+        """Whether reads through this handle run a postfilter."""
+        with self._handle_lock:
+            return self.schunk.storage.dparams.postfilter != NULL
+
+    @property
     def chunksize(self):
         return self.schunk.chunksize
 
@@ -2599,6 +2611,18 @@ cdef class SChunk:
         cdef int rc = blosc2_schunk_unlock(self.schunk)
         if rc < 0:
             raise RuntimeError("Could not unlock the super-chunk frame")
+
+    @property
+    def _locks_frame(self):
+        """Whether operations take the cross-process frame lock: on disk with the default I/O, and
+        `locking` or the BLOSC_LOCKING environment variable set (what C-Blosc2 checks when it
+        opens the frame)."""
+        cdef blosc2_storage *storage = self.schunk.storage
+        if storage.urlpath == NULL or storage.io == NULL or storage.io.id != BLOSC2_IO_FILESYSTEM:
+            return False
+        if storage.io.params != NULL and (<blosc2_stdio_params *> storage.io.params).locking:
+            return True
+        return os.environ.get("BLOSC_LOCKING", "") not in ("", "0")
 
     @_handle_locked
     def refresh(self):
