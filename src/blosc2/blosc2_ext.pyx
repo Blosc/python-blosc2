@@ -200,6 +200,13 @@ cdef extern from "blosc2.h":
         BLOSC2_SPECIAL_UNINIT
 
     ctypedef enum:
+        BLOSC_DOSHUFFLE
+        BLOSC_DOBITSHUFFLE
+        BLOSC_UDCODEC_FORMAT
+        BLOSC2_CHUNK_FLAGS
+        BLOSC2_CHUNK_FILTER_CODES
+
+    ctypedef enum:
         BLOSC2_VERSION_STRING
         BLOSC2_VERSION_REVISION
         BLOSC2_VERSION_DATE
@@ -3374,18 +3381,19 @@ def decompress(src, dst=None, as_bytearray=False):
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    cdef int32_t srcsize = <int32_t>len(typed_view_src)
     cdef Py_buffer buf
     if dst is not None:
         PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
         if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc1_decompress(<void*>&typed_view_src[0], buf.buf, buf.len)
+        size = _blosc1_decompress(&typed_view_src[0], srcsize, buf.buf, buf.len)
         PyBuffer_Release(&buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc1_decompress(<void*>&typed_view_src[0], <void*> <char *> dst, len(dst))
+        size = _blosc1_decompress(&typed_view_src[0], srcsize, <void*> <char *> dst, len(dst))
         if size >= 0:
             return bytearray(dst) if as_bytearray else dst
     if size < 0:
@@ -3468,8 +3476,9 @@ def set_releasegil(c_bool gilstate):
 
 # Ids of the codecs and filters registered from Python (register_codec(), register_filter()), whose
 # callbacks need the GIL.  C-Blosc2 cannot unregister them, so these are never cleared.  They let the GIL
-# checks of compressions run without Python lookups; slice reads (_can_release_gil()) still look at
-# blosc2.ucodecs_registry and blosc2.ufilters_registry, which tests replace to force reads without the GIL.
+# checks of compressions and chunk headers run without Python lookups; slice reads (_can_release_gil())
+# still look at blosc2.ucodecs_registry and blosc2.ufilters_registry, which tests replace to force reads
+# without the GIL.
 cdef c_bool _python_codec_ids[256]
 cdef c_bool _python_filter_ids[256]
 cdef c_bool _python_ids_registered = False
@@ -3704,15 +3713,54 @@ cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams*
     #dparams.typesize = typesize = kwargs.get('typesize', blosc2.dparams_dflts['typesize'])
     _check_dparams(dparams, cparams)
 
+# The offset in the extended header of a chunk of the id of its codec when the codec bits of its flags say
+# BLOSC_UDCODEC_FORMAT (README_CHUNK_FORMAT.rst in C-Blosc2; blosc2.h has no name for it)
+cdef enum:
+    _CHUNK_UDCODEC = 0x16
+
+cdef c_bool _chunk_runs_python(const uint8_t *chunk, int32_t chunksize) noexcept:
+    """Whether decompressing `chunk` can run a codec or filter registered from Python, as its header tells.
+    Their callbacks need the GIL, so they must run on the calling thread, holding it: C-Blosc2's worker
+    threads never hold it."""
+    cdef uint8_t flags
+    cdef uint8_t codec
+    cdef int i
+    if not _python_ids_registered or chunksize < BLOSC_EXTENDED_HEADER_LENGTH:
+        return False
+    flags = chunk[BLOSC2_CHUNK_FLAGS]
+    # Only an extended header (both shuffle flags set) can name user codecs and filters
+    if not (flags & BLOSC_DOSHUFFLE and flags & BLOSC_DOBITSHUFFLE):
+        return False
+    codec = flags >> 5  # the codec bits of the flags (5-7)
+    if codec == BLOSC_UDCODEC_FORMAT:
+        codec = chunk[_CHUNK_UDCODEC]
+    if _python_codec_ids[codec]:
+        return True
+    for i in range(BLOSC2_MAX_FILTERS):
+        if _python_filter_ids[chunk[BLOSC2_CHUNK_FILTER_CODES + i]]:
+            return True
+    return False
+
+cdef int _blosc1_decompress(const uint8_t *src, int32_t srcsize, void *dest, size_t destsize) noexcept:
+    """blosc1_decompress(), which uses the global context and its number of threads, except for chunks that
+    can run Python code (see _chunk_runs_python()): those get a context of one thread of their own."""
+    cdef blosc2_context *dctx
+    cdef int rc
+    if not _chunk_runs_python(src, srcsize):
+        return blosc1_decompress(src, dest, destsize)
+    dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)  # one thread
+    if dctx == NULL:
+        return BLOSC2_ERROR_MEMORY_ALLOC
+    rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, <int32_t>destsize)
+    blosc2_free_ctx(dctx)
+    return rc
+
 def decompress2(src, dst=None, **kwargs):
     cdef blosc2_dparams dparams
     cdef char *dst_buf
     cdef void *view
     create_dparams_from_kwargs(&dparams, kwargs)
 
-    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
-    if dctx == NULL:
-        raise RuntimeError("Could not create decompression context")
     cdef const uint8_t[:] typed_view_src
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
@@ -3722,6 +3770,11 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t blocksize
     cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    if dparams.nthreads > 1 and _chunk_runs_python(&typed_view_src[0], srcsize):
+        dparams.nthreads = 1
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
     cdef Py_buffer buf
     if dst is not None:
         PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
@@ -3824,10 +3877,6 @@ def vldecompress(src, **kwargs):
     cdef blosc2_dparams dparams
     create_dparams_from_kwargs(&dparams, kwargs)
 
-    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
-    if dctx == NULL:
-        raise RuntimeError("Could not create decompression context")
-
     cdef const uint8_t[:] typed_view_src
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
@@ -3837,6 +3886,11 @@ def vldecompress(src, **kwargs):
     cdef int32_t nblocks
     cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &nblocks)
+    if dparams.nthreads > 1 and _chunk_runs_python(&typed_view_src[0], srcsize):
+        dparams.nthreads = 1
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
     if nblocks <= 0:
         blosc2_free_ctx(dctx)
         raise ValueError("Chunk does not contain VL blocks")
