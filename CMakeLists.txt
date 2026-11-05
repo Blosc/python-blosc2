@@ -66,6 +66,7 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx" --output-file blosc2_ext.c
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/block_reductions.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_array_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
   VERBATIM)
