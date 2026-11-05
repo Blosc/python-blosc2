@@ -121,6 +121,25 @@ def test_typed_weak_scalar_overflow_preserves_error_contract():
         (a + 256)[:]
 
 
+def test_typed_mixed_width_literal_rejects_before_execution(monkeypatch, native_graph_runtime):
+    if _NUMPY_VALUE_PROMOTION:
+        pytest.skip("NumPy 1 has value-based scalar promotion")
+    a = blosc2.asarray(np.ones(513, dtype=np.uint8), chunks=(256,), blocks=(64,))
+    b = blosc2.asarray(np.ones(513, dtype=np.int16), chunks=(256,), blocks=(64,))
+    # Conservative native admission must not reject a valid promoted subtree.
+    valid = blosc2.lazyexpr("(a + b) + 300", {"a": a, "b": b})[:]
+    assert valid.dtype == np.dtype(np.int16)
+    np.testing.assert_array_equal(valid, np.full(513, 302, dtype=np.int16))
+
+    def no_execution(*args, **kwargs):
+        pytest.fail("Out-of-range weak literal reached numerical execution")
+
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", no_execution)
+    # The root promotes to int16, but 300 is consumed by the uint8 subtree first.
+    with pytest.raises(OverflowError, match=r"300.*uint8"):
+        blosc2.lazyexpr("(a + 300) + b", {"a": a, "b": b})[:]
+
+
 @pytest.mark.parametrize("layout", ["C", "F", "strided"])
 def test_typed_output_contract(layout):
     na = np.arange(99, dtype=np.float32).reshape(9, 11)
