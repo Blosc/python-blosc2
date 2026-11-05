@@ -1,7 +1,7 @@
 # Integrated Menudet math backend and FP-mode performance
 
 2026-10-18, local macOS arm64 (Apple M4 Pro), Python 3.14, NumPy 2.5.4,
-integrated `PortableKernel` artifacts from this checkout. Warm `evaluate()`
+integrated `MenudetKernel` artifacts from this checkout. Warm `evaluate()`
 medians, 2,000,000 float64 items, 9 samples after warmup. Values are ns/item
 (lower is better). `jit=off` exercises the bounded vector interpreter; `jit=on`
 requests optional JIT and therefore falls back to that interpreter for explicit
