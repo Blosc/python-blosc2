@@ -129,6 +129,7 @@ def test_set_prefetch(prefetch):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM or not hasattr(os, "fork"), reason="needs native fork()")
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded, use of fork.*:DeprecationWarning")
 def test_fork(on_disk, prefetch):
     path, expected = on_disk
     prefetch(4)
