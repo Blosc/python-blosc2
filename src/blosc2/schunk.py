@@ -1383,6 +1383,13 @@ class SChunk(blosc2_ext.SChunk):
         --------
         :func:`~blosc2.schunk_from_cframe`
 
+        Notes
+        -----
+        The buffer holds the chunks as they are stored: a postfilter (see
+        :meth:`postfilter`) is not applied, and it is not part of the buffer
+        either. Set it again on the deserialized :ref:`SChunk` to read the same
+        values as from this one.
+
         Examples
         --------
         >>> import blosc2

@@ -122,6 +122,23 @@ for array/table examples, persistence policy and current limitations. Release
 certification is tracked separately; this development entry is not an announcement
 that 4.15.0 has been published.
 
+### Serializing containers that have a postfilter
+
+- **Behaviour change:** `SChunk.to_cframe()` and `NDArray.to_cframe()` now return
+  the chunks as they are stored for every storage, also when a postfilter is set
+  (`SChunk.postfilter`). Before, they returned the postfilter's output unless the
+  container was an in-memory contiguous frame (`contiguous=True` without
+  `urlpath`). In-memory containers are sparse by default, so the frame usually
+  held the postfiltered values, and setting the postfilter again on the container
+  loaded from it applied it twice. Code that loads such a frame without setting
+  the postfilter again now reads the stored values. To serialize the postfiltered
+  values, serialize a copy that holds them: `NDArray.copy()` applies the
+  postfilter, and for an `SChunk`, a new one made from its decompressed data does.
+  Containers without a postfilter give the same frames as before. With a
+  prefilter or a postfilter, `to_cframe()` no longer decompresses and recompresses
+  every chunk, which makes it much faster. This comes with the bundled C-Blosc2
+  (Blosc/c-blosc2#858).
+
 ## Changes from 4.14.1 to 4.14.2
 
 XXX version-specific blurb XXX
