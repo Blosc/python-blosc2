@@ -1027,7 +1027,8 @@ class SChunk(blosc2_ext.SChunk):
         data: bytes object
             The data that will be compressed and inserted as a chunk.
         copy: bool
-            Whether to make an internal copy of the chunk to insert it or not.
+            Kept for backward compatibility; it has no effect. The chunk compressed
+            from :paramref:`data` stays internal, so it never needs a copy.
 
         Returns
         -------
@@ -1161,7 +1162,8 @@ class SChunk(blosc2_ext.SChunk):
         data: bytes object
             The data to be compressed and will replace the old chunk.
         copy: bool
-             Whether to make an internal copy of the chunk before updating it.
+            Kept for backward compatibility; it has no effect. The chunk compressed
+            from :paramref:`data` stays internal, so it never needs a copy.
 
         Returns
         -------
@@ -3003,15 +3005,10 @@ def open(  # noqa: C901
             container must enable it) and cannot be combined with `mmap_mode`.
             The ``BLOSC_LOCKING`` environment variable enables it globally.
             For more info, see :class:`blosc2.Storage`.
-        cparams: :class:`blosc2.CParams` or dict
-            The compression parameters for new and updated chunks, which are the same that can
-            be used in the :func:`~blosc2.compress2` function. Except for a super-chunk opened in
-            mode 'w' (which starts empty), they update the stored ones: a dict changes only the
-            parameters it has (new filters without filters_meta get zero metas), a
-            :class:`blosc2.CParams` all of them; nthreads defaults to :attr:`blosc2.nthreads`.
-            Typesize and blocksize cannot be changed (they fix the layout of the stored data): other
-            values raise a ValueError, while the defaults of a :class:`blosc2.CParams` (typesize 8,
-            blocksize 0) are ignored.
+        cparams: dict
+            A dictionary with the compression parameters, which are the same that can be
+            used in the :func:`~blosc2.compress2` function.
+            Typesize and blocksize cannot be changed.
         dparams: dict
             A dictionary with the decompression parameters, which are the same that can
             be used in the :func:`~blosc2.decompress2` function.
