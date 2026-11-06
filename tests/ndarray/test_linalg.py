@@ -563,6 +563,49 @@ def test_matmul_fast_path_multichunk(monkeypatch, mkn, achunks, bchunks, dtype, 
         _toggle_miniexpr(old_flag)
 
 
+def _nan_padded(data, chunks, cparams):
+    # Shrinking leaves the cut values in the chunks' padding
+    big = np.full((data.shape[0] + 60, data.shape[1] + 60), np.nan, dtype=data.dtype)
+    big[: data.shape[0], : data.shape[1]] = data
+    arr = blosc2.asarray(big, chunks=chunks, blocks=(50, 50), cparams=cparams)
+    arr.resize(data.shape)
+    return arr
+
+
+@pytest.mark.parametrize(
+    ("mkn", "chunks"),
+    [
+        ((130, 170, 90), (100, 100)),  # 2 chunks along K, the last one ends inside a block
+        ((170, 170, 170), (200, 200)),  # 1 chunk along K, ends inside a block
+        ((100, 100, 100), (200, 200)),  # the last 2 blocks along K are only padding
+        ((120, 120, 120), (200, 200)),  # both
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("nthreads", PREFILTER_NTHREADS)
+def test_matmul_fast_path_ignores_padding(monkeypatch, mkn, chunks, dtype, nthreads):
+    # The prefilter multiplies whole blocks, so along K it also reads the chunks' padding,
+    # which need not hold zeros (full() fills it as well)
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b = _small_int_operands(mkn, dtype)
+        cparams = blosc2.CParams(nthreads=nthreads)
+        x1 = _nan_padded(a, chunks, cparams)
+        x2 = _nan_padded(b, chunks, cparams)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+            c = blosc2.matmul(x1, x2, chunks=chunks, blocks=(50, 50), cparams=cparams)
+            expected = a @ b
+
+        assert calls == [(expected.shape, a.shape, b.shape, np.dtype(dtype))]
+        np.testing.assert_array_equal(c[:], expected)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
 @pytest.mark.parametrize(
     ("achunks", "bchunks", "outchunks"),
     [

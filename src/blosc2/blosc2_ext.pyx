@@ -5428,6 +5428,9 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     # convert from block_idx to element idx block_i (row)
     block_i = nblock_ // block_ncols * out_block_nrows
     block_startA = nblockA + block_i // p * Ablock_ncols
+    # Elements of K from the current block on.  The chunks along K are whole blocks (see
+    # _matmul_can_use_fast_path()), so each step of the block loop advances K by q.
+    cdef int64_t k_left = ndarr.shape[ndim - 1]
     ndarr = udata.inputs[1]
     ndim = ndarr.ndim
     r = ndarr.blockshape[ndim - 1]
@@ -5463,6 +5466,8 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
         nblockA = block_startA
         nblockB = block_startB
         while True: # block loop
+            if k_left <= 0:
+                break  # only padding left (in the last chunk along K)
             startA = nblockA * block_nbytes[0]
             startB = nblockB * block_nbytes[1]
             # In bytes, for the reason given in aux_miniexpr().  matmul only ever
@@ -5478,6 +5483,16 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
             if rc != block_nbytes[1]:
                 return _matmul_exit(input_buffers, dctx, -1)
             batch = 0
+            if k_left < q:
+                # The block ends in the padding, which need not hold zeros (full() fills it,
+                # resize() leaves old data there): zero A's padding columns and B's padding
+                # rows so that their products add nothing
+                for i in range(block_nbytes[0] // (q * typesize)):
+                    memset(<uint8_t*>input_buffers[0] + (i * q + k_left) * typesize, 0,
+                           (q - k_left) * typesize)
+                for i in range(block_nbytes[1] // (q * r * typesize)):
+                    memset(<uint8_t*>input_buffers[1] + (i * q + k_left) * r * typesize, 0,
+                           (q - k_left) * r * typesize)
             while batch < batches:
                 batch_ = batch
                 offsetA = 0
@@ -5554,6 +5569,7 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 else:
                     return _matmul_exit(input_buffers, dctx, -1)
                 batch += 1
+            k_left -= q
             nblockA += 1
             nblockB += Bblock_ncols
             if (nblockA % Ablock_ncols == 0):
