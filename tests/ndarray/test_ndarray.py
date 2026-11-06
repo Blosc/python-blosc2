@@ -877,6 +877,55 @@ def test_oindex_random_negative_indices():
             np.testing.assert_array_equal(a[:], x)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.arange(6, dtype=np.int32).reshape(2, 3),  # the selection's shape and dtype
+        np.full((2, 3), 1.7),
+        np.arange(6, dtype=">i4").reshape(2, 3),
+        np.arange(12, dtype=np.int32).reshape(2, 6)[:, ::2],  # not contiguous
+        np.asfortranarray(np.arange(6, dtype=np.int32).reshape(2, 3)),
+        np.arange(3),  # broadcast rows
+        np.arange(2).reshape(2, 1),  # broadcast columns
+        np.ones((1, 2, 3)),  # a leading length-1 dimension
+        7,
+        [1, 2, 3],
+        [[1, 2, 3], [4, 5, 6]],
+        [[[1, 2, 3], [4, 5, 6]]],
+        blosc2.asarray(np.arange(6, dtype=np.int16).reshape(2, 3)),
+    ],
+)
+def test_oindex_set_value_like_numpy(value):
+    x = np.arange(100, dtype=np.int32).reshape(10, 10)
+    a = blosc2.asarray(x, chunks=(4, 4), blocks=(2, 2))
+    key = ([1, 8], [0, 5, 2])
+    a.oindex[key] = value
+    x[np.ix_(*key)] = value[()] if isinstance(value, blosc2.NDArray) else value
+    np.testing.assert_array_equal(a[:], x)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.arange(6, dtype=np.int32).reshape(3, 2),  # the selection's size and dtype, not its shape
+        np.arange(2, dtype=np.int32),
+        np.arange(6.0).reshape(3, 2),
+        np.arange(7),
+        np.ones((2, 2, 3)),
+        [[1, 2]],
+    ],
+)
+def test_oindex_set_value_wrong_shape(value):
+    x = np.arange(100, dtype=np.int32).reshape(10, 10)
+    a = blosc2.asarray(x, chunks=(4, 4), blocks=(2, 2))
+    key = ([1, 8], [0, 5, 2])
+    with pytest.raises(ValueError):
+        x.copy()[np.ix_(*key)] = value  # NumPy rejects it too
+    with pytest.raises(ValueError, match="could not broadcast"):
+        a.oindex[key] = value
+    np.testing.assert_array_equal(a[:], x)
+
+
 @pytest.mark.parametrize("c", [None, 3])
 def test_fancy_index(c):
     # Test 1d

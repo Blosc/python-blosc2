@@ -4610,14 +4610,33 @@ class NDArray(blosc2_ext.NDArray, Operand):
         arr = np.empty(tuple(len(k) for k in key), dtype=self.dtype)
         return super().get_oindex_numpy(arr, key)
 
-    def set_oselection_numpy(self, key: list | np.ndarray, arr: NDArray) -> np.ndarray:
+    def set_oselection_numpy(self, key: list | np.ndarray, arr: Any) -> np.ndarray:
         """
         Select independently from self along axes specified in key and set to entries in arr.
         Key must be same length as self shape.
         Negative indices count from the end of their axis; out-of-bounds indices raise IndexError.
+        ``arr`` is converted to the array's dtype and broadcast to the selection's shape as in NumPy
+        (a scalar, a list, an array or an NDArray).
         See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
         """
-        return super().set_oindex_numpy(self._normalize_oselection(key), arr)
+        key = self._normalize_oselection(key)
+        shape = tuple(map(len, key))
+        # The extension reads the selection's bytes straight from arr's buffer: only a C-contiguous
+        # array of the selection's shape and dtype skips NumPy's assignment
+        if not (
+            isinstance(arr, np.ndarray)
+            and arr.shape == shape
+            and arr.dtype == self.dtype
+            and arr.flags.c_contiguous
+        ):
+            if isinstance(arr, blosc2.Operand):
+                arr = arr[()]
+            elif isinstance(arr, list | tuple):
+                arr = np.asarray(arr)  # nested lists broadcast like arrays, as in NumPy's indexing
+            value = np.empty(shape, dtype=self.dtype)
+            value[...] = arr
+            arr = value
+        return super().set_oindex_numpy(key, arr)
 
     def _try_subsample_gather(self, start, stop, step, shape):
         """Fast path for a coarse strided read via the sparse-gather primitive.
