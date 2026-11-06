@@ -3754,33 +3754,56 @@ def open(urlpath, mode, offset, **kwargs):
     if mode != "w" and kwargs is not None:
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
-    # nthreads is not stored in the frame; apply the live global when the caller
-    # did not supply an explicit cparams — symmetric with the DParams default below.
     dparams = kwargs.get("dparams", blosc2.DParams())
 
     if is_ndarray:
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL), mode=mode)
-        if cparams is not None:
-            res._schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-        else:
-            res._schunk.cparams = dataclasses.replace(
-                res._schunk.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads)
-            )
-        if dparams is not None:
-            res._schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
-        res._schunk.mode = mode
+        schunk_obj = res._schunk
+        schunk_obj.mode = mode
     else:
         res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
                             mode=mode, **kwargs)
-        if cparams is not None:
-            res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-        else:
-            res.cparams = dataclasses.replace(res.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
-        if dparams is not None:
-            res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
+        schunk_obj = res
+    if cparams is not None and mode == "w" and not is_ndarray:
+        # A super-chunk opened in mode "w" starts empty (an NDArray keeps its chunks, so its layout)
+        schunk_obj.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+    else:
+        schunk_obj.cparams = _opened_cparams(schunk_obj.cparams, cparams)
+    if dparams is not None:
+        schunk_obj.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
     return res
+
+
+def _opened_cparams(stored, cparams):
+    """`stored`, the compression parameters of an opened container, updated with `cparams`: a dict
+    changes only its keys, a CParams every field; nthreads, which is not stored, defaults to the current
+    one.  Typesize and blocksize fix the layout of the stored data: other values raise ValueError (a
+    CParams' default typesize and blocksize count as not given).
+    """
+    if cparams is None:
+        changes = {}
+    elif isinstance(cparams, blosc2.CParams):
+        changes = dataclasses.asdict(cparams)
+        default_typesize = blosc2.cparams_dflts["typesize"]
+        if changes["typesize"] == default_typesize:
+            del changes["typesize"]
+            # BYTEDELTA's meta was derived from the default typesize: derive it from the stored one
+            changes["filters_meta"] = [
+                0 if f == blosc2.Filter.BYTEDELTA and m == default_typesize else m
+                for f, m in zip(changes["filters"], changes["filters_meta"], strict=False)
+            ]
+    else:
+        changes = dict(cparams)
+        if "filters" in changes and "filters_meta" not in changes:
+            # As in CParams(**cparams): the stored metas belong to the stored filters
+            changes["filters_meta"] = [0] * len(changes["filters"])
+    if changes.pop("typesize", stored.typesize) != stored.typesize:
+        raise ValueError(f"Cannot change the typesize ({stored.typesize}) of an existing container")
+    if changes.pop("blocksize", 0) not in (0, stored.blocksize):
+        raise ValueError(f"Cannot change the blocksize ({stored.blocksize}) of an existing container")
+    return dataclasses.replace(stored, **{"nthreads": blosc2.storage.default_nthreads(), **changes})
 
 
 def check_access_mode(urlpath, mode):
