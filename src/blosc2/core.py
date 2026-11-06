@@ -2273,7 +2273,7 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
     Raises
     ------
     RuntimeError
-        If the data cannot be compressed into :paramref:`dst`.
+        If the data cannot be decompressed into :paramref:`dst`.
         If an internal error occurs, likely due to an invalid parameter
         If :paramref:`dst` is `None` and a bytes object could not be created to store the result.
     TypeError
