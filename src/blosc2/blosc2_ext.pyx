@@ -32,6 +32,7 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from cpython.bool cimport PyBool_Check
+from cpython.exc cimport PyErr_Occurred
 from cpython.long cimport PyLong_Check
 from cpython.number cimport PyIndex_Check
 from cpython.pyport cimport PY_SSIZE_T_MAX, PY_SSIZE_T_MIN
@@ -1257,11 +1258,10 @@ def decompress(src, dst=None, as_bytearray=False):
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
         size = blosc1_decompress(<void*>&typed_view_src[0], <void*> <char *> dst, len(dst))
-        if as_bytearray:
-            dst = bytearray(dst)
         if size >= 0:
-            return dst
+            return bytearray(dst) if as_bytearray else dst
     if size < 0:
+        _raise_callback_error()
         raise RuntimeError("Cannot decompress")
 
 
@@ -1330,7 +1330,7 @@ def get_compressor():
     return blosc1_get_compressor()
 
 
-cdef c_bool RELEASEGIL = False
+cdef c_bool RELEASEGIL = False  # never set on wasm32 (see blosc2.set_releasegil)
 
 def set_releasegil(c_bool gilstate):
     global RELEASEGIL
@@ -1338,39 +1338,87 @@ def set_releasegil(c_bool gilstate):
     RELEASEGIL = gilstate
     return oldstate
 
+# Ids of the codecs and filters registered from Python (register_codec(), register_filter()), whose
+# callbacks need the GIL.  C-Blosc2 cannot unregister them, so these are never cleared.  They let the GIL
+# checks of compressions run without Python lookups; slice reads (_can_release_gil()) still look at
+# blosc2.ucodecs_registry and blosc2.ufilters_registry, which tests replace to force reads without the GIL.
+cdef c_bool _python_codec_ids[256]
+cdef c_bool _python_filter_ids[256]
+cdef c_bool _python_ids_registered = False
+
+cdef inline c_bool _prefilter_runs_python(blosc2_prefilter_fn prefilter) noexcept:
+    """Whether `prefilter` is set and calls Python, i.e. is not the C-only miniexpr or matmul one."""
+    return (prefilter != NULL and prefilter != <blosc2_prefilter_fn>miniexpr_prefilter
+            and prefilter != <blosc2_prefilter_fn>matmul_prefilter)
+
+cdef inline c_bool _uses_python_filter(const blosc2_cparams *cparams) noexcept:
+    cdef int i
+    for i in range(BLOSC2_MAX_FILTERS):
+        if _python_filter_ids[cparams.filters[i]]:
+            return True
+    return False
+
+cdef c_bool _can_compress_without_gil(blosc2_context *cctx) noexcept:
+    """Whether compressing with `cctx` may release the GIL as set_releasegil() asks: only if no Python
+    callback can run, i.e. its prefilter, codec and filters are not Python ones.  Unlike slice reads, calls
+    without the GIL here and in _decompress_ctx() are not waited for in register_codec() and
+    register_filter(): what they register can only meet a call that started with an id nothing was
+    registered under, which is wrong anyway."""
+    cdef blosc2_cparams cparams
+    if not RELEASEGIL or cctx == NULL or blosc2_ctx_get_cparams(cctx, &cparams) < 0:
+        return False
+    return not (_prefilter_runs_python(cparams.prefilter) or _python_codec_ids[cparams.compcode]
+                or _uses_python_filter(&cparams))
+
+cdef int _compress_ctx(blosc2_context *cctx, const void *src, int32_t srcsize, void *dest,
+                       int32_t destsize) noexcept:
+    """blosc2_compress_ctx(), without the GIL if _can_compress_without_gil(cctx)."""
+    cdef int rc
+    if _can_compress_without_gil(cctx):
+        with nogil:
+            rc = blosc2_compress_ctx(cctx, src, srcsize, dest, destsize)
+    else:
+        rc = blosc2_compress_ctx(cctx, src, srcsize, dest, destsize)
+    return rc
+
+cdef int _decompress_ctx(blosc2_context *dctx, const void *src, int32_t srcsize, void *dest,
+                         int32_t destsize) noexcept:
+    """blosc2_decompress_ctx() with a context without postfilter, without the GIL if set_releasegil() asks
+    and no codec or filter is registered from Python (the chunk tells which ones it uses)."""
+    cdef int rc
+    if RELEASEGIL and not _python_ids_registered:
+        with nogil:
+            rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, destsize)
+    else:
+        rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, destsize)
+    return rc
+
+cdef int _raise_callback_error() except -1:
+    """Raise the pending exception of a Python callback that failed in the C call that just returned, if
+    any.  Call it right after that call: running Python code with the exception pending ends in a
+    SystemError."""
+    return -1 if PyErr_Occurred() != NULL else 0
+
 def get_blocksize():
     return blosc1_get_blocksize()
 
 cdef _check_cparams(blosc2_cparams *cparams):
     if cparams.nthreads > 1:
-        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP\
-                and cparams.compcode in blosc2.ucodecs_registry.keys():
+        if _python_codec_ids[cparams.compcode]:
             raise ValueError("Cannot use multi-threading with user defined Python codecs")
-
-        ufilters = [BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
-                  for filter in cparams.filters]
-        for i in range(len(ufilters)):
-            if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
-                raise ValueError("Cannot use multi-threading with user defined Python filters")
-
-        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter):
-            # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
+        if _uses_python_filter(cparams):
+            raise ValueError("Cannot use multi-threading with user defined Python filters")
+        if _prefilter_runs_python(cparams.prefilter):
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
 cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
     if cparams == NULL:
         return
     if dparams.nthreads > 1:
-        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP\
-                and cparams.compcode in blosc2.ucodecs_registry.keys():
+        if _python_codec_ids[cparams.compcode]:
             raise ValueError("Cannot use multi-threading with user defined Python codecs")
-
-        ufilters = [BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
-                    for filter in cparams.filters]
-        for i in range(len(ufilters)):
-            if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
-                raise ValueError("Cannot use multi-threading with user defined Python filters")
-
+        if _uses_python_filter(cparams):
+            raise ValueError("Cannot use multi-threading with user defined Python filters")
         if dparams.postfilter != NULL:
             raise ValueError("`nthreads` must be 1 when a postfilter is set")
 
@@ -1455,16 +1503,11 @@ def compress2(src, **kwargs):
     cctx = blosc2_create_cctx(cparams)
     if cctx == NULL:
         raise RuntimeError("Could not create the compression context")
-    if RELEASEGIL:
-        with nogil:
-            size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
-    else:
-        size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
+    size = _compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
     blosc2_free_ctx(cctx)
     PyBuffer_Release(&buf)
-    if size < 0:
-        raise RuntimeError("Could not compress the data")
-    elif size == 0:
+    _check_rc(size, "Could not compress the data")
+    if size == 0:
         del dest
         raise RuntimeError("The result could not fit ")
     return dest[:size]
@@ -1509,11 +1552,7 @@ def decompress2(src, dst=None, **kwargs):
         view = <void*>&typed_view_src[0]
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # The decode context needs the full source buffer length.
-        if RELEASEGIL:
-            with nogil:
-                size = blosc2_decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
-        else:
-            size = blosc2_decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
+        size = _decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
         blosc2_free_ctx(dctx)
         PyBuffer_Release(&buf)
     else:
@@ -1525,15 +1564,12 @@ def decompress2(src, dst=None, **kwargs):
         view = <void*>&typed_view_src[0]
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # The decode context needs the full source buffer length.
-        if RELEASEGIL:
-            with nogil:
-                size = blosc2_decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
-        else:
-            size = blosc2_decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
+        size = _decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
         blosc2_free_ctx(dctx)
         if size >= 0:
             return dst
     if size < 0:
+        _raise_callback_error()
         raise ValueError("Error while decompressing, check the src data and/or the dparams")
 
 
@@ -1584,7 +1620,7 @@ def vlcompress(srcs, **kwargs):
         cctx = blosc2_create_cctx(cparams)
         if cctx == NULL:
             raise RuntimeError("Could not create the compression context")
-        if RELEASEGIL:
+        if _can_compress_without_gil(cctx):
             with nogil:
                 size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
         else:
@@ -1598,9 +1634,8 @@ def vlcompress(srcs, **kwargs):
         free(src_ptrs)
         free(srcsizes)
 
-    if size < 0:
-        raise RuntimeError("Could not compress the data")
-    elif size == 0:
+    _check_rc(size, "Could not compress the data")
+    if size == 0:
         del dest
         raise RuntimeError("The result could not fit ")
     return dest[:size]
@@ -1642,8 +1677,7 @@ def vldecompress(src, **kwargs):
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # The decode context needs the full source buffer length.
         rc = blosc2_vldecompress_ctx(dctx, <void*>&typed_view_src[0], srcsize, dests, destsizes, nblocks)
-        if rc < 0:
-            raise RuntimeError("Could not decompress the data")
+        _check_rc(rc, "Could not decompress the data")
         for i in range(rc):
             out.append(PyBytes_FromStringAndSize(<char*>dests[i], destsizes[i]))
             free(dests[i])
@@ -1683,8 +1717,7 @@ def vldecompress_block(src, int32_t nblock, **kwargs):
             &dest,
             &destsize,
         )
-        if rc < 0:
-            raise RuntimeError("Could not decompress the block")
+        _check_rc(rc, "Could not decompress the block")
         return PyBytes_FromStringAndSize(<char*>dest, destsize)
     finally:
         if dest != NULL:
@@ -1983,14 +2016,11 @@ cdef class SChunk:
                 csize = <int32_t> (len_chunk + BLOSC2_MAX_OVERHEAD)
                 chunk = <uint8_t*> malloc(csize)
                 self.schunk.current_nchunk = i
-                if RELEASEGIL:
-                    with nogil:
-                        comp_size = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
-                else:
-                    comp_size = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
+                comp_size = _compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
                 if comp_size < 0:
                     free(chunk)
                     PyBuffer_Release(&buf)
+                    _raise_callback_error()
                     raise RuntimeError("Could not compress the data")
                 elif comp_size == 0:
                     free(chunk)
@@ -2156,14 +2186,11 @@ cdef class SChunk:
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         self.schunk.current_nchunk = self.schunk.nchunks
-        if RELEASEGIL:
-            with nogil:
-                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
-        else:
-            size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+        size = _compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(&buf)
         if size < 0:
             free(chunk)
+            _raise_callback_error()
             raise RuntimeError("Could not compress the data")
         elif size == 0:
             free(chunk)
@@ -2278,6 +2305,7 @@ cdef class SChunk:
                 return dst
 
         if size < 0:
+            _raise_callback_error()
             raise RuntimeError(f"Error while decompressing the specified chunk, error code: {size}")
 
     @_handle_locked
@@ -2346,8 +2374,7 @@ cdef class SChunk:
         cdef uint8_t *block
         cdef int32_t destsize
         cbytes = blosc2_schunk_get_vlblock(self.schunk, nchunk, nblock, &block, &destsize)
-        if cbytes < 0:
-            raise RuntimeError("Error while getting the vlblock")
+        _check_rc(cbytes, "Error while getting the vlblock")
         ret_block = PyBytes_FromStringAndSize(<char*>block, destsize)
         free(block)
         return ret_block
@@ -2390,16 +2417,12 @@ cdef class SChunk:
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
-        if RELEASEGIL:
-            with nogil:
-                # No need to create another cctx
-                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
-        else:
-            size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+        size = _compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(&buf)
         if size <= 0:
             free(chunk)
             if size < 0:
+                _raise_callback_error()
                 raise RuntimeError("Could not compress the data")
             raise RuntimeError("The result could not fit ")
 
@@ -2440,16 +2463,13 @@ cdef class SChunk:
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
-        if RELEASEGIL:
-            with nogil:
-                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
-        else:
-            size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+        size = _compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
 
         PyBuffer_Release(&buf)
         if size <= 0:
             free(chunk)
             if size < 0:
+                _raise_callback_error()
                 raise RuntimeError("Could not compress the data")
             raise RuntimeError("The result could not fit ")
 
@@ -2474,9 +2494,8 @@ cdef class SChunk:
         cdef int size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
         PyBuffer_Release(&buf)
         PyBuffer_Release(&chunk_buf)
-        if size < 0:
-            raise RuntimeError("Could not compress the data")
-        elif size == 0:
+        _check_rc(size, "Could not compress the data")
+        if size == 0:
             raise RuntimeError("The result could not fit ")
         return size
 
@@ -2502,8 +2521,7 @@ cdef class SChunk:
             rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, <void*><char *> out)
             if rc >= 0:
                 return out
-        if rc < 0:
-            raise RuntimeError("Error while getting the slice")
+        _check_rc(rc, "Error while getting the slice")
 
     @_handle_locked
     def set_slice(self, value, start=0, stop=None):
@@ -2533,6 +2551,10 @@ cdef class SChunk:
             # Increase SChunk's size
             if start < nitems:
                 rc = blosc2_schunk_set_slice_buffer(self.schunk, start, nitems, buf.buf)
+                if rc < 0:
+                    PyBuffer_Release(&buf)
+                    _raise_callback_error()
+                    raise RuntimeError("Error while setting the slice")
                 buf_pos = (nitems - start) * self.schunk.typesize
             if self.schunk.nbytes % self.schunk.chunksize != 0:
                 # Update last chunk before appending any other
@@ -2546,20 +2568,19 @@ cdef class SChunk:
                 if rc < 0:
                     free(data)
                     PyBuffer_Release(&buf)
+                    _raise_callback_error()
                     raise RuntimeError("Error while decompressing the chunk")
                 data_start = self.schunk.nbytes - (self.schunk.nchunks - 1) * self.schunk.chunksize
                 memcpy(data + data_start, buf_ptr + buf_pos, nbytes_copy)
                 chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 self.schunk.current_nchunk = self.schunk.nchunks - 1
-                if RELEASEGIL:
-                    with nogil:
-                        comp_rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
-                else:
-                    comp_rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                comp_rc = _compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk,
+                                       chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 free(data)
                 if comp_rc < 0:
                     free(chunk)
                     PyBuffer_Release(&buf)
+                    _raise_callback_error()
                     raise RuntimeError("Error while compressing the data")
                 elif comp_rc == 0:
                     free(chunk)
@@ -2584,14 +2605,11 @@ cdef class SChunk:
                     alloc_len = <int32_t> (chunksize + BLOSC2_MAX_OVERHEAD)
                     chunk = <uint8_t*> malloc(alloc_len)
                     self.schunk.current_nchunk = self.schunk.nchunks
-                    if RELEASEGIL:
-                        with nogil:
-                            comp_rc = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
-                    else:
-                        comp_rc = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
+                    comp_rc = _compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
                     if comp_rc < 0:
                         free(chunk)
                         PyBuffer_Release(&buf)
+                        _raise_callback_error()
                         raise RuntimeError("Error while compressing the chunk")
                     elif comp_rc == 0:
                         free(chunk)
@@ -2608,12 +2626,13 @@ cdef class SChunk:
         else:
             rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, buf.buf)
         PyBuffer_Release(&buf)
-        if rc < 0:
-            raise RuntimeError("Error while setting the slice")
+        _check_rc(rc, "Error while setting the slice")
 
     @_handle_locked
     def to_cframe(self):
-        return schunk_to_cframe(self.schunk, RELEASEGIL)
+        # Serializing can decompress (with the postfilter) and recompress chunks and vlmetalayers
+        return schunk_to_cframe(self.schunk, _can_compress_without_gil(self.schunk.cctx)
+                                and _can_release_gil(self.schunk))
 
     @_handle_locked
     def _avoid_cframe_free(self, avoid_cframe_free):
@@ -3597,6 +3616,7 @@ cdef class vlmeta:
             rc = blosc2_vlmeta_add(self.schunk, name,  <uint8_t*> content, len_content, &ccparams)
 
         if rc < 0:
+            _raise_callback_error()
             raise RuntimeError
 
     @_handle_locked
@@ -3610,6 +3630,7 @@ cdef class vlmeta:
         if rc >= 0:
             rc = blosc2_vlmeta_get(self.schunk, name, &content, &content_len)
         if rc < 0:
+            _raise_callback_error()
             raise RuntimeError
         return content[:content_len]
 
@@ -3879,8 +3900,7 @@ cdef schunk_to_cframe(blosc2_schunk* schunk, c_bool release_gil):
     Py_XDECREF(dest.out)
     if dest.alloc_failed:
         raise MemoryError()
-    if cframe_len < 0:
-        raise RuntimeError("Error while getting the cframe")
+    _check_rc(cframe_len, "Error while getting the cframe")
     return out
 
 
@@ -3969,7 +3989,7 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     # A slice read that found no Python codec could otherwise meet `decoder` without the GIL: keep
     # new reads from releasing it and wait for those that did.  Nothing below releases the GIL
     # before the registry is updated.
-    global _nogil_reads_blocked
+    global _nogil_reads_blocked, _python_ids_registered
     _nogil_reads_blocked += 1
     try:
         _wait_for_nogil_reads()
@@ -3979,6 +3999,7 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
 
         if encoder and decoder:
             blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+            _python_codec_ids[id] = _python_ids_registered = True
     finally:
         _nogil_reads_blocked -= 1
 
@@ -4043,7 +4064,7 @@ def register_filter(id, forward, backward, filter_name):
         strcpy(filter.name, filter_name_)
 
     # As in register_codec()
-    global _nogil_reads_blocked
+    global _nogil_reads_blocked, _python_ids_registered
     _nogil_reads_blocked += 1
     try:
         _wait_for_nogil_reads()
@@ -4052,10 +4073,13 @@ def register_filter(id, forward, backward, filter_name):
             raise RuntimeError("Error while registering filter")
         if forward and backward:
             blosc2.ufilters_registry[id] = (forward, backward)
+            _python_filter_ids[id] = _python_ids_registered = True
     finally:
         _nogil_reads_blocked -= 1
 
 cdef _check_rc(rc, message):
+    # Before anything else: a Python callback may have failed in the C call that gave rc
+    _raise_callback_error()
     if rc < 0:
         raise RuntimeError(message)
 
@@ -4577,6 +4601,9 @@ cdef class NDArray:
             rc = b2nd_get_slice_cbuffer_into(self.array, start_, stop_, buf, buffershape_, buffersize)
         else:
             rc = b2nd_get_slice_cbuffer(self.array, start_, stop_, buf, buffershape_, buffersize)
+        if rc < 0:
+            # The callers retry failed reads, which must not run with a callback's exception set
+            _raise_callback_error()
         return rc
 
     cdef c_bool _box_layout(self, np.ndarray out, const c_bool *int_dims, int64_t *buffershape_,
@@ -4690,8 +4717,7 @@ cdef class NDArray:
         PyBuffer_Release(&view)
         if needs_free:
             free(chunk)
-        if rc < 0:
-            raise RuntimeError("Error while decoding the requested span")
+        _check_rc(rc, "Error while decoding the requested span")
         if rc != want_nbytes:
             # A short read used to pass silently and leave the tail of the
             # destination uninitialised.
@@ -5621,7 +5647,7 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
     cdef int rc = 0
     with HandleLocks((arr1, arr2)):
         rc = b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array)
-    _check_rc(rc, "Error while concatenating the arrays")
+        _check_rc(rc, "Error while concatenating the arrays")  # before the locks' release() runs
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
     if copy:
