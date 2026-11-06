@@ -4579,23 +4579,45 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 out = super().set_slice((start, stop), chunk)
         return out
 
+    def _normalize_oselection(self, key: list | np.ndarray) -> list:
+        """Count negative indices from the end of their axis, like NumPy; IndexError outside the axis."""
+        shape = self.shape
+        if len(key) != len(shape):
+            raise ValueError(f"Key must have {len(shape)} dimensions, got {len(key)}.")
+        normalized = []
+        for indices, size in zip(key, shape, strict=True):
+            if isinstance(indices, np.ndarray):
+                indices = indices.tolist()  # min(), max() and the extension's copy are faster on lists
+            if len(indices) > 0:
+                low, high = builtins.min(indices), builtins.max(indices)
+                if low < -size or high >= size:
+                    bad = next(i for i in indices if not -size <= i < size)  # the first, as in NumPy
+                    axis = len(normalized)
+                    raise IndexError(f"index {bad} is out of bounds for axis {axis} with size {size}")
+                if low < 0:
+                    indices = [i + size if i < 0 else i for i in indices]
+            normalized.append(indices)
+        return normalized
+
     def get_oselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
         Select independently from self along axes specified in key. Key must be same length as self shape.
+        Negative indices count from the end of their axis; out-of-bounds indices raise IndexError.
         See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
         """
-        shape = tuple(len(k) for k in key) + self.shape[len(key) :]
+        key = self._normalize_oselection(key)
         # Create the array to store the result
-        arr = np.empty(shape, dtype=self.dtype)
+        arr = np.empty(tuple(len(k) for k in key), dtype=self.dtype)
         return super().get_oindex_numpy(arr, key)
 
     def set_oselection_numpy(self, key: list | np.ndarray, arr: NDArray) -> np.ndarray:
         """
         Select independently from self along axes specified in key and set to entries in arr.
         Key must be same length as self shape.
+        Negative indices count from the end of their axis; out-of-bounds indices raise IndexError.
         See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
         """
-        return super().set_oindex_numpy(key, arr)
+        return super().set_oindex_numpy(self._normalize_oselection(key), arr)
 
     def _try_subsample_gather(self, start, stop, step, shape):
         """Fast path for a coarse strided read via the sparse-gather primitive.
