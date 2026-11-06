@@ -825,12 +825,14 @@ ctypedef struct user_filters_udata:
     int input_cdtype
     int output_cdtype
     int32_t chunkshape
+    int32_t itemsize  # of both dtypes
 
 ctypedef struct filler_udata:
     char* py_func
     uintptr_t inputs_id
     int output_cdtype
     int32_t chunkshape
+    int32_t itemsize  # of the output dtype
 
 ctypedef struct udf_udata:
     char* py_func
@@ -4793,6 +4795,7 @@ cdef class SChunk:
         postf_udata.input_cdtype = dtype_input.num
         postf_udata.output_cdtype = dtype_output.num
         postf_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+        postf_udata.itemsize = dtype_input.itemsize
 
         postparams.user_data = postf_udata
         dparams.postparams = postparams
@@ -4847,6 +4850,7 @@ cdef class SChunk:
         fill_udata.inputs_id = inputs_id
         fill_udata.output_cdtype = np.dtype(dtype_output).num
         fill_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+        fill_udata.itemsize = np.dtype(dtype_output).itemsize
 
         preparams.user_data = fill_udata
         cparams.preparams = preparams
@@ -4881,6 +4885,7 @@ cdef class SChunk:
         pref_udata.input_cdtype = dtype_input.num
         pref_udata.output_cdtype = dtype_output.num
         pref_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+        pref_udata.itemsize = dtype_input.itemsize
 
         preparams.user_data = pref_udata
         cparams.preparams = preparams
@@ -5002,9 +5007,18 @@ cdef class SChunk:
             blosc2_schunk_free(schunk_ptr)
 
 
+# The arrays that general_postfilter, general_filler and general_prefilter hand to Python have
+# size // typesize items of the callback's dtype, so they only fit buffers whose typesize is the
+# dtype's itemsize.  Other buffers (C-Blosc2 before Blosc/c-blosc2#857 passes vlmetalayer content
+# to the postfilter, and a chunk can have another typesize than its SChunk) get a ValueError, raised
+# before anything is written and re-raised by the caller after the C call (_raise_callback_error()).
+
 # postfilter
 cdef int general_postfilter(blosc2_postfilter_params *params) with gil:
     cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
+    if params.typesize != udata.itemsize:
+        raise ValueError(f"postfilter: data typesize {params.typesize} does not match "
+                         f"dtype itemsize {udata.itemsize}")
     cdef int nd = 1
     cdef np.npy_intp dims = params.size // params.typesize
     input = np.PyArray_SimpleNewFromData(nd, &dims, udata.input_cdtype, <void*>params.input)
@@ -5018,6 +5032,9 @@ cdef int general_postfilter(blosc2_postfilter_params *params) with gil:
 # filler
 cdef int general_filler(blosc2_prefilter_params *params):
     cdef filler_udata *udata = <filler_udata *> params.user_data
+    if params.output_typesize != udata.itemsize:
+        raise ValueError(f"filler: data typesize {params.output_typesize} does not match "
+                         f"dtype itemsize {udata.itemsize}")
     cdef int nd = 1
     cdef np.npy_intp dims = params.output_size // params.output_typesize
 
@@ -5666,6 +5683,10 @@ def nelem_from_inputs(inputs_tuple, nelem=None):
 # prefilter
 cdef int general_prefilter(blosc2_prefilter_params *params):
     cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
+    # Typesize check: see general_postfilter
+    if params.output_typesize != udata.itemsize:
+        raise ValueError(f"prefilter: data typesize {params.output_typesize} does not match "
+                         f"dtype itemsize {udata.itemsize}")
     cdef int nd = 1
     cdef np.npy_intp dims = params.output_size // params.output_typesize
 
