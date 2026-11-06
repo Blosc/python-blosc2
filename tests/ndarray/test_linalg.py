@@ -520,6 +520,79 @@ def test_matmul_prefilter_supported_dtypes(dtype, nthreads):
         np.testing.assert_array_equal(out[:], np.matmul(a, b))
 
 
+def _small_int_operands(mkn, dtype):
+    # Small integers, so that float32 and float64 products are exact.  Not constant: with
+    # ones()/full() all chunks hold the same values, which hides reading the wrong chunk.
+    m, k, n = mkn
+    rng = np.random.default_rng(0)
+    a = rng.integers(-3, 4, size=(m, k)).astype(dtype)
+    b = rng.integers(-3, 4, size=(k, n)).astype(dtype)
+    return a, b
+
+
+@pytest.mark.parametrize(
+    ("mkn", "achunks", "bchunks"),
+    [
+        ((200, 100, 100), (100, 100), (100, 100)),  # 2 chunks along the output rows
+        ((100, 100, 200), (100, 100), (100, 100)),  # 2 chunks along the output columns
+        ((100, 200, 100), (100, 100), (100, 100)),  # 2 chunks along K
+        ((300, 250, 200), (100, 100), (100, 100)),  # all three, partial last chunks
+        ((200, 300, 150), (100, 150), (150, 50)),  # non-square chunks
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("nthreads", PREFILTER_NTHREADS)
+def test_matmul_fast_path_multichunk(monkeypatch, mkn, achunks, bchunks, dtype, nthreads):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b = _small_int_operands(mkn, dtype)
+        cparams = blosc2.CParams(nthreads=nthreads)
+        x1 = blosc2.asarray(a, chunks=achunks, blocks=(50, 50), cparams=cparams)
+        x2 = blosc2.asarray(b, chunks=bchunks, blocks=(50, 50), cparams=cparams)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+            c = blosc2.matmul(x1, x2, chunks=(achunks[0], bchunks[1]), blocks=(50, 50), cparams=cparams)
+            expected = a @ b
+
+        assert calls == [(expected.shape, a.shape, b.shape, np.dtype(dtype))]
+        np.testing.assert_array_equal(c[:], expected)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize(
+    ("achunks", "bchunks", "outchunks"),
+    [
+        ((100, 100), (100, 100), (50, 100)),  # output chunk rows differ from A's
+        ((100, 100), (100, 100), (100, 50)),  # output chunk columns differ from B's
+        ((100, 100), (50, 100), (100, 100)),  # A and B chunk K differently
+    ],
+)
+def test_matmul_fast_path_needs_shared_chunk_grid(monkeypatch, achunks, bchunks, outchunks):
+    # The prefilter maps output chunks onto A's and B's chunks one to one; other layouts
+    # gave wrong results, errors or crashes there, so they must take the chunked path
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b = _small_int_operands((200, 200, 200), np.float64)
+        x1 = blosc2.asarray(a, chunks=achunks, blocks=(50, 50))
+        x2 = blosc2.asarray(b, chunks=bchunks, blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+            c = blosc2.matmul(x1, x2, chunks=outchunks, blocks=(50, 50))
+            expected = a @ b
+
+        assert calls == []
+        np.testing.assert_array_equal(c[:], expected)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
     [

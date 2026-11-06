@@ -5413,6 +5413,31 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     out_block_nrows = out_arr.blockshape[ndim - 2]
     out_block_ncols = out_arr.blockshape[ndim - 1]
 
+    # Move nchunkA/nchunkB to the first chunks this output chunk needs: A's chunk in the
+    # same row and B's chunk in the same column, both at K = 0.  The chunk loop reads src[]
+    # from them, so this must happen before it starts.
+    ndarr = udata.inputs[0]
+    ndim = ndarr.ndim
+    q = ndarr.blockshape[ndim - 1]
+    p = ndarr.blockshape[ndim - 2]
+    # nchunk_ = chunks_in_row * chunk_row + chunk_col
+    # convert from chunk_idx to element idx chunk_i (row)
+    chunk_i = nchunk_ // ncols * out_chunk_nrows
+    nchunkA += chunk_i // ndarr.chunkshape[ndim - 2] * Ancols
+    # nblock_ = blocks_in_chunkrow * block_row + block_col
+    # convert from block_idx to element idx block_i (row)
+    block_i = nblock_ // block_ncols * out_block_nrows
+    block_startA = nblockA + block_i // p * Ablock_ncols
+    ndarr = udata.inputs[1]
+    ndim = ndarr.ndim
+    r = ndarr.blockshape[ndim - 1]
+    # convert from chunk_idx to element idx chunk_j (col)
+    chunk_j = nchunk_ % ncols * out_chunk_ncols
+    nchunkB += chunk_j // ndarr.chunkshape[ndim - 1]
+    # convert from block_idx to element idx block_j (col)
+    block_j = nblock_ % block_ncols * out_block_ncols
+    block_startB = nblockB + block_j // r
+
     memset(params_output, 0, out_arr.blocknitems * typesize)
 
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
@@ -5430,27 +5455,6 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
             if rc < 0 or block_nbytes[i] <= 0:
                 return _matmul_exit(input_buffers, dctx, -1)
             if first_run:
-                if i == 0:
-                    q = ndarr.blockshape[ndim - 1]
-                    p = ndarr.blockshape[ndim - 2]
-                    # nchunk_ = chunks_in_row * chunk_row + chunk_col
-                    # convert from chunk_idx to element idx chunk_i (row)
-                    chunk_i = nchunk_ // ncols * out_chunk_nrows
-                    chunk_startA = nchunkA + chunk_i // ndarr.chunkshape[ndim - 2] * Ancols
-                    nchunkA = chunk_startA
-                    # nblock_ = blocks_in_chunkrow * block_row + block_col
-                    # convert from block_idx to element idx block_i (row)
-                    block_i = nblock_ // block_ncols * out_block_nrows
-                    block_startA = nblockA + block_i // p * Ablock_ncols
-                else: # i = 1
-                    r = ndarr.blockshape[ndim - 1]
-                    # convert from chunk_idx to element idx chunk_j (col)
-                    chunk_j = nchunk_ % ncols * out_chunk_ncols
-                    chunk_startB = nchunkB + chunk_j // ndarr.chunkshape[ndim - 1]
-                    nchunkB = chunk_startB
-                    # convert from block_idx to element idx block_j (col)
-                    block_j = nblock_ % block_ncols * out_block_ncols
-                    block_startB = nblockB + block_j // r
                 input_buffers[i] = malloc(block_nbytes[i])
             if input_buffers[i] == NULL:
                 return _matmul_exit(input_buffers, dctx, -1)
