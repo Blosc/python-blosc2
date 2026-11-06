@@ -5,6 +5,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import ctypes
+import gc
+import sys
+
 import numpy as np
 import pytest
 
@@ -124,6 +128,16 @@ argvalues = [
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(10, 40), slice(25, 75 - 1), slice(100, 200)), np.int32),
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(20, 35), slice(50, 75), slice(100, 300 - 1)), np.int32),
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(20 + 1, 25), slice(25, 50), slice(50, 100)), np.int32),
+    # int indices drop their dims
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (2, slice(3, 17), slice(5, 29)), np.int32),
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (slice(1, 3), slice(3, 17), 4), np.int32),
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (2, 5, slice(5, 29)), np.int32),
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (2, 5, 7), np.int32),
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (2, slice(5, 6), slice(5, 29)), np.int32),
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (slice(2, 3), slice(3, 17), slice(5, 29)), np.int32),
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (2, slice(8, 16), slice(8, 16)), np.int32),  # aligned
+    ((2, 2, 2), (1, 1, 1), (1, 1, 1), (1, 0, 1), np.int32),  # aligned
+    ((7, 20, 30), (1, 8, 8), (1, 4, 4), (2, slice(3, 17, 2), slice(5, 29)), np.int32),  # step
 ]
 
 
@@ -136,6 +150,7 @@ def test_slice(shape, chunks, blocks, slices, dtype):
     np_slice = a[slices]
     assert b.shape == np_slice.shape
     np.testing.assert_almost_equal(b[...], np_slice)
+    assert b.base is None  # a new array, not a view
 
 
 @pytest.mark.parametrize(argnames, argvalues)
@@ -179,3 +194,101 @@ def test_slice_chunks_blocks(shape, chunks, blocks, chunks2, blocks2, slices, dt
     b = a.slice(slices, chunks=chunks2, blocks=blocks2)
     np_slice = a[slices]
     np.testing.assert_almost_equal(b[...], np_slice)
+
+
+# --- int indices and storage arguments --------------------------------------
+# The result of slice() owns its data and has the storage asked for.
+
+_INT_KEY = (2, slice(3, 17), slice(5, 29))  # not chunk-aligned
+_SLICES_KEY = (slice(1, 3), slice(3, 17), slice(5, 29))  # not chunk-aligned
+_ALIGNED_INT_KEY = (2, slice(8, 16), slice(8, 16))
+_ALIGNED_SLICES_KEY = (slice(2, 4), slice(8, 16), slice(8, 16))
+
+
+def _array_3d():
+    nparray = np.arange(7 * 20 * 30, dtype=np.int32).reshape(7, 20, 30)
+    return nparray, blosc2.asarray(nparray, chunks=(1, 8, 8), blocks=(1, 4, 4))
+
+
+_ALL_KEYS = [_INT_KEY, _SLICES_KEY, _ALIGNED_INT_KEY, _ALIGNED_SLICES_KEY]
+
+
+@pytest.mark.parametrize("key", _ALL_KEYS)
+def test_slice_storage(tmp_path, key):
+    nparray, a = _array_3d()
+    urlpath = str(tmp_path / "slice.b2nd")
+    b = a.slice(key, urlpath=urlpath, mode="w", meta={"m": [1, 2]})
+    assert b.schunk.urlpath == urlpath
+    assert b.schunk.contiguous
+    for c in (b, blosc2.open(urlpath)):
+        assert c.shape == nparray[key].shape
+        assert c.schunk.meta["m"] == [1, 2]
+        np.testing.assert_array_equal(c[...], nparray[key])
+    assert a.slice(key, contiguous=True).schunk.contiguous
+
+
+@pytest.mark.parametrize("key", _ALL_KEYS)
+def test_slice_cparams_dparams(key):
+    nparray, a = _array_3d()
+    cparams = {"codec": blosc2.Codec.LZ4, "clevel": 1, "filters": [blosc2.Filter.NOFILTER], "nthreads": 1}
+    b = a.slice(key, cparams=cparams, dparams={"nthreads": 1})
+    assert (b.cparams.codec, b.cparams.clevel, b.cparams.filters[-1]) == (
+        blosc2.Codec.LZ4,
+        1,
+        blosc2.Filter.NOFILTER,
+    )
+    assert b.cparams.nthreads == 1
+    assert b.dparams.nthreads == 1
+    np.testing.assert_array_equal(b[...], nparray[key])
+
+
+@pytest.mark.parametrize(
+    ("key", "chunks", "blocks", "chunks2", "blocks2"),
+    [
+        (_INT_KEY, (7, 12), (7, 4), (7, 12), (7, 4)),
+        (_INT_KEY, [2, 7, 12], [2, 7, 4], (7, 12), (7, 4)),  # with the dropped dim
+        ((2, slice(5, 6), slice(5, 29)), [1, 12], [1, 4], (1, 12), (1, 4)),
+        (_ALIGNED_INT_KEY, (4, 8), (2, 4), (4, 8), (2, 4)),
+    ],
+)
+def test_slice_int_indices_chunks_blocks(key, chunks, blocks, chunks2, blocks2):
+    nparray, a = _array_3d()
+    b = a.slice(key, chunks=chunks, blocks=blocks)
+    assert b.chunks == chunks2
+    assert b.blocks == blocks2
+    np.testing.assert_array_equal(b[...], nparray[key])
+
+
+class _Mallinfo2(ctypes.Structure):
+    # all fields: mallinfo2() returns the struct by value
+    _fields_ = [
+        (name, ctypes.c_size_t)
+        for name in "arena ordblks smblks hblks hblkhd usmblks fsmblks uordblks fordblks keepcost".split()
+    ]
+
+
+_mallinfo2 = getattr(ctypes.CDLL(None), "mallinfo2", None) if sys.platform.startswith("linux") else None
+if _mallinfo2 is not None:  # glibc >= 2.33
+    _mallinfo2.restype = _Mallinfo2
+
+
+def _malloc_in_use():
+    gc.collect()
+    info = _mallinfo2()
+    return info.uordblks + info.hblkhd
+
+
+@pytest.mark.skipif(_mallinfo2 is None, reason="needs glibc's mallinfo2()")
+@pytest.mark.parametrize("key", [_INT_KEY, _SLICES_KEY])
+def test_slice_frees_sliced_array(key):
+    # The sliced array (about 75 KiB here) was kept for every slice that was not chunk-aligned
+    _, a = _array_3d()
+    for _ in range(20):  # warm-up
+        a.slice(key)
+    growth = []
+    for _ in range(3):
+        before = _malloc_in_use()
+        for _ in range(100):
+            a.slice(key)
+        growth.append((_malloc_in_use() - before) / 100)
+    assert min(growth) < 256
