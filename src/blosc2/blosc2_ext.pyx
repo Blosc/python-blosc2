@@ -237,6 +237,7 @@ cdef extern from "blosc2.h":
         BLOSC2_ERROR_SCHUNK_SPECIAL
         BLOSC2_ERROR_PLUGIN_IO
         BLOSC2_ERROR_FILE_REMOVE
+        BLOSC2_ERROR_NULL_POINTER
 
     ctypedef enum:
         BLOSC2_DEFINED_CODECS_START
@@ -5728,12 +5729,15 @@ cdef class vlmeta:
     @_handle_locked
     def get_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
-        rc = blosc2_vlmeta_exists(self.schunk, name)
         cdef uint8_t* content
         cdef int32_t content_len
-        if rc < 0:
+        # One lookup (for a file-backed frame, each lookup reads the frame header).  These four errors
+        # come from reading the content; the others are lookup errors (not found, name too long, frame
+        # re-sync or lock), which were a KeyError from a blosc2_vlmeta_exists() call before and still are.
+        cdef int rc = blosc2_vlmeta_get(self.schunk, name, &content, &content_len)
+        if rc < 0 and rc not in (BLOSC2_ERROR_DATA, BLOSC2_ERROR_MEMORY_ALLOC, BLOSC2_ERROR_NULL_POINTER,
+                                 BLOSC2_ERROR_READ_BUFFER):
             raise KeyError
-        rc = blosc2_vlmeta_get(self.schunk, name, &content, &content_len)
         # On errors, blosc2_vlmeta_get() leaves nothing to free
         if rc < 0:
             _raise_callback_error()
