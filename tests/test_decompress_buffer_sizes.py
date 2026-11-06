@@ -5,9 +5,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""decompress() and decompress2() stay within the src and dst buffers they are given."""
+"""The decompression functions stay within the src and dst buffers they are given, and free what they
+took when they fail."""
 
 import array
+import ctypes
+import gc
 import sys
 
 import numpy as np
@@ -112,3 +115,79 @@ def test_truncated_memcpyed_src(decompress):
     src = memoryview(bytearray(chunk))[: len(chunk) // 2]
     with pytest.raises(_corrupt_src_error(decompress)):
         decompress(src)
+
+
+class _Mallinfo2(ctypes.Structure):
+    _fields_ = [
+        (name, ctypes.c_size_t)
+        for name in (
+            "arena",
+            "ordblks",
+            "smblks",
+            "hblks",
+            "hblkhd",
+            "usmblks",
+            "fsmblks",
+            "uordblks",
+            "fordblks",
+            "keepcost",
+        )
+    ]
+
+
+def _get_mallinfo2():
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        mallinfo2 = ctypes.CDLL(None).mallinfo2  # glibc >= 2.33
+    except (OSError, AttributeError):
+        return None
+    mallinfo2.restype = _Mallinfo2
+    return mallinfo2
+
+
+_mallinfo2 = _get_mallinfo2()
+
+
+def _c_bytes_left_per_call(fn, ncalls=300, nrounds=3):
+    """Smallest growth of malloc's in-use bytes per call of `fn` over `nrounds` rounds."""
+    for _ in range(50):  # warm-up: caches and other one-time allocations
+        fn()
+    growth = []
+    for _ in range(nrounds):
+        gc.collect()
+        info = _mallinfo2()
+        before = info.uordblks + info.hblkhd
+        for _ in range(ncalls):
+            fn()
+        gc.collect()
+        info = _mallinfo2()
+        growth.append((info.uordblks + info.hblkhd - before) / ncalls)
+    return min(growth)
+
+
+@pytest.mark.skipif(_mallinfo2 is None, reason="needs glibc's mallinfo2()")
+@pytest.mark.parametrize(
+    ("call", "exc"),
+    [
+        pytest.param(
+            lambda: blosc2.blosc2_ext.vldecompress_block(b"abc", 0), ValueError, id="vlblock-short-src"
+        ),
+        pytest.param(
+            lambda: blosc2.blosc2_ext.vldecompress_block(3, 0), TypeError, id="vlblock-no-buffer-src"
+        ),
+        pytest.param(lambda: blosc2.decompress2(CHUNK, 3), TypeError, id="decompress2-no-buffer-dst"),
+        pytest.param(
+            lambda: blosc2.decompress2(CHUNK, np.zeros(64, dtype=np.int64)[::2]),
+            ValueError,
+            id="decompress2-strided-dst",
+        ),
+    ],
+)
+def test_failed_call_frees_dctx(call, exc):
+    def fail():
+        with pytest.raises(exc):
+            call()
+
+    # The decompression context (about 1.3 kB) was leaked
+    assert _c_bytes_left_per_call(fail) < 256

@@ -3738,15 +3738,17 @@ def decompress2(src, dst=None, **kwargs):
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef Py_buffer buf
     if dst is not None:
-        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
         view = <void*>&typed_view_src[0]
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # The decode context needs the full source buffer length.
         try:
-            size = _decompress_ctx(dctx, view, srcsize, buf.buf, _checked_dst_size(buf.len, nbytes))
+            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
+            try:
+                size = _decompress_ctx(dctx, view, srcsize, buf.buf, _checked_dst_size(buf.len, nbytes))
+            finally:
+                PyBuffer_Release(&buf)
         finally:
             blosc2_free_ctx(dctx)
-            PyBuffer_Release(&buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
@@ -3888,14 +3890,14 @@ def vldecompress_block(src, int32_t nblock, **kwargs):
     cdef blosc2_dparams dparams
     create_dparams_from_kwargs(&dparams, kwargs)
 
-    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
-    if dctx == NULL:
-        raise RuntimeError("Could not create decompression context")
-
     cdef const uint8_t[:] typed_view_src
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', typed_view_src.nbytes)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
 
     cdef uint8_t *dest = NULL
     cdef int32_t destsize = 0
