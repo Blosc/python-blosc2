@@ -12,7 +12,12 @@ from types import CellType, FunctionType
 import numpy as np
 
 from .dsl_kernel import SourceKernel as DSLKernel
-from .menudet_kernel import capture_analysis, menudet_dtype_descriptor, prepare_menudet_kernel
+from .menudet_kernel import (
+    _header_pragmas,
+    capture_analysis,
+    menudet_dtype_descriptor,
+    prepare_menudet_kernel,
+)
 
 
 def _dtype(annotation):
@@ -84,6 +89,10 @@ class MenudetFunction:
             raise TypeError("Menudet decorators currently accept array parameters, not row proxies")
         # Annotations/defaults are Python binding metadata, not native syntax or
         # captures. Normalize only this author's header; leave @dsl_kernel intact.
+        pragmas = {
+            **_header_pragmas(author.dsl_source or ""),
+            **_header_pragmas(inspect.cleandoc(func.__doc__ or "")),
+        }
         tree = ast.parse(author.dsl_source)
         function = tree.body[0]
         function.returns = None
@@ -91,7 +100,12 @@ class MenudetFunction:
         function.args.posonlyargs, function.args.args = [], function.args.posonlyargs + function.args.args
         for arg in function.args.args:
             arg.annotation = None
-        author.dsl_source = ast.unparse(tree)
+        unparsed = ast.unparse(tree)
+        if pragmas:
+            header = "".join(f"# me:{k}={v}\n" for k, v in pragmas.items())
+            author.dsl_source = f"{header}{unparsed}"
+        else:
+            author.dsl_source = unparsed
         # Export capture lookup must not observe later global/closure rebinding.
         closure = tuple(CellType(cell.cell_contents) for cell in func.__closure__ or ()) or None
         author.func = FunctionType(
