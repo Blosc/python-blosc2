@@ -4184,16 +4184,17 @@ cdef class SChunk:
             len_data = buf.len
             nchunks = (len_data + chunksize - 1) // chunksize if len_data > 0 else 0
             len_chunk = chunksize
-            for i in range(nchunks):
-                if i == (nchunks - 1):
-                    len_chunk = len_data - i * chunksize
-                index = i * chunksize
-                rc = _store_buffer(self.schunk, _WRITE_APPEND, i, buf_ptr + index, len_chunk)
-                if rc < 0:
-                    PyBuffer_Release(&buf)
-                    _raise_callback_error()
-                    raise RuntimeError("Could not compress and append the chunk")
-            PyBuffer_Release(&buf)
+            try:
+                for i in range(nchunks):
+                    if i == (nchunks - 1):
+                        len_chunk = len_data - i * chunksize
+                    index = i * chunksize
+                    rc = _store_buffer(self.schunk, _WRITE_APPEND, i, buf_ptr + index, len_chunk)
+                    if rc < 0:
+                        _raise_callback_error()
+                        raise RuntimeError("Could not compress and append the chunk")
+            finally:
+                PyBuffer_Release(&buf)
 
     @property
     def c_schunk(self):
