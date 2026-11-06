@@ -5,6 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import os
+import sys
+
 import numpy as np
 import pytest
 
@@ -150,3 +153,65 @@ def test_vlmeta_empty_list_roundtrip():
 
     assert schunk.vlmeta["empty"] == []
     assert schunk.vlmeta["nested"] == {"rows": [[], ["x"]]}
+
+
+def _rss_bytes():
+    with open("/proc/self/statm") as f:
+        return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+
+
+def _rss_growth(op, n):
+    for _ in range(10):
+        op()
+    rss = _rss_bytes()
+    for _ in range(n):
+        op()
+    return _rss_bytes() - rss
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the RSS from /proc")
+def test_vlmeta_read_frees_content():
+    # Each read used to leak the 1 MiB content (200 MiB here)
+    schunk = blosc2.SChunk()
+    schunk.vlmeta["big"] = bytes(2**20)
+    assert _rss_growth(lambda: schunk.vlmeta["big"], 200) < 50 * 2**20
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the RSS from /proc")
+def test_vlmeta_names_are_freed():
+    # Each listing used to leak an array of 4096 pointers (32 MiB here)
+    schunk = blosc2.SChunk()
+    for i in range(4096):
+        schunk.vlmeta[str(i)] = i
+    assert _rss_growth(lambda: list(schunk.vlmeta), 1000) < 8 * 2**20
+
+
+def _read_syscalls():
+    # Read syscalls (read, pread, ...) of this process so far
+    with open("/proc/self/io") as f:
+        return next(int(line.split()[1]) for line in f if line.startswith("syscr:"))
+
+
+@pytest.mark.skipif(not os.path.exists("/proc/self/io"), reason="needs Linux task I/O accounting")
+@pytest.mark.parametrize("contiguous", [True, False])
+def test_vlmeta_read_looks_name_up_once(tmp_path, contiguous):
+    # Each lookup re-reads the frame header from the file (one pread); reads used to look the name up twice
+    urlpath = str(tmp_path / "frame.b2frame")
+    schunk = blosc2.SChunk(urlpath=urlpath, contiguous=contiguous)
+    schunk.vlmeta["small"] = 1
+    reader = blosc2.open(urlpath, mode="r")
+    assert reader.vlmeta["small"] == 1
+    n = 100
+    syscr = _read_syscalls()
+    for _ in range(n):
+        reader.vlmeta["small"]
+    # One read syscall per vlmeta read (two before)
+    assert _read_syscalls() - syscr < 1.5 * n
+
+
+def test_vlmeta_name_too_long_is_keyerror():
+    # Longer than BLOSC2_METALAYER_NAME_MAXLEN: the lookup rejects it, so it cannot exist
+    schunk = blosc2.SChunk()
+    assert "x" * 40 not in schunk.vlmeta
+    with pytest.raises(KeyError):
+        schunk.vlmeta["x" * 40]

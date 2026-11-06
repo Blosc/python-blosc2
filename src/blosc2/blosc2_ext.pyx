@@ -237,6 +237,7 @@ cdef extern from "blosc2.h":
         BLOSC2_ERROR_SCHUNK_SPECIAL
         BLOSC2_ERROR_PLUGIN_IO
         BLOSC2_ERROR_FILE_REMOVE
+        BLOSC2_ERROR_NULL_POINTER
 
     ctypedef enum:
         BLOSC2_DEFINED_CODECS_START
@@ -5728,17 +5729,23 @@ cdef class vlmeta:
     @_handle_locked
     def get_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
-        rc = blosc2_vlmeta_exists(self.schunk, name)
         cdef uint8_t* content
         cdef int32_t content_len
-        if rc < 0:
+        # One lookup (for a file-backed frame, each lookup reads the frame header).  These four errors
+        # come from reading the content; the others are lookup errors (not found, name too long, frame
+        # re-sync or lock), which were a KeyError from a blosc2_vlmeta_exists() call before and still are.
+        cdef int rc = blosc2_vlmeta_get(self.schunk, name, &content, &content_len)
+        if rc < 0 and rc not in (BLOSC2_ERROR_DATA, BLOSC2_ERROR_MEMORY_ALLOC, BLOSC2_ERROR_NULL_POINTER,
+                                 BLOSC2_ERROR_READ_BUFFER):
             raise KeyError
-        if rc >= 0:
-            rc = blosc2_vlmeta_get(self.schunk, name, &content, &content_len)
+        # On errors, blosc2_vlmeta_get() leaves nothing to free
         if rc < 0:
             _raise_callback_error()
             raise RuntimeError
-        return content[:content_len]
+        try:
+            return content[:content_len]
+        finally:
+            free(content)
 
     @_handle_locked
     def del_vlmeta(self, name):
@@ -5754,22 +5761,26 @@ cdef class vlmeta:
     @_handle_locked
     def get_names(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char *))
-        rc = blosc2_vlmeta_get_names(self.schunk, names)
-        if rc != self.schunk.nvlmetalayers:
-            raise RuntimeError
-        res = [names[i].decode("utf-8") for i in range(rc)]
-        return res
+        try:
+            rc = blosc2_vlmeta_get_names(self.schunk, names)
+            if rc != self.schunk.nvlmetalayers:
+                raise RuntimeError
+            return [names[i].decode("utf-8") for i in range(rc)]
+        finally:
+            free(names)
 
     @_handle_locked
     def to_dict(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char*))
-        rc = blosc2_vlmeta_get_names(self.schunk, names)
-        if rc != self.schunk.nvlmetalayers:
-            raise RuntimeError
-        res = {}
-        for i in range(rc):
-            res[names[i]] = unpackb(self.get_vlmeta(names[i]), list_hook=decode_tuple)
-        return res
+        try:
+            rc = blosc2_vlmeta_get_names(self.schunk, names)
+            if rc != self.schunk.nvlmetalayers:
+                raise RuntimeError
+            # Copies (as bytes keys): the names point into the vlmetalayers, which get_vlmeta() may re-sync
+            keys = [names[i] for i in range(rc)]
+        finally:
+            free(names)
+        return {key: unpackb(self.get_vlmeta(key), list_hook=decode_tuple) for key in keys}
 
 
 @_handle_locked
@@ -5782,20 +5793,25 @@ def meta__contains__(self, name):
 @_handle_locked
 def meta__getitem__(self, name):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
-    name = name.encode("utf-8") if isinstance(name, str) else name
+    name_ = name.encode("utf-8") if isinstance(name, str) else name
     cdef uint8_t *content
     cdef int32_t content_len
-    n = blosc2_meta_get(schunk, name, &content, &content_len)
-    res = PyBytes_FromStringAndSize(<char *> content, content_len)
-    free(content)
-
-    return res
+    cdef int n = blosc2_meta_get(schunk, name_, &content, &content_len)
+    # On errors, blosc2_meta_get() leaves nothing to free (content may be uninitialized)
+    if n == BLOSC2_ERROR_NOT_FOUND:
+        raise KeyError(f"{name} not found")
+    if n < 0:
+        raise RuntimeError("Could not get the metalayer")
+    try:
+        return PyBytes_FromStringAndSize(<char *> content, content_len)
+    finally:
+        free(content)
 
 @_handle_locked
 def meta__setitem__(self, name, content):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
-    name = name.encode("utf-8") if isinstance(name, str) else name
     old_content = meta__getitem__(self, name)
+    name = name.encode("utf-8") if isinstance(name, str) else name
     if len(old_content) != len(content):
         raise ValueError("The length of the content in a metalayer cannot change.")
     blosc2_meta_update(schunk, name, content, len(content))
