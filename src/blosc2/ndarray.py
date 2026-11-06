@@ -343,6 +343,52 @@ def get_ndarray_start_stop(ndim, key, shape):
     return start, stop, tuple(step), none_mask
 
 
+def _selection_shape(start, stop, step, int_mask, none_mask) -> tuple:
+    """NumPy's shape of the selection of a key resolved by process_key() and
+    get_ndarray_start_stop(): ``len(range(start, stop, step))`` per sliced dimension, nothing for
+    an integer index and 1 for every None (`int_mask` and `none_mask` have one entry per key item).
+    """
+    dims = zip(start, stop, step, strict=True)
+    shape = []
+    for is_int, is_none in zip(int_mask, none_mask, strict=True):
+        if is_none:
+            shape.append(1)
+            continue
+        st, sp, stp = next(dims)
+        if not is_int:
+            shape.append(len(range(st, sp, stp)))
+    return tuple(shape)
+
+
+def _check_broadcast(vshape: tuple, shape: tuple) -> bool:
+    """Check that a value of shape `vshape` can be assigned to a selection of shape `shape` as in
+    NumPy, which ignores leading dimensions of length 1 of the value and broadcasts the rest;
+    raise NumPy's ValueError if not.  Return whether the value must be broadcast, i.e. it does not
+    hold the items of the selection (in C order: dimensions of length 1 do not matter there).
+    """
+    extra = builtins.max(len(vshape) - len(shape), 0)
+    if builtins.any(n != 1 for n in vshape[:extra]) or builtins.any(
+        n not in (1, s) for n, s in zip(reversed(vshape), reversed(shape), strict=False)
+    ):
+        raise ValueError(f"could not broadcast input array from shape {vshape} into shape {shape}")
+    return math.prod(vshape) != math.prod(shape)
+
+
+def _broadcast_value(value: np.ndarray, shape: tuple) -> np.ndarray:
+    """`value` broadcast to `shape` as checked by _check_broadcast() (a read-only view)."""
+    extra = value.ndim - len(shape)
+    return np.broadcast_to(value.reshape(value.shape[extra:]) if extra > 0 else value, shape)
+
+
+def _setitem_value(value, shape: tuple):
+    """`value` (not a scalar) for a selection of shape `shape` that is written piece by piece
+    (``value[idx]``): as it is if it has that shape, else broadcast to it (a NumPy view)."""
+    if value.shape == shape:
+        return value
+    _check_broadcast(value.shape, shape)
+    return _broadcast_value(value[()] if isinstance(value, blosc2.Operand) else value, shape)
+
+
 def are_partitions_aligned(shape, chunks, blocks):
     """
     Check if the partitions defined by chunks and blocks are aligned with the shape.
@@ -5066,12 +5112,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         key: int, slice or sequence of slices
-            The index or indices specifying the slice(s) to be updated. Note that the step parameter
-            is not yet supported.
-        value: Py_Object Supporting the Buffer Protocol
-            An object supporting the
-            `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_
-            which will be used to overwrite the specified slice(s).
+            The index or indices specifying the slice(s) to be updated.
+        value: scalar or array-like
+            The value(s) to write: a scalar, or an array (NumPy array, :ref:`NDArray`, or any object
+            supporting the `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_) that
+            is broadcast to the shape of the selection as in NumPy. A value that cannot be
+            broadcast raises ValueError.
 
         Examples
         --------
@@ -5107,13 +5153,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
             key_, mask = process_key(key, self.shape)  # internally handles key an integer
         if hasattr(value, "shape") and value.shape == () and not getattr(value.dtype, "fields", None):
             value = value.item()
+        # 0-d values are scalars now and nothing below makes new ones: check once (it is not cheap)
+        scalar = np.isscalar(value)
         # Convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch (not NumPy arrays: that costs more
         # than a small write, for the same result)
-        if not (np.isscalar(value) or type(value) is np.ndarray):
+        if not (scalar or type(value) is np.ndarray):
             value = blosc2.as_simpleproxy(value)
 
+        # `shape` is NumPy's shape of the selection, which the value must broadcast to
         if basic is not None:
-            start, stop, mask = basic
+            start, stop, mask, shape = basic
             none_mask = ()
         elif builtins.any(isinstance(k, list | np.ndarray) for k in key_):  # fancy indexing
             _slice = ndindex.ndindex(key_).expand(
@@ -5127,38 +5176,52 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
                 else:  # do nothing
                     return self
+            if not scalar:
+                # The shape of a stride-0 stand-in for self with an extra empty dimension (no memory)
+                stand_in = np.broadcast_to(np.empty((), dtype=np.uint8), (*self.shape, 0))
+                value = _setitem_value(value, stand_in[(*_slice.raw, slice(None))].shape[:-1])
             return self._mark_indexes_stale(self._get_set_findex_default(_slice, value=value))
         else:
             start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
+            shape = _selection_shape(start, stop, step, mask, none_mask)
             if step != (1,) * self.ndim:  # handle non-unit or negative steps
                 if np.any(none_mask):
                     raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
+                if not scalar:
+                    value = _setitem_value(value, shape)
                 return self._mark_indexes_stale(
                     self._get_set_nonunit_steps((start, stop, step, mask), value=value)
                 )
 
-        shape = [sp - st for sp, st in zip(stop, start, strict=False)]
+        # set_slice() checks only the size of the buffer: check the shape before writing anything
+        broadcast = not scalar and (vshape := value.shape) != shape and _check_broadcast(vshape, shape)
         if (
             isinstance(value, NDArray)
+            and not broadcast
             and not builtins.any(none_mask)
             and self._set_array_chunkwise(start, stop, mask, value)
         ):
             return self._mark_indexes_stale(self)
         if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
             value = value[()]  # convert to numpy
-        if np.isscalar(value) or value.shape == ():
+        if broadcast and value.size == 1:
+            value = value.reshape(())  # fill as with a scalar (chunk-wise in large regions)
+        if scalar or value.shape == ():
             if self._fill_chunkwise(start, stop, value):
                 return self._mark_indexes_stale(self)
             value = np.full(shape, value, dtype=self.dtype)
-        if value.dtype != self.dtype:  # handles decompressed NDArray too
-            try:
-                value = value.astype(self.dtype)
-            except ComplexWarning:
-                # Expression type inference can promote complex functions (e.g.
-                # conj) applied to real arrays; preserve the destination dtype.
-                value = value.real.astype(self.dtype)
-        # set_slice() takes one C-contiguous buffer: copy views with gaps or negative strides and
-        # Fortran-ordered arrays (a no-op for C-contiguous ones)
+        else:
+            if value.dtype != self.dtype:  # handles decompressed NDArray too
+                try:
+                    value = value.astype(self.dtype, order="C")
+                except ComplexWarning:
+                    # Expression type inference can promote complex functions (e.g.
+                    # conj) applied to real arrays; preserve the destination dtype.
+                    value = value.real.astype(self.dtype, order="C")
+            if broadcast:  # after the conversion, which then converts only the given items
+                value = _broadcast_value(value, shape)
+        # set_slice() takes one C-contiguous buffer: copy views with gaps, negative or zero strides
+        # (broadcast values) and Fortran-ordered arrays (a no-op for C-contiguous ones)
         value = np.ascontiguousarray(value)
 
         return self._mark_indexes_stale(super().set_slice((start, stop), value))

@@ -6474,9 +6474,10 @@ cdef class NDArray:
 
         For keys made of integers (Python or NumPy, not bools), slices with unit
         step and Ellipsis, follow shape changes made by another handle (SWMR) and
-        return ``(start, stop, int_mask)``: the region as lists and which dimensions
-        are indexed with an integer.  Any other key, or one that does not fit the
-        shape, gives None (the general path then raises the appropriate exception).
+        return ``(start, stop, int_mask, shape)``: the region as lists, which
+        dimensions are indexed with an integer, and NumPy's shape of the selection
+        (a tuple without those dimensions).  Any other key, or one that does not fit
+        the shape, gives None (the general path then raises the appropriate exception).
         """
         cdef tuple items = key if type(key) is tuple else (key,)
         cdef Py_ssize_t nkey = len(items)
@@ -6496,7 +6497,7 @@ cdef class NDArray:
                 return None
         cdef int ndim = self.array.ndim, j
         return ([start_[j] for j in range(ndim)], [stop_[j] for j in range(ndim)],
-                tuple([int_dims[j] for j in range(ndim)]))
+                tuple([int_dims[j] for j in range(ndim)]), tuple(out_shape))
 
     def get_basic_numpy(self, key):
         """Return ``self[key]`` as a NumPy array if *key* is a basic index, else None.
