@@ -3580,7 +3580,26 @@ cdef int64_t _store_data(blosc2_schunk *schunk, _write_op op, int64_t nchunk, da
 def get_blocksize():
     return blosc1_get_blocksize()
 
+cdef inline c_bool _runs_python_callbacks(const blosc2_cparams *cparams) noexcept:
+    """Whether `cparams` name a codec or filter registered from Python."""
+    return _python_codec_ids[cparams.compcode] or _uses_python_filter(cparams)
+
+
+cdef _check_blosc_nthreads():
+    """Codecs and filters registered from Python need one-thread contexts, but C-Blosc2 gives every
+    context BLOSC_NTHREADS threads when that is set (also the ones asking for one), and their callbacks
+    would then run on C-Blosc2's worker threads, without the GIL: raise instead.  Checked where they are
+    registered and where contexts for their data are set up, since the variable can change at run time."""
+    nthreads = context_nthreads(1)
+    if nthreads > 1:
+        raise ValueError(f"BLOSC_NTHREADS={nthreads} is not supported with codecs or filters registered "
+                         f"from Python: C-Blosc2 would run them on {nthreads} threads, but they need one "
+                         "(unset BLOSC_NTHREADS or set it to 1)")
+
+
 cdef _check_cparams(blosc2_cparams *cparams):
+    if _runs_python_callbacks(cparams):
+        _check_blosc_nthreads()
     if cparams.nthreads > 1:
         if _python_codec_ids[cparams.compcode]:
             raise ValueError("Cannot use multi-threading with user defined Python codecs")
@@ -3593,6 +3612,8 @@ cdef _check_cparams(blosc2_cparams *cparams):
 cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
     if cparams == NULL:
         return
+    if _runs_python_callbacks(cparams):
+        _check_blosc_nthreads()
     if dparams.nthreads > 1:
         if _python_codec_ids[cparams.compcode]:
             raise ValueError("Cannot use multi-threading with user defined Python codecs")
@@ -3600,6 +3621,31 @@ cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
             raise ValueError("Cannot use multi-threading with user defined Python filters")
         if dparams.postfilter != NULL:
             raise ValueError("`nthreads` must be 1 when a postfilter is set")
+
+
+cdef _one_thread_for_python_callbacks(blosc2_schunk *sc):
+    """Give `sc` one-thread contexts if its codec or a filter is registered from Python, the rule that
+    _check_cparams() and _check_dparams() enforce for new containers.  Super-chunks made from frames or
+    opened from files start with C-Blosc2's global number of threads, which would run the Python
+    callbacks on C-Blosc2's worker threads, without the GIL.  Raises if BLOSC_NTHREADS is above one."""
+    cdef blosc2_context *ctx
+    if not _runs_python_callbacks(sc.storage.cparams):
+        return
+    _check_blosc_nthreads()
+    if sc.storage.cparams.nthreads != 1:
+        sc.storage.cparams.nthreads = 1
+        ctx = blosc2_create_cctx(dereference(sc.storage.cparams))
+        if ctx == NULL:
+            raise RuntimeError("Could not create compression context")
+        blosc2_free_ctx(sc.cctx)
+        sc.cctx = ctx
+    if sc.storage.dparams.nthreads != 1:
+        sc.storage.dparams.nthreads = 1
+        ctx = blosc2_create_dctx(dereference(sc.storage.dparams))
+        if ctx == NULL:
+            raise RuntimeError("Could not create decompression context")
+        blosc2_free_ctx(sc.dctx)
+        sc.dctx = ctx
 
 
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
@@ -4154,6 +4200,7 @@ cdef class SChunk:
                 check_schunk_params(self.schunk, kwargs)
             if schunk_is_ndarray(self.schunk):
                 raise ValueError("Cannot open an NDArray as a SChunk. Please use blosc2.open instead")
+            _one_thread_for_python_callbacks(self.schunk)
         else:
             self.schunk = blosc2_schunk_new(&storage)
 
@@ -5882,6 +5929,8 @@ def open(urlpath, mode, offset, **kwargs):
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
     dparams = kwargs.get("dparams", blosc2.DParams())
+    # As _one_thread_for_python_callbacks(), for the parameters set below: they default to blosc2.nthreads
+    python_callbacks = _runs_python_callbacks(schunk.storage.cparams)
 
     if is_ndarray:
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
@@ -5896,9 +5945,14 @@ def open(urlpath, mode, offset, **kwargs):
         # A super-chunk opened in mode "w" starts empty (an NDArray keeps its chunks, so its layout)
         schunk_obj.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
     else:
-        schunk_obj.cparams = _opened_cparams(schunk_obj.cparams, cparams)
+        opened_cparams = _opened_cparams(schunk_obj.cparams, cparams)
+        if python_callbacks:
+            opened_cparams = dataclasses.replace(opened_cparams, nthreads=1)
+        schunk_obj.cparams = opened_cparams
     if dparams is not None:
-        schunk_obj.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
+        dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
+        schunk_obj.dparams = dataclasses.replace(dparams, nthreads=1) if python_callbacks else dparams
+    _one_thread_for_python_callbacks((<SChunk> schunk_obj).schunk)  # also for dparams=None
 
     return res
 
@@ -6020,6 +6074,7 @@ def schunk_from_cframe(cframe, copy=False):
     PyBuffer_Release(&buf)
     if not copy:
         schunk._avoid_cframe_free(True)
+    _one_thread_for_python_callbacks(schunk_)
     return schunk
 
 
@@ -6075,6 +6130,8 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
 
     if (encoder is None and decoder is not None) or (encoder is not None and decoder is None):
         raise ValueError("both encoder and decoder must be given, or none")
+    if encoder is not None:
+        _check_blosc_nthreads()
 
     cdef blosc2_codec codec
     codec.compcode = id
@@ -6151,6 +6208,8 @@ def register_filter(id, forward, backward, filter_name):
                          " and ", BLOSC2_USER_REGISTERED_FILTERS_STOP)
     if (forward is None and backward is not None) or (forward is not None and backward is None):
         raise ValueError("both encoder and decoder must be given, or none")
+    if forward is not None:
+        _check_blosc_nthreads()
 
     cdef blosc2_filter filter
     filter.id = id
@@ -7948,6 +8007,7 @@ def ndarray_from_cframe(cframe, copy=False):
     PyBuffer_Release(&buf)
     if not copy:
         ndarray._schunk._avoid_cframe_free(True)
+    _one_thread_for_python_callbacks(array.sc)
     return ndarray
 
 
