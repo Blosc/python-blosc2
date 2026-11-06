@@ -5,6 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import os
+import sys
+
 import numpy as np
 import pytest
 
@@ -150,3 +153,34 @@ def test_vlmeta_empty_list_roundtrip():
 
     assert schunk.vlmeta["empty"] == []
     assert schunk.vlmeta["nested"] == {"rows": [[], ["x"]]}
+
+
+def _rss_bytes():
+    with open("/proc/self/statm") as f:
+        return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+
+
+def _rss_growth(op, n):
+    for _ in range(10):
+        op()
+    rss = _rss_bytes()
+    for _ in range(n):
+        op()
+    return _rss_bytes() - rss
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the RSS from /proc")
+def test_vlmeta_read_frees_content():
+    # Each read used to leak the 1 MiB content (200 MiB here)
+    schunk = blosc2.SChunk()
+    schunk.vlmeta["big"] = bytes(2**20)
+    assert _rss_growth(lambda: schunk.vlmeta["big"], 200) < 50 * 2**20
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the RSS from /proc")
+def test_vlmeta_names_are_freed():
+    # Each listing used to leak an array of 4096 pointers (32 MiB here)
+    schunk = blosc2.SChunk()
+    for i in range(4096):
+        schunk.vlmeta[str(i)] = i
+    assert _rss_growth(lambda: list(schunk.vlmeta), 1000) < 8 * 2**20
