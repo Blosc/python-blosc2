@@ -2939,7 +2939,8 @@ class Column:
         pred = dc.codes != code if negate else dc.codes == code
         if len(dc.codes) != n_phys:
             physical = blosc2.zeros(n_phys, dtype=np.bool_)
-            physical[: len(dc.codes)] = pred
+            n = min(len(dc.codes), n_phys)  # the codes can have more slots than the table
+            physical[:n] = pred[:n]
             pred = physical
         pred = pred & valid
         return pred if other is None else kleene(pred, exclude_nulls=negate)
@@ -2949,7 +2950,8 @@ class Column:
         null = dc.codes == np.int32(spec.null_code)
         if len(dc.codes) != n_phys:
             physical = blosc2.zeros(n_phys, dtype=np.bool_)
-            physical[: len(dc.codes)] = null
+            n = min(len(dc.codes), n_phys)
+            physical[:n] = null[:n]
             null = physical
         return null
 
