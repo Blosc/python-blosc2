@@ -5,6 +5,8 @@
 #######################################################################
 """Measure portable JIT coverage, correctness, cold load and warm execution.
 
+Retained internal fixture builder and performance harness (see plans/migrate-benchs-menudet.md).
+
 Run from an environment built with the experimental Menudet native revision::
 
     python bench/jit-coverage.py --items 4096 --repeat 5
@@ -12,11 +14,14 @@ Run from an environment built with the experimental Menudet native revision::
     python bench/jit-coverage.py --json results.json --require-jit
 
 This benchmarks production MenudetKernel artifacts on NumPy buffers, not
-compression, lazy scheduling or legacy @blosc2.jit dispatch. Cases intentionally
-include safe fallbacks. Cold timing includes artifact load/JIT preparation, not
-source export; existing compiler caches can make it a cached load, not a fresh
-compile. Warm timing includes the Python adapter and output allocation. A prepared
-kernel's has_jit flag identifies the route for these direct, nonempty evaluations.
+compression, lazy scheduling or legacy @blosc2.jit dispatch. Synthetic typed
+source generation using internal SourceKernel.export is intentionally retained
+outside reported timings to exercise native artifact coverage directly without
+altering coverage targets. Cases intentionally include safe fallbacks. Cold
+timing includes artifact load/JIT preparation, not source export; existing
+compiler caches can make it a cached load, not a fresh compile. Warm timing
+includes the Python adapter and output allocation. A prepared kernel's has_jit
+flag identifies the route for these direct, nonempty evaluations.
 """
 
 from __future__ import annotations

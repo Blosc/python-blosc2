@@ -14,13 +14,28 @@ import time
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import SourceKernel as DSLKernel
+
+def fn_sin_cos(x: np.float64) -> np.float64:
+    return np.sin(x) + np.cos(x)
+
+
+def fn_exp_sin_log1p(x: np.float64) -> np.float64:
+    return np.exp(np.sin(x)) + np.log1p(x + 1.5)
+
+
+def fn_trig_heavy(x: np.float64) -> np.float64:
+    return np.sin(x) * np.cos(x) + np.tan(x * 0.25)
+
+
+def fn_sqrt_norm(x: np.float64) -> np.float64:
+    return np.sqrt(x * x + 1.0)
+
 
 EXPRESSIONS = {
-    "sin+cos": "sin(x) + cos(x)",
-    "exp(sin)+log1p": "exp(sin(x)) + log1p(x + 1.5)",
-    "trig-heavy": "sin(x) * cos(x) + tan(x * 0.25)",
-    "sqrt-norm": "sqrt(x * x + 1.0)",
+    "sin+cos": (fn_sin_cos, "sin(x) + cos(x)"),
+    "exp(sin)+log1p": (fn_exp_sin_log1p, "exp(sin(x)) + log1p(x + 1.5)"),
+    "trig-heavy": (fn_trig_heavy, "sin(x) * cos(x) + tan(x * 0.25)"),
+    "sqrt-norm": (fn_sqrt_norm, "sqrt(x * x + 1.0)"),
 }
 
 
@@ -32,6 +47,15 @@ def measure(kernel, x, repeats):
         result = kernel.evaluate({"x": x})
         samples.append(time.perf_counter() - start)
     return statistics.median(samples), result
+
+
+def make_menudet_kernel(func, math: str, ulp: str | None, fp: str, jit: bool):
+    doc = (
+        f"# me:compiler=cc\n# me:math={math}\n# me:fp={fp}\n"
+        + (f"# me:ulp={ulp}\n" if ulp else "")
+    )
+    func.__doc__ = doc
+    return blosc2.menudet(jit=jit)(func)
 
 
 def main():
@@ -57,17 +81,11 @@ def main():
     jit_modes = ["off", "on"] if args.jit == "both" else [args.jit]
     rows = []
     for jit in jit_modes:
-        for name, expression in EXPRESSIONS.items():
+        for name, (func, expression) in EXPRESSIONS.items():
             for math, ulp, fp in configurations:
                 try:
-                    kernel = blosc2.MenudetKernel.from_json(
-                        DSLKernel.from_source(
-                            f"# me:compiler=cc\n# me:math={math}\n# me:fp={fp}\n"
-                            + (f"# me:ulp={ulp}\n" if ulp else "")
-                            + f"def k(x):\n    return {expression}\n"
-                        ).export({"x": "float64"}, "float64"),
-                        jit=jit == "on",
-                    )
+                    menudet_func = make_menudet_kernel(func, math, ulp, fp, jit == "on")
+                    kernel = menudet_func.specialize(x)
                 except blosc2.MenudetError as error:
                     rows.append(
                         {

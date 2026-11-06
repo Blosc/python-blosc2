@@ -71,14 +71,15 @@ Changing the comment is not a public-API migration.
 
 Both already execute Menudet artifacts; they are not legacy execution migrations.
 
-- `bench/mathlib-performance.py`: replace private source/export authoring with
-  the chosen public portable authoring interface, preserving math backend,
-  accuracy and FP settings. Do not lose pragma/policy configuration in the move.
-- `bench/jit-coverage.py`: decide whether to retain a documented internal fixture
+- `bench/mathlib-performance.py`: Migrated to public `@blosc2.menudet` authoring
+  and specialization, preserving math backend, accuracy and FP settings via
+  docstring header pragmas. Removed all private `SourceKernel`/`export` imports.
+- `bench/jit-coverage.py`: Retained as an explicitly documented internal fixture
   builder. Its generated typed sources exercise native artifact coverage and
-  export is outside reported timings. Public authoring is desirable only if it
-  does not change the coverage target. Keep native numerical cross-products in
-  miniexpr rather than duplicating them in Python tests.
+  export is outside reported timings. Public authoring is intentionally bypassed
+  here to avoid changing the coverage target, keeping native numerical
+  cross-products in miniexpr rather than duplicating them in Python tests. Included
+  in the Section C / Phase 4 intentional internal allowlist.
 
 ### C. Three intentional old-versus-new comparisons
 
@@ -136,9 +137,11 @@ for environment, exactness checks, measurements and residual limitations.
 - Black–Scholes/histogram: pricing and histogram counts/edges are exact; captured
   scalars keep the dense storage prefilter available; the histogram still uses a
   generic Numba counting UDF.
-- `mandelbrot-dsl`: escape counts match exactly only with explicit `float32`
-  seeds; the early-exit loop is not admitted by the native partition proof, so the
-  port does not reproduce the old DSL's block-parallel Mandelbrot throughput.
+- `mandelbrot-dsl`: early-exit loops are now admitted by the native partition
+  proof (`native_partitionable=True`); on the M4 Pro, `cc` is about 1.3x faster
+  than native Numba. The 2026-11-05 1576-pixel literal-seed divergence was a
+  miniexpr weak-local join bug, fixed on 2026-11-06; a fully literal recurrence
+  is numerically identical but still misses the partitionable path.
 - `mandelbrot-pure-dsl`: the old "1 thread" arm was replaced by
   interpreter/`tcc`/`cc`, because `CParams.nthreads` does not partition Menudet
   execution.

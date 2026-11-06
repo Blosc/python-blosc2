@@ -12,6 +12,30 @@ Files migrated and executed:
 - `examples/ndarray/mandelbrot-dsl.ipynb`
 - `examples/ndarray/mandelbrot-pure-dsl.ipynb`
 
+## 2026-11-06 post-update note
+
+The M4 Pro notebooks were rerun after the miniexpr/C-Blosc2 updates (Python
+3.14.4, Blosc2 4.15.0.dev0, C-Blosc2 3.5.1.dev, miniexpr 95dbc24). The early-exit
+Mandelbrot loop is now admitted to the native partition proof
+(`native_partitionable=True`, `menudet-prefilter`, 12 threads), so the raw
+Mandelbrot numbers and conclusions in the tables below are superseded. Current
+best times on the same M4 Pro:
+
+| Workload | Arm | Best (s) |
+|---|---|---:|
+| Black-Scholes | Numba / Menudet `cc` / `tcc` | 0.151 / 0.220 / 0.863 |
+| Histogram | Numba / Menudet `cc` / `tcc` | 0.085 / 0.119 / 0.202 |
+| Mandelbrot DSL | Numba / Menudet `cc` / `tcc` | 0.020 / 0.0154 / 0.0593 |
+| Mandelbrot pure | NumPy / interpreter / `tcc` / `cc` | 1.54 / 1.59 / 0.056 / 0.0159 |
+
+The previous 1576-pixel literal-seed divergence was traced to a miniexpr
+weak-local join bug: a local initialized from a weak literal lost strength when
+reassigned from a strong float32 operand, widening the recurrence to float64.
+The fix preserves weak scalar strength across local joins. A focused regression
+test lives in miniexpr (`tests/test_dsl_menudet_weak_locals.c`). The literal-seed
+variant is now numerically identical; a fully literal recurrence still misses the
+partitionable path, so the typed seeds/constants remain in the examples.
+
 ## Environment
 
 - Apple Mac mini, Apple M4 Pro, 12 cores, 24 GiB RAM, macOS/Darwin 25.6.0 arm64.
@@ -50,8 +74,9 @@ Files migrated and executed:
 ### `mandelbrot-dsl.ipynb`
 
 - Ported the kernel to `@blosc2.menudet` with a captured iteration bound.
-- Seeds `zr`/`zi` with explicit `np.float32(0.0)`. Using a Python `0.0` literal
-  promoted intermediates and produced 1576 differing pixels at 1200x800x200; the
+- Seeds `zr`/`zi` with explicit `np.float32(0.0)`. At the time, a Python `0.0`
+  literal promoted intermediates and produced 1576 differing pixels at
+  1200x800x200; this was later fixed as the miniexpr weak-local join bug. The
   explicit float32 seeds match Numba exactly.
 - Retained the ordinary Numba `lazyudf` arm and the native Numba baseline.
 - Added exact-equality checks, escape-range reporting, a results discussion and
