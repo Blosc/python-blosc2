@@ -437,6 +437,205 @@ def test_matmul_fast_path_failure_falls_back(monkeypatch):
         _toggle_miniexpr(old_flag)
 
 
+# The matmul prefilter runs on C-Blosc2's threads when nthreads > 1 (none on WASM)
+PREFILTER_NTHREADS = [1, pytest.param(4, marks=pytest.mark.skipif(blosc2.IS_WASM, reason="no threads"))]
+
+
+def _int_valued_operands(dtype, nthreads, shape=(200, 200)):
+    # One chunk with 16 blocks per operand; integer values keep every product sum exact
+    rng = np.random.default_rng(0)
+    a = rng.integers(-2, 3, shape).astype(dtype)
+    b = rng.integers(-2, 3, shape).astype(dtype)
+    cparams = blosc2.CParams(nthreads=nthreads)
+    x1 = blosc2.asarray(a, chunks=shape, blocks=(50, 50), cparams=cparams)
+    x2 = blosc2.asarray(b, chunks=shape, blocks=(50, 50), cparams=cparams)
+    return a, b, x1, x2, cparams
+
+
+# float16 and longdouble are kind "f" too, but the prefilter has float32/float64 kernels only
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.float16,
+        pytest.param(
+            np.longdouble,
+            marks=pytest.mark.skipif(np.dtype(np.longdouble).itemsize <= 8, reason="longdouble is float64"),
+        ),
+    ],
+)
+def test_matmul_fast_path_skips_float_dtypes_without_kernel(monkeypatch, dtype):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b, x1, x2, _ = _int_valued_operands(dtype, nthreads=1)
+        c = blosc2.matmul(x1, x2, chunks=(200, 200), blocks=(50, 50))
+
+        assert calls == []
+        assert c.dtype == dtype
+        np.testing.assert_array_equal(c[:], np.matmul(a, b))
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize(
+    ("dtype1", "dtype2", "out_dtype"),
+    [
+        (np.complex128, np.complex128, np.complex128),
+        (np.bool_, np.bool_, np.bool_),
+        (np.int16, np.int16, np.int16),
+        (np.float16, np.float16, np.float16),
+        ([("x", "<f8")], [("x", "<f8")], [("x", "<f8")]),
+        (np.float32, np.float32, np.float64),
+        (np.float32, np.float64, np.float64),
+        # non-native byte order on any host
+        (np.dtype(np.float64).newbyteorder(),) * 3,
+    ],
+)
+def test_set_pref_matmul_rejects_dtypes_without_kernel(dtype1, dtype2, out_dtype):
+    # The prefilter runs without the GIL and cannot raise, so the dtypes are checked when it is set
+    x1 = blosc2.zeros((100, 100), dtype=dtype1, chunks=(100, 100), blocks=(50, 50))
+    x2 = blosc2.zeros((100, 100), dtype=dtype2, chunks=(100, 100), blocks=(50, 50))
+    out = blosc2.zeros((100, 100), dtype=out_dtype, chunks=(100, 100), blocks=(50, 50))
+    with pytest.raises(TypeError, match="fast matmul path"):
+        out._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+    assert not out.schunk._has_prefilter
+
+
+@pytest.mark.parametrize("nthreads", PREFILTER_NTHREADS)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32, np.int64])
+def test_matmul_prefilter_supported_dtypes(dtype, nthreads):
+    # blosc2.matmul() only sends floats to the prefilter; the int kernels are driven directly
+    a, b, x1, x2, cparams = _int_valued_operands(dtype, nthreads)
+    out = blosc2.zeros((200, 200), dtype=dtype, chunks=(200, 200), blocks=(50, 50), cparams=cparams)
+    out._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+    try:
+        data = np.empty(out.schunk.chunksize, dtype=np.uint8)
+        for nchunk in range(out.schunk.nchunks):
+            out.schunk.update_data(nchunk, data, copy=False)
+    finally:
+        out.schunk.remove_prefilter("miniexpr")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+        np.testing.assert_array_equal(out[:], np.matmul(a, b))
+
+
+def _small_int_operands(mkn, dtype):
+    # Small integers, so that float32 and float64 products are exact.  Not constant: with
+    # ones()/full() all chunks hold the same values, which hides reading the wrong chunk.
+    m, k, n = mkn
+    rng = np.random.default_rng(0)
+    a = rng.integers(-3, 4, size=(m, k)).astype(dtype)
+    b = rng.integers(-3, 4, size=(k, n)).astype(dtype)
+    return a, b
+
+
+@pytest.mark.parametrize(
+    ("mkn", "achunks", "bchunks"),
+    [
+        ((200, 100, 100), (100, 100), (100, 100)),  # 2 chunks along the output rows
+        ((100, 100, 200), (100, 100), (100, 100)),  # 2 chunks along the output columns
+        ((100, 200, 100), (100, 100), (100, 100)),  # 2 chunks along K
+        ((300, 250, 200), (100, 100), (100, 100)),  # all three, partial last chunks
+        ((200, 300, 150), (100, 150), (150, 50)),  # non-square chunks
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("nthreads", PREFILTER_NTHREADS)
+def test_matmul_fast_path_multichunk(monkeypatch, mkn, achunks, bchunks, dtype, nthreads):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b = _small_int_operands(mkn, dtype)
+        cparams = blosc2.CParams(nthreads=nthreads)
+        x1 = blosc2.asarray(a, chunks=achunks, blocks=(50, 50), cparams=cparams)
+        x2 = blosc2.asarray(b, chunks=bchunks, blocks=(50, 50), cparams=cparams)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+            c = blosc2.matmul(x1, x2, chunks=(achunks[0], bchunks[1]), blocks=(50, 50), cparams=cparams)
+            expected = a @ b
+
+        assert calls == [(expected.shape, a.shape, b.shape, np.dtype(dtype))]
+        np.testing.assert_array_equal(c[:], expected)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def _nan_padded(data, chunks, cparams):
+    # Shrinking leaves the cut values in the chunks' padding
+    big = np.full((data.shape[0] + 60, data.shape[1] + 60), np.nan, dtype=data.dtype)
+    big[: data.shape[0], : data.shape[1]] = data
+    arr = blosc2.asarray(big, chunks=chunks, blocks=(50, 50), cparams=cparams)
+    arr.resize(data.shape)
+    return arr
+
+
+@pytest.mark.parametrize(
+    ("mkn", "chunks"),
+    [
+        ((130, 170, 90), (100, 100)),  # 2 chunks along K, the last one ends inside a block
+        ((170, 170, 170), (200, 200)),  # 1 chunk along K, ends inside a block
+        ((100, 100, 100), (200, 200)),  # the last 2 blocks along K are only padding
+        ((120, 120, 120), (200, 200)),  # both
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("nthreads", PREFILTER_NTHREADS)
+def test_matmul_fast_path_ignores_padding(monkeypatch, mkn, chunks, dtype, nthreads):
+    # The prefilter multiplies whole blocks, so along K it also reads the chunks' padding,
+    # which need not hold zeros (full() fills it as well)
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b = _small_int_operands(mkn, dtype)
+        cparams = blosc2.CParams(nthreads=nthreads)
+        x1 = _nan_padded(a, chunks, cparams)
+        x2 = _nan_padded(b, chunks, cparams)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+            c = blosc2.matmul(x1, x2, chunks=chunks, blocks=(50, 50), cparams=cparams)
+            expected = a @ b
+
+        assert calls == [(expected.shape, a.shape, b.shape, np.dtype(dtype))]
+        np.testing.assert_array_equal(c[:], expected)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize(
+    ("achunks", "bchunks", "outchunks"),
+    [
+        ((100, 100), (100, 100), (50, 100)),  # output chunk rows differ from A's
+        ((100, 100), (100, 100), (100, 50)),  # output chunk columns differ from B's
+        ((100, 100), (50, 100), (100, 100)),  # A and B chunk K differently
+    ],
+)
+def test_matmul_fast_path_needs_shared_chunk_grid(monkeypatch, achunks, bchunks, outchunks):
+    # The prefilter maps output chunks onto A's and B's chunks one to one; other layouts
+    # gave wrong results, errors or crashes there, so they must take the chunked path
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b = _small_int_operands((200, 200, 200), np.float64)
+        x1 = blosc2.asarray(a, chunks=achunks, blocks=(50, 50))
+        x2 = blosc2.asarray(b, chunks=bchunks, blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+            c = blosc2.matmul(x1, x2, chunks=outchunks, blocks=(50, 50))
+            expected = a @ b
+
+        assert calls == []
+        np.testing.assert_array_equal(c[:], expected)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
     [
