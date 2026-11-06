@@ -26,6 +26,7 @@ import cython
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
+    PyBUF_WRITABLE,
     PyBuffer_Release,
     PyBytes_AsString,
     PyBytes_FromStringAndSize,
@@ -3389,7 +3390,7 @@ def decompress(src, dst=None, as_bytearray=False):
     cdef int32_t srcsize = <int32_t>min(len(typed_view_src), INT_MAX)
     cdef Py_buffer buf
     if dst is not None:
-        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
         try:
             size = blosc2_decompress(<void*>&typed_view_src[0], srcsize, buf.buf,
                                      _checked_dst_size(buf.len, nbytes))
@@ -3742,7 +3743,7 @@ def decompress2(src, dst=None, **kwargs):
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # The decode context needs the full source buffer length.
         try:
-            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
+            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
             try:
                 size = _decompress_ctx(dctx, view, srcsize, buf.buf, _checked_dst_size(buf.len, nbytes))
             finally:
@@ -4439,7 +4440,7 @@ cdef class SChunk:
         cdef int32_t blocksize
         cdef Py_buffer buf
         if dst is not None:
-            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
+            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
             if buf.len == 0:
                 raise ValueError("The dst length must be greater than 0")
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)

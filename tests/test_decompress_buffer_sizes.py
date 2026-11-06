@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""The decompression functions stay within the src and dst buffers they are given, and free what they
-took when they fail."""
+"""The decompression functions stay within the src and dst buffers they are given, write only into a
+writable dst, and free what they took when they fail."""
 
 import array
 import ctypes
@@ -115,6 +115,33 @@ def test_truncated_memcpyed_src(decompress):
     src = memoryview(bytearray(chunk))[: len(chunk) // 2]
     with pytest.raises(_corrupt_src_error(decompress)):
         decompress(src)
+
+
+def _decompress_chunk(src, dst):
+    # src is CHUNK, which compresses DATA: decompress the same data from a super-chunk
+    return blosc2.SChunk(chunksize=NBYTES, data=DATA).decompress_chunk(0, dst)
+
+
+def _readonly_numpy(nbytes):
+    arr = np.zeros(nbytes, dtype=np.uint8)
+    arr.flags.writeable = False
+    return arr
+
+
+@pytest.mark.parametrize("decompress", [*DECOMPRESSORS, _decompress_chunk])
+@pytest.mark.parametrize(
+    ("make_dst", "exc"),
+    [
+        pytest.param(bytes, BufferError, id="bytes"),
+        pytest.param(lambda n: memoryview(bytearray(n)).toreadonly(), BufferError, id="readonly-memoryview"),
+        pytest.param(_readonly_numpy, ValueError, id="readonly-numpy"),
+    ],
+)
+def test_readonly_dst_is_refused(decompress, make_dst, exc):
+    dst = make_dst(NBYTES)
+    with pytest.raises(exc, match=r"not writable|read-only"):
+        decompress(CHUNK, dst)
+    assert bytes(dst) == bytes(NBYTES)
 
 
 class _Mallinfo2(ctypes.Structure):
