@@ -808,6 +808,124 @@ def test_oindex():
     np.testing.assert_allclose(arr[:], nparr)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        ([-1], [0, 1]),
+        ([0, 1], [-3]),
+        ([-10, 9, 0], [-1, 0]),  # -shape and the last index
+        ([3, 3, -7], [5, -5, 5]),  # repeated, also through negative aliases
+        ([], [0, 1]),
+        ([], []),
+        (np.array([-1, 2]), np.array([1, -2], dtype=np.int8)),
+        (np.array([9], dtype=np.uint64), range(-3, 3)),
+    ],
+)
+def test_oindex_normalizes_like_numpy(key):
+    # oindex goes through get_oselection_numpy() and set_oselection_numpy()
+    x = np.arange(100, dtype=np.int32).reshape(10, 10)
+    a = blosc2.asarray(x, chunks=(4, 4), blocks=(2, 2))
+    key_copy = [np.array(k) for k in key]
+    expected = x[np.ix_(*key)]
+    np.testing.assert_array_equal(a.oindex[key], expected)
+
+    values = np.arange(1000, 1000 + expected.size, dtype=np.int32).reshape(expected.shape)
+    a.oindex[key] = values
+    x[np.ix_(*key)] = values
+    np.testing.assert_array_equal(a[:], x)
+    for k, k_copy in zip(key, key_copy, strict=True):
+        np.testing.assert_array_equal(k, k_copy)  # the caller's indices are not changed
+
+
+@pytest.mark.parametrize(
+    ("key", "match"),
+    [
+        (([10], [0, 1]), "index 10 is out of bounds for axis 0 with size 10"),
+        (([0, 1], [-11]), "index -11 is out of bounds for axis 1 with size 10"),
+        (([0, 11, -12, 10], [0]), "index 11 is out of bounds for axis 0 with size 10"),
+        (([0], [2**63]), "out of bounds"),
+        ((np.array([0, 1]), np.array([1, 2**63], dtype=np.uint64)), "out of bounds"),
+    ],
+)
+def test_oindex_rejects_bad_indices(key, match):
+    x = np.arange(100, dtype=np.int32).reshape(10, 10)
+    a = blosc2.asarray(x, chunks=(4, 4), blocks=(2, 2))
+    with pytest.raises(IndexError, match=match):
+        a.oindex[key]
+    with pytest.raises(IndexError, match=match):
+        a.oindex[key] = np.zeros((len(key[0]), len(key[1])), dtype=np.int32)
+    np.testing.assert_array_equal(a[:], x)
+
+
+def test_oindex_random_negative_indices():
+    rng = np.random.default_rng(8)
+    for shape, chunks, blocks in [
+        ((13,), (5,), (2,)),
+        ((9, 11), (4, 5), (2, 3)),
+        ((6, 7, 8), (3, 4, 5), (2, 2, 2)),
+    ]:
+        x = rng.integers(0, 1000, size=shape, dtype=np.int64)
+        a = blosc2.asarray(x, chunks=chunks, blocks=blocks)
+        for _ in range(10):
+            # Indices in [-n, n): negatives, repeats and the edges of every axis
+            key = [rng.integers(-n, n, size=rng.integers(0, 2 * n)).tolist() for n in shape]
+            expected = x[np.ix_(*key)]
+            np.testing.assert_array_equal(a.oindex[key], expected)
+            values = rng.integers(0, 1000, size=expected.shape, dtype=np.int64)
+            a.oindex[key] = values
+            x[np.ix_(*key)] = values
+            np.testing.assert_array_equal(a[:], x)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.arange(6, dtype=np.int32).reshape(2, 3),  # the selection's shape and dtype
+        np.full((2, 3), 1.7),
+        np.arange(6, dtype=">i4").reshape(2, 3),
+        np.arange(12, dtype=np.int32).reshape(2, 6)[:, ::2],  # not contiguous
+        np.asfortranarray(np.arange(6, dtype=np.int32).reshape(2, 3)),
+        np.arange(3),  # broadcast rows
+        np.arange(2).reshape(2, 1),  # broadcast columns
+        np.ones((1, 2, 3)),  # a leading length-1 dimension
+        7,
+        [1, 2, 3],
+        [[1, 2, 3], [4, 5, 6]],
+        [[[1, 2, 3], [4, 5, 6]]],
+        blosc2.asarray(np.arange(6, dtype=np.int16).reshape(2, 3)),
+    ],
+)
+def test_oindex_set_value_like_numpy(value):
+    x = np.arange(100, dtype=np.int32).reshape(10, 10)
+    a = blosc2.asarray(x, chunks=(4, 4), blocks=(2, 2))
+    key = ([1, 8], [0, 5, 2])
+    a.oindex[key] = value
+    x[np.ix_(*key)] = value[()] if isinstance(value, blosc2.NDArray) else value
+    np.testing.assert_array_equal(a[:], x)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.arange(6, dtype=np.int32).reshape(3, 2),  # the selection's size and dtype, not its shape
+        np.arange(2, dtype=np.int32),
+        np.arange(6.0).reshape(3, 2),
+        np.arange(7),
+        np.ones((2, 2, 3)),
+        [[1, 2]],
+    ],
+)
+def test_oindex_set_value_wrong_shape(value):
+    x = np.arange(100, dtype=np.int32).reshape(10, 10)
+    a = blosc2.asarray(x, chunks=(4, 4), blocks=(2, 2))
+    key = ([1, 8], [0, 5, 2])
+    with pytest.raises(ValueError):
+        x.copy()[np.ix_(*key)] = value  # NumPy rejects it too
+    with pytest.raises(ValueError, match="could not broadcast"):
+        a.oindex[key] = value
+    np.testing.assert_array_equal(a[:], x)
+
+
 @pytest.mark.parametrize("c", [None, 3])
 def test_fancy_index(c):
     # Test 1d
