@@ -2521,7 +2521,9 @@ def register_codec(
 
     Notes
     -----
-    * Cannot use multi-threading when using a user-defined codec.
+    * Cannot use multi-threading when using a user-defined codec. A codec with Python
+      functions cannot be registered while the ``BLOSC_NTHREADS`` environment variable is
+      above 1, since C-Blosc2 would use that many threads for it.
 
     * User-defined codecs can only be used inside an `SChunk` instance.
 
@@ -2599,7 +2601,9 @@ def register_filter(
 
     Notes
     -----
-    * Multi-threading cannot be used with a user-defined filter.
+    * Multi-threading cannot be used with a user-defined filter. A filter with Python
+      functions cannot be registered while the ``BLOSC_NTHREADS`` environment variable is
+      above 1, since C-Blosc2 would use that many threads for it.
 
     * User-defined filters can only be used inside an `SChunk` instance.
 
