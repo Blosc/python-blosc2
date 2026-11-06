@@ -4984,6 +4984,78 @@ class NDArray(blosc2_ext.NDArray, Operand):
         self._last_read.clear()
         self._last_read[make_key_hashable(key)] = nparr
 
+    def read_into(self, out: np.ndarray, key: Any = None, casting: str = "same_kind") -> np.ndarray:
+        """Decompress ``self[key]`` into the existing NumPy array ``out``.
+
+        This is ``out[...] = self[key]`` without the temporary array: the data is decompressed
+        straight to its place in ``out``, which can be a view into a larger array, e.g. the
+        interior of a padded array, one item of a batch or one channel of a multi-channel array.
+        Nothing of the larger array outside ``out`` is touched. Reusing ``out`` across calls also
+        saves the page faults of a fresh result array every time.
+
+        Parameters
+        ----------
+        out: np.ndarray
+            Writeable NumPy array with the shape of ``self[key]``. Contiguous or not: any layout
+            works. Data goes straight into ``out`` (no temporary) when ``out`` has ``self.dtype`` and
+            its last axis is contiguous, with any strides in the other axes that are whole
+            multiples of the next axis' stride. That covers C-contiguous arrays and every box of one,
+            including views with steps in all but the last axis. Other layouts (e.g. Fortran order,
+            transposed views, steps along the last axis) and other dtypes go through one temporary.
+            For a CPU ``torch.Tensor`` ``t``, pass ``t.numpy()``.
+        key: int, slice, Ellipsis or tuple of them, or any key that :meth:`__getitem__` accepts
+            The selection to read, as in ``self[key]``; None (default) reads the whole array.
+            Integers, slices with step 1 and an Ellipsis decompress straight into ``out``; other
+            keys (steps, integer or boolean arrays, ``None``) go through ``self[key]``.
+        casting: str
+            How ``self.dtype`` may be converted to ``out.dtype``, as in :func:`numpy.copyto`.
+            Default ``"same_kind"``.
+
+        Returns
+        -------
+        out: np.ndarray
+            The ``out`` array.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import blosc2
+        >>> a = blosc2.arange(12, dtype=np.int32, shape=(3, 4))
+        >>> padded = np.full((5, 6), -1, dtype=np.int32)
+        >>> _ = a.read_into(padded[1:4, 1:5])  # into the interior of a padded array
+        >>> padded
+        array([[-1, -1, -1, -1, -1, -1],
+               [-1,  0,  1,  2,  3, -1],
+               [-1,  4,  5,  6,  7, -1],
+               [-1,  8,  9, 10, 11, -1],
+               [-1, -1, -1, -1, -1, -1]], dtype=int32)
+        >>> batch = np.empty((2, 2, 4), dtype=np.int32)
+        >>> _ = a.read_into(batch[1], (slice(1, 3), slice(None)))  # into one item of a batch
+        >>> batch[1]
+        array([[ 4,  5,  6,  7],
+               [ 8,  9, 10, 11]], dtype=int32)
+        """
+        if not isinstance(out, np.ndarray):
+            raise TypeError(f"out must be a NumPy array, not {type(out).__name__}")
+        if not out.flags.writeable:
+            raise ValueError("out is read-only")
+        if key is None:
+            key = ()
+        # Integers, slices with step 1 and an Ellipsis: straight into out, or into a temporary for
+        # another dtype or layout (None: another key, see get_basic_into)
+        value = self.get_basic_into(out, key)
+        if value is out:
+            return out
+        if value is None:  # steps, arrays, newaxis, masks, fields...: through __getitem__
+            value = self[key]
+            if isinstance(value, (blosc2.LazyExpr, NDField)):
+                value = value[:]
+            value = np.asarray(value)
+            if out.shape != value.shape:
+                raise ValueError(f"out has shape {out.shape}, but the selection has shape {value.shape}")
+        np.copyto(out, value, casting=casting)
+        return out
+
     def __setitem__(  # noqa: C901
         self,
         key: int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | None,
@@ -5085,6 +5157,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # Expression type inference can promote complex functions (e.g.
                 # conj) applied to real arrays; preserve the destination dtype.
                 value = value.real.astype(self.dtype)
+        # set_slice() takes one C-contiguous buffer: copy views with gaps or negative strides and
+        # Fortran-ordered arrays (a no-op for C-contiguous ones)
+        value = np.ascontiguousarray(value)
 
         return self._mark_indexes_stale(super().set_slice((start, stop), value))
 

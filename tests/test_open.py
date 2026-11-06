@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import dataclasses
 import os
 import random
 
@@ -12,6 +13,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import expected_nthreads
 
 
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
@@ -249,3 +251,156 @@ def test_open_schunk_context_manager(tmp_path):
     with blosc2.open(urlpath, mode="r") as schunk:
         assert isinstance(schunk, blosc2.SChunk)
         assert schunk[:] == data.tobytes()
+
+
+# open(..., cparams=...) of an existing container updates the stored compression parameters
+
+
+def _float_array(tmp_path, **kwargs):
+    urlpath = tmp_path / "a.b2nd"
+    blosc2.asarray(
+        np.arange(1000, dtype=np.float32), urlpath=urlpath, chunks=(500,), blocks=(100,), **kwargs
+    )
+    return urlpath
+
+
+@pytest.mark.parametrize("contiguous", [True, False])
+@pytest.mark.parametrize(
+    "cparams",
+    [
+        {"nthreads": 2},
+        {"clevel": 1},
+        {"nthreads": 2, "typesize": 4},
+        {"codec": blosc2.Codec.LZ4, "filters": [blosc2.Filter.BITSHUFFLE]},
+        blosc2.CParams(nthreads=2),
+    ],
+)
+def test_open_cparams_keep_layout(tmp_path, contiguous, cparams):
+    # Typesize and blocksize stay those of the array, so that writes produce chunks that fit its blocks
+    # (they used to fail, or to corrupt the file)
+    urlpath = tmp_path / "a.b2nd"
+    x = np.arange(48 * 40 * 24, dtype=np.float32).reshape(48, 40, 24)
+    blosc2.asarray(
+        x,
+        urlpath=urlpath,
+        contiguous=contiguous,
+        chunks=(24, 20, 24),
+        blocks=(8, 10, 12),
+        cparams={"codec": blosc2.Codec.LZ4HC, "clevel": 5, "filters": [blosc2.Filter.SHUFFLE]},
+    )
+    stored = blosc2.open(urlpath).cparams
+    a = blosc2.open(urlpath, mode="a", cparams=cparams)
+    fields = ("nthreads", "codec", "clevel", "filters")
+    # A CParams instance gives every field but typesize and blocksize
+    given = cparams if isinstance(cparams, dict) else {key: getattr(cparams, key) for key in fields}
+    expected = {key: getattr(stored, key) for key in ("typesize", "blocksize", *fields)} | given
+    expected["nthreads"] = expected_nthreads(expected["nthreads"])
+    for key, value in expected.items():
+        got = getattr(a.cparams, key)
+        if key == "filters":  # the opened array's filters are padded to 6
+            got = got[: len(value)]
+        assert got == value, key
+
+    a[:] = x[::-1].copy()
+    a[1:5, 3:7, 2:9] = -1
+    a.resize((60, 40, 24))
+    a[48:] = 7
+    a.schunk.update_data(0, np.full(24 * 20 * 24, 5, np.float32), copy=True)
+    del a
+    y = np.concatenate([x[::-1], np.full((12, 40, 24), 7, np.float32)])
+    y[1:5, 3:7, 2:9] = -1
+    y[:24, :20, :24] = 5
+    np.testing.assert_array_equal(blosc2.open(urlpath)[:], y)
+
+
+def test_open_cparams_mode_w_ndarray(tmp_path):
+    # Mode "w" does not empty an existing NDArray, so its layout must stay too
+    urlpath = _float_array(tmp_path)
+    a = blosc2.open(urlpath, mode="w", cparams={"nthreads": 2})
+    assert (a.cparams.typesize, a.cparams.blocksize) == (4, 100 * 4)
+    a[:] = np.arange(1000, dtype=np.float32)[::-1].copy()
+    del a
+    np.testing.assert_array_equal(blosc2.open(urlpath)[:], np.arange(1000, dtype=np.float32)[::-1])
+
+
+@pytest.mark.parametrize(
+    "cparams",
+    [{"typesize": 8}, {"blocksize": 1024}, blosc2.CParams(typesize=2), blosc2.CParams(blocksize=4096)],
+)
+def test_open_cparams_change_layout(tmp_path, cparams):
+    urlpath = _float_array(tmp_path)
+    with pytest.raises(ValueError, match="Cannot change the"):
+        blosc2.open(urlpath, mode="a", cparams=cparams)
+
+
+def test_open_cparams_blocksize_zero(tmp_path):
+    # 0 (automatic) leaves the blocksize as it is
+    urlpath = _float_array(tmp_path)
+    assert blosc2.open(urlpath, mode="a", cparams={"blocksize": 0}).cparams.blocksize == 100 * 4
+
+
+def test_open_cparams_read_mode(tmp_path):
+    urlpath = tmp_path / "a.b2nd"
+    blosc2.asarray(
+        np.arange(1000, dtype=np.int16), urlpath=urlpath, cparams={"codec": blosc2.Codec.LZ4, "clevel": 3}
+    )
+    stored = blosc2.open(urlpath).cparams
+    a = blosc2.open(urlpath, mode="r", cparams={"nthreads": 1})
+    assert a.cparams == dataclasses.replace(stored, nthreads=1)
+
+
+def test_open_cparams_filters_meta(tmp_path):
+    # Without filters_meta, new filters get zero metas, as in CParams(filters=...): the stored metas
+    # belong to the stored filters
+    filters = [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+    urlpath = _float_array(tmp_path, cparams={"filters": filters, "filters_meta": [23, 0]})
+    assert blosc2.open(urlpath, mode="a", cparams={"nthreads": 1}).cparams.filters_meta[:2] == [23, 0]
+    a = blosc2.open(urlpath, mode="a", cparams={"filters": [blosc2.Filter.BITSHUFFLE]})
+    assert a.cparams.filters[0] == blosc2.Filter.BITSHUFFLE
+    assert a.cparams.filters_meta[0] == 0
+    y = np.arange(1000, dtype=np.float32)[::-1].copy()
+    a[:] = y
+    np.testing.assert_array_equal(blosc2.open(urlpath)[:], y)
+
+
+@pytest.mark.parametrize(
+    "cparams",
+    [
+        {"filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]},
+        blosc2.CParams(filters=[blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]),
+    ],
+)
+def test_open_cparams_bytedelta_meta(tmp_path, cparams):
+    # BYTEDELTA's meta is the item size: that of the array, not CParams' default typesize (8)
+    urlpath = _float_array(tmp_path)
+    assert blosc2.open(urlpath, mode="a", cparams=cparams).cparams.filters_meta[:2] == [0, 4]
+
+
+@pytest.mark.parametrize("contiguous", [True, False])
+@pytest.mark.parametrize("cparams", [{"nthreads": 2}, {"clevel": 1}, blosc2.CParams(nthreads=2)])
+def test_open_cparams_keep_typesize(tmp_path, contiguous, cparams):
+    # Items of an opened super-chunk keep their size: typesize used to become the default (8)
+    urlpath = tmp_path / "schunk.b2frame"
+    schunk = blosc2.SChunk(
+        chunksize=4000,
+        urlpath=urlpath,
+        contiguous=contiguous,
+        cparams={"typesize": 4, "codec": blosc2.Codec.LZ4HC, "clevel": 3},
+    )
+    schunk.append_data(np.arange(1000, dtype=np.int32))
+    del schunk
+    schunk = blosc2.open(urlpath, mode="a", cparams=cparams)
+    assert schunk.typesize == schunk.cparams.typesize == 4
+    if isinstance(cparams, dict):
+        codec, clevel = blosc2.Codec.LZ4HC, cparams.get("clevel", 3)
+    else:
+        codec, clevel = cparams.codec, cparams.clevel
+    assert (schunk.cparams.codec, schunk.cparams.clevel) == (codec, clevel)
+    schunk.append_data(np.arange(1000, 2000, dtype=np.int32))
+    schunk.update_data(0, np.full(1000, 5, dtype=np.int32), copy=True)
+    schunk[10:20] = np.zeros(10, dtype=np.int32)
+    expected = np.arange(2000, dtype=np.int32)
+    expected[:1000] = 5
+    expected[10:20] = 0
+    np.testing.assert_array_equal(np.frombuffer(schunk[:], dtype=np.int32), expected)
+    np.testing.assert_array_equal(np.frombuffer(blosc2.open(urlpath)[:], dtype=np.int32), expected)

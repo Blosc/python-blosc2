@@ -25,6 +25,7 @@ It is a direct alias for ``array.vlmeta`` and uses the same persistent storage.
         __len__
         __getitem__
         __setitem__
+        read_into
         take
 
     Utility Methods
@@ -34,6 +35,7 @@ It is a direct alias for ``array.vlmeta`` and uses the same persistent storage.
     .. automethod:: __len__
     .. automethod:: __getitem__
     .. automethod:: __setitem__
+    .. automethod:: read_into
     .. automethod:: take
 
 Constructors

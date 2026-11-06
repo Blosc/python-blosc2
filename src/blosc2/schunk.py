@@ -1027,7 +1027,8 @@ class SChunk(blosc2_ext.SChunk):
         data: bytes object
             The data that will be compressed and inserted as a chunk.
         copy: bool
-            Whether to make an internal copy of the chunk to insert it or not.
+            Kept for backward compatibility; it has no effect. The chunk compressed
+            from :paramref:`data` stays internal, so it never needs a copy.
 
         Returns
         -------
@@ -1161,7 +1162,8 @@ class SChunk(blosc2_ext.SChunk):
         data: bytes object
             The data to be compressed and will replace the old chunk.
         copy: bool
-             Whether to make an internal copy of the chunk before updating it.
+            Kept for backward compatibility; it has no effect. The chunk compressed
+            from :paramref:`data` stays internal, so it never needs a copy.
 
         Returns
         -------

@@ -1349,8 +1349,18 @@ def set_prefetch(nthreads: int, max_ahead: int = 0, piece_size: int = 0) -> int:
       CPU.
     * On local disks, fewer threads (1-2) or larger pieces (4-8 MiB) cost less CPU, for some of the
       speed (how much depends on the disk).
-    * With many reader processes at once, 1-2 threads each are enough; when the CPU is the limit,
-      none may be better.
+    * Keep 4 also with many reader processes or threads: in tests on NFS with 24 to 96 reader
+      processes on 64 hardware threads, 4 threads were the fastest setting or within 10% of it. Only
+      when the readers keep all cores busy can fewer threads, or none, be faster.
+
+    How many threads run: each slice being read gets up to :paramref:`nthreads` read-ahead threads, and
+    slices that threads of the process read at the same time get theirs each. So a process runs up to
+    :paramref:`nthreads` times the number of slices it reads at once, at most 256 in all: a program that
+    reads with one thread has :paramref:`nthreads` of them, one that reads with 8 threads at once (each
+    with its own handle) up to 8 x :paramref:`nthreads`, and 8 processes with one reader each have
+    :paramref:`nthreads` each. Decompression threads (``nthreads`` in ``dparams``, ``blosc2.nthreads``)
+    are separate and do not count: they decompress a chunk while the read-ahead threads fetch the next
+    ones, so readers can keep one decompression thread each and still read ahead.
 
     Parameters
     ----------
@@ -1370,9 +1380,10 @@ def set_prefetch(nthreads: int, max_ahead: int = 0, piece_size: int = 0) -> int:
     Notes
     -----
     The setting and the threads are per process; a process created with ``fork()`` starts its own threads
-    on first use. The ``BLOSC_PREFETCH`` environment variable, set to a number of threads, turns read-ahead
-    on when blosc2 is imported. It works with the default and the memory-mapped file I/O on POSIX systems
-    (Linux, macOS); on Windows it has no effect. Skipping cached pages asks the kernel (``cachestat()`` on
+    on first use. Read-ahead threads are started as needed and keep running, each with its buffer. The
+    ``BLOSC_PREFETCH`` environment variable, set to a number of threads, turns read-ahead on when blosc2 is
+    imported. It works with the default and the memory-mapped file I/O on POSIX systems (Linux, macOS); on
+    Windows it has no effect. Skipping cached pages asks the kernel (``cachestat()`` on
     Linux >= 6.5, else ``mincore()``), which on Linux answers only for files the process owns or may write
     to (before 6.5: only files it owns); other files are read again even if cached, which is correct but
     costs a copy.
@@ -1515,6 +1526,11 @@ def set_releasegil(gilstate: bool) -> bool:
     Reading slices of an :ref:`NDArray` releases the GIL while decompressing
     regardless of this setting, unless a Python postfilter, codec or filter
     could run during the read.
+
+    Compressing keeps the GIL regardless of this setting when a Python callback
+    (a prefilter, a filler, or a codec or filter registered from Python) could
+    run.  Decompressing a chunk keeps it while any codec or filter is registered
+    from Python, as the chunk may use one.
 
     Examples
     --------
