@@ -1,0 +1,298 @@
+{
+  "metadata": {
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-package/blosc2/__init__.py",
+    "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-package/blosc2/blosc2_ext.abi3.so",
+    "python": "3.14.4",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "shape": [
+      1000,
+      1000
+    ],
+    "dtype": "<f4",
+    "chunks": [
+      1000,
+      1000
+    ],
+    "blocks": [
+      25,
+      1000
+    ],
+    "cparams": "CParams(codec=<Codec.BLOSCLZ: 0>, codec_meta=0, clevel=1, use_dict=False, typesize=8, nthreads=12, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "threads": 12,
+    "compiler_requested": "tcc",
+    "repeat": 5,
+    "protocol": "validate first output; best of warm allocation/compression samples"
+  },
+  "results": [
+    {
+      "case": "loop1",
+      "route": "menudet",
+      "preparation_s": 0.010443249717354774,
+      "first_s": 0.002705666236579418,
+      "samples_s": [
+        0.001997583545744419,
+        0.001302666962146759,
+        0.0011957092210650444,
+        0.0011757491156458855,
+        0.0011804578825831413
+      ],
+      "best_s": 0.0011757491156458855,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 40,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 2,
+        "output_zero_fill_bytes": 4000000,
+        "output_chunk_buffer_bytes": 4000000,
+        "input_buffer_bytes": 2400000
+      }
+    },
+    {
+      "case": "loop1",
+      "route": "legacy",
+      "preparation_s": 0.0001998329535126686,
+      "first_s": 0.0033895419910550117,
+      "samples_s": [
+        0.002233250066637993,
+        0.002443375065922737,
+        0.0021549174562096596,
+        0.001927124336361885,
+        0.0021532904356718063
+      ],
+      "best_s": 0.001927124336361885,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop2",
+      "route": "menudet",
+      "preparation_s": 0.0042470842599868774,
+      "first_s": 0.0021186256781220436,
+      "samples_s": [
+        0.002060125581920147,
+        0.0018331250175833702,
+        0.002001166343688965,
+        0.0018177079036831856,
+        0.0020945416763424873
+      ],
+      "best_s": 0.0018177079036831856,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 40,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 2,
+        "output_zero_fill_bytes": 4000000,
+        "output_chunk_buffer_bytes": 4000000,
+        "input_buffer_bytes": 2400000
+      }
+    },
+    {
+      "case": "loop2",
+      "route": "legacy",
+      "preparation_s": 0.0001800842583179474,
+      "first_s": 0.0032694172114133835,
+      "samples_s": [
+        0.0032985005527734756,
+        0.003161415457725525,
+        0.0031088748946785927,
+        0.003104916773736477,
+        0.0031599588692188263
+      ],
+      "best_s": 0.003104916773736477,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop4",
+      "route": "menudet",
+      "preparation_s": 0.004297332838177681,
+      "first_s": 0.0034431247040629387,
+      "samples_s": [
+        0.003715749830007553,
+        0.003315834328532219,
+        0.0032294578850269318,
+        0.003188124857842922,
+        0.003268917091190815
+      ],
+      "best_s": 0.003188124857842922,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 40,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 2,
+        "output_zero_fill_bytes": 4000000,
+        "output_chunk_buffer_bytes": 4000000,
+        "input_buffer_bytes": 2400000
+      }
+    },
+    {
+      "case": "loop4",
+      "route": "legacy",
+      "preparation_s": 0.00013308320194482803,
+      "first_s": 0.006392749957740307,
+      "samples_s": [
+        0.00647183321416378,
+        0.005524042062461376,
+        0.005492790602147579,
+        0.005892832763493061,
+        0.006020416505634785
+      ],
+      "best_s": 0.005492790602147579,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "loop4_heavy",
+      "route": "menudet",
+      "preparation_s": 0.004810333251953125,
+      "first_s": 0.006608041934669018,
+      "samples_s": [
+        0.005644583143293858,
+        0.0055387914180755615,
+        0.005211125127971172,
+        0.007554291747510433,
+        0.005558833479881287
+      ],
+      "best_s": 0.005211125127971172,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 40,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 2,
+        "output_zero_fill_bytes": 4000000,
+        "output_chunk_buffer_bytes": 4000000,
+        "input_buffer_bytes": 2400000
+      }
+    },
+    {
+      "case": "loop4_heavy",
+      "route": "legacy",
+      "preparation_s": 0.00013237446546554565,
+      "first_s": 0.006630333140492439,
+      "samples_s": [
+        0.00734783336520195,
+        0.007492124103009701,
+        0.007756915874779224,
+        0.006757750175893307,
+        0.007422290742397308
+      ],
+      "best_s": 0.006757750175893307,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    },
+    {
+      "case": "nested2",
+      "route": "menudet",
+      "preparation_s": 0.005987083539366722,
+      "first_s": 0.004678708501160145,
+      "samples_s": [
+        0.004441374912858009,
+        0.004206458106637001,
+        0.0056779999285936356,
+        0.003826083615422249,
+        0.003978249616920948
+      ],
+      "best_s": 0.003826083615422249,
+      "has_jit": true,
+      "inferred_dtype": "float64",
+      "native_partitionable": true,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 40,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 2,
+        "output_zero_fill_bytes": 4000000,
+        "output_chunk_buffer_bytes": 4000000,
+        "input_buffer_bytes": 2400000
+      }
+    },
+    {
+      "case": "nested2",
+      "route": "legacy",
+      "preparation_s": 0.0001532919704914093,
+      "first_s": 0.006733458489179611,
+      "samples_s": [
+        0.006970458664000034,
+        0.007498458959162235,
+        0.006772332824766636,
+        0.00668695755302906,
+        0.0064904168248176575
+      ],
+      "best_s": 0.0064904168248176575,
+      "has_jit": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "inferred_dtype": null,
+      "native_partitionable": null,
+      "execution_report": null
+    }
+  ]
+}

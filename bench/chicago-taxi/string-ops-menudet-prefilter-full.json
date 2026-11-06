@@ -1,0 +1,70 @@
+{
+  "rows": 24314322,
+  "company_dtype": "<U44",
+  "payment_dtype": "<U11",
+  "control_note": "Legacy explicitly sets the internal _legacy_source_recipe flag; serial uses the public artifact with chunk-sized logical groups.",
+  "public_source_sha256": "bfb03036148229a0f3236c56ef6c7054816d467688c5f28316ef4d51f2d54b1e",
+  "python": "3.14.4",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/taxi-string-pinned-wheel-package/blosc2/__init__.py",
+  "blosc2_version": "4.15.0.dev0",
+  "c_blosc2_version": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+  "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/taxi-string-pinned-wheel-package/blosc2/blosc2_ext.abi3.so",
+  "extension_sha256": "b8d993f0e8ea848d945de2f5f185bf396fe44d1f61f4e84093a5ebe9b46c0c83",
+  "threads": 12,
+  "fingerprint": "54ad44682fd2efcaf659bbb53e401f8f",
+  "native_report": {
+    "route": "menudet-prefilter",
+    "evaluated_blocks": 47489,
+    "output_destination": "blosc2",
+    "discarded_output_bytes": 0,
+    "fp_flags": 0,
+    "fp_supported": true,
+    "threads": 12,
+    "native_decoder_contexts": 24,
+    "input_buffer_allocations": 24,
+    "input_chunk_fetches": 744,
+    "output_zero_fill_bytes": 6046089216,
+    "output_chunk_buffer_bytes": 16252928,
+    "input_buffer_bytes": 1351680
+  },
+  "arms": {
+    "prefilter": {
+      "median_wall_s": 1.6995181245729327,
+      "median_cpu_s": 19.058142999999994,
+      "samples": [
+        {
+          "wall_s": 1.6978572076186538,
+          "cpu_s": 19.058142999999994
+        },
+        {
+          "wall_s": 1.6995181245729327,
+          "cpu_s": 19.063795
+        },
+        {
+          "wall_s": 1.701056458055973,
+          "cpu_s": 18.995236000000006
+        }
+      ]
+    },
+    "legacy": {
+      "median_wall_s": 1.3220360409468412,
+      "median_cpu_s": 14.746079000000002,
+      "samples": [
+        {
+          "wall_s": 1.3173648342490196,
+          "cpu_s": 14.746079000000002
+        },
+        {
+          "wall_s": 1.3220360409468412,
+          "cpu_s": 14.769951000000006
+        },
+        {
+          "wall_s": 1.3277557082474232,
+          "cpu_s": 14.582307000000014
+        }
+      ]
+    }
+  }
+}

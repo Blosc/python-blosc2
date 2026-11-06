@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.blosc.org/schemas/menudet-performance-v1.json",
+  "title": "Menudet paired observation result v1",
+  "type": "object",
+  "required": ["schema_version", "measurement_mode", "profile", "settings", "manifests", "harness_files", "blocks", "comparisons", "coverage", "wall_seconds"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "measurement_mode": {"enum": ["local-control", "paired-wheels"]},
+    "coverage": {"enum": ["complete", "incomplete", "failed"]},
+    "wall_seconds": {"type": "number", "minimum": 0},
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["case_id", "arm", "block_id", "order_index", "status"],
+        "properties": {
+          "arm": {"enum": ["baseline", "candidate"]},
+          "block_id": {"type": "integer", "minimum": 0},
+          "order_index": {"type": "integer", "minimum": 0},
+          "status": {"enum": ["ok", "failed", "incomplete"]},
+          "preparation_ns": {"type": ["number", "null"], "minimum": 0},
+          "execution": {"type": "object", "required": ["route", "engine", "effective_compiler", "report_scope"]},
+          "warm_samples": {"type": "array", "items": {
+            "type": "object", "required": ["elapsed_ns", "iterations", "per_call_ns"],
+            "properties": {"iterations": {"type": "integer", "minimum": 1}, "per_call_ns": {"type": "number", "exclusiveMinimum": 0}}
+          }}
+        },
+        "allOf": [{"if": {"properties": {"status": {"const": "ok"}}}, "then": {"required": ["execution", "warm_samples", "fingerprint", "workload"]}}]
+      }
+    },
+    "comparisons": {"type": "array", "items": {"type": "object", "required": ["case_id", "ratio", "verdict"]}}
+  }
+}

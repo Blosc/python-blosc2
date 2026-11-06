@@ -12,6 +12,7 @@ import zipfile
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 
@@ -41,7 +42,7 @@ def remote_table_url(tmp_path, table, name="table"):
     return url
 
 
-@pytest.mark.parametrize("text_spec", [blosc2.utf8(), blosc2.vlstring()])
+@pytest.mark.parametrize("text_spec", [pytest.param(utf8_spec(), marks=needs_utf8), blosc2.vlstring()])
 def test_preview_opens_only_visible_columns(tmp_path, monkeypatch, text_spec):
     @dataclasses.dataclass
     class WideRow:
@@ -581,10 +582,14 @@ def test_remote_full_index_selective_lookup(tmp_path, expression, expected):
 
 @pytest.mark.parametrize("kind", ["partial", "opsi", "bucket"])
 def test_remote_positional_index_lookup(tmp_path, kind):
-    url, _ = indexed_remote_table_url(tmp_path, kind, rows=5000)
+    rows = 1025  # Five 256-row chunks, with a partial final chunk.
+    url, _ = indexed_remote_table_url(tmp_path, kind, rows=rows)
     with blosc2.RemoteCTable(url, cache_policy=blosc2.CachePolicy.MEMORY) as remote:
-        np.testing.assert_array_equal(remote.where("x == 7").y[:], [4993])
-        np.testing.assert_array_equal(remote.where("(x >= 7) & (x < 10)").y[:], [4993, 4992, 4991])
+        np.testing.assert_array_equal(remote.where("x == 7").y[:], [rows - 7])
+        # Cross a chunk boundary, and check the partial tail and an empty result.
+        np.testing.assert_array_equal(remote.where("(x >= 255) & (x < 258)").y[:], [770, 769, 768])
+        np.testing.assert_array_equal(remote.where("x == 1024").y[:], [1])
+        np.testing.assert_array_equal(remote.where("x == 1025").y[:], [])
         assert any(f"_indexes/x/{kind}." in (array.dataset or "") for array in remote._storage._arrays)
 
 
@@ -671,6 +676,7 @@ def test_sparse_table_cache_budget(tmp_path, limit):
 
 @pytest.mark.parametrize("include_note", [False, True])
 @pytest.mark.parametrize("nrows", [0, 2, 20, 21])
+@needs_utf8
 def test_remote_example_total_timing(tmp_path, capsys, include_note, nrows):
     import runpy
     from pathlib import Path
@@ -700,6 +706,7 @@ def test_remote_example_total_timing(tmp_path, capsys, include_note, nrows):
     assert sample == str(local[start:stop]).strip()
 
 
+@needs_utf8
 def test_remote_example_cache_dir(tmp_path, capsys, monkeypatch):
     import runpy
     import sys
@@ -719,6 +726,7 @@ def test_remote_example_cache_dir(tmp_path, capsys, monkeypatch):
     assert "(0 requests," in output.split("Total network :")[1]
 
 
+@needs_utf8
 def test_remote_example_batch_columns(tmp_path, capsys):
     import runpy
     from pathlib import Path
@@ -747,6 +755,7 @@ def test_remote_example_batch_columns(tmp_path, capsys):
 
 @pytest.mark.parametrize(("format_flag", "suffix"), [("pytables", ".h5"), ("parquet", ".parquet")])
 @pytest.mark.parametrize("explicit", [False, True])
+@needs_utf8
 def test_remote_example_external_formats(tmp_path, capsys, monkeypatch, format_flag, suffix, explicit):
     import runpy
     import sys
@@ -803,6 +812,7 @@ def test_remote_example_external_formats(tmp_path, capsys, monkeypatch, format_f
 
 
 @pytest.mark.parametrize("explicit", [False, True])
+@needs_utf8
 def test_remote_example_blosc2_flag_and_inference(tmp_path, capsys, monkeypatch, explicit):
     import runpy
     import sys
@@ -821,6 +831,7 @@ def test_remote_example_blosc2_flag_and_inference(tmp_path, capsys, monkeypatch,
     assert "[Format: Blosc2 B2Z" in capsys.readouterr().out
 
 
+@needs_utf8
 def test_remote_example_unknown_extension(tmp_path, monkeypatch, capsys):
     import runpy
     import sys
@@ -835,6 +846,7 @@ def test_remote_example_unknown_extension(tmp_path, monkeypatch, capsys):
     assert "cannot infer format" in capsys.readouterr().err
 
 
+@needs_utf8
 def test_remote_example_url_extension_ignores_query_string(monkeypatch):
     import runpy
     import sys
@@ -881,6 +893,7 @@ def test_disk_cache_metadata_key_order(tmp_path, monkeypatch):
 @pytest.mark.parametrize("max_concurrency", [1, 8])
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.usefixtures("b2z_range_reads")
+@needs_utf8
 def test_disk_cache_reuses_ctable_bootstrap(tmp_path, monkeypatch, max_concurrency, legacy):
     schema = dataclasses.make_dataclass("Sample", [("x", float), ("note", str, blosc2.field(blosc2.utf8()))])
     values = np.random.default_rng(42).random(20_000)
@@ -981,6 +994,7 @@ def test_disk_cache_reuses_batch_column_prefixes(tmp_path, monkeypatch, max_conc
 @pytest.mark.parametrize(
     "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
 )
+@needs_utf8
 def test_remote_ctable_refresh(tmp_path, policy):
     schema = dataclasses.make_dataclass("Sample", [("x", int), ("note", str, blosc2.field(blosc2.utf8()))])
     local = blosc2.CTable(schema, [(1, "old"), (2, "café")], create_summary_index=False)
@@ -1503,6 +1517,7 @@ def test_remote_store_returns_table_with_independent_lifetime(tmp_path):
 
 
 @pytest.mark.usefixtures("b2z_range_reads")
+@needs_utf8
 def test_remote_ctable_reference_save_roundtrip(tmp_path):
     @dataclasses.dataclass
     class TextRow:
@@ -1677,6 +1692,7 @@ def test_remote_ctable_batch_column_is_lazy(tmp_path):
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
 @pytest.mark.parametrize("null_storage", ["mask", "sentinel"])
 @pytest.mark.parametrize("deleted", [False, True])
+@needs_utf8
 def test_remote_ctable_utf8(tmp_path, policy, null_storage, deleted):
     @dataclasses.dataclass
     class TextRow:
@@ -1805,6 +1821,7 @@ def test_remote_ctable_deleted_rows_and_disk_cache(tmp_path):
 
 
 @pytest.mark.parametrize("empty", [False, True])
+@needs_utf8
 def test_remote_utf8_nested_lifetime(tmp_path, empty):
     @dataclasses.dataclass
     class TextRow:
@@ -1842,6 +1859,7 @@ def test_remote_utf8_nested_lifetime(tmp_path, empty):
 
 
 @pytest.mark.parametrize("bad_data", [None, np.arange(4, dtype="int64")])
+@needs_utf8
 def test_remote_utf8_invalid_companion(tmp_path, bad_data):
     @dataclasses.dataclass
     class TextRow:
@@ -1877,6 +1895,7 @@ def test_remote_utf8_invalid_companion(tmp_path, bad_data):
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
 @pytest.mark.parametrize("blocks", [False, True])
 @pytest.mark.usefixtures("b2z_range_reads")
+@needs_utf8
 def test_remote_utf8_bounded_transfer(tmp_path, monkeypatch, policy, blocks):
     from blosc2 import proxy_source
     from blosc2._utf8_array import UTF8Array
@@ -1969,6 +1988,7 @@ def test_remote_store_rejects_table_root(tmp_path):
 
 
 @pytest.mark.parametrize("policy", list(blosc2.CachePolicy))
+@needs_utf8
 def test_open_dispatches_local_and_remote_tables(tmp_path, policy):
     @dataclasses.dataclass
     class TextRow:
@@ -2061,6 +2081,7 @@ def test_open_dispatches_remote_table_hierarchy(tmp_path, suffix, monkeypatch):
 
 
 @pytest.mark.usefixtures("b2z_range_reads")
+@needs_utf8
 def test_parallel_metadata_benchmark(tmp_path, monkeypatch):
     import runpy
     import time
@@ -2139,11 +2160,8 @@ def test_parallel_metadata_benchmark(tmp_path, monkeypatch):
         assert repr(list(table[:5])) == expected[1]
 
 
-@pytest.mark.parametrize(
-    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
-)
-@pytest.mark.parametrize("budget", [128, 1 << 20])
-def test_parallel_rows_cache_policies(tmp_path, policy, budget):
+@pytest.fixture(scope="module")
+def parallel_rows_archive(tmp_path_factory):
     @dataclasses.dataclass
     class Mixed:
         x: int = blosc2.field(blosc2.int64(null_storage="mask"))
@@ -2159,7 +2177,22 @@ def test_parallel_rows_cache_policies(tmp_path, policy, budget):
         create_summary_index=False,
     )
     local.delete([2, 9])
-    url = remote_table_url(tmp_path, local)
+    archive = tmp_path_factory.mktemp("parallel-rows") / "table.b2z"
+    local.to_b2z(archive)
+    return local, archive.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "policy", [blosc2.CachePolicy.NONE, blosc2.CachePolicy.MEMORY, blosc2.CachePolicy.DISK]
+)
+@pytest.mark.parametrize("budget", [128, 1 << 20])
+@needs_utf8
+def test_parallel_rows_cache_policies(tmp_path, parallel_rows_archive, policy, budget):
+    # Reuse only immutable source bytes; each case gets a distinct URL and fresh
+    # caches, so no policy/budget case can benefit from another one's warm reads.
+    local, archive = parallel_rows_archive
+    url = f"memory://{tmp_path.name}-parallel-rows.b2z"
+    fsspec.filesystem("memory").pipe(url, archive)
     options = {"cache_policy": policy, "row_buffer_bytes": budget, "metadata_buffer_bytes": budget}
     if policy == blosc2.CachePolicy.DISK:
         options["cache_dir"] = tmp_path / "cache"
@@ -2303,6 +2336,7 @@ def test_parallel_rows_blocks_and_reopen(tmp_path, monkeypatch, policy):
             assert list(table[399990:]) == list(local[399990:])
 
 
+@needs_utf8
 def test_parallel_timestamp_and_projection(tmp_path):
     @dataclasses.dataclass
     class Timed:

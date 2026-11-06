@@ -1,0 +1,159 @@
+{
+  "rng": "PCG64",
+  "seeds": [
+    1729,
+    20261009
+  ],
+  "results": [
+    {
+      "seed": 1729,
+      "cases": 49,
+      "matching": 48,
+      "known_divergences": 1,
+      "minimized": {
+        "id": "property-1729-boundary",
+        "operation": "add",
+        "semantic_revision": "menudet-draft-1.0-checked",
+        "requires": [
+          "numeric"
+        ],
+        "artifact": "{\"constants\": [], \"context\": {\"ndim\": 0}, \"entry_point\": \"k\", \"inputs\": [{\"dtype\": \"int8\", \"name\": \"x\"}, {\"dtype\": \"int8\", \"name\": \"y\"}], \"language\": {\"name\": \"miniexpr\", \"version\": \"1.0\"}, \"metadata\": {}, \"output\": {\"contract\": \"elementwise\", \"dtype\": \"int8\"}, \"requires\": [\"numeric\"], \"schema_version\": \"1.0\", \"semantics\": {\"fp\": \"strict\"}, \"source\": \"def k(x, y):\\n    return x + y\\n\"}",
+        "inputs": [
+          {
+            "dtype": "int8",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7f",
+            "name": "x",
+            "category": "array",
+            "layout": {
+              "order": "C",
+              "byteorder": "native",
+              "step": 1,
+              "reverse_axis": null
+            }
+          },
+          {
+            "dtype": "int8",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "01",
+            "name": "y",
+            "category": "array",
+            "layout": {
+              "order": "C",
+              "byteorder": "native",
+              "step": 1,
+              "reverse_axis": null
+            }
+          }
+        ],
+        "scalar_operands": [],
+        "literal": null,
+        "comparison": {
+          "kind": "bitwise",
+          "atol": 0.0,
+          "rtol": 0.0,
+          "max_ulp": 0,
+          "nan": "bits",
+          "signed_zero": "exact"
+        },
+        "reference_kind": "numpy",
+        "seed": 1729,
+        "expected": {
+          "dtype": "int8",
+          "shape": [
+            1
+          ],
+          "encoding": "raw-be-hex",
+          "hex": "80"
+        },
+        "divergence": {
+          "id": "D01",
+          "reason": "Known checked-overflow boundary used to test minimization"
+        },
+        "minimized_from": "property-1729-boundary"
+      },
+      "promoted_case_id": "seed-1729-minimized-int8-overflow"
+    },
+    {
+      "seed": 20261009,
+      "cases": 49,
+      "matching": 48,
+      "known_divergences": 1,
+      "minimized": {
+        "id": "property-20261009-boundary",
+        "operation": "add",
+        "semantic_revision": "menudet-draft-1.0-checked",
+        "requires": [
+          "numeric"
+        ],
+        "artifact": "{\"constants\": [], \"context\": {\"ndim\": 0}, \"entry_point\": \"k\", \"inputs\": [{\"dtype\": \"int8\", \"name\": \"x\"}, {\"dtype\": \"int8\", \"name\": \"y\"}], \"language\": {\"name\": \"miniexpr\", \"version\": \"1.0\"}, \"metadata\": {}, \"output\": {\"contract\": \"elementwise\", \"dtype\": \"int8\"}, \"requires\": [\"numeric\"], \"schema_version\": \"1.0\", \"semantics\": {\"fp\": \"strict\"}, \"source\": \"def k(x, y):\\n    return x + y\\n\"}",
+        "inputs": [
+          {
+            "dtype": "int8",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "7f",
+            "name": "x",
+            "category": "array",
+            "layout": {
+              "order": "C",
+              "byteorder": "native",
+              "step": 1,
+              "reverse_axis": null
+            }
+          },
+          {
+            "dtype": "int8",
+            "shape": [
+              1
+            ],
+            "encoding": "raw-be-hex",
+            "hex": "01",
+            "name": "y",
+            "category": "array",
+            "layout": {
+              "order": "C",
+              "byteorder": "native",
+              "step": 1,
+              "reverse_axis": null
+            }
+          }
+        ],
+        "scalar_operands": [],
+        "literal": null,
+        "comparison": {
+          "kind": "bitwise",
+          "atol": 0.0,
+          "rtol": 0.0,
+          "max_ulp": 0,
+          "nan": "bits",
+          "signed_zero": "exact"
+        },
+        "reference_kind": "numpy",
+        "seed": 20261009,
+        "expected": {
+          "dtype": "int8",
+          "shape": [
+            1
+          ],
+          "encoding": "raw-be-hex",
+          "hex": "80"
+        },
+        "divergence": {
+          "id": "D01",
+          "reason": "Known checked-overflow boundary used to test minimization"
+        },
+        "minimized_from": "property-20261009-boundary"
+      },
+      "promoted_case_id": null
+    }
+  ]
+}

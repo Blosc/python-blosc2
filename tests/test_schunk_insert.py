@@ -5,29 +5,25 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import random
-
 import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 
-@pytest.mark.parametrize("gil", [True, False])
-@pytest.mark.parametrize("contiguous", [True, False])
-@pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    ("nchunks", "ninserts"),
-    [
-        (0, 3),
-        (1, 1),
-        (10, 3),
-        (15, 17),
-    ],
+    ("storage_case", "counts", "gil"),
+    orthogonal_cases(
+        [(True, None), (False, None), (True, "b2frame"), (False, "b2frame")],
+        [(0, 3), (1, 1), (10, 3), (15, 17)],
+        [True, False],
+    ),
 )
-@pytest.mark.parametrize("copy", [True, False])
-@pytest.mark.parametrize("create_chunk", [True, False])
-def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, create_chunk, gil):
+@pytest.mark.parametrize(("create_chunk", "copy"), [(True, True), (False, True), (False, False)])
+def test_schunk_insert_numpy(storage_case, counts, copy, create_chunk, gil):
+    contiguous, urlpath = storage_case
+    nchunks, ninserts = counts
     blosc2.set_releasegil(gil)
     storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath)
     blosc2.remove_urlpath(urlpath)
@@ -35,13 +31,15 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
     schunk = blosc2.SChunk(
         chunksize=200 * 1000 * 4, storage=storage, cparams={"nthreads": 2}, dparams={"nthreads": 2}
     )
+    expected_chunks = []
     for i in range(nchunks):
         buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
+        expected_chunks.append(buffer.tobytes())
 
     for i in range(ninserts):
-        pos = random.randint(0, nchunks + i)
+        pos = (0, nchunks + i, (nchunks + i) // 2)[i % 3]
         buffer = pos * np.arange(200 * 1000, dtype="int32")
         if create_chunk:
             chunk = blosc2.compress2(buffer)
@@ -51,32 +49,30 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
         chunk_ = schunk.decompress_chunk(pos)
         bytes_obj = buffer.tobytes()
         assert chunk_ == bytes_obj
+        expected_chunks.insert(pos, bytes_obj)
 
         dest = np.empty(buffer.shape, buffer.dtype)
         schunk.decompress_chunk(pos, dest)
         assert np.array_equal(buffer, dest)
 
     for i in range(nchunks + ninserts):
-        schunk.decompress_chunk(i)
+        assert schunk.decompress_chunk(i) == expected_chunks[i]
     assert gil == blosc2.set_releasegil(False)
     blosc2.remove_urlpath(urlpath)
 
 
-@pytest.mark.parametrize("gil", [True, False])
-@pytest.mark.parametrize("contiguous", [True, False])
-@pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    ("nchunks", "ninserts"),
-    [
-        (0, 3),
-        (1, 1),
-        (10, 3),
-        (15, 17),
-    ],
+    ("storage_case", "counts", "gil"),
+    orthogonal_cases(
+        [(True, None), (False, None), (True, "b2frame"), (False, "b2frame")],
+        [(0, 3), (1, 1), (10, 3), (15, 17)],
+        [True, False],
+    ),
 )
-@pytest.mark.parametrize("copy", [True, False])
-@pytest.mark.parametrize("create_chunk", [True, False])
-def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk, gil):
+@pytest.mark.parametrize(("create_chunk", "copy"), [(True, True), (False, True), (False, False)])
+def test_insert(storage_case, counts, copy, create_chunk, gil):
+    contiguous, urlpath = storage_case
+    nchunks, ninserts = counts
     blosc2.set_releasegil(gil)
     storage = {
         "contiguous": contiguous,
@@ -95,7 +91,7 @@ def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk, gil)
         assert nchunks_ == (i + 1)
 
     for i in range(ninserts):
-        pos = random.randint(0, nchunks + i)
+        pos = (0, nchunks + i, (nchunks + i) // 2)[i % 3]
         bytes_obj = b"i " * nbytes
         if create_chunk:
             chunk = blosc2.compress2(bytes_obj, typesize=1)

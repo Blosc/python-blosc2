@@ -5,17 +5,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Demonstrate saving and reloading DSL kernels.
+# Demonstrate saving and reloading Menudet recipes.
 #
-# We compute a 2-D heat-diffusion stencil: each interior point is
-# replaced by a weighted average of its four neighbours plus a source
-# term.  The DSL kernel is saved to disk and reloaded in a fresh
-# context – the JIT-compiled fast path is fully preserved.
+# We blend a 2-D field with a source term. The portable artifact is
+# saved to disk and reloaded without reconstructing a Python function.
 
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel
 
 shape = (128, 128)
 
@@ -31,7 +28,7 @@ v = vexpr.compute(urlpath="v.b2nd", mode="w")
 # The kernel operates element-wise on flat chunks; index-based
 # neighbour access is intentionally avoided here so the expression
 # stays in the simple DSL subset that miniexpr can JIT.
-@blosc2.dsl_kernel
+@blosc2.menudet
 def heat_step(u, v):
     # Weighted blend: 0.25*(left+right+up+down) approximated element-wise
     # by mixing u and a scaled source term – keeps the kernel portable
@@ -41,16 +38,14 @@ def heat_step(u, v):
 
 
 # ── build and save the lazy computation ────────────────────────────
-lazy = blosc2.lazyudf(heat_step, (u, v), dtype=np.float64)
+lazy = heat_step(u, v)
 lazy.save(urlpath="heat_step.b2nd")
-print("LazyUDF saved to heat_step.b2nd")
+print("Menudet recipe saved to heat_step.b2nd")
 
 # ── reload in a 'fresh' context (no reference to heat_step) ─────────
 reloaded = blosc2.open("heat_step.b2nd", mode="r")
-assert isinstance(reloaded, blosc2.LazyUDF), "Expected a LazyUDF after open()"
-assert isinstance(reloaded.func, DSLKernel), "func must be a DSLKernel after reload"
-assert reloaded.func.dsl_source is not None, "dsl_source must survive the round-trip"
-print(f"Reloaded DSL source:\n{reloaded.func.dsl_source}\n")
+assert isinstance(reloaded.kernel, blosc2.MenudetKernel)
+print(f"Reloaded Menudet artifact:\n{reloaded.kernel.to_json()}\n")
 
 # ── evaluate and verify ──────────────────────────────────────────────
 result = reloaded.compute()
@@ -61,7 +56,7 @@ print("Max absolute error vs NumPy reference:", np.max(np.abs(result[()] - expec
 # ── chain two steps: save the first result and run a second step ─────
 u2 = result.copy(urlpath="u2.b2nd", mode="w")
 
-lazy2 = blosc2.lazyudf(heat_step, (u2, v), dtype=np.float64)
+lazy2 = heat_step(u2, v)
 lazy2.save(urlpath="heat_step2.b2nd")
 
 reloaded2 = blosc2.open("heat_step2.b2nd", mode="r")

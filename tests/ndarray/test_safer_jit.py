@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from blosc2.lazyexpr import _jit_from_env
 
 pytestmark = pytest.mark.skipif(
@@ -17,7 +18,7 @@ pytestmark = pytest.mark.skipif(
 HERE = Path(__file__).resolve().parent
 
 
-def run_probe(tmp_path, backend="tcc", mode="on", trace=False, **overrides):
+def run_probe(tmp_path, backend="tcc", mode="on", trace=False, workload="all", **overrides):
     env = os.environ.copy()
     for name in list(env):
         if name.startswith(("ME_DSL_", "BLOSC_ME_JIT")) or name in ("CC", "CFLAGS"):
@@ -25,7 +26,7 @@ def run_probe(tmp_path, backend="tcc", mode="on", trace=False, **overrides):
     env.update(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(tmp_path), ME_DSL_TRACE="1" if trace else "0")
     env.update(overrides)
     return subprocess.run(
-        [sys.executable, str(HERE / "safer_jit_probe.py"), backend, mode],
+        [sys.executable, str(HERE / "safer_jit_probe.py"), backend, mode, workload],
         env=env,
         text=True,
         capture_output=True,
@@ -90,8 +91,10 @@ def test_tcc_compile_failure_is_quiet(tmp_path, trace):
     result = run_probe(tmp_path, trace=trace, ME_DSL_JIT_TCC_OPTIONS="-invalid-safer-jit-option")
     assert result.stdout == ""
     if trace:
-        assert "jit runtime fallback: interpreter" in result.stderr
-        assert "invalid-safer-jit-option" in result.stderr
+        if "jit runtime fallback: interpreter" in result.stderr:
+            assert "invalid-safer-jit-option" in result.stderr
+        else:
+            assert "menudet jit ineligible: explicit compiler flags" in result.stderr
     else:
         assert result.stderr == ""
     assert list(tmp_path.iterdir()) == []
@@ -108,7 +111,7 @@ def test_tcc_explicit_missing_library(tmp_path):
 def test_jit_off_does_not_compile(tmp_path, backend):
     result = run_probe(tmp_path, backend=backend, mode="off", trace=True)
     assert "jit runtime built:" not in result.stderr
-    assert "reason=jit_mode=off" in result.stderr
+    assert "reason=jit_mode=off" in result.stderr or "menudet jit ineligible: request=2" in result.stderr
     assert list(tmp_path.iterdir()) == []
 
 
@@ -158,12 +161,16 @@ def test_cc_failure_is_quiet(tmp_path, failure, trace):
 def test_cc_reuses_disk_cache_in_fresh_process(tmp_path):
     if shutil.which("cc") is None:
         pytest.skip("System compiler unavailable")
-    cold = run_probe(tmp_path, backend="cc", trace=True)
-    warm = run_probe(tmp_path, backend="cc", trace=True)
+    if _NUMPY_VALUE_PROMOTION:
+        pytest.skip("Automatic native chunk execution is disabled on NumPy < 2")
+    # One real compiled kernel is enough to prove cross-process disk reuse.
+    # Other probes retain the full constructor/expression/UDF/reduction workload.
+    cold = run_probe(tmp_path, backend="cc", trace=True, workload="cache", CFLAGS="-O0")
+    warm = run_probe(tmp_path, backend="cc", trace=True, workload="cache", CFLAGS="-O0")
     assert "jit runtime built:" in cold.stderr
     assert "source=disk-cache" in warm.stderr
     assert "jit runtime built:" not in warm.stderr
-    assert list((tmp_path / "miniexpr-jit").glob("kernel_*.meta"))
+    assert len(list((tmp_path / "miniexpr-jit").glob("kernel_*.meta"))) == 1
 
 
 def test_cc_compiler_output_is_opt_in(tmp_path):

@@ -14,8 +14,10 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
     broadcast_to
     clip
+    complex
     contains
     endswith
+    fmod
     imag
     lower
     real
@@ -28,8 +30,10 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
 .. autofunction:: blosc2.broadcast_to
 .. autofunction:: blosc2.clip
+.. autofunction:: blosc2.complex
 .. autofunction:: blosc2.contains
 .. autofunction:: blosc2.endswith
+.. autofunction:: blosc2.fmod
 .. autofunction:: blosc2.imag
 .. autofunction:: blosc2.lower
 .. autofunction:: blosc2.real

@@ -441,6 +441,9 @@ class TreeStore(DictStore):
         """
         key = self._validate_key(key)
 
+        from blosc2.b2objects import preflight_persistence
+
+        preflight_persistence(value)
         if isinstance(value, blosc2.RemoteStore):
             self._set_remote_store_reference(key, value)
             return

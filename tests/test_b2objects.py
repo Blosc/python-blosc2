@@ -10,12 +10,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import blosc2
 import blosc2.c2array as blosc2_c2array
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel_add_square(x, y):
     return x * x + y * y + 2 * x * y
 
@@ -135,40 +137,50 @@ def test_legacy_lazyexpr_open_backward_compat():
     np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
 
 
-def test_legacy_lazyudf_open_backward_compat():
+@pytest.mark.parametrize("policy", ["safe", "full"])
+def test_legacy_lazyudf_open_is_unsupported(policy):
     fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
 
-    restored = blosc2.open(fixture, mode="r", deserialize="full")
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.open(fixture, mode="r", deserialize=policy)
 
-    assert isinstance(restored, blosc2.LazyUDF)
-    np.testing.assert_allclose(restored.compute()[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+
+def test_open_b2object_rejects_legacy_marker_before_reading_payload(monkeypatch):
+    import blosc2.b2objects as objects
+
+    carrier = blosc2.empty((4,), dtype="float64", meta={"b2o": {"version": 1, "kind": "lazyudf"}})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Read the payload before rejecting the legacy marker")
+
+    monkeypatch.setattr(objects, "read_b2object_payload", forbidden)
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.open_b2object(carrier)
 
 
 def test_lazyudf_from_cframe_roundtrip(tmp_path):
     a = blosc2.asarray(np.arange(5, dtype=np.float64), urlpath=tmp_path / "a.b2nd", mode="w")
     b = blosc2.asarray(np.arange(5, dtype=np.float64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
     expr = blosc2.lazyudf(kernel_add_square, (a, b), dtype=np.float64)
-    carrier = blosc2.ndarray_from_cframe(expr.to_cframe())
-
-    assert carrier.schunk.meta["b2o"] == {"kind": "lazyudf", "version": 1}
-    payload = carrier.schunk.vlmeta["b2o"]
-    assert payload["kind"] == "lazyudf"
-    assert payload["version"] == 1
-    assert payload["function_kind"] == "dsl"
-    assert payload["dsl_version"] == 1
-    assert payload["name"] == "kernel_add_square"
-    assert "kernel_add_square" in payload["udf_source"]
-    assert payload["dtype"] == np.dtype(np.float64).str
-    assert payload["shape"] == [5]
-    assert payload["operands"] == {
-        "o0": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "a.b2nd").as_posix()},
-        "o1": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "b.b2nd").as_posix()},
-    }
-
-    restored = blosc2.from_cframe(expr.to_cframe(), deserialize="full")
-
-    assert isinstance(restored, blosc2.LazyUDF)
+    restored = blosc2.from_cframe(expr.to_cframe())
     np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+    from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
+
+    offset = np.float32(2)
+
+    @DSLKernel
+    def captured(x, scale):
+        return x * scale + offset
+
+    authored = blosc2.lazyudf(captured, (a, np.int16(3)), dtype="float64")
+    authored.vlmeta["label"] = "captured"
+    packed = msgpack_packb([authored])
+    framed = authored.to_cframe()
+    offset = np.float32(99)
+    np.testing.assert_array_equal(msgpack_unpackb(packed)[0][:], np.arange(5) * 3 + 2)
+    framed_recipe = blosc2.from_cframe(framed)
+    np.testing.assert_array_equal(framed_recipe[:], np.arange(5) * 3 + 2)
+    assert framed_recipe.vlmeta["label"] == "captured"
 
 
 def test_lazyudf_open_roundtrip(tmp_path):
@@ -178,10 +190,26 @@ def test_lazyudf_open_roundtrip(tmp_path):
     urlpath = tmp_path / "expr.b2nd"
 
     expr.save(urlpath)
-    restored = blosc2.open(urlpath, mode="r", deserialize="full")
-
-    assert isinstance(restored, blosc2.LazyUDF)
+    restored = blosc2.open(urlpath, mode="r")
     np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+    nested = expr + 1
+    nested.save(tmp_path / "nested.b2nd")
+    np.testing.assert_array_equal(blosc2.open(tmp_path / "nested.b2nd")[:], (np.arange(5) * 3) ** 2 + 1)
+    for body, expected in (
+        ("print(x)\n    return x", "print"),
+        ("return callback(x)", "invalid_source"),
+        ("return block_sum(x)", "block scalar"),
+    ):
+        invalid = DSLKernel.from_source(f"def invalid(x):\n    {body}\n")
+        bad = blosc2.lazyudf(invalid, (a,), dtype="float64")
+        before = urlpath.read_bytes()
+        with pytest.raises((blosc2.MenudetError, ValueError), match=expected):
+            bad.save(urlpath, mode="w")
+        assert urlpath.read_bytes() == before
+    fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
+    with pytest.raises(blosc2.UnsupportedLegacyRecipeError):
+        blosc2.open(fixture, deserialize="full")
+    assert urlpath.read_bytes() == before
 
 
 def test_b2z_bundle_with_lazy_recipes_opens_read_only(tmp_path):
@@ -197,13 +225,11 @@ def test_b2z_bundle_with_lazy_recipes_opens_read_only(tmp_path):
         udf = blosc2.lazyudf(kernel_add_square, (a, b), dtype=np.float64, shape=a.shape)
 
         store["/recipes/expr"] = blosc2.ndarray_from_cframe(expr.to_cframe())
-        store["/recipes/udf"] = blosc2.ndarray_from_cframe(udf.to_cframe())
+        store["/recipes/udf"] = udf
 
     with blosc2.open(str(bundle_path), mode="r", deserialize="full") as store:
         restored_expr = store["/recipes/expr"]
-        restored_udf = store["/recipes/udf"]
 
         assert isinstance(restored_expr, blosc2.LazyExpr)
-        assert isinstance(restored_udf, blosc2.LazyUDF)
         np.testing.assert_allclose(restored_expr.compute()[:], np.arange(5, dtype=np.float64) * 3)
-        np.testing.assert_allclose(restored_udf.compute()[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+        np.testing.assert_allclose(store["/recipes/udf"][:], (np.arange(5, dtype=np.float64) * 3) ** 2)

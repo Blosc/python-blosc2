@@ -43,6 +43,12 @@ def counting_store(zarr, store, traffic, *, metadata=None):
     class CountingStore(zarr.storage.WrapperStore):
         _blosc2_traffic = traffic
 
+        def with_read_only(self, read_only=False):
+            # Zarr 3.1's WrapperStore inherits an unimplemented base method.
+            # Retain traffic/metadata accounting when Zarr opens a writable
+            # authorized store for reading.
+            return CountingStore(self._store.with_read_only(read_only))
+
         async def get(self, key, prototype, byte_range=None):
             is_metadata = (
                 metadata is not None

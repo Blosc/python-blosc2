@@ -25,7 +25,7 @@ _DSL_USAGE_DOC_URL = "https://github.com/Blosc/python-blosc2/blob/main/doc/refer
 
 
 class DSLSyntaxError(ValueError):
-    """Raised when a @dsl_kernel function uses unsupported DSL syntax."""
+    """Raised when source normalization encounters unsupported DSL syntax."""
 
 
 # NumPy function names that the DSL grammar recognizes only under a different
@@ -229,7 +229,11 @@ class _NumpyAttrCallRewriter(ast.NodeTransformer):
             and isinstance(func.value, ast.Name)
             and func.value.id in self._aliases
         ):
-            dsl_name = _NUMPY_TO_DSL_FUNC_ALIASES.get(func.attr, func.attr)
+            from .utils import MINIEXPR_FUNCTION_ALIASES
+
+            dsl_name = _NUMPY_TO_DSL_FUNC_ALIASES.get(
+                func.attr, MINIEXPR_FUNCTION_ALIASES.get(func.attr, func.attr)
+            )
             node.func = ast.copy_location(ast.Name(id=dsl_name, ctx=ast.Load()), func)
             self.rewrote_any = True
         return node
@@ -688,8 +692,71 @@ class DSLValidator:
         self._err(op, "Unsupported comparison in DSL")
 
 
-class DSLKernel:
-    """Wrap a Python function and optionally extract a miniexpr DSL kernel from it."""
+class SourceKernel:
+    """Internal source normalization for Menudet and numerical execution helpers.
+
+    This implementation object is not a public legacy authoring API and is never
+    reconstructed from persisted Python-source recipes.
+    """
+
+    @classmethod
+    def from_source(cls, source: str) -> SourceKernel:
+        """Construct a native-only kernel without executing Python source.
+
+        Preserve the source, including header pragmas, verbatim. Only the function
+        header is inspected here; miniexpr validates the body when compiling with
+        the input and output dtypes supplied to :func:`blosc2.lazyudf`.
+        No frontend rewriting, captured globals, or Python fallback is provided.
+        This accepts native DSL source, not a Menudet-profile certification.
+        """
+        if not isinstance(source, str):
+            raise TypeError("DSL source must be a string")
+        if "\x00" in source:
+            raise ValueError("Native DSL source must not contain NUL characters")
+        try:
+            tokens = list(tokenize.generate_tokens(StringIO(source).readline))
+            first = next(t for t in tokens if t.type not in (tokenize.COMMENT, tokenize.NL))
+            if first.type != tokenize.NAME or first.string != "def":
+                raise ValueError("DSL source must start with a function definition")
+            _, _, colon = _find_def_signature_span(source)
+            if colon is None:
+                raise ValueError("DSL source requires a function header")
+            lines = source.splitlines(keepends=True)
+            header = "".join(lines[: colon.end[0] - 1]) + lines[colon.end[0] - 1][: colon.end[1]]
+            function = ast.parse(header + "\n    pass\n").body[0]
+            args = function.args
+            if (
+                args.posonlyargs
+                or args.vararg
+                or args.kwarg
+                or args.kwonlyargs
+                or args.defaults
+                or args.kw_defaults
+                or function.returns
+                or any(arg.annotation for arg in args.args)
+            ):
+                raise ValueError("Native DSL parameters must be plain positional names")
+            names = [arg.arg for arg in args.args]
+            if len(set(names)) != len(names):
+                raise ValueError("Native DSL parameter names must be unique")
+        except (SyntaxError, tokenize.TokenError, IndentationError, StopIteration) as error:
+            raise ValueError(f"Invalid native DSL function header: {error}") from error
+
+        kernel = cls.__new__(cls)
+        kernel.func = None
+        kernel.__name__ = kernel.__qualname__ = function.name
+        kernel.__doc__ = None
+        kernel._sig = None
+        kernel._sig_has_varargs = False
+        kernel._sig_npositional = len(names)
+        kernel._legacy_udf_signature = False
+        from .utils import canonicalize_miniexpr_functions
+
+        kernel.dsl_source = canonicalize_miniexpr_functions(source)
+        kernel.input_names = names
+        kernel.dsl_error = None
+        kernel.row_param = kernel.row_columns = None
+        return kernel
 
     def __init__(self, func):
         self.func = func
@@ -734,7 +801,9 @@ class DSLKernel:
             dsl_source = None
             input_names = None
             self.dsl_error = e
-        self.dsl_source = dsl_source
+        from .utils import canonicalize_miniexpr_functions
+
+        self.dsl_source = canonicalize_miniexpr_functions(dsl_source) if dsl_source is not None else None
         self.input_names = input_names
 
     def _extract_dsl(self, func, validate: bool = True):
@@ -833,12 +902,17 @@ class DSLKernel:
         any alias, including a bare `numpy` import, is honored).  The DSL grammar
         only accepts bare function-name calls.  No-op, returning the inputs
         unchanged, when there is nothing to rewrite (including when the alias is
-        shadowed by one of the kernel's own parameter names).
+        shadowed by a parameter, local, or closure binding).
         """
+        code = getattr(func, "__code__", None)
+        shadowed = set(input_names)
+        if code is not None:
+            shadowed.update(code.co_varnames)
+            shadowed.update(code.co_freevars)
         aliases = {
             name
             for name, value in getattr(func, "__globals__", {}).items()
-            if value is numpy and name not in input_names
+            if value is numpy and name not in shadowed
         }
         if not aliases:
             return dsl_source, dsl_tree, dsl_func
@@ -872,7 +946,62 @@ class DSLKernel:
             raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
         return [a.arg for a in (args.posonlyargs + args.args)]
 
+    def export(
+        self,
+        input_dtypes,
+        output_dtype,
+        *,
+        capture_dtypes=None,
+        constants=None,
+        metadata=None,
+        version="0.1",
+        casting="unsafe",
+        cardinality="elementwise",
+        ndim=0,
+    ):
+        """Export a typed Menudet JSON artifact without calling the Python function.
+
+        ``input_dtypes`` maps runtime parameter names to explicit logical dtypes.
+        Optional ``constants`` supplies scalar values for remaining parameters.
+        Globals/closure scalars are snapshotted at export and become explicit,
+        collision-free parameters. ``capture_dtypes`` overrides scalar type
+        inference (Python bool/int/float infer bool/int64/float64 respectively;
+        supported NumPy scalars retain their dtype). Arrays, objects, and external
+        callbacks cannot be captures. Import via :meth:`blosc2.MenudetKernel.from_json`.
+
+        Menudet ``version="0.1"`` is an beta specification with
+        NumPy-style arithmetic and optional JIT. Final output supports
+        ``casting="safe"``, ``"same_kind"`` or ``"unsafe"``. Numeric captures follow
+        the declared scalar category:
+        ordinary numeric captures are weak scalars; NumPy scalars and explicit
+        ``capture_dtypes`` are strong typed scalars.
+        Menudet supports mixed numeric types and fixed byte/Unicode snapshots;
+        ``cardinality`` is ``elementwise`` or ``block_scalar``, and ``ndim``
+        declares the required logical coordinate rank. Source header pragmas
+        (``me:fp``, ``me:compiler``, ``me:math``, ``me:ulp``) are preserved in the
+        artifact. Omitted policy fields stay inheritance requests resolved by the
+        importer's environment; environment-derived choices are never baked into
+        exported source. The native loader validates normalized source, widths,
+        policy and cardinality before export succeeds.
+        """
+        from .menudet_kernel import export_menudet_kernel
+
+        return export_menudet_kernel(
+            self,
+            input_dtypes,
+            output_dtype,
+            capture_dtypes=capture_dtypes,
+            constants=constants,
+            metadata=metadata,
+            version=version,
+            casting=casting,
+            cardinality=cardinality,
+            ndim=ndim,
+        )
+
     def __call__(self, inputs_tuple, output, offset=None):
+        if self.func is None:
+            raise RuntimeError("A native-source DSL kernel cannot execute as a Python function")
         if self.dsl_error is not None:
             raise self.dsl_error
         if self._legacy_udf_signature:
@@ -897,16 +1026,29 @@ class DSLKernel:
             return None
 
 
-def dsl_kernel(func):
-    """Decorator to wrap a function in a DSLKernel.
+class DSLKernel:
+    """Retired public constructor; use :func:`blosc2.menudet` instead."""
 
-    Default argument values in *func*'s signature are accepted as ordinary named
-    inputs, but they are honored (filled in when omitted) only through the
-    ``@blosc2.jit`` call path.  Calling a :class:`DSLKernel` directly (e.g. via
-    :func:`lazyudf`) requires every input to be passed positionally.
+    def __new__(cls, *args, **kwargs):
+        return dsl_kernel()
+
+    @classmethod
+    def from_source(cls, *args, **kwargs):
+        return dsl_kernel()
+
+
+def dsl_kernel(func=None, **kwargs):
+    """Retired alpha decorator. Use :func:`blosc2.menudet` for new computations.
+
+    This name remains importable to provide migration guidance, not to enable
+    new legacy authoring. Source normalization remains internal to Menudet.
     """
-
-    return DSLKernel(func)
+    raise RuntimeError(
+        "Legacy DSL authoring (@blosc2.dsl_kernel and DSLKernel) has been retired. "
+        "Use @blosc2.menudet instead. "
+        "See the migration guide: "
+        "https://blosc.org/python-blosc2/guides/migrating_to_menudet.html"
+    )
 
 
 def validate_dsl(func):
@@ -915,7 +1057,7 @@ def validate_dsl(func):
     Parameters
     ----------
     func
-        A Python callable or :class:`DSLKernel`.
+        A Python callable (or an internal normalized source kernel).
 
     Returns
     -------
@@ -929,8 +1071,7 @@ def validate_dsl(func):
     Examples
     --------
     >>> import blosc2
-    >>> @blosc2.dsl_kernel
-    ... def k(a, b):
+    >>> def k(a, b):
     ...     return a * a + b * b
     >>> info = blosc2.validate_dsl(k)
     >>> info["valid"]
@@ -940,8 +1081,7 @@ def validate_dsl(func):
 
     An unsupported construct is reported instead of raising:
 
-    >>> @blosc2.dsl_kernel
-    ... def bad(a):
+    >>> def bad(a):
     ...     return 1 if a > 0 else 0
     >>> blosc2.validate_dsl(bad)["valid"]
     False
@@ -952,7 +1092,7 @@ def validate_dsl(func):
         back to the interpreter) for given operand/output dtypes.
     """
 
-    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    kernel = func if isinstance(func, SourceKernel) else SourceKernel(func)
     err = kernel.dsl_error
     return {
         "valid": err is None,
@@ -960,6 +1100,64 @@ def validate_dsl(func):
         "input_names": kernel.input_names,
         "error": None if err is None else str(err),
     }
+
+
+def validate_menudet(
+    source, input_dtypes, output_dtype, *, language_version="0.1", ndim=0, cardinality=None
+):
+    """Check raw native source and an exact typed signature against the Menudet 0.1 beta profile.
+
+    Return a dictionary with ``valid``, ``status``, ``line``, ``column``, and
+    ``error``. Validation neither executes a kernel nor invokes a JIT compiler.
+    It does not normalize frontend syntax, inspect globals, or certify runtime
+    input ranges, target compatibility, or sandbox safety. Native support is
+    required; older builds report ``runtime_unsupported`` without Python fallback.
+
+    ``input_dtypes`` maps parameter names to explicit dtype descriptions. Parameter
+    binding is by name; mapping order may differ from source order. Dtypes describe
+    logical values, not the storage layout of any actual input arrays.
+    The default ``language_version="0.1"`` is an beta specification admitting mixed numeric and fixed-width ``S``/``U``
+    signatures. ``ndim`` declares the logical rank for reserved ND symbols;
+    missing or insufficient context rejects explicitly. ``cardinality`` may be
+    ``elementwise`` or ``block_scalar`` to assert the native return contract;
+    None validates the inferred contract. Neither arrays nor an artifact JSON
+    loader are needed. Exact string output width is checked natively.
+    """
+    from collections.abc import Mapping
+
+    from . import blosc2_ext
+
+    if not isinstance(source, str) or not isinstance(language_version, str):
+        raise TypeError("source and language_version must be strings")
+    if not isinstance(input_dtypes, Mapping):
+        raise TypeError("input_dtypes must map parameter names to explicit dtypes")
+    if "\x00" in source or "\x00" in language_version:
+        raise ValueError("Menudet source and version must not contain NUL characters")
+    if language_version != "0.1":
+        return {
+            "valid": False,
+            "status": "unsupported_version",
+            "line": 0,
+            "column": 0,
+            "error": "Unsupported Menudet version; expected Menudet 0.1 beta",
+        }
+    if any(not isinstance(name, str) or "\x00" in name for name in input_dtypes):
+        raise ValueError("Menudet input names must be strings without NUL characters")
+    if type(ndim) is not int or not 0 <= ndim <= 2**31 - 1:
+        raise ValueError("ndim must be a nonnegative Python integer representable by the native API")
+    contracts = {None: 0, "elementwise": 1, "block_scalar": 2}
+    if cardinality not in contracts:
+        raise ValueError("cardinality must be None, 'elementwise' or 'block_scalar'")
+    validator = getattr(blosc2_ext, "validate_menudet_source", None)
+    if validator is None:
+        return {
+            "valid": False,
+            "status": "runtime_unsupported",
+            "line": 0,
+            "column": 0,
+            "error": "Rebuild miniexpr and the extension with Menudet validation support",
+        }
+    return validator(source, input_dtypes, output_dtype, language_version, ndim, contracts[cardinality])
 
 
 def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blocks=None):
@@ -973,7 +1171,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     Parameters
     ----------
     func
-        A Python callable or :class:`DSLKernel`.
+        A Python callable (or an internal normalized source kernel).
     operands
         One spec per kernel input.  A NumPy dtype (e.g. ``np.float64``, ``"f8"``)
         marks an *array* operand; a Python ``int``/``float``/``bool`` marks a *scalar*
@@ -998,8 +1196,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> @blosc2.dsl_kernel
-    ... def k(a, b):
+    >>> def k(a, b):
     ...     return a * a + b * b
     >>> status = blosc2.validate_dsl_jit(k, [np.float64, np.float64], np.float64)
     >>> status["jit"]
@@ -1010,8 +1207,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     Pass array operands as dtypes and scalar parameters as values (the scalar is
     inlined as a constant, as at run time):
 
-    >>> @blosc2.dsl_kernel
-    ... def scaled(a, n):
+    >>> def scaled(a, n):
     ...     return a * float(n)
     >>> blosc2.validate_dsl_jit(scaled, {"a": np.float64, "n": 3}, np.float64)["jit"]
     True
@@ -1024,7 +1220,7 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
 
     import blosc2
 
-    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    kernel = func if isinstance(func, SourceKernel) else SourceKernel(func)
     if kernel.dsl_error is not None:
         return {
             "valid": False,
@@ -1071,76 +1267,11 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     return status
 
 
-def kernel_from_source(source: str, name: str | None = None) -> DSLKernel:
-    """Reconstruct a :class:`DSLKernel` from its stored source text.
+def kernel_from_source(source: str, name: str | None = None):
+    """Reject retired Python-source reconstruction without parsing or execution."""
+    from .exceptions import UnsupportedLegacyRecipeError
 
-    Executes *source* in a restricted namespace (builtins minus ``__import__``,
-    plus ``np`` and ``blosc2``), extracts the defined function, and wraps it in
-    a :class:`DSLKernel`.  This is the inverse of persisting
-    :attr:`DSLKernel.dsl_source` and is shared by the persisted-``LazyUDF``
-    decoder and the CTable DSL-column loaders.
-
-    Parameters
-    ----------
-    source
-        Complete, standalone function-definition source (as produced by
-        :attr:`DSLKernel.dsl_source` or :func:`inspect.getsource`).
-    name
-        Name of the function to extract from *source*.  When omitted, the
-        single top-level function definition in *source* is used.
-    """
-    import builtins
-    import linecache
-
-    import numpy as np
-
-    import blosc2
-
-    tree = ast.parse(source)
-    func_defs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
-    if name is None:
-        if len(func_defs) != 1:
-            raise ValueError(
-                "kernel_from_source requires an explicit 'name' when 'source' does not "
-                "contain exactly one top-level function definition"
-            )
-        name = func_defs[0].name
-
-    # Security: reject sources that include top-level statements with
-    # side effects (assignments, calls, loops, etc.) beyond the function
-    # definition itself.  Imports and docstrings are permitted.
-    allowed_nodes = (ast.FunctionDef, ast.Import, ast.ImportFrom)
-    for node in tree.body:
-        if isinstance(node, allowed_nodes):
-            continue
-        # A bare string literal at module level is a docstring — safe.
-        if (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        ):
-            continue
-        raise ValueError(
-            f"kernel_from_source source must contain only a function definition "
-            f"(optionally preceded by imports), but found: {ast.dump(node)[:120]}"
-        )
-
-    local_ns: dict = {}
-    filename = f"<{name}>"
-    safe_globals = {
-        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
-        "np": np,
-        "blosc2": blosc2,
-    }
-    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
-    exec(compile(source, filename, "exec"), safe_globals, local_ns)
-    try:
-        func = local_ns[name]
-    except KeyError:
-        raise ValueError(f"kernel_from_source: source did not define function {name!r}") from None
-    if not isinstance(func, DSLKernel):
-        func = DSLKernel(func)
-    return func
+    raise UnsupportedLegacyRecipeError()
 
 
 class DSLBuilder:

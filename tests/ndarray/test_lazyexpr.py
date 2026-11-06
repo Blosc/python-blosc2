@@ -5,7 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import itertools
 import math
+import operator
 import pathlib
 import warnings
 
@@ -13,6 +15,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 from blosc2.lazyexpr import ne_evaluate
 from blosc2.utils import get_chunks_idx, npvecdot
 
@@ -43,6 +46,187 @@ def test_arctan2_preserves_fractional_results(dtype, fused):
     np.testing.assert_allclose(expr.compute()[:], expected, rtol=1e-6)
     np.testing.assert_allclose(expr.sum(), expected.sum(), rtol=1e-6)
     np.testing.assert_allclose(blosc2.lazyexpr("arctan2(a, b)")[:], expected, rtol=1e-6)
+
+
+_RESULT_DTYPE_EXPRESSIONS = [
+    "hypot({n}, b)",
+    "copysign({n}, b)",
+    "nextafter({n}, b)",
+    "arctan2({n}, b)",
+    "hypot(a, b * 1)",
+    "hypot({n}, 2)",
+    "arctan2({n}, 2.5)",
+    "(a < b) / b",
+    "a / 2",
+    "a / b",
+    "{n} / b",
+    "{n} // b",
+    "{n} % b",
+    "a ** b",
+    "{n} ** 2",
+    "sin({n})",
+    "sqrt(a)",
+]
+# Cases where BLOSC2_EXPRESSION_EVALUATOR=legacy still gives the uniform evaluator's result dtype, or
+# computes integer true division in integer arithmetic on expr[:]; the typed evaluator is the default
+_ALL_INT_DTYPES = (np.bool_, np.int8, np.uint16, np.int32, np.int64)
+_LEGACY_RESULT_DTYPE_FAILURES = {
+    "hypot({n}, b)": _ALL_INT_DTYPES,
+    "copysign({n}, b)": _ALL_INT_DTYPES,
+    "nextafter({n}, b)": (np.int32, np.int64),
+    "hypot(a, b * 1)": _ALL_INT_DTYPES,
+    "hypot({n}, 2)": _ALL_INT_DTYPES,
+    "(a < b) / b": _ALL_INT_DTYPES,
+    "a / 2": (np.bool_,),
+    "a / b": (np.bool_, np.int8, np.uint16, np.int64),
+    "{n} / b": (np.bool_, np.int8, np.uint16, np.int64),
+    "{n} // b": (np.bool_,),
+    "{n} % b": (np.bool_,),
+    "a ** b": (np.bool_,),
+    "{n} ** 2": (np.bool_,),
+}
+# The string (lazyexpr) path now matches NumPy for bool true division; the
+# ufunc-built (functions) path still keeps the uniform result dtype.
+_LEGACY_STRING_FIXED = {
+    "(a < b) / b",
+    "a / b",
+    "{n} / b",
+}
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expression", "build"),
+    [
+        (dtype, expression, build)
+        for index, expression in enumerate(_RESULT_DTYPE_EXPRESSIONS)
+        for build_index, build in enumerate(("functions", "string"))
+        # Bool has operator-specific result types: keep both authoring routes for
+        # every expression. Rotate other integer widths; their full operator
+        # matrix is native-owned. nextafter needs the int32/int64 signatures.
+        for dtype in (
+            (np.int32, np.int64)
+            if "nextafter" in expression
+            else (np.bool_, (np.int8, np.uint16, np.int64)[(index + build_index) % 3])
+        )
+    ],
+)
+def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    # Float functions and true division of integer (or bool) subexpressions give floats, and bool
+    # //, % and ** give int8, as in NumPy; with the operand dtype, their results were truncated
+    if dtype is np.int32 and expression in ("a / b", "{n} / b"):
+        pytest.skip("int32 / int32 gives float32 on purpose")
+    if "nextafter" in expression and dtype not in (np.int32, np.int64):
+        pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
+    legacy_fixed = build == "string" and dtype is np.bool_ and expression in _LEGACY_STRING_FIXED
+    if (
+        not typed_evaluator_enabled()
+        and not legacy_fixed
+        and dtype in _LEGACY_RESULT_DTYPE_FAILURES.get(expression, ())
+    ):
+        reason = "the legacy evaluator keeps its uniform result dtypes and integer true division"
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+    # A subexpression of the operand dtype (bool + bool is an or in NumPy)
+    expression = expression.format(n="(a & b)" if dtype is np.bool_ else "(a + b)")
+    na = (np.arange(1200).reshape(30, 40) % 5).astype(dtype)
+    nb = (np.arange(1200).reshape(30, 40) % 3 + 1).astype(dtype)
+    a = blosc2.asarray(na, chunks=(10, 40), blocks=(5, 40))
+    b = blosc2.asarray(nb, chunks=(10, 40), blocks=(5, 40))
+    namespace = {"hypot": np.hypot, "copysign": np.copysign, "nextafter": np.nextafter}
+    namespace.update(arctan2=np.arctan2, sin=np.sin, sqrt=np.sqrt)
+    with np.errstate(all="ignore"):
+        expected = eval(expression, namespace, {"a": na, "b": nb})
+        if dtype is np.int32 and expression == "a / 2" and blosc2.result_type(2) == np.int32:
+            # A Python int is int32 here (as on wasm32), so this is int32 / int32, which gives float32
+            # on purpose; elsewhere it is int32 / int64, float64 as in NumPy
+            expected = expected.astype(np.float32)
+        if build == "string":
+            expr = blosc2.lazyexpr(expression, {"a": a, "b": b})
+        else:
+            expr = eval(expression, {name: getattr(blosc2, name) for name in namespace}, {"a": a, "b": b})
+        assert expr.dtype == expected.dtype
+        for res in (expr[:], expr[...], expr.compute()[:], expr[:7]):
+            assert res.dtype == expected.dtype
+        rtol = 1e-3 if expected.dtype == np.float16 else 1e-6
+        np.testing.assert_allclose(expr[:], expected, rtol=rtol)
+        np.testing.assert_allclose(expr.compute()[:], expected, rtol=rtol)
+        np.testing.assert_allclose(expr[:7], expected[:7], rtol=rtol)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "op"),
+    [(np.int32, op) for op in ("&", "|", "^", "<<", ">>")]
+    + [
+        (np.float64, "+"),
+        (np.int64, "*"),
+        (np.int32, "/"),
+        (np.int64, "/"),
+        (np.float64, "/"),
+        (np.int32, "//"),
+        (np.int64, "%"),
+        (np.float64, "**"),
+        (np.int64, "<"),
+        (np.float64, "hypot"),
+    ],
+)
+def test_lazyexpr_non_native_byte_order(dtype, op):
+    # The operand dtype checks compare against native dtypes: a non-native operand must give the
+    # same result dtype as a native one (no "Invalid operand type for &: >i4", and >i4 / >i4
+    # keeps the float32 of int32 / int32)
+    if dtype is np.float64 and op in ("&", "|", "^", "<<", ">>"):
+        pytest.skip("no float bitwise operators")
+    native = np.dtype(dtype)
+    swapped = native.newbyteorder()
+    na = np.arange(1, 7, dtype=native)
+    nb = np.array([1, 2, 1, 3, 1, 2], dtype=native)
+
+    def build(a, b):
+        return blosc2.hypot(a, b) if op == "hypot" else eval(f"a {op} b")
+
+    reference = build(blosc2.asarray(na), nb)
+    if op == "/" and dtype is np.int32:
+        assert np.dtype(reference.dtype) == np.float32
+    expr = build(blosc2.asarray(na), nb.astype(swapped))
+    assert expr.dtype == reference.dtype
+    np.testing.assert_array_equal(expr[:], reference[:])
+    np.testing.assert_array_equal(expr.compute()[:], reference.compute()[:])
+    # Only the dtype for non-native NDArray operands: their values are a separate problem
+    sa, sb = na.astype(swapped), nb.astype(swapped)
+    for a, b in ((na, sb), (sa, nb), (sa, sb)):
+        assert build(blosc2.asarray(a), blosc2.asarray(b)).dtype == reference.dtype
+
+
+@pytest.mark.parametrize("other", [np.ones(4, dtype=np.int32), 2, 2.5])
+def test_arctan2_rejects_complex_when_built(other):
+    c = blosc2.asarray(np.ones(4, dtype=np.complex128))
+    for x in (c, c + c):
+        with pytest.raises(TypeError):
+            blosc2.arctan2(x, other)
+
+
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.parametrize("how", ["getitem", "compute", "sum"])
+def test_comparison_with_out_of_range_python_int(how, request):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    # NumPy 2 compares an int8 array with a Python int outside the int8 range (all True here);
+    # only arithmetic with such an int raises
+    if typed_evaluator_enabled():
+        # Raised by expression_graph._numpy_binary_dtype(), which treats the comparison as arithmetic
+        reason = "the typed evaluator raises OverflowError: Python integer 300 out of bounds for int8"
+        request.applymarker(pytest.mark.xfail(raises=OverflowError, reason=reason, strict=True))
+    elif how != "sum":
+        reason = "the legacy evaluator casts 300 to int8 (44): 144 True of 200"
+        request.applymarker(pytest.mark.xfail(raises=AssertionError, reason=reason, strict=True))
+    na = np.arange(-100, 100, dtype=np.int8)
+    a = blosc2.asarray(na, chunks=(50,), blocks=(10,))
+    expected = na < 300
+    expr = blosc2.lazyexpr("a < 300", {"a": a})
+    if how == "sum":
+        assert expr.sum() == expected.sum()
+    else:
+        np.testing.assert_array_equal(expr[:] if how == "getitem" else expr.compute()[:], expected)
 
 
 _UNARY_FUNCTIONS = [
@@ -82,26 +266,35 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100)])
+@pytest.fixture(params=[(NITEMS,), (NITEMS // 10, 100)])
 def shape_fixture(request):
     return request.param
 
 
-# params: (same_chunks, same_blocks)
+# Keep both precisions at each rank. Two small 1-D sizes do not exercise distinct
+# schedulers; use the larger one and retain independent partition relationships.
+DEFAULT_ARRAY_SCENARIOS = {
+    (np.float32, (NITEMS,), (True, False)),
+    (np.float32, (NITEMS // 10, 100), (True, True)),
+    (np.float64, (NITEMS,), (True, True)),
+    (np.float64, (NITEMS // 10, 100), (True, False)),
+}
+
+
 @pytest.fixture(
     params=[
-        (True, True),
-        (True, False),
-        pytest.param((False, True), marks=pytest.mark.heavy),
-        pytest.param((False, False), marks=pytest.mark.heavy),
+        pytest.param(
+            (dtype, shape, partitions),
+            marks=[] if (dtype, shape, partitions) in DEFAULT_ARRAY_SCENARIOS else pytest.mark.heavy,
+            id=f"{np.dtype(dtype).name}-{shape}-{partitions}",
+        )
+        for dtype in (np.float32, np.float64)
+        for shape in ((NITEMS,), (NITEMS // 10, 100))
+        for partitions in ((True, True), (True, False), (False, True), (False, False))
     ]
 )
-def chunks_blocks_fixture(request):
-    return request.param
-
-
-@pytest.fixture
-def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
+def array_fixture(request):
+    dtype_fixture, shape_fixture, chunks_blocks_fixture = request.param
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     chunks = chunks1 = blocks = blocks1 = None  # silence linter
@@ -317,6 +510,21 @@ def test_complex_evaluate(array_fixture):
         np.testing.assert_allclose(res[:], nres)
 
 
+@pytest.mark.parametrize("dtype", ["complex64", "complex128"])
+def test_complex_multiply_infinity(dtype):
+    values = np.array([complex(np.inf, -np.inf), complex(np.inf, 1), 1 + 2j, 0j], dtype=dtype)
+    array = blosc2.asarray(values, chunks=(4,), blocks=(2,))
+    with np.errstate(invalid="ignore"):
+        expected = values * 2 + 1
+        expr = array * 2 + 1
+        results = [expr[:], expr[::2], expr.compute(jit=False)[:]]
+    for actual, reference in zip(results, [expected, expected[::2], expected], strict=True):
+        # Compare components separately: complex NaN equality can hide an
+        # incorrect finite/infinite component when its other component is NaN.
+        np.testing.assert_equal(actual.real, reference.real)
+        np.testing.assert_equal(actual.imag, reference.imag)
+
+
 def test_complex_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
@@ -407,7 +615,9 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
 # Skip this test for blosc2.IS_WASM
 @pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("function", _UNARY_FUNCTIONS)
-def test_functions(function, dtype_fixture, shape_fixture):
+def test_functions(function, dtype_fixture):
+    # Every wrapper retains both precisions; rank is an independent scheduler axis.
+    shape_fixture = (NITEMS // 10, 100) if len(function) % 2 else (NITEMS,)
     nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -466,10 +676,22 @@ def test_functions(function, dtype_fixture, shape_fixture):
     ["arctan2", "**"],
 )
 @pytest.mark.parametrize(
-    ("value1", "value2"),
-    [("NDArray", "scalar"), ("NDArray", "NDArray"), ("scalar", "NDArray"), ("scalar", "scalar")],
+    ("value1", "value2", "dtype_fixture"),
+    [
+        (left, right, dtype)
+        for left, right in (
+            ("NDArray", "scalar"),
+            ("NDArray", "NDArray"),
+            ("scalar", "NDArray"),
+            ("scalar", "scalar"),
+        )
+        # Python scalar/scalar construction does not use the array dtype fixture.
+        for dtype in ((np.float64,) if left == right == "scalar" else (np.float32, np.float64))
+    ],
+    indirect=["dtype_fixture"],
 )
-def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, value2):
+def test_arctan2_pow(urlpath, dtype_fixture, function, value1, value2):
+    shape_fixture = (NITEMS // 10, 100) if value1 == "NDArray" else (NITEMS,)
     nelems = np.prod(shape_fixture)
     if urlpath is None:
         urlpath1 = urlpath2 = urlpath_save = None
@@ -487,7 +709,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             expr = blosc2.LazyExpr(new_op=(a1, function, a2))
             if urlpath is not None:
                 expr.save(urlpath=urlpath_save)
-                expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+                expr = blosc2.open(urlpath_save, mode="r")
             res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
@@ -501,7 +723,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             expr = blosc2.LazyExpr(new_op=(a1, function, value2))
             if urlpath is not None:
                 expr.save(urlpath=urlpath_save)
-                expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+                expr = blosc2.open(urlpath_save, mode="r")
             res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
@@ -517,7 +739,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         expr = blosc2.LazyExpr(new_op=(value1, function, a2))
         if urlpath is not None:
             expr.save(urlpath=urlpath_save)
-            expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+            expr = blosc2.open(urlpath_save, mode="r")
         res_lazyexpr = expr.compute()
         # Evaluate using NumExpr
         if function == "**":
@@ -737,7 +959,7 @@ def test_save():
     )
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 
-    expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+    expr = blosc2.open(urlpath_save, mode="r")
     # After opening, check that a lazy expression does have an array
     # and schunk attributes. This is to allow the .info() method to work.
     assert hasattr(expr, "array") is True
@@ -755,11 +977,12 @@ def test_save():
     expr = "a1 / a2 + a2 - a3 * a4**x"
     var_dict = {"a1": ops[0], "a2": ops[1], "a3": ops[2], "a4": ops[3], "x": x}
     lazy_expr = eval(expr, var_dict)
+    expected_persisted = lazy_expr[:]
     lazy_expr.save(urlpath=urlpath_save2)
-    expr = blosc2.open(urlpath_save2, mode="r", deserialize="full")
+    expr = blosc2.open(urlpath_save2, mode="r")
     assert expr.array.dtype == np.float64
     res = expr.compute()
-    nres = ne_evaluate("na1 / na2 + na2 - na3 * na4**3")
+    nres = expected_persisted  # Persistence must preserve values, not another engine's pow lowering.
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
     np.testing.assert_allclose(expr[:], nres, rtol=tol, atol=tol)
@@ -780,7 +1003,7 @@ def test_save_unsafe():
     expr.save(urlpath=urlpath)
     disk_arrays.append(urlpath)
 
-    expr = blosc2.open(urlpath, mode="r", deserialize="full")
+    expr = blosc2.open(urlpath, mode="r")
     # Replace expression by a (potentially) unsafe expression
     expr.expression = "import os; os.system('touch /tmp/unsafe')"
     with pytest.raises(ValueError) as excinfo:
@@ -816,7 +1039,8 @@ def test_save_unsafe():
         pytest.param("expm1", marks=pytest.mark.heavy),
     ],
 )
-def test_save_functions(function, dtype_fixture, shape_fixture):
+def test_save_functions(function, dtype_fixture):
+    shape_fixture = (NITEMS // 10, 100) if len(function) % 2 else (NITEMS,)
     nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -828,7 +1052,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
     expr.save(urlpath=urlpath_save)
     del expr
-    expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+    expr = blosc2.open(urlpath_save, mode="r")
     res_lazyexpr = expr.compute()
 
     # Evaluate using NumExpr
@@ -844,7 +1068,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
-    expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+    expr = blosc2.open(urlpath_save, mode="r")
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
@@ -868,7 +1092,7 @@ def test_save_contains(values):
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
             expr_lazy.save(urlpath=urlpath_save)
-            expr_lazy = blosc2.open(urlpath_save, mode="r", deserialize="full")
+            expr_lazy = blosc2.open(urlpath_save, mode="r")
             # Evaluate using NumExpr
             expr_numexpr = f"{'contains'}(a1, value2)"
             res_numexpr = ne_evaluate(expr_numexpr)
@@ -878,7 +1102,7 @@ def test_save_contains(values):
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
             expr_lazy.save(urlpath=urlpath_save)
-            expr_lazy = blosc2.open(urlpath_save, mode="r", deserialize="full")
+            expr_lazy = blosc2.open(urlpath_save, mode="r")
             # Evaluate using NumExpr
             res_numexpr = ne_evaluate("contains(a2, a1)")
     else:  # ("str", "NDArray")
@@ -888,7 +1112,7 @@ def test_save_contains(values):
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
         expr_lazy.save(urlpath=urlpath_save)
-        expr_lazy = blosc2.open(urlpath_save, mode="r", deserialize="full")
+        expr_lazy = blosc2.open(urlpath_save, mode="r")
         # Evaluate using NumExpr
         res_numexpr = ne_evaluate("contains(value1, a2)")
     res_lazyexpr = expr_lazy.compute()
@@ -922,7 +1146,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 
-    expr = blosc2.open(urlpath_save, mode="r", deserialize="full")
+    expr = blosc2.open(urlpath_save, mode="r")
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 
@@ -976,7 +1200,7 @@ def test_save_constructor(disk, shape, dtype, constructor):
         a = b2func(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
         expr = f"a + {constructor}({lshape}, dtype={dtype}, shape={shape}) + 1"
     if disk:
-        a = blosc2.open(urlpath, mode="r", deserialize="full")
+        a = blosc2.open(urlpath, mode="r")
     npfunc = getattr(np, constructor)
     if constructor == "linspace":
         na = npfunc(0, 10, lshape, dtype=dtype).reshape(shape)
@@ -994,7 +1218,7 @@ def test_save_constructor(disk, shape, dtype, constructor):
     assert lexpr.shape == a.shape
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     nres = na + na + 1
     assert np.allclose(res[()], nres)
@@ -1016,7 +1240,7 @@ def test_save_2_constructors(shape, disk):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     na = np.arange(lshape).reshape(shape)
     nb = np.ones(shape)
@@ -1043,7 +1267,7 @@ def test_save_constructor_reshape(shape, disk):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     na = np.arange(lshape).reshape(shape)
     nb = np.ones(shape)
@@ -1067,7 +1291,7 @@ def test_save_2equal_constructors(shape, disk):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r", deserialize="full")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     na = np.ones(shape, dtype=np.int8)
     nb = np.ones(shape)
@@ -1374,9 +1598,9 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
         b = blosc2.zeros((N, N), urlpath=bpath, mode="w", chunks=chunks, blocks=blocks)
         c = blosc2.zeros((N, N), urlpath=cpath, mode="w", chunks=chunks, blocks=blocks)
     if disk:
-        a = blosc2.open("a.b2nd", mode="r", deserialize="full")
-        b = blosc2.open("b.b2nd", mode="r", deserialize="full")
-        c = blosc2.open("c.b2nd", mode="r", deserialize="full")
+        a = blosc2.open("a.b2nd", mode="r")
+        b = blosc2.open("b.b2nd", mode="r")
+        c = blosc2.open("c.b2nd", mode="r")
 
     expr = ((a**3 + blosc2.sin(c * 2)) < b) & ~(c > 0)
 
@@ -1414,7 +1638,7 @@ def test_get_expr_operands(expression, expected_operands):
     assert blosc2.get_expr_operands(expression) == set(expected_operands)
 
 
-@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
 @pytest.mark.parametrize(
     "scalar",
     [
@@ -1548,23 +1772,27 @@ def test_str_arange_non_divisible_step():
 
 
 @pytest.mark.parametrize(
-    "obj",
+    ("obj", "item"),
     [
-        blosc2.arange(10),
-        blosc2.ones(10),
-        blosc2.zeros(10),
-        blosc2.arange(10) + blosc2.ones(10),
-        blosc2.arange(10) + np.ones(10),
-        "arange(10)",
-        "arange(10) + arange(10)",
-        "arange(10) + linspace(0, 1, 10)",
-        "arange(10, shape=(10,))",
-        "arr",
-        "arange(10) + arr",
+        (obj, ((), slice(10), slice(0, 10, 2))[index % 3])
+        for index, obj in enumerate(
+            [
+                blosc2.arange(10),
+                blosc2.ones(10),
+                blosc2.zeros(10),
+                blosc2.arange(10) + blosc2.ones(10),
+                blosc2.arange(10) + np.ones(10),
+                "arange(10)",
+                "arange(10) + arange(10)",
+                "arange(10) + linspace(0, 1, 10)",
+                "arange(10, shape=(10,))",
+                "arr",
+                "arange(10) + arr",
+            ]
+        )
     ],
 )
 @pytest.mark.parametrize("getitem", [True, False])
-@pytest.mark.parametrize("item", [(), slice(10), slice(0, 10, 2)])
 def test_only_ndarrays_or_constructors(obj, getitem, item):
     arr = blosc2.arange(10)  # is a test case
     larr = blosc2.lazyexpr(obj)
@@ -1596,9 +1824,10 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
-def test_string_scalar_keeps_miniexpr_path(monkeypatch):
+def test_string_scalar_keeps_miniexpr_path(monkeypatch, automatic_native_runtime):
     import importlib
 
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
@@ -1687,9 +1916,10 @@ def test_miniexpr_failure_falls_back_default(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
+def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch, automatic_native_runtime):
     import importlib
 
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
@@ -1720,7 +1950,7 @@ def test_missing_operator():
     blosc2.remove_urlpath("b.b2nd")
     # Re-open the lazy expression
     with pytest.raises(blosc2.exceptions.MissingOperands) as excinfo:
-        blosc2.open("expr.b2nd", mode="r", deserialize="full")
+        blosc2.open("expr.b2nd", mode="r")
 
     # Check that some operand is missing
     assert "a" not in excinfo.value.missing_ops
@@ -1751,13 +1981,13 @@ def test_save_dictstore_operands(tmp_path):
         expr = blosc2.lazyexpr("a + b")
         expr.save(expr_path)
 
-    carrier = blosc2.open(expr_path, mode="r", deserialize="full").array
+    carrier = blosc2.open(expr_path, mode="r").array
     assert carrier.schunk.vlmeta["b2o"]["operands"] == {
         "a": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/a"},
         "b": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/b"},
     }
 
-    restored = blosc2.open(expr_path, mode="r", deserialize="full")
+    restored = blosc2.open(expr_path, mode="r")
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], expected)
@@ -1773,6 +2003,9 @@ def test_save_proxy_operands_reopen_default_mode(tmp_path):
     expr = proxy + proxy
     expr.save(str(expr_path))
 
+    # Proxy reconstruction remains full-only, even inside an ordinary expression.
+    with pytest.raises(blosc2.UnsafeDeserializationError, match="proxy"):
+        blosc2.open(str(expr_path), mode="r")
     restored = blosc2.open(str(expr_path), mode="r", deserialize="full")
 
     assert isinstance(restored, blosc2.LazyExpr)
@@ -1795,7 +2028,7 @@ def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
 
     expr_path = tmp_path / "expr_vlmeta.b2nd"
     expr.save(str(expr_path))
-    restored = blosc2.open(str(expr_path), mode="r", deserialize="full")
+    restored = blosc2.open(str(expr_path), mode="r")
 
     assert restored.vlmeta["name"] == "sum"
     assert restored.vlmeta["config"] == {"scale": 1}
@@ -1803,9 +2036,9 @@ def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
     with pytest.raises(ValueError, match="reading mode"):
         restored.vlmeta["note"] = "persisted"
 
-    writable = blosc2.open(str(expr_path), mode="a", deserialize="full")
+    writable = blosc2.open(str(expr_path), mode="a")
     writable.vlmeta["note"] = "persisted"
-    reopened = blosc2.open(str(expr_path), mode="r", deserialize="full")
+    reopened = blosc2.open(str(expr_path), mode="r")
     assert reopened.vlmeta["note"] == "persisted"
     np.testing.assert_array_equal(reopened[:], np.arange(5, dtype=np.int64) * 2)
 
@@ -1881,19 +2114,19 @@ def test_chain_persistentexpressions():
 
     le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
     le1_.save("expr1.b2nd", mode="w")
-    myle1 = blosc2.open("expr1.b2nd", mode="r", deserialize="full")
+    myle1 = blosc2.open("expr1.b2nd", mode="r")
 
     le2_ = blosc2.lazyexpr("(le1 < c)", {"le1": myle1, "c": c})
     le2_.save("expr2.b2nd", mode="w")
-    myle2 = blosc2.open("expr2.b2nd", mode="r", deserialize="full")
+    myle2 = blosc2.open("expr2.b2nd", mode="r")
 
     le3_ = blosc2.lazyexpr("(b < 0)", {"b": b})
     le3_.save("expr3.b2nd", mode="w")
-    myle3 = blosc2.open("expr3.b2nd", mode="r", deserialize="full")
+    myle3 = blosc2.open("expr3.b2nd", mode="r")
 
     le4_ = blosc2.lazyexpr("(le2 & le3)", {"le2": myle2, "le3": myle3})
     le4_.save("expr4.b2nd", mode="w")
-    myle4 = blosc2.open("expr4.b2nd", mode="r", deserialize="full")
+    myle4 = blosc2.open("expr4.b2nd", mode="r")
     assert (myle4[:] == le4[:]).all()
 
     # Remove files
@@ -2403,9 +2636,361 @@ def test_cumulative_block_layout(monkeypatch, blocks):
     out = blosc2.empty(data.shape, dtype=data.dtype, chunks=chunks, blocks=blocks)
     expression = a + 0
     result = expression.cumulative_sum(axis=0, out=out)
-    expected = np.cumulative_sum(data, axis=0)
+    expected = np.cumsum(data, axis=0)
     np.testing.assert_array_equal(result[:], expected)
     np.testing.assert_array_equal(out[:], expected)
+
+
+def _record_miniexpr(monkeypatch):
+    """Force miniexpr on, and return the list the expressions it compiles get appended to."""
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    compiled = []
+
+    def wrapped_set_pref_expr(self, expression, inputs, *args, **kwargs):
+        res = original_set_pref_expr(self, expression, inputs, *args, **kwargs)
+        compiled.append(expression)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+    return compiled
+
+
+def _record_typed_prefilter(monkeypatch):
+    """Record artifacts scheduled through the typed Menudet prefilter."""
+    original = blosc2.NDArray._execute_menudet_prefilter
+    calls = []
+
+    def wrapped(self, kernel, inputs, *args, **kwargs):
+        res = original(self, kernel, inputs, *args, **kwargs)
+        calls.append(True)
+        return res
+
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", wrapped)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("dtype", "x", "y"),
+    [
+        (np.float32, "a", 0),
+        (np.float32, 1.5, "a"),
+        (np.int32, "a", 0.5),
+        (np.int16, "a", -1),
+        (np.float64, "a", "b"),
+    ],
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    compiled = _record_miniexpr(monkeypatch)
+    na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
+    nb = (na // 3).astype(dtype)
+    a = blosc2.asarray(na, chunks=(16, 30), blocks=(4, 30))
+    b = blosc2.asarray(nb, chunks=(16, 30), blocks=(4, 30))
+    ops, nops = {"a": a, "b": b}, {"a": na, "b": nb}
+    expr = blosc2.where(a > 500, ops.get(x, x), ops.get(y, y))
+    expected = np.where(na > 500, nops.get(x, x), nops.get(y, y))
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    if typed_evaluator_enabled():
+        assert not compiled
+    else:
+        # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
+        assert len(compiled) == 1
+        assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
+
+
+@pytest.mark.parametrize(
+    "case", ["mask", "mask_and_threshold", "labels", "labels_arrays", "wider_output", "int16"]
+)
+@pytest.mark.parametrize("getitem", [False, True])
+def test_where_mixed_dtypes_use_miniexpr(monkeypatch, case, getitem):
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    # Conditions whose operands cast safely to the output dtype stay on miniexpr
+    compiled = _record_miniexpr(monkeypatch)
+    rng = np.random.default_rng(1)
+    na = rng.normal(100, 50, (40, 30)).astype(np.float32)
+    nb = rng.normal(size=(40, 30)).astype(np.float32)
+    nm = na > 120
+    nl = rng.integers(0, 5, (40, 30)).astype(np.uint8)
+    ni = rng.integers(-100, 100, (40, 30)).astype(np.int16)
+    a, b, m, lbl, i = (blosc2.asarray(v, chunks=(16, 30), blocks=(4, 30)) for v in (na, nb, nm, nl, ni))
+    cond, x, y, ncond, nx, ny = {
+        "mask": (m, a, 0, nm, na, 0),
+        "mask_and_threshold": (m & (a > 100), a, 0, nm & (na > 100), na, 0),
+        "labels": (lbl == 3, a, 0, nl == 3, na, 0),
+        "labels_arrays": (lbl == 3, a, b, nl == 3, na, nb),
+        "wider_output": (a > 100, 1.0, 0.0, na > 100, 1.0, 0.0),
+        "int16": (i > 5, a, i, ni > 5, na, ni),
+    }[case]
+    expr = blosc2.where(cond, x, y)
+    expected = np.where(ncond, nx, ny)
+    res = expr[:] if getitem else expr.compute()[:]
+    assert res.dtype == expected.dtype
+    np.testing.assert_array_equal(res, expected)
+    if typed_evaluator_enabled():
+        assert not compiled
+    else:
+        assert len(compiled) == 1
+        assert "where(" in compiled[0]
+
+
+def test_where_float32_condition_inexact_literal():
+    # NumPy compares float32 against float32(0.1), so nothing is > 0.1 here.  A fused where() must
+    # not compare against the double 0.1 (or against 0, the literal typed by an int64 output).
+    a = blosc2.asarray(np.full(12, 0.1, dtype=np.float32), chunks=(6,), blocks=(3,))
+    b = blosc2.asarray(np.full(12, 0.5, dtype=np.float32), chunks=(6,), blocks=(3,))
+    for x, y in ((1, 0), (a, 0), (a, b), (1.0, b)):
+        expr = blosc2.where(a > 0.1, x, y)
+        expected = np.full(12, y if np.isscalar(y) else 0.5)
+        np.testing.assert_array_equal(expr[:], expected)
+        np.testing.assert_array_equal(expr.compute()[:], expected)
+        expr = blosc2.where(a <= 0.1, x, y)
+        expected = np.full(12, x if np.isscalar(x) else 0.1, dtype=expr.dtype)
+        np.testing.assert_array_equal(expr[:], expected)
+        np.testing.assert_array_equal(expr.compute()[:], expected)
+
+
+def test_where_large_uint64_scalar():
+    a = blosc2.asarray(np.arange(12, dtype=np.uint64), chunks=(6,), blocks=(3,))
+    big = np.uint64(2**63 + 1)
+    expr = blosc2.where(a > 5, big, a)
+    expected = np.array(list(range(6)) + [2**63 + 1] * 6, dtype=np.uint64)
+    for res in (expr[:], expr.compute()[:]):
+        assert res.dtype == np.uint64
+        np.testing.assert_array_equal(res, expected)
+
+
+@pytest.mark.parametrize("scalar_array", [False, True])
+@pytest.mark.parametrize("case", ["compare", "fused_compare", "reverse_compare", "add", "maximum"])
+def test_strong_scalar_survives_expression_fusion(monkeypatch, scalar_array, case):
+    compiled = _record_miniexpr(monkeypatch)
+    na = np.full((4, 6), 0.1, dtype=np.float32)
+    a = blosc2.asarray(na, chunks=(2, 6), blocks=(1, 3))
+    scalar = np.array(0.1, dtype=np.float64) if scalar_array else np.float64(0.1)
+    if case == "compare":
+        expr, expected = a > scalar, na > scalar
+    elif case == "fused_compare":
+        expr, expected = (a + 0) > scalar, (na + 0) > scalar
+    elif case == "reverse_compare":
+        expr, expected = scalar < (a + 0), scalar < (na + 0)
+    elif case == "add":
+        expr, expected = (a + 0) + scalar, (na + 0) + scalar
+    else:
+        expr, expected = blosc2.maximum(a, scalar), np.maximum(na, scalar)
+    # No scalar inlining: strong dtypes remain available to each evaluator.
+    assert any(getattr(value, "dtype", None) == np.float64 for value in expr.operands.values())
+    assert expr.dtype == expected.dtype
+    for result in (expr[:], expr.compute(jit=False)[:], expr.compute(jit=True)[:], expr[:2]):
+        assert result.dtype == expected.dtype
+        np.testing.assert_array_equal(result, expected[:2] if result.shape == (2, 6) else expected)
+    np.testing.assert_array_equal(expr.sum(), expected.sum())
+    assert not compiled
+
+
+def test_python_scalar_remains_weak():
+    na = np.full(12, 0.1, dtype=np.float32)
+    a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
+    for result in ((a > 0.1)[:], ((a + 0) > 0.1)[:]):
+        np.testing.assert_array_equal(result, na > 0.1)
+
+
+def test_float32_scalar_retains_strong_dtype():
+    na = np.ones(12, dtype=np.float16)
+    a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
+    scalar = np.float32(0.1)
+    for expr in (a + scalar, (a + 0) + scalar, scalar + (a + 0)):
+        expected = na + scalar
+        assert expr.dtype == expected.dtype
+        np.testing.assert_array_equal(expr[:], expected)
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.uint64])
+@pytest.mark.parametrize(
+    "case", ["eq_literal", "add_literal", "add_scalar", "where_scalar", "where_literal_condition"]
+)
+def test_large_integer_constants_exact(dtype, case):
+    # miniexpr parses literals into C doubles, so integers beyond 2**53 must not reach it
+    na = (2**53 + np.arange(-6, 6, dtype=np.int64)).astype(dtype)  # the default int is int32 on wasm32
+    a = blosc2.asarray(na, chunks=(6,), blocks=(3,))
+    big = 2**53 + 1
+    huge = dtype(2**63 + 1 if dtype == np.uint64 else 2**62 + 1)
+    expr, expected = {
+        "eq_literal": (a == big, na == big),
+        "add_literal": (a + big, na + big),
+        "add_scalar": (a + huge, na + huge),
+        "where_scalar": (blosc2.where(a > 2**53, huge, a), np.where(na > 2**53, huge, na)),
+        "where_literal_condition": (blosc2.where(a == big, a, 0), np.where(na == big, na, 0)),
+    }[case]
+    for res in (expr[:], expr.compute()[:]):
+        assert res.dtype == expected.dtype
+        np.testing.assert_array_equal(res, expected)
+
+
+def _values_around(literal, dtype):
+    """12 values of `dtype` at and next to `literal`, where comparing with it gets decided."""
+    dtype = np.dtype(dtype)
+    if dtype.kind == "f":
+        v = dtype.type(literal)
+        values = [v, np.nextafter(v, dtype.type(np.inf)), np.nextafter(v, dtype.type(-np.inf)), 0]
+    else:
+        info = np.iinfo(dtype)
+        lo, hi = math.floor(literal), math.ceil(literal)
+        values = [v for v in (lo - 1, lo, hi, hi + 1, 0) if info.min <= v <= info.max]
+    return np.resize(np.array(values, dtype=dtype), 12)
+
+
+def _where_branches(kind, out_dtype):
+    """NumPy branches x, y for where(): `out_dtype` scalars, arrays, or an array and a Python 0."""
+    if kind == "python":
+        return (1, 0) if out_dtype == "int" else (0.5, 0.0)
+    dtype = np.dtype(out_dtype)
+    # 64-bit integers next to 2**53, to check that their values do not go through doubles
+    start = 2**53 if dtype.kind in "iu" and dtype.itemsize == 8 else 1
+    # int64 explicitly: the default integer is int32 on wasm32, where 2**53 would overflow it
+    values = np.arange(12, dtype=np.int64)
+    x = (values % 2).astype(dtype) if dtype.kind == "b" else (start + values).astype(dtype)
+    y = np.zeros(12, dtype=dtype)
+    return {"scalars": (x[1], y[0]), "arrays": (x, y), "mixed": (x, 0)}[kind]
+
+
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.parametrize(
+    "cond_dtype", [np.float32, np.float64, np.int8, np.int32, np.int64, np.uint8, np.uint64]
+)
+@pytest.mark.parametrize("branches", ["python", "scalars", "arrays", "mixed"])
+def test_where_literal_condition_matches_numpy(cond_dtype, branches):
+    # A fused where() gets typed and computed in its output dtype by miniexpr; comparing against
+    # literals that the condition's dtype (or a double) cannot hold must still give NumPy's results.
+    literals = [0.1, 0.5, -1, 100, 16777217, 2**31 + 1, 2**53 + 1]
+    out_dtypes = (
+        ["int", "float"] if branches == "python" else ["float32", "float64", "int64", "uint8", "bool"]
+    )
+    failures = []
+    for literal, op, out_dtype in itertools.product(literals, (operator.gt, operator.eq), out_dtypes):
+        nc = _values_around(literal, cond_dtype)
+        c = blosc2.asarray(nc, chunks=(6,), blocks=(3,))
+        nx, ny = _where_branches(branches, out_dtype)
+        x, y = (
+            blosc2.asarray(v, chunks=(6,), blocks=(3,)) if isinstance(v, np.ndarray) else v for v in (nx, ny)
+        )
+        expected = np.where(op(nc, literal), nx, ny)
+        expr = blosc2.where(op(c, literal), x, y)
+        for how, res in (("[:]", expr[:]), ("compute()", expr.compute()[:])):
+            if res.dtype != expected.dtype or not np.array_equal(res, expected):
+                failures.append(f"{how} {op.__name__}({literal}) -> {out_dtype}: {res} != {expected}")
+    assert not failures, "\n".join(failures[:10])
+
+
+@pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
+@pytest.mark.parametrize("cond", ["float32_sum", "int8_wraparound"])
+@pytest.mark.parametrize("branches", ["python_int", "python_float", "array_scalar", "arrays"])
+def test_where_arithmetic_condition_matches_numpy(cond, branches):
+    # miniexpr would compute the condition in the output dtype: float32 sums in float64, int8 sums
+    # without wrapping around
+    rng = np.random.default_rng(0)
+    if cond == "float32_sum":
+        na = rng.random(24, dtype=np.float32)
+        nb = rng.random(24, dtype=np.float32)
+        operands = (na, nb, na + nb)
+
+        def build(a, b, c):
+            return a + b == c
+    else:
+        na = rng.integers(-128, 128, 24).astype(np.int8)
+        operands = (na,)
+
+        def build(a):
+            return a + a < 0
+
+    to_blosc2 = {id(v): blosc2.asarray(v, chunks=(12,), blocks=(4,)) for v in operands}
+    nx, ny = {
+        "python_int": (1, 0),
+        "python_float": (1.0, 0.0),
+        "array_scalar": (na, 0),
+        "arrays": (na, operands[-1]),
+    }[branches]
+    x, y = (to_blosc2.get(id(v), v) for v in (nx, ny))
+    expected = np.where(build(*operands), nx, ny)
+    expr = blosc2.where(build(*(to_blosc2[id(v)] for v in operands)), x, y)
+    for res in (expr[:], expr.compute()[:]):
+        assert res.dtype == expected.dtype
+        np.testing.assert_array_equal(res, expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "direct"),
+    [
+        ((100, 100), (100, 100), (25, 100), True),
+        ((10_000,), (3000,), (1000,), True),  # partial last chunk
+        ((5,), (8,), (4,), True),  # a single, partial chunk
+        ((37, 50, 60), (5, 50, 60), (1, 25, 60), True),
+        ((4, 12, 30), (1, 4, 30), (1, 2, 30), True),
+        ((1, 10, 30), (1, 4, 30), (1, 2, 30), True),  # partial, but the very last chunk
+        ((4, 10, 30), (1, 4, 30), (1, 2, 30), False),  # partial chunks inside the array
+        ((40, 30), (16, 30), (4, 10), False),  # blocks not contiguous in their chunk
+        ((40, 30), (16, 15), (4, 15), False),  # chunks not contiguous in the array
+        ((24, 20, 18), (8, 10, 9), (4, 5, 9), False),
+    ],
+)
+@pytest.mark.parametrize("dtype", [np.float32, np.int16, np.complex128])
+def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, dtype):
+    # getitem writes the miniexpr results straight into the NumPy result when the chunks tile it
+    import importlib
+
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
+    typed_sources = _record_typed_prefilter(monkeypatch)
+    assert lazyexpr_mod._chunks_tile_flat(shape, chunks, blocks) is direct
+    rng = np.random.default_rng(1)
+    na = (rng.random(shape) * 100).astype(dtype)
+    nb = (rng.random(shape) * 10).astype(dtype)
+    a = blosc2.asarray(na, chunks=chunks, blocks=blocks)
+    b = blosc2.asarray(nb, chunks=chunks, blocks=blocks)
+    if dtype is np.complex128:
+        second = (a * b, na * nb)
+    else:
+        second = ((a - b) > 40, (na - nb) > 40)
+    for expr, expected in [(a + b * 2, na + nb * 2), second]:
+        for accessor in (slice(None), ()):
+            typed_sources.clear()
+            res = expr[accessor]
+            assert res.dtype == expected.dtype
+            assert res.flags.c_contiguous
+            assert res.flags.writeable
+            np.testing.assert_array_equal(res, expected)
+            base = res
+            while isinstance(getattr(base, "base", None), np.ndarray):
+                base = base.base
+            if typed_evaluator_enabled():
+                # The typed prefilter writes directly into an exact-sized NumPy array.
+                assert base is res
+                if (
+                    dtype is not np.complex128
+                    and not blosc2.IS_WASM
+                    and getattr(
+                        blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False
+                    )()
+                ):
+                    assert bool(typed_sources) is (direct and not _NUMPY_VALUE_PROMOTION)
+            else:
+                # The direct path's buffer holds a header prefix and at most one chunk of padding
+                chunk_nbytes = math.prod(chunks) * res.itemsize
+                nchunks = math.prod(-(-s // c) for s, c in zip(shape, chunks, strict=True))
+                in_place = base.dtype == np.uint8 and base.nbytes == nchunks * chunk_nbytes + (
+                    blosc2.EXTENDED_HEADER_LENGTH
+                )
+                if dtype is np.complex128 and not in_place:
+                    continue  # miniexpr is not used for complex numbers on some platforms
+                assert in_place is direct
 
 
 @pytest.mark.parametrize("source", ["contiguous", "cframe"])

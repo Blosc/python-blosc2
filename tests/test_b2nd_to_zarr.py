@@ -137,6 +137,7 @@ def test_b2nd_to_zarr_zip_store(tmp_path):
     store.close()
 
 
+@pytest.mark.filterwarnings("ignore:.*does not have a Zarr V3 specification.*:Warning")
 @pytest.mark.parametrize("full_verify", [False, True])
 def test_b2nd_to_zarr_verifies_string_arrays(tmp_path, full_verify):
     src = tmp_path / "strings.b2nd"

@@ -1,0 +1,631 @@
+{
+  "versions": {
+    "numpy": "2.5.4",
+    "numexpr": "2.14.2",
+    "blosc2": "4.15.0.dev0"
+  },
+  "configuration": {
+    "items": [
+      1000,
+      100000,
+      8000000
+    ],
+    "shape": null,
+    "input_order": "C",
+    "order": "K",
+    "dtype": "float64",
+    "cases": [
+      "copy",
+      "linear",
+      "polynomial",
+      "sqrt",
+      "trig",
+      "complex"
+    ],
+    "threads": 8,
+    "samples": 7,
+    "warmups": 3,
+    "jit": "cc",
+    "backend": "jit",
+    "json": "plans/remove-numexpr-cc-results.json",
+    "native_revision": "ed437bd7b84f0e90e967664504e5d031169f4fb2"
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "python": "3.14.4 | packaged by conda-forge | (main, Apr  8 2026, 02:33:53) [Clang 20.1.8 ]",
+  "native_probe_has_jit": true,
+  "package": "/Users/faltet/blosc/python-blosc2/build-windows-complex/wheel-test-package/blosc2/__init__.py",
+  "extension_sha256": "171adfe1755aae4a3b00ccfc1e0fd5e7d9f34338f7295d871ef005a8e5ea3953",
+  "numpy_temporaries": "Chained recipes allocate intermediates; copy and complex write directly to out.",
+  "results": [
+    {
+      "case": "copy",
+      "expression": "copy(x)",
+      "items": 1000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.0009573996067047119,
+      "blosc2": 0.0888332724571228,
+      "numexpr": 0.008624978363513947,
+      "numexpr_error": null,
+      "ratio": 10.29953568729079,
+      "route": "native-copy",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 0,
+          "interpreter_stages": 1
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 0,
+          "interpreter_stages": 1
+        }
+      ],
+      "output_bytes": 8000,
+      "spread_ms": {
+        "numpy": 0.0009164214134216309,
+        "blosc2": 0.011790543794631958,
+        "numexpr": 0.0029578804969787598
+      }
+    },
+    {
+      "case": "linear",
+      "expression": "x + y * 2 - 1",
+      "items": 1000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.011582858860492706,
+      "blosc2": 0.0950004905462265,
+      "numexpr": 0.009874813258647919,
+      "numexpr_error": null,
+      "ratio": 9.620484768461756,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 8000,
+      "spread_ms": {
+        "numpy": 0.0020833685994148254,
+        "blosc2": 0.006126239895820618,
+        "numexpr": 0.003334134817123413
+      }
+    },
+    {
+      "case": "polynomial",
+      "expression": "x * x + y * y + x * y",
+      "items": 1000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.06479118019342422,
+      "blosc2": 0.41129253804683685,
+      "numexpr": 0.03570877015590668,
+      "numexpr_error": null,
+      "ratio": 11.517969850294715,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 8000,
+      "spread_ms": {
+        "numpy": 0.03929156810045242,
+        "blosc2": 0.6296262145042419,
+        "numexpr": 0.03179255872964859
+      }
+    },
+    {
+      "case": "sqrt",
+      "expression": "sqrt(x * x + y * y)",
+      "items": 1000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.1104576513171196,
+      "blosc2": 0.5074590444564819,
+      "numexpr": 0.053250230848789215,
+      "numexpr_error": null,
+      "ratio": 9.529706000664603,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 8000,
+      "spread_ms": {
+        "numpy": 0.20483415573835373,
+        "blosc2": 0.31458400189876556,
+        "numexpr": 0.04270952194929123
+      }
+    },
+    {
+      "case": "trig",
+      "expression": "sin(x) + cos(y)",
+      "items": 1000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.08224975317716599,
+      "blosc2": 0.437125563621521,
+      "numexpr": 0.05954131484031677,
+      "numexpr_error": null,
+      "ratio": 7.341550397297128,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 8000,
+      "spread_ms": {
+        "numpy": 0.045083463191986084,
+        "blosc2": 0.08329097181558609,
+        "numexpr": 0.019834376871585846
+      }
+    },
+    {
+      "case": "complex",
+      "expression": "complex(x, y)",
+      "items": 1000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.03716722130775452,
+      "blosc2": 0.1262091100215912,
+      "numexpr": 0.02275034785270691,
+      "numexpr_error": null,
+      "ratio": 5.547568364172261,
+      "route": "numpy/eager",
+      "execution_reports": [],
+      "output_bytes": 16000,
+      "spread_ms": {
+        "numpy": 0.04145968705415726,
+        "blosc2": 0.11191517114639282,
+        "numexpr": 0.008249655365943909
+      }
+    },
+    {
+      "case": "copy",
+      "expression": "copy(x)",
+      "items": 100000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.02466607838869095,
+      "blosc2": 0.250999815762043,
+      "numexpr": 0.16945786774158478,
+      "numexpr_error": null,
+      "ratio": 1.481193048792552,
+      "route": "native-copy",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 0,
+          "interpreter_stages": 1
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 0,
+          "interpreter_stages": 1
+        }
+      ],
+      "output_bytes": 800000,
+      "spread_ms": {
+        "numpy": 0.007124617695808411,
+        "blosc2": 0.19845739006996155,
+        "numexpr": 0.043917447328567505
+      }
+    },
+    {
+      "case": "linear",
+      "expression": "x + y * 2 - 1",
+      "items": 100000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.12375041842460632,
+      "blosc2": 0.2237502485513687,
+      "numexpr": 0.1622503623366356,
+      "numexpr_error": null,
+      "ratio": 1.3790431363545046,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 800000,
+      "spread_ms": {
+        "numpy": 0.10870769619941711,
+        "blosc2": 0.04724971950054169,
+        "numexpr": 0.04654191434383392
+      }
+    },
+    {
+      "case": "polynomial",
+      "expression": "x * x + y * y + x * y",
+      "items": 100000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.1775827258825302,
+      "blosc2": 0.20733289420604706,
+      "numexpr": 0.1454576849937439,
+      "numexpr_error": null,
+      "ratio": 1.4253828817292424,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 800000,
+      "spread_ms": {
+        "numpy": 0.17395894974470139,
+        "blosc2": 0.06779097020626068,
+        "numexpr": 0.09554252028465271
+      }
+    },
+    {
+      "case": "sqrt",
+      "expression": "sqrt(x * x + y * y)",
+      "items": 100000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.14066696166992188,
+      "blosc2": 0.24187471717596054,
+      "numexpr": 0.13833306729793549,
+      "numexpr_error": null,
+      "ratio": 1.7484952940067593,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 1,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 800000,
+      "spread_ms": {
+        "numpy": 0.059874728322029114,
+        "blosc2": 0.022749416530132294,
+        "numexpr": 0.0404994934797287
+      }
+    },
+    {
+      "case": "trig",
+      "expression": "sin(x) + cos(y)",
+      "items": 100000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.48458296805620193,
+      "blosc2": 0.29299966990947723,
+      "numexpr": 0.1265835016965866,
+      "numexpr_error": null,
+      "ratio": 2.314675024647214,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 4,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        },
+        {
+          "temporary_bytes": 0,
+          "gathered_bytes": 0,
+          "intermediate_bytes": 0,
+          "tasks": 4,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 800000,
+      "spread_ms": {
+        "numpy": 0.16679149121046066,
+        "blosc2": 0.1100422814488411,
+        "numexpr": 0.1027919352054596
+      }
+    },
+    {
+      "case": "complex",
+      "expression": "complex(x, y)",
+      "items": 100000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.073249451816082,
+      "blosc2": 0.1122504472732544,
+      "numexpr": 0.10470952838659286,
+      "numexpr_error": null,
+      "ratio": 1.0720175040691624,
+      "route": "numpy/eager",
+      "execution_reports": [],
+      "output_bytes": 1600000,
+      "spread_ms": {
+        "numpy": 0.01629069447517395,
+        "blosc2": 0.0255415216088295,
+        "numexpr": 0.07591582834720612
+      }
+    },
+    {
+      "case": "copy",
+      "expression": "copy(x)",
+      "items": 8000000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 0.9077917784452438,
+      "blosc2": 0.7462920621037483,
+      "numexpr": 0.7990002632141113,
+      "numexpr_error": null,
+      "ratio": 0.9340323107049608,
+      "route": "native-copy",
+      "execution_reports": [
+        {
+          "intermediate_bytes": 0,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 64000000,
+      "spread_ms": {
+        "numpy": 0.07045920938253403,
+        "blosc2": 0.15016738325357437,
+        "numexpr": 0.07520802319049835
+      }
+    },
+    {
+      "case": "linear",
+      "expression": "x + y * 2 - 1",
+      "items": 8000000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 7.587040774524212,
+      "blosc2": 1.2304168194532394,
+      "numexpr": 1.2250831350684166,
+      "numexpr_error": null,
+      "ratio": 1.004353732601604,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "intermediate_bytes": 0,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 64000000,
+      "spread_ms": {
+        "numpy": 0.992998480796814,
+        "blosc2": 0.11637620627880096,
+        "numexpr": 0.07616635411977768
+      }
+    },
+    {
+      "case": "polynomial",
+      "expression": "x * x + y * y + x * y",
+      "items": 8000000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 17.60424952954054,
+      "blosc2": 1.1860411614179611,
+      "numexpr": 1.5959171578288078,
+      "numexpr_error": null,
+      "ratio": 0.7431721349694183,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "intermediate_bytes": 0,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 64000000,
+      "spread_ms": {
+        "numpy": 1.4864187687635422,
+        "blosc2": 0.11224951595067978,
+        "numexpr": 0.0721663236618042
+      }
+    },
+    {
+      "case": "sqrt",
+      "expression": "sqrt(x * x + y * y)",
+      "items": 8000000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 15.166041441261768,
+      "blosc2": 1.1713746935129166,
+      "numexpr": 1.4831246808171272,
+      "numexpr_error": null,
+      "ratio": 0.7898019017979985,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "intermediate_bytes": 0,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 64000000,
+      "spread_ms": {
+        "numpy": 1.8458757549524307,
+        "blosc2": 0.28629135340452194,
+        "numexpr": 0.0954996794462204
+      }
+    },
+    {
+      "case": "trig",
+      "expression": "sin(x) + cos(y)",
+      "items": 8000000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 36.911374889314175,
+      "blosc2": 4.220957867801189,
+      "numexpr": 3.873583860695362,
+      "numexpr_error": null,
+      "ratio": 1.0896776782427704,
+      "route": "native-jit",
+      "execution_reports": [
+        {
+          "intermediate_bytes": 0,
+          "output_copy_bytes": 0,
+          "input_materialization_bytes": 0,
+          "jit_stages": 1,
+          "interpreter_stages": 0
+        }
+      ],
+      "output_bytes": 64000000,
+      "spread_ms": {
+        "numpy": 0.71741733700037,
+        "blosc2": 0.057499855756759644,
+        "numexpr": 0.05950126796960831
+      }
+    },
+    {
+      "case": "complex",
+      "expression": "complex(x, y)",
+      "items": 8000000,
+      "dtype": "float64",
+      "status": "qualified",
+      "numpy": 4.4723330065608025,
+      "blosc2": 4.499875009059906,
+      "numexpr": 1.4244578778743744,
+      "numexpr_error": null,
+      "ratio": 3.159008826413861,
+      "route": "numpy/eager",
+      "execution_reports": [],
+      "output_bytes": 128000000,
+      "spread_ms": {
+        "numpy": 0.20604208111763,
+        "blosc2": 0.14616642147302628,
+        "numexpr": 0.3608325496315956
+      }
+    }
+  ]
+}

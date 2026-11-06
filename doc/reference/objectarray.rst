@@ -15,7 +15,7 @@ Each entry is stored as one compressed chunk:
   :class:`BatchArray`, :class:`EmbedStore`) are serialized transparently
   via :meth:`to_cframe` / :func:`blosc2.from_cframe`
 - structured Blosc2 reference objects (:class:`C2Array`, :class:`LazyExpr`,
-  and :class:`LazyUDF` backed by :func:`blosc2.dsl_kernel`) are also supported
+  and lazy Menudet results authored with :func:`blosc2.menudet`) are also supported
 
 ObjectArray is a good fit when you need:
 

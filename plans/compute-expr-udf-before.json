@@ -1,0 +1,678 @@
+{
+  "metadata": {
+    "python": "3.14.4",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py",
+    "extension": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/blosc2_ext.abi3.so",
+    "blosc2": "4.15.0.dev0",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "numpy": "2.5.4",
+    "numba": "0.68.0",
+    "numexpr": "2.14.2",
+    "shape": [
+      10000,
+      10000
+    ],
+    "dtype": "float32",
+    "chunks": [
+      1250,
+      10000
+    ],
+    "blocks": [
+      2,
+      10000
+    ],
+    "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=4, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "threads": 4,
+    "repeat": 3,
+    "cython_openmp": false,
+    "input_layout": "C-order linspaces x=[0,1], y=[-1,1], z=[0,10]; no seed",
+    "protocol": "validate first result; best of warm repeats; compute allocates/compresses NDArray, getitem allocates NumPy; no conversion in timing",
+    "environment": {
+      "ME_DSL_JIT_LIBTCC_PATH": "/Users/faltet/miniforge3/envs/blosc2/lib/python3.14/site-packages/blosc2/lib/libtcc.dylib"
+    },
+    "execution_policies": {
+      "tcc": {
+        "jit": "True",
+        "jit_backend": "tcc",
+        "math_backend": "None",
+        "fp_accuracy": "FPAccuracy.MEDIUM",
+        "trace": "False",
+        "compiler": "None",
+        "cflags": "None",
+        "cache_dir": "None",
+        "compiler_output": "False"
+      },
+      "cc": {
+        "jit": "True",
+        "jit_backend": "cc",
+        "math_backend": "None",
+        "fp_accuracy": "FPAccuracy.MEDIUM",
+        "trace": "False",
+        "compiler": "None",
+        "cflags": "None",
+        "cache_dir": "None",
+        "compiler_output": "False"
+      }
+    }
+  },
+  "results": [
+    {
+      "case": 1,
+      "method": "NumPy",
+      "qualified": true,
+      "first_s": 0.019736332818865776,
+      "samples_s": [
+        0.01913487445563078,
+        0.01849674992263317,
+        0.018984667025506496
+      ],
+      "best_s": 0.01849674992263317
+    },
+    {
+      "case": 1,
+      "method": "NumExpr (out)",
+      "qualified": true,
+      "first_s": 0.01859429106116295,
+      "samples_s": [
+        0.014290832914412022,
+        0.014080832712352276,
+        0.014158999547362328
+      ],
+      "best_s": 0.014080832712352276
+    },
+    {
+      "case": 1,
+      "method": "Numba (out)",
+      "qualified": true,
+      "first_s": 0.36050066631287336,
+      "samples_s": [
+        0.003392874263226986,
+        0.002316124737262726,
+        0.0023108338937163353
+      ],
+      "best_s": 0.0023108338937163353
+    },
+    {
+      "case": 1,
+      "method": "LazyExpr compute",
+      "qualified": true,
+      "first_s": 0.1091799596324563,
+      "samples_s": [
+        0.10469804145395756,
+        0.10517779272049665,
+        0.10709279216825962
+      ],
+      "best_s": 0.10469804145395756
+    },
+    {
+      "case": 1,
+      "method": "LazyExpr getitem",
+      "qualified": true,
+      "first_s": 0.036597500555217266,
+      "samples_s": [
+        0.027209958992898464,
+        0.02700966689735651,
+        0.02783920895308256
+      ],
+      "best_s": 0.02700966689735651
+    },
+    {
+      "case": 1,
+      "method": "Numba UDF compute",
+      "qualified": true,
+      "first_s": 0.15917341597378254,
+      "samples_s": [
+        0.015611416660249233,
+        0.014678667299449444,
+        0.01593950018286705
+      ],
+      "best_s": 0.014678667299449444
+    },
+    {
+      "case": 1,
+      "method": "Numba UDF getitem",
+      "qualified": true,
+      "first_s": 0.017129375599324703,
+      "samples_s": [
+        0.017227083444595337,
+        0.016609624959528446,
+        0.016257458366453648
+      ],
+      "best_s": 0.016257458366453648
+    },
+    {
+      "case": 1,
+      "method": "Cython UDF compute",
+      "qualified": true,
+      "first_s": 0.0174621669575572,
+      "samples_s": [
+        0.017858625389635563,
+        0.01681104116141796,
+        0.016644124872982502
+      ],
+      "best_s": 0.016644124872982502
+    },
+    {
+      "case": 1,
+      "method": "Cython UDF getitem",
+      "qualified": true,
+      "first_s": 0.01915975008159876,
+      "samples_s": [
+        0.02003829088062048,
+        0.01841395813971758,
+        0.018586458638310432
+      ],
+      "best_s": 0.01841395813971758
+    },
+    {
+      "case": 1,
+      "method": "Menudet tcc compute",
+      "preparation_s": 0.004583332687616348,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 786432,
+        "gathered_bytes": 50000000,
+        "evaluated_tiles": 191,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 50000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 2.6957212081179023,
+      "samples_s": [
+        2.6509066242724657,
+        2.683805334381759,
+        2.684220541268587
+      ],
+      "best_s": 2.6509066242724657
+    },
+    {
+      "case": 1,
+      "method": "Menudet tcc getitem",
+      "preparation_s": 0.004583332687616348,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 786432,
+        "gathered_bytes": 400000000,
+        "evaluated_tiles": 1526,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 400000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 2.2190066250041127,
+      "samples_s": [
+        2.1345515828579664,
+        2.130777540616691,
+        2.1075431248173118
+      ],
+      "best_s": 2.1075431248173118
+    },
+    {
+      "case": 1,
+      "method": "Menudet cc compute",
+      "preparation_s": 0.003096708096563816,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 786432,
+        "gathered_bytes": 50000000,
+        "evaluated_tiles": 191,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 50000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 2.5443602073937654,
+      "samples_s": [
+        2.614072541706264,
+        2.5552935004234314,
+        2.546695957891643
+      ],
+      "best_s": 2.546695957891643
+    },
+    {
+      "case": 1,
+      "method": "Menudet cc getitem",
+      "preparation_s": 0.003096708096563816,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 786432,
+        "gathered_bytes": 400000000,
+        "evaluated_tiles": 1526,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 400000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 1.9697989579290152,
+      "samples_s": [
+        1.9780934574082494,
+        1.9841881664469838,
+        1.989351375028491
+      ],
+      "best_s": 1.9780934574082494
+    },
+    {
+      "case": 2,
+      "method": "NumPy",
+      "qualified": true,
+      "first_s": 0.2389802085235715,
+      "samples_s": [
+        0.2749480828642845,
+        0.20357033237814903,
+        0.18183054216206074
+      ],
+      "best_s": 0.18183054216206074
+    },
+    {
+      "case": 2,
+      "method": "NumExpr (out)",
+      "qualified": true,
+      "first_s": 0.050946833565831184,
+      "samples_s": [
+        0.048741625621914864,
+        0.048664750531315804,
+        0.04861491732299328
+      ],
+      "best_s": 0.04861491732299328
+    },
+    {
+      "case": 2,
+      "method": "Numba (out)",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "LazyExpr compute",
+      "qualified": true,
+      "first_s": 0.16894970834255219,
+      "samples_s": [
+        0.16439358331263065,
+        0.1626242082566023,
+        0.16569141577929258
+      ],
+      "best_s": 0.1626242082566023
+    },
+    {
+      "case": 2,
+      "method": "LazyExpr getitem",
+      "qualified": true,
+      "first_s": 0.05535533372312784,
+      "samples_s": [
+        0.055182541720569134,
+        0.054989165626466274,
+        0.055621666833758354
+      ],
+      "best_s": 0.054989165626466274
+    },
+    {
+      "case": 2,
+      "method": "Numba UDF compute",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Numba UDF getitem",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Cython UDF compute",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Cython UDF getitem",
+      "qualified": false,
+      "best_s": null,
+      "samples_s": [],
+      "error": "\nArrays are not equal\n\nMismatched elements: 1 / 100000000 (1e-06%)\nMismatch at index:\n [0, 1]: False (ACTUAL), True (DESIRED)\n ACTUAL: array([[ True, False,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],...\n DESIRED: array([[ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],\n       [ True,  True,  True, ...,  True,  True,  True],..."
+    },
+    {
+      "case": 2,
+      "method": "Menudet tcc compute",
+      "preparation_s": 0.008366917259991169,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1048576,
+        "gathered_bytes": 100000000,
+        "evaluated_tiles": 191,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 100000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 5.737202040851116,
+      "samples_s": [
+        5.915898375213146,
+        5.806096665561199,
+        5.687637542374432
+      ],
+      "best_s": 5.687637542374432
+    },
+    {
+      "case": 2,
+      "method": "Menudet tcc getitem",
+      "preparation_s": 0.008366917259991169,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1048576,
+        "gathered_bytes": 800000000,
+        "evaluated_tiles": 1526,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 800000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 4.514846375212073,
+      "samples_s": [
+        4.490608458407223,
+        4.584256083704531,
+        4.4479640405625105
+      ],
+      "best_s": 4.4479640405625105
+    },
+    {
+      "case": 2,
+      "method": "Menudet cc compute",
+      "preparation_s": 0.0033247098326683044,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1048576,
+        "gathered_bytes": 100000000,
+        "evaluated_tiles": 191,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 100000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 5.108893416821957,
+      "samples_s": [
+        5.044777540490031,
+        5.114505083300173,
+        5.116130833514035
+      ],
+      "best_s": 5.044777540490031
+    },
+    {
+      "case": 2,
+      "method": "Menudet cc getitem",
+      "preparation_s": 0.0033247098326683044,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1048576,
+        "gathered_bytes": 800000000,
+        "evaluated_tiles": 1526,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 800000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 3.9695982495322824,
+      "samples_s": [
+        3.9653673749417067,
+        3.96334470808506,
+        3.975076542235911
+      ],
+      "best_s": 3.96334470808506
+    },
+    {
+      "case": 3,
+      "method": "NumPy",
+      "qualified": true,
+      "first_s": 0.8628632500767708,
+      "samples_s": [
+        0.8445094162598252,
+        0.8417178746312857,
+        0.8341347090899944
+      ],
+      "best_s": 0.8341347090899944
+    },
+    {
+      "case": 3,
+      "method": "NumExpr (out)",
+      "qualified": true,
+      "first_s": 0.17618683259934187,
+      "samples_s": [
+        0.17416062485426664,
+        0.17445279099047184,
+        0.17438849993050098
+      ],
+      "best_s": 0.17416062485426664
+    },
+    {
+      "case": 3,
+      "method": "Numba (out)",
+      "qualified": true,
+      "first_s": 0.24200908280909061,
+      "samples_s": [
+        0.08113429229706526,
+        0.08109479211270809,
+        0.08105254080146551
+      ],
+      "best_s": 0.08105254080146551
+    },
+    {
+      "case": 3,
+      "method": "LazyExpr compute",
+      "qualified": true,
+      "first_s": 0.8795553743839264,
+      "samples_s": [
+        0.8746997080743313,
+        0.8723376244306564,
+        0.8763560000807047
+      ],
+      "best_s": 0.8723376244306564
+    },
+    {
+      "case": 3,
+      "method": "LazyExpr getitem",
+      "qualified": true,
+      "first_s": 0.2689075404778123,
+      "samples_s": [
+        0.2635665824636817,
+        0.26347225066274405,
+        0.2625453332439065
+      ],
+      "best_s": 0.2625453332439065
+    },
+    {
+      "case": 3,
+      "method": "Numba UDF compute",
+      "qualified": true,
+      "first_s": 0.3070890000090003,
+      "samples_s": [
+        0.1157644996419549,
+        0.11496658250689507,
+        0.1141244163736701
+      ],
+      "best_s": 0.1141244163736701
+    },
+    {
+      "case": 3,
+      "method": "Numba UDF getitem",
+      "qualified": true,
+      "first_s": 0.11642979178577662,
+      "samples_s": [
+        0.11769583355635405,
+        0.11624758411198854,
+        0.1171115841716528
+      ],
+      "best_s": 0.11624758411198854
+    },
+    {
+      "case": 3,
+      "method": "Cython UDF compute",
+      "qualified": true,
+      "first_s": 0.6239801254123449,
+      "samples_s": [
+        0.6188003337010741,
+        0.6200244594365358,
+        0.6181347910314798
+      ],
+      "best_s": 0.6181347910314798
+    },
+    {
+      "case": 3,
+      "method": "Cython UDF getitem",
+      "qualified": true,
+      "first_s": 0.6174572501331568,
+      "samples_s": [
+        0.6313912095502019,
+        0.6170039176940918,
+        0.6223156247287989
+      ],
+      "best_s": 0.6170039176940918
+    },
+    {
+      "case": 3,
+      "method": "Menudet tcc compute",
+      "preparation_s": 0.008690291084349155,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1310720,
+        "gathered_bytes": 150000000,
+        "evaluated_tiles": 191,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 150000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 9.278113083913922,
+      "samples_s": [
+        9.291835417039692,
+        9.245974042452872,
+        9.289969291538
+      ],
+      "best_s": 9.245974042452872
+    },
+    {
+      "case": 3,
+      "method": "Menudet tcc getitem",
+      "preparation_s": 0.008690291084349155,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1310720,
+        "gathered_bytes": 1200000000,
+        "evaluated_tiles": 1526,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 1200000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 8.51796183269471,
+      "samples_s": [
+        8.611561958678067,
+        8.645439708605409,
+        8.5545140421018
+      ],
+      "best_s": 8.5545140421018
+    },
+    {
+      "case": 3,
+      "method": "Menudet cc compute",
+      "preparation_s": 0.003297332674264908,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1310720,
+        "gathered_bytes": 150000000,
+        "evaluated_tiles": 191,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 150000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 8.595160082913935,
+      "samples_s": [
+        8.609481665305793,
+        8.637456624768674,
+        8.589260791428387
+      ],
+      "best_s": 8.589260791428387
+    },
+    {
+      "case": 3,
+      "method": "Menudet cc getitem",
+      "preparation_s": 0.003297332674264908,
+      "has_jit": true,
+      "execution_report": {
+        "temporary_bytes": 1310720,
+        "gathered_bytes": 1200000000,
+        "evaluated_tiles": 1526,
+        "zero_copy_tiles": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "tile_items": 65536,
+        "maximum_reader_items": 65536,
+        "reader_bytes": 1200000000,
+        "route": "bounded-readers"
+      },
+      "qualified": true,
+      "first_s": 8.132949749939144,
+      "samples_s": [
+        8.144880957901478,
+        8.095092374831438,
+        8.129697834141552
+      ],
+      "best_s": 8.095092374831438
+    }
+  ]
+}

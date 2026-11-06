@@ -1971,7 +1971,12 @@ class _CTableIndexingMixin:
             # so positions are exact.  Falls back to the per-segment query if the
             # bitmap path is unavailable.
             bitmap = self._combined_summary_block_bitmap(expr_result, indexed_columns, primary_col_arr)
-            if bitmap is None:
+            if bitmap is None and self._flatten_conjunction(expr_result.expression) is not None:
+                # A single-column bitmap is sound only for a conjunction (or a
+                # single comparison): every predicate then has to hold in a
+                # pruned block too.  For an OR, a block where only another
+                # column matches must still be evaluated, so the segment path
+                # below (with the plan's combined candidate units) is required.
                 bitmap = self._summary_candidate_block_bitmap(primary_col_arr, plan)
             if bitmap is not None:
                 # Mask-direct: SUMMARY evaluates the predicate through miniexpr

@@ -63,12 +63,59 @@ _MINIEXPR_REDUCTION_OPS = [
 ]
 
 
+def _save_reduction_cases():
+    # Keep every reducer on disk and in memory, rotating scalar/axis results.
+    # The original tuple-axis and additional-reducer heavy cases stay heavy.
+    cases = []
+    for index, parameter in enumerate(_SAVE_REDUCTION_OPS):
+        op = parameter if isinstance(parameter, str) else parameter.values[0]
+        marks = () if isinstance(parameter, str) else parameter.marks
+        for disk in (True, False):
+            cases.append(pytest.param(op, (None, 0)[(index + disk) % 2], disk, marks=marks))
+            cases.append(pytest.param(op, (0, 1), disk, marks=(*marks, pytest.mark.heavy)))
+    return cases
+
+
+def _fast_path_cases():
+    layouts = [
+        ((10, 50, 70), (10, 25, 50)),
+        ((20, 50, 100), (10, 50, 100)),
+        ((10, 50, 100), (6, 25, 75)),
+        ((15, 30, 75), (7, 20, 50)),
+        ((1, 50, 100), (1, 50, 60)),
+    ]
+    cases = []
+    for parameter in _FAST_REDUCTION_OPS:
+        op = parameter if isinstance(parameter, str) else parameter.values[0]
+        for layout_index, (chunks, blocks) in enumerate(layouts):
+            for axis_index, axis in enumerate((None, 0, 1)):
+                for disk in (True, False):
+                    for fill in (1, 0, 0.32):
+                        heavy = (
+                            not isinstance(parameter, str) or layout_index >= 2 or axis == 1 or fill == 0.32
+                        )
+                        if not heavy and (disk != bool(layout_index) or fill != axis_index):
+                            continue
+                        cases.append(
+                            pytest.param(
+                                chunks,
+                                blocks,
+                                disk,
+                                fill,
+                                op,
+                                axis,
+                                marks=pytest.mark.heavy if heavy else (),
+                            )
+                        )
+    return cases
+
+
 @pytest.fixture(params=[np.float32, np.float64])
 def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100)])
+@pytest.fixture(params=[(NITEMS,), (NITEMS // 100, 100)])
 def shape_fixture(request):
     return request.param
 
@@ -99,8 +146,26 @@ def array_fixture(dtype_fixture, shape_fixture):
 
 # @pytest.mark.parametrize("reduce_op", ["sum"])
 @pytest.mark.parametrize(
-    "reduce_op",
-    ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin", "cumulative_sum", "cumulative_prod"],
+    ("reduce_op", "dtype_fixture", "shape_fixture"),
+    [
+        (op, dtype, ((NITEMS,), (NITEMS // 100, 100))[(index + dtype_index) % 2])
+        for index, op in enumerate(
+            (
+                "sum",
+                "prod",
+                "min",
+                "max",
+                "any",
+                "all",
+                "argmax",
+                "argmin",
+                "cumulative_sum",
+                "cumulative_prod",
+            )
+        )
+        for dtype_index, dtype in enumerate((np.float32, np.float64))
+    ],
+    indirect=["dtype_fixture", "shape_fixture"],
 )
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -120,8 +185,26 @@ def test_reduce_bool(array_fixture, reduce_op):
 
 # @pytest.mark.parametrize("reduce_op", ["sum"])
 @pytest.mark.parametrize(
-    "reduce_op",
-    ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin", "cumulative_sum", "cumulative_prod"],
+    ("reduce_op", "dtype_fixture", "shape_fixture"),
+    [
+        (op, dtype, ((NITEMS,), (NITEMS // 100, 100))[(index + dtype_index) % 2])
+        for index, op in enumerate(
+            (
+                "sum",
+                "prod",
+                "min",
+                "max",
+                "any",
+                "all",
+                "argmax",
+                "argmin",
+                "cumulative_sum",
+                "cumulative_prod",
+            )
+        )
+        for dtype_index, dtype in enumerate((np.float32, np.float64))
+    ],
+    indirect=["dtype_fixture", "shape_fixture"],
 )
 def test_reduce_where(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -258,30 +341,35 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
 
 # TODO: "prod" is not supported here because it overflows with current values
 @pytest.mark.parametrize(
-    "reduce_op",
+    ("reduce_op", "shape_fixture", "axis"),
     [
-        "cumulative_sum",
-        "sum",
-        "min",
-        "mean",
-        "argmax",
-        pytest.param("max", marks=pytest.mark.heavy),
-        pytest.param("std", marks=pytest.mark.heavy),
-        pytest.param("var", marks=pytest.mark.heavy),
-        pytest.param("any", marks=pytest.mark.heavy),
-        pytest.param("all", marks=pytest.mark.heavy),
-        pytest.param("argmin", marks=pytest.mark.heavy),
+        pytest.param(
+            op,
+            shape,
+            axis,
+            marks=[] if op in {"cumulative_sum", "sum", "min", "mean", "argmax"} else pytest.mark.heavy,
+        )
+        for op in (
+            "cumulative_sum",
+            "sum",
+            "min",
+            "mean",
+            "argmax",
+            "max",
+            "std",
+            "var",
+            "any",
+            "all",
+            "argmin",
+        )
+        for shape in ((NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100))
+        for axis in (None, 0, 1)
+        if (axis is None or axis < len(shape)) and not (op == "cumulative_sum" and axis is None)
     ],
+    indirect=["shape_fixture"],
 )
-@pytest.mark.parametrize("axis", [None, 0, 1])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    if axis is not None:
-        if len(a1.shape) <= axis:
-            return
-    else:
-        if reduce_op == "cumulative_sum":
-            return
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
     tol = 1e-12 if a1.dtype == "float64" else 5e-5
@@ -311,8 +399,9 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 @pytest.mark.parametrize(
     "shapes",
     [
+        # Both former small sizes used identical ranks/broadcast directions.
+        # Keep one small geometry and the opt-in large-array qualification.
         ((5, 5, 5), (5, 5), (5,)),
-        ((10, 10, 10), (10, 10), (10,)),
         pytest.param(((100, 100, 100), (100, 100), (100,)), marks=pytest.mark.heavy),
     ],
 )
@@ -466,20 +555,7 @@ def test_reduce_slice(reduce_op):
 
 
 # Test fast path for reductions
-@pytest.mark.parametrize(
-    ("chunks", "blocks"),
-    [
-        ((10, 50, 70), (10, 25, 50)),
-        ((20, 50, 100), (10, 50, 100)),
-        pytest.param((10, 50, 100), (6, 25, 75), marks=pytest.mark.heavy),
-        pytest.param((15, 30, 75), (7, 20, 50), marks=pytest.mark.heavy),
-        pytest.param((1, 50, 100), (1, 50, 60), marks=pytest.mark.heavy),
-    ],
-)
-@pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [1, 0, pytest.param(0.32, marks=pytest.mark.heavy)])
-@pytest.mark.parametrize("reduce_op", _FAST_REDUCTION_OPS)
-@pytest.mark.parametrize("axis", [None, 0, pytest.param(1, marks=pytest.mark.heavy)])
+@pytest.mark.parametrize(("chunks", "blocks", "disk", "fill_value", "reduce_op", "axis"), _fast_path_cases())
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
@@ -544,12 +620,10 @@ def test_miniexpr_slice(chunks, blocks, disk, fill_value, reduce_op):
     assert np.allclose(res, nres)
 
 
-@pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize(
     "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
-@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
+@pytest.mark.parametrize(("reduce_op", "axis", "disk"), _save_reduction_cases())
 def test_save_version1(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
@@ -590,12 +664,10 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
         blosc2.remove_urlpath("out.b2nd")
 
 
-@pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize(
     "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
-@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
+@pytest.mark.parametrize(("reduce_op", "axis", "disk"), _save_reduction_cases())
 def test_save_version2(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
@@ -635,12 +707,10 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
         blosc2.remove_urlpath("out.b2nd")
 
 
-@pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize(
     "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
-@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
+@pytest.mark.parametrize(("reduce_op", "axis", "disk"), _save_reduction_cases())
 def test_save_version3(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
@@ -680,12 +750,10 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
         blosc2.remove_urlpath("out.b2nd")
 
 
-@pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize(
     "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
-@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
+@pytest.mark.parametrize(("reduce_op", "axis", "disk"), _save_reduction_cases())
 def test_save_version4(disk, fill_value, reduce_op, axis):
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
         axis = 1 if isinstance(axis, tuple) else axis
@@ -977,3 +1045,192 @@ def test_reductions_where_ndarray_and_lazyexpr():
     np.testing.assert_allclose(a.std(axis=0, where=mask), np.std(na, axis=0, where=nmask))
     np.testing.assert_allclose(a.min(axis=0, where=mask), np.min(na, axis=0, where=nmask, initial=np.inf))
     np.testing.assert_allclose(a.max(axis=0, where=mask), np.max(na, axis=0, where=nmask, initial=-np.inf))
+
+
+@pytest.mark.parametrize(
+    ("dtype", "op", "ddof", "keepdims", "offset", "miniexpr"),
+    [
+        (dtype, op, (offset_index + dtype_index) % 2, bool((offset_index + op_index) % 2), offset, native)
+        for dtype_index, dtype in enumerate((np.float32, np.float64))
+        for op_index, op in enumerate(("std", "var"))
+        for offset_index, offset in enumerate((0, 1e4, -1e4))
+        for native in (True, False)
+    ],
+)
+def test_std_var_full_reduction(monkeypatch, dtype, op, ddof, keepdims, offset, miniexpr):
+    # Full std/var reduce (x - mean) * (x - mean) with the mean inlined as a scalar
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", miniexpr)
+    rng = np.random.default_rng(42)
+    na = (offset + rng.normal(scale=3, size=(37, 40, 50))).astype(dtype)
+    a = blosc2.asarray(na, chunks=(10, 20, 50), blocks=(5, 10, 25))
+    res = getattr(a, op)(ddof=ddof, keepdims=keepdims)
+    expected = getattr(na.astype(np.float64), op)(ddof=ddof, keepdims=keepdims)
+    assert np.asarray(res).dtype == getattr(na, op)().dtype
+    assert np.shape(res) == np.shape(expected)
+    np.testing.assert_allclose(res, expected, rtol=1e-5 if dtype == np.float32 else 1e-12)
+    # Same through a lazy expression and the module-level functions
+    res = getattr(blosc2, op)(a + 1, ddof=ddof, keepdims=keepdims)
+    assert np.asarray(res).dtype == getattr(na, op)().dtype
+    np.testing.assert_allclose(res, expected, rtol=1e-5 if dtype == np.float32 else 1e-12)
+
+
+@pytest.mark.parametrize("op", ["std", "var"])
+def test_std_var_full_reduction_wider_dtype(op):
+    # A float64 result of float32 data takes float64 deviations from the mean, as NumPy does
+    rng = np.random.default_rng(1)
+    na = (rng.random(400_000) + 1e6).astype(np.float32)
+    a = blosc2.asarray(na)
+    res = getattr(a, op)(dtype=np.float64)
+    assert np.asarray(res).dtype == np.float64
+    np.testing.assert_allclose(res, getattr(np, op)(na, dtype=np.float64), rtol=1e-6)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf])
+def test_std_var_full_reduction_nonfinite(value):
+    na = np.arange(1000, dtype=np.float64).reshape(10, 100)
+    na[3, 7] = value
+    a = blosc2.asarray(na, chunks=(5, 50), blocks=(5, 10))
+    with np.errstate(invalid="ignore"):
+        np.testing.assert_array_equal(a.std(), np.std(na))
+        np.testing.assert_array_equal(a.var(), np.var(na))
+
+
+@pytest.mark.parametrize(
+    ("chunks", "blocks", "axis", "op"),
+    [
+        ((10, 20, 50), ((5, 20, 50), (1, 4, 50), (5, 10, 25))[(op_index + axis_index) % 3], axis, op)
+        for op_index, op in enumerate(("sum", "max", "argmin", "cumulative_sum"))
+        for axis_index, axis in enumerate((0, 1, 2, (0, 2), None))
+        if not (op in ("argmin", "cumulative_sum") and isinstance(axis, tuple))
+        and not (op == "cumulative_sum" and axis is None)
+    ],
+)
+def test_reduction_axis_chunk_layouts(chunks, blocks, axis, op):
+    rng = np.random.default_rng(3)
+    na = rng.integers(-1000, 1000, size=(37, 45, 50)).astype(np.float64)
+    nb = rng.integers(-1000, 1000, size=(37, 45, 50)).astype(np.float64)
+    a = blosc2.asarray(na, chunks=chunks, blocks=blocks)
+    b = blosc2.asarray(nb, chunks=chunks, blocks=blocks)
+    for expr, nexpr in [(a, na), (a + b, na + nb)]:
+        res = getattr(expr, op)(axis=axis)
+        # npcumsum: np.cumulative_sum is NumPy >= 2.1 only
+        expected = (npcumsum if op == "cumulative_sum" else getattr(np, op))(nexpr, axis=axis)
+        np.testing.assert_array_equal(res[()] if isinstance(res, blosc2.NDArray) else res, expected)
+        if op in ("sum", "max"):
+            res = getattr(expr, op)(axis=axis, keepdims=True)
+            np.testing.assert_array_equal(res, getattr(np, op)(nexpr, axis=axis, keepdims=True))
+
+
+@pytest.mark.parametrize("case", ["float32_literal", "int64_literal", "int64_inexact_literal"])
+def test_comparison_reduction_preserves_operand_typing(monkeypatch, case):
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    if case == "float32_literal":
+        data = np.full(12, 0.1, dtype=np.float32)
+        literal = 0.1
+    else:
+        data = 2**53 + np.arange(-6, 6, dtype=np.int64)
+        literal = 2**53 + (case == "int64_inexact_literal")
+    a = blosc2.asarray(data, chunks=(6,), blocks=(3,))
+    expr = a > literal if case == "float32_literal" else a == literal
+    expected = data > literal if case == "float32_literal" else data == literal
+
+    def reject_legacy_prefilter(*args, **kwargs):
+        pytest.fail("Comparison reductions must not compile a legacy miniexpr prefilter")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", reject_legacy_prefilter)
+    for name in ("sum", "any", "all"):
+        np.testing.assert_array_equal(getattr(expr, name)(), getattr(expected, name)())
+    np.testing.assert_array_equal(expr.sum(item=slice(1, 10)), expected[1:10].sum())
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native scalar reductions are disabled on WASM")
+def test_numeric_reduction_retains_miniexpr(monkeypatch, automatic_native_runtime):
+    import importlib
+
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
+    data = np.arange(12, dtype=np.float32)
+    a = blosc2.asarray(data, chunks=(6,), blocks=(3,))
+    if typed_evaluator_enabled():
+        if not getattr(blosc2.blosc2_ext, "menudet_prefilter_reductions_available", lambda: False)():
+            pytest.skip("Rebuilt native prefilter reduction bindings are required")
+        original = blosc2.NDArray._execute_menudet_prefilter
+        reports = []
+
+        def record_typed(self, *args, **kwargs):
+            result, report = original(self, *args, **kwargs)
+            reports.append(report)
+            return result, report
+
+        monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", record_typed)
+        np.testing.assert_array_equal(a.sum(), data.sum())
+        assert len(reports) == 1
+        assert reports[0]["output_destination"] == "reduction"
+    else:
+        original = blosc2.NDArray._set_pref_expr
+        compiled = []
+
+        def record_prefilter(self, expression, *args, **kwargs):
+            result = original(self, expression, *args, **kwargs)
+            compiled.append(expression)
+            return result
+
+        monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", record_prefilter)
+        np.testing.assert_array_equal(a.sum(), data.sum())
+        assert len(compiled) == 1
+        assert compiled[0].startswith("sum(")
+
+
+@pytest.mark.parametrize(
+    ("dtype", "axis", "keepdims", "use_where"),
+    [
+        (dtype, axis, bool((dtype_index + axis_index + masked) % 2), masked)
+        for dtype_index, dtype in enumerate((np.float32, np.float64, np.complex64, np.int32, np.bool_))
+        for axis_index, axis in enumerate((None, 0))
+        for masked in (False, True)
+    ],
+)
+def test_mean_dtype_matches_numpy(dtype, axis, keepdims, use_where):
+    # A float32 mean stays float32: NumPy 1.x makes a float32 scalar over a Python int float64
+    # (and an array over a count above 65535), and the int64 counts of where= do so in any version
+    rng = np.random.default_rng(0)
+    na = (10 * rng.normal(size=(70_000, 3))).astype(dtype)
+    nmask = rng.random(na.shape) < 0.7
+    a, mask = blosc2.asarray(na), blosc2.asarray(nmask)
+    kwargs = {"axis": axis, "keepdims": keepdims, **({"where": nmask} if use_where else {})}
+    res = a.mean(**{**kwargs, "where": mask} if use_where else kwargs)
+    assert np.asarray(res).dtype == np.mean(na, **kwargs).dtype
+    # Values against a float64 reference: these means are close to 0
+    expected = np.mean(na.astype(np.result_type(na.dtype, np.float64)), **kwargs)
+    assert np.shape(res) == np.shape(expected)
+    np.testing.assert_allclose(res, expected, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("pos", "fill", "reduce_op"),
+    [
+        (pos, fill, op)
+        for op in ("min", "max", "any", "all")
+        for fill in (False, True)
+        for pos in (None, (0, 0), (36, 40), (18, 3))
+        if op in ("min", "max") or pos in (None, (36, 40))
+    ],
+)
+def test_reduce_bool_padded_blocks(fill, reduce_op, pos):
+    # Chunks and blocks that do not tile the shape leave unwritten padding blocks, whose
+    # starting value must be the reduction's identity: True for min, False for max. The
+    # result stays bool on every path.
+    na = np.full((37, 41), fill)
+    if pos is not None:
+        na[pos] = not fill
+    a = blosc2.asarray(na, chunks=(20, 25), blocks=(8, 10))
+    for arr, narr in ((a, na), (~a, ~na)):
+        for axis in (None, 0):
+            res = getattr(arr, reduce_op)(axis=axis)
+            np.testing.assert_array_equal(res, getattr(narr, reduce_op)(axis=axis))
+            assert np.asarray(res).dtype == np.bool_

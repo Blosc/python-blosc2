@@ -10,9 +10,10 @@ import pytest
 
 import blosc2
 import blosc2.c2array as blosc2_c2array
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def _kernel_add_twice(x, y):
     return x + y * 2
 
@@ -267,9 +268,8 @@ def test_msgpack_supports_lazyudf_dslkernel(tmp_path):
     oarr = blosc2.ObjectArray()
     oarr.append(udf)
     restored = oarr[0]
-
-    assert isinstance(restored, blosc2.LazyUDF)
-    np.testing.assert_allclose(restored[:], expected)
+    np.testing.assert_array_equal(restored[:], expected)
+    assert restored.kernel.schema_version == "0.1"
 
 
 def test_msgpack_rejects_in_memory_lazyexpr():
@@ -284,7 +284,7 @@ def test_msgpack_rejects_plain_python_lazyudf(tmp_path):
     udf = _make_persistent_python_lazyudf(tmp_path)
 
     oarr = blosc2.ObjectArray()
-    with pytest.raises(TypeError, match="DSLKernel"):
+    with pytest.raises(TypeError, match="MenudetKernel"):
         oarr.append(udf)
 
 

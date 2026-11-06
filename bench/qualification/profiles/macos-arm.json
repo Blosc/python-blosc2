@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "profile_id": "macos-arm",
+  "calibrated": false,
+  "size": 1048576,
+  "threads": 2,
+  "max_memory_bytes": 536870912,
+  "cases": [
+    "evaluate-comparison-auto-new", "evaluate-comparison-cc-new", "evaluate-comparison-cc-out", "evaluate-comparison-tcc-new",
+    "evaluate-polynomial-auto-new", "evaluate-polynomial-cc-new", "evaluate-polynomial-cc-out", "evaluate-polynomial-tcc-new",
+    "authored-slabs-compressed", "authored-slabs-numpy", "lazyexpr-slabs-compressed",
+    "authored-loop-interpreter", "authored-loop-cc", "evaluate-transcendental-system",
+    "lazyexpr-tiny-compressed", "lazyexpr-above-compressed", "evaluate-strided-fallback",
+    "evaluate-transcendental-accelerate", "evaluate-square-accelerate"
+  ]
+}

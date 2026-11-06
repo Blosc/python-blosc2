@@ -260,10 +260,10 @@ class UTF8LazyExpr:
     the same reason.  Slicing the *result* works normally.
     """
 
-    def __init__(self, expression: str, operands: dict, *, ne_args: dict | None = None) -> None:
+    def __init__(self, expression: str, operands: dict, *, eval_kwargs: dict | None = None) -> None:
         self.expression = expression
         self.operands = dict(operands)
-        self._ne_args = ne_args
+        self._eval_kwargs = eval_kwargs
         self._utf8 = {k: v for k, v in self.operands.items() if isinstance(v, UTF8Array)}
         if not self._utf8:
             raise ValueError("UTF8LazyExpr needs at least one UTF8Array operand")

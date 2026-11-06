@@ -1,0 +1,647 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "nitems": 65536,
+  "repeats": 7,
+  "technique": "Median across fresh processes of native best-of-warm timings; fixed backend order",
+  "limitations": [
+    "Compilation excluded; not an interleaved compiler-ranking experiment.",
+    "Native harness compares result bytes with the interpreter."
+  ],
+  "executable_sha256": "37c60f071f022047a076c4ac71f25308b5c8d5c267f2a2e60967e0fb391d8a56",
+  "linked_native_sha256": {
+    "libminiexpr.dylib": "dc12528904b586520dd5f343f93267853063361b2cf799e415f6b39d1c4d6ad2"
+  },
+  "compiler_versions": {
+    "gcc-16": "gcc-16 (Homebrew GCC 16.2.0) 16.2.0\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+    "clang": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+  },
+  "summary": [
+    {
+      "case": "A math-call: sin(x)+cos(x)",
+      "interpreter_ms": 77.063,
+      "interpreter_range_ms": [
+        76.786,
+        77.443
+      ],
+      "tcc_ms": 6.86,
+      "tcc_range_ms": [
+        6.757,
+        7.087
+      ],
+      "tcc_route": "JIT",
+      "gcc_ms": 6.829,
+      "gcc_range_ms": [
+        6.669,
+        6.949
+      ],
+      "gcc_route": "JIT",
+      "clang_ms": 6.776,
+      "clang_range_ms": [
+        6.683,
+        6.996
+      ],
+      "clang_route": "JIT"
+    },
+    {
+      "case": "B integer-dtype: int32 x+y",
+      "interpreter_ms": 68.578,
+      "interpreter_range_ms": [
+        68.512,
+        68.649
+      ],
+      "tcc_ms": 0.23,
+      "tcc_range_ms": [
+        0.227,
+        0.231
+      ],
+      "tcc_route": "JIT",
+      "gcc_ms": 0.051,
+      "gcc_range_ms": [
+        0.046,
+        0.086
+      ],
+      "gcc_route": "JIT",
+      "clang_ms": 0.02,
+      "clang_range_ms": [
+        0.007,
+        0.021
+      ],
+      "clang_route": "JIT"
+    },
+    {
+      "case": "C float-operator: x // 3.0",
+      "interpreter_ms": 68.513,
+      "interpreter_range_ms": [
+        68.217,
+        68.589
+      ],
+      "tcc_ms": 68.612,
+      "tcc_range_ms": [
+        68.434,
+        68.615
+      ],
+      "tcc_route": "fb",
+      "gcc_ms": 68.606,
+      "gcc_range_ms": [
+        68.278,
+        68.695
+      ],
+      "gcc_route": "fb",
+      "clang_ms": 68.646,
+      "clang_range_ms": [
+        68.438,
+        68.816
+      ],
+      "clang_route": "fb"
+    },
+    {
+      "case": "D local-temp: y=x*2; y+1",
+      "interpreter_ms": 136.696,
+      "interpreter_range_ms": [
+        135.895,
+        137.437
+      ],
+      "tcc_ms": 0.101,
+      "tcc_range_ms": [
+        0.1,
+        0.101
+      ],
+      "tcc_route": "JIT",
+      "gcc_ms": 0.133,
+      "gcc_range_ms": [
+        0.052,
+        0.23
+      ],
+      "gcc_route": "JIT",
+      "clang_ms": 0.122,
+      "clang_range_ms": [
+        0.114,
+        0.139
+      ],
+      "clang_route": "JIT"
+    },
+    {
+      "case": "E control-flow: if x>0 else -x",
+      "interpreter_ms": 82.466,
+      "interpreter_range_ms": [
+        82.369,
+        82.753
+      ],
+      "tcc_ms": 0.19,
+      "tcc_range_ms": [
+        0.175,
+        0.193
+      ],
+      "tcc_route": "JIT",
+      "gcc_ms": 0.118,
+      "gcc_range_ms": [
+        0.113,
+        0.149
+      ],
+      "gcc_route": "JIT",
+      "clang_ms": 0.102,
+      "clang_range_ms": [
+        0.102,
+        0.134
+      ],
+      "clang_route": "JIT"
+    },
+    {
+      "case": "F reduction: sum(x)",
+      "interpreter_ms": 0.492,
+      "interpreter_range_ms": [
+        0.489,
+        0.926
+      ],
+      "tcc_ms": 0.473,
+      "tcc_range_ms": [
+        0.463,
+        0.49
+      ],
+      "tcc_route": "fb",
+      "gcc_ms": 0.471,
+      "gcc_range_ms": [
+        0.464,
+        0.479
+      ],
+      "gcc_route": "fb",
+      "clang_ms": 0.472,
+      "clang_range_ms": [
+        0.461,
+        0.478
+      ],
+      "clang_route": "fb"
+    },
+    {
+      "case": "G nd-context: x + _i0",
+      "interpreter_ms": 68.797,
+      "interpreter_range_ms": [
+        68.688,
+        69.351
+      ],
+      "tcc_ms": 69.094,
+      "tcc_range_ms": [
+        68.951,
+        69.16
+      ],
+      "tcc_route": "fb",
+      "gcc_ms": 68.965,
+      "gcc_range_ms": [
+        68.747,
+        69.332
+      ],
+      "gcc_route": "fb",
+      "clang_ms": 69.028,
+      "clang_range_ms": [
+        68.822,
+        69.587
+      ],
+      "clang_route": "fb"
+    },
+    {
+      "case": "control eligible: where(x!=0,y/x,y)",
+      "interpreter_ms": 192.634,
+      "interpreter_range_ms": [
+        192.334,
+        193.118
+      ],
+      "tcc_ms": 0.216,
+      "tcc_range_ms": [
+        0.211,
+        0.222
+      ],
+      "tcc_route": "JIT",
+      "gcc_ms": 0.195,
+      "gcc_range_ms": [
+        0.167,
+        0.218
+      ],
+      "gcc_route": "JIT",
+      "clang_ms": 0.144,
+      "clang_range_ms": [
+        0.134,
+        0.176
+      ],
+      "clang_route": "JIT"
+    }
+  ],
+  "processes": [
+    [
+      {
+        "case": "A math-call: sin(x)+cos(x)",
+        "interpreter_ms": 76.786,
+        "tcc_ms": 6.86,
+        "tcc_route": "JIT",
+        "gcc_ms": 6.949,
+        "gcc_route": "JIT",
+        "clang_ms": 6.996,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "B integer-dtype: int32 x+y",
+        "interpreter_ms": 68.551,
+        "tcc_ms": 0.227,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.086,
+        "gcc_route": "JIT",
+        "clang_ms": 0.007,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "C float-operator: x // 3.0",
+        "interpreter_ms": 68.217,
+        "tcc_ms": 68.615,
+        "tcc_route": "fb",
+        "gcc_ms": 68.606,
+        "gcc_route": "fb",
+        "clang_ms": 68.438,
+        "clang_route": "fb"
+      },
+      {
+        "case": "D local-temp: y=x*2; y+1",
+        "interpreter_ms": 136.525,
+        "tcc_ms": 0.1,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.23,
+        "gcc_route": "JIT",
+        "clang_ms": 0.116,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "E control-flow: if x>0 else -x",
+        "interpreter_ms": 82.369,
+        "tcc_ms": 0.186,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.148,
+        "gcc_route": "JIT",
+        "clang_ms": 0.134,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "F reduction: sum(x)",
+        "interpreter_ms": 0.489,
+        "tcc_ms": 0.463,
+        "tcc_route": "fb",
+        "gcc_ms": 0.464,
+        "gcc_route": "fb",
+        "clang_ms": 0.461,
+        "clang_route": "fb"
+      },
+      {
+        "case": "G nd-context: x + _i0",
+        "interpreter_ms": 68.716,
+        "tcc_ms": 69.094,
+        "tcc_route": "fb",
+        "gcc_ms": 68.965,
+        "gcc_route": "fb",
+        "clang_ms": 69.028,
+        "clang_route": "fb"
+      },
+      {
+        "case": "control eligible: where(x!=0,y/x,y)",
+        "interpreter_ms": 192.489,
+        "tcc_ms": 0.211,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.18,
+        "gcc_route": "JIT",
+        "clang_ms": 0.134,
+        "clang_route": "JIT"
+      }
+    ],
+    [
+      {
+        "case": "A math-call: sin(x)+cos(x)",
+        "interpreter_ms": 76.958,
+        "tcc_ms": 6.757,
+        "tcc_route": "JIT",
+        "gcc_ms": 6.794,
+        "gcc_route": "JIT",
+        "clang_ms": 6.683,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "B integer-dtype: int32 x+y",
+        "interpreter_ms": 68.63,
+        "tcc_ms": 0.23,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.047,
+        "gcc_route": "JIT",
+        "clang_ms": 0.018,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "C float-operator: x // 3.0",
+        "interpreter_ms": 68.217,
+        "tcc_ms": 68.448,
+        "tcc_route": "fb",
+        "gcc_ms": 68.278,
+        "gcc_route": "fb",
+        "clang_ms": 68.646,
+        "clang_route": "fb"
+      },
+      {
+        "case": "D local-temp: y=x*2; y+1",
+        "interpreter_ms": 135.895,
+        "tcc_ms": 0.101,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.136,
+        "gcc_route": "JIT",
+        "clang_ms": 0.139,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "E control-flow: if x>0 else -x",
+        "interpreter_ms": 82.542,
+        "tcc_ms": 0.175,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.113,
+        "gcc_route": "JIT",
+        "clang_ms": 0.102,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "F reduction: sum(x)",
+        "interpreter_ms": 0.492,
+        "tcc_ms": 0.472,
+        "tcc_route": "fb",
+        "gcc_ms": 0.466,
+        "gcc_route": "fb",
+        "clang_ms": 0.472,
+        "clang_route": "fb"
+      },
+      {
+        "case": "G nd-context: x + _i0",
+        "interpreter_ms": 68.688,
+        "tcc_ms": 69.081,
+        "tcc_route": "fb",
+        "gcc_ms": 68.882,
+        "gcc_route": "fb",
+        "clang_ms": 68.822,
+        "clang_route": "fb"
+      },
+      {
+        "case": "control eligible: where(x!=0,y/x,y)",
+        "interpreter_ms": 192.334,
+        "tcc_ms": 0.222,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.195,
+        "gcc_route": "JIT",
+        "clang_ms": 0.138,
+        "clang_route": "JIT"
+      }
+    ],
+    [
+      {
+        "case": "A math-call: sin(x)+cos(x)",
+        "interpreter_ms": 77.063,
+        "tcc_ms": 6.985,
+        "tcc_route": "JIT",
+        "gcc_ms": 6.922,
+        "gcc_route": "JIT",
+        "clang_ms": 6.756,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "B integer-dtype: int32 x+y",
+        "interpreter_ms": 68.649,
+        "tcc_ms": 0.231,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.046,
+        "gcc_route": "JIT",
+        "clang_ms": 0.021,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "C float-operator: x // 3.0",
+        "interpreter_ms": 68.589,
+        "tcc_ms": 68.612,
+        "tcc_route": "fb",
+        "gcc_ms": 68.695,
+        "gcc_route": "fb",
+        "clang_ms": 68.773,
+        "clang_route": "fb"
+      },
+      {
+        "case": "D local-temp: y=x*2; y+1",
+        "interpreter_ms": 136.696,
+        "tcc_ms": 0.101,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.133,
+        "gcc_route": "JIT",
+        "clang_ms": 0.126,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "E control-flow: if x>0 else -x",
+        "interpreter_ms": 82.46,
+        "tcc_ms": 0.193,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.114,
+        "gcc_route": "JIT",
+        "clang_ms": 0.102,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "F reduction: sum(x)",
+        "interpreter_ms": 0.49,
+        "tcc_ms": 0.489,
+        "tcc_route": "fb",
+        "gcc_ms": 0.479,
+        "gcc_route": "fb",
+        "clang_ms": 0.478,
+        "clang_route": "fb"
+      },
+      {
+        "case": "G nd-context: x + _i0",
+        "interpreter_ms": 68.95,
+        "tcc_ms": 69.16,
+        "tcc_route": "fb",
+        "gcc_ms": 68.977,
+        "gcc_route": "fb",
+        "clang_ms": 69.145,
+        "clang_route": "fb"
+      },
+      {
+        "case": "control eligible: where(x!=0,y/x,y)",
+        "interpreter_ms": 193.118,
+        "tcc_ms": 0.214,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.203,
+        "gcc_route": "JIT",
+        "clang_ms": 0.144,
+        "clang_route": "JIT"
+      }
+    ],
+    [
+      {
+        "case": "A math-call: sin(x)+cos(x)",
+        "interpreter_ms": 77.261,
+        "tcc_ms": 6.834,
+        "tcc_route": "JIT",
+        "gcc_ms": 6.829,
+        "gcc_route": "JIT",
+        "clang_ms": 6.776,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "B integer-dtype: int32 x+y",
+        "interpreter_ms": 68.512,
+        "tcc_ms": 0.23,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.051,
+        "gcc_route": "JIT",
+        "clang_ms": 0.02,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "C float-operator: x // 3.0",
+        "interpreter_ms": 68.549,
+        "tcc_ms": 68.434,
+        "tcc_route": "fb",
+        "gcc_ms": 68.584,
+        "gcc_route": "fb",
+        "clang_ms": 68.505,
+        "clang_route": "fb"
+      },
+      {
+        "case": "D local-temp: y=x*2; y+1",
+        "interpreter_ms": 137.437,
+        "tcc_ms": 0.1,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.127,
+        "gcc_route": "JIT",
+        "clang_ms": 0.114,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "E control-flow: if x>0 else -x",
+        "interpreter_ms": 82.753,
+        "tcc_ms": 0.191,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.149,
+        "gcc_route": "JIT",
+        "clang_ms": 0.109,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "F reduction: sum(x)",
+        "interpreter_ms": 0.926,
+        "tcc_ms": 0.473,
+        "tcc_route": "fb",
+        "gcc_ms": 0.473,
+        "gcc_route": "fb",
+        "clang_ms": 0.472,
+        "clang_route": "fb"
+      },
+      {
+        "case": "G nd-context: x + _i0",
+        "interpreter_ms": 68.797,
+        "tcc_ms": 69.159,
+        "tcc_route": "fb",
+        "gcc_ms": 69.332,
+        "gcc_route": "fb",
+        "clang_ms": 69.587,
+        "clang_route": "fb"
+      },
+      {
+        "case": "control eligible: where(x!=0,y/x,y)",
+        "interpreter_ms": 192.888,
+        "tcc_ms": 0.22,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.167,
+        "gcc_route": "JIT",
+        "clang_ms": 0.176,
+        "clang_route": "JIT"
+      }
+    ],
+    [
+      {
+        "case": "A math-call: sin(x)+cos(x)",
+        "interpreter_ms": 77.443,
+        "tcc_ms": 7.087,
+        "tcc_route": "JIT",
+        "gcc_ms": 6.669,
+        "gcc_route": "JIT",
+        "clang_ms": 6.804,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "B integer-dtype: int32 x+y",
+        "interpreter_ms": 68.578,
+        "tcc_ms": 0.23,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.058,
+        "gcc_route": "JIT",
+        "clang_ms": 0.02,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "C float-operator: x // 3.0",
+        "interpreter_ms": 68.513,
+        "tcc_ms": 68.615,
+        "tcc_route": "fb",
+        "gcc_ms": 68.609,
+        "gcc_route": "fb",
+        "clang_ms": 68.816,
+        "clang_route": "fb"
+      },
+      {
+        "case": "D local-temp: y=x*2; y+1",
+        "interpreter_ms": 137.192,
+        "tcc_ms": 0.101,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.052,
+        "gcc_route": "JIT",
+        "clang_ms": 0.122,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "E control-flow: if x>0 else -x",
+        "interpreter_ms": 82.466,
+        "tcc_ms": 0.19,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.118,
+        "gcc_route": "JIT",
+        "clang_ms": 0.102,
+        "clang_route": "JIT"
+      },
+      {
+        "case": "F reduction: sum(x)",
+        "interpreter_ms": 0.751,
+        "tcc_ms": 0.49,
+        "tcc_route": "fb",
+        "gcc_ms": 0.471,
+        "gcc_route": "fb",
+        "clang_ms": 0.472,
+        "clang_route": "fb"
+      },
+      {
+        "case": "G nd-context: x + _i0",
+        "interpreter_ms": 69.351,
+        "tcc_ms": 68.951,
+        "tcc_route": "fb",
+        "gcc_ms": 68.747,
+        "gcc_route": "fb",
+        "clang_ms": 68.858,
+        "clang_route": "fb"
+      },
+      {
+        "case": "control eligible: where(x!=0,y/x,y)",
+        "interpreter_ms": 192.634,
+        "tcc_ms": 0.216,
+        "tcc_route": "JIT",
+        "gcc_ms": 0.218,
+        "gcc_route": "JIT",
+        "clang_ms": 0.165,
+        "clang_route": "JIT"
+      }
+    ]
+  ],
+  "raw_output": [
+    "MiniExpr portable 1.1: interpreter vs JIT (warm per-evaluation time)\nnitems=65536 repeats=7  (cold load/compile excluded; best of warm runs; ms per full-array call)\n\ncase (family / example)                     interpreter              tcc           gcc-16            clang\nA math-call: sin(x)+cos(x)                     76.786 I        6.860 JIT        6.949 JIT        6.996 JIT\nB integer-dtype: int32 x+y                     68.551 I        0.227 JIT        0.086 JIT        0.007 JIT\nC float-operator: x // 3.0                     68.217 I        68.615 fb        68.606 fb        68.438 fb\nD local-temp: y=x*2; y+1                      136.525 I        0.100 JIT        0.230 JIT        0.116 JIT\nE control-flow: if x>0 else -x                 82.369 I        0.186 JIT        0.148 JIT        0.134 JIT\nF reduction: sum(x)                             0.489 I         0.463 fb         0.464 fb         0.461 fb\nG nd-context: x + _i0                          68.716 I        69.094 fb        68.965 fb        69.028 fb\ncontrol eligible: where(x!=0,y/x,y)           192.489 I        0.211 JIT        0.180 JIT        0.134 JIT\n\nlegend: I=interpreter  JIT=compiled kernel  fb=JIT declined, interpreter fallback\n        *=warm result differs bitwise from the interpreter reference\ncompiled control kernel per backend:  tcc=yes  gcc-16=yes  clang=yes\nvalue checks: all match interpreter\n",
+    "MiniExpr portable 1.1: interpreter vs JIT (warm per-evaluation time)\nnitems=65536 repeats=7  (cold load/compile excluded; best of warm runs; ms per full-array call)\n\ncase (family / example)                     interpreter              tcc           gcc-16            clang\nA math-call: sin(x)+cos(x)                     76.958 I        6.757 JIT        6.794 JIT        6.683 JIT\nB integer-dtype: int32 x+y                     68.630 I        0.230 JIT        0.047 JIT        0.018 JIT\nC float-operator: x // 3.0                     68.217 I        68.448 fb        68.278 fb        68.646 fb\nD local-temp: y=x*2; y+1                      135.895 I        0.101 JIT        0.136 JIT        0.139 JIT\nE control-flow: if x>0 else -x                 82.542 I        0.175 JIT        0.113 JIT        0.102 JIT\nF reduction: sum(x)                             0.492 I         0.472 fb         0.466 fb         0.472 fb\nG nd-context: x + _i0                          68.688 I        69.081 fb        68.882 fb        68.822 fb\ncontrol eligible: where(x!=0,y/x,y)           192.334 I        0.222 JIT        0.195 JIT        0.138 JIT\n\nlegend: I=interpreter  JIT=compiled kernel  fb=JIT declined, interpreter fallback\n        *=warm result differs bitwise from the interpreter reference\ncompiled control kernel per backend:  tcc=yes  gcc-16=yes  clang=yes\nvalue checks: all match interpreter\n",
+    "MiniExpr portable 1.1: interpreter vs JIT (warm per-evaluation time)\nnitems=65536 repeats=7  (cold load/compile excluded; best of warm runs; ms per full-array call)\n\ncase (family / example)                     interpreter              tcc           gcc-16            clang\nA math-call: sin(x)+cos(x)                     77.063 I        6.985 JIT        6.922 JIT        6.756 JIT\nB integer-dtype: int32 x+y                     68.649 I        0.231 JIT        0.046 JIT        0.021 JIT\nC float-operator: x // 3.0                     68.589 I        68.612 fb        68.695 fb        68.773 fb\nD local-temp: y=x*2; y+1                      136.696 I        0.101 JIT        0.133 JIT        0.126 JIT\nE control-flow: if x>0 else -x                 82.460 I        0.193 JIT        0.114 JIT        0.102 JIT\nF reduction: sum(x)                             0.490 I         0.489 fb         0.479 fb         0.478 fb\nG nd-context: x + _i0                          68.950 I        69.160 fb        68.977 fb        69.145 fb\ncontrol eligible: where(x!=0,y/x,y)           193.118 I        0.214 JIT        0.203 JIT        0.144 JIT\n\nlegend: I=interpreter  JIT=compiled kernel  fb=JIT declined, interpreter fallback\n        *=warm result differs bitwise from the interpreter reference\ncompiled control kernel per backend:  tcc=yes  gcc-16=yes  clang=yes\nvalue checks: all match interpreter\n",
+    "MiniExpr portable 1.1: interpreter vs JIT (warm per-evaluation time)\nnitems=65536 repeats=7  (cold load/compile excluded; best of warm runs; ms per full-array call)\n\ncase (family / example)                     interpreter              tcc           gcc-16            clang\nA math-call: sin(x)+cos(x)                     77.261 I        6.834 JIT        6.829 JIT        6.776 JIT\nB integer-dtype: int32 x+y                     68.512 I        0.230 JIT        0.051 JIT        0.020 JIT\nC float-operator: x // 3.0                     68.549 I        68.434 fb        68.584 fb        68.505 fb\nD local-temp: y=x*2; y+1                      137.437 I        0.100 JIT        0.127 JIT        0.114 JIT\nE control-flow: if x>0 else -x                 82.753 I        0.191 JIT        0.149 JIT        0.109 JIT\nF reduction: sum(x)                             0.926 I         0.473 fb         0.473 fb         0.472 fb\nG nd-context: x + _i0                          68.797 I        69.159 fb        69.332 fb        69.587 fb\ncontrol eligible: where(x!=0,y/x,y)           192.888 I        0.220 JIT        0.167 JIT        0.176 JIT\n\nlegend: I=interpreter  JIT=compiled kernel  fb=JIT declined, interpreter fallback\n        *=warm result differs bitwise from the interpreter reference\ncompiled control kernel per backend:  tcc=yes  gcc-16=yes  clang=yes\nvalue checks: all match interpreter\n",
+    "MiniExpr portable 1.1: interpreter vs JIT (warm per-evaluation time)\nnitems=65536 repeats=7  (cold load/compile excluded; best of warm runs; ms per full-array call)\n\ncase (family / example)                     interpreter              tcc           gcc-16            clang\nA math-call: sin(x)+cos(x)                     77.443 I        7.087 JIT        6.669 JIT        6.804 JIT\nB integer-dtype: int32 x+y                     68.578 I        0.230 JIT        0.058 JIT        0.020 JIT\nC float-operator: x // 3.0                     68.513 I        68.615 fb        68.609 fb        68.816 fb\nD local-temp: y=x*2; y+1                      137.192 I        0.101 JIT        0.052 JIT        0.122 JIT\nE control-flow: if x>0 else -x                 82.466 I        0.190 JIT        0.118 JIT        0.102 JIT\nF reduction: sum(x)                             0.751 I         0.490 fb         0.471 fb         0.472 fb\nG nd-context: x + _i0                          69.351 I        68.951 fb        68.747 fb        68.858 fb\ncontrol eligible: where(x!=0,y/x,y)           192.634 I        0.216 JIT        0.218 JIT        0.165 JIT\n\nlegend: I=interpreter  JIT=compiled kernel  fb=JIT declined, interpreter fallback\n        *=warm result differs bitwise from the interpreter reference\ncompiled control kernel per backend:  tcc=yes  gcc-16=yes  clang=yes\nvalue checks: all match interpreter\n"
+  ]
+}

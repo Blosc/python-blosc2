@@ -1,0 +1,3254 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rows": [
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.514667,
+      "setup_ms": 0.001792,
+      "first_ms": 0.058334,
+      "warm_median_ms": 0.020708,
+      "peak_rss_bytes": 73596928,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.305833,
+      "setup_ms": 0.000375,
+      "first_ms": 0.098125,
+      "warm_median_ms": 0.053042,
+      "peak_rss_bytes": 72335360,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 0.007458,
+      "warm_median_ms": 0.000792,
+      "peak_rss_bytes": 71942144,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.116208,
+      "first_ms": 0.211833,
+      "warm_median_ms": 0.005209,
+      "peak_rss_bytes": 71696384,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000292,
+      "first_ms": 0.795667,
+      "warm_median_ms": 0.184833,
+      "peak_rss_bytes": 73629696,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000333,
+      "first_ms": 0.6895,
+      "warm_median_ms": 0.206625,
+      "peak_rss_bytes": 72859648,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.103375,
+      "first_ms": 0.24625,
+      "warm_median_ms": 0.005166,
+      "peak_rss_bytes": 72040448,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000292,
+      "first_ms": 0.013292,
+      "warm_median_ms": 0.001959,
+      "peak_rss_bytes": 69795840,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.299958,
+      "setup_ms": 0.000459,
+      "first_ms": 0.104625,
+      "warm_median_ms": 0.061417,
+      "peak_rss_bytes": 74563584,
+      "native_report": {
+        "temporary_bytes": 32,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.3175,
+      "setup_ms": 0.001667,
+      "first_ms": 0.042458,
+      "warm_median_ms": 0.020625,
+      "peak_rss_bytes": 74924032,
+      "native_report": {
+        "temporary_bytes": 32,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.317792,
+      "setup_ms": 0.001709,
+      "first_ms": 0.042292,
+      "warm_median_ms": 0.020417,
+      "peak_rss_bytes": 71925760,
+      "native_report": {
+        "temporary_bytes": 32,
+        "gathered_bytes": 32,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.29625,
+      "setup_ms": 0.000375,
+      "first_ms": 0.096083,
+      "warm_median_ms": 0.052083,
+      "peak_rss_bytes": 75169792,
+      "native_report": {
+        "temporary_bytes": 32,
+        "gathered_bytes": 32,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 0.008542,
+      "warm_median_ms": 0.001083,
+      "peak_rss_bytes": 69337088,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.117667,
+      "first_ms": 0.226125,
+      "warm_median_ms": 0.005125,
+      "peak_rss_bytes": 71090176,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.0005,
+      "first_ms": 0.668333,
+      "warm_median_ms": 0.179291,
+      "peak_rss_bytes": 72744960,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000459,
+      "first_ms": 0.6855,
+      "warm_median_ms": 0.199917,
+      "peak_rss_bytes": 75235328,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.116667,
+      "first_ms": 0.33775,
+      "warm_median_ms": 0.005583,
+      "peak_rss_bytes": 72400896,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.0005,
+      "first_ms": 0.013667,
+      "warm_median_ms": 0.001792,
+      "peak_rss_bytes": 72597504,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.297208,
+      "setup_ms": 0.000416,
+      "first_ms": 0.102833,
+      "warm_median_ms": 0.059334,
+      "peak_rss_bytes": 74137600,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 32,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.354459,
+      "setup_ms": 0.002042,
+      "first_ms": 0.048541,
+      "warm_median_ms": 0.021125,
+      "peak_rss_bytes": 72679424,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 32,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.333041,
+      "setup_ms": 0.002,
+      "first_ms": 0.052083,
+      "warm_median_ms": 0.023292,
+      "peak_rss_bytes": 73924608,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.322125,
+      "setup_ms": 0.000584,
+      "first_ms": 0.104,
+      "warm_median_ms": 0.053166,
+      "peak_rss_bytes": 72433664,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000625,
+      "first_ms": 0.006375,
+      "warm_median_ms": 0.000792,
+      "peak_rss_bytes": 71532544,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.119042,
+      "first_ms": 0.221666,
+      "warm_median_ms": 0.005083,
+      "peak_rss_bytes": 71843840,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 0.753417,
+      "warm_median_ms": 0.177916,
+      "peak_rss_bytes": 73744384,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000333,
+      "first_ms": 0.696667,
+      "warm_median_ms": 0.200666,
+      "peak_rss_bytes": 75415552,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.128084,
+      "first_ms": 0.335959,
+      "warm_median_ms": 0.005375,
+      "peak_rss_bytes": 72630272,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000292,
+      "first_ms": 0.012083,
+      "warm_median_ms": 0.001917,
+      "peak_rss_bytes": 71909376,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.300542,
+      "setup_ms": 0.0005,
+      "first_ms": 0.104,
+      "warm_median_ms": 0.058083,
+      "peak_rss_bytes": 74907648,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.302084,
+      "setup_ms": 0.001542,
+      "first_ms": 0.041875,
+      "warm_median_ms": 0.020625,
+      "peak_rss_bytes": 75268096,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.310417,
+      "setup_ms": 0.001708,
+      "first_ms": 0.04275,
+      "warm_median_ms": 0.022084,
+      "peak_rss_bytes": 73596928,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.308292,
+      "setup_ms": 0.000417,
+      "first_ms": 0.097209,
+      "warm_median_ms": 0.054542,
+      "peak_rss_bytes": 73957376,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.005917,
+      "warm_median_ms": 0.000834,
+      "peak_rss_bytes": 72253440,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.11,
+      "first_ms": 0.277667,
+      "warm_median_ms": 0.0055,
+      "peak_rss_bytes": 70238208,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000333,
+      "first_ms": 0.636625,
+      "warm_median_ms": 0.189333,
+      "peak_rss_bytes": 75481088,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.765125,
+      "warm_median_ms": 0.205667,
+      "peak_rss_bytes": 73285632,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.111459,
+      "first_ms": 0.237083,
+      "warm_median_ms": 0.0055,
+      "peak_rss_bytes": 71139328,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 0.010958,
+      "warm_median_ms": 0.001875,
+      "peak_rss_bytes": 69353472,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.339375,
+      "setup_ms": 0.000333,
+      "first_ms": 0.104167,
+      "warm_median_ms": 0.059708,
+      "peak_rss_bytes": 74383360,
+      "native_report": {
+        "temporary_bytes": 128,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.300708,
+      "setup_ms": 0.001666,
+      "first_ms": 0.042417,
+      "warm_median_ms": 0.02025,
+      "peak_rss_bytes": 71925760,
+      "native_report": {
+        "temporary_bytes": 128,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.3185,
+      "setup_ms": 0.001459,
+      "first_ms": 0.042667,
+      "warm_median_ms": 0.020375,
+      "peak_rss_bytes": 73121792,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.3195,
+      "setup_ms": 0.000416,
+      "first_ms": 0.102833,
+      "warm_median_ms": 0.056875,
+      "peak_rss_bytes": 74629120,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.008292,
+      "warm_median_ms": 0.00075,
+      "peak_rss_bytes": 71516160,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.147875,
+      "first_ms": 0.271542,
+      "warm_median_ms": 0.005208,
+      "peak_rss_bytes": 71811072,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000459,
+      "first_ms": 0.641375,
+      "warm_median_ms": 0.190333,
+      "peak_rss_bytes": 72859648,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000292,
+      "first_ms": 0.68525,
+      "warm_median_ms": 0.19875,
+      "peak_rss_bytes": 73908224,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.116125,
+      "first_ms": 0.271375,
+      "warm_median_ms": 0.005333,
+      "peak_rss_bytes": 71811072,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 0.014542,
+      "warm_median_ms": 0.001834,
+      "peak_rss_bytes": 70991872,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.345291,
+      "setup_ms": 0.000458,
+      "first_ms": 0.117834,
+      "warm_median_ms": 0.068917,
+      "peak_rss_bytes": 73056256,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.303792,
+      "setup_ms": 0.001666,
+      "first_ms": 0.044416,
+      "warm_median_ms": 0.020833,
+      "peak_rss_bytes": 75038720,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 1,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.301875,
+      "setup_ms": 0.0015,
+      "first_ms": 0.042167,
+      "warm_median_ms": 0.022375,
+      "peak_rss_bytes": 74301440,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.301,
+      "setup_ms": 0.000375,
+      "first_ms": 0.094584,
+      "warm_median_ms": 0.056708,
+      "peak_rss_bytes": 74596352,
+      "native_report": {
+        "temporary_bytes": 64,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000458,
+      "first_ms": 0.007042,
+      "warm_median_ms": 0.000667,
+      "peak_rss_bytes": 71745536,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.120041,
+      "first_ms": 0.287167,
+      "warm_median_ms": 0.005125,
+      "peak_rss_bytes": 72531968,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000416,
+      "first_ms": 0.651542,
+      "warm_median_ms": 0.189166,
+      "peak_rss_bytes": 71974912,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.711209,
+      "warm_median_ms": 0.204458,
+      "peak_rss_bytes": 72941568,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.127584,
+      "first_ms": 0.298583,
+      "warm_median_ms": 0.005417,
+      "peak_rss_bytes": 71122944,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000541,
+      "first_ms": 0.016125,
+      "warm_median_ms": 0.002084,
+      "peak_rss_bytes": 72450048,
+      "native_report": null,
+      "shape": [
+        8
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.303917,
+      "setup_ms": 0.000583,
+      "first_ms": 0.102917,
+      "warm_median_ms": 0.060042,
+      "peak_rss_bytes": 72384512,
+      "native_report": {
+        "temporary_bytes": 128,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 8,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.303958,
+      "setup_ms": 0.001584,
+      "first_ms": 0.043,
+      "warm_median_ms": 0.02075,
+      "peak_rss_bytes": 73269248,
+      "native_report": {
+        "temporary_bytes": 128,
+        "gathered_bytes": 64,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        8
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.294166,
+      "setup_ms": 0.001541,
+      "first_ms": 492.981041,
+      "warm_median_ms": 495.235625,
+      "peak_rss_bytes": 86245376,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.3205,
+      "setup_ms": 0.000459,
+      "first_ms": 495.281333,
+      "warm_median_ms": 496.517792,
+      "peak_rss_bytes": 85737472,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000458,
+      "first_ms": 0.153667,
+      "warm_median_ms": 0.039084,
+      "peak_rss_bytes": 78987264,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.100291,
+      "first_ms": 0.469125,
+      "warm_median_ms": 0.137917,
+      "peak_rss_bytes": 83214336,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 0.903542,
+      "warm_median_ms": 0.468625,
+      "peak_rss_bytes": 87605248,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.976458,
+      "warm_median_ms": 0.518292,
+      "peak_rss_bytes": 77824000,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.119917,
+      "first_ms": 0.601167,
+      "warm_median_ms": 0.268375,
+      "peak_rss_bytes": 75677696,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000833,
+      "first_ms": 0.178166,
+      "warm_median_ms": 0.07125,
+      "peak_rss_bytes": 76070912,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.294875,
+      "setup_ms": 0.000458,
+      "first_ms": 497.676542,
+      "warm_median_ms": 502.578083,
+      "peak_rss_bytes": 77299712,
+      "native_report": {
+        "temporary_bytes": 4096,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.30275,
+      "setup_ms": 0.001625,
+      "first_ms": 502.72525,
+      "warm_median_ms": 502.689958,
+      "peak_rss_bytes": 77971456,
+      "native_report": {
+        "temporary_bytes": 4096,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.334625,
+      "setup_ms": 0.001875,
+      "first_ms": 499.394834,
+      "warm_median_ms": 501.993584,
+      "peak_rss_bytes": 87572480,
+      "native_report": {
+        "temporary_bytes": 4096,
+        "gathered_bytes": 1048576,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.301375,
+      "setup_ms": 0.000416,
+      "first_ms": 497.764541,
+      "warm_median_ms": 500.992625,
+      "peak_rss_bytes": 86851584,
+      "native_report": {
+        "temporary_bytes": 4096,
+        "gathered_bytes": 1048576,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000333,
+      "first_ms": 0.131583,
+      "warm_median_ms": 0.076208,
+      "peak_rss_bytes": 81608704,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.133416,
+      "first_ms": 0.5,
+      "warm_median_ms": 0.13775,
+      "peak_rss_bytes": 83869696,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000458,
+      "first_ms": 0.920667,
+      "warm_median_ms": 0.540459,
+      "peak_rss_bytes": 91881472,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.0005,
+      "first_ms": 0.955708,
+      "warm_median_ms": 0.448208,
+      "peak_rss_bytes": 78233600,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.137083,
+      "first_ms": 0.528041,
+      "warm_median_ms": 0.267208,
+      "peak_rss_bytes": 76300288,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000542,
+      "first_ms": 0.179875,
+      "warm_median_ms": 0.113792,
+      "peak_rss_bytes": 76333056,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.317667,
+      "setup_ms": 0.000417,
+      "first_ms": 500.38925,
+      "warm_median_ms": 501.741583,
+      "peak_rss_bytes": 77103104,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 1048576,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float32",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.302459,
+      "setup_ms": 0.001708,
+      "first_ms": 508.356958,
+      "warm_median_ms": 511.460667,
+      "peak_rss_bytes": 78151680,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 1048576,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.317667,
+      "setup_ms": 0.001542,
+      "first_ms": 501.392292,
+      "warm_median_ms": 506.269625,
+      "peak_rss_bytes": 93011968,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.298208,
+      "setup_ms": 0.000333,
+      "first_ms": 503.746333,
+      "warm_median_ms": 502.782708,
+      "peak_rss_bytes": 91258880,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.228375,
+      "warm_median_ms": 0.137167,
+      "peak_rss_bytes": 88227840,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.127,
+      "first_ms": 0.480667,
+      "warm_median_ms": 0.230459,
+      "peak_rss_bytes": 88981504,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 1.053334,
+      "warm_median_ms": 0.655667,
+      "peak_rss_bytes": 98516992,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000542,
+      "first_ms": 1.059792,
+      "warm_median_ms": 0.545542,
+      "peak_rss_bytes": 81281024,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.130041,
+      "first_ms": 0.593542,
+      "warm_median_ms": 0.267958,
+      "peak_rss_bytes": 76365824,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000792,
+      "first_ms": 0.315459,
+      "warm_median_ms": 0.136792,
+      "peak_rss_bytes": 77398016,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.342917,
+      "setup_ms": 0.0005,
+      "first_ms": 530.502166,
+      "warm_median_ms": 505.585417,
+      "peak_rss_bytes": 78807040,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.309167,
+      "setup_ms": 0.001458,
+      "first_ms": 505.576,
+      "warm_median_ms": 506.144167,
+      "peak_rss_bytes": 77611008,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.300125,
+      "setup_ms": 0.001542,
+      "first_ms": 506.595042,
+      "warm_median_ms": 504.319083,
+      "peak_rss_bytes": 96993280,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.322625,
+      "setup_ms": 0.0005,
+      "first_ms": 508.51675,
+      "warm_median_ms": 509.339458,
+      "peak_rss_bytes": 95666176,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.001792,
+      "first_ms": 0.24225,
+      "warm_median_ms": 0.147166,
+      "peak_rss_bytes": 88637440,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.171959,
+      "first_ms": 0.46425,
+      "warm_median_ms": 0.251958,
+      "peak_rss_bytes": 91258880,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.0005,
+      "first_ms": 1.035583,
+      "warm_median_ms": 0.646959,
+      "peak_rss_bytes": 104890368,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000375,
+      "first_ms": 1.089417,
+      "warm_median_ms": 0.624208,
+      "peak_rss_bytes": 83738624,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.121584,
+      "first_ms": 0.548375,
+      "warm_median_ms": 0.274,
+      "peak_rss_bytes": 81248256,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000417,
+      "first_ms": 0.27425,
+      "warm_median_ms": 0.183958,
+      "peak_rss_bytes": 77643776,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.31675,
+      "setup_ms": 0.000375,
+      "first_ms": 507.456167,
+      "warm_median_ms": 509.784708,
+      "peak_rss_bytes": 82690048,
+      "native_report": {
+        "temporary_bytes": 16384,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "float64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.307458,
+      "setup_ms": 0.001708,
+      "first_ms": 507.66325,
+      "warm_median_ms": 509.10025,
+      "peak_rss_bytes": 81035264,
+      "native_report": {
+        "temporary_bytes": 16384,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.326041,
+      "setup_ms": 0.001709,
+      "first_ms": 511.636792,
+      "warm_median_ms": 519.098875,
+      "peak_rss_bytes": 96763904,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": 0.329458,
+      "setup_ms": 0.000542,
+      "first_ms": 509.748875,
+      "warm_median_ms": 511.0815,
+      "peak_rss_bytes": 94715904,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000667,
+      "first_ms": 0.235166,
+      "warm_median_ms": 0.160625,
+      "peak_rss_bytes": 88162304,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.1445,
+      "first_ms": 0.557083,
+      "warm_median_ms": 0.189042,
+      "peak_rss_bytes": 92995584,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000334,
+      "first_ms": 1.014875,
+      "warm_median_ms": 0.640917,
+      "peak_rss_bytes": 98385920,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000333,
+      "first_ms": 1.018042,
+      "warm_median_ms": 0.544291,
+      "peak_rss_bytes": 80887808,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.124084,
+      "first_ms": 0.438125,
+      "warm_median_ms": 0.210834,
+      "peak_rss_bytes": 76611584,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.000458,
+      "first_ms": 0.252916,
+      "warm_median_ms": 0.163167,
+      "peak_rss_bytes": 74317824,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.309125,
+      "setup_ms": 0.000458,
+      "first_ms": 514.61025,
+      "warm_median_ms": 516.72075,
+      "peak_rss_bytes": 76988416,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "C",
+      "reduction": true,
+      "compile_ms": 0.307667,
+      "setup_ms": 0.001666,
+      "first_ms": 516.029709,
+      "warm_median_ms": 520.246375,
+      "peak_rss_bytes": 78872576,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 256,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.313375,
+      "setup_ms": 0.001917,
+      "first_ms": 511.699,
+      "warm_median_ms": 515.242542,
+      "peak_rss_bytes": 97337344,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": 0.306833,
+      "setup_ms": 0.0005,
+      "first_ms": 516.132209,
+      "warm_median_ms": 518.433833,
+      "peak_rss_bytes": 99778560,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000583,
+      "first_ms": 0.257334,
+      "warm_median_ms": 0.175792,
+      "peak_rss_bytes": 90587136,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.11375,
+      "first_ms": 0.439167,
+      "warm_median_ms": 0.224459,
+      "peak_rss_bytes": 90357760,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": false,
+      "compile_ms": null,
+      "setup_ms": 0.000459,
+      "first_ms": 0.95875,
+      "warm_median_ms": 0.512791,
+      "peak_rss_bytes": 97435648,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "blosc2",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.0005,
+      "first_ms": 1.135,
+      "warm_median_ms": 0.490584,
+      "peak_rss_bytes": 83738624,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "blosc2",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numexpr",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.127916,
+      "first_ms": 0.489,
+      "warm_median_ms": 0.207166,
+      "peak_rss_bytes": 83050496,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numexpr",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "numpy",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": null,
+      "setup_ms": 0.001,
+      "first_ms": 0.287667,
+      "warm_median_ms": 0.186917,
+      "peak_rss_bytes": 80494592,
+      "native_report": null,
+      "shape": [
+        262144
+      ],
+      "backend": "numpy",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "graph",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.317375,
+      "setup_ms": 0.000584,
+      "first_ms": 518.431334,
+      "warm_median_ms": 516.006375,
+      "peak_rss_bytes": 81428480,
+      "native_report": {
+        "temporary_bytes": 16384,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    },
+    {
+      "route": "native",
+      "size": 262144,
+      "dtype": "int64",
+      "layout": "strided",
+      "reduction": true,
+      "compile_ms": 0.302167,
+      "setup_ms": 0.001542,
+      "first_ms": 520.158167,
+      "warm_median_ms": 520.628917,
+      "peak_rss_bytes": 83558400,
+      "native_report": {
+        "temporary_bytes": 16384,
+        "gathered_bytes": 2097152,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 256,
+        "fp_flags": 0,
+        "fp_supported": true
+      },
+      "shape": [
+        262144
+      ],
+      "backend": "portable-interpreter",
+      "threads": 1,
+      "iterator_tile_items": 1024,
+      "numpy": "2.5.3",
+      "package": "/Users/faltet/blosc/python-blosc2/src/blosc2/__init__.py"
+    }
+  ],
+  "limitations": [
+    "Process peak RSS includes interpreter/imports/reference allocations.",
+    "One serial native thread; compressed input frontend not timed in this matrix.",
+    "Compilation measured for native plan; control-route parsing is included in first run.",
+    "No universal speed budget or speedup claim."
+  ],
+  "supplemental": [
+    {
+      "scenario": "mixed",
+      "compile_ms": 0.301708,
+      "first_ms": 8.51275,
+      "warm_median_ms": 8.702083,
+      "load_ms": null,
+      "size": 8192,
+      "threads": 1,
+      "peak_rss_bytes": 74825728,
+      "native_report": {
+        "temporary_bytes": 8192,
+        "gathered_bytes": 65536,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 8,
+        "evaluated_tiles": 8,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "extension_sha256": "f89a36db2b86de2c0a02d2f6a0f2211a543affda4f932b025856d1b043659633",
+      "python_revision": "cf6f25c1020c13864413e97b39e466c893b77a7b",
+      "note": "Native logical scheduler"
+    },
+    {
+      "scenario": "partial",
+      "compile_ms": 0.337542,
+      "first_ms": 2.033958,
+      "warm_median_ms": 1.9575,
+      "load_ms": null,
+      "size": 8192,
+      "threads": 1,
+      "peak_rss_bytes": 74694656,
+      "native_report": {
+        "temporary_bytes": 7680,
+        "gathered_bytes": 7680,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 0,
+        "evaluated_tiles": 1,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 0
+      },
+      "extension_sha256": "f89a36db2b86de2c0a02d2f6a0f2211a543affda4f932b025856d1b043659633",
+      "python_revision": "cf6f25c1020c13864413e97b39e466c893b77a7b",
+      "note": "Native logical scheduler"
+    },
+    {
+      "scenario": "compressed",
+      "compile_ms": 0.329625,
+      "first_ms": 16.657417,
+      "warm_median_ms": 16.510542,
+      "load_ms": null,
+      "size": 8192,
+      "threads": 1,
+      "peak_rss_bytes": 77463552,
+      "native_report": {
+        "temporary_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "zero_copy_tiles": 8,
+        "evaluated_tiles": 8,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "semantic_revision": "menudet-numpy-1.1",
+        "backend": "portable-interpreter",
+        "plan_cache": {
+          "hits": 6,
+          "misses": 1,
+          "maxsize": 128,
+          "currsize": 1
+        },
+        "input_materialization_bytes": 65536
+      },
+      "extension_sha256": "f89a36db2b86de2c0a02d2f6a0f2211a543affda4f932b025856d1b043659633",
+      "python_revision": "cf6f25c1020c13864413e97b39e466c893b77a7b",
+      "note": "Native logical scheduler"
+    },
+    {
+      "scenario": "persisted",
+      "compile_ms": 0.292458,
+      "first_ms": 19.385959,
+      "warm_median_ms": 16.315916,
+      "load_ms": 0.283959,
+      "size": 8192,
+      "threads": 1,
+      "peak_rss_bytes": 79446016,
+      "native_report": null,
+      "extension_sha256": "f89a36db2b86de2c0a02d2f6a0f2211a543affda4f932b025856d1b043659633",
+      "python_revision": "cf6f25c1020c13864413e97b39e466c893b77a7b",
+      "note": "Existing portable recipe block scheduler"
+    },
+    {
+      "scenario": "threaded",
+      "compile_ms": 0.305041,
+      "first_ms": 16.927917,
+      "warm_median_ms": 17.332875,
+      "load_ms": null,
+      "size": 8192,
+      "threads": 4,
+      "peak_rss_bytes": 77135872,
+      "native_report": null,
+      "extension_sha256": "f89a36db2b86de2c0a02d2f6a0f2211a543affda4f932b025856d1b043659633",
+      "python_revision": "cf6f25c1020c13864413e97b39e466c893b77a7b",
+      "note": "Four independent concurrent calls"
+    }
+  ]
+}

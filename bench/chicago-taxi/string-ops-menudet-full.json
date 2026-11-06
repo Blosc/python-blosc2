@@ -1,0 +1,279 @@
+{
+  "metadata": {
+    "rows": 24314322,
+    "parquet": "/Users/faltet/blosc/python-blosc2/bench/chicago-taxi/chicago-taxi-flat.parquet",
+    "company_dtype": "<U44",
+    "payment_dtype": "<U11",
+    "python": "3.15.0",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "threads": 12,
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/taxi-string-pinned-wheel-package/blosc2/__init__.py",
+    "blosc2_version": "4.15.0.dev0",
+    "c_blosc2_version": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "dependencies": {
+      "numpy": "2.5.4",
+      "pyarrow": "26.0.0",
+      "blosc2": "4.15.0.dev0",
+      "pandas": "3.0.6",
+      "polars": "2.1.0",
+      "duckdb": "2.0.0"
+    },
+    "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/taxi-string-pinned-wheel-package/blosc2/blosc2_ext.abi3.so",
+    "chunks": [
+      65536
+    ],
+    "blocks": [
+      512
+    ],
+    "measurement": "one untimed call, then best of nruns; allocation/compression included",
+    "nruns": 3,
+    "kernel": "public Menudet, native interpreter, explicit fixed-width Unicode output",
+    "compression": {
+      "codec": "LZ4",
+      "clevel": 5,
+      "filters": [
+        "NOFILTER",
+        "NOFILTER",
+        "NOFILTER",
+        "NOFILTER",
+        "NOFILTER",
+        "SHUFFLE"
+      ],
+      "filters_meta": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        4
+      ],
+      "raw_clevel": 0
+    }
+  },
+  "results": [
+    {
+      "engine": "blosc2",
+      "task": "filter",
+      "best_s": 0.14184987545013428,
+      "samples_s": [
+        0.14184987545013428,
+        0.14346737507730722,
+        0.14509274996817112
+      ],
+      "result_mib": 4.334088325500488,
+      "fingerprint": "e2dd16b7e41faa07865a1b296d983260",
+      "execution_report": null
+    },
+    {
+      "engine": "blosc2",
+      "task": "transform",
+      "best_s": 0.5555091658607125,
+      "samples_s": [
+        0.5555091658607125,
+        0.5629999581724405,
+        0.5558435833081603
+      ],
+      "result_mib": 68.30670642852783,
+      "fingerprint": "a170e69126bd2b5302f327023b9cfa89",
+      "execution_report": null
+    },
+    {
+      "engine": "blosc2",
+      "task": "kernel",
+      "best_s": 1.69592749979347,
+      "samples_s": [
+        1.7037136666476727,
+        1.697013333439827,
+        1.69592749979347
+      ],
+      "result_mib": 67.79478073120117,
+      "fingerprint": "54ad44682fd2efcaf659bbb53e401f8f",
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 47489,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 744,
+        "output_zero_fill_bytes": 6046089216,
+        "output_chunk_buffer_bytes": 16252928,
+        "input_buffer_bytes": 1351680
+      }
+    },
+    {
+      "engine": "blosc2 (raw)",
+      "task": "filter",
+      "best_s": 0.2120507499203086,
+      "samples_s": [
+        0.3163235420361161,
+        0.35297958366572857,
+        0.2120507499203086
+      ],
+      "result_mib": 23.272705078125,
+      "fingerprint": "e2dd16b7e41faa07865a1b296d983260",
+      "execution_report": null
+    },
+    {
+      "engine": "blosc2 (raw)",
+      "task": "transform",
+      "best_s": 0.7730193752795458,
+      "samples_s": [
+        0.7730193752795458,
+        3.055231250822544,
+        2.1681554159149528
+      ],
+      "result_mib": 5859.022705078125,
+      "fingerprint": "a170e69126bd2b5302f327023b9cfa89",
+      "execution_report": null
+    },
+    {
+      "engine": "blosc2 (raw)",
+      "task": "kernel",
+      "best_s": 2.3032092498615384,
+      "samples_s": [
+        2.794955166988075,
+        2.415099000558257,
+        2.3032092498615384
+      ],
+      "result_mib": 5766.022705078125,
+      "fingerprint": "54ad44682fd2efcaf659bbb53e401f8f",
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 47489,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 12,
+        "native_decoder_contexts": 24,
+        "input_buffer_allocations": 24,
+        "input_chunk_fetches": 744,
+        "output_zero_fill_bytes": 16137360,
+        "output_chunk_buffer_bytes": 16252928,
+        "input_buffer_bytes": 1351680
+      }
+    },
+    {
+      "engine": "pandas",
+      "task": "filter",
+      "best_s": 0.15872183348983526,
+      "samples_s": [
+        0.16011683363467455,
+        0.16256345808506012,
+        0.15872183348983526
+      ],
+      "result_mib": 23.18807029724121,
+      "fingerprint": "e2dd16b7e41faa07865a1b296d983260",
+      "execution_report": null
+    },
+    {
+      "engine": "pandas",
+      "task": "transform",
+      "best_s": 1.411373334005475,
+      "samples_s": [
+        1.411373334005475,
+        1.4335617925971746,
+        1.4198747910559177
+      ],
+      "result_mib": 985.5584545135498,
+      "fingerprint": "a170e69126bd2b5302f327023b9cfa89",
+      "execution_report": null
+    },
+    {
+      "engine": "pandas",
+      "task": "kernel",
+      "best_s": 3.9758633337914944,
+      "samples_s": [
+        3.9758633337914944,
+        3.981245500035584,
+        3.989021958783269
+      ],
+      "result_mib": 931.6593494415283,
+      "fingerprint": "54ad44682fd2efcaf659bbb53e401f8f",
+      "execution_report": null
+    },
+    {
+      "engine": "polars",
+      "task": "filter",
+      "best_s": 0.07072041742503643,
+      "samples_s": [
+        0.0709017077460885,
+        0.07072041742503643,
+        0.071385832503438
+      ],
+      "result_mib": 2.898493766784668,
+      "fingerprint": "e2dd16b7e41faa07865a1b296d983260",
+      "execution_report": null
+    },
+    {
+      "engine": "polars",
+      "task": "transform",
+      "best_s": 1.1578690828755498,
+      "samples_s": [
+        1.1578690828755498,
+        1.1604973329231143,
+        1.1624392922967672
+      ],
+      "result_mib": 985.5583362579346,
+      "fingerprint": "a170e69126bd2b5302f327023b9cfa89",
+      "execution_report": null
+    },
+    {
+      "engine": "polars",
+      "task": "kernel",
+      "best_s": 2.2021717093884945,
+      "samples_s": [
+        2.241964832879603,
+        2.258038583211601,
+        2.2021717093884945
+      ],
+      "result_mib": 934.5577249526978,
+      "fingerprint": "54ad44682fd2efcaf659bbb53e401f8f",
+      "execution_report": null
+    },
+    {
+      "engine": "duckdb",
+      "task": "filter",
+      "best_s": 0.037989125587046146,
+      "samples_s": [
+        0.037989125587046146,
+        0.03886412549763918,
+        0.03887333255261183
+      ],
+      "result_mib": 5.797019958496094,
+      "fingerprint": "e2dd16b7e41faa07865a1b296d983260",
+      "execution_report": null
+    },
+    {
+      "engine": "duckdb",
+      "task": "transform",
+      "best_s": 0.3108327919617295,
+      "samples_s": [
+        0.36282404139637947,
+        0.3108327919617295,
+        0.37361020874232054
+      ],
+      "result_mib": 895.7058734893799,
+      "fingerprint": "a170e69126bd2b5302f327023b9cfa89",
+      "execution_report": null
+    },
+    {
+      "engine": "duckdb",
+      "task": "kernel",
+      "best_s": 0.5097735421732068,
+      "samples_s": [
+        0.5101515837013721,
+        0.5170701248571277,
+        0.5097735421732068
+      ],
+      "result_mib": 841.8067684173584,
+      "fingerprint": "54ad44682fd2efcaf659bbb53e401f8f",
+      "execution_report": null
+    }
+  ]
+}

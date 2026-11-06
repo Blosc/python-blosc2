@@ -17,6 +17,7 @@ import pytest
 
 import blosc2
 from blosc2 import blosc2_ext
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 # NumPy 2.0 added the `np.strings` namespace and the `+` ufunc loop for U/S
 # arrays; blosc2 still supports NumPy 1.26, where `np.char` is the equivalent
@@ -121,7 +122,7 @@ def test_blog_kernel_as_dsl_kernel(names):
     branches whose string results have different widths.
     """
 
-    @blosc2.dsl_kernel
+    @DSLKernel
     def format_room_info(property_type, name):
         result = "property_type=" + property_type
         desc = name.lower()
@@ -192,7 +193,7 @@ def test_bytes_predicates_match_numpy(raws):
 
 
 def test_bytes_dsl_kernel(raws):
-    @blosc2.dsl_kernel
+    @DSLKernel
     def tag(x):
         if b"o" in x:
             return x

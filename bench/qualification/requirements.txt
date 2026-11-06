@@ -1,0 +1,13 @@
+# Shared provisioning constraints; CI freezes the complete resolved environment
+# once, clones it for both arms, and records the resulting lock content hash.
+numpy==2.5.4
+msgpack==1.2.1
+ndindex==1.10.1
+pydantic==2.13.4
+httpx[http2]==0.28.1
+rich==15.0.0
+threadpoolctl==3.6.0
+cython==3.2.9
+scikit-build-core==0.12.2
+cmake>=3.30,<5
+ninja>=1.12,<2

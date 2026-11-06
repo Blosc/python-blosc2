@@ -46,39 +46,35 @@ This works for any expression over operands blosc2 can broadcast, not just two `
 
 *Benchmark for this tip: [`tip_12_broadcast_build.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_12_broadcast_build.py)*
 
-## Generate arrays with DSL kernels
+(generate-arrays-with-dsl-kernels)=
+## Generate arrays without NumPy staging
 
-The constructors from the previous tip are not magic: internally, {func}`blosc2.arange() <blosc2.arange>` is a one-line DSL kernel (`start + _flat_idx * step`) that blosc2 compiles to native code and evaluates chunk by chunk, using multiple threads. The same machinery — a {func}`blosc2.dsl_kernel <blosc2.dsl_kernel>`-decorated function handed to {func}`blosc2.lazyudf() <blosc2.lazyudf>` — is open to you, for any array whose value is a function of its index.
-
-As a worked example, let's build a random constructor from scratch: hash the element index (here with a classic integer hash), and every chunk can be filled independently, in parallel, reproducibly for a given seed. Blosc2 ships a proper one these days — see {doc}`Random Functions <../reference/random>` — but writing a small version by hand is the clearest way to see what the machinery does.
+The constructors from the previous tip generate values directly into Blosc2 storage. Likewise, prefer {doc}`blosc2.random <../reference/random>` to a full NumPy staging buffer when generating random arrays. For supported user-authored kernels, see the {doc}`Menudet guide <menudet>`.
 
 ```python
-@blosc2.dsl_kernel
-def random_int32(seed):
-    x = _flat_idx ^ seed
-    x = (((x >> 16) ^ x) * 0x45D9F3B) & 0xFFFFFFFF
-    x = (((x >> 16) ^ x) * 0x45D9F3B) & 0xFFFFFFFF
-    return (x >> 16) ^ x  # full [-2^31, 2^31) range
-
-
 # Avoid: materializes the full array with NumPy first
 rng = np.random.default_rng(42)
 a = blosc2.asarray(
     rng.integers(-(2**31), 2**31, size=N, dtype=np.int32), cparams={"clevel": 0}
 )
 
-# Prefer: the kernel fills the NDArray chunk by chunk, in parallel
-lazy = blosc2.lazyudf(random_int32, (42,), dtype=np.int32, shape=(N,))
-a = lazy.compute(cparams={"clevel": 0})
+# Prefer: generate directly into Blosc2 storage.
+a = blosc2.random.default_rng(42).integers(
+    -(2**31), 2**31, shape=(N,), dtype=np.int32, cparams={"clevel": 0}
+)
 ```
 
 (`clevel=0` because random data is incompressible — don't pay the codec for nothing.)
 
-![DSL random kernel vs asarray(rng.integers())](optim_tips/tip_11_dsl_random.png)
+### A separate integer-hash experiment
 
-At 200M int32 elements, the DSL kernel was **~3.6x faster** and used **~1.9x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
+![Menudet integer hash versus NumPy PCG64 staging (different sampling semantics)](optim_tips/tip_11_dsl_random.png)
 
-The output passes light uniformity checks against NumPy's PCG64 (the benchmark script prints them) — good enough for synthetic data, benchmarks and test fixtures, but this hand-rolled hash is *not* a substitute for a real generator. For statistically rigorous work such as Monte Carlo, use {doc}`blosc2.random <../reference/random>`, which gives you NumPy-quality streams (one independent `SeedSequence` per chunk) and keeps the chunk-parallel generation. The benchmark source explains the hash design and the DSL integer-arithmetic rules it relies on; see also the [DSL syntax reference](../reference/dsl_syntax.md).
+At **200M int32 items**, a `@blosc2.menudet` hash took **0.0456s**, versus **0.3716s** for NumPy PCG64 plus {func}`asarray() <blosc2.asarray>`: about **8.2x faster**, with **1.9x lower whole-process peak RSS** (837 MiB versus 1617 MiB). These measurements use an Apple M4 Pro, 12 threads, the system-CC JIT, `clevel=0`, and aligned native generator scheduling plus optimized integer locals described in the [qualification report](https://github.com/Blosc/python-blosc2/blob/main/plans/menudet-api.md). This is about the **same throughput as the true legacy JIT control** (0.0444s) on this configuration. They are **not measurements of `blosc2.random`** or a promise of legacy parity on other compilers, thread counts or machines.
+
+The hash permutes the 32-bit domain: distinct counters produce no duplicates. It therefore does **not** provide independent random draws, even if its mean, variance and lag-one correlation look reasonable. The plot illustrates kernel generation and storage costs, not interchangeable RNG performance. Timings are medians of seven warm runs; peak RSS is measured in separate processes.
+
+For statistically rigorous work such as Monte Carlo, {doc}`blosc2.random <../reference/random>` provides NumPy-quality streams (one independent `SeedSequence` per chunk) while keeping chunk-parallel generation directly into storage.
 
 *Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
 
@@ -87,7 +83,7 @@ The output passes light uniformity checks against NumPy's PCG64 (the benchmark s
 There are two routes the {func}`@blosc2.jit <blosc2.jit>` decorator can take because they are good at different things:
 
 - **No control flow → tracing (the default).** `jit` calls your function once with proxy operands, records the `LazyExpr` it builds, and evaluates that expression *vectorized* over whole chunks. This is the faster route for plain elementwise math.
-- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. So when `jit` sees control flow *and* the body fits the DSL grammar, it compiles the entire function with the same miniexpr engine that enables the {func}`@blosc2.dsl_kernel <blosc2.dsl_kernel>` decorator and runs the *compiled* kernel chunk by chunk.
+- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. When `jit` sees supported control flow, it uses the native Menudet route. Use {func}`@blosc2.menudet <blosc2.menudet>` for explicit portable kernel authoring.
 
 In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md).
 

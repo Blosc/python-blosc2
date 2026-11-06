@@ -10,15 +10,17 @@ on:
 
 jobs:
   build_wheels:
-    name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && format(' (numpy {0})', matrix.numpy-version) || matrix.python-version && format(' (python {0})', matrix.python-version) || '' }}
+    name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && format(' (numpy {0})', matrix.numpy-version) || matrix.python-version && format(' (python {0})', matrix.python-version) || '' }} (${{ matrix.evaluator || 'default' }})
     runs-on: ${{ matrix.os }}
     env:
       CMAKE_GENERATOR: Ninja
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12"]
         numpy-version: [null]
+        evaluator: [default]
         include:
           - os: ubuntu-24.04-arm
             python-version: "3.12"
@@ -29,9 +31,44 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.14"
             numpy-version: null
+          # Temporary escape-hatch coverage while typed is qualified globally.
+          - os: ubuntu-latest
+            python-version: "3.12"
+            numpy-version: null
+            evaluator: legacy
 
     steps:
     - uses: actions/checkout@v7
+
+    - name: Select temporary legacy escape hatch
+      if: matrix.evaluator == 'legacy'
+      shell: bash
+      run: echo "BLOSC2_EXPRESSION_EVALUATOR=legacy" >> "$GITHUB_ENV"
+
+    # Experimental tests require the explicit native pair, not the unchanged
+    # release dependency. Keep this source override local to numpy-compat CI.
+    - name: Select experimental native revision
+      if: github.ref == 'refs/heads/numpy-compat' || github.ref == 'refs/heads/portable-jit-improvements'
+      id: native_ref
+      shell: bash
+      run: echo "sha=$(cat .github/menudet-native-ref)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/checkout@v7
+      if: github.ref == 'refs/heads/numpy-compat' || github.ref == 'refs/heads/portable-jit-improvements'
+      with:
+        repository: Blosc/miniexpr
+        ref: ${{ steps.native_ref.outputs.sha }}
+        path: ci-native
+
+    - name: Override experimental native source
+      if: github.ref == 'refs/heads/numpy-compat' || github.ref == 'refs/heads/portable-jit-improvements'
+      shell: bash
+      run: |
+        source_path="$PWD/ci-native"
+        if [ "$RUNNER_OS" = Windows ]; then
+          source_path=$(cygpath -m "$source_path")
+        fi
+        echo "CMAKE_ARGS=-DFETCHCONTENT_SOURCE_DIR_MINIEXPR=$source_path" >> "$GITHUB_ENV"
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v7
@@ -67,17 +104,18 @@ jobs:
       if: runner.os == 'Windows'
       run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
 
-    - name: Install specific numpy version
-      if: matrix.numpy-version
-      run: pip install "numpy==${{ matrix.numpy-version }}.*"
+    - name: Resolve compiler cache launcher (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        $launcher = (Get-Command sccache -CommandType Application -ErrorAction Stop).Source.Replace('\', '/')
+        "CMAKE_C_COMPILER_LAUNCHER=$launcher" >> $env:GITHUB_ENV
+        "CMAKE_CXX_COMPILER_LAUNCHER=$launcher" >> $env:GITHUB_ENV
 
     - name: Build (Windows)
       if: runner.os == 'Windows'
       id: build_windows
       run: pip install -e . --group test
       env:
-        CMAKE_C_COMPILER_LAUNCHER: sccache
-        CMAKE_CXX_COMPILER_LAUNCHER: sccache
         SCCACHE_DIR: C:\Users\runneradmin\AppData\Local\sccache
         CC: clang-cl
         CXX: clang-cl
@@ -89,9 +127,31 @@ jobs:
       id: build_non_windows
       run: pip install -e . --group test
 
+    - name: Install Arrow dictionary test dependency
+      # Pandas is already a dev dependency; Arrow's dictionary conversions now
+      # import it even when the test does not construct a pandas object.
+      run: python -m pip install pandas
+
+    # Build isolation uses NumPy 2 headers for the dual-ABI extension. Optional
+    # test dependencies may upgrade the runtime too, so pin it AFTER installing.
+    - name: Install NumPy 1.26-compatible test runtime
+      if: matrix.numpy-version == '1.26'
+      # PyArrow 26 dropped the NumPy 1 ABI without encoding it in Requires-Dist.
+      # Keep this host-compatibility job on a known dual-ABI Arrow release.
+      run: pip install "numpy==1.26.*" "zarr>=3.1.5,<3.2" "pyarrow==21.0.0" pandas
+
+    - name: Verify requested NumPy runtime
+      if: matrix.numpy-version
+      run: python -c "import numpy as np; assert np.__version__.startswith('${{ matrix.numpy-version }}.'), np.__version__"
+
+    - name: Require a NumExpr-free runtime
+      run: |
+        python -m pip uninstall -y numexpr
+        python -c "import importlib.util, importlib.metadata; assert importlib.util.find_spec('numexpr') is None; assert not any(r.lower().startswith('numexpr') for r in importlib.metadata.requires('blosc2') or [])"
+
     - name: Test (Windows)
       if: runner.os == 'Windows'
-      run: python -m pytest -m "not heavy and not network and not tui" --durations=25
+      run: python scripts/qualify_without_numexpr.py --require-absent -- -m "not heavy and not network and not tui" --durations=25
       env:
         # A test over this many seconds is a deadlock, not a slow test (the
         # slowest is ~7 s): dump stacks and kill the worker so xdist names it
@@ -101,20 +161,48 @@ jobs:
         PYTEST_DEADMAN_SECONDS: "300"
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 #        BLOSC_NTHREADS: "1"
-#        NUMEXPR_NUM_THREADS: "1"
 #        OMP_NUM_THREADS: "1"
 
     - name: Test (non-Windows)
       if: runner.os != 'Windows'
-      run: python -m pytest -m "not heavy and not network and not tui" --durations=25
+      run: python scripts/qualify_without_numexpr.py --require-absent -- -m "not heavy and not network and not tui" --durations=25
       env:
         PYTEST_DEADMAN_SECONDS: "300"
         PYTEST_DEADMAN_SESSION_SECONDS: "1500"
 
+    - name: Verify independence with optional NumExpr installed
+      if: runner.os == 'Linux' && matrix.python-version == '3.12' && !matrix.numpy-version && matrix.evaluator != 'legacy'
+      run: |
+        python -m pip install numexpr
+        python -m pytest tests/test_no_numexpr.py -q -n 0
+
+    - name: Verify experimental safe-graph corpus
+      if: always() && (steps.build_windows.outcome == 'success' || steps.build_non_windows.outcome == 'success')
+      run: python scripts/verify_safe_lazyexpr.py --report safe-lazyexpr.json
+
+    - name: Upload safe-graph platform evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: safe-lazyexpr-${{ matrix.os }}-py${{ matrix.python-version }}-np${{ matrix.numpy-version || 'default' }}-${{ matrix.evaluator || 'default' }}
+        path: safe-lazyexpr.json
+        if-no-files-found: ignore
+
+    - name: Certify bounded Menudet math against independent references
+      run: python scripts/certify_menudet_math.py --report menudet-math.json
+
+    - name: Upload Menudet math certification
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: menudet-math-${{ matrix.os }}-py${{ matrix.python-version }}-np${{ matrix.numpy-version || 'default' }}-${{ matrix.evaluator || 'default' }}
+        path: menudet-math.json
+        if-no-files-found: ignore
+
     # TUIs are timing-sensitive and only boot a headless terminal: one OS is
     # enough, and a flake here is feedback, not a release blocker.
     - name: Test TUI (non-blocking)
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && !matrix.numpy-version
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && !matrix.numpy-version && matrix.evaluator != 'legacy'
       continue-on-error: true
       run: python -m pytest -m "tui and not heavy and not network" -n 4 --dist loadfile --durations=10
       env:
@@ -152,5 +240,5 @@ jobs:
     # three of the five jobs are ubuntu, so `runner.os == 'Linux'` ran this
     # three times per push.
     - name: Test network access
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && !matrix.numpy-version
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && !matrix.numpy-version && matrix.evaluator != 'legacy'
       run: python -m pytest -m "network and not heavy" -n 8 --dist load --durations=10

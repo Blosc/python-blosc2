@@ -1,0 +1,174 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.5.3",
+  "numexpr": "2.14.2",
+  "extension_sha256": "18870621a7c477f86af2223a0358046a75fe9829e7d07f7270301f91a9229a1f",
+  "numexpr_threads": 12,
+  "samples": 7,
+  "results": [
+    {
+      "dtype": "float32",
+      "nitems": 16,
+      "engine": "portable",
+      "compile_ns": 18250,
+      "first_ns": 55500,
+      "median_ns": 41333,
+      "backend": "interpreter"
+    },
+    {
+      "dtype": "float32",
+      "nitems": 16,
+      "engine": "numpy",
+      "compile_ns": null,
+      "first_ns": 3125,
+      "median_ns": 875,
+      "backend": "numpy"
+    },
+    {
+      "dtype": "float32",
+      "nitems": 16,
+      "engine": "numexpr",
+      "compile_ns": null,
+      "first_ns": 261083,
+      "median_ns": 5250,
+      "backend": "numexpr"
+    },
+    {
+      "dtype": "float32",
+      "nitems": 262144,
+      "engine": "portable",
+      "compile_ns": 18250,
+      "first_ns": 507846750,
+      "median_ns": 503989750,
+      "backend": "interpreter"
+    },
+    {
+      "dtype": "float32",
+      "nitems": 262144,
+      "engine": "numpy",
+      "compile_ns": null,
+      "first_ns": 67083,
+      "median_ns": 48208,
+      "backend": "numpy"
+    },
+    {
+      "dtype": "float32",
+      "nitems": 262144,
+      "engine": "numexpr",
+      "compile_ns": null,
+      "first_ns": 227583,
+      "median_ns": 171041,
+      "backend": "numexpr"
+    },
+    {
+      "dtype": "float64",
+      "nitems": 16,
+      "engine": "portable",
+      "compile_ns": 14750,
+      "first_ns": 71041,
+      "median_ns": 32375,
+      "backend": "interpreter"
+    },
+    {
+      "dtype": "float64",
+      "nitems": 16,
+      "engine": "numpy",
+      "compile_ns": null,
+      "first_ns": 1458,
+      "median_ns": 750,
+      "backend": "numpy"
+    },
+    {
+      "dtype": "float64",
+      "nitems": 16,
+      "engine": "numexpr",
+      "compile_ns": null,
+      "first_ns": 140458,
+      "median_ns": 4458,
+      "backend": "numexpr"
+    },
+    {
+      "dtype": "float64",
+      "nitems": 262144,
+      "engine": "portable",
+      "compile_ns": 14750,
+      "first_ns": 512491667,
+      "median_ns": 505005083,
+      "backend": "interpreter"
+    },
+    {
+      "dtype": "float64",
+      "nitems": 262144,
+      "engine": "numpy",
+      "compile_ns": null,
+      "first_ns": 178416,
+      "median_ns": 118833,
+      "backend": "numpy"
+    },
+    {
+      "dtype": "float64",
+      "nitems": 262144,
+      "engine": "numexpr",
+      "compile_ns": null,
+      "first_ns": 291167,
+      "median_ns": 208959,
+      "backend": "numexpr"
+    },
+    {
+      "dtype": "int64",
+      "nitems": 16,
+      "engine": "portable",
+      "compile_ns": 18958,
+      "first_ns": 83542,
+      "median_ns": 32125,
+      "backend": "interpreter"
+    },
+    {
+      "dtype": "int64",
+      "nitems": 16,
+      "engine": "numpy",
+      "compile_ns": null,
+      "first_ns": 1417,
+      "median_ns": 667,
+      "backend": "numpy"
+    },
+    {
+      "dtype": "int64",
+      "nitems": 16,
+      "engine": "numexpr",
+      "compile_ns": null,
+      "first_ns": 116083,
+      "median_ns": 4375,
+      "backend": "numexpr"
+    },
+    {
+      "dtype": "int64",
+      "nitems": 262144,
+      "engine": "portable",
+      "compile_ns": 18958,
+      "first_ns": 505870042,
+      "median_ns": 503212542,
+      "backend": "interpreter"
+    },
+    {
+      "dtype": "int64",
+      "nitems": 262144,
+      "engine": "numpy",
+      "compile_ns": null,
+      "first_ns": 262334,
+      "median_ns": 153958,
+      "backend": "numpy"
+    },
+    {
+      "dtype": "int64",
+      "nitems": 262144,
+      "engine": "numexpr",
+      "compile_ns": null,
+      "first_ns": 244958,
+      "median_ns": 193708,
+      "backend": "numexpr"
+    }
+  ],
+  "limitations": "Single process, fixed order, allocated output; no RSS or direct-native large-array timing.",
+  "installed_native_revision": "3418cdce4b5c11e1661c8b6453e3d31d94b0b2b4"
+}

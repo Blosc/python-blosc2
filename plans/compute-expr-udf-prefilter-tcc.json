@@ -1,0 +1,373 @@
+{
+  "metadata": {
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-package/blosc2/__init__.py",
+    "extension": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/row-slab-package/blosc2/blosc2_ext.abi3.so",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "python": "3.14.4",
+    "blosc2": "4.15.0.dev0",
+    "c_blosc2": "3.4.2.dev ($Date:: 2026-10-30 #$)",
+    "compiler": "tcc",
+    "threads": 4,
+    "shape": [
+      10000,
+      10000
+    ],
+    "chunks": [
+      1250,
+      10000
+    ],
+    "blocks": [
+      2,
+      10000
+    ],
+    "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=4, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+    "repeat": 3
+  },
+  "results": [
+    {
+      "case": 1,
+      "route": "menudet",
+      "mode": "compute",
+      "preparation_s": 0.004274040460586548,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 4,
+        "native_decoder_contexts": 4,
+        "input_buffer_allocations": 4,
+        "input_chunk_fetches": 8,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 320000
+      },
+      "legacy_jit_probe": null,
+      "qualified": true,
+      "first_s": 0.06253474950790405,
+      "samples_s": [
+        0.06220624968409538,
+        0.06170154083520174,
+        0.062163833528757095
+      ],
+      "best_s": 0.06170154083520174
+    },
+    {
+      "case": 1,
+      "route": "menudet",
+      "mode": "getitem",
+      "preparation_s": 0.004274040460586548,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 4,
+        "native_decoder_contexts": 4,
+        "input_buffer_allocations": 4,
+        "input_chunk_fetches": 8,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 20128,
+        "input_buffer_bytes": 320000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 400000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 12840128,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "legacy_jit_probe": null,
+      "qualified": true,
+      "first_s": 0.06404312513768673,
+      "samples_s": [
+        0.06411974970251322,
+        0.06324220821261406,
+        0.06418195832520723
+      ],
+      "best_s": 0.06324220821261406
+    },
+    {
+      "case": 1,
+      "route": "legacy",
+      "mode": "compute",
+      "preparation_s": 7.337518036365509e-05,
+      "execution_report": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": true,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "qualified": true,
+      "first_s": 0.04335225000977516,
+      "samples_s": [
+        0.043149166740477085,
+        0.04271458275616169,
+        0.04273041617125273
+      ],
+      "best_s": 0.04271458275616169
+    },
+    {
+      "case": 1,
+      "route": "legacy",
+      "mode": "getitem",
+      "preparation_s": 7.337518036365509e-05,
+      "execution_report": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": true,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "qualified": true,
+      "first_s": 0.05627825018018484,
+      "samples_s": [
+        0.05500849988311529,
+        0.05345966573804617,
+        0.053983790799975395
+      ],
+      "best_s": 0.05345966573804617
+    },
+    {
+      "case": 2,
+      "route": "menudet",
+      "mode": "compute",
+      "preparation_s": 0.005226832814514637,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 4,
+        "native_decoder_contexts": 8,
+        "input_buffer_allocations": 8,
+        "input_chunk_fetches": 16,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 640000
+      },
+      "legacy_jit_probe": null,
+      "qualified": true,
+      "first_s": 0.186834417283535,
+      "samples_s": [
+        0.18615108355879784,
+        0.18606779165565968,
+        0.18645841628313065
+      ],
+      "best_s": 0.18606779165565968
+    },
+    {
+      "case": 2,
+      "route": "menudet",
+      "mode": "getitem",
+      "preparation_s": 0.005226832814514637,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 4,
+        "native_decoder_contexts": 8,
+        "input_buffer_allocations": 8,
+        "input_chunk_fetches": 16,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 20128,
+        "input_buffer_bytes": 640000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 800000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 13160128,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "legacy_jit_probe": null,
+      "qualified": true,
+      "first_s": 0.18696950003504753,
+      "samples_s": [
+        0.18676058389246464,
+        0.18691454082727432,
+        0.18572825007140636
+      ],
+      "best_s": 0.18572825007140636
+    },
+    {
+      "case": 2,
+      "route": "legacy",
+      "mode": "compute",
+      "preparation_s": 4.3208710849285126e-05,
+      "execution_report": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "qualified": true,
+      "first_s": 0.08686766680330038,
+      "samples_s": [
+        0.0872860411182046,
+        0.08757162466645241,
+        0.08753829263150692
+      ],
+      "best_s": 0.0872860411182046
+    },
+    {
+      "case": 2,
+      "route": "legacy",
+      "mode": "getitem",
+      "preparation_s": 4.3208710849285126e-05,
+      "execution_report": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "qualified": true,
+      "first_s": 0.10039441753178835,
+      "samples_s": [
+        0.0992504172027111,
+        0.09978679195046425,
+        0.09961962513625622
+      ],
+      "best_s": 0.0992504172027111
+    },
+    {
+      "case": 3,
+      "route": "menudet",
+      "mode": "compute",
+      "preparation_s": 0.004417208023369312,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "blosc2",
+        "discarded_output_bytes": 0,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 4,
+        "native_decoder_contexts": 12,
+        "input_buffer_allocations": 12,
+        "input_chunk_fetches": 24,
+        "output_zero_fill_bytes": 100000000,
+        "output_chunk_buffer_bytes": 12500000,
+        "input_buffer_bytes": 960000
+      },
+      "legacy_jit_probe": null,
+      "qualified": true,
+      "first_s": 0.3654970424249768,
+      "samples_s": [
+        0.3651142083108425,
+        0.3647138336673379,
+        0.3647317495197058
+      ],
+      "best_s": 0.3647138336673379
+    },
+    {
+      "case": 3,
+      "route": "menudet",
+      "mode": "getitem",
+      "preparation_s": 0.004417208023369312,
+      "execution_report": {
+        "route": "menudet-prefilter",
+        "evaluated_blocks": 5000,
+        "output_destination": "numpy",
+        "discarded_output_bytes": 256,
+        "fp_flags": 0,
+        "fp_supported": true,
+        "threads": 4,
+        "native_decoder_contexts": 12,
+        "input_buffer_allocations": 12,
+        "input_chunk_fetches": 24,
+        "output_zero_fill_bytes": 0,
+        "output_chunk_buffer_bytes": 20128,
+        "input_buffer_bytes": 960000,
+        "scheduling": "dynamic-chunks",
+        "stages": 1,
+        "jit_stages": 1,
+        "interpreter_stages": 0,
+        "intermediate_bytes": 0,
+        "gathered_bytes": 0,
+        "normalization_bytes": 0,
+        "reader_bytes": 1200000000,
+        "input_materialization_bytes": 0,
+        "driver_buffer_bytes": 12500000,
+        "temporary_bytes": 13480128,
+        "tile_items": 20000,
+        "maximum_reader_items": 20000,
+        "evaluated_tiles": 5000,
+        "output_copy_bytes": 0
+      },
+      "legacy_jit_probe": null,
+      "qualified": true,
+      "first_s": 0.38565183337777853,
+      "samples_s": [
+        0.3830966670066118,
+        0.3815286662429571,
+        0.3829415002837777
+      ],
+      "best_s": 0.3815286662429571
+    },
+    {
+      "case": 3,
+      "route": "legacy",
+      "mode": "compute",
+      "preparation_s": 7.38333910703659e-05,
+      "execution_report": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "qualified": true,
+      "first_s": 0.33881629165261984,
+      "samples_s": [
+        0.3384014153853059,
+        0.33830408472567797,
+        0.33827287517488003
+      ],
+      "best_s": 0.33827287517488003
+    },
+    {
+      "case": 3,
+      "route": "legacy",
+      "mode": "getitem",
+      "preparation_s": 7.38333910703659e-05,
+      "execution_report": null,
+      "legacy_jit_probe": {
+        "compiled": true,
+        "jit": false,
+        "status": "ME_COMPILE_SUCCESS"
+      },
+      "qualified": true,
+      "first_s": 0.3543089581653476,
+      "samples_s": [
+        0.35245020780712366,
+        0.3520723329856992,
+        0.35181220807135105
+      ],
+      "best_s": 0.35181220807135105
+    }
+  ]
+}

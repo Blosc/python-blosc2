@@ -31,25 +31,12 @@ def make_unicode_array(shape, maxlen=16):
 # Parameter grids
 # ----------------------------------
 
-SHAPES = [
-    (12,),
-    (12, 6),
-    (3, 4, 5),
+UNICODE_LAYOUTS = [
+    ((12,), (4,), (3,)),
+    ((12, 6), (7, 4), (3, 3)),
+    ((3, 4, 5), (2, 2, 5), (1, 2, 5)),
 ]
-
-CHUNKS = [
-    None,
-    (4,),
-    (7, 4),
-    (2, 2, 5),
-]
-
-BLOCKS = [
-    None,
-    (3,),
-    (3, 3),
-    (1, 2, 5),
-]
+SHAPES = [shape for shape, _, _ in UNICODE_LAYOUTS]
 
 
 # ----------------------------------
@@ -57,17 +44,19 @@ BLOCKS = [
 # ----------------------------------
 
 
-@pytest.mark.parametrize("shape", SHAPES)
-@pytest.mark.parametrize("chunks", CHUNKS)
-@pytest.mark.parametrize("blocks", BLOCKS)
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        (shape, chunks if explicit_chunks else None, blocks if explicit_blocks else None)
+        for shape, chunks, blocks in UNICODE_LAYOUTS
+        for explicit_chunks in (False, True)
+        for explicit_blocks in (False, True)
+    ],
+)
 def test_unicode_roundtrip_in_memory(shape, chunks, blocks):
     arr = make_unicode_array(shape)
 
-    b2 = blosc2.asarray(
-        arr,
-        chunks=chunks if chunks and len(chunks) == arr.ndim else None,
-        blocks=blocks if blocks and len(blocks) == arr.ndim else None,
-    )
+    b2 = blosc2.asarray(arr, chunks=chunks, blocks=blocks)
 
     assert b2.dtype == arr.dtype
     assert np.array_equal(b2, arr)

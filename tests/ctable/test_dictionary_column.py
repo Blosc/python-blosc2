@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -369,6 +371,31 @@ class TestArrowInterop:
         at = self._make_arrow_table(index_type=pa.uint32())
         ct = CTable.from_arrow(at.schema, at.to_batches())
         assert ct["vendor"][:] == ["Uber", "Lyft", "Uber", None]
+
+    def test_import_unsigned_dictionary_without_pandas(self):
+        script = """
+from importlib.abc import MetaPathFinder
+import sys
+
+class NoPandas(MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'pandas' or fullname.startswith('pandas.'):
+            raise ModuleNotFoundError("pandas intentionally unavailable", name=fullname)
+
+sys.meta_path.insert(0, NoPandas())
+import pyarrow as pa
+from blosc2 import CTable
+
+for dtype in (pa.uint8(), pa.uint32()):
+    for codes in ([0, None], [None, None], []):
+        indices = pa.array(codes, type=dtype)
+        column = pa.DictionaryArray.from_arrays(indices, pa.array(['A']))
+        table = pa.table({'vendor': column})
+        result = CTable.from_arrow(table.schema, table.to_batches())
+        assert result['vendor'][:] == ['A' if code == 0 else None for code in codes]
+"""
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
 
     def test_import_dict_uint_exceeding_int32_raises(self):
         import numpy as np

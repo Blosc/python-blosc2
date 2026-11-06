@@ -1,0 +1,58 @@
+
+loops-before
+Sun Nov  1 15:47:15 2026    /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/loops-before.pstats
+
+         973 function calls (920 primitive calls) in 0.018 seconds
+
+   Ordered by: cumulative time
+   List reduced from 139 to 18 due to restriction <18>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.018    0.018 profile-menudet-loops.py:96(<lambda>)
+        1    0.000    0.000    0.018    0.018 menudet_lazy.py:332(compute)
+        1    0.000    0.000    0.017    0.017 menudet_lazy.py:122(_values)
+        1    0.017    0.017    0.017    0.017 menudet_kernel.py:682(evaluate_block)
+        2    0.001    0.000    0.001    0.000 ndarray.py:4598(__getitem__)
+        1    0.000    0.000    0.000    0.000 ndarray.py:4738(__setitem__)
+        1    0.000    0.000    0.000    0.000 ndarray.py:5901(empty)
+        1    0.000    0.000    0.000    0.000 proxy.py:1866(as_simpleproxy)
+        1    0.000    0.000    0.000    0.000 proxy.py:1790(__init__)
+        3    0.000    0.000    0.000    0.000 dataclasses.py:1475(asdict)
+     56/3    0.000    0.000    0.000    0.000 dataclasses.py:1499(_asdict_inner)
+        1    0.000    0.000    0.000    0.000 ndarray.py:7318(_check_ndarray_kwargs)
+        2    0.000    0.000    0.000    0.000 core.py:1915(compute_chunks_blocks)
+        1    0.000    0.000    0.000    0.000 ndarray.py:3817(__init__)
+        1    0.000    0.000    0.000    0.000 schunk.py:268(__init__)
+        3    0.000    0.000    0.000    0.000 storage_readers.py:12(storage_reader_eligible)
+        3    0.000    0.000    0.000    0.000 utils.py:1080(process_key)
+        2    0.000    0.000    0.000    0.000 <string>:2(__init__)
+
+
+
+loops-after
+Sun Nov  1 15:57:03 2026    /private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/loops-after.pstats
+
+         628 function calls (598 primitive calls) in 0.001 seconds
+
+   Ordered by: cumulative time
+   List reduced from 83 to 18 due to restriction <18>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.001    0.001 profile-menudet-loops.py:96(<lambda>)
+        1    0.000    0.000    0.001    0.001 menudet_lazy.py:332(compute)
+        1    0.000    0.000    0.001    0.001 storage_readers.py:362(compute_storage_if_eligible)
+        1    0.001    0.001    0.001    0.001 schunk.py:1150(update_data)
+        1    0.000    0.000    0.000    0.000 ndarray.py:5968(uninit)
+        1    0.000    0.000    0.000    0.000 ndarray.py:7318(_check_ndarray_kwargs)
+        2    0.000    0.000    0.000    0.000 dataclasses.py:1475(asdict)
+        1    0.000    0.000    0.000    0.000 ndarray.py:3817(__init__)
+     32/2    0.000    0.000    0.000    0.000 dataclasses.py:1499(_asdict_inner)
+        1    0.000    0.000    0.000    0.000 storage_readers.py:349(_prefilter_inputs_eligible)
+       10    0.000    0.000    0.000    0.000 fromnumeric.py:3325(prod)
+        1    0.000    0.000    0.000    0.000 schunk.py:268(__init__)
+       10    0.000    0.000    0.000    0.000 fromnumeric.py:66(_wrapreduction)
+        1    0.000    0.000    0.000    0.000 storage_readers.py:595(_dense_compressed_eligible)
+        1    0.000    0.000    0.000    0.000 storage_readers.py:12(storage_reader_eligible)
+        2    0.000    0.000    0.000    0.000 <string>:2(__init__)
+        1    0.000    0.000    0.000    0.000 dataclasses.py:1754(replace)
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}

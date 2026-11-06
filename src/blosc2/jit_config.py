@@ -19,6 +19,7 @@ _UNSET = _Unset()
 _BUILTIN = {
     "jit": None,
     "jit_backend": None,
+    "math_backend": None,
     "fp_accuracy": blosc2.FPAccuracy.DEFAULT,
     "trace": False,
     "compiler": None,
@@ -45,6 +46,12 @@ def _validate_string(name, value):
     return os.path.abspath(value) if name == "cache_dir" else value
 
 
+def _validate_math_backend(value):
+    if not isinstance(value, (str, type(None))) or value not in (None, "system", "sleef", "accelerate"):
+        raise ValueError("math_backend must be None, 'system', 'sleef', or 'accelerate'")
+    return value
+
+
 def _validate(values, *, check_platform=True):
     result = {}
     for name, value in values.items():
@@ -65,6 +72,8 @@ def _validate(values, *, check_platform=True):
         elif name == "fp_accuracy":
             if not isinstance(value, blosc2.FPAccuracy):
                 raise TypeError("fp_accuracy must be a blosc2.FPAccuracy value or None")
+        elif name == "math_backend":
+            value = _validate_math_backend(value)
         elif value is not None:
             value = _validate_string(name, value)
         result[name] = value
@@ -75,6 +84,7 @@ def set_jit_options(
     *,
     jit=_UNSET,
     jit_backend=_UNSET,
+    math_backend=_UNSET,
     fp_accuracy=_UNSET,
     trace=_UNSET,
     compiler=_UNSET,
@@ -114,6 +124,7 @@ def jit_options(
     *,
     jit=_UNSET,
     jit_backend=_UNSET,
+    math_backend=_UNSET,
     fp_accuracy=_UNSET,
     trace=_UNSET,
     compiler=_UNSET,
@@ -148,6 +159,25 @@ def execution_options():
 def trace_enabled():
     env = os.environ.get("ME_DSL_TRACE")
     return env != "0" if env else execution_options()["trace"]
+
+
+def math_execution(func):
+    """Scope per-call math policy without leaking execution kwargs into storage APIs."""
+
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        backend = kwargs.pop("math_backend", None)
+        if backend is None:
+            return func(*args, **kwargs)
+        options = execution_options()
+        options.update(_validate({"math_backend": backend}))
+        token = _execution.set((options, _context.get()))
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _execution.reset(token)
+
+    return wrapped
 
 
 def pop_execution_options(kwargs):

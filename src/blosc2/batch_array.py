@@ -196,7 +196,7 @@ class BatchArray:
         :meth:`to_cframe` / :func:`blosc2.from_cframe`. Msgpack also supports
         structured Blosc2 reference objects, currently
         :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
-        :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`. These lazy
+        lazy Menudet results authored with :func:`blosc2.menudet`. These lazy
         objects preserve reference semantics, so only persistent local
         operands, :class:`blosc2.C2Array` operands, and
         :class:`blosc2.DictStore` members are supported; purely in-memory

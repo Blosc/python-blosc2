@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Compare reduction performance on DSL kernels.
+# Compare reduction performance on public Menudet kernels.
 # This uses the special _flat_idx var.
 
 from time import time
@@ -19,40 +19,54 @@ shape = (10_000, 10_000)
 cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
 
 
-@blosc2.dsl_kernel
-def kernel_ramp():
-    # return _i0 * _n1 + _i1  # DSL index/shape symbols resolved by miniexpr
-    return _flat_idx  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+@blosc2.menudet(ndim=2)
+def kernel_ramp() -> np.int64:
+    return _flat_idx  # noqa: F821  # Global logical index supplied by Menudet.
 
 
-print(kernel_ramp.dsl_source)
-a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)
-npa = a.compute(cparams=cparams)
-t0 = time()
-result = npa.sum()
-# print(result)
-print("Blosc2 sum over NDArray:", round(time() - t0, 3), "s")
+def make_lazy(shape, cparams):
+    chunks, blocks = blosc2.compute_chunks_blocks(shape, dtype=dtype, cparams=cparams)
+    storage = {"chunks": chunks, "blocks": blocks, "cparams": cparams}
+    # Preserve global coordinates without re-evaluating the entire ramp per tile.
+    lazy = kernel_ramp.specialize().lazy({}, shape=shape, partitions=chunks)
+    return lazy, storage
 
-t0 = time()
-a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)
-result = a.sum(cparams=cparams)
-# print(result)
-print("Blosc2 sum over LazyArray:", round(time() - t0, 3), "s")
 
-t0 = time()
-a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)
-result = a.compute(cparams=cparams).sum()
-# print(result)
-print("(with a prior .compute):", round(time() - t0, 3), "s")
+def main():
+    nitems = int(np.prod(shape))
+    expected = nitems * (nitems - 1) // 2
+    a, storage = make_lazy(shape, cparams)
+    print(a.kernel.source)
+    materialized = a.compute(**storage)
+    t0 = time()
+    result = materialized.sum()
+    print("Blosc2 sum over NDArray:", round(time() - t0, 3), "s")
+    assert result == expected
 
-t0 = time()
-a = blosc2.arange(np.prod(shape), dtype=dtype, shape=shape, cparams=cparams)
-result = a.sum()
-# print(result)
-print("Blosc2 arange + sum:", round(time() - t0, 3), "s")
+    t0 = time()
+    a, storage = make_lazy(shape, cparams)
+    result = a.sum(**storage)
+    print("Blosc2 sum over Menudet LazyArray:", round(time() - t0, 3), "s")
+    assert result == expected
 
-t0 = time()
-npa = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
-result = npa.sum()
-# print(result)
-print("NumPy arange + sum:", round(time() - t0, 3), "s")
+    t0 = time()
+    a, storage = make_lazy(shape, cparams)
+    result = a.compute(**storage).sum()
+    print("Menudet compute + sum:", round(time() - t0, 3), "s")
+    assert result == expected
+
+    t0 = time()
+    a = blosc2.arange(nitems, dtype=dtype, shape=shape, **storage)
+    result = a.sum()
+    print("Blosc2 arange + sum:", round(time() - t0, 3), "s")
+    assert result == expected
+
+    t0 = time()
+    npa = np.arange(nitems, dtype=dtype).reshape(shape)
+    result = npa.sum()
+    print("NumPy arange + sum:", round(time() - t0, 3), "s")
+    assert result == expected
+
+
+if __name__ == "__main__":
+    main()

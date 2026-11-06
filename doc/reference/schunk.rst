@@ -43,7 +43,7 @@ including:
 - ``Ref``
 - ``C2Array``
 - ``LazyExpr``
-- ``LazyUDF`` backed by ``@blosc2.dsl_kernel``
+- Lazy Menudet results authored with ``@blosc2.menudet``
 
 Both single-key access (``schunk.attrs["name"]``) and bulk access
 (``schunk.attrs[:]``) use this serializer.

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 
 @pytest.fixture(autouse=True)
@@ -33,16 +34,17 @@ def restore_options(monkeypatch):
 
 def test_set_get_and_atomic_validation():
     original = blosc2.get_jit_options()
-    assert blosc2.set_jit_options(jit=True, jit_backend="cc") == original
+    assert blosc2.set_jit_options(jit=True, jit_backend="cc", math_backend="system") == original
     result = blosc2.get_jit_options()
     assert result["jit"] is True
     assert result["jit_backend"] == "cc"
+    assert result["math_backend"] == "system"
     result["jit"] = False
     assert blosc2.get_jit_options()["jit"] is True
     with pytest.raises(TypeError):
         blosc2.set_jit_options(jit=False, trace="yes")
     assert blosc2.get_jit_options()["jit"] is True
-    blosc2.set_jit_options(jit=None, jit_backend=None)
+    blosc2.set_jit_options(jit=None, jit_backend=None, math_backend=None)
     assert blosc2.get_jit_options() == original
 
 
@@ -51,6 +53,8 @@ def test_set_get_and_atomic_validation():
     [
         {"jit": 1},
         {"jit_backend": "invalid"},
+        {"math_backend": "invalid"},
+        {"math_backend": 1},
         {"fp_accuracy": 1},
         {"compiler": ""},
         {"cflags": "\0"},
@@ -257,13 +261,14 @@ def test_ramp_metadata_shortcut_strips_execution_options(constructor, monkeypatc
     np.testing.assert_array_equal(result[:], 0)
 
 
-@blosc2.dsl_kernel
+@DSLKernel
 def kernel(x):
     return x * 2 + 1
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native miniexpr prefilter observation")
-def test_fp_accuracy_precedence(monkeypatch):
+def test_fp_accuracy_precedence(monkeypatch, automatic_native_runtime):
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
     observed = []
     original = blosc2.NDArray._set_pref_expr
 
@@ -286,7 +291,7 @@ def test_fp_accuracy_precedence(monkeypatch):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM or os.name == "nt", reason="Native POSIX TCC execution")
-def test_evaluation_time_and_udf_policy(capfd):
+def test_evaluation_time_and_udf_policy(capfd, automatic_native_runtime):
     arr = blosc2.asarray(np.arange(32, dtype=np.float64))
     expr = arr + 1
     udf = blosc2.lazyudf(kernel, (arr,), dtype=arr.dtype, jit=False)
@@ -294,7 +299,7 @@ def test_evaluation_time_and_udf_policy(capfd):
         np.testing.assert_array_equal(expr.compute()[:], np.arange(32) + 1)
         assert "jit runtime built:" in capfd.readouterr().err
         np.testing.assert_array_equal(udf[:], np.arange(32) * 2 + 1)
-        assert "reason=jit_mode=off" in capfd.readouterr().err
+        assert "request=2" in capfd.readouterr().err
     assert blosc2.get_jit_options()["trace"] is False
 
 
@@ -353,6 +358,66 @@ def test_environment_overrides_and_tcc_ignores_cc_settings(tmp_path, capfd, monk
     assert capfd.readouterr() == ("", "")
 
 
+@pytest.mark.parametrize("backend", ["tcc", "cc"])
+def test_synthesized_backend_respects_environment_and_source(monkeypatch, backend):
+    from blosc2.lazyexpr import _apply_jit_backend_pragma
+
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", backend)
+    other = "cc" if backend == "tcc" else "tcc"
+    inputs = {"x": np.arange(4, dtype=np.float64)}
+    assert _apply_jit_backend_pragma("x + 1", inputs, other).startswith(f"# me:compiler={backend}\n")
+    source = f"# me:compiler={other}\ndef k(x):\n    return x + 1\n"
+    assert _apply_jit_backend_pragma(source, inputs, backend) == source
+    commented = "# me:fp=strict\ndef k(x):\n    return x\n"
+    assert _apply_jit_backend_pragma(commented, inputs, other) == f"# me:compiler={backend}\n{commented}"
+
+
+@pytest.mark.parametrize("backend", ["tcc", "cc"])
+@pytest.mark.parametrize("jit", [False, True])
+def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, jit, automatic_native_runtime):
+    import importlib
+
+    from blosc2.expression_evaluator import typed_evaluator_enabled
+
+    lazyexpr = importlib.import_module("blosc2.lazyexpr")
+
+    def reject_elementwise_wrapper(*args):
+        pytest.fail("Scalar reductions must not be wrapped in elementwise DSL source")
+
+    monkeypatch.setattr(lazyexpr, "_apply_jit_backend_pragma", reject_elementwise_wrapper)
+    original = blosc2.NDArray._set_pref_expr
+    calls = []
+    typed_calls = []
+
+    def capture(self, expression, inputs, fp_accuracy, aux_reduc=None, **kwargs):
+        assert aux_reduc is not None
+        assert kwargs["jit"] is False  # Prevent native auto-lifting as well.
+        calls.append(expression)
+        return original(self, expression, inputs, fp_accuracy, aux_reduc, **kwargs)
+
+    original_menudet = blosc2.NDArray._execute_menudet_prefilter
+
+    def capture_menudet(self, *args, **kwargs):
+        typed_calls.append(kwargs.get("reduction_op"))
+        return original_menudet(self, *args, **kwargs)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", capture)
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", capture_menudet)
+    values = np.arange(128, dtype=np.float64)
+    expr = blosc2.asarray(values) * 2 + 1
+    assert expr.sum(jit=jit, jit_backend=backend) == (values * 2 + 1).sum()
+    if blosc2.IS_WASM:
+        # WASM currently uses the non-prefilter reduction path. It must still
+        # produce correct results without introducing an elementwise wrapper.
+        assert not calls
+    elif typed_evaluator_enabled():
+        assert not calls
+        assert typed_calls == [1]
+    else:
+        assert calls
+    assert all(expression.startswith("sum(") for expression in calls)
+
+
 @pytest.mark.skipif(blosc2.IS_WASM or os.name == "nt", reason="POSIX compiler-output injection")
 def test_compiler_output(tmp_path, capfd):
     compiler = tmp_path / "bad cc's executable"
@@ -372,7 +437,7 @@ def test_compiler_output(tmp_path, capfd):
     ("variable", "value", "reason"),
     [
         ("CC", "/no/env/compiler", "c compiler unavailable"),
-        ("CFLAGS", "-invalid-blosc2-option", "compilation failed"),
+        ("CFLAGS", "-invalid-blosc2-option", "explicit compiler flags"),
     ],
 )
 def test_cc_environment_precedence(tmp_path, capfd, monkeypatch, variable, value, reason):
@@ -383,5 +448,5 @@ def test_cc_environment_precedence(tmp_path, capfd, monkeypatch, variable, value
     ):
         blosc2.linspace(0, 11, 79)
     assert reason in capfd.readouterr().err
-    assert (tmp_path / "env-cache").exists()
+    assert (tmp_path / "env-cache").exists() == (variable == "CC")
     assert not (tmp_path / "python-cache").exists()

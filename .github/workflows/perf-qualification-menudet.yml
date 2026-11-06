@@ -1,0 +1,114 @@
+name: Qualification perf benches
+run-name: Menudet perf ${{ inputs.mode || github.event.schedule == '41 5 * * 0' && 'calibration' || 'observation' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Exact baseline SHA approved by the caller for this run (empty uses reviewed anchor)
+        type: string
+      mode:
+        description: Bounded observation or calibration
+        type: choice
+        options: [observation, smoke, calibration, larger]
+        default: observation
+  schedule:
+    - cron: '23 4 * * *'
+    - cron: '41 5 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: menudet-perf-${{ inputs.mode == 'calibration' && 'calibration' || github.event.schedule == '41 5 * * 0' && 'calibration' || 'routine' }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    # Observe/calibrate manually first. No baseline promotion or nightly enablement
+    # is inferred from a successful run.
+    if: github.event_name != 'schedule' || vars.MENUDET_PERF_NIGHTLY_ENABLED == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            architecture: x86_64
+            profile: observation
+          - os: macos-15
+            architecture: arm64
+            profile: macos-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      EXPECTED_ARCH: ${{ matrix.architecture }}
+      REQUESTED_BASELINE: ${{ inputs.baseline_ref }}
+      REQUESTED_MODE: ${{ inputs.mode }}
+      PROFILE: ${{ matrix.profile }}
+      SCHEDULE: ${{ github.event.schedule }}
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: blosc2
+          python-version: '3.12'
+          auto-activate-base: false
+      - name: Resolve exact revisions and runner contract
+        run: |
+          python bench/qualification/ci.py resolve --output artifacts/identity.json
+      - name: Provision one shared dependency set
+        run: |
+          python -m pip install -r bench/qualification/requirements.txt
+          python -m pip freeze --all > artifacts/dependencies.lock
+          python bench/qualification/ci.py cache-key --identity artifacts/identity.json --lock artifacts/dependencies.lock
+      - uses: actions/cache@v4
+        id: wheels
+        with:
+          key: menudet-perf-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MENUDET_PERF_CACHE_KEY }}
+          path: |
+            artifacts/builds/baseline/wheels
+            artifacts/builds/baseline/manifest.json
+            artifacts/builds/baseline/build.log
+            artifacts/builds/candidate/wheels
+            artifacts/builds/candidate/manifest.json
+            artifacts/builds/candidate/build.log
+      - name: Build both exact integrated stacks sequentially
+        if: steps.wheels.outputs.cache-hit != 'true'
+        run: |
+          python bench/qualification/ci.py build --identity artifacts/identity.json --lock artifacts/dependencies.lock
+      - name: Install wheels in isolated conda environments
+        run: |
+          conda create -y -n menudet-baseline --clone blosc2
+          conda create -y -n menudet-candidate --clone blosc2
+          conda run -n menudet-baseline python -m pip install --no-deps artifacts/builds/baseline/wheels/*.whl
+          conda run -n menudet-candidate python -m pip install --no-deps artifacts/builds/candidate/wheels/*.whl
+          conda run -n menudet-baseline python -m pip check
+          conda run -n menudet-candidate python -m pip check
+          python bench/qualification/ci.py environments --output artifacts/environments.json
+      - name: Run paired contracts and bounded observations
+        run: |
+          python bench/qualification/ci.py measure --identity artifacts/identity.json --environments artifacts/environments.json
+      - name: Publish concise job summary
+        if: always()
+        run: |
+          python bench/qualification/ci.py summary --artifacts artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: menudet-perf-${{ matrix.os }}-${{ github.run_attempt }}
+          retention-days: 90
+          path: |
+            artifacts/*.json
+            artifacts/*.md
+            artifacts/*.lock
+            artifacts/*.zip
+            artifacts/calibration/**
+            artifacts/builds/*/manifest.json
+            artifacts/builds/*/build.log

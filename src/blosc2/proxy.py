@@ -21,7 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel, DSLSyntaxError
+from blosc2.dsl_kernel import DSLSyntaxError
+from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 # What a proxy reads from, which lived here until the import graph asked for it
 # further down (see `proxy_source`).  The four classes are re-exported rather
@@ -232,6 +233,9 @@ class Proxy(blosc2.Operand):
 
         """
         self.src = src
+        # Cached chunks belong to this source, even if a caller later rebinds
+        # the public src attribute. Safe expression admission checks provenance.
+        self._cache_source = src
         self.urlpath = urlpath
         self._cache_status = None
         if kwargs is None:
@@ -2160,6 +2164,8 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
         }
         storage_kwargs = {k: v for k, v in decorator_kwargs.items() if k not in _JIT_EXECUTION_TUNING_KWARGS}
         lexpr = blosc2.lazyudf(kernel, values, dtype=None, shape=shape, **exec_kwargs)
+        # Native control-flow wrappers must not silently select full/legacy DSL.
+        lexpr._require_menudet = not blosc2.IS_WASM
 
         if out is not None:
             if isinstance(out, blosc2.NDArray):
@@ -2244,7 +2250,7 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
           compile: a function that is DSL-shaped but calls something miniexpr
           does not implement passes here and fails later, at call time, with a
           ``RuntimeError``.  See the DSL syntax reference for what the grammar
-          accepts.  (Unrelated to :func:`blosc2.dsl_kernel`, which builds a
+          accepts.  (Unrelated to the retired ``@dsl_kernel``, which built a
           :class:`DSLKernel` object rather than an evaluating wrapper.)
 
           This also works as a pandas engine, which is the only way to reach

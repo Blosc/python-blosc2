@@ -1,0 +1,35 @@
+name: Menudet qualification freshness
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '13 9 * * *'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: menudet-perf-freshness
+  cancel-in-progress: false
+jobs:
+  freshness:
+    if: vars.MENUDET_PERF_NIGHTLY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: blosc2
+          python-version: '3.12'
+          auto-activate-base: false
+      - run: conda run -n blosc2 python bench/qualification/freshness.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: menudet-freshness
+          path: menudet-freshness.json
+          retention-days: 90

@@ -8,3 +8,5 @@ Development
    code-of-conduct
    roadmap
    remote_cache_design
+   menudet_certification
+   expression_evaluator_migration

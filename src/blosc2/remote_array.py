@@ -759,6 +759,7 @@ class RemoteArray(RemoteObject, blosc2.Operand):
             _runtime_cache_path = self._carrier_path(cache_dir, None) + ".cache"
         self._runtime_urlpath = self._runtime_source(urlpath)
         self._expected_geometry = self._geometry(self.src)
+        self._expression_source = self.src
         self._expected_cparams = self.src.cparams
         self._refresh_lock = threading.Lock()
         self._operation_lock = threading.RLock()

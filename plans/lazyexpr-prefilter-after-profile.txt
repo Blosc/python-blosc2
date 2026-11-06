@@ -1,0 +1,31 @@
+         634616 function calls (608218 primitive calls) in 0.382 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1346 to 25 due to restriction <25>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.431    0.431 <frozen runpy>:262(run_path)
+        1    0.000    0.000    0.430    0.430 <frozen runpy>:91(_run_module_code)
+        1    0.000    0.000    0.430    0.430 <frozen runpy>:65(_run_code)
+     28/1    0.000    0.000    0.430    0.430 {built-in method builtins.exec}
+        1    0.000    0.000    0.430    0.430 dsl-kernel-bench.py:1(<module>)
+        1    0.001    0.001    0.418    0.418 dsl-kernel-bench.py:270(main)
+       10    0.008    0.001    0.377    0.038 dsl-kernel-bench.py:190(bench_case)
+ 2078/511    0.002    0.000    0.135    0.000 expression_graph.py:93(wrapped)
+   109/63    0.000    0.000    0.125    0.002 jit_config.py:167(wrapped)
+   109/63    0.001    0.000    0.125    0.002 lazyexpr.py:4931(compute)
+       80    0.041    0.001    0.111    0.001 storage_readers.py:365(compute_storage_if_eligible)
+    53/22    0.001    0.000    0.099    0.005 {built-in method builtins.eval}
+       20    0.005    0.000    0.095    0.005 dsl-kernel-bench.py:178(time_it)
+       60    0.000    0.000    0.090    0.002 dsl-kernel-bench.py:229(<lambda>)
+      109    0.001    0.000    0.089    0.001 native_graph.py:617(compute_native_prefilter_if_eligible)
+       10    0.000    0.000    0.072    0.007 lazyexpr.py:6073(lazyexpr)
+    54/10    0.001    0.000    0.072    0.007 lazyexpr.py:5198(_new_expr)
+       20    0.003    0.000    0.071    0.004 utils.py:1671(assert_allclose)
+       20    0.020    0.001    0.068    0.003 utils.py:738(assert_array_compare)
+      105    0.058    0.001    0.058    0.001 schunk.py:1150(update_data)
+    41/10    0.000    0.000    0.054    0.005 lazyexpr.py:5843(_numpy_eval_expr)
+       40    0.000    0.000    0.053    0.001 menudet_lazy.py:332(compute)
+    41/10    0.000    0.000    0.049    0.005 lazyexpr.py:130(_numpy_eval_datetime_aware)
+    41/10    0.000    0.000    0.049    0.005 expression_graph.py:2033(evaluate_expression)
+  281/168    0.000    0.000    0.046    0.000 expression_graph.py:111(wrapped)

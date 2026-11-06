@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 ################# Automatic compute of optional chunks and blocks #################
 # The exact outcome of these depends on many aspects, including CPUs cache sizes,
@@ -18,18 +19,15 @@ import blosc2
 ###################################################################################
 
 
-@pytest.mark.parametrize("clevel", [0, 1, 5, 9])
-@pytest.mark.parametrize("codec", [blosc2.Codec.BLOSCLZ, blosc2.Codec.ZSTD])
 @pytest.mark.parametrize(
-    "shape",
-    [
-        (1000, 1000),
-        (10, 20, 30),
-        (10, 30, 50, 10),
-        (10, 10, 10, 10, 10),
-    ],
+    ("clevel", "codec", "shape", "dtype"),
+    orthogonal_cases(
+        [0, 1, 5, 9],
+        [blosc2.Codec.BLOSCLZ, blosc2.Codec.ZSTD],
+        [(1000, 1000), (10, 20, 30), (10, 30, 50, 10), (10, 10, 10, 10, 10)],
+        ["u1", "i4", "f8"],
+    ),
 )
-@pytest.mark.parametrize("dtype", ["u1", "i4", "f8"])
 def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     cparams = blosc2.cparams_dflts.copy()
     cparams["clevel"] = clevel
