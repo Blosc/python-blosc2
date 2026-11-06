@@ -437,6 +437,89 @@ def test_matmul_fast_path_failure_falls_back(monkeypatch):
         _toggle_miniexpr(old_flag)
 
 
+# The matmul prefilter runs on C-Blosc2's threads when nthreads > 1 (none on WASM)
+PREFILTER_NTHREADS = [1, pytest.param(4, marks=pytest.mark.skipif(blosc2.IS_WASM, reason="no threads"))]
+
+
+def _int_valued_operands(dtype, nthreads, shape=(200, 200)):
+    # One chunk with 16 blocks per operand; integer values keep every product sum exact
+    rng = np.random.default_rng(0)
+    a = rng.integers(-2, 3, shape).astype(dtype)
+    b = rng.integers(-2, 3, shape).astype(dtype)
+    cparams = blosc2.CParams(nthreads=nthreads)
+    x1 = blosc2.asarray(a, chunks=shape, blocks=(50, 50), cparams=cparams)
+    x2 = blosc2.asarray(b, chunks=shape, blocks=(50, 50), cparams=cparams)
+    return a, b, x1, x2, cparams
+
+
+# float16 and longdouble are kind "f" too, but the prefilter has float32/float64 kernels only
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.float16,
+        pytest.param(
+            np.longdouble,
+            marks=pytest.mark.skipif(np.dtype(np.longdouble).itemsize <= 8, reason="longdouble is float64"),
+        ),
+    ],
+)
+def test_matmul_fast_path_skips_float_dtypes_without_kernel(monkeypatch, dtype):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a, b, x1, x2, _ = _int_valued_operands(dtype, nthreads=1)
+        c = blosc2.matmul(x1, x2, chunks=(200, 200), blocks=(50, 50))
+
+        assert calls == []
+        assert c.dtype == dtype
+        np.testing.assert_array_equal(c[:], np.matmul(a, b))
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize(
+    ("dtype1", "dtype2", "out_dtype"),
+    [
+        (np.complex128, np.complex128, np.complex128),
+        (np.bool_, np.bool_, np.bool_),
+        (np.int16, np.int16, np.int16),
+        (np.float16, np.float16, np.float16),
+        ([("x", "<f8")], [("x", "<f8")], [("x", "<f8")]),
+        (np.float32, np.float32, np.float64),
+        (np.float32, np.float64, np.float64),
+        # non-native byte order on any host
+        (np.dtype(np.float64).newbyteorder(),) * 3,
+    ],
+)
+def test_set_pref_matmul_rejects_dtypes_without_kernel(dtype1, dtype2, out_dtype):
+    # The prefilter runs without the GIL and cannot raise, so the dtypes are checked when it is set
+    x1 = blosc2.zeros((100, 100), dtype=dtype1, chunks=(100, 100), blocks=(50, 50))
+    x2 = blosc2.zeros((100, 100), dtype=dtype2, chunks=(100, 100), blocks=(50, 50))
+    out = blosc2.zeros((100, 100), dtype=out_dtype, chunks=(100, 100), blocks=(50, 50))
+    with pytest.raises(TypeError, match="fast matmul path"):
+        out._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+    assert not out.schunk._has_prefilter
+
+
+@pytest.mark.parametrize("nthreads", PREFILTER_NTHREADS)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32, np.int64])
+def test_matmul_prefilter_supported_dtypes(dtype, nthreads):
+    # blosc2.matmul() only sends floats to the prefilter; the int kernels are driven directly
+    a, b, x1, x2, cparams = _int_valued_operands(dtype, nthreads)
+    out = blosc2.zeros((200, 200), dtype=dtype, chunks=(200, 200), blocks=(50, 50), cparams=cparams)
+    out._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+    try:
+        data = np.empty(out.schunk.chunksize, dtype=np.uint8)
+        for nchunk in range(out.schunk.nchunks):
+            out.schunk.update_data(nchunk, data, copy=False)
+    finally:
+        out.schunk.remove_prefilter("miniexpr")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+        np.testing.assert_array_equal(out[:], np.matmul(a, b))
+
+
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
     [

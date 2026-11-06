@@ -78,8 +78,11 @@ def _matmul_can_use_fast_path(
         return False
 
     # The prefilter reads the operands' chunks straight from memory, which frames (on disk,
-    # or in memory with contiguous=True) do not keep
-    if any(op.schunk.urlpath is not None or op.schunk.contiguous for op in (x1, x2)):
+    # or in memory with contiguous=True) do not keep, and decompresses them without the GIL
+    if any(
+        op.schunk.urlpath is not None or op.schunk.contiguous or blosc2.blosc2_ext.reads_need_python(op)
+        for op in (x1, x2)
+    ):
         return False
 
     # The current prefilter-backed implementation is only supported for 2-D layouts.
@@ -108,11 +111,8 @@ def _matmul_can_use_fast_path(
     if result_blocks[:-2] != result.blocks[:-2]:
         return False
 
-    if x1.dtype.kind != "f":
-        return False
-    if x2.dtype.kind != "f":
-        return False
-    return x1.dtype == x2.dtype
+    # The prefilter has float32 and float64 kernels only (float16 and longdouble are kind "f" too)
+    return x1.dtype in (np.float32, np.float64)
 
 
 def _matmul_fast_path_context(result: blosc2.NDArray):
