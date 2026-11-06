@@ -6336,6 +6336,23 @@ cdef enum:
 cdef object _np_integer = np.integer
 
 
+cdef list _drop_masked(seq, mask):
+    """The items of `seq` where `mask` is False."""
+    return [x for x, m in zip(seq, mask) if not m]
+
+
+cdef _full_rank_chunkshape(chunkshape, mask):
+    """Chunks or blocks given for the result of a slice, which has no dims for those in `mask`, with
+    1 inserted in those dims.  Other lengths go to compute_chunks_blocks() unchanged."""
+    if chunkshape is None:
+        return None
+    chunkshape = list(chunkshape) if isinstance(chunkshape, (tuple, list)) else [chunkshape]
+    if len(chunkshape) != len(mask) - sum(mask):
+        return chunkshape
+    kept = iter(chunkshape)
+    return [1 if m else next(kept) for m in mask]
+
+
 cdef class NDArray:
     cdef b2nd_array_t* array
     cdef readonly object _handle_lock
@@ -6951,49 +6968,53 @@ cdef class NDArray:
 
     @_handle_locked
     def get_slice(self, key, mask, **kwargs):
+        """The slice from `key` (start, stop) as a new array without the dims in `mask` (those
+        indexed by an int, which have length 1)."""
         start, stop = key
         shape = tuple(sp - st for sp, st in zip(stop, start))
-        chunks = kwargs.pop("chunks", None)
-        blocks = kwargs.pop("blocks", None)
-        if blocks and len(shape) != len(blocks):
-            for i in range(len(shape)):
-                if shape[i] == 1:
-                    blocks.insert(i, 1)
-        if chunks and len(shape) != len(chunks):
-            for i in range(len(shape)):
-                if shape[i] == 1:
-                    chunks.insert(i, 1)
-        chunks, blocks = blosc2.compute_chunks_blocks(shape, chunks, blocks, self.dtype)
-
-        # shape will be overwritten by get_slice
-        cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks,
-                                                    self.dtype, kwargs)
-        if ctx.ptr == NULL:
-            raise RuntimeError("Error while creating the context")
-        ndim = self.ndim
+        chunks, blocks = blosc2.compute_chunks_blocks(
+            shape, _full_rank_chunkshape(kwargs.pop("chunks", None), mask),
+            _full_rank_chunkshape(kwargs.pop("blocks", None), mask), self.dtype)
+        drop_dims = any(mask)
+        if drop_dims:
+            # Chunk and block 1 in the dropped dims: then the chunks of the slice are chunks of the result
+            chunks = [1 if m else c for c, m in zip(chunks, mask)]
+            blocks = [1 if m else b for b, m in zip(blocks, mask)]
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
-        for i in range(ndim):
+        for i in range(self.ndim):
             start_[i] = start[i]
             stop_[i] = stop[i]
 
-        cdef b2nd_array_t *array
-        _check_rc(b2nd_get_slice(ctx.ptr, &array, self.array, start_, stop_),
-                  "Error while getting the slice")
+        # Without dims to drop, the slice is the result.  Else the slice is built in memory and its
+        # chunks are moved into the result (b2nd_squeeze_index() would give a view that needs the
+        # slice to be kept alive).
+        slice_kwargs = kwargs
+        if drop_dims:
+            slice_kwargs = {k: kwargs[k] for k in ("cparams", "dparams") if k in kwargs}
+            slice_kwargs["contiguous"] = False  # not a frame: the chunks are in sc.data
+        # shape will be overwritten by get_slice
+        cdef _B2ndContext ctx = create_b2nd_context(shape, chunks, blocks, self.dtype, slice_kwargs)
+        if ctx.ptr == NULL:
+            raise RuntimeError("Error while creating the context")
+        cdef b2nd_array_t *sliced = NULL
+        _check_rc(b2nd_get_slice(ctx.ptr, &sliced, self.array, start_, stop_), "Error while getting the slice")
+        if not drop_dims:
+            return blosc2.NDArray(_schunk=PyCapsule_New(sliced.sc, <char *> "blosc2_schunk*", NULL),
+                                  _array=PyCapsule_New(sliced, <char *> "b2nd_array_t*", NULL))
 
-        cdef c_bool mask_[B2ND_MAX_DIM]
-        for i in range(ndim):
-            mask_[i] = mask[i]
-        cdef b2nd_array_t *view = NULL
-        cdef int rc = b2nd_squeeze_index(array, &view, mask_)
-        if rc < 0:
-            b2nd_free(array)
-        _check_rc(rc, "Error while squeezing sliced array")
-        array = view
-        ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
-                                 _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-
-
-        return ndarray
+        cdef NDArray result
+        cdef int64_t nchunk
+        try:
+            result = empty(_drop_masked(shape, mask), _drop_masked(chunks, mask),
+                           _drop_masked(blocks, mask), self.dtype, **kwargs)
+            # The result owns each chunk after a successful update (in memory: no copy, no allocation)
+            for nchunk in range(sliced.sc.nchunks):
+                _check_rc(blosc2_schunk_update_chunk(result.array.sc, nchunk, sliced.sc.data[nchunk], False),
+                          "Error while moving the sliced array")
+                sliced.sc.data[nchunk] = NULL
+        finally:
+            b2nd_free(sliced)  # cannot fail; must not raise here
+        return result
 
     @_handle_locked
     def set_slice(self, key, ndarray):
