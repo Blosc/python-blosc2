@@ -418,3 +418,19 @@ def test_none_is_not_a_dtype_annotation():
         @blosc2.menudet
         def bad(x) -> None:
             return x
+
+
+def test_menudet_preserves_docstring_pragmas():
+    @blosc2.menudet
+    def pragma_kernel(x: np.float64) -> np.float64:
+        """
+        # me:compiler=cc
+        # me:fp=fast
+        """
+        return np.sin(x) + 1.0
+
+    x = np.array([0.5, 1.0], dtype=np.float64)
+    kernel = pragma_kernel.specialize(x)
+    assert kernel._info["fp_mode"] == "fast"
+    assert "compiler=cc" in kernel._info["source"]
+    np.testing.assert_allclose(kernel.evaluate({"x": x}), np.sin(x) + 1.0)
