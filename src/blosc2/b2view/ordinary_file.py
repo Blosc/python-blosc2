@@ -3,13 +3,18 @@
 import mimetypes
 import os
 import stat
-import tempfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
 import blosc2
-from blosc2.core import find_url_separator, fsspec_filesystem, is_fsspec_url, parse_container_url
+from blosc2.core import (
+    find_url_separator,
+    fsspec_filesystem,
+    is_fsspec_url,
+    mkstemp_for_replace,
+    parse_container_url,
+)
 
 MAX_READ_BYTES = 16 << 20
 TRANSFER_BYTES = 1 << 20
@@ -179,7 +184,7 @@ class OrdinaryFile:
             raise FileExistsError(destination)
         if self.fs is None and destination.exists() and os.path.samefile(self.path, destination):
             raise ValueError("Destination must differ from the source file")
-        fd, temporary = tempfile.mkstemp(prefix=".b2view-download-", dir=destination.parent)
+        fd, temporary = mkstemp_for_replace(destination, prefix=".b2view-download-")
         try:
             with os.fdopen(fd, "wb") as output, self._stream(streaming=True) as source:
                 done = 0

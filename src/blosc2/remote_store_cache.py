@@ -4,7 +4,6 @@ import errno
 import json
 import os
 import shutil
-import tempfile
 import threading
 import time
 import uuid
@@ -14,7 +13,7 @@ from pathlib import Path
 import msgpack
 
 import blosc2
-from blosc2.core import cache_directory_name
+from blosc2.core import cache_directory_name, mkstemp_for_replace
 from blosc2.msgpack_utils import msgpack_packb
 
 
@@ -190,7 +189,7 @@ class StoreDiskCache:
 
 def atomic_write(path, data):
     """Publish complete metadata and sync its directory before returning."""
-    fd, name = tempfile.mkstemp(prefix="publish-", dir=path.parent)
+    fd, name = mkstemp_for_replace(path, prefix="publish-")
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)

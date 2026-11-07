@@ -8,6 +8,7 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
+import contextlib
 import copy
 import ctypes
 import ctypes.util
@@ -20,10 +21,12 @@ import pickle
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import asdict, fields
 from functools import cache, lru_cache
 from typing import TYPE_CHECKING, ClassVar
@@ -2317,6 +2320,39 @@ def remove_urlpath(path: str) -> None:
             path = str(path)
         path = path.encode("utf-8") if isinstance(path, str) else path
         blosc2_ext.remove_urlpath(path)
+
+
+def mkstemp_for_replace(target: str | os.PathLike, *, prefix: str = "", suffix: str = "") -> tuple[int, str]:
+    """Create a temporary file next to *target*, to be ``os.replace()``-d onto it.
+
+    Returns ``(fd, path)`` like ``tempfile.mkstemp()``, but the file gets the
+    permissions that writing *target* in place would leave, not mkstemp's
+    0o600: an existing *target* keeps its permission bits, a new one gets
+    0o666 less the umask (or the directory's default ACL).  The kernel applies
+    the umask at creation, so it is never read: ``os.umask()`` can only be read
+    by setting it, process-wide, which races with other threads.
+    """
+    target = os.path.abspath(target)
+    # 122 random bits: unlike mkstemp's short names, no retry loop is needed.
+    path = os.path.join(os.path.dirname(target), f"{prefix}{uuid.uuid4().hex}{suffix}")
+    mode = None
+    # Windows only has a read-only flag (and a read-only target cannot be replaced).
+    if os.name != "nt":
+        with contextlib.suppress(OSError):  # no target: a new file
+            mode = stat.S_IMODE(os.stat(target).st_mode)
+    # Never more open than the target, not even until the chmod below: whoever
+    # opened the file meanwhile could read what is written to it later.
+    fd = os.open(
+        path,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o666 if mode is None else mode & 0o666,
+    )
+    if mode is not None:
+        # Through the fd, so a symlink swapped in for path cannot redirect it.
+        # Best effort: some filesystems (e.g. vfat) refuse chmod.
+        with contextlib.suppress(OSError):
+            os.fchmod(fd, mode)
+    return fd, path
 
 
 def schunk_from_cframe(
