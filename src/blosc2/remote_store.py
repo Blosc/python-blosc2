@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 import numpy as np
 
 import blosc2
-from blosc2.core import parse_container_url, storage_options_fingerprint
+from blosc2.core import mkstemp_for_replace, parse_container_url, storage_options_fingerprint
 from blosc2.info import InfoReporter, format_nbytes_info, format_store_tree
 from blosc2.proxy import CacheCoordinator
 from blosc2.proxy_source import Traffic
@@ -1809,8 +1809,9 @@ class RemoteDiscovery:
                 )
 
             staging_dir = tempfile.mkdtemp(prefix="b2z-export-", dir=dest_dir)
-            fd, tmp_zip = tempfile.mkstemp(prefix="export-", suffix=".b2z.tmp", dir=dest_dir)
-            os.close(fd)
+            fd, tmp_zip = mkstemp_for_replace(dest_abs, prefix="export-", suffix=".b2z.tmp")
+            # Written through the fd: the file may already have a read-only target's mode
+            tmp_file = os.fdopen(fd, "w+b")
             try:
                 exported_caches = []
                 for orig_key in candidates:
@@ -1894,7 +1895,7 @@ class RemoteDiscovery:
                             filepaths.append(fp)
                 filepaths.sort(key=os.path.getsize, reverse=True)
 
-                with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as zf:
+                with tmp_file, zipfile.ZipFile(tmp_file, "w", zipfile.ZIP_STORED) as zf:
                     for fp in filepaths:
                         arcname = os.path.relpath(fp, staging_dir)
                         zf.write(fp, arcname)
@@ -1903,6 +1904,7 @@ class RemoteDiscovery:
                 os.replace(tmp_zip, dest_abs)
                 return dest_abs
             finally:
+                tmp_file.close()
                 if os.path.exists(tmp_zip):
                     with contextlib.suppress(OSError):
                         os.unlink(tmp_zip)
