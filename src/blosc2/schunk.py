@@ -1874,12 +1874,9 @@ def _open_special_store(urlpath, mode, offset, *, deserialize=DeserializeMode.SA
             from blosc2.remote_store import RemoteStore
 
             return RemoteStore._open_artifact(urlpath, mode=mode, **kwargs)
-        if "b2embed" in schunk_meta:
-            if offset != 0:
-                raise ValueError("Offset must be 0 for EmbedStore")
-            from blosc2.embed_store import EmbedStore
-
-            return EmbedStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
+        # No "b2embed" check: the embed.b2e of a .b2d/.b2z written by python-blosc2
+        # <= 4.0.0 carries that marker too (b2dict and b2tree came in 4.1.0), so it
+        # does not tell the store type.  Those stores and .b2e files go by extension.
         if "b2dict" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for DictStore")
