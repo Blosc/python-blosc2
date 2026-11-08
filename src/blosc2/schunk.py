@@ -480,7 +480,7 @@ class SChunk(blosc2_ext.SChunk):
         if blosc2.IS_WASM and value.nthreads != 1:
             value = replace(value, nthreads=1)
         super().update_cparams(value)
-        self._cparams = super().get_cparams()
+        self._cparams = None
 
     @property
     def dparams(self) -> blosc2.DParams:
@@ -496,7 +496,7 @@ class SChunk(blosc2_ext.SChunk):
         if blosc2.IS_WASM and value.nthreads != 1:
             value = replace(value, nthreads=1)
         super().update_dparams(value)
-        self._dparams = super().get_dparams()
+        self._dparams = None
 
     @contextmanager
     def holding_lock(self) -> Iterator[SChunk]:
