@@ -2406,12 +2406,9 @@ def ndarray_from_cframe(
     """
     from blosc2.deserialization import set_deserialize
 
+    # copy=False: the array pins `cframe` with its C memory (see blosc2_ext.ndarray_from_cframe)
     arr = blosc2_ext.ndarray_from_cframe(cframe, copy)
     set_deserialize(arr, deserialize)
-    if not copy:
-        # Same zero-copy pin as schunk_from_cframe; on the inner SChunk so
-        # both `arr` and a handed-out `arr.schunk` reach it.
-        arr._schunk._cframe = cframe
     return arr
 
 
