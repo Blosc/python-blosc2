@@ -1974,14 +1974,20 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
     deserialize = normalize_deserialize(deserialize)
     set_deserialize(res, deserialize)
     meta = getattr(res, "schunk", res).meta
-    if "proxy-source" in meta:
+    # All the metalayer names at once, instead of one locked call per check below.  Names that are not
+    # UTF-8 (the C API allows them) cannot be listed: then the checks go one by one.
+    try:
+        names = meta.keys()
+    except UnicodeDecodeError:
+        names = meta
+    if "proxy-source" in names:
         if deserialize is DeserializeMode.SAFE:
             raise UnsafeDeserializationError("proxy")
         proxy = _reconstruct_legacy_proxy(res, meta["proxy-source"])
         if proxy is not None:
             return proxy
 
-    if "b2o" in meta:
+    if "b2o" in names:
         if isinstance(meta["b2o"], dict) and meta["b2o"].get("kind") == "lazyudf":
             raise blosc2.UnsupportedLegacyRecipeError()
         if deserialize is DeserializeMode.SAFE and (
@@ -1992,23 +1998,23 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
             raise UnsafeDeserializationError(str(kind))
         return blosc2.open_b2object(res)
 
-    if "listarray" in meta:
+    if "listarray" in names:
         from blosc2.list_array import ListArray
 
         return ListArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "vlarray" in meta:
+    if "vlarray" in names:
         from blosc2.objectarray import ObjectArray
 
         return ObjectArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "batcharray" in meta:
+    if "batcharray" in names:
         from blosc2.batch_array import BatchArray
 
         return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
-    if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        if res.schunk.meta["LazyArray"] == 1:
+    if isinstance(res, blosc2.NDArray) and "LazyArray" in names:
+        if meta["LazyArray"] == 1:
             raise blosc2.UnsupportedLegacyRecipeError()
         if deserialize is DeserializeMode.SAFE:
             raise UnsafeDeserializationError("LazyArray")
