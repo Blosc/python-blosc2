@@ -5481,6 +5481,34 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     out_block_nrows = out_arr.blockshape[ndim - 2]
     out_block_ncols = out_arr.blockshape[ndim - 1]
 
+    # Move nchunkA/nchunkB to the first chunks this output chunk needs: A's chunk in the
+    # same row and B's chunk in the same column, both at K = 0.  The chunk loop reads src[]
+    # from them, so this must happen before it starts.
+    ndarr = udata.inputs[0]
+    ndim = ndarr.ndim
+    q = ndarr.blockshape[ndim - 1]
+    p = ndarr.blockshape[ndim - 2]
+    # nchunk_ = chunks_in_row * chunk_row + chunk_col
+    # convert from chunk_idx to element idx chunk_i (row)
+    chunk_i = nchunk_ // ncols * out_chunk_nrows
+    nchunkA += chunk_i // ndarr.chunkshape[ndim - 2] * Ancols
+    # nblock_ = blocks_in_chunkrow * block_row + block_col
+    # convert from block_idx to element idx block_i (row)
+    block_i = nblock_ // block_ncols * out_block_nrows
+    block_startA = nblockA + block_i // p * Ablock_ncols
+    # Elements of K from the current block on.  The chunks along K are whole blocks (see
+    # _matmul_can_use_fast_path()), so each step of the block loop advances K by q.
+    cdef int64_t k_left = ndarr.shape[ndim - 1]
+    ndarr = udata.inputs[1]
+    ndim = ndarr.ndim
+    r = ndarr.blockshape[ndim - 1]
+    # convert from chunk_idx to element idx chunk_j (col)
+    chunk_j = nchunk_ % ncols * out_chunk_ncols
+    nchunkB += chunk_j // ndarr.chunkshape[ndim - 1]
+    # convert from block_idx to element idx block_j (col)
+    block_j = nblock_ % block_ncols * out_block_ncols
+    block_startB = nblockB + block_j // r
+
     memset(params_output, 0, out_arr.blocknitems * typesize)
 
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
@@ -5498,27 +5526,6 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
             if rc < 0 or block_nbytes[i] <= 0:
                 return _matmul_exit(input_buffers, dctx, -1)
             if first_run:
-                if i == 0:
-                    q = ndarr.blockshape[ndim - 1]
-                    p = ndarr.blockshape[ndim - 2]
-                    # nchunk_ = chunks_in_row * chunk_row + chunk_col
-                    # convert from chunk_idx to element idx chunk_i (row)
-                    chunk_i = nchunk_ // ncols * out_chunk_nrows
-                    chunk_startA = nchunkA + chunk_i // ndarr.chunkshape[ndim - 2] * Ancols
-                    nchunkA = chunk_startA
-                    # nblock_ = blocks_in_chunkrow * block_row + block_col
-                    # convert from block_idx to element idx block_i (row)
-                    block_i = nblock_ // block_ncols * out_block_nrows
-                    block_startA = nblockA + block_i // p * Ablock_ncols
-                else: # i = 1
-                    r = ndarr.blockshape[ndim - 1]
-                    # convert from chunk_idx to element idx chunk_j (col)
-                    chunk_j = nchunk_ % ncols * out_chunk_ncols
-                    chunk_startB = nchunkB + chunk_j // ndarr.chunkshape[ndim - 1]
-                    nchunkB = chunk_startB
-                    # convert from block_idx to element idx block_j (col)
-                    block_j = nblock_ % block_ncols * out_block_ncols
-                    block_startB = nblockB + block_j // r
                 input_buffers[i] = malloc(block_nbytes[i])
             if input_buffers[i] == NULL:
                 return _matmul_exit(input_buffers, dctx, -1)
@@ -5527,6 +5534,8 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
         nblockA = block_startA
         nblockB = block_startB
         while True: # block loop
+            if k_left <= 0:
+                break  # only padding left (in the last chunk along K)
             startA = nblockA * block_nbytes[0]
             startB = nblockB * block_nbytes[1]
             # In bytes, for the reason given in aux_miniexpr().  matmul only ever
@@ -5542,6 +5551,16 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
             if rc != block_nbytes[1]:
                 return _matmul_exit(input_buffers, dctx, -1)
             batch = 0
+            if k_left < q:
+                # The block ends in the padding, which need not hold zeros (full() fills it,
+                # resize() leaves old data there): zero A's padding columns and B's padding
+                # rows so that their products add nothing
+                for i in range(block_nbytes[0] // (q * typesize)):
+                    memset(<uint8_t*>input_buffers[0] + (i * q + k_left) * typesize, 0,
+                           (q - k_left) * typesize)
+                for i in range(block_nbytes[1] // (q * r * typesize)):
+                    memset(<uint8_t*>input_buffers[1] + (i * q + k_left) * r * typesize, 0,
+                           (q - k_left) * r * typesize)
             while batch < batches:
                 batch_ = batch
                 offsetA = 0
@@ -5618,6 +5637,7 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 else:
                     return _matmul_exit(input_buffers, dctx, -1)
                 batch += 1
+            k_left -= q
             nblockA += 1
             nblockB += Bblock_ncols
             if (nblockA % Ablock_ncols == 0):

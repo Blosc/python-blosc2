@@ -98,6 +98,14 @@ def _matmul_can_use_fast_path(
     if not chunks_aligned:
         return False
 
+    # The prefilter maps each output chunk to A's chunk row and B's chunk column and
+    # walks K chunk by chunk in both, so all three must share one chunk grid
+    same_chunks = result.chunks[-2] == x1.chunks[-2]
+    same_chunks &= result.chunks[-1] == x2.chunks[-1]
+    same_chunks &= x1.chunks[-1] == x2.chunks[-2]
+    if not same_chunks:
+        return False
+
     same_blocks = x2.blocks[-2] == x1.blocks[-1]
     same_blocks &= x2.blocks[-1] == result.blocks[-1]
     same_blocks &= result.blocks[-2] == x1.blocks[-2]
