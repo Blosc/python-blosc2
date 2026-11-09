@@ -68,7 +68,7 @@ jobs:
           python -m pip install -r bench/qualification/requirements.txt
           python -m pip freeze --all > artifacts/dependencies.lock
           python bench/qualification/ci.py cache-key --identity artifacts/identity.json --lock artifacts/dependencies.lock
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         id: wheels
         with:
           key: menudet-perf-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MENUDET_PERF_CACHE_KEY }}
