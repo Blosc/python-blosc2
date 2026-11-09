@@ -6882,6 +6882,30 @@ cdef class NDArray:
         _check_rc(rc, "Error while getting the sparse selection")
         return arr
 
+    cdef _check_oindex_buffer(self, arr, key, str role):
+        """Raise ValueError if the buffer of `arr` (the `role` "destination" or "source" in the
+        message) cannot hold the orthogonal selection `key`.
+
+        The C copy moves typesize bytes per item, but an array's dtype can have smaller items:
+        arrays that c-blosc2 2.7-2.16 wrote without a dtype store "|u1" whatever the typesize,
+        or the dtype string is damaged.  A buffer allocated for the dtype is too small then.
+        """
+        cdef int64_t typesize = self.array.sc.typesize
+        nbytes = typesize  # a Python int: it cannot wrap around for huge selections
+        for k in key:
+            nbytes *= len(k)
+        cdef Py_buffer view
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        cdef Py_ssize_t buflen = view.len
+        PyBuffer_Release(&view)
+        if buflen < nbytes:
+            msg = (f"{role} buffer is smaller than the requested orthogonal selection "
+                   f"({buflen} < {nbytes} bytes)")
+            itemsize = getattr(arr, "itemsize", typesize)
+            if itemsize != typesize:
+                msg += f": its itemsize is {itemsize}, but the array's typesize is {typesize}"
+            raise ValueError(msg)
+
     @_handle_locked
     def get_oindex_numpy(self, arr, key):
         """
@@ -6889,6 +6913,7 @@ cdef class NDArray:
         """
         if len(key) != self.array.ndim:
             raise ValueError(f"Key must have {self.array.ndim} dimensions, got {len(key)}.")
+        self._check_oindex_buffer(arr, key, "destination")
         cdef int64_t[B2ND_MAX_DIM] buffershape_
         cdef int64_t** key_
         cdef int64_t buffersize_ = self.array.sc.typesize
@@ -6922,6 +6947,7 @@ cdef class NDArray:
         """
         if len(key) != self.array.ndim:
             raise ValueError(f"Key must have {self.array.ndim} dimensions, got {len(key)}.")
+        self._check_oindex_buffer(arr, key, "source")
         cdef int64_t[B2ND_MAX_DIM] buffershape_
         cdef int64_t** key_
         cdef int64_t buffersize_ = self.array.sc.typesize
