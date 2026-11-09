@@ -263,7 +263,18 @@ class _Mallinfo2(ctypes.Structure):
     # all fields: mallinfo2() returns the struct by value
     _fields_ = [
         (name, ctypes.c_size_t)
-        for name in "arena ordblks smblks hblks hblkhd usmblks fsmblks uordblks fordblks keepcost".split()
+        for name in [
+            "arena",
+            "ordblks",
+            "smblks",
+            "hblks",
+            "hblkhd",
+            "usmblks",
+            "fsmblks",
+            "uordblks",
+            "fordblks",
+            "keepcost",
+        ]
     ]
 
 
