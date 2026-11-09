@@ -2258,8 +2258,9 @@ cdef class NativeGraphSchedule:
                 owned.append(bound)
             sources[i].view.name = name
         cdef void *output_data = np.PyArray_DATA(output)
-        # Native span readers decompress with C-Blosc2 from the graph's callbacks
-        if _nogil_enter(True):
+        # Native span readers decompress with C-Blosc2 from the graph's callbacks, which must hold the GIL
+        # for chunks of a codec or filter registered from Python (any chunk could use one)
+        if _nogil_enter(not (native_spans and _python_ids_registered)):
             with nogil:
                 rc = _graph_execute_sources(self._handle, sources, n, &destination, output_data, capacity,
                                             raise_mask, &report, &error)
@@ -7172,6 +7173,9 @@ cdef class NDArray:
         # teams. Zero preserves the existing caller/storage decompression policy.
         if nthreads:
             dparams.nthreads = nthreads
+        # A codec or filter registered from Python (any chunk could use one) needs the GIL, on this thread
+        if _python_ids_registered:
+            dparams.nthreads = 1
         dparams.schunk = self.array.sc
         dparams.typesize = self.array.sc.typesize
         dctx = blosc2_create_dctx(dparams)
@@ -7189,8 +7193,9 @@ cdef class NDArray:
         want_nbytes = nitems * self.array.sc.typesize
         # This invocation owns its context, chunk reference and destination;
         # release the GIL so independent bounded graph readers can decompress
-        # concurrently instead of serializing all native source callbacks.
-        if _nogil_enter(True):
+        # concurrently instead of serializing all native source callbacks
+        # (unless a codec or filter is registered from Python, see above).
+        if _nogil_enter(not _python_ids_registered):
             with nogil:
                 rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
                                               start * self.array.sc.typesize, want_nbytes,
