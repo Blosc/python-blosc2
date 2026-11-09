@@ -106,7 +106,7 @@ jobs:
           python --version >> paired-revisions.txt
           python -m pip freeze >> paired-revisions.txt
           cmake --version >> paired-revisions.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: menudet-pair-${{ matrix.os }}

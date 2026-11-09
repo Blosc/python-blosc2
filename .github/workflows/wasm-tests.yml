@@ -71,7 +71,7 @@ jobs:
           PY
       - name: Upload WASM platform evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: safe-lazyexpr-wasm
           path: |
