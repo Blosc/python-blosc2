@@ -6049,7 +6049,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Notes
         -----
-        There is a fast path for slices that are aligned with underlying chunks.
+        The result is a new array (not a view), with the storage given in `kwargs`.
+        There is a fast path for slices that are aligned with underlying chunks
+        (unless `chunks` or `blocks` are given).
         Aligned means that the slices are made entirely with complete chunks.
         """
         if "cparams" not in kwargs:
@@ -6062,28 +6064,23 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key, mask = process_key(key, self.shape)
         start, stop, step, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
 
-        # Fast path for slices made with aligned chunks
-        if step == (1,) * self.ndim:
+        def kept(seq):  # without the dims indexed by an int (mask), which the result drops
+            return [x for x, m in zip(seq, mask, strict=True) if not m]
+
+        # Fast path for slices made with aligned chunks (unless other chunks or blocks are asked for)
+        if step == (1,) * self.ndim and kwargs.get("chunks") is None and kwargs.get("blocks") is None:
             aligned_chunks = detect_aligned_chunks(key, self.shape, self.chunks, consecutive=False)
             if aligned_chunks:
-                # print("Aligned chunks detected", aligned_chunks)
-                # Create a new ndarray for the key slice
-                new_shape = [
-                    sp - st for sp, st in zip([k.stop for k in key], [k.start for k in key], strict=False)
-                ]
+                # Those dims have chunk and block 1 (aligned), so the chunks of self are chunks of
+                # the result too: no need to decompress and compress them again
                 newarr = blosc2.empty(
-                    shape=new_shape,
+                    shape=kept([k.stop - k.start for k in key]),
                     dtype=self.dtype,
-                    chunks=self.chunks,
-                    blocks=self.blocks,
-                    **kwargs,
+                    **(kwargs | {"chunks": kept(self.chunks), "blocks": kept(self.blocks)}),
                 )
-                # Get the chunks from the original array and update the new array
-                # No need for chunks to decompress and compress again
                 for order, nchunk in enumerate(aligned_chunks):
-                    chunk = self.schunk.get_chunk(nchunk)
-                    newarr.schunk.update_chunk(order, chunk)
-                return newarr.squeeze(axis=np.where(mask)[0])  # remove any dummy dims introduced
+                    newarr.schunk.update_chunk(order, self.schunk.get_chunk(nchunk))
+                return newarr
 
         key = (start, stop)
         ndslice = super().get_slice(key, mask, **kwargs)
@@ -6092,11 +6089,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # TODO: perhaps add a step param in the get_slice method in the future?
         if step != (1,) * self.ndim:
             nparr = ndslice[...]
-            if len(step) == 1:
-                nparr = nparr[:: step[0]]
-            else:
-                slice_ = tuple(slice(None, None, st) for st in step)
-                nparr = nparr[slice_]
+            nparr = nparr[tuple(slice(None, None, st) for st in kept(step))]
             return asarray(nparr, **kwargs)
 
         return ndslice

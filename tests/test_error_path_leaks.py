@@ -116,15 +116,6 @@ def arr():
             256,
             id="copy",
         ),
-        # The sliced array (about 100 kB) was leaked when squeezing it failed (a metalayer other
-        # than b2nd)
-        pytest.param(
-            lambda arr, path: arr.slice((slice(0, 10), slice(0, 20)), meta={"m": 1}),
-            RuntimeError,
-            "Error while squeezing sliced array",
-            256,
-            id="slice-squeeze",
-        ),
         # The index arrays and the output buffer (about 180 bytes) were leaked
         pytest.param(
             lambda arr, path: arr.oindex[[0, 1000], [0]],
