@@ -5574,6 +5574,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         :func:`~blosc2.ndarray_from_cframe`
             This function can be used to reconstruct a NDArray from the serialized bytes.
 
+        Notes
+        -----
+        The buffer holds the chunks as they are stored: a postfilter set on
+        :attr:`schunk` is not applied, and it is not part of the buffer either.
+        For a buffer with the postfiltered values, serialize a :meth:`copy`.
+
         Examples
         --------
         >>> import blosc2
