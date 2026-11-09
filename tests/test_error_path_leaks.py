@@ -80,9 +80,7 @@ def missing_dir_path(tmp_path):
 
 @pytest.fixture
 def arr():
-    return blosc2.asarray(
-        np.arange(2000, dtype=np.int32).reshape(100, 20), chunks=(50, 20), blocks=(10, 20)
-    )
+    return blosc2.asarray(np.arange(2000, dtype=np.int32).reshape(100, 20), chunks=(50, 20), blocks=(10, 20))
 
 
 @pytest.mark.skipif(_mallinfo2 is None, reason="needs glibc's mallinfo2()")
