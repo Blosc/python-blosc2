@@ -183,6 +183,49 @@ def test_python_codec_filter_writes(releasegil, python_cparams, path):
     assert calls[decode] > before[decode]
 
 
+@pytest.mark.parametrize("contiguous", [True, False])
+def test_to_cframe_python_codec_filter(releasegil, python_cparams, contiguous):
+    # Serializing copies the chunks as they are: the Python codec or filter does not run
+    cparams, encode, decode = python_cparams
+    values = data(2 * N + N // 2)
+    schunk = new_schunk(cparams, data=values, contiguous=contiguous)
+    schunk.vlmeta["meta"] = "a vlmetalayer"
+    before = calls.copy()
+    cframe = schunk.to_cframe()
+    assert calls == before
+    copy = blosc2.schunk_from_cframe(cframe, copy=True)
+    # It gets C-Blosc2's global number of threads, which cannot run Python codecs and filters
+    copy.dparams = blosc2.DParams(**DPARAMS)
+    np.testing.assert_array_equal(read(copy), values)
+    assert copy.vlmeta["meta"] == "a vlmetalayer"
+    assert calls[decode] > before[decode]
+
+
+@pytest.mark.parametrize("kind", ["prefilter", "postfilter"])
+def test_to_cframe_contiguous_callbacks(releasegil, kind):
+    # An in-memory contiguous frame is only copied, so the GIL can go even with a prefilter or postfilter
+    values = data(2 * N)
+    schunk = new_schunk(data=values, contiguous=True)
+    if kind == "prefilter":
+
+        @schunk.prefilter(DTYPE, DTYPE)
+        def pf_cframe_test_releasegil(input, output, offset):
+            called("prefilter")
+            output[:] = input
+
+    else:
+
+        @schunk.postfilter(DTYPE, DTYPE)
+        def post_cframe_test_releasegil(input, output, offset):
+            called("postfilter")
+            output[:] = input
+
+    before = calls.copy()
+    cframe = schunk.to_cframe()
+    assert calls == before
+    np.testing.assert_array_equal(read(blosc2.schunk_from_cframe(cframe, copy=True)), values)
+
+
 def test_to_cframe_postfilter(releasegil):
     # Serializing a sparse super-chunk decompresses its chunks with its dparams, postfilter included
     values = data(2 * N)
@@ -218,23 +261,51 @@ def longest_gap(func):
     return np.diff([t0, *inside, t1]).max() / (t1 - t0)
 
 
+def assert_releases_the_gil(func):
+    """func() with set_releasegil(True) must let other threads run.  Holding the GIL leaves one gap as long
+    as nearly the whole call, every time; a busy machine can delay the ticker now and then, hence a few
+    attempts (as in test_get_slice_releases_the_gil)."""
+    old = blosc2.set_releasegil(True)
+    try:
+        gaps = []
+        while len(gaps) < 5 and (not gaps or gaps[-1] >= 0.5):
+            gaps.append(longest_gap(func))
+    finally:
+        blosc2.set_releasegil(old)
+    assert gaps[-1] < 0.5, f"longest gaps, as fractions of the call: {gaps}"
+
+
+# A codec or filter registered from Python only keeps the GIL for the calls that use it
+
+
 @pytest.mark.skipif(blosc2.IS_WASM, reason="set_releasegil() does nothing on wasm32")
 def test_write_releases_the_gil_next_to_python_codecs(registered):
-    # A codec or filter registered from Python only keeps the GIL for the compressions that use it
     values = np.linspace(0, 1, 8 * 1024 * 1024, dtype=np.float32)
     schunk = blosc2.SChunk(
         chunksize=values.nbytes, cparams={"codec": blosc2.Codec.ZSTD, "clevel": 1, "nthreads": 1}
     )
-    old = blosc2.set_releasegil(True)
-    try:
-        # Holding the GIL leaves one gap as long as nearly the whole write, every time; a busy machine can
-        # delay the ticker now and then, hence a few attempts (as in test_get_slice_releases_the_gil)
-        gaps = []
-        while len(gaps) < 5 and (not gaps or gaps[-1] >= 0.5):
-            gaps.append(longest_gap(lambda: schunk.append_data(values)))
-    finally:
-        blosc2.set_releasegil(old)
-    assert gaps[-1] < 0.5, f"longest gaps, as fractions of the write: {gaps}"
+    assert_releases_the_gil(lambda: schunk.append_data(values))
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="set_releasegil() does nothing on wasm32")
+def test_decompress2_releases_the_gil_next_to_python_codecs(registered):
+    values = np.linspace(0, 1, 8 * 1024 * 1024, dtype=np.float32)
+    chunk = blosc2.compress2(values, codec=blosc2.Codec.ZSTD, clevel=1, nthreads=1)
+    assert_releases_the_gil(lambda: blosc2.decompress2(chunk, nthreads=1))
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="set_releasegil() does nothing on wasm32")
+@pytest.mark.parametrize("contiguous", [True, False])
+def test_to_cframe_releases_the_gil_next_to_python_codecs(registered, contiguous):
+    # In memory, the chunks are copied as they are.  Stored as they are (clevel 0), so that the frame is
+    # large and copying it takes a while.
+    values = np.random.default_rng(0).integers(0, 256, 64 * 1024 * 1024, dtype=np.uint8)
+    schunk = blosc2.SChunk(
+        chunksize=8 * 1024 * 1024, data=values, contiguous=contiguous, cparams={"clevel": 0}
+    )
+    del values
+    schunk.vlmeta["meta"] = "a vlmetalayer"  # decompressed and recompressed when sparse
+    assert_releases_the_gil(schunk.to_cframe)
 
 
 # The ways of writing one chunk to a super-chunk holding a chunk (or half of one, for setitem-append)
