@@ -6038,7 +6038,7 @@ def meta__len__(self):
 def meta_keys(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
     keys = []
-    for i in range(meta__len__(self)):
+    for i in range(schunk.nmetalayers):  # not meta__len__(), which would take the handle lock again
         name = schunk.metalayers[i].name.decode("utf-8")
         keys.append(name)
     return keys
