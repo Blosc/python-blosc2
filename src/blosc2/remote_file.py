@@ -3,12 +3,12 @@
 import hashlib
 import os
 import struct
-import tempfile
 import time
 import weakref
 from pathlib import Path
 
 import blosc2
+from blosc2.core import mkstemp_for_replace
 from blosc2.remote_array import RemoteMetadataMapping
 from blosc2.remote_object import RemoteObject
 
@@ -255,7 +255,7 @@ class RemoteFile(RemoteObject):
         destination = Path(destination).absolute()
         if not overwrite and destination.exists():
             raise FileExistsError(destination)
-        fd, temporary = tempfile.mkstemp(prefix=".b2view-download-", dir=destination.parent)
+        fd, temporary = mkstemp_for_replace(destination, prefix=".b2view-download-")
         try:
             with os.fdopen(fd, "wb") as file:
                 done = 0

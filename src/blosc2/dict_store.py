@@ -20,6 +20,7 @@ import numpy as np
 
 import blosc2
 from blosc2.c2array import C2Array
+from blosc2.core import mkstemp_for_replace
 from blosc2.deserialization import get_deserialize, normalize_deserialize, set_deserialize
 from blosc2.embed_store import EmbedStore
 from blosc2.info import InfoReporter
@@ -939,7 +940,9 @@ class DictStore:
         The file is written to a temporary sibling and moved onto ``filename``
         atomically: concurrent readers of an existing target see either the
         old archive or the new one, never a partial write. On Windows, the
-        final replace fails if another process holds the target open.
+        final replace fails if another process holds the target open. An
+        existing target keeps its permission bits; a new one gets the usual
+        ``0o666`` less the umask.
 
         Examples
         --------
@@ -987,10 +990,10 @@ class DictStore:
         # atomically onto the target: concurrent readers of the target see either
         # the old zip or the new one, never a torn state.  (On Windows the final
         # replace fails if another process holds the target open.)
-        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(b2z_path)), suffix=".b2z.tmp")
-        os.close(fd)
+        fd, tmp_path = mkstemp_for_replace(b2z_path, suffix=".b2z.tmp")
         try:
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+            # Through the fd: the file may already have a read-only target's mode
+            with os.fdopen(fd, "w+b") as tmp_file, zipfile.ZipFile(tmp_file, "w", zipfile.ZIP_STORED) as zf:
                 # Write all files (except estore_path) first (sorted by size)
                 for filepath in filepaths:
                     arcname = os.path.relpath(filepath, self.working_dir)
