@@ -4151,6 +4151,7 @@ cdef class SChunk:
     cdef blosc2_schunk *schunk
     cdef c_bool _is_view
     cdef readonly object _handle_lock
+    cdef object _view_owner  # owns a view's memory: an NDArray's _ArrayOwner (see NDArray.__init__)
 
     def __init__(self, _schunk=None, chunksize=2 ** 24, data=None, **kwargs):
         # Replaced by the NDArray's lock when this is an NDArray's SChunk (see NDArray.__init__)
@@ -6472,26 +6473,46 @@ cdef enum:
 cdef object _np_integer = np.integer
 
 
+@cython.no_gc_clear  # `source` must outlive the array: released only after __dealloc__
+cdef class _ArrayOwner:
+    """Frees an NDArray's b2nd array once both the NDArray and its SChunk view (NDArray.schunk) are
+    gone.  The view holds this rather than the NDArray, which holds the view: that cycle would defer
+    the free (and closing the file) to the cyclic GC."""
+    cdef b2nd_array_t *array
+    # What the array's memory points into: the base's owner for an expand_dims/squeeze view, the
+    # buffer for ndarray_from_cframe(copy=False)
+    cdef object source
+
+    def __dealloc__(self):
+        if self.array != NULL:
+            _check_rc(b2nd_free(self.array), "Error while freeing the array")
+
+
 cdef class NDArray:
     cdef b2nd_array_t* array
     cdef readonly object _handle_lock
+    cdef _ArrayOwner _owner
 
     def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
+        self._owner = _ArrayOwner()
+        self._owner.array = self.array
         self.base = base # add reference to base if NDArray is a view
         # One handle lock per C super-chunk (see _handle_locked): expand_dims/squeeze views share
         # their base's, and the SChunk wrapper over the same super-chunk (blosc2.NDArray._schunk,
-        # created before this runs) is switched to it.
+        # created before this runs) is switched to it.  The wrapper also keeps the C memory alive.
         schunk = getattr(self, "_schunk", None)
         if base is not None:
             self._handle_lock = (<NDArray?>base)._handle_lock
+            self._owner.source = (<NDArray>base)._owner
         elif schunk is not None:
             self._handle_lock = (<SChunk?>schunk)._handle_lock
         else:
             self._handle_lock = _new_handle_lock()
         if schunk is not None:
             (<SChunk?>schunk)._handle_lock = self._handle_lock
+            (<SChunk>schunk)._view_owner = self._owner
 
     @property
     def c_array(self):
@@ -7893,10 +7914,6 @@ cdef class NDArray:
         if self.array.sc.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    def __dealloc__(self):
-        if self.array != NULL:
-            _check_rc(b2nd_free(self.array), "Error while freeing the array")
-
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     if isinstance(dtype, list) and len(dtype) > 0 and isinstance(dtype[0], tuple):
@@ -8142,6 +8159,7 @@ def ndarray_from_cframe(cframe, copy=False):
     PyBuffer_Release(&buf)
     if not copy:
         ndarray._schunk._avoid_cframe_free(True)
+        (<NDArray>ndarray)._owner.source = cframe  # the frame points into its buffer
     _one_thread_for_python_callbacks(array.sc)
     return ndarray
 

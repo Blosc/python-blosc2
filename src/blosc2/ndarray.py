@@ -4292,16 +4292,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         All the attributes from the :ref:`SChunk <SChunk>` can be accessed through
         this instance as `self.schunk`.
 
-        .. warning::
-            The returned SChunk is a *view* over C memory owned by this
-            NDArray: keep the NDArray alive while using it. A schunk that
-            outlives its array reads freed memory — e.g.
-            ``blosc2.asarray(...).schunk.get_chunk(0)`` nondeterministically
-            returns ``b""`` or raises. (A keep-alive back-reference was
-            tried and reverted: the NDArray<->SChunk cycle defers
-            finalization from refcount time to GC time, exhausting file
-            descriptors and breaking the indexing machinery's
-            dropped-on-gc caches.)
+        .. note::
+            The returned SChunk is a *view* over the C super-chunk of this
+            NDArray and keeps that memory alive, so it stays valid after the
+            NDArray is gone (e.g. ``schunk = blosc2.open(urlpath).schunk``).
 
         See Also
         --------
