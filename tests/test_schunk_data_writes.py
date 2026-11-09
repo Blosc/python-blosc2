@@ -77,9 +77,9 @@ def test_data_writes(storage, releasegil):
             np.testing.assert_array_equal(got, exp)
 
 
-def test_data_writes_reach_prefilter(storage):
+def test_data_writes_reach_prefilter(storage, releasegil):
     # The prefilter computes each item from its position, so it must see the right chunk number.
-    # With the GIL held only: Python prefilters crash with set_releasegil(True).
+    # It runs Python, so the writes keep the GIL even with set_releasegil(True).
     schunk = new_schunk(storage, nthreads=1)
 
     @schunk.prefilter(np.int32, np.int32)
