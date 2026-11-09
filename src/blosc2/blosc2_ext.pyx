@@ -922,12 +922,12 @@ blosc2_init()
 
 @atexit.register
 def destroy():
-    # Daemon threads can still be inside a slice read without the GIL (see
-    # NDArray.get_slice_numpy), and blosc2_destroy() frees thread pools and plugins such a
-    # read may be using.  If they do not finish soon, leave the cleanup to the OS.
-    global _nogil_reads_blocked
-    _nogil_reads_blocked += 1
-    if _wait_for_nogil_reads(timeout=1.0):
+    # Daemon threads can still be inside a C call without the GIL (see _nogil_enter()), and
+    # blosc2_destroy() frees the global context and the thread pools such a call may be using.
+    # If they do not finish soon, leave the cleanup to the OS.
+    global _nogil_calls_blocked
+    _nogil_calls_blocked += 1
+    if _wait_for_nogil_calls(timeout=1.0):
         blosc2_destroy()
 
 
@@ -2050,6 +2050,15 @@ cdef class NativeGraphHandle:
         return result
 
 
+cdef inline int _graph_execute_sources(const void *handle, const b2_array_source *sources, int n,
+                                       const b2_array_view *destination, void *output, size_t capacity,
+                                       unsigned raise_mask, b2_graph_report *report,
+                                       b2_graph_error *error) noexcept nogil:
+    if b2_graph_output_available():
+        return b2_graph_execute_into(handle, NULL, sources, n, destination, raise_mask, report, error)
+    return b2_graph_execute_sources(handle, sources, n, output, capacity, raise_mask, report, error)
+
+
 cdef class NativeGraphSchedule:
     cdef void *_handle
 
@@ -2248,12 +2257,16 @@ cdef class NativeGraphSchedule:
                     normalized += bound.nbytes
                 owned.append(bound)
             sources[i].view.name = name
-        with nogil:
-            if b2_graph_output_available():
-                rc = b2_graph_execute_into(self._handle,NULL,sources,n,&destination,raise_mask,&report,&error)
-            else:
-                rc = b2_graph_execute_sources(self._handle, sources, n, np.PyArray_DATA(output), capacity,
-                                              raise_mask, &report, &error)
+        cdef void *output_data = np.PyArray_DATA(output)
+        # Native span readers decompress with C-Blosc2 from the graph's callbacks
+        if _nogil_enter(True):
+            with nogil:
+                rc = _graph_execute_sources(self._handle, sources, n, &destination, output_data, capacity,
+                                            raise_mask, &report, &error)
+            _nogil_exit()
+        else:
+            rc = _graph_execute_sources(self._handle, sources, n, &destination, output_data, capacity,
+                                        raise_mask, &report, &error)
         for state in states:
             if state.error is not None:
                 raise state.error
@@ -3003,15 +3016,56 @@ cdef class MenudetResidentPrefilter:
         free(self.state.workers)
         free(self.placeholder)
 
+    cdef int _schedule(self, int32_t *encoded, size_t *chunks, size_t *discarded) noexcept nogil:
+        """evaluate()'s chunk loop: adds to *chunks and *discarded, leaves the last result in *encoded and
+        returns the first error code, or 0.  The disposable prefilter ignores its scheduling source and
+        writes directly to the real sink. Borrow that same sink's valid address range as the driver: no
+        dummy input allocation or numerical copy."""
+        cdef int64_t origin = 0, live
+        cdef int32_t nbytes
+        cdef int tid, rc = 0
+        cdef blosc2_prefilter_params tail_params
+        while origin < self.count:
+            live = min(self.chunk_items, self.count - origin)
+            nbytes = <int32_t>(live * self.itemsize)
+            self.state.resident_origin = origin
+            self.state.resident_chunk_items = live
+            if live <= self.state.block_items:
+                # A single-block chunk needs no thread pool and must not
+                # let C-Blosc2's tuner shrink context->blocksize.
+                tail_params = self.parameters
+                tail_params.tid = 0
+                tail_params.nchunk = <int32_t>chunks[0]
+                tail_params.nblock = 0
+                tail_params.output = self.placeholder
+                tail_params.output_size = 0
+                menudet_menudet_prefilter(&tail_params)
+                encoded[0] = BLOSC2_MAX_OVERHEAD
+            else:
+                encoded[0] = blosc2_compress_ctx(self.context,
+                    self.state.numpy_output + origin * self.itemsize, nbytes,
+                    self.placeholder, self.placeholder_capacity)
+            chunks[0] += 1
+            if encoded[0] <= 0:
+                rc = encoded[0]
+                break
+            discarded[0] += encoded[0]
+            for tid in range(self.nworkers):
+                if self.state.workers[tid].status:
+                    rc = self.state.workers[tid].status
+                    break
+            if rc:
+                break
+            origin += live
+        return rc
+
     def evaluate(self, inputs, out=None):
         cdef np.ndarray array, output
         cdef list owned = []
         cdef int i, tid, rc = 0, active_workers = 0
-        cdef int32_t encoded = 0, nbytes
-        cdef int64_t origin = 0, live
+        cdef int32_t encoded = 0
         cdef size_t discarded = 0, chunks = 0
         cdef menudet_prefilter_worker *worker
-        cdef blosc2_prefilter_params tail_params
         if self.context == NULL:
             raise RuntimeError("Resident prefilter context is not initialized")
         if self.running:
@@ -3051,42 +3105,12 @@ cdef class MenudetResidentPrefilter:
                 worker.evaluated_blocks = 0
                 worker.output_zero_fill_bytes = 0
                 memset(&worker.error, 0, sizeof(worker.error))
-            # The disposable prefilter ignores its scheduling source and writes
-            # directly to the real sink. Borrow that same sink's valid address
-            # range as the driver: no dummy input allocation or numerical copy.
-            with nogil:
-                while origin < self.count:
-                    live = min(self.chunk_items, self.count - origin)
-                    nbytes = <int32_t>(live * self.itemsize)
-                    self.state.resident_origin = origin
-                    self.state.resident_chunk_items = live
-                    if live <= self.state.block_items:
-                        # A single-block chunk needs no thread pool and must not
-                        # let C-Blosc2's tuner shrink context->blocksize.
-                        tail_params = self.parameters
-                        tail_params.tid = 0
-                        tail_params.nchunk = <int32_t>chunks
-                        tail_params.nblock = 0
-                        tail_params.output = self.placeholder
-                        tail_params.output_size = 0
-                        menudet_menudet_prefilter(&tail_params)
-                        encoded = BLOSC2_MAX_OVERHEAD
-                    else:
-                        encoded = blosc2_compress_ctx(self.context,
-                            self.state.numpy_output + origin * self.itemsize, nbytes,
-                            self.placeholder, self.placeholder_capacity)
-                    chunks += 1
-                    if encoded <= 0:
-                        rc = encoded
-                        break
-                    discarded += encoded
-                    for tid in range(self.nworkers):
-                        if self.state.workers[tid].status:
-                            rc = self.state.workers[tid].status
-                            break
-                    if rc:
-                        break
-                    origin += live
+            if _nogil_enter(True):
+                with nogil:
+                    rc = self._schedule(&encoded, &chunks, &discarded)
+                _nogil_exit()
+            else:
+                rc = self._schedule(&encoded, &chunks, &discarded)
             menudet_prefilter_merge(&self.state)
             if self.state.status:
                 try:
@@ -3364,12 +3388,13 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFF
     cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
     cdef int filter_ = filter.value if isinstance(filter, Enum) else 0
-    if RELEASEGIL:
-        _dest = <void*> <char *> dest
+    _dest = <void*> <char *> dest
+    if _nogil_enter(RELEASEGIL):
         with nogil:
             size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
+        _nogil_exit()
     else:
-        size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
+        size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
     PyBuffer_Release(&buf)
     if size > 0:
         return dest[:size]
@@ -3541,19 +3566,17 @@ cdef c_bool _cctx_can_release_gil(blosc2_context *cctx) noexcept:
 
 cdef c_bool _can_compress_without_gil(blosc2_context *cctx) noexcept:
     """Whether compressing with `cctx` may release the GIL as set_releasegil() asks: only if no Python
-    callback can run, i.e. its prefilter, codec and filters are not Python ones.  Unlike slice reads, calls
-    without the GIL here and in _decompress_ctx() are not waited for in register_codec() and
-    register_filter(): what they register can only meet a call that started with an id nothing was
-    registered under, which is wrong anyway."""
+    callback can run, i.e. its prefilter, codec and filters are not Python ones."""
     return RELEASEGIL and _cctx_can_release_gil(cctx)
 
 cdef int _compress_ctx(blosc2_context *cctx, const void *src, int32_t srcsize, void *dest,
                        int32_t destsize) noexcept:
     """blosc2_compress_ctx(), without the GIL if _can_compress_without_gil(cctx)."""
     cdef int rc
-    if _can_compress_without_gil(cctx):
+    if _nogil_enter(_can_compress_without_gil(cctx)):
         with nogil:
             rc = blosc2_compress_ctx(cctx, src, srcsize, dest, destsize)
+        _nogil_exit()
     else:
         rc = blosc2_compress_ctx(cctx, src, srcsize, dest, destsize)
     return rc
@@ -3563,9 +3586,10 @@ cdef int _decompress_ctx(blosc2_context *dctx, const void *src, int32_t srcsize,
     """blosc2_decompress_ctx() with a context without postfilter, without the GIL if set_releasegil() asks
     and the chunk uses no codec or filter registered from Python."""
     cdef int rc
-    if RELEASEGIL and not _chunk_runs_python(<const uint8_t*>src, srcsize):
+    if _nogil_enter(RELEASEGIL and not _chunk_runs_python(<const uint8_t*>src, srcsize)):
         with nogil:
             rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, destsize)
+        _nogil_exit()
     else:
         rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, destsize)
     return rc
@@ -3601,9 +3625,10 @@ cdef int64_t _store_buffer(blosc2_schunk *schunk, _write_op op, int64_t nchunk,
     cdef int64_t rc
     if nbytes > BLOSC2_MAX_BUFFERSIZE:
         raise ValueError(f"Cannot compress more than {BLOSC2_MAX_BUFFERSIZE} bytes into one chunk")
-    if _can_compress_without_gil(schunk.cctx):
+    if _nogil_enter(_can_compress_without_gil(schunk.cctx)):
         with nogil:
             rc = _store_buffer_nogil(schunk, op, nchunk, src, <int32_t> nbytes)
+        _nogil_exit()
     else:
         rc = _store_buffer_nogil(schunk, op, nchunk, src, <int32_t> nbytes)
     return rc
@@ -3926,9 +3951,10 @@ def vlcompress(srcs, **kwargs):
         cctx = blosc2_create_cctx(cparams)
         if cctx == NULL:
             raise RuntimeError("Could not create the compression context")
-        if _can_compress_without_gil(cctx):
+        if _nogil_enter(_can_compress_without_gil(cctx)):
             with nogil:
                 size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
+            _nogil_exit()
         else:
             size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
     finally:
@@ -4170,32 +4196,54 @@ cdef class HandleLocks:
             lock.release()
 
 
-# Slice reads running without the GIL (see NDArray.get_slice_numpy), and whether new ones must
-# keep it (> 0).  Both only change with the GIL held.
-cdef int _nogil_reads = 0
-cdef int _nogil_reads_blocked = 0
+# C calls running without the GIL (see _nogil_enter()), and whether new ones must keep it (> 0).
+# Both only change with the GIL held.
+cdef int _nogil_calls = 0
+cdef int _nogil_calls_blocked = 0
 
 
-def _wait_for_nogil_reads(timeout=None):
-    """Wait until no slice read runs without the GIL; return False if `timeout` (s) ran out.
+cdef inline c_bool _nogil_enter(c_bool release) noexcept:
+    """Whether a C call may run without the GIL: if `release` (the caller's own conditions) and no
+    _wait_for_nogil_calls() caller needs such calls to stop.  If so, the call counts as running until
+    the caller, holding the GIL again, calls _nogil_exit().  Every C-Blosc2 call in this module that
+    releases the GIL goes through here, except opening a frame and lock(): nothing needs to wait for
+    them, as they run no codec or filter from Python and use neither the global context nor (unless
+    BLOSC_NTHREADS asks for it) a thread pool, and most of them can wait for another thread's frame
+    lock.  miniexpr's native graph and artifact calls reach C-Blosc2 only through native span
+    readers, so of those only NativeGraphSchedule._execute_sources_bound() counts."""
+    global _nogil_calls
+    if release and not _nogil_calls_blocked:
+        _nogil_calls += 1
+        return True
+    return False
 
-    For changes to C state that such reads use (registering a Python codec or filter, exit).
-    The caller increments `_nogil_reads_blocked` first, so that no new ones start meanwhile.
+
+cdef inline void _nogil_exit() noexcept:
+    """End a call that _nogil_enter() let run without the GIL; the caller holds the GIL again."""
+    global _nogil_calls
+    _nogil_calls -= 1
+
+
+def _wait_for_nogil_calls(timeout=None):
+    """Wait until no C call runs without the GIL; return False if `timeout` (s) ran out.
+
+    For changes to C state that such calls use (registering a Python codec or filter, exit).
+    The caller increments `_nogil_calls_blocked` first, so that no new ones start meanwhile.
     """
     deadline = None if timeout is None else time.monotonic() + timeout
-    while _nogil_reads:
+    while _nogil_calls:
         if deadline is not None and time.monotonic() > deadline:
             return False
-        time.sleep(0.0005)  # releases the GIL, so the readers can finish
+        time.sleep(0.0005)  # releases the GIL, so the calls can finish
     return True
 
 
 def _reset_after_fork():
-    # The threads that held handle locks or read without the GIL at the fork do not exist in
-    # the child, so nothing would ever release those locks there
-    global _nogil_reads, _nogil_reads_blocked
-    _nogil_reads = 0
-    _nogil_reads_blocked = 0
+    # The threads that held handle locks or ran C calls without the GIL at the fork do not exist
+    # in the child, so nothing would ever release those locks there
+    global _nogil_calls, _nogil_calls_blocked
+    _nogil_calls = 0
+    _nogil_calls_blocked = 0
     for lock in list(_all_handle_locks):
         if not lock._is_owned():
             lock._at_fork_reinit()
@@ -4272,7 +4320,8 @@ cdef class SChunk:
             create_storage(&storage, kwargs)
 
         if self.mode == "r":
-            with nogil:  # A lock holder in another thread must be able to resume.
+            # A lock holder in another thread must be able to resume; not counted (see _nogil_enter())
+            with nogil:
                 if storage.io != NULL:
                     # mmap or locking: open through the user-defined io
                     self.schunk = blosc2_schunk_open_offset_udio(storage.urlpath, 0, storage.io)
@@ -4719,11 +4768,8 @@ cdef class SChunk:
         self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
         cdef int size
         try:
-            if _cctx_can_release_gil(self.schunk.cctx):
-                with nogil:
-                    size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
-            else:
-                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
+            size = _compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf,
+                                 <int32_t> chunk_buf.len)
         finally:
             PyBuffer_Release(&buf)
             PyBuffer_Release(&chunk_buf)
@@ -4850,7 +4896,7 @@ cdef class SChunk:
         `holding_lock()` context manager instead of calling this directly.
         """
         cdef int rc
-        with nogil:  # may block waiting for other processes
+        with nogil:  # may block waiting for other processes; not counted (see _nogil_enter())
             rc = blosc2_schunk_lock(self.schunk)
         if rc < 0:
             raise RuntimeError("Could not lock the super-chunk frame")
@@ -6076,7 +6122,8 @@ def open(urlpath, mode, offset, **kwargs):
 
     if mmap_mode is None:
         io = &_locking_io if locking else NULL
-        with nogil:  # Opening can wait for another Python thread's frame lock.
+        # Opening can wait for another Python thread's frame lock; not counted (see _nogil_enter())
+        with nogil:
             if io != NULL:
                 schunk = blosc2_schunk_open_offset_udio(path, frame_offset, io)
             else:
@@ -6094,7 +6141,7 @@ def open(urlpath, mode, offset, **kwargs):
         io = <blosc2_io *>malloc(sizeof(blosc2_io))
         io.id = BLOSC2_IO_FILESYSTEM_MMAP
         io.params = mmap_file
-        with nogil:
+        with nogil:  # not counted (see _nogil_enter())
             schunk = blosc2_schunk_open_offset_udio(path, frame_offset, io)
 
     if schunk == NULL:
@@ -6273,9 +6320,10 @@ cdef schunk_to_cframe(blosc2_schunk* schunk, c_bool release_gil):
     dest.out = NULL
     dest.alloc_failed = False
     cdef int64_t cframe_len
-    if release_gil:
+    if _nogil_enter(release_gil):
         with nogil:
             cframe_len = blosc2_schunk_to_buffer_alloc(schunk, cframe_alloc, &dest)
+        _nogil_exit()
     else:
         cframe_len = blosc2_schunk_to_buffer_alloc(schunk, cframe_alloc, &dest)
     out = <object> dest.out if dest.out != NULL else None
@@ -6372,13 +6420,13 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     else:
         codec.decoder = <blosc2_codec_decoder_cb> general_decoder
 
-    # A slice read that found no Python codec could otherwise meet `decoder` without the GIL: keep
-    # new reads from releasing it and wait for those that did.  Nothing below releases the GIL
-    # before the registry is updated.
-    global _nogil_reads_blocked, _python_ids_registered
-    _nogil_reads_blocked += 1
+    # A C call that found no Python codec could otherwise meet `decoder` without the GIL: keep new
+    # calls from releasing it and wait for those that did.  Nothing below releases the GIL before
+    # the registry is updated.
+    global _nogil_calls_blocked, _python_ids_registered
+    _nogil_calls_blocked += 1
     try:
-        _wait_for_nogil_reads()
+        _wait_for_nogil_calls()
         rc = blosc2_register_codec(&codec)
         if rc < 0:
             raise RuntimeError("Error while registering codec")
@@ -6387,7 +6435,7 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
             blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
             _python_codec_ids[id] = _python_ids_registered = True
     finally:
-        _nogil_reads_blocked -= 1
+        _nogil_calls_blocked -= 1
 
 
 cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,
@@ -6452,10 +6500,10 @@ def register_filter(id, forward, backward, filter_name):
         strcpy(filter.name, filter_name_)
 
     # As in register_codec()
-    global _nogil_reads_blocked, _python_ids_registered
-    _nogil_reads_blocked += 1
+    global _nogil_calls_blocked, _python_ids_registered
+    _nogil_calls_blocked += 1
     try:
-        _wait_for_nogil_reads()
+        _wait_for_nogil_calls()
         rc = blosc2_register_filter(&filter)
         if rc < 0:
             raise RuntimeError("Error while registering filter")
@@ -6463,7 +6511,7 @@ def register_filter(id, forward, backward, filter_name):
             blosc2.ufilters_registry[id] = (forward, backward)
             _python_filter_ids[id] = _python_ids_registered = True
     finally:
-        _nogil_reads_blocked -= 1
+        _nogil_calls_blocked -= 1
 
 cdef _check_rc(rc, message):
     # Before anything else: a Python callback may have failed in the C call that gave rc
@@ -6581,9 +6629,8 @@ cdef c_bool _can_release_gil(blosc2_schunk *sc) except? False:
     """Whether decompressing from `sc` may run without the GIL, i.e. no Python callback can run on
     the way: no postfilter on its decompression context and no codec or filter registered from
     Python (any chunk could use one, whatever the super-chunk's own cparams say).  Never on wasm32,
-    where releasing the GIL is known to give wrong results (see blosc2.set_releasegil), nor while
-    _wait_for_nogil_reads() callers need the reads to stop."""
-    if _nogil_reads_blocked or blosc2.IS_WASM or blosc2.ucodecs_registry or blosc2.ufilters_registry:
+    where releasing the GIL is known to give wrong results (see blosc2.set_releasegil)."""
+    if blosc2.IS_WASM or blosc2.ucodecs_registry or blosc2.ufilters_registry:
         return False
     cdef blosc2_dparams dparams
     if sc.dctx == NULL or blosc2_ctx_get_dparams(sc.dctx, &dparams) < 0:
@@ -7013,16 +7060,14 @@ cdef class NDArray:
         callback can run on the way, so that threads reading other arrays (or other handles of the
         same file) run in parallel; everything else that uses this super-chunk holds the lock
         meanwhile."""
-        global _nogil_reads
         cdef int rc
-        if _can_release_gil(self.array.sc):
-            _nogil_reads += 1
+        if _nogil_enter(_can_release_gil(self.array.sc)):
             with nogil:
                 if into:
                     rc = b2nd_get_slice_cbuffer_into(self.array, start_, stop_, buf, buffershape_, buffersize)
                 else:
                     rc = b2nd_get_slice_cbuffer(self.array, start_, stop_, buf, buffershape_, buffersize)
-            _nogil_reads -= 1
+            _nogil_exit()
         elif into:
             rc = b2nd_get_slice_cbuffer_into(self.array, start_, stop_, buf, buffershape_, buffersize)
         else:
@@ -7145,7 +7190,13 @@ cdef class NDArray:
         # This invocation owns its context, chunk reference and destination;
         # release the GIL so independent bounded graph readers can decompress
         # concurrently instead of serializing all native source callbacks.
-        with nogil:
+        if _nogil_enter(True):
+            with nogil:
+                rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
+                                              start * self.array.sc.typesize, want_nbytes,
+                                              view.buf, view.len)
+            _nogil_exit()
+        else:
             rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
                                           start * self.array.sc.typesize, want_nbytes,
                                           view.buf, view.len)
