@@ -170,6 +170,90 @@ def test_structured_scalar_assignment():
         np.testing.assert_array_equal(array[:], expected)
 
 
+def setitem_values(sel):
+    """Values for a selection of shape `sel`: right shapes, wrong ones, broadcastable ones."""
+    n = int(np.prod(sel))
+    items = np.arange(100, 100 + n, dtype=np.int32)
+    values = [
+        items.reshape(sel),
+        items.reshape(sel[::-1]),  # transposed: wrong unless sel is symmetric
+        items,  # flat: wrong unless sel is 1-d
+        items.reshape((*sel, 1)),  # trailing 1: wrong
+        np.arange(n + 1, dtype=np.int32),  # wrong size
+        np.zeros(0, dtype=np.int32),  # wrong size
+        items.reshape((1, *sel)),  # leading 1s are ignored
+        items.reshape((1, 1, *sel)),
+        np.array([7], dtype=np.int32),  # broadcast
+        items.astype(np.float64).reshape(sel) + 0.5,  # converted
+    ]
+    if sel:
+        values.append(items.reshape((sel[0], 1, *sel[1:])))  # inner 1: wrong
+        values.append(np.arange(sel[-1], dtype=np.int32) - 9)  # broadcast along the last axis
+        values.append(np.arange(sel[-1], dtype=np.float32) + 0.5)  # broadcast and converted
+    if len(sel) > 1:
+        values.append(np.arange(sel[-2], dtype=np.int32).reshape(-1, 1) - 7)  # along the others
+    return values
+
+
+# set_slice() checks only the size of the value's buffer: values of a wrong shape and the right size
+# were written in C order, and broadcastable values raised RuntimeError
+@pytest.mark.parametrize(
+    ("shape", "chunks", "key"),
+    [
+        ((4, 6), (2, 3), (slice(0, 2), slice(0, 3))),
+        ((4, 6), (2, 3), (slice(1, 4), slice(1, 6))),
+        ((4, 6), (2, 3), Ellipsis),
+        ((4, 6), (2, 3), (0, slice(0, 3))),
+        ((4, 6), (2, 3), (slice(0, 3), 2)),
+        ((4, 6), (2, 3), (slice(0, 2), None, slice(0, 3))),
+        ((4, 6), (2, 3), (slice(0, 0), slice(0, 3))),
+        ((4, 6), (2, 3), (slice(0, 4, 2), slice(0, 3))),
+        ((4, 6), (2, 3), (slice(None, None, -1), slice(0, 6, 2))),
+        ((4, 6), (2, 3), (1, slice(5, 0, -2))),
+        ((4, 6), (2, 3), np.array([0, 3])),
+        ((4, 6), (2, 3), np.array([True, False, True, True])),
+        ((6, 8, 10), (3, 4, 5), (slice(1, 5), 2, slice(0, 10))),
+        ((40, 50), (10, 10), (slice(None), slice(None))),  # chunk-wise fill and copy
+        ((40, 50), (10, 10), (slice(5, 37), 7)),
+        ((), (), Ellipsis),
+    ],
+)
+@pytest.mark.parametrize("kind", ["numpy", "list", "NDArray"])
+def test_setitem_value_shape_like_numpy(shape, chunks, key, kind):
+    base = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+    for value in setitem_values(base[key].shape):
+        if kind == "list":
+            v = value.tolist()
+        elif kind == "NDArray" and value.size > 0:
+            v = blosc2.asarray(value)
+        else:
+            v = value
+        a = blosc2.asarray(base, chunks=chunks)
+        expected = base.copy()
+        try:
+            # Lists are taken as np.asarray() makes them (NumPy limits their dimensions)
+            expected[key] = np.asarray(v) if kind == "list" else value
+        except ValueError:
+            with pytest.raises(ValueError, match="could not broadcast"):
+                a[key] = v
+            expected = base  # nothing written
+        else:
+            a[key] = v
+        np.testing.assert_array_equal(a[()], expected, err_msg=f"value of shape {value.shape}")
+
+
+def test_setitem_lazyexpr_value_shape():
+    a = blosc2.zeros((4, 6), dtype=np.float64, chunks=(2, 3))
+    row = blosc2.asarray(np.arange(3, dtype=np.float64))
+    a[1:3, 0:3] = row + 1  # broadcast
+    expected = np.zeros((4, 6))
+    expected[1:3, 0:3] = np.arange(3) + 1
+    np.testing.assert_array_equal(a[:], expected)
+    with pytest.raises(ValueError, match="could not broadcast"):
+        a[0:3, 0:2] = blosc2.asarray(np.ones((2, 3))) * 2  # 6 items, but the wrong shape
+    np.testing.assert_array_equal(a[:], expected)
+
+
 def test_setitem_fancy_index():
     out = blosc2.zeros(10)
     idx = np.array([1, 6, 7])
