@@ -1116,6 +1116,9 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     compressed = [value for value in inputs.values() if type(value) is blosc2.NDArray]
     if len(shape) != 1 or not compressed or blosc2.IS_WASM or plan.info()["stages"] != 1:
         return None
+    # The workers decompress the inputs without the GIL
+    if any(blosc2.blosc2_ext.reads_need_python(value) for value in compressed):
+        return None
     minimum = MINIMUM_COMPRESSED_GRAPH_ITEMS if reduction else _compressed_map_minimum(inputs)
     if shape[0] < minimum:
         return None
