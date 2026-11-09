@@ -1542,7 +1542,8 @@ class SChunk(blosc2_ext.SChunk):
         * `nthreads` must be 1 when decompressing.
 
         * The :paramref:`input_dtype` itemsize must be the same as the
-          :paramref:`output_dtype` itemsize.
+          :paramref:`output_dtype` itemsize, and the typesize of the chunks:
+          decompressing a chunk with another typesize fails.
 
         See Also
         --------
@@ -1644,6 +1645,7 @@ class SChunk(blosc2_ext.SChunk):
         Notes
         -----
         * Compression `nthreads` must be 1 when using this.
+        * The :paramref:`schunk_dtype` itemsize must be the typesize of the SChunk.
         * This does not need to be removed from the created `SChunk` instance.
 
         See Also
@@ -1678,16 +1680,19 @@ class SChunk(blosc2_ext.SChunk):
                 raise ValueError("Cannot apply a filler to a non empty SChunk")
             nelem_ = blosc2_ext.nelem_from_inputs(inputs_tuple, nelem)
             super(SChunk, self)._set_filler(func, id(inputs_tuple), schunk_dtype)
-            chunksize = self.chunksize
-            written_nbytes = 0
-            nbytes = nelem_ * self.typesize
-            while written_nbytes < nbytes:
-                chunk = np.zeros(chunksize // self.typesize, dtype=schunk_dtype)
-                self.append_data(chunk)
-                written_nbytes += chunksize
-                if (nbytes - written_nbytes) < self.chunksize:
-                    chunksize = nbytes - written_nbytes
-            self.remove_prefilter(func.__name__)
+            try:
+                chunksize = self.chunksize
+                written_nbytes = 0
+                nbytes = nelem_ * self.typesize
+                while written_nbytes < nbytes:
+                    chunk = np.zeros(chunksize // self.typesize, dtype=schunk_dtype)
+                    self.append_data(chunk)
+                    written_nbytes += chunksize
+                    if (nbytes - written_nbytes) < self.chunksize:
+                        chunksize = nbytes - written_nbytes
+            finally:
+                # Also after a failed append: the filler only keeps the id of inputs_tuple
+                self.remove_prefilter(func.__name__)
 
             def exec_func(*args):
                 func(*args)
@@ -1723,7 +1728,8 @@ class SChunk(blosc2_ext.SChunk):
         * `nthreads` must be 1 when compressing.
 
         * The :paramref:`input_dtype` itemsize must be the same as the
-          :paramref:`output_dtype` itemsize.
+          :paramref:`output_dtype` itemsize, and the typesize of the SChunk:
+          compressing with another typesize fails.
 
         See Also
         --------
