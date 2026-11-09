@@ -169,7 +169,7 @@ def decompress(
     dst: NumPy object or bytearray
         The destination NumPy object or bytearray to fill,
         the length of which must be greater than 0.
-        The user must ensure it has enough capacity to hold
+        It must be writable and have enough capacity to hold
         the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
@@ -188,6 +188,8 @@ def decompress(
 
     Raises
     ------
+    BufferError
+        Raised if :paramref:`dst` is read-only, like a `bytes` object or a read-only memoryview.
     RuntimeError
         Raised if the compressed data is corrupted or the output buffer is not large enough.
         Also raised if a `bytes` object could not be obtained.
@@ -195,7 +197,7 @@ def decompress(
         Raised if :paramref:`src` does not support the Buffer Protocol.
     ValueError
         Raised if the length of :paramref:`src` is smaller than the minimum required length.
-        Also raised if `dst` is not `None` and its length is 0.
+        Also raised if `dst` is not `None` and its length is 0, or if it is a read-only NumPy array.
 
     Examples
     --------
@@ -2247,10 +2249,9 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         bytearray, memoryview, or numpy.ndarray.
     dst: NumPy object or bytearray, optional
         The destination NumPy object or bytearray to fill. The length
-        must be greater than 0. The user must ensure
-        it has enough capacity for the decompressed
-        data. Default is `None`, meaning a new bytes object
-        is created, filled and returned.
+        must be greater than 0. It must be writable and have enough
+        capacity for the decompressed data. Default is `None`,
+        meaning a new bytes object is created, filled and returned.
 
     kwargs: dict, optional
         Decompression parameters. The default values are in :class:`blosc2.DParams`.
@@ -2272,15 +2273,17 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
 
     Raises
     ------
+    BufferError
+        If :paramref:`dst` is read-only, like a `bytes` object or a read-only memoryview.
     RuntimeError
-        If the data cannot be compressed into :paramref:`dst`.
+        If the data cannot be decompressed into :paramref:`dst`.
         If an internal error occurs, likely due to an invalid parameter
         If :paramref:`dst` is `None` and a bytes object could not be created to store the result.
     TypeError
         If :paramref:`src` does not support the Buffer Protocol.
     ValueError
         If the length of :paramref:`src` is smaller than the minimum.
-        If :paramref:`dst` is not None and its length is 0.
+        If :paramref:`dst` is not None and its length is 0, or if it is a read-only NumPy array.
     """
     if kwargs is not None and "dparams" in kwargs:
         if len(kwargs) > 1:

@@ -860,8 +860,8 @@ class SChunk(blosc2_ext.SChunk):
             The index of the chunk that will be decompressed.
         dst: NumPy object or bytearray
             The destination NumPy object or bytearray to fill, the length
-            of which must be greater than 0. The user must ensure
-            that it has enough capacity to host the decompressed
+            of which must be greater than 0. It must be writable and
+            have enough capacity to host the decompressed
             chunk. Default is None, meaning that a new bytes object
             is created, filled and returned.
 
@@ -874,8 +874,12 @@ class SChunk(blosc2_ext.SChunk):
 
         Raises
         ------
+        BufferError
+            If :paramref:`dst` is read-only, like a `bytes` object or a read-only memoryview.
         RunTimeError
             If a problem is detected.
+        ValueError
+            If the length of :paramref:`dst` is 0, or if it is a read-only NumPy array.
 
         Examples
         --------

@@ -26,6 +26,7 @@ import cython
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
+    PyBUF_WRITABLE,
     PyBuffer_Release,
     PyBytes_AsString,
     PyBytes_FromStringAndSize,
@@ -3364,6 +3365,18 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFF
         raise ValueError("Cannot compress")
 
 
+cdef int32_t _checked_dst_size(Py_ssize_t dst_len, int32_t nbytes) except -1:
+    """The destsize for decompressing into a dst of `dst_len` bytes: its length, up to the INT_MAX that
+    C-Blosc2 takes.  C-Blosc2 refuses a chunk larger than destsize; this raises the documented errors first,
+    for an empty dst or one smaller than `nbytes` (the header's size of the decompressed data)."""
+    if dst_len == 0:
+        raise ValueError("The dst length must be greater than 0")
+    if dst_len < nbytes:
+        raise RuntimeError(f"The dst length ({dst_len} bytes) is smaller than the decompressed size of src "
+                           f"({nbytes} bytes)")
+    return <int32_t>min(dst_len, INT_MAX)
+
+
 def decompress(src, dst=None, as_bytearray=False):
     cdef int32_t nbytes
     cdef int32_t cbytes
@@ -3374,18 +3387,20 @@ def decompress(src, dst=None, as_bytearray=False):
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    cdef int32_t srcsize = <int32_t>min(len(typed_view_src), INT_MAX)
     cdef Py_buffer buf
     if dst is not None:
-        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
-        if buf.len == 0:
-            raise ValueError("The dst length must be greater than 0")
-        size = blosc1_decompress(<void*>&typed_view_src[0], buf.buf, buf.len)
-        PyBuffer_Release(&buf)
+        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
+        try:
+            size = blosc2_decompress(<void*>&typed_view_src[0], srcsize, buf.buf,
+                                     _checked_dst_size(buf.len, nbytes))
+        finally:
+            PyBuffer_Release(&buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc1_decompress(<void*>&typed_view_src[0], <void*> <char *> dst, len(dst))
+        size = blosc2_decompress(<void*>&typed_view_src[0], srcsize, <void*> <char *> dst, nbytes)
         if size >= 0:
             return bytearray(dst) if as_bytearray else dst
     if size < 0:
@@ -3725,20 +3740,21 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t blocksize
-    cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
+    cdef int32_t srcsize = <int32_t>min(len(typed_view_src), INT_MAX)
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef Py_buffer buf
     if dst is not None:
-        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
-        if buf.len == 0:
-            blosc2_free_ctx(dctx)
-            raise ValueError("The dst length must be greater than 0")
         view = <void*>&typed_view_src[0]
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # The decode context needs the full source buffer length.
-        size = _decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
-        blosc2_free_ctx(dctx)
-        PyBuffer_Release(&buf)
+        try:
+            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
+            try:
+                size = _decompress_ctx(dctx, view, srcsize, buf.buf, _checked_dst_size(buf.len, nbytes))
+            finally:
+                PyBuffer_Release(&buf)
+        finally:
+            blosc2_free_ctx(dctx)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
@@ -3880,14 +3896,14 @@ def vldecompress_block(src, int32_t nblock, **kwargs):
     cdef blosc2_dparams dparams
     create_dparams_from_kwargs(&dparams, kwargs)
 
-    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
-    if dctx == NULL:
-        raise RuntimeError("Could not create decompression context")
-
     cdef const uint8_t[:] typed_view_src
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', typed_view_src.nbytes)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
 
     cdef uint8_t *dest = NULL
     cdef int32_t destsize = 0
@@ -4429,7 +4445,7 @@ cdef class SChunk:
         cdef int32_t blocksize
         cdef Py_buffer buf
         if dst is not None:
-            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
+            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
             if buf.len == 0:
                 raise ValueError("The dst length must be greater than 0")
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)
