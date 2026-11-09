@@ -32,7 +32,7 @@ jobs:
       CMAKE_GENERATOR: Ninja
     steps:
       - uses: actions/checkout@v7
-      - uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@v4
         with:
           activate-environment: blosc2
           python-version: '3.12'
