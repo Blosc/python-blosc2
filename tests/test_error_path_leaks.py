@@ -118,7 +118,9 @@ def arr():
         ),
         # The index arrays and the output buffer (about 180 bytes) were leaked
         pytest.param(
-            lambda arr, path: arr.oindex[[0, 1000], [0]],
+            lambda arr, path: super(blosc2.NDArray, arr).get_oindex_numpy(
+                np.empty((2, 1), dtype=arr.dtype), [[0, 1000], [0]]
+            ),
             RuntimeError,
             "Error while getting orthogonal selection",
             64,
