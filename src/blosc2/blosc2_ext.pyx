@@ -3388,6 +3388,21 @@ cdef int32_t _checked_dst_size(Py_ssize_t dst_len, int32_t nbytes) except -1:
     return <int32_t>min(dst_len, INT_MAX)
 
 
+cdef int _blosc_decompress(const uint8_t *src, int32_t srcsize, void *dest, int32_t destsize) noexcept:
+    """blosc2_decompress(), which uses the global context and its number of threads, except for chunks that
+    can run Python code (see _chunk_runs_python()): those get a context of one thread of their own."""
+    cdef blosc2_context *dctx
+    cdef int rc
+    if not _chunk_runs_python(src, srcsize):
+        return blosc2_decompress(src, srcsize, dest, destsize)
+    dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)  # one thread
+    if dctx == NULL:
+        return BLOSC2_ERROR_MEMORY_ALLOC
+    rc = blosc2_decompress_ctx(dctx, src, srcsize, dest, destsize)
+    blosc2_free_ctx(dctx)
+    return rc
+
+
 def decompress(src, dst=None, as_bytearray=False):
     cdef int32_t nbytes
     cdef int32_t cbytes
@@ -3403,7 +3418,7 @@ def decompress(src, dst=None, as_bytearray=False):
     if dst is not None:
         PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
         try:
-            size = blosc2_decompress(<void*>&typed_view_src[0], srcsize, buf.buf,
+            size = _blosc_decompress(&typed_view_src[0], srcsize, buf.buf,
                                      _checked_dst_size(buf.len, nbytes))
         finally:
             PyBuffer_Release(&buf)
@@ -3411,7 +3426,7 @@ def decompress(src, dst=None, as_bytearray=False):
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc2_decompress(<void*>&typed_view_src[0], srcsize, <void*> <char *> dst, nbytes)
+        size = _blosc_decompress(&typed_view_src[0], srcsize, <void*> <char *> dst, nbytes)
         if size >= 0:
             return bytearray(dst) if as_bytearray else dst
     if size < 0:

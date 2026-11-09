@@ -168,18 +168,30 @@ def test_asarray_error_releases_input(missing_dir_path):
 
 def test_setitem_error_releases_value(arr):
     def call(x):
-        with pytest.raises(RuntimeError, match="Error while setting the slice"):
+        with pytest.raises((RuntimeError, ValueError)):
             arr[0:10, 0:20] = x
 
     _assert_released(lambda: np.zeros(4, dtype=np.int32), call)
 
+    def call_c(x):
+        with pytest.raises(RuntimeError, match="Error while setting the slice"):
+            arr.set_slice(([0, 0], [10, 20]), x)
+
+    _assert_released(lambda: np.zeros(4, dtype=np.int32), call_c)
+
 
 def test_oindex_setitem_error_releases_value(arr):
     def call(x):
-        with pytest.raises(RuntimeError, match="orthogonal selection"):
+        with pytest.raises((RuntimeError, IndexError)):
             arr.oindex[[0, 1000], [0, 1]] = x
 
     _assert_released(lambda: np.zeros((2, 2), dtype=np.int32), call)
+
+    def call_c(x):
+        with pytest.raises(RuntimeError, match="orthogonal selection"):
+            arr.set_oindex_numpy([[0, 1000], [0, 1]], x)
+
+    _assert_released(lambda: np.zeros((2, 2), dtype=np.int32), call_c)
 
 
 @pytest.mark.parametrize("func", [blosc2.schunk_from_cframe, blosc2.ndarray_from_cframe])
