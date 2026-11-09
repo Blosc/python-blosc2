@@ -12,6 +12,49 @@ Files migrated and executed:
 - `examples/ndarray/mandelbrot-dsl.ipynb`
 - `examples/ndarray/mandelbrot-pure-dsl.ipynb`
 
+## 2026-11-09 subsequent JIT recheck
+
+Rebuilt against the latest local miniexpr changes and reran the three M4 Pro
+notebooks using the isolated package and `blosc2` conda Python. All saved
+exactness checks pass; the literal Mandelbrot probe still confirms
+`native_partitionable=True` and `menudet-prefilter` for all Menudet backends.
+
+| Workload | Arm | Best (s) |
+|---|---|---:|
+| Black-Scholes | Numba / Menudet `cc` / `tcc` | 0.1475 / 0.2216 / 0.7980 |
+| Histogram | Numba / Menudet `cc` / `tcc` | 0.08593 / 0.06925 / 0.14483 |
+| Mandelbrot DSL (literal) | Numba / Menudet `cc` / `tcc` | 0.01956 / 0.01525 / 0.07955 |
+| Mandelbrot pure (literal) | NumPy / interpreter / `tcc` / `cc` | 1.6376 / 1.5749 / 0.08442 / 0.01599 |
+
+Histogram throughput improves 3.47x (`cc`) and 6.56x (`tcc`) over the preceding
+build; `cc` now beats Numba by 1.24x. Mandelbrot `cc` is unchanged, but TCC is
+about 41–42% slower in both notebooks. No cause is established by these
+end-to-end timings. Notebook prose and outputs reflect these results. The shared
+installation remains unchanged. The incremental build emitted Cython/generated-C
+warnings and a duplicate-library linker warning, but completed successfully.
+
+## 2026-11-09 literal-kernel recheck
+
+Rebuilt the extension against local miniexpr 95dbc24 plus the weak-local join
+and partition-proof fixes, and reran all three M4 Pro notebooks using an isolated
+package with the `blosc2` conda Python. The shared editable extension was not
+replaced. Both M4 Mandelbrot kernels now use Python literal seeds and constants.
+The matching probe reports `native_partitionable=True` and `menudet-prefilter`
+for interpreter, `cc` and `tcc`; all notebook exactness checks pass.
+
+| Workload | Arm | Best (s) |
+|---|---|---:|
+| Black-Scholes | Numba / Menudet `cc` / `tcc` | 0.1502 / 0.2222 / 0.8629 |
+| Histogram | Numba / Menudet `cc` / `tcc` | 0.0859 / 0.2405 / 0.9504 |
+| Mandelbrot DSL (literal) | Numba / Menudet `cc` / `tcc` | 0.0201 / 0.0152 / 0.0565 |
+| Mandelbrot pure (literal) | NumPy / interpreter / `tcc` / `cc` | 1.5516 / 1.6243 / 0.0593 / 0.0163 |
+
+Mandelbrot performance is restored without casts; the histogram slowdown remains
+and its cause is not established by these end-to-end measurements. First measured
+runs are not controlled cold-compilation timings: specialization and cache state
+can put preparation outside the timed region. This recheck supersedes the
+literal-partition limitation and performance claims in the historical note below.
+
 ## 2026-11-06 post-update note
 
 The M4 Pro notebooks were rerun after the miniexpr/C-Blosc2 updates (Python

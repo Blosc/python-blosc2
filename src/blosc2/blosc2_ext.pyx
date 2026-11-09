@@ -3487,17 +3487,22 @@ cdef inline c_bool _uses_python_filter(const blosc2_cparams *cparams) noexcept:
             return True
     return False
 
+cdef c_bool _cctx_can_release_gil(blosc2_context *cctx) noexcept:
+    """Whether compressing with `cctx` can run without the GIL: only if no Python callback can run,
+    i.e. its prefilter, codec and filters are not Python ones, and never on wasm32."""
+    cdef blosc2_cparams cparams
+    if blosc2.IS_WASM or cctx == NULL or blosc2_ctx_get_cparams(cctx, &cparams) < 0:
+        return False
+    return not (_prefilter_runs_python(cparams.prefilter) or _python_codec_ids[cparams.compcode]
+                or _uses_python_filter(&cparams))
+
 cdef c_bool _can_compress_without_gil(blosc2_context *cctx) noexcept:
     """Whether compressing with `cctx` may release the GIL as set_releasegil() asks: only if no Python
     callback can run, i.e. its prefilter, codec and filters are not Python ones.  Unlike slice reads, calls
     without the GIL here and in _decompress_ctx() are not waited for in register_codec() and
     register_filter(): what they register can only meet a call that started with an id nothing was
     registered under, which is wrong anyway."""
-    cdef blosc2_cparams cparams
-    if not RELEASEGIL or cctx == NULL or blosc2_ctx_get_cparams(cctx, &cparams) < 0:
-        return False
-    return not (_prefilter_runs_python(cparams.prefilter) or _python_codec_ids[cparams.compcode]
-                or _uses_python_filter(&cparams))
+    return RELEASEGIL and _cctx_can_release_gil(cctx)
 
 cdef int _compress_ctx(blosc2_context *cctx, const void *src, int32_t srcsize, void *dest,
                        int32_t destsize) noexcept:
@@ -4587,7 +4592,7 @@ cdef class SChunk:
         self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
         cdef int size
         try:
-            if _can_compress_without_gil(self.schunk.cctx):
+            if _cctx_can_release_gil(self.schunk.cctx):
                 with nogil:
                     size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
             else:
