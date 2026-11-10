@@ -4604,6 +4604,8 @@ cdef class SChunk:
         cdef int32_t cbytes
         cdef int32_t blocksize
         cdef Py_buffer buf
+        # Registration can happen after this container was opened.  Recheck before using its contexts.
+        _one_thread_for_python_callbacks(self.schunk)
         if dst is not None:
             PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE | PyBUF_WRITABLE)
             if buf.len == 0:
@@ -4782,6 +4784,7 @@ cdef class SChunk:
 
     @_handle_locked
     def get_slice(self, start=0, stop=None, out=None):
+        _one_thread_for_python_callbacks(self.schunk)
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
         start, stop, _ = slice(start, stop, 1).indices(nitems)
         if start >= stop:
@@ -7140,6 +7143,8 @@ cdef class NDArray:
         cdef int rc
         cdef int32_t lazychunk_cbytes
         cdef int32_t want_nbytes
+        # Postfilters need the GIL too, even when no Python codec/filter IDs are registered.
+        cdef c_bool can_release_gil = _can_release_gil(self.array.sc)
 
         lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
         if lazychunk_cbytes < 0:
@@ -7173,8 +7178,8 @@ cdef class NDArray:
         # teams. Zero preserves the existing caller/storage decompression policy.
         if nthreads:
             dparams.nthreads = nthreads
-        # A codec or filter registered from Python (any chunk could use one) needs the GIL, on this thread
-        if _python_ids_registered:
+        # Python codecs, filters and postfilters need the GIL, on this thread.
+        if not can_release_gil:
             dparams.nthreads = 1
         dparams.schunk = self.array.sc
         dparams.typesize = self.array.sc.typesize
@@ -7194,8 +7199,8 @@ cdef class NDArray:
         # This invocation owns its context, chunk reference and destination;
         # release the GIL so independent bounded graph readers can decompress
         # concurrently instead of serializing all native source callbacks
-        # (unless a codec or filter is registered from Python, see above).
-        if _nogil_enter(not _python_ids_registered):
+        # (unless a Python callback can run, see above).
+        if _nogil_enter(can_release_gil):
             with nogil:
                 rc = blosc2_getitem_bytes_ctx(dctx, chunk, lazychunk_cbytes,
                                               start * self.array.sc.typesize, want_nbytes,
