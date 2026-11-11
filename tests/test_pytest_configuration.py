@@ -18,7 +18,8 @@ def test_without_cache_provider(tmp_path):
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "test_smoke.py"],
         cwd=tmp_path,
-        env={**os.environ, "PYTEST_ADDOPTS": ""},
+        # This tests our conftest, not the developer's installed pytest plugins.
+        env={**os.environ, "PYTEST_ADDOPTS": "", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
         capture_output=True,
         text=True,
         timeout=30,

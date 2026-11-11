@@ -77,7 +77,8 @@ def test_blosc_nthreads_env():
     assert _import_blosc2_and_print({"BLOSC_NTHREADS": "3"}, code) == ["3"] * 4
     # C-Blosc2 reads the leading integer (strtol)
     assert _import_blosc2_and_print({"BLOSC_NTHREADS": "4abc"}, code) == ["4"] * 4
-    assert _import_blosc2_and_print({"BLOSC_NTHREADS": "2.5"}, code) == ["2"] * 4
     default = _import_blosc2_and_print({}, "print(blosc2.nthreads)")
-    for invalid in ["0", "-2", "abc", ""]:
+    # One nonpositive integer and one malformed value cover the two rejection
+    # classes; repeated strtol spellings only pay for additional package imports.
+    for invalid in ["0", "abc"]:
         assert _import_blosc2_and_print({"BLOSC_NTHREADS": invalid}, "print(blosc2.nthreads)") == default

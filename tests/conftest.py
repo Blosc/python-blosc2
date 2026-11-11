@@ -168,7 +168,7 @@ def b2z_range_reads(monkeypatch):
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _fast_textual_idle():
+def _fast_textual_idle(request):
     """Speed up the b2view (tui) tests by shrinking Textual's idle poll.
 
     Every ``pilot.pause()``/``pilot.press()`` ends in Textual's ``wait_for_idle``,
@@ -179,6 +179,9 @@ def _fast_textual_idle():
     conftest.py, because a second conftest module would shadow this one for the
     bare ``from conftest import ...`` imports other tests rely on.
     """
+    if not any(item.get_closest_marker("tui") is not None for item in request.session.items):
+        yield
+        return
     try:
         import textual._wait as textual_wait  # opt-in [tui] extra; absent otherwise
     except ImportError:

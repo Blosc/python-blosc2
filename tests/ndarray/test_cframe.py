@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 STORAGES = ["memory", "memory_contiguous", "file", "directory"]
 
@@ -81,7 +82,7 @@ def make_scalar(**kw):
 
 def make_many_chunks(**kw):
     # more than 2048 chunks: the frame offsets take several blocks
-    return blosc2.asarray(np.arange(300_000, dtype=np.int32), chunks=(100,), blocks=(100,), **kw)
+    return blosc2.asarray(np.arange(2049, dtype=np.int32), chunks=(1,), blocks=(1,), **kw)
 
 
 MAKERS = [
@@ -111,8 +112,15 @@ def check_same(a, b):
     assert b.vlmeta.getall() == a.vlmeta.getall()
 
 
-@pytest.mark.parametrize("storage", STORAGES)
-@pytest.mark.parametrize("make", MAKERS)
+@pytest.mark.parametrize(
+    ("make", "storage"),
+    [
+        *orthogonal_cases(MAKERS, STORAGES),
+        (make_many_chunks, "file"),
+        # Thousands of individual files add filesystem stress, not a new frame format.
+        pytest.param(make_many_chunks, "directory", marks=pytest.mark.heavy),
+    ],
+)
 def test_roundtrip(make, storage, tmp_path):
     a = make(**storage_kwargs(storage, tmp_path))
     cframe = a.to_cframe()
@@ -128,14 +136,16 @@ def test_roundtrip(make, storage, tmp_path):
     check_same(a, copied)
 
 
-@pytest.mark.parametrize("storage", ["memory", "file", "directory"])
-@pytest.mark.parametrize("make", MAKERS)
+@pytest.mark.parametrize(
+    ("make", "storage"),
+    orthogonal_cases(
+        [make for make in MAKERS if make is not make_many_chunks], ["memory", "file", "directory"]
+    ),
+)
 def test_reserialize(make, storage, tmp_path):
     # Arrays that are not a frame in memory get a new frame built; it must not depend on where the
     # chunks come from (special chunks are plain chunks in a sparse super-chunk, but offsets in a frame)
     a = make(**storage_kwargs(storage, tmp_path))
-    if a.schunk.nchunks > 2048:
-        pytest.skip("the offsets take several blocks, compressed by several threads in a varying order")
     cframe = a.to_cframe()
     assert blosc2.ndarray_from_cframe(cframe, copy=True).to_cframe() == cframe
     assert a.to_cframe() == cframe

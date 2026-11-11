@@ -118,14 +118,16 @@ def test_schunk(contiguous, urlpath, cparams, dparams, chunksize):
     blosc2.remove_urlpath(urlpath)
 
 
-@pytest.mark.parametrize("contiguous", [True, False])
-@pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    ("cparams", "nitems"),
+    ("contiguous", "urlpath", "cparams", "nitems"),
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, 0),
-        ({"typesize": 4}, 200 * 1000),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, 200 * 1000 * 2 + 17),
+        # Every special value sees empty, full and partial final chunks, without
+        # multiplying storage by compression settings. Keep both on-disk formats.
+        (True, None, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, 0),
+        (True, None, {"typesize": 4}, 2000),
+        (False, "b2frame", {"typesize": 4}, 2000),
+        (True, "b2frame", {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, 4017),
+        (False, None, {"typesize": 4}, 2017),
     ],
 )
 @pytest.mark.parametrize(
@@ -144,7 +146,7 @@ def test_schunk_fill_special(contiguous, urlpath, cparams, nitems, special_value
     kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams}
     blosc2.remove_urlpath(urlpath)
 
-    chunk_len = 200 * 1000
+    chunk_len = 2000
     schunk = blosc2.SChunk(chunksize=chunk_len * 4, **kwargs)
     if special_value in [blosc2.SpecialValue.ZERO, blosc2.SpecialValue.NAN, blosc2.SpecialValue.UNINIT]:
         schunk.fill_special(nitems, special_value)

@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 ndarray_mod = importlib.import_module("blosc2.ndarray")
 
@@ -75,8 +76,8 @@ SCALAR_VALUES = [
 ]
 
 
-# Retain every value/region interaction; storage and buffer budgets are independent
-# scheduling dimensions. Each value sees all four settings across the eight regions.
+# Sweep every scalar kind and region, plus mixed settings. Explicit tests below
+# own special-chunk encoding and padding; storage/budget need not multiply these.
 @pytest.mark.parametrize(
     ("dtype", "value", "key", "disk", "budget"),
     [
@@ -87,8 +88,11 @@ SCALAR_VALUES = [
             bool((value_index + region_index) % 2),
             None if (value_index // 2 + region_index // 2) % 2 == 0 else 3000,
         )
-        for value_index, (dtype, value) in enumerate(SCALAR_VALUES)
-        for region_index, key in enumerate(REGIONS)
+        for value_index, region_index in orthogonal_cases(
+            list(range(len(SCALAR_VALUES))), list(range(len(REGIONS)))
+        )
+        for dtype, value in [SCALAR_VALUES[value_index]]
+        for key in [REGIONS[region_index]]
     ],
     indirect=["budget"],
 )
@@ -204,8 +208,11 @@ SOURCES = [
             *[(False, False), (True, False), (False, True)][(source_index + region_index) % 3],
             None if ((source_index + region_index) // 3) % 2 == 0 else 3000,
         )
-        for source_index, (name, kwargs, dtype) in enumerate(SOURCES)
-        for region_index, key in enumerate(REGIONS)
+        for source_index, region_index in orthogonal_cases(
+            list(range(len(SOURCES))), list(range(len(REGIONS)))
+        )
+        for name, kwargs, dtype in [SOURCES[source_index]]
+        for key in [REGIONS[region_index]]
     ],
     indirect=["budget"],
 )
@@ -346,7 +353,8 @@ def test_astype_chunkwise(chunks, blocks, dtype):
 
 def test_astype_chunkwise_kinds(tmp_path):
     rng = np.random.default_rng(8)
-    x = rng.integers(-100, 100, size=BIG).astype(np.int64)
+    # int64 crosses asarray's 16 MiB cutoff with half as many items as float32.
+    x = rng.integers(-100, 100, size=(33, 256, 256)).astype(np.int64)
     a = blosc2.asarray(x, chunks=(16, 128, 256), blocks=(4, 32, 256))
     np.testing.assert_array_equal(blosc2.astype(a, "m8[s]")[...], x.astype("m8[s]"))
     c = blosc2.astype(a, np.complex64, urlpath=str(tmp_path / "c.b2nd"), mode="w")

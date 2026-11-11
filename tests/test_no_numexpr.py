@@ -19,7 +19,11 @@ def test_package_has_no_numexpr_import_or_requirement():
     package = Path(blosc2.__file__).parent
     imports = []
     for source in package.glob("*.py"):
-        tree = ast.parse(source.read_text(), filename=str(source))
+        text = source.read_text()
+        # Most modules cannot contain such an import; avoid constructing their ASTs.
+        if "numexpr" not in text:
+            continue
+        tree = ast.parse(text, filename=str(source))
         for node in ast.walk(tree):
             names = (
                 [alias.name for alias in node.names]

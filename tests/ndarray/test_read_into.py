@@ -11,11 +11,13 @@ import numpy as np
 import pytest
 
 import blosc2
+from conftest import orthogonal_cases
 
 SENTINEL = 77
+STORAGES = ["memory", "contiguous", "sparse", "mmap"]
 
 
-@pytest.fixture(params=["memory", "contiguous", "sparse", "mmap"])
+@pytest.fixture(params=STORAGES)
 def storage(request, tmp_path):
     kind = request.param
 
@@ -70,13 +72,17 @@ def read_and_check(b, a, key, monkeypatch):
     np.testing.assert_array_equal(out, expected)
 
 
-@pytest.mark.parametrize("key", KEYS)
+@pytest.mark.parametrize(("key", "storage"), orthogonal_cases(KEYS, STORAGES), indirect=["storage"])
 def test_keys(storage, key, monkeypatch):
     a = source((12, 9, 7), np.float32)
     read_and_check(storage(a, (5, 4, 4), (2, 2, 3)), a, key, monkeypatch)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.int16, np.uint8, np.float64, np.complex64, np.bool_])
+@pytest.mark.parametrize(
+    ("dtype", "storage"),
+    orthogonal_cases([np.float32, np.int16, np.uint8, np.float64, np.complex64, np.bool_], STORAGES),
+    indirect=["storage"],
+)
 def test_dtypes(storage, dtype, monkeypatch):
     a = source((12, 9, 7), dtype)
     read_and_check(storage(a, (5, 4, 4), (2, 2, 3)), a, (slice(1, 11), 4, slice(None)), monkeypatch)

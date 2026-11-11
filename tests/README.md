@@ -158,3 +158,35 @@ Validation in conda `blosc2`, using the configured parallel workers:
 **12,402 passed, 94 skipped, 3 xfailed in 29.76 seconds**, including module doctests.
 The legacy escape-hatch run also passed: **12,364 passed, 94 skipped, 41 xfailed
 in 29.56 seconds**. No numerical assertion or tolerance was relaxed.
+
+## Post-4.15 test-cost pass
+
+Default collection (including configured doctests) drops from **13,205 to
+12,977** cases in the local `blosc2` environment. This supersedes the chunkwise
+assignment sampling described above:
+
+- Scalar/source assignment cases sweep each value and region independently,
+  adding mixed settings with `orthogonal_cases`, rather than retaining their
+  full product. Dedicated padding, special-chunk, aliasing and buffer-budget
+  regressions are unchanged.
+- Cframe tests sample maker/storage combinations. The offsets-boundary fixture
+  uses 2,049 tiny chunks instead of 3,000 larger ones. Byte-for-byte reserialization
+  no longer builds that fixture only to skip it. Its directory-storage stress
+  case remains available with `pytest -m heavy tests/ndarray/test_cframe.py`;
+  memory and contiguous-file offsets-boundary roundtrips remain in the default suite.
+- `read_into` retains every key, dtype and storage kind without crossing every
+  key/dtype with every storage. Strided output and resize regressions are unchanged.
+- Special-value SChunk construction keeps every value with empty, full and
+  partial final chunks, rotating storage/compression settings and using smaller
+  chunks. The int64 chunkwise-cast fixture is halved but still exceeds the
+  16 MiB dispatch threshold.
+- NumExpr import checks prefilter source text before parsing ASTs. Nested pytest
+  disables third-party plugin autoload, non-TUI sessions avoid the Textual idle
+  patch import, and thread-environment checks avoid redundant `strtol` spellings.
+
+Crash/deadlock subprocess isolation, GIL/thread combinations, stress repetitions,
+numerical assertions and tolerances are unchanged.
+
+Validation in conda `blosc2`: **12,865 passed, 109 skipped, 3 xfailed in
+32.74 seconds**, versus 34.81 seconds before this pass on the same machine.
+The opt-in directory cframe stress case also passes. Ruff lint/format checks pass.
