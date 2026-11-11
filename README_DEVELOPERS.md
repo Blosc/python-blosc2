@@ -10,6 +10,16 @@ the commands are shown side-by-side where they differ.
 
 ### Clone and install (editable)
 
+On macOS, install the Xcode Command Line Tools before running the installation
+commands below (unless they are already installed). They provide the compiler
+needed to build the native extension:
+
+```bash
+xcode-select --install
+```
+
+Wait for the installation to finish before continuing.
+
 ```bash
 git clone https://github.com/Blosc/python-blosc2/
 cd python-blosc2
