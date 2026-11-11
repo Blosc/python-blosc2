@@ -153,7 +153,7 @@ single whole-column call rather than a per-row Python loop. Add a `for` or
 shape can only be compiled, not traced.
 
 An `if`, on the other hand, is fine. `row["colname"]` references are rewritten
-into named parameters, so the function is compiled as a DSL kernel and every
+into named parameters, so the function is compiled as a Menudet kernel and every
 branch runs:
 
 ```python
@@ -171,7 +171,7 @@ df.apply(format_room_info, axis=1, engine=blosc2.jit)
 ```
 
 String columns work here, and so do `.lower()`, `.removesuffix()` and
-`str.split(sep, 1)` with tuple unpacking — they are lowered to the DSL's
+`str.split(sep, 1)` with tuple unpacking — they are lowered to Menudet's
 function-call grammar for you. Two things to know:
 
 - A string local's width is fixed by its first assignment, so reassigning it
@@ -190,12 +190,12 @@ plain `if` on column values has nothing to look at and raises `ValueError: The
 truth value of an array ... is ambiguous`. Use `np.where`, or write the
 function so it compiles instead — see below.
 
-**Real `if`/`for`/`while` works, if the function fits the DSL.** When your
+**Real `if`/`for`/`while` works, if the function fits Menudet.** When your
 function branches or loops over column values *and* fits Blosc2's
-[DSL grammar](../reference/dsl_syntax.md), it is compiled and runs as written,
+[Menudet grammar](../reference/dsl_syntax.md), it is compiled and runs as written,
 branches and all — that is what makes the Kepler kernel above possible. If it
 doesn't fit the grammar, it silently falls back to tracing (hence the
-`ValueError`); if it looks DSL-shaped but calls an unsupported function, you
+`ValueError`); if it looks Menudet-shaped but calls an unsupported function, you
 get a `RuntimeError` naming it.
 
 **`np.where` evaluates both arms.** Both branches are computed over the whole
@@ -204,7 +204,7 @@ see — negative bases, divisions by zero, `RuntimeWarning`s. The answer is
 still correct, but clamp each arm to its own domain (as `yeo_johnson` does
 with `np.maximum`) to keep the noise and wasted work away.
 
-**Don't put a reduction inside per-element control flow.** In a DSL kernel,
+**Don't put a reduction inside per-element control flow.** In a Menudet kernel,
 `sum`/`max`/`min` collapse the whole block being evaluated to a single value,
 not one per row. So `if max(abs(diff)) < 1e-12: break` compiles, runs, and
 silently gives wrong results for every row but the first. Write the

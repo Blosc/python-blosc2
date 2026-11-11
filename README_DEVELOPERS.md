@@ -109,6 +109,16 @@ LD_LIBRARY_PATH=/usr/local/lib pytest
 
 (Replace `LD_LIBRARY_PATH` with `DYLD_LIBRARY_PATH` on macOS or `PATH` on Windows.)
 
+### Using a local checkout of miniexpr
+
+When developing or debugging features in `miniexpr` simultaneously, you can point CMake to your local clone using CMake's standard `FETCHCONTENT_SOURCE_DIR_<name>` mechanism:
+
+```bash
+CMAKE_ARGS="-DFETCHCONTENT_SOURCE_DIR_MINIEXPR=$(pwd)/../miniexpr" pip install -e . --no-build-isolation
+```
+
+Alternatively, uncomment `# SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr` in `CMakeLists.txt`.
+
 ### Speeding up local builds (sccache + Ninja)
 
 If you do frequent local rebuilds, sccache can significantly speed up C/C++ rebuilds.

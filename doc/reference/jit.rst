@@ -151,14 +151,15 @@ JIT is best effort
 If TCC or the explicitly selected system compiler cannot compile or load a
 kernel, miniexpr evaluates it with its interpreter instead. This also applies
 when SELinux or another operating-system policy denies executable mappings.
-Fallback is quiet by default and may be slower. Invalid arguments, invalid DSL
+Fallback is quiet by default and may be slower. Invalid arguments, invalid Menudet
 syntax, unsupported backend names, and genuine computation errors still raise
 their normal errors.
 
 Successful array creation alone is not evidence that JIT ran. Use
 ``ME_DSL_TRACE=1`` to inspect runtime compilation, cache reuse, and fallback, or
-:func:`blosc2.validate_dsl_jit` to probe a DSL kernel for specific input/output
-dtypes. The latter probes compilation, not execution on real data.
+check the ``has_jit`` attribute on a prepared :class:`blosc2.MenudetKernel`.
+The legacy helper :func:`blosc2.validate_dsl_jit` remains available for backward
+compatibility.
 
 Per-call controls
 -----------------
@@ -188,7 +189,7 @@ the JIT keywords; use ``blosc2.jit_options(jit=True)`` or
 retain their existing native default behavior.
 
 Scalar miniexpr reductions currently use the native interpreter, even when JIT
-is requested. Elementwise DSL returns (including automatically lifted expressions)
+is requested. Elementwise Menudet returns (including automatically lifted expressions)
 write a block of values and cannot safely target a single reduction accumulator.
 Other execution options still apply, and non-scalar reduction paths retain their
 usual evaluation policies.
@@ -201,7 +202,7 @@ usual evaluation policies.
 
 ``jit=True``
     Prefer JIT for eligible computations. Plain expressions can be automatically
-    lifted into DSL kernels. Interpreter fallback remains available.
+    lifted into Menudet kernels. Interpreter fallback remains available.
 
 ``jit=False``
     Disable JIT for the computation. Applicable environment overrides are
@@ -215,7 +216,7 @@ usual evaluation policies.
 
 ``jit_backend=None`` (default)
     Use the default backend: TCC on supported native targets. Under
-    WebAssembly/Pyodide, eligible floating-point DSL kernels prefer the JavaScript
+    WebAssembly/Pyodide, eligible floating-point Menudet kernels prefer the JavaScript
     backend unless ``jit=False`` or ``strict_miniexpr=True`` is specified.
 
 ``jit_backend="tcc"``
@@ -233,7 +234,7 @@ usual evaluation policies.
     loading executable shared libraries. Compiled libraries and metadata persist
     for reuse by subsequent processes. Compiler absence, compilation failure,
     cache failure, or denied library loading falls back to the interpreter.
-    For a plain expression, also set ``jit=True`` to request DSL auto-lifting.
+    For a plain expression, also set ``jit=True`` to request Menudet auto-lifting.
 
 ``jit_backend="js"``
     Select the JavaScript bridge, available only under WebAssembly/Pyodide.

@@ -85,7 +85,7 @@ There are two routes the {func}`@blosc2.jit <blosc2.jit>` decorator can take bec
 - **No control flow → tracing (the default).** `jit` calls your function once with proxy operands, records the `LazyExpr` it builds, and evaluates that expression *vectorized* over whole chunks. This is the faster route for plain elementwise math.
 - **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. When `jit` sees supported control flow, it uses the native Menudet route. Use {func}`@blosc2.menudet <blosc2.menudet>` for explicit portable kernel authoring.
 
-In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md).
+In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [Menudet grammar](../reference/dsl_syntax.md).
 
 ### An example: Mandelbrot escape times
 
@@ -132,9 +132,9 @@ Operands may equally be on-disk {class}`~blosc2.NDArray` objects: the same kerne
 
 #### Gotcha: silent fallback to tracing
 
-The DSL grammar is narrower than Python, and a body that misses it falls back to tracing *silently* — you only find out when the call fails. For example, the tuple assignment `zr, zi = ...` of the Python reference is not valid DSL program; that is why the jit version uses a `zr2` temporary.
+The Menudet grammar is narrower than Python, and a body that misses it falls back to tracing *silently* — you only find out when the call fails. For example, the tuple assignment `zr, zi = ...` of the Python reference is not a valid Menudet program; that is why the jit version uses a `zr2` temporary.
 
-The [DSL syntax reference](../reference/dsl_syntax.md) has the full grammar. To turn that silent fallback into a hard error, decorate with `@blosc2.jit(strict=True)`: it forces the DSL route and raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled.
+The [Menudet syntax reference](../reference/dsl_syntax.md) has the full grammar. To turn that silent fallback into a hard error, decorate with `@blosc2.jit(strict=True)`: it forces the compiled route and raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled. For new code requiring portable, validated kernels, author with {func}`@blosc2.menudet <blosc2.menudet>` directly.
 
 The opposite knob, `strict=False`, forces tracing even when there is control flow. On this function it fails loudly — tracing evaluates `if zr * zr + zi * zi > 4.0` on an array, which raises `ValueError`. The dangerous case is a branch on a plain Python value instead (say `if max_iter > 100`): tracing records only the path that one call happened to take, and that path is then reused for every element, quietly. So use `strict=False` only when the branches depend on Python values, never on the arrays.
 
@@ -145,7 +145,7 @@ If compiling the whole function is this good, why doesn't `jit` do it for everyt
 Here is a heavy elementwise mix of transcendental functions:
 
 ```python
-@blosc2.jit  # using jit(strict=True) forces the DSL route
+@blosc2.jit  # using jit(strict=True) forces the Menudet route
 def heavy(x):
     return (
         np.sin(x)
@@ -158,11 +158,11 @@ def heavy(x):
 
 Measured over 8M float32 values:
 
-![Elementwise: tracing vs forced DSL](optim_tips/tip_15b_jit_elementwise.png)
+![Elementwise: tracing vs forced Menudet](optim_tips/tip_15b_jit_elementwise.png)
 
-The first bar is the same expression in plain NumPy, as a scale anchor: all three jit routes beat it — the traced default by **~3.2x**, and even the slowest of them, the forced DSL kernel on tcc, by ~2.3x.
+The first bar is the same expression in plain NumPy, as a scale anchor: all three jit routes beat it — the traced default by **~3.2x**, and even the slowest of them, the forced Menudet kernel on tcc, by ~2.3x.
 
-Among the three, the default `@blosc2.jit` (which traces) is the faster route here: forcing the DSL route with `strict=True` is **~1.37x slower** with the bundled tcc, and gets close to tracing when compiled with `jit_backend="cc"` (still ~1.07x slower; the plot shows the exact times). Note that `jit_backend="cc"` alone does *not* switch an elementwise function to the compiled route; it keeps tracing, at the same speed.
+Among the three, the default `@blosc2.jit` (which traces) is the faster route here: forcing the Menudet route with `strict=True` is **~1.37x slower** with the bundled tcc, and gets close to tracing when compiled with `jit_backend="cc"` (still ~1.07x slower; the plot shows the exact times). Note that `jit_backend="cc"` alone does *not* switch an elementwise function to the compiled route; it keeps tracing, at the same speed.
 
 So, use `strict=True` when you want the compiled-kernel guarantee; but be aware that usually it may cost you speed.
 

@@ -23,11 +23,11 @@ vexpr = blosc2.sin(blosc2.linspace(0.0, 2 * np.pi, shape=shape, dtype=np.float64
 v = vexpr.compute(urlpath="v.b2nd", mode="w")
 
 
-# ── DSL kernel: one explicit Jacobi-style stencil step ──────────────
+# ── Menudet kernel: one explicit Jacobi-style stencil step ──────────────
 # `u` holds the current temperature field; `v` is a source/sink term.
 # The kernel operates element-wise on flat chunks; index-based
 # neighbour access is intentionally avoided here so the expression
-# stays in the simple DSL subset that miniexpr can JIT.
+# stays in the simple Menudet subset that miniexpr can JIT.
 @blosc2.menudet
 def heat_step(u, v):
     # Weighted blend: 0.25*(left+right+up+down) approximated element-wise

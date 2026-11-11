@@ -30,6 +30,8 @@ Python-Blosc2 is a high-performance compressor, compute engine, and format for b
 
 `C-Blosc2 <https://www.blosc.org/c-blosc2/c-blosc2.html>`_ is used under the hood as its compression backend. Written in C, and building on its predecessor `C-Blosc <https://github.com/Blosc/c-blosc>`_, C-Blosc2 aims to be an extremely fast meta-compressor for binary data, supporting a diverse set of strategies, and with an extensible plugin architecture for a wide range of codecs and filters.
 
+`miniexpr <https://github.com/Blosc/miniexpr>`_ is embedded as the compute engine backend. It delivers fast multithreaded evaluation for lazy expressions directly over compressed chunks, and powers **Menudet**—a little language for portable, JIT-accelerated array and table kernels that serialize as architecture-independent computational artifacts.
+
 More info: https://www.blosc.org/python-blosc2/getting_started/overview.html
 
 Installing

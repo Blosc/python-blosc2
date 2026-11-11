@@ -10,7 +10,7 @@ from blosc2.lazyexpr import LazyArray
 
 
 def menudet_from_lazyudf(obj):
-    """Preflight a newly authored DSL recipe without executing it or touching storage."""
+    """Preflight a newly authored Menudet recipe without executing it or touching storage."""
     from blosc2.dsl_kernel import SourceKernel as DSLKernel
     from blosc2.menudet_kernel import MenudetError, MenudetKernel
 

@@ -34,10 +34,12 @@ for arbitrary untrusted source or data.
 Specifications
 --------------
 
-For the full language and format contracts, see miniexpr's specifications:
+For the full language, format, and grammar contracts, see miniexpr's canonical documentation:
 
-* `Menudet 0.1 language specification <https://github.com/Blosc/miniexpr/blob/6413c800984ff1b8c63953e336b3b8b245b1c3a5/doc/dsl-spec/0.1.md>`_
-* `Menudet 0.1 artifact specification <https://github.com/Blosc/miniexpr/blob/6413c800984ff1b8c63953e336b3b8b245b1c3a5/doc/dsl-spec/artifact-0.1.md>`_
+* `Menudet introduction & portability model <https://github.com/Blosc/miniexpr/blob/main/doc/menudet-intro.md>`_
+* `Menudet canonical syntax reference <https://github.com/Blosc/miniexpr/blob/main/doc/menudet-syntax.md>`_
+* `Menudet 0.1 language specification <https://github.com/Blosc/miniexpr/blob/main/doc/dsl-spec/0.1.md>`_
+* `Menudet 0.1 artifact specification <https://github.com/Blosc/miniexpr/blob/main/doc/dsl-spec/artifact-0.1.md>`_
 
 API
 ---

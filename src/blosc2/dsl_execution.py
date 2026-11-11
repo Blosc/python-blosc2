@@ -1,4 +1,4 @@
-"""Execute source-authored LazyUDF recipes using the Menudet Menudet runtime."""
+"""Execute source-authored LazyUDF recipes using the Menudet runtime."""
 
 import copy
 import os

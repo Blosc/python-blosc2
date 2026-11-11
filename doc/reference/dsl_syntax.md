@@ -2,7 +2,14 @@
 
 Use `@blosc2.menudet` for portable array kernels. See the
 [guide](../guides/menudet.rst) for usage and the [API reference](menudet.rst) for
-options. The old DSL interface is retired; see the
+options.
+
+> **Canonical specification**: The single source of truth for the Menudet language
+> grammar, statements, pragmas, and operator semantics is maintained in
+> [miniexpr's Menudet syntax reference](https://github.com/Blosc/miniexpr/blob/main/doc/menudet-syntax.md).
+> This document highlights the Python-Blosc2 authoring bindings and conventions.
+
+The old DSL interface is retired; see the
 [migration guide](../guides/migrating_to_menudet.rst).
 
 ## Quick start
@@ -177,6 +184,8 @@ untrusted source or data.
 
 ## Further reading
 
+- [Canonical Menudet syntax reference](https://github.com/Blosc/miniexpr/blob/main/doc/menudet-syntax.md): complete grammar, statements, pragmas, and expressions.
+- [Menudet introduction & portability model](https://github.com/Blosc/miniexpr/blob/main/doc/menudet-intro.md): language goals, 4 dimensions of portability, and crash-proof safety.
 - [Menudet user guide](../guides/menudet.rst): authoring, persistence and table integration.
 - [API reference](menudet.rst): decorators, kernels and validation.
 - [Numerical behavior](menudet_accuracy.md): typing, conversions and accuracy.

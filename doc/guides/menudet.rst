@@ -82,6 +82,24 @@ use ``@menudet(jit=True)`` or a ``blosc2.jit_options(jit=True)`` context to pref
 JIT, and ``require_jit=True`` to require it. Interpretation is still native
 Menudet execution, not evaluation of the Python body.
 
+Menudet kernels vs. LazyExpr execution plans
+--------------------------------------------
+
+It is helpful to understand how Menudet kernels fit into Blosc2's compute architecture:
+
+* **Menudet (:func:`@blosc2.menudet`, :class:`blosc2.MenudetKernel`)**:
+  This is the *kernel language* for expressing transformations on small, cache-friendly blocks
+  or partitions. Menudet focuses on local computations: elementwise arithmetic, multi-statement
+  branching, and block-level reductions. It compiles to a standalone JSON computational artifact
+  that can be saved, inspected, or executed across platforms without Python.
+
+* **Lazy expressions & computational graphs (:class:`blosc2.LazyExpr`)**:
+  This is the *dataset-level execution engine*. When you compute with whole Blosc2 arrays,
+  a native computational graph (an execution plan managed by ``miniexpr``) orchestrates the
+  computation across entire multidimensional datasets. It streams compressed chunks, manages
+  memory buffers via read hooks, and performs axis reductions. Inside this graph execution plan,
+  individual stage operations are evaluated as Menudet kernels.
+
 Types and scalar arguments
 --------------------------
 

@@ -5875,7 +5875,7 @@ class LazyExpr(LazyArray):
 
 
 def _align_dsl_operand_grids(inputs):
-    """Put every NDArray operand of a DSL kernel on a single chunks/blocks grid.
+    """Put every NDArray operand of a Menudet kernel on a single chunks/blocks grid.
 
     Blocks are sized in bytes, so same-shaped operands of different itemsize get
     different grids by default (float32 vs int64 over 1M elements: blocks of
@@ -5906,7 +5906,7 @@ def _align_dsl_operand_grids(inputs):
 
 
 def _dsl_kernel_string_dtype(func, inputs):
-    """Output dtype of a string-returning DSL kernel, per miniexpr.
+    """Output dtype of a string-returning Menudet kernel, per miniexpr.
 
     Returns None when the kernel is not string-valued or miniexpr cannot type
     it, leaving the existing dtype handling in charge.
