@@ -33,6 +33,8 @@ miniexpr 0.3.1, and faster frame serialization for containers with postfilters.
   to 3.6.1 and miniexpr to 0.3.1. ``blosc2.print_versions()`` now also reports
   the compiled miniexpr version.
 
+Special thanks to Fabian Isensee for his outstanding contributions!
+
 Install it with::
 
     pip install blosc2 --upgrade   # if you prefer wheels
