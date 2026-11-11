@@ -103,15 +103,18 @@ Checking packaging
     pip install blosc2 -U
     pytest
 
-* Do an actual release in GitHub by visiting:
-  https://github.com/Blosc/python-blosc2/releases/new
-  Add the notes specific for this release.
-
 * Check the wasm32 wheels have been updated in the ``wheels`` branch correctly.
   Go to https://cat2.cloud/demo, login and check that the first cell in any of
   the notebooks runs correctly - this means the wheels have been deployed to
   GitHub Pages successfully. The printed output should also show the correct
   version number for the version you have just published.
+
+GitHub release
+--------------
+
+* Do an actual release in GitHub by visiting:
+  https://github.com/Blosc/python-blosc2/releases/new
+  Add the notes specific for this release.
 
 Announcing
 ----------
