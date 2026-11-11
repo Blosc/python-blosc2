@@ -1,40 +1,37 @@
-Announcing Python-Blosc2 4.14.1
+Announcing Python-Blosc2 4.15.0
 ===============================
 
-Python-Blosc2 4.14.1 is a security and feature release introducing safe
-persisted-object deserialization by default, Caterva2 remote stores and tables,
-compressed slicing for ``RemoteArray``, and performance optimizations for
-expression gather operations.
+Python-Blosc2 4.15.0 is a major feature release introducing Menudet 0.1 beta
+(a little language for portable computation on arrays and tables), typed
+ordinary-expression evaluation by default, bundled C-Blosc2 3.6.1 and
+miniexpr 0.3.1, and faster frame serialization for containers with postfilters.
 
-- **Safe persisted-object deserialization by default.** Persisted-input APIs
-  (``blosc2.open()``, ``blosc2.load()``, ``blosc2.from_cframe()``, CFrame
-  constructors, store traversal, and CTable variable-length/batch columns) now
-  default to ``deserialize="safe"``. Safe mode accepts passive MessagePack
-  values but rejects embedded objects, references, remote/source descriptors,
-  proxies, and lazy recipes before reconstruction. Trusted callers wishing to
-  deserialize rich values must pass ``deserialize="full"`` explicitly; blocked
-  values raise the new public ``blosc2.UnsafeDeserializationError``.
+- **Introducing Menudet 0.1 beta.** Menudet is a little language for portable
+  computation on arrays and tables. Use ``@blosc2.menudet`` (``MenudetFunction``)
+  for decorated authors, ``MenudetKernel`` for executable specializations,
+  ``MenudetError`` for errors, and ``validate_menudet`` for source validation.
+  Export normalized Menudet authoring as validated, standalone JSON artifacts with
+  typed signatures and exact captured constants. Native miniexpr executes imports
+  without reconstructing Python functions or falling back to Python. Supports
+  checked integer arithmetic, operand-typed floating computation, control flow,
+  fixed-width strings, logical array coordinates, and ordered block reductions.
 
-- **Caterva2 remote stores and tables.** Caterva2 groups and dataset tables can
-  now be opened via ``blosc2.open()`` as ``RemoteStore`` and ``RemoteCTable``
-  respectively. Caterva2 tables support on-demand reading, bounded row slices,
-  column projection (``select()``), iteration, and materialization. Large row
-  slices and materialization fetch data in bounded batches to limit peak memory
-  usage, with ``materialize(urlpath=...)`` streaming batches directly to disk.
-  Authentication tokens are bound at open time and disk caches are partitioned
-  per token for multi-tenant isolation.
+- **Typed ordinary-expression evaluation by default.** Ordinary lazy expressions
+  now default to typed native execution where admitted, with bounded
+  typed-graph/NumPy fallback otherwise. Intermediate computation dtypes remain
+  separate from output and reduction accumulator dtypes. Unsupported typed
+  execution never silently retries through the uniform evaluator after numerical
+  execution starts.
 
-- **Compressed slicing for ``RemoteArray``.** Added ``RemoteArray.slice()`` to
-  extract a slice selection directly as an independent compressed ``NDArray``
-  without materializing an uncompressed NumPy array intermediate. Custom
-  compression parameters (``cparams``) can be passed directly, and fetching,
-  construction, and cache eviction are serialized into a single atomic operation
-  allowing slices larger than the cache quota.
+- **Serializing containers with a postfilter.** ``SChunk.to_cframe()`` and
+  ``NDArray.to_cframe()`` now return stored chunks for every storage, also when a
+  postfilter is set. Containers with a prefilter or postfilter no longer
+  decompress and recompress every chunk during ``to_cframe()``, dramatically
+  improving serialization performance.
 
-- **Expression gather performance optimization.** Avoided zero-initializing
-  full NumPy input blocks in ``miniexpr`` gather operations, as full blocks are
-  overwritten byte-for-byte by raw NumPy gather (#728). Only partial edge blocks
-  retain zero-padding. Contributed by Johnny Kao (@Johnny-Kao).
+- **Bundled C-Blosc2 and miniexpr updates.** Bundled C-Blosc2 has been updated
+  to 3.6.1 and miniexpr to 0.3.1. ``blosc2.print_versions()`` now also reports
+  the compiled miniexpr version.
 
 Install it with::
 

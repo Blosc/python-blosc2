@@ -1,6 +1,6 @@
 # Release notes
 
-## Changes from 4.14.2 to 4.15.0 (in development)
+## Changes from 4.14.2 to 4.15.0
 
 ### Typed ordinary-expression evaluation by default
 
@@ -118,9 +118,7 @@ interpreter on all supported platforms. Callbacks and arbitrary memory access
 remain outside the language contract.
 
 See the [Menudet reference](https://www.blosc.org/python-blosc2/reference/menudet.html)
-for array/table examples, persistence policy and current limitations. Release
-certification is tracked separately; this development entry is not an announcement
-that 4.15.0 has been published.
+for array/table examples, persistence policy and current limitations.
 
 ### Serializing containers that have a postfilter
 
@@ -138,6 +136,12 @@ that 4.15.0 has been published.
   prefilter or a postfilter, `to_cframe()` no longer decompresses and recompresses
   every chunk, which makes it much faster. This comes with the bundled C-Blosc2
   (Blosc/c-blosc2#858).
+
+### Bundled libraries and other improvements
+
+- Bundled C-Blosc2 updated to 3.6.1.
+- Bundled miniexpr updated to 0.3.1.
+- Report the compiled miniexpr version in `blosc2.print_versions()`.
 
 ## Changes from 4.14.1 to 4.14.2
 
