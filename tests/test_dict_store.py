@@ -167,6 +167,31 @@ def test_extensionless_store_is_a_directory(tmp_path):
     assert np.array_equal(opened["/node1"][:], np.arange(4))
 
 
+@pytest.mark.parametrize(("suffix", "store_type"), [("b2z", blosc2.TreeStore), ("b2d", blosc2.DictStore)])
+def test_open_store_written_by_4_0_0(tmp_path, suffix, store_type):
+    # A DictStore written by 4.0.0 (no b2dict marker yet) with an embedded leaf,
+    # an external one and a nested key; it opens by its extension, as in 4.0.0
+    fixture = pathlib.Path(__file__).parent / "data" / "legacy_store_v4.0.0" / "dictstore.b2z"
+    path = tmp_path / f"legacy.{suffix}"
+    if suffix == "b2z":
+        shutil.copy(fixture, path)
+    else:  # the same members, unzipped
+        with zipfile.ZipFile(fixture) as zf:
+            zf.extractall(path)
+    expected = {
+        "/embedded": np.arange(12, dtype="<i4").reshape(3, 4),
+        "/external": np.arange(20_000, dtype="<i4"),
+        "/group/leaf": np.linspace(0, 1, 5, dtype="<f4"),
+    }
+
+    # The default mode, then "a" (a .b2z is written back on close), then again
+    for kwargs in ({}, {"mode": "a"}, {"mode": "r"}):
+        with blosc2.open(str(path), **kwargs) as store:
+            assert type(store) is store_type
+            for key, value in expected.items():
+                np.testing.assert_array_equal(store[key][:], value)
+
+
 def test_to_b2z_from_readonly_b2d():
     b2d_path = "test_to_b2z_from_readonly.b2d"
     b2z_path = "test_to_b2z_from_readonly.b2z"

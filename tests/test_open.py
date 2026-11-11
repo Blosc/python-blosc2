@@ -253,6 +253,19 @@ def test_open_schunk_context_manager(tmp_path):
         assert schunk[:] == data.tobytes()
 
 
+def test_open_non_utf8_metalayer_name(tmp_path):
+    # Metalayer names are bytes in C-Blosc2; one that is not UTF-8 must not keep a container from opening
+    urlpath = tmp_path / "array.b2nd"
+    blosc2.zeros((10,), dtype=np.int32, urlpath=urlpath, mode="w", meta={b"\xff\xfename": 1})
+    arr = blosc2.open(urlpath)
+    assert isinstance(arr, blosc2.NDArray)
+    np.testing.assert_array_equal(arr[:], np.zeros(10, dtype=np.int32))
+
+    urlpath = tmp_path / "schunk.b2frame"
+    blosc2.SChunk(chunksize=40, urlpath=urlpath, mode="w", contiguous=True, meta={b"\xffname": 1})
+    assert isinstance(blosc2.open(urlpath), blosc2.SChunk)
+
+
 # open(..., cparams=...) of an existing container updates the stored compression parameters
 
 

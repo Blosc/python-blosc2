@@ -34,6 +34,30 @@ def test_objectarray_cframe_defaults_safe(durable_ref):
     assert trusted[0] == durable_ref
 
 
+@pytest.mark.parametrize(
+    ("constructor", "mode"),
+    [
+        ("arange(4, dtype='i2')", "safe"),
+        ("fromiter(range(4), shape=(4,), dtype='int32')", "full"),
+    ],
+)
+def test_saved_constructor_expression_policy(tmp_path, constructor, mode):
+    values = np.arange(4, dtype="int32")
+    operand = blosc2.asarray(values, urlpath=tmp_path / "operand.b2nd", mode="w")
+    expression = f"a + {constructor}"
+    if mode == "full":
+        with pytest.raises(blosc2.UnsafeDeserializationError, match="'range'"):
+            blosc2.lazyexpr(expression, {"a": operand}, evaluation="safe")
+    expr = blosc2.lazyexpr(expression, {"a": operand}, evaluation=mode)
+    path = tmp_path / "expression.b2nd"
+    expr.save(path)
+    if mode == "full":
+        with pytest.raises(blosc2.UnsafeDeserializationError, match="'range'"):
+            blosc2.open(path)
+    restored = blosc2.open(path, deserialize=mode)
+    np.testing.assert_array_equal(restored[:], values * 2)
+
+
 def test_batcharray_cframe_defaults_safe(durable_ref):
     source = blosc2.BatchArray(items_per_block=1)
     source.append([durable_ref])

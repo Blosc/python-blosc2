@@ -8,6 +8,7 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
+import contextlib
 import copy
 import ctypes
 import ctypes.util
@@ -20,10 +21,12 @@ import pickle
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import asdict, fields
 from functools import cache, lru_cache
 from typing import TYPE_CHECKING, ClassVar
@@ -169,7 +172,7 @@ def decompress(
     dst: NumPy object or bytearray
         The destination NumPy object or bytearray to fill,
         the length of which must be greater than 0.
-        The user must ensure it has enough capacity to hold
+        It must be writable and have enough capacity to hold
         the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
@@ -188,6 +191,8 @@ def decompress(
 
     Raises
     ------
+    BufferError
+        Raised if :paramref:`dst` is read-only, like a `bytes` object or a read-only memoryview.
     RuntimeError
         Raised if the compressed data is corrupted or the output buffer is not large enough.
         Also raised if a `bytes` object could not be obtained.
@@ -195,7 +200,7 @@ def decompress(
         Raised if :paramref:`src` does not support the Buffer Protocol.
     ValueError
         Raised if the length of :paramref:`src` is smaller than the minimum required length.
-        Also raised if `dst` is not `None` and its length is 0.
+        Also raised if `dst` is not `None` and its length is 0, or if it is a read-only NumPy array.
 
     Examples
     --------
@@ -1529,8 +1534,8 @@ def set_releasegil(gilstate: bool) -> bool:
 
     Compressing keeps the GIL regardless of this setting when a Python callback
     (a prefilter, a filler, or a codec or filter registered from Python) could
-    run.  Decompressing a chunk keeps it while any codec or filter is registered
-    from Python, as the chunk may use one.
+    run.  :func:`decompress2` keeps it when the chunk uses a codec or filter
+    registered from Python.
 
     Examples
     --------
@@ -2247,10 +2252,9 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         bytearray, memoryview, or numpy.ndarray.
     dst: NumPy object or bytearray, optional
         The destination NumPy object or bytearray to fill. The length
-        must be greater than 0. The user must ensure
-        it has enough capacity for the decompressed
-        data. Default is `None`, meaning a new bytes object
-        is created, filled and returned.
+        must be greater than 0. It must be writable and have enough
+        capacity for the decompressed data. Default is `None`,
+        meaning a new bytes object is created, filled and returned.
 
     kwargs: dict, optional
         Decompression parameters. The default values are in :class:`blosc2.DParams`.
@@ -2272,15 +2276,17 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
 
     Raises
     ------
+    BufferError
+        If :paramref:`dst` is read-only, like a `bytes` object or a read-only memoryview.
     RuntimeError
-        If the data cannot be compressed into :paramref:`dst`.
+        If the data cannot be decompressed into :paramref:`dst`.
         If an internal error occurs, likely due to an invalid parameter
         If :paramref:`dst` is `None` and a bytes object could not be created to store the result.
     TypeError
         If :paramref:`src` does not support the Buffer Protocol.
     ValueError
         If the length of :paramref:`src` is smaller than the minimum.
-        If :paramref:`dst` is not None and its length is 0.
+        If :paramref:`dst` is not None and its length is 0, or if it is a read-only NumPy array.
     """
     if kwargs is not None and "dparams" in kwargs:
         if len(kwargs) > 1:
@@ -2317,6 +2323,39 @@ def remove_urlpath(path: str) -> None:
             path = str(path)
         path = path.encode("utf-8") if isinstance(path, str) else path
         blosc2_ext.remove_urlpath(path)
+
+
+def mkstemp_for_replace(target: str | os.PathLike, *, prefix: str = "", suffix: str = "") -> tuple[int, str]:
+    """Create a temporary file next to *target*, to be ``os.replace()``-d onto it.
+
+    Returns ``(fd, path)`` like ``tempfile.mkstemp()``, but the file gets the
+    permissions that writing *target* in place would leave, not mkstemp's
+    0o600: an existing *target* keeps its permission bits, a new one gets
+    0o666 less the umask (or the directory's default ACL).  The kernel applies
+    the umask at creation, so it is never read: ``os.umask()`` can only be read
+    by setting it, process-wide, which races with other threads.
+    """
+    target = os.path.abspath(target)
+    # 122 random bits: unlike mkstemp's short names, no retry loop is needed.
+    path = os.path.join(os.path.dirname(target), f"{prefix}{uuid.uuid4().hex}{suffix}")
+    mode = None
+    # Windows only has a read-only flag (and a read-only target cannot be replaced).
+    if os.name != "nt":
+        with contextlib.suppress(OSError):  # no target: a new file
+            mode = stat.S_IMODE(os.stat(target).st_mode)
+    # Never more open than the target, not even until the chmod below: whoever
+    # opened the file meanwhile could read what is written to it later.
+    fd = os.open(
+        path,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o666 if mode is None else mode & 0o666,
+    )
+    if mode is not None:
+        # Through the fd, so a symlink swapped in for path cannot redirect it.
+        # Best effort: some filesystems (e.g. vfat) refuse chmod.
+        with contextlib.suppress(OSError):
+            os.fchmod(fd, mode)
+    return fd, path
 
 
 def schunk_from_cframe(
@@ -2406,12 +2445,9 @@ def ndarray_from_cframe(
     """
     from blosc2.deserialization import set_deserialize
 
+    # copy=False: the array pins `cframe` with its C memory (see blosc2_ext.ndarray_from_cframe)
     arr = blosc2_ext.ndarray_from_cframe(cframe, copy)
     set_deserialize(arr, deserialize)
-    if not copy:
-        # Same zero-copy pin as schunk_from_cframe; on the inner SChunk so
-        # both `arr` and a handed-out `arr.schunk` reach it.
-        arr._schunk._cframe = cframe
     return arr
 
 
@@ -2521,7 +2557,9 @@ def register_codec(
 
     Notes
     -----
-    * Cannot use multi-threading when using a user-defined codec.
+    * Cannot use multi-threading when using a user-defined codec. A codec with Python
+      functions cannot be registered while the ``BLOSC_NTHREADS`` environment variable is
+      above 1, since C-Blosc2 would use that many threads for it.
 
     * User-defined codecs can only be used inside an `SChunk` instance.
 
@@ -2599,7 +2637,9 @@ def register_filter(
 
     Notes
     -----
-    * Multi-threading cannot be used with a user-defined filter.
+    * Multi-threading cannot be used with a user-defined filter. A filter with Python
+      functions cannot be registered while the ``BLOSC_NTHREADS`` environment variable is
+      above 1, since C-Blosc2 would use that many threads for it.
 
     * User-defined filters can only be used inside an `SChunk` instance.
 

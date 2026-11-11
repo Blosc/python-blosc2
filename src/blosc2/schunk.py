@@ -480,7 +480,7 @@ class SChunk(blosc2_ext.SChunk):
         if blosc2.IS_WASM and value.nthreads != 1:
             value = replace(value, nthreads=1)
         super().update_cparams(value)
-        self._cparams = super().get_cparams()
+        self._cparams = None
 
     @property
     def dparams(self) -> blosc2.DParams:
@@ -496,7 +496,7 @@ class SChunk(blosc2_ext.SChunk):
         if blosc2.IS_WASM and value.nthreads != 1:
             value = replace(value, nthreads=1)
         super().update_dparams(value)
-        self._dparams = super().get_dparams()
+        self._dparams = None
 
     @contextmanager
     def holding_lock(self) -> Iterator[SChunk]:
@@ -860,8 +860,8 @@ class SChunk(blosc2_ext.SChunk):
             The index of the chunk that will be decompressed.
         dst: NumPy object or bytearray
             The destination NumPy object or bytearray to fill, the length
-            of which must be greater than 0. The user must ensure
-            that it has enough capacity to host the decompressed
+            of which must be greater than 0. It must be writable and
+            have enough capacity to host the decompressed
             chunk. Default is None, meaning that a new bytes object
             is created, filled and returned.
 
@@ -874,8 +874,12 @@ class SChunk(blosc2_ext.SChunk):
 
         Raises
         ------
+        BufferError
+            If :paramref:`dst` is read-only, like a `bytes` object or a read-only memoryview.
         RunTimeError
             If a problem is detected.
+        ValueError
+            If the length of :paramref:`dst` is 0, or if it is a read-only NumPy array.
 
         Examples
         --------
@@ -1383,6 +1387,13 @@ class SChunk(blosc2_ext.SChunk):
         --------
         :func:`~blosc2.schunk_from_cframe`
 
+        Notes
+        -----
+        The buffer holds the chunks as they are stored: a postfilter (see
+        :meth:`postfilter`) is not applied, and it is not part of the buffer
+        either. Set it again on the deserialized :ref:`SChunk` to read the same
+        values as from this one.
+
         Examples
         --------
         >>> import blosc2
@@ -1538,7 +1549,8 @@ class SChunk(blosc2_ext.SChunk):
         * `nthreads` must be 1 when decompressing.
 
         * The :paramref:`input_dtype` itemsize must be the same as the
-          :paramref:`output_dtype` itemsize.
+          :paramref:`output_dtype` itemsize, and the typesize of the chunks:
+          decompressing a chunk with another typesize fails.
 
         See Also
         --------
@@ -1640,6 +1652,7 @@ class SChunk(blosc2_ext.SChunk):
         Notes
         -----
         * Compression `nthreads` must be 1 when using this.
+        * The :paramref:`schunk_dtype` itemsize must be the typesize of the SChunk.
         * This does not need to be removed from the created `SChunk` instance.
 
         See Also
@@ -1674,16 +1687,19 @@ class SChunk(blosc2_ext.SChunk):
                 raise ValueError("Cannot apply a filler to a non empty SChunk")
             nelem_ = blosc2_ext.nelem_from_inputs(inputs_tuple, nelem)
             super(SChunk, self)._set_filler(func, id(inputs_tuple), schunk_dtype)
-            chunksize = self.chunksize
-            written_nbytes = 0
-            nbytes = nelem_ * self.typesize
-            while written_nbytes < nbytes:
-                chunk = np.zeros(chunksize // self.typesize, dtype=schunk_dtype)
-                self.append_data(chunk)
-                written_nbytes += chunksize
-                if (nbytes - written_nbytes) < self.chunksize:
-                    chunksize = nbytes - written_nbytes
-            self.remove_prefilter(func.__name__)
+            try:
+                chunksize = self.chunksize
+                written_nbytes = 0
+                nbytes = nelem_ * self.typesize
+                while written_nbytes < nbytes:
+                    chunk = np.zeros(chunksize // self.typesize, dtype=schunk_dtype)
+                    self.append_data(chunk)
+                    written_nbytes += chunksize
+                    if (nbytes - written_nbytes) < self.chunksize:
+                        chunksize = nbytes - written_nbytes
+            finally:
+                # Also after a failed append: the filler only keeps the id of inputs_tuple
+                self.remove_prefilter(func.__name__)
 
             def exec_func(*args):
                 func(*args)
@@ -1719,7 +1735,8 @@ class SChunk(blosc2_ext.SChunk):
         * `nthreads` must be 1 when compressing.
 
         * The :paramref:`input_dtype` itemsize must be the same as the
-          :paramref:`output_dtype` itemsize.
+          :paramref:`output_dtype` itemsize, and the typesize of the SChunk:
+          compressing with another typesize fails.
 
         See Also
         --------
@@ -1874,12 +1891,9 @@ def _open_special_store(urlpath, mode, offset, *, deserialize=DeserializeMode.SA
             from blosc2.remote_store import RemoteStore
 
             return RemoteStore._open_artifact(urlpath, mode=mode, **kwargs)
-        if "b2embed" in schunk_meta:
-            if offset != 0:
-                raise ValueError("Offset must be 0 for EmbedStore")
-            from blosc2.embed_store import EmbedStore
-
-            return EmbedStore(urlpath, mode=mode, deserialize=deserialize, **kwargs)
+        # No "b2embed" check: the embed.b2e of a .b2d/.b2z written by python-blosc2
+        # <= 4.0.0 carries that marker too (b2dict and b2tree came in 4.1.0), so it
+        # does not tell the store type.  Those stores and .b2e files go by extension.
         if "b2dict" in schunk_meta:
             if offset != 0:
                 raise ValueError("Offset must be 0 for DictStore")
@@ -1974,14 +1988,20 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
     deserialize = normalize_deserialize(deserialize)
     set_deserialize(res, deserialize)
     meta = getattr(res, "schunk", res).meta
-    if "proxy-source" in meta:
+    # All the metalayer names at once, instead of one locked call per check below.  Names that are not
+    # UTF-8 (the C API allows them) cannot be listed: then the checks go one by one.
+    try:
+        names = meta.keys()
+    except UnicodeDecodeError:
+        names = meta
+    if "proxy-source" in names:
         if deserialize is DeserializeMode.SAFE:
             raise UnsafeDeserializationError("proxy")
         proxy = _reconstruct_legacy_proxy(res, meta["proxy-source"])
         if proxy is not None:
             return proxy
 
-    if "b2o" in meta:
+    if "b2o" in names:
         if isinstance(meta["b2o"], dict) and meta["b2o"].get("kind") == "lazyudf":
             raise blosc2.UnsupportedLegacyRecipeError()
         if deserialize is DeserializeMode.SAFE and (
@@ -1992,23 +2012,23 @@ def process_opened_object(res, *, deserialize=DeserializeMode.SAFE):
             raise UnsafeDeserializationError(str(kind))
         return blosc2.open_b2object(res)
 
-    if "listarray" in meta:
+    if "listarray" in names:
         from blosc2.list_array import ListArray
 
         return ListArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "vlarray" in meta:
+    if "vlarray" in names:
         from blosc2.objectarray import ObjectArray
 
         return ObjectArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "batcharray" in meta:
+    if "batcharray" in names:
         from blosc2.batch_array import BatchArray
 
         return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
-    if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        if res.schunk.meta["LazyArray"] == 1:
+    if isinstance(res, blosc2.NDArray) and "LazyArray" in names:
+        if meta["LazyArray"] == 1:
             raise blosc2.UnsupportedLegacyRecipeError()
         if deserialize is DeserializeMode.SAFE:
             raise UnsafeDeserializationError("LazyArray")

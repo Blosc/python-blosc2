@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import tempfile
 import uuid
 
@@ -45,6 +46,12 @@ def publish_materialized(staged, destination, overwrite, staging):
             raise FileExistsError(destination)
         previous = os.path.join(staging, "previous")
         os.replace(destination, previous)
+        if os.name != "nt" and os.path.isfile(previous) and os.path.isfile(staged):
+            # A replaced .b2z keeps its mode, as with to_b2z(); both paths now lie
+            # in the private staging directory, so a chmod by path is safe.  Best
+            # effort: some filesystems (e.g. vfat) refuse chmod.
+            with contextlib.suppress(OSError):
+                shutil.copymode(previous, staged)
     try:
         os.replace(staged, destination)
     except BaseException:

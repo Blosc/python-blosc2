@@ -1177,17 +1177,17 @@ def test_save_constructor(disk, shape, dtype, constructor):
     a, expr = None, None
     if constructor in ("zeros", "ones"):
         a = b2func(shape, dtype=dtype, urlpath=urlpath, mode="w")
-        expr = f"a + {constructor}({shape}, dtype={dtype}) + 1"
+        expr = f"a + {constructor}({shape}, dtype={dtype!r}) + 1"
     elif constructor == "full":
         a = b2func(shape, 10, dtype=dtype, urlpath=urlpath, mode="w")
-        expr = f"a + {constructor}(10, {shape}, dtype={dtype}) + 1"
+        expr = f"a + {constructor}({shape}, 10, dtype={dtype!r}) + 1"
     elif constructor == "fromiter":
         a = b2func(range(lshape), dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
-        expr = f"a + {constructor}(range({lshape}), dtype={dtype}, shape={shape}) + 1"
+        expr = f"a + {constructor}(range({lshape}), dtype={dtype!r}, shape={shape}) + 1"
     elif constructor == "reshape":
         # Let's put a nested arange array here
         a = blosc2.arange(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
-        b = f"arange({lshape}, dtype={dtype})"
+        b = f"arange({lshape}, dtype={dtype!r})"
         # Both expressions below are equivalent, but use the method variant for testing purposes
         # expr = f"a + {constructor}({b}, shape={shape}) + 1"
         expr = f"a + {b}.reshape({shape}) + 1"
@@ -1195,10 +1195,10 @@ def test_save_constructor(disk, shape, dtype, constructor):
         # expr = f"a + {b}.reshape(shape={shape}) + 1"
     elif constructor == "linspace":
         a = b2func(0, 10, lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
-        expr = f"a + {constructor}(0, 10, {lshape}, dtype={dtype}, shape={shape}) + 1"
+        expr = f"a + {constructor}(0, 10, {lshape}, dtype={dtype!r}, shape={shape}) + 1"
     elif constructor == "arange":
         a = b2func(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
-        expr = f"a + {constructor}({lshape}, dtype={dtype}, shape={shape}) + 1"
+        expr = f"a + {constructor}({lshape}, dtype={dtype!r}, shape={shape}) + 1"
     if disk:
         a = blosc2.open(urlpath, mode="r")
     npfunc = getattr(np, constructor)
@@ -1214,11 +1214,16 @@ def test_save_constructor(disk, shape, dtype, constructor):
         na = npfunc(lshape, dtype=dtype).reshape(shape)
 
     # An expression involving the constructor
-    lexpr = blosc2.lazyexpr(expr)
+    # Iterators are outside the safe numerical grammar; this test creates and trusts the expression.
+    evaluation = "full" if constructor == "fromiter" else "safe"
+    lexpr = blosc2.lazyexpr(expr, evaluation=evaluation)
     assert lexpr.shape == a.shape
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd", mode="r")
+        if constructor == "fromiter":
+            with pytest.raises(blosc2.UnsafeDeserializationError, match="'range'"):
+                blosc2.open("out.b2nd", mode="r")
+        lexpr = blosc2.open("out.b2nd", mode="r", deserialize=evaluation)
     res = lexpr.compute()
     nres = na + na + 1
     assert np.allclose(res[()], nres)
