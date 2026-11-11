@@ -11,6 +11,16 @@ import pytest
 import blosc2
 
 
+def test_print_versions(capsys):
+    version = blosc2.blosc2_ext.MINIEXPR_VERSION_STRING
+    assert isinstance(version, str)
+    assert version
+    assert blosc2.print_versions() is None
+    lines = capsys.readouterr().out.splitlines()
+    version_line = lines.index(f"miniexpr version: {version}")
+    assert lines[version_line + 1] == f"NumPy version: {np.__version__}"
+
+
 @pytest.mark.parametrize("codec", blosc2.compressor_list())
 def test_comp_info(codec):
     blosc2.clib_info(codec)

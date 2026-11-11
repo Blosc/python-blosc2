@@ -702,6 +702,8 @@ cdef extern from "b2nd.h":
 
 # miniexpr C API declarations
 cdef extern from "miniexpr.h":
+    const char* ME_VERSION_STRING
+
     ctypedef enum me_dtype:
         ME_AUTO,
         ME_BOOL
@@ -906,6 +908,7 @@ MAX_OVERHEAD = BLOSC2_MAX_OVERHEAD
 MAX_DIM = B2ND_MAX_DIM
 VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode("utf-8")
 VERSION_DATE = (<char*>BLOSC2_VERSION_DATE).decode("utf-8")
+MINIEXPR_VERSION_STRING = ME_VERSION_STRING.decode("utf-8")
 MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
 EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 DEFINED_CODECS_STOP = BLOSC2_DEFINED_CODECS_STOP

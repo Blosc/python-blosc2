@@ -1597,9 +1597,8 @@ def print_versions():
     print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
         print(f"  {clib}: {clib_versions[clib]}")
+    print(f"miniexpr version: {blosc2_ext.MINIEXPR_VERSION_STRING}")
     print(f"NumPy version: {np.__version__}")
-    if not blosc2.IS_WASM:
-        print("expression engines: miniexpr (interpreter/JIT), NumPy fallback")
     import httpx
 
     print(f"httpx version: {httpx.__version__}")
