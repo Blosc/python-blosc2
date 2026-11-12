@@ -6498,7 +6498,10 @@ def empty(
         Keyword arguments supported:
             chunks: tuple or list
                 The chunk shape. If None (default), Blosc2 will compute
-                an efficient chunk shape.
+                an efficient chunk shape. For frame-backed storage, very large
+                arrays may need larger automatic chunks to keep the chunk
+                offsets within the native buffer limit. Explicit chunks are
+                preserved; exceeding this limit raises ``ValueError``.
             blocks: tuple or list
                 The block shape. If None (default), Blosc2 will compute
                 an efficient block shape. This will override the `blocksize`

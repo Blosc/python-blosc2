@@ -1994,6 +1994,65 @@ def compute_partition(nitems, maxshape, minpart=None):
     return partition
 
 
+def _frame_safe_chunks(shape, chunks, blocks, dtype, automatic, **kwargs):
+    """Keep a frame's logical int64 offsets payload within native buffer limits."""
+    storage = kwargs.get("storage")
+    if isinstance(storage, blosc2.Storage):
+        urlpath, contiguous = storage.urlpath, storage.contiguous
+    elif storage is not None:
+        urlpath, contiguous = storage.get("urlpath"), storage.get("contiguous")
+    else:
+        urlpath, contiguous = kwargs.get("urlpath"), kwargs.get("contiguous")
+    # On-disk sparse storage also has a frame (for its index).
+    if not (contiguous or urlpath is not None) or 0 in shape:
+        return chunks
+
+    # Python-only counterpart of C-Blosc2's int32 offsets-length constraint.
+    # MAX_BUFFERSIZE also leaves room for the offsets chunk's Blosc header.
+    max_chunks = blosc2.MAX_BUFFERSIZE // 8
+    shape, chunks, blocks = ([int(x) for x in values] for values in (shape, chunks, blocks))
+    grid = [(s + c - 1) // c for s, c in zip(shape, chunks, strict=True)]
+    nchunks = math.prod(grid)
+    if nchunks <= max_chunks:
+        return chunks
+    if not automatic:
+        raise ValueError(
+            f"Frame requires {nchunks:,} chunks, exceeding the offsets limit of "
+            f"{max_chunks:,} chunks (8 bytes per offset; MAX_BUFFERSIZE="
+            f"{blosc2.MAX_BUFFERSIZE:,} bytes). Increase chunks or reduce the array shape."
+        )
+
+    itemsize = np.dtype(dtype).itemsize
+    while nchunks > max_chunks:
+        padded = [(c + b - 1) // b * b for c, b in zip(chunks, blocks, strict=True)]
+        chunk_bytes = math.prod(padded) * itemsize
+        # Grow dimensions with the most remaining chunks first.  Cap growth
+        # by the padded byte budget, not just the logical chunk volume.
+        for axis in sorted(range(len(shape)), key=grid.__getitem__, reverse=True):
+            block = blocks[axis]
+            other_bytes = chunk_bytes // padded[axis]
+            max_axis = blosc2.MAX_BUFFERSIZE // other_bytes // block * block
+            candidate = min(shape[axis], (2 * chunks[axis] + block - 1) // block * block, max_axis)
+            if candidate <= chunks[axis]:
+                continue
+            new_grid = (shape[axis] + candidate - 1) // candidate
+            if new_grid >= grid[axis]:
+                continue
+            chunks[axis] = candidate
+            grid[axis] = new_grid
+            nchunks = math.prod(grid)
+            break
+        else:
+            raise ValueError(
+                f"Cannot select automatic chunks within the frame offsets limit of "
+                f"{max_chunks:,} chunks and the padded chunk size limit "
+                f"MAX_BUFFERSIZE={blosc2.MAX_BUFFERSIZE:,} bytes. Specify chunks or "
+                "smaller blocks, or reduce the array shape."
+            )
+
+    return chunks
+
+
 def compute_chunks_blocks(  # noqa: C901
     shape: tuple | list,
     chunks: tuple | list | None = None,
@@ -2024,6 +2083,15 @@ def compute_chunks_blocks(  # noqa: C901
     -------
     tuple
         A (chunks, blocks) tuple containing the computed chunk and block sizes.
+
+    Notes
+    -----
+    For frame-backed storage (contiguous in-memory storage or any on-disk
+    storage), automatic chunks are enlarged if necessary to keep the chunk
+    offsets payload within the native buffer size limit. Blocks are unchanged.
+    Explicit chunks are never enlarged; an oversized offsets payload raises
+    ``ValueError`` instead. Padded chunk sizes must also fit within
+    :data:`blosc2.MAX_BUFFERSIZE`.
     """
 
     # Return an arbitrary value for chunks and blocks when shape has any 0 dim
@@ -2051,8 +2119,10 @@ def compute_chunks_blocks(  # noqa: C901
         for block, chunk in zip(blocks, chunks, strict=True):
             if block > chunk:
                 raise ValueError("blocks cannot be greater than chunks")
+        _frame_safe_chunks(shape, chunks, blocks, dtype, False, **kwargs)
         return chunks, blocks
 
+    automatic_chunks = chunks is None
     cparams = kwargs.get("cparams") or blosc2.CParams()  # just get defaults
     if isinstance(cparams, blosc2.CParams):
         # Shallow is enough (only keys are set below, filters only on a deep copy), and asdict()
@@ -2161,6 +2231,7 @@ def compute_chunks_blocks(  # noqa: C901
             for s, c, b in zip(shape, chunks, blocks, strict=False)
         ]
 
+    chunks = _frame_safe_chunks(shape, chunks, blocks, dtype, automatic_chunks, **kwargs)
     return tuple(chunks), tuple(blocks)
 
 
