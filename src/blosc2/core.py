@@ -1932,7 +1932,8 @@ def nearest_divisor(a, b, strict=False):
     b : int
         The reference value to compare divisors against.
     strict : bool, optional
-        If True, always use the downward search algorithm.
+        If True, return the largest divisor not exceeding `b`.  This is also
+        the behavior for `a > 100_000`.
 
     Returns
     -------
@@ -1945,13 +1946,7 @@ def nearest_divisor(a, b, strict=False):
     that is *way* faster.
     """
     if a > 100_000 or strict:
-        # When `a` is largish, or we require `b` strictly less than `a`,
-        # use a (faster) algorithm that only goes downwards.
-        # This is quite brute force, and tried to optimize this, but I have not found a faster way.
-        for i in range(b, 0, -1):
-            if a % i == 0:
-                return i
-        return 1  # Fallback to 1, which is always a divisor
+        return blosc2_ext.divisor_at_most(a, b)
 
     # When `a` is smallish, use a more general algorithm that can find forwards and backwards
     # Get all divisors of `a`; use a generator to avoid creating a list
@@ -1986,12 +1981,10 @@ def compute_partition(nitems, maxshape, minpart=None):
             break
         rsize = max(size, minsize)
         if rsize <= max_items:
-            # rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
             rsize = rsize if size % rsize == 0 else blosc2_ext.nearest_divisor(size, rsize)
         else:
             rsize = max(max_items, minsize)
-            # new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize, strict=True)
-            new_rsize = rsize if size % rsize == 0 else blosc2_ext.nearest_divisor(size, rsize, strict=True)
+            new_rsize = rsize if size % rsize == 0 else blosc2_ext.divisor_at_most(size, rsize)
             # If the new rsize is not too far from the original rsize, use it
             if rsize // 2 < new_rsize < rsize * 2:
                 rsize = new_rsize

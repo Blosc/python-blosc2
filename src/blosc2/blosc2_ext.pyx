@@ -3307,6 +3307,42 @@ cdef inline str _me_compile_error_details(int rc, int error):
     return details
 
 
+@cython.cdivision(True)
+cpdef int64_t divisor_at_most(int64_t a, int64_t b):
+    """Return the largest divisor of positive ``a`` not exceeding ``b``.
+
+    Return 1 when ``b < 1``, preserving the partitioning fallback.  Probe
+    nearby candidates first, then enumerate divisor pairs in constant memory
+    and O(min(b, sqrt(a))) worst-case time.
+    """
+    cdef int64_t i = 1, q, best = 1
+    cdef int probe
+
+    if a <= 0:
+        raise ValueError("a must be positive")
+    if b >= a:
+        return a
+
+    for probe in range(8):
+        if b <= 0:
+            return 1
+        if a % b == 0:
+            return b
+        b -= 1
+
+    # The complementary divisors decrease as i increases, so the first one
+    # below the remaining bound is optimal.  Division avoids i*i overflow.
+    while i <= b and i <= a // i:
+        if a % i == 0:
+            q = a // i
+            if q <= b:
+                return q
+            best = i
+        i += 1
+
+    return best
+
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
@@ -3320,7 +3356,8 @@ def nearest_divisor(int64_t a, int64_t b, bint strict=False):
     b : int
         The reference value to compare divisors against.
     strict : bool, optional
-        If True, always use the downward search algorithm.
+        If True, return the largest divisor not exceeding `b`.  This is also
+        the behavior for `a > 100_000`.
 
     Returns
     -------
@@ -3336,13 +3373,7 @@ def nearest_divisor(int64_t a, int64_t b, bint strict=False):
         bint found
 
     if a > 100_000 or strict:
-        # For large numbers or when strict=True, search downwards from b
-        i = b
-        while i > 0:
-            if a % i == 0:
-                return i
-            i -= 1
-        return 1  # Fallback to 1, which is always a divisor
+        return divisor_at_most(a, b)
 
     # For smaller numbers, find the closest divisor
     closest = 1
