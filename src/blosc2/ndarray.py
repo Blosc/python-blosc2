@@ -7189,6 +7189,24 @@ def linspace(  # noqa: C901
         return lazyarr.compute(**kwargs)
 
 
+def _diagonal_chunk_indices(shape, chunks, k):
+    """Yield C-order chunk indices intersecting diagonal k, without scanning the grid."""
+    rows, cols = shape
+    chunk_rows, chunk_cols = chunks
+    row_begin = builtins.max(0, -k)
+    row_end = builtins.min(rows, cols - k)
+    if row_begin >= row_end:
+        return
+    column_chunks = (cols + chunk_cols - 1) // chunk_cols
+    for row_chunk in range(row_begin // chunk_rows, (row_end - 1) // chunk_rows + 1):
+        r0 = row_chunk * chunk_rows
+        r1 = builtins.min(rows, r0 + chunk_rows)
+        c_begin = builtins.max(0, r0 + k)
+        c_end = builtins.min(cols, r1 + k)
+        for column_chunk in range(c_begin // chunk_cols, (c_end - 1) // chunk_cols + 1):
+            yield row_chunk * column_chunks + column_chunk
+
+
 def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
     """Return a 2-D array with ones on the diagonal and zeros elsewhere.
 
@@ -7214,7 +7232,9 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
         Select the native compiler ("tcc" or "cc").
     **kwargs: Any
         Storage arguments accepted by :func:`empty`. Default chunk and block
-        shapes localize the diagonal so zero-only blocks skip kernel evaluation.
+        shapes localize the diagonal. Zero-only chunks retain their special
+        zero representation; within diagonal chunks, zero-only blocks skip
+        kernel evaluation on the native prefilter path.
         Complex output and WebAssembly retain the chunkwise NumPy callback.
 
     Returns
@@ -7278,13 +7298,17 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
         kwargs["chunks"] = tuple(builtins.min(1024, builtins.max(1, n)) for n in shape)
     if kwargs.get("blocks") is None:
         kwargs["blocks"] = tuple(builtins.min(128, c) for c in kwargs["chunks"])
-    output = blosc2.empty(shape, dtype=dtype, **kwargs)
+    output = blosc2.zeros(shape, dtype=dtype, **kwargs)
     if not output.size:
         return output
+    chunk_indices = _diagonal_chunk_indices(shape, output.chunks, k)
     if blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({}, output=output):
-        kernel._handle.evaluate_prefilter({}, out=output, _diagonal=k)
+        kernel._handle.evaluate_prefilter({}, out=output, _diagonal=k, _chunk_indices=chunk_indices)
         return output
-    for origin in itertools.product(*(range(0, n, c) for n, c in zip(shape, output.chunks, strict=True))):
+    column_chunks = (shape[1] + output.chunks[1] - 1) // output.chunks[1]
+    for chunk in chunk_indices:
+        row_chunk, column_chunk = divmod(chunk, column_chunks)
+        origin = (row_chunk * output.chunks[0], column_chunk * output.chunks[1])
         extent = tuple(builtins.min(c, n - o) for o, c, n in zip(origin, output.chunks, shape, strict=True))
         item = tuple(slice(o, o + e) for o, e in zip(origin, extent, strict=True))
         output[item] = kernel.evaluate_block(

@@ -2678,9 +2678,12 @@ cdef class MenudetArtifactHandle:
                 raise ValueError("Invalid prefilter chunk range")
             threads = 1
         if _chunk_indices is not None:
-            if numpy_out is None or out is not None or _chunk_range is not None:
-                raise ValueError("Dynamic prefilter chunks require a direct NumPy output")
-            threads = 1
+            if (numpy_out is None and out is None) or _chunk_range is not None:
+                raise ValueError("Selected prefilter chunks require Blosc2 or NumPy output and no chunk range")
+            if out is None:
+                # NumPy callers can claim chunks from a shared queue across
+                # coarse workers. Compressed output retains block threading.
+                threads = 1
         if out is None and numpy_out is None and _reduction_out is None:
             numpy_out = np.empty(first.shape, dtype=self.signature_dtype(-1))
         if numpy_out is not None:
@@ -7913,6 +7916,7 @@ cdef class NDArray:
         cdef int32_t decoded_bytes, encoded_bytes, block_bytes
         cdef size_t decoder_contexts = 0, input_buffer_allocations = 0, input_chunk_fetches = 0
         cdef size_t placeholder_bytes = 0
+        cdef size_t processed_chunks = 0
         cdef int64_t chunk, blocks_per_chunk = 0, block_cursor
         cdef int64_t begin = 0, end = self.array.sc.nchunks
         cdef bint disposable_sink = numpy_out is not None or reduction_out is not None
@@ -8023,8 +8027,8 @@ cdef class NDArray:
             if self.array.sc.cctx == NULL:
                 raise MemoryError("Cannot create Menudet prefilter compression context")
             try:
-                # Reuse this worker's native context and decoder scratch while
-                # claiming chunks from an invocation-local synchronized queue.
+                # Reuse the native context and scratch over a full range,
+                # selected compressed chunks, or a NumPy worker's chunk queue.
                 for chunk in (range(begin, end) if chunk_indices is None else chunk_indices):
                     if chunk < begin or chunk >= end:
                         raise ValueError("Dynamic prefilter chunk is outside the output domain")
@@ -8066,6 +8070,7 @@ cdef class NDArray:
                         placeholder_bytes += self.schunk._prefilter_data(chunk, data, chunk_buffer)
                     else:
                         self.schunk.update_data(chunk, data, copy=False)
+                    processed_chunks += 1
                     # In the uncompressed/disposable route callback failures
                     # are captured locally rather than propagated by Blosc2.
                     for tid in range(state.nworkers):
@@ -8104,6 +8109,7 @@ cdef class NDArray:
                     free(state.chunks[i])
         result = reduction_out if reduction_out is not None else (numpy_out if numpy_out is not None else self)
         return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
+                          "processed_chunks": processed_chunks,
                          "output_destination": ("reduction" if reduction_out is not None
                                                 else ("numpy" if numpy_out is not None else "blosc2")),
                          "discarded_output_bytes": placeholder_bytes,
