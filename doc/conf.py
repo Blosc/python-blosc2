@@ -68,6 +68,7 @@ redirects = {
     "getting_started/tutorials/11.containers": "../../tutorials/11.containers.html",
     "getting_started/tutorials/11.objectarray": "../../tutorials/11.objectarray.html",
     "getting_started/tutorials/12.batcharray": "../../tutorials/12.batcharray.html",
+    "getting_started/tutorials/12b.listarray": "../../tutorials/12b.listarray.html",
     "getting_started/tutorials/13.ctable-basics": "../../tutorials/13.ctable-basics.html",
     "getting_started/tutorials/14.indexing-arrays": "../../tutorials/14.indexing-arrays.html",
     "getting_started/tutorials/15.indexing-ctables": "../../tutorials/15.indexing-ctables.html",
