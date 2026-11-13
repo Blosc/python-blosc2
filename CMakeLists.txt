@@ -16,8 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.6.0)
-# LZ4 state reuse and reduced scheduler locking (after v3.6.2).
-set(BLOSC2_BUNDLED_VERSION bd4f49c067cde6ef0fd705bf817d378a5189560e)
+# Fused SHUFFLE+BYTEDELTA for 2/4/8-byte groups on ARM64 and SSSE3 (after v3.6.2).
+set(BLOSC2_BUNDLED_VERSION 2dedbe70be40df56f47ed62efc7d287718bad251)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
