@@ -6857,6 +6857,21 @@ def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs, *, endpo
     return output
 
 
+def _ramp_storage_defaults(kwargs):
+    """Supply ramp filters without mutating or replacing explicit user settings."""
+    cparams = kwargs.get("cparams")
+    if cparams is None:
+        cparams = {}
+    elif not isinstance(cparams, dict):
+        # A CParams instance specifies a complete compression configuration.
+        return
+    else:
+        cparams = cparams.copy()
+    if "filters" not in cparams:
+        cparams["filters"] = [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
+    kwargs["cparams"] = cparams
+
+
 def arange(  # noqa: C901
     start: int | float,
     stop: int | float | None = None,
@@ -6914,6 +6929,9 @@ def arange(  # noqa: C901
         JS is WebAssembly/Pyodide-only. See :ref:`JITOptions` for limitations.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
+        Eager arrays default to ZSTD with SHUFFLE followed by BYTEDELTA.
+        Explicit filters or a complete :class:`CParams` configuration override
+        these constructor-specific filters; other compression settings are preserved.
 
     Returns
     -------
@@ -6987,6 +7005,8 @@ def arange(  # noqa: C901
             )
         return _menudet_ramp(start, step, dtype, tuple(shape), execution=execution)
 
+    _ramp_storage_defaults(kwargs)
+    storage_kwargs = kwargs.copy()
     if is_inside_new_expr() or NUM == 0:
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **storage_kwargs)
@@ -7070,6 +7090,9 @@ def linspace(  # noqa: C901
         Complex ramps are interpreter-only, even when JIT is requested.
     **kwargs: Any
         Storage arguments accepted by :func:`empty`, plus the execution options below.
+        Eager arrays default to ZSTD with SHUFFLE followed by BYTEDELTA.
+        Explicit filters or a complete :class:`CParams` configuration override
+        these constructor-specific filters; other compression settings are preserved.
 
     Other Parameters
     ----------------
@@ -7162,6 +7185,8 @@ def linspace(  # noqa: C901
             start, step, dtype, tuple(shape), execution=execution, endpoint_stop=endpoint_stop
         )
 
+    _ramp_storage_defaults(kwargs)
+    storage_kwargs = kwargs.copy()
     if is_inside_new_expr() or num == 0:
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **storage_kwargs)  # will return empty array for num == 0
