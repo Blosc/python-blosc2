@@ -16,7 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.6.0)
-set(BLOSC2_BUNDLED_VERSION v3.6.2)
+# LZ4 state reuse and reduced scheduler locking (after v3.6.2).
+set(BLOSC2_BUNDLED_VERSION bd4f49c067cde6ef0fd705bf817d378a5189560e)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -144,8 +145,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG v0.3.1
-    #GIT_TAG 88ff82ad2fc5cbbb7b4886a15e043bd4cbc09abd
+    # Avoid loop-limit lookups for loop-free kernels (after v0.3.1).
+    GIT_TAG b1c6676174d36463c94aa9cb0b267698575ae55d
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)

@@ -1,0 +1,3204 @@
+{
+  "workload": {
+    "shape": [
+      1000,
+      1000,
+      1000
+    ],
+    "dtype": "float64",
+    "codec": "LZ4",
+    "filters": [
+      "SHUFFLE",
+      "BYTEDELTA"
+    ]
+  },
+  "builds": [
+    {
+      "full_write": "ON",
+      "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on",
+      "extension_sha256": "03b73da2669c9acac124efaa3125228852a182d71e35ec7fc27ba811fa06e5a4"
+    },
+    {
+      "full_write": "OFF",
+      "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off",
+      "extension_sha256": "d01c8a2285761a584b1340d5568122648caeebe6e0d5648454fd1c69cda97162"
+    }
+  ],
+  "sessions": [
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 0.17260116711258888,
+              "cpu": 1.5682569999999991,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 0.1732674166560173,
+              "cpu": 1.579281,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 0.172025584615767,
+              "cpu": 1.575747999999999,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 0.1741468347609043,
+              "cpu": 1.5638199999999998,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 0.172799582593143,
+              "cpu": 1.5612679999999983,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 0.17296666745096445,
+              "cpu": 1.5802370000000003,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 0.17162908427417278,
+              "cpu": 1.5695629999999987,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 0.17386954184621572,
+              "cpu": 1.5744839999999982,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 0.17136612441390753,
+              "cpu": 1.5604239999999976,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 0.17357158288359642,
+              "cpu": 1.5436740000000029,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 0.1714364578947425,
+              "cpu": 1.545690999999998,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 0.17197470739483833,
+              "cpu": 1.5642379999999996,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 0.17141749989241362,
+              "cpu": 1.548604000000001,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 0.17383558303117752,
+              "cpu": 1.5673609999999982,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 0.1707058334723115,
+              "cpu": 1.5609199999999959,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            },
+            {
+              "wall": 0.17122408282011747,
+              "cpu": 1.5683069999999972,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 1
+            },
+            {
+              "wall": 0.17095583397895098,
+              "cpu": 1.5512950000000032,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 0
+            },
+            {
+              "wall": 0.18334012478590012,
+              "cpu": 1.5710769999999954,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 1
+            },
+            {
+              "wall": 0.1914595002308488,
+              "cpu": 1.592455000000001,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 0
+            },
+            {
+              "wall": 0.17051112465560436,
+              "cpu": 1.563919999999996,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 1
+            },
+            {
+              "wall": 0.1705519575625658,
+              "cpu": 1.5528169999999974,
+              "cratio": 68.7704067048327,
+              "pair": 20,
+              "position": 0
+            },
+            {
+              "wall": 0.17113754246383905,
+              "cpu": 1.5507109999999997,
+              "cratio": 68.7704067048327,
+              "pair": 21,
+              "position": 1
+            },
+            {
+              "wall": 0.17003591638058424,
+              "cpu": 1.5540400000000005,
+              "cratio": 68.7704067048327,
+              "pair": 22,
+              "position": 0
+            },
+            {
+              "wall": 0.1773609584197402,
+              "cpu": 1.5430400000000049,
+              "cratio": 68.7704067048327,
+              "pair": 23,
+              "position": 1
+            },
+            {
+              "wall": 0.17077029217034578,
+              "cpu": 1.5504490000000004,
+              "cratio": 68.7704067048327,
+              "pair": 24,
+              "position": 0
+            },
+            {
+              "wall": 0.1712279161438346,
+              "cpu": 1.5473210000000037,
+              "cratio": 68.7704067048327,
+              "pair": 25,
+              "position": 1
+            },
+            {
+              "wall": 0.16987070813775063,
+              "cpu": 1.5495909999999995,
+              "cratio": 68.7704067048327,
+              "pair": 26,
+              "position": 0
+            },
+            {
+              "wall": 0.17167570907622576,
+              "cpu": 1.5408710000000028,
+              "cratio": 68.7704067048327,
+              "pair": 27,
+              "position": 1
+            },
+            {
+              "wall": 0.1705350410193205,
+              "cpu": 1.556880999999997,
+              "cratio": 68.7704067048327,
+              "pair": 28,
+              "position": 0
+            },
+            {
+              "wall": 0.17144812550395727,
+              "cpu": 1.560884999999999,
+              "cratio": 68.7704067048327,
+              "pair": 29,
+              "position": 1
+            }
+          ],
+          [
+            {
+              "wall": 0.17990954220294952,
+              "cpu": 1.661752,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 0.1800788752734661,
+              "cpu": 1.6506369999999997,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 0.17980154044926167,
+              "cpu": 1.6576090000000008,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 0.17930745799094439,
+              "cpu": 1.6554040000000008,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 0.1815265417098999,
+              "cpu": 1.6595419999999983,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 0.17968975007534027,
+              "cpu": 1.6634640000000012,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 0.17981895804405212,
+              "cpu": 1.6532020000000003,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 0.18017608299851418,
+              "cpu": 1.6436969999999995,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 0.17852350044995546,
+              "cpu": 1.6486449999999984,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 0.17846587486565113,
+              "cpu": 1.6450150000000008,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 0.17971887439489365,
+              "cpu": 1.6512069999999994,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 0.1781509993597865,
+              "cpu": 1.6499520000000025,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 0.1792992502450943,
+              "cpu": 1.6172840000000015,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 0.1784286666661501,
+              "cpu": 1.6358780000000017,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 0.1782377501949668,
+              "cpu": 1.6498210000000029,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            },
+            {
+              "wall": 0.1779832076281309,
+              "cpu": 1.638857999999999,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 0
+            },
+            {
+              "wall": 0.1788179585710168,
+              "cpu": 1.636291,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 1
+            },
+            {
+              "wall": 0.177520832978189,
+              "cpu": 1.6408109999999994,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 0
+            },
+            {
+              "wall": 0.17881066724658012,
+              "cpu": 1.6428589999999943,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 1
+            },
+            {
+              "wall": 0.18156520929187536,
+              "cpu": 1.6211699999999993,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 0
+            },
+            {
+              "wall": 0.1777309589087963,
+              "cpu": 1.6331229999999977,
+              "cratio": 68.7704067048327,
+              "pair": 20,
+              "position": 1
+            },
+            {
+              "wall": 0.17775487527251244,
+              "cpu": 1.6329759999999993,
+              "cratio": 68.7704067048327,
+              "pair": 21,
+              "position": 0
+            },
+            {
+              "wall": 0.17762145772576332,
+              "cpu": 1.6313010000000006,
+              "cratio": 68.7704067048327,
+              "pair": 22,
+              "position": 1
+            },
+            {
+              "wall": 0.1782564576715231,
+              "cpu": 1.6281960000000026,
+              "cratio": 68.7704067048327,
+              "pair": 23,
+              "position": 0
+            },
+            {
+              "wall": 0.17760570719838142,
+              "cpu": 1.6327830000000034,
+              "cratio": 68.7704067048327,
+              "pair": 24,
+              "position": 1
+            },
+            {
+              "wall": 0.17706566769629717,
+              "cpu": 1.6346479999999985,
+              "cratio": 68.7704067048327,
+              "pair": 25,
+              "position": 0
+            },
+            {
+              "wall": 0.1789779169484973,
+              "cpu": 1.6299399999999977,
+              "cratio": 68.7704067048327,
+              "pair": 26,
+              "position": 1
+            },
+            {
+              "wall": 0.17738120816648006,
+              "cpu": 1.632798000000001,
+              "cratio": 68.7704067048327,
+              "pair": 27,
+              "position": 0
+            },
+            {
+              "wall": 0.17776304110884666,
+              "cpu": 1.6307789999999969,
+              "cratio": 68.7704067048327,
+              "pair": 28,
+              "position": 1
+            },
+            {
+              "wall": 0.17770854104310274,
+              "cpu": 1.6383679999999998,
+              "cratio": 68.7704067048327,
+              "pair": 29,
+              "position": 0
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 30,
+      "session": "12t-a"
+    },
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 0.17779549956321716,
+              "cpu": 1.633553000000001,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 0.17949558328837156,
+              "cpu": 1.6221429999999994,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 0.1779001671820879,
+              "cpu": 1.6341270000000012,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 0.1812986247241497,
+              "cpu": 1.6417999999999981,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 0.1775937918573618,
+              "cpu": 1.6253920000000015,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 0.17754595912992954,
+              "cpu": 1.6373700000000007,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 0.17699487507343292,
+              "cpu": 1.6399919999999995,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 0.18045612517744303,
+              "cpu": 1.6210799999999992,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 0.17780129052698612,
+              "cpu": 1.6325049999999983,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 0.18005029018968344,
+              "cpu": 1.614766000000003,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 0.1804149579256773,
+              "cpu": 1.6267749999999985,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 0.1778875421732664,
+              "cpu": 1.6319839999999992,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 0.17734616715461016,
+              "cpu": 1.634087000000001,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 0.17861716728657484,
+              "cpu": 1.6305020000000034,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 0.17766429111361504,
+              "cpu": 1.6371090000000024,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            },
+            {
+              "wall": 0.1771876672282815,
+              "cpu": 1.635951999999996,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 1
+            },
+            {
+              "wall": 0.17644754238426685,
+              "cpu": 1.641651000000003,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 0
+            },
+            {
+              "wall": 0.17736970726400614,
+              "cpu": 1.6331729999999993,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 1
+            },
+            {
+              "wall": 0.17690895777195692,
+              "cpu": 1.6379950000000036,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 0
+            },
+            {
+              "wall": 0.1782454578205943,
+              "cpu": 1.6366510000000005,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 1
+            }
+          ],
+          [
+            {
+              "wall": 0.17173600010573864,
+              "cpu": 1.565512,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 0.17111454252153635,
+              "cpu": 1.5489039999999985,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 0.17139150016009808,
+              "cpu": 1.5406510000000004,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 0.172540333122015,
+              "cpu": 1.532343000000001,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 0.1714117918163538,
+              "cpu": 1.5596319999999988,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 0.16962525062263012,
+              "cpu": 1.5496429999999997,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 0.1722971247509122,
+              "cpu": 1.5505129999999987,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 0.1715955836698413,
+              "cpu": 1.5430300000000017,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 0.17136229202151299,
+              "cpu": 1.5523360000000004,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 0.17070420924574137,
+              "cpu": 1.5476540000000014,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 0.17078574933111668,
+              "cpu": 1.5465449999999983,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 0.16986741591244936,
+              "cpu": 1.5552410000000023,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 0.16976041719317436,
+              "cpu": 1.5621580000000002,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 0.1706773340702057,
+              "cpu": 1.5347030000000004,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 0.17075216583907604,
+              "cpu": 1.561319000000001,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            },
+            {
+              "wall": 0.16937724966555834,
+              "cpu": 1.552061000000002,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 0
+            },
+            {
+              "wall": 0.17033562529832125,
+              "cpu": 1.5594919999999988,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 1
+            },
+            {
+              "wall": 0.1719406247138977,
+              "cpu": 1.5398420000000002,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 0
+            },
+            {
+              "wall": 0.17105970811098814,
+              "cpu": 1.5582449999999994,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 1
+            },
+            {
+              "wall": 0.16997424978762865,
+              "cpu": 1.549121999999997,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 0
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 20,
+      "session": "12t-extra-8t",
+      "note": "Requested thread override was not applied by the initial harness; actual compression thread count is 12 (see metadata). Excluded from requested 8/1-thread comparisons."
+    },
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 0.1888349587097764,
+              "cpu": 1.6489469999999997,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 0.17869470827281475,
+              "cpu": 1.624803,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 0.17905325070023537,
+              "cpu": 1.625686,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 0.17682425025850534,
+              "cpu": 1.6277179999999998,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 0.17754750046879053,
+              "cpu": 1.633427000000001,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 0.1814127080142498,
+              "cpu": 1.6216560000000015,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 0.1775113334879279,
+              "cpu": 1.6279959999999996,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 0.1775500001385808,
+              "cpu": 1.6338170000000005,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 0.1795225003734231,
+              "cpu": 1.617286,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 0.1773625835776329,
+              "cpu": 1.626804,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 0.17661266773939133,
+              "cpu": 1.6398189999999992,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 0.1842930419370532,
+              "cpu": 1.6266370000000023,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 0.1770790833979845,
+              "cpu": 1.6286379999999987,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 0.17766470927745104,
+              "cpu": 1.639400000000002,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 0.18281337525695562,
+              "cpu": 1.6282560000000004,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            },
+            {
+              "wall": 0.2045302502810955,
+              "cpu": 1.669037000000003,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 1
+            },
+            {
+              "wall": 0.18558358307927847,
+              "cpu": 1.6651150000000001,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 0
+            },
+            {
+              "wall": 0.17993262503296137,
+              "cpu": 1.6530070000000023,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 1
+            },
+            {
+              "wall": 0.17993683274835348,
+              "cpu": 1.6318219999999997,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 0
+            },
+            {
+              "wall": 0.18085345905274153,
+              "cpu": 1.6202599999999947,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 1
+            },
+            {
+              "wall": 0.17976033315062523,
+              "cpu": 1.6254910000000038,
+              "cratio": 68.7704067048327,
+              "pair": 20,
+              "position": 0
+            },
+            {
+              "wall": 0.17736529186367989,
+              "cpu": 1.6387969999999967,
+              "cratio": 68.7704067048327,
+              "pair": 21,
+              "position": 1
+            },
+            {
+              "wall": 0.1828899998217821,
+              "cpu": 1.6200120000000027,
+              "cratio": 68.7704067048327,
+              "pair": 22,
+              "position": 0
+            },
+            {
+              "wall": 0.17822774965316057,
+              "cpu": 1.6306730000000016,
+              "cratio": 68.7704067048327,
+              "pair": 23,
+              "position": 1
+            },
+            {
+              "wall": 0.18320166692137718,
+              "cpu": 1.6255249999999961,
+              "cratio": 68.7704067048327,
+              "pair": 24,
+              "position": 0
+            },
+            {
+              "wall": 0.17767425067722797,
+              "cpu": 1.6413689999999974,
+              "cratio": 68.7704067048327,
+              "pair": 25,
+              "position": 1
+            },
+            {
+              "wall": 0.1782153332605958,
+              "cpu": 1.623038000000001,
+              "cratio": 68.7704067048327,
+              "pair": 26,
+              "position": 0
+            },
+            {
+              "wall": 0.17881633341312408,
+              "cpu": 1.6301419999999993,
+              "cratio": 68.7704067048327,
+              "pair": 27,
+              "position": 1
+            },
+            {
+              "wall": 0.1803227076306939,
+              "cpu": 1.5890529999999998,
+              "cratio": 68.7704067048327,
+              "pair": 28,
+              "position": 0
+            },
+            {
+              "wall": 0.17879491671919823,
+              "cpu": 1.618434999999998,
+              "cratio": 68.7704067048327,
+              "pair": 29,
+              "position": 1
+            }
+          ],
+          [
+            {
+              "wall": 0.1711667077615857,
+              "cpu": 1.5517310000000002,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 0.17074220720678568,
+              "cpu": 1.5537930000000006,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 0.1712861666455865,
+              "cpu": 1.55598,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 0.1698872921988368,
+              "cpu": 1.5536180000000002,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 0.17218000069260597,
+              "cpu": 1.5485629999999997,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 0.17206045892089605,
+              "cpu": 1.5409969999999973,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 0.17124312557280064,
+              "cpu": 1.5631790000000017,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 0.1702137915417552,
+              "cpu": 1.5557090000000002,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 0.17291462514549494,
+              "cpu": 1.5521770000000004,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 0.17009933292865753,
+              "cpu": 1.5523720000000019,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 0.17062283400446177,
+              "cpu": 1.5557830000000017,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 0.1725013330578804,
+              "cpu": 1.538057000000002,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 0.17090125009417534,
+              "cpu": 1.5531939999999977,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 0.17038816679269075,
+              "cpu": 1.5557890000000008,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 0.20735079050064087,
+              "cpu": 1.6052450000000036,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            },
+            {
+              "wall": 0.21038166526705027,
+              "cpu": 1.572063,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 0
+            },
+            {
+              "wall": 0.1712575415149331,
+              "cpu": 1.5934499999999971,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 1
+            },
+            {
+              "wall": 0.17541300039738417,
+              "cpu": 1.573048,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 0
+            },
+            {
+              "wall": 0.17184424959123135,
+              "cpu": 1.5501119999999986,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 1
+            },
+            {
+              "wall": 0.17072250042110682,
+              "cpu": 1.5436389999999989,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 0
+            },
+            {
+              "wall": 0.17231404222548008,
+              "cpu": 1.55368,
+              "cratio": 68.7704067048327,
+              "pair": 20,
+              "position": 1
+            },
+            {
+              "wall": 0.17010174971073866,
+              "cpu": 1.550879000000002,
+              "cratio": 68.7704067048327,
+              "pair": 21,
+              "position": 0
+            },
+            {
+              "wall": 0.17167300079017878,
+              "cpu": 1.5560960000000037,
+              "cratio": 68.7704067048327,
+              "pair": 22,
+              "position": 1
+            },
+            {
+              "wall": 0.17047016695141792,
+              "cpu": 1.5409980000000019,
+              "cratio": 68.7704067048327,
+              "pair": 23,
+              "position": 0
+            },
+            {
+              "wall": 0.17157966643571854,
+              "cpu": 1.550581000000001,
+              "cratio": 68.7704067048327,
+              "pair": 24,
+              "position": 1
+            },
+            {
+              "wall": 0.16978916712105274,
+              "cpu": 1.5500480000000039,
+              "cratio": 68.7704067048327,
+              "pair": 25,
+              "position": 0
+            },
+            {
+              "wall": 0.17320800013840199,
+              "cpu": 1.5478469999999973,
+              "cratio": 68.7704067048327,
+              "pair": 26,
+              "position": 1
+            },
+            {
+              "wall": 0.17027562484145164,
+              "cpu": 1.5418659999999988,
+              "cratio": 68.7704067048327,
+              "pair": 27,
+              "position": 0
+            },
+            {
+              "wall": 0.17210366670042276,
+              "cpu": 1.5410779999999988,
+              "cratio": 68.7704067048327,
+              "pair": 28,
+              "position": 1
+            },
+            {
+              "wall": 0.17058054078370333,
+              "cpu": 1.5591389999999947,
+              "cratio": 68.7704067048327,
+              "pair": 29,
+              "position": 0
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 30,
+      "session": "12t-b"
+    },
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 0.23422487452626228,
+              "cpu": 1.643358000000001,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 0.18005737476050854,
+              "cpu": 1.5308539999999997,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 0.1731301248073578,
+              "cpu": 1.5344580000000008,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 0.17076441552489996,
+              "cpu": 1.5574380000000012,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 0.17138416599482298,
+              "cpu": 1.5538669999999986,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 0.17095037549734116,
+              "cpu": 1.5547830000000005,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 0.17118395864963531,
+              "cpu": 1.5537460000000003,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 0.17153016664087772,
+              "cpu": 1.5552160000000015,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 0.17187583446502686,
+              "cpu": 1.5495389999999993,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 0.1745650004595518,
+              "cpu": 1.539793999999997,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 0.17278045788407326,
+              "cpu": 1.5448489999999993,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 0.17741824965924025,
+              "cpu": 1.5516429999999986,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 0.17408554162830114,
+              "cpu": 1.5484989999999996,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 0.19214904215186834,
+              "cpu": 1.5522349999999996,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 0.18001937493681908,
+              "cpu": 1.550978999999998,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            }
+          ],
+          [
+            {
+              "wall": 0.18797633238136768,
+              "cpu": 1.6311400000000003,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 0.1803982499986887,
+              "cpu": 1.6218019999999989,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 0.17898700013756752,
+              "cpu": 1.611084,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 0.17958041559904814,
+              "cpu": 1.6139349999999997,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 0.17880462482571602,
+              "cpu": 1.6252429999999976,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 0.17677383217960596,
+              "cpu": 1.6298780000000015,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 0.17762470804154873,
+              "cpu": 1.6297429999999977,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 0.17959391605108976,
+              "cpu": 1.6125040000000013,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 0.18058883305639029,
+              "cpu": 1.6194629999999997,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 0.17846024967730045,
+              "cpu": 1.6323670000000021,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 0.1799035845324397,
+              "cpu": 1.6415420000000012,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 0.17781020794063807,
+              "cpu": 1.6239650000000019,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 0.1813636664301157,
+              "cpu": 1.6004150000000017,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 0.1811877079308033,
+              "cpu": 1.5918880000000009,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 0.18920587562024593,
+              "cpu": 1.6261570000000063,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 15,
+      "session": "12t-extra-1t",
+      "note": "Requested thread override was not applied by the initial harness; actual compression thread count is 12 (see metadata). Excluded from requested 8/1-thread comparisons."
+    },
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 12,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 0.17037887498736382,
+              "cpu": 1.556241,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 0.17158720828592777,
+              "cpu": 1.5551469999999998,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 0.1734311245381832,
+              "cpu": 1.5343350000000004,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 0.17302166763693094,
+              "cpu": 1.564240999999999,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 0.17155829165130854,
+              "cpu": 1.543025,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 0.1707253335043788,
+              "cpu": 1.5632319999999993,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 0.17072858288884163,
+              "cpu": 1.5587250000000026,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 0.1713430006057024,
+              "cpu": 1.5551770000000005,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 0.17278808262199163,
+              "cpu": 1.5427479999999996,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 0.17266575060784817,
+              "cpu": 1.5520490000000002,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 0.17076004203408957,
+              "cpu": 1.5663839999999993,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 0.17165200039744377,
+              "cpu": 1.5594169999999998,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 0.16992925014346838,
+              "cpu": 1.5613959999999985,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 0.17128570936620235,
+              "cpu": 1.5616400000000006,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 0.17168354243040085,
+              "cpu": 1.5484399999999994,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            },
+            {
+              "wall": 0.1715048337355256,
+              "cpu": 1.558914999999999,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 1
+            },
+            {
+              "wall": 0.17072166688740253,
+              "cpu": 1.5597759999999994,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 0
+            },
+            {
+              "wall": 0.1741130417212844,
+              "cpu": 1.5557149999999993,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 1
+            },
+            {
+              "wall": 0.1712090838700533,
+              "cpu": 1.5523250000000033,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 0
+            },
+            {
+              "wall": 0.17224541679024696,
+              "cpu": 1.5429249999999968,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 1
+            },
+            {
+              "wall": 0.17265387531369925,
+              "cpu": 1.5180860000000038,
+              "cratio": 68.7704067048327,
+              "pair": 20,
+              "position": 0
+            },
+            {
+              "wall": 0.17303437553346157,
+              "cpu": 1.5473870000000005,
+              "cratio": 68.7704067048327,
+              "pair": 21,
+              "position": 1
+            },
+            {
+              "wall": 0.17108745779842138,
+              "cpu": 1.5513660000000016,
+              "cratio": 68.7704067048327,
+              "pair": 22,
+              "position": 0
+            },
+            {
+              "wall": 0.17180058266967535,
+              "cpu": 1.553730999999999,
+              "cratio": 68.7704067048327,
+              "pair": 23,
+              "position": 1
+            },
+            {
+              "wall": 0.17078449949622154,
+              "cpu": 1.5581760000000031,
+              "cratio": 68.7704067048327,
+              "pair": 24,
+              "position": 0
+            },
+            {
+              "wall": 0.17126816604286432,
+              "cpu": 1.555646000000003,
+              "cratio": 68.7704067048327,
+              "pair": 25,
+              "position": 1
+            },
+            {
+              "wall": 0.17157099954783916,
+              "cpu": 1.551241999999995,
+              "cratio": 68.7704067048327,
+              "pair": 26,
+              "position": 0
+            },
+            {
+              "wall": 0.17211558297276497,
+              "cpu": 1.558256,
+              "cratio": 68.7704067048327,
+              "pair": 27,
+              "position": 1
+            },
+            {
+              "wall": 0.17229108326137066,
+              "cpu": 1.5616259999999968,
+              "cratio": 68.7704067048327,
+              "pair": 28,
+              "position": 0
+            },
+            {
+              "wall": 0.17159154172986746,
+              "cpu": 1.5546290000000056,
+              "cratio": 68.7704067048327,
+              "pair": 29,
+              "position": 1
+            }
+          ],
+          [
+            {
+              "wall": 0.1780061675235629,
+              "cpu": 1.6261030000000005,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 0.17896920908242464,
+              "cpu": 1.6254460000000002,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 0.1792322499677539,
+              "cpu": 1.612501,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 0.17793566640466452,
+              "cpu": 1.6266230000000004,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 0.18011537473648787,
+              "cpu": 1.615910999999997,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 0.1768196253105998,
+              "cpu": 1.6296029999999995,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 0.17719483375549316,
+              "cpu": 1.6347839999999998,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 0.1782794576138258,
+              "cpu": 1.6332059999999977,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 0.17729387525469065,
+              "cpu": 1.6298180000000002,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 0.17856166698038578,
+              "cpu": 1.6164640000000006,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 0.17709904164075851,
+              "cpu": 1.6279839999999979,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 0.17738204263150692,
+              "cpu": 1.6206609999999984,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 0.1771840825676918,
+              "cpu": 1.6461129999999997,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 0.1765291253104806,
+              "cpu": 1.6341699999999975,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 0.18337445799261332,
+              "cpu": 1.6331690000000023,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            },
+            {
+              "wall": 0.17851716745644808,
+              "cpu": 1.6229750000000038,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 0
+            },
+            {
+              "wall": 0.17659545876085758,
+              "cpu": 1.6360380000000063,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 1
+            },
+            {
+              "wall": 0.1777718747034669,
+              "cpu": 1.6299509999999984,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 0
+            },
+            {
+              "wall": 0.1767166666686535,
+              "cpu": 1.6288690000000017,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 1
+            },
+            {
+              "wall": 0.17888058349490166,
+              "cpu": 1.6173819999999992,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 0
+            },
+            {
+              "wall": 0.18042137566953897,
+              "cpu": 1.605832999999997,
+              "cratio": 68.7704067048327,
+              "pair": 20,
+              "position": 1
+            },
+            {
+              "wall": 0.17911716736853123,
+              "cpu": 1.6363240000000019,
+              "cratio": 68.7704067048327,
+              "pair": 21,
+              "position": 0
+            },
+            {
+              "wall": 0.1770168747752905,
+              "cpu": 1.6331240000000022,
+              "cratio": 68.7704067048327,
+              "pair": 22,
+              "position": 1
+            },
+            {
+              "wall": 0.1762420004233718,
+              "cpu": 1.634418999999994,
+              "cratio": 68.7704067048327,
+              "pair": 23,
+              "position": 0
+            },
+            {
+              "wall": 0.1791662499308586,
+              "cpu": 1.6219119999999947,
+              "cratio": 68.7704067048327,
+              "pair": 24,
+              "position": 1
+            },
+            {
+              "wall": 0.17948441579937935,
+              "cpu": 1.6114570000000015,
+              "cratio": 68.7704067048327,
+              "pair": 25,
+              "position": 0
+            },
+            {
+              "wall": 0.17785358428955078,
+              "cpu": 1.642074000000001,
+              "cratio": 68.7704067048327,
+              "pair": 26,
+              "position": 1
+            },
+            {
+              "wall": 0.17815175000578165,
+              "cpu": 1.628824999999999,
+              "cratio": 68.7704067048327,
+              "pair": 27,
+              "position": 0
+            },
+            {
+              "wall": 0.17704866733402014,
+              "cpu": 1.6369119999999953,
+              "cratio": 68.7704067048327,
+              "pair": 28,
+              "position": 1
+            },
+            {
+              "wall": 0.17731491569429636,
+              "cpu": 1.6238880000000009,
+              "cratio": 68.7704067048327,
+              "pair": 29,
+              "position": 0
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 30,
+      "session": "12t-c"
+    },
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 8,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=8, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 8,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=8, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 0.18278620764613152,
+              "cpu": 1.2787429999999995,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 0.18557041604071856,
+              "cpu": 1.2916419999999995,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 0.18475433345884085,
+              "cpu": 1.2853940000000001,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 0.23616212513297796,
+              "cpu": 1.4517550000000004,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 0.19041604176163673,
+              "cpu": 1.3123329999999989,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 0.1838206658139825,
+              "cpu": 1.2834979999999998,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 0.18356720823794603,
+              "cpu": 1.2825740000000003,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 0.18420008290559053,
+              "cpu": 1.2822940000000003,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 0.18413216713815928,
+              "cpu": 1.2785879999999992,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 0.183356374502182,
+              "cpu": 1.2846399999999996,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 0.18229379132390022,
+              "cpu": 1.277660000000001,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 0.18593629077076912,
+              "cpu": 1.2923380000000009,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 0.1867195414379239,
+              "cpu": 1.2946950000000008,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 0.18418291676789522,
+              "cpu": 1.2840610000000012,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 0.1833389587700367,
+              "cpu": 1.278217999999999,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            },
+            {
+              "wall": 0.18439950048923492,
+              "cpu": 1.2848690000000005,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 1
+            },
+            {
+              "wall": 0.19208083301782608,
+              "cpu": 1.31053,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 0
+            },
+            {
+              "wall": 0.18538620974868536,
+              "cpu": 1.2896129999999992,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 1
+            },
+            {
+              "wall": 0.18667274992913008,
+              "cpu": 1.2903480000000016,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 0
+            },
+            {
+              "wall": 0.18336450029164553,
+              "cpu": 1.2835760000000036,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 1
+            }
+          ],
+          [
+            {
+              "wall": 0.19519250001758337,
+              "cpu": 1.3640749999999997,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 0.1913556670770049,
+              "cpu": 1.3475479999999997,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 0.19259812496602535,
+              "cpu": 1.3521359999999998,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 0.20605187490582466,
+              "cpu": 1.4023970000000006,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 0.20432187523692846,
+              "cpu": 1.4067670000000003,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 0.19279929157346487,
+              "cpu": 1.3523340000000008,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 0.19072583317756653,
+              "cpu": 1.3436109999999992,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 0.19053445849567652,
+              "cpu": 1.3452970000000022,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 0.19234454166144133,
+              "cpu": 1.3468540000000004,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 0.19182875007390976,
+              "cpu": 1.3445210000000003,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 0.1955159166827798,
+              "cpu": 1.3633609999999976,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 0.19148362521082163,
+              "cpu": 1.3446919999999984,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 0.19313287548720837,
+              "cpu": 1.351852000000001,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 0.19148312509059906,
+              "cpu": 1.3473810000000022,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 0.19137175008654594,
+              "cpu": 1.3453809999999997,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            },
+            {
+              "wall": 0.19132629223167896,
+              "cpu": 1.3455469999999998,
+              "cratio": 68.7704067048327,
+              "pair": 15,
+              "position": 0
+            },
+            {
+              "wall": 0.19873424991965294,
+              "cpu": 1.372473000000003,
+              "cratio": 68.7704067048327,
+              "pair": 16,
+              "position": 1
+            },
+            {
+              "wall": 0.19643200002610683,
+              "cpu": 1.3664349999999956,
+              "cratio": 68.7704067048327,
+              "pair": 17,
+              "position": 0
+            },
+            {
+              "wall": 0.1920748334378004,
+              "cpu": 1.3502319999999983,
+              "cratio": 68.7704067048327,
+              "pair": 18,
+              "position": 1
+            },
+            {
+              "wall": 0.1911612907424569,
+              "cpu": 1.3464430000000007,
+              "cratio": 68.7704067048327,
+              "pair": 19,
+              "position": 0
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 20,
+      "session": "8t-verified"
+    },
+    {
+      "metadata": [
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-on/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 1,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=1, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": true,
+            "output_zero_fill_bytes": 0,
+            "physical_output_bytes": 32000000
+          }
+        },
+        {
+          "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+          "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+          "lz4": "1.11.1",
+          "chunks": [
+            2,
+            1000,
+            1000
+          ],
+          "blocks": [
+            1,
+            10,
+            1000
+          ],
+          "threads": 1,
+          "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=1, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+          "zero_fill_probe": {
+            "prefilter_full_write": false,
+            "output_zero_fill_bytes": 32000000,
+            "physical_output_bytes": 32000000
+          }
+        }
+      ],
+      "results": {
+        "construct": [
+          [
+            {
+              "wall": 1.155493250116706,
+              "cpu": 1.1554220000000006,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 0
+            },
+            {
+              "wall": 1.1629074169322848,
+              "cpu": 1.1615009999999995,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 1
+            },
+            {
+              "wall": 1.1582148326560855,
+              "cpu": 1.1581470000000014,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 0
+            },
+            {
+              "wall": 1.1571575831621885,
+              "cpu": 1.1570799999999988,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 1
+            },
+            {
+              "wall": 1.1571263745427132,
+              "cpu": 1.156998999999999,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 0
+            },
+            {
+              "wall": 1.1570230005308986,
+              "cpu": 1.1569680000000009,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 1
+            },
+            {
+              "wall": 1.1615523742511868,
+              "cpu": 1.1614280000000008,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 0
+            },
+            {
+              "wall": 1.1588864997029305,
+              "cpu": 1.1588170000000009,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 1
+            },
+            {
+              "wall": 1.1550694582983851,
+              "cpu": 1.1549929999999975,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 0
+            },
+            {
+              "wall": 1.1554951248690486,
+              "cpu": 1.1554059999999993,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 1
+            },
+            {
+              "wall": 1.1618481678888202,
+              "cpu": 1.1617800000000003,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 0
+            },
+            {
+              "wall": 1.1618405412882566,
+              "cpu": 1.1604339999999986,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 1
+            },
+            {
+              "wall": 1.1577025847509503,
+              "cpu": 1.1575340000000018,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 0
+            },
+            {
+              "wall": 1.1601626258343458,
+              "cpu": 1.1600450000000002,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 1
+            },
+            {
+              "wall": 1.1581764593720436,
+              "cpu": 1.157349,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 0
+            }
+          ],
+          [
+            {
+              "wall": 1.2213010843843222,
+              "cpu": 1.2211990000000004,
+              "cratio": 68.7704067048327,
+              "pair": 0,
+              "position": 1
+            },
+            {
+              "wall": 1.2232132079079747,
+              "cpu": 1.2229869999999998,
+              "cratio": 68.7704067048327,
+              "pair": 1,
+              "position": 0
+            },
+            {
+              "wall": 1.2141338335350156,
+              "cpu": 1.2140519999999988,
+              "cratio": 68.7704067048327,
+              "pair": 2,
+              "position": 1
+            },
+            {
+              "wall": 1.2162593333050609,
+              "cpu": 1.2161670000000004,
+              "cratio": 68.7704067048327,
+              "pair": 3,
+              "position": 0
+            },
+            {
+              "wall": 1.2143331253901124,
+              "cpu": 1.2142400000000002,
+              "cratio": 68.7704067048327,
+              "pair": 4,
+              "position": 1
+            },
+            {
+              "wall": 1.2159639997407794,
+              "cpu": 1.2158180000000005,
+              "cratio": 68.7704067048327,
+              "pair": 5,
+              "position": 0
+            },
+            {
+              "wall": 1.220306457951665,
+              "cpu": 1.2202270000000013,
+              "cratio": 68.7704067048327,
+              "pair": 6,
+              "position": 1
+            },
+            {
+              "wall": 1.2155375825241208,
+              "cpu": 1.215446,
+              "cratio": 68.7704067048327,
+              "pair": 7,
+              "position": 0
+            },
+            {
+              "wall": 1.2151253335177898,
+              "cpu": 1.215054000000002,
+              "cratio": 68.7704067048327,
+              "pair": 8,
+              "position": 1
+            },
+            {
+              "wall": 1.2150456253439188,
+              "cpu": 1.2149709999999985,
+              "cratio": 68.7704067048327,
+              "pair": 9,
+              "position": 0
+            },
+            {
+              "wall": 1.2149635823443532,
+              "cpu": 1.2148779999999988,
+              "cratio": 68.7704067048327,
+              "pair": 10,
+              "position": 1
+            },
+            {
+              "wall": 1.2156694997102022,
+              "cpu": 1.2151800000000001,
+              "cratio": 68.7704067048327,
+              "pair": 11,
+              "position": 0
+            },
+            {
+              "wall": 1.2145061250776052,
+              "cpu": 1.2143920000000001,
+              "cratio": 68.7704067048327,
+              "pair": 12,
+              "position": 1
+            },
+            {
+              "wall": 1.2160417912527919,
+              "cpu": 1.215866000000002,
+              "cratio": 68.7704067048327,
+              "pair": 13,
+              "position": 0
+            },
+            {
+              "wall": 1.2166464580222964,
+              "cpu": 1.2165299999999988,
+              "cratio": 68.7704067048327,
+              "pair": 14,
+              "position": 1
+            }
+          ]
+        ]
+      },
+      "warmups": 5,
+      "measured_pairs": 15,
+      "session": "1t-verified"
+    }
+  ],
+  "control": {
+    "metadata": [
+      {
+        "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+        "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+        "lz4": "1.11.1",
+        "chunks": [
+          2,
+          1000,
+          1000
+        ],
+        "blocks": [
+          1,
+          10,
+          1000
+        ],
+        "threads": 12,
+        "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+        "zero_fill_probe": {
+          "prefilter_full_write": false,
+          "output_zero_fill_bytes": 32000000,
+          "physical_output_bytes": 32000000
+        }
+      },
+      {
+        "package": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/__init__.py",
+        "extension": "/Users/faltet/blosc/python-blosc2/build_py314/linspace-zero-fill-off/blosc2/blosc2_ext.abi3.so",
+        "lz4": "1.11.1",
+        "chunks": [
+          2,
+          1000,
+          1000
+        ],
+        "blocks": [
+          1,
+          10,
+          1000
+        ],
+        "threads": 12,
+        "cparams": "CParams(codec=<Codec.LZ4: 1>, codec_meta=0, clevel=5, use_dict=False, typesize=8, nthreads=12, blocksize=80000, splitmode=<SplitMode.AUTO_SPLIT: 3>, filters=[<Filter.SHUFFLE: 1>, <Filter.BYTEDELTA: 35>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>], filters_meta=[0, 8, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)",
+        "zero_fill_probe": {
+          "prefilter_full_write": false,
+          "output_zero_fill_bytes": 32000000,
+          "physical_output_bytes": 32000000
+        }
+      }
+    ],
+    "results": {
+      "construct": [
+        [
+          {
+            "wall": 0.18191891722381115,
+            "cpu": 1.5990889999999993,
+            "cratio": 68.7704067048327,
+            "pair": 0,
+            "position": 0
+          },
+          {
+            "wall": 0.1788723338395357,
+            "cpu": 1.617287000000001,
+            "cratio": 68.7704067048327,
+            "pair": 1,
+            "position": 1
+          },
+          {
+            "wall": 0.18005316611379385,
+            "cpu": 1.6046420000000001,
+            "cratio": 68.7704067048327,
+            "pair": 2,
+            "position": 0
+          },
+          {
+            "wall": 0.18314112536609173,
+            "cpu": 1.6205079999999992,
+            "cratio": 68.7704067048327,
+            "pair": 3,
+            "position": 1
+          },
+          {
+            "wall": 0.17972004227340221,
+            "cpu": 1.6177540000000015,
+            "cratio": 68.7704067048327,
+            "pair": 4,
+            "position": 0
+          },
+          {
+            "wall": 0.17978200037032366,
+            "cpu": 1.6220440000000025,
+            "cratio": 68.7704067048327,
+            "pair": 5,
+            "position": 1
+          },
+          {
+            "wall": 0.17899758275598288,
+            "cpu": 1.619681,
+            "cratio": 68.7704067048327,
+            "pair": 6,
+            "position": 0
+          },
+          {
+            "wall": 0.181299333460629,
+            "cpu": 1.590800999999999,
+            "cratio": 68.7704067048327,
+            "pair": 7,
+            "position": 1
+          },
+          {
+            "wall": 0.1812770003452897,
+            "cpu": 1.5951520000000023,
+            "cratio": 68.7704067048327,
+            "pair": 8,
+            "position": 0
+          },
+          {
+            "wall": 0.1789298327639699,
+            "cpu": 1.6135330000000003,
+            "cratio": 68.7704067048327,
+            "pair": 9,
+            "position": 1
+          },
+          {
+            "wall": 0.1783107491210103,
+            "cpu": 1.6207409999999989,
+            "cratio": 68.7704067048327,
+            "pair": 10,
+            "position": 0
+          },
+          {
+            "wall": 0.17869812436401844,
+            "cpu": 1.6218389999999978,
+            "cratio": 68.7704067048327,
+            "pair": 11,
+            "position": 1
+          },
+          {
+            "wall": 0.1790038337931037,
+            "cpu": 1.6209880000000005,
+            "cratio": 68.7704067048327,
+            "pair": 12,
+            "position": 0
+          },
+          {
+            "wall": 0.17959429137408733,
+            "cpu": 1.6185429999999954,
+            "cratio": 68.7704067048327,
+            "pair": 13,
+            "position": 1
+          },
+          {
+            "wall": 0.17801233287900686,
+            "cpu": 1.6245329999999996,
+            "cratio": 68.7704067048327,
+            "pair": 14,
+            "position": 0
+          },
+          {
+            "wall": 0.1805231673642993,
+            "cpu": 1.6342330000000018,
+            "cratio": 68.7704067048327,
+            "pair": 15,
+            "position": 1
+          },
+          {
+            "wall": 0.17922099959105253,
+            "cpu": 1.6183380000000014,
+            "cratio": 68.7704067048327,
+            "pair": 16,
+            "position": 0
+          },
+          {
+            "wall": 0.17986337468028069,
+            "cpu": 1.624063999999997,
+            "cratio": 68.7704067048327,
+            "pair": 17,
+            "position": 1
+          },
+          {
+            "wall": 0.17932370956987143,
+            "cpu": 1.6208659999999995,
+            "cratio": 68.7704067048327,
+            "pair": 18,
+            "position": 0
+          },
+          {
+            "wall": 0.1790499584749341,
+            "cpu": 1.6157770000000014,
+            "cratio": 68.7704067048327,
+            "pair": 19,
+            "position": 1
+          },
+          {
+            "wall": 0.17885554023087025,
+            "cpu": 1.6134550000000019,
+            "cratio": 68.7704067048327,
+            "pair": 20,
+            "position": 0
+          },
+          {
+            "wall": 0.1803148752078414,
+            "cpu": 1.6130470000000017,
+            "cratio": 68.7704067048327,
+            "pair": 21,
+            "position": 1
+          },
+          {
+            "wall": 0.17915366683155298,
+            "cpu": 1.6175489999999968,
+            "cratio": 68.7704067048327,
+            "pair": 22,
+            "position": 0
+          },
+          {
+            "wall": 0.1791283329948783,
+            "cpu": 1.6175579999999954,
+            "cratio": 68.7704067048327,
+            "pair": 23,
+            "position": 1
+          },
+          {
+            "wall": 0.178851124830544,
+            "cpu": 1.6180050000000037,
+            "cratio": 68.7704067048327,
+            "pair": 24,
+            "position": 0
+          }
+        ],
+        [
+          {
+            "wall": 0.18067883420735598,
+            "cpu": 1.6266619999999996,
+            "cratio": 68.7704067048327,
+            "pair": 0,
+            "position": 1
+          },
+          {
+            "wall": 0.17991662491112947,
+            "cpu": 1.6270230000000012,
+            "cratio": 68.7704067048327,
+            "pair": 1,
+            "position": 0
+          },
+          {
+            "wall": 0.19324075058102608,
+            "cpu": 1.6314419999999998,
+            "cratio": 68.7704067048327,
+            "pair": 2,
+            "position": 1
+          },
+          {
+            "wall": 0.18530962523072958,
+            "cpu": 1.6230569999999993,
+            "cratio": 68.7704067048327,
+            "pair": 3,
+            "position": 0
+          },
+          {
+            "wall": 0.1797952502965927,
+            "cpu": 1.6247419999999977,
+            "cratio": 68.7704067048327,
+            "pair": 4,
+            "position": 1
+          },
+          {
+            "wall": 0.19602166675031185,
+            "cpu": 1.6332200000000014,
+            "cratio": 68.7704067048327,
+            "pair": 5,
+            "position": 0
+          },
+          {
+            "wall": 0.1795647917315364,
+            "cpu": 1.6153469999999999,
+            "cratio": 68.7704067048327,
+            "pair": 6,
+            "position": 1
+          },
+          {
+            "wall": 0.18053966667503119,
+            "cpu": 1.598516,
+            "cratio": 68.7704067048327,
+            "pair": 7,
+            "position": 0
+          },
+          {
+            "wall": 0.18019841704517603,
+            "cpu": 1.605362999999997,
+            "cratio": 68.7704067048327,
+            "pair": 8,
+            "position": 1
+          },
+          {
+            "wall": 0.17879408411681652,
+            "cpu": 1.624365000000001,
+            "cratio": 68.7704067048327,
+            "pair": 9,
+            "position": 0
+          },
+          {
+            "wall": 0.1800107080489397,
+            "cpu": 1.6245189999999994,
+            "cratio": 68.7704067048327,
+            "pair": 10,
+            "position": 1
+          },
+          {
+            "wall": 0.17955179139971733,
+            "cpu": 1.6216240000000006,
+            "cratio": 68.7704067048327,
+            "pair": 11,
+            "position": 0
+          },
+          {
+            "wall": 0.18037633318454027,
+            "cpu": 1.6274480000000011,
+            "cratio": 68.7704067048327,
+            "pair": 12,
+            "position": 1
+          },
+          {
+            "wall": 0.17898020800203085,
+            "cpu": 1.6242739999999962,
+            "cratio": 68.7704067048327,
+            "pair": 13,
+            "position": 0
+          },
+          {
+            "wall": 0.18279112502932549,
+            "cpu": 1.6176369999999949,
+            "cratio": 68.7704067048327,
+            "pair": 14,
+            "position": 1
+          },
+          {
+            "wall": 0.1977923745289445,
+            "cpu": 1.6686070000000015,
+            "cratio": 68.7704067048327,
+            "pair": 15,
+            "position": 0
+          },
+          {
+            "wall": 0.18052229192107916,
+            "cpu": 1.6245400000000032,
+            "cratio": 68.7704067048327,
+            "pair": 16,
+            "position": 1
+          },
+          {
+            "wall": 0.18555033300071955,
+            "cpu": 1.6310500000000019,
+            "cratio": 68.7704067048327,
+            "pair": 17,
+            "position": 0
+          },
+          {
+            "wall": 0.1843201657757163,
+            "cpu": 1.6364109999999954,
+            "cratio": 68.7704067048327,
+            "pair": 18,
+            "position": 1
+          },
+          {
+            "wall": 0.18076641578227282,
+            "cpu": 1.617681999999995,
+            "cratio": 68.7704067048327,
+            "pair": 19,
+            "position": 0
+          },
+          {
+            "wall": 0.1867010835558176,
+            "cpu": 1.6251080000000044,
+            "cratio": 68.7704067048327,
+            "pair": 20,
+            "position": 1
+          },
+          {
+            "wall": 0.18044524919241667,
+            "cpu": 1.630913999999997,
+            "cratio": 68.7704067048327,
+            "pair": 21,
+            "position": 0
+          },
+          {
+            "wall": 0.17880462482571602,
+            "cpu": 1.6229360000000028,
+            "cratio": 68.7704067048327,
+            "pair": 22,
+            "position": 1
+          },
+          {
+            "wall": 0.17873591650277376,
+            "cpu": 1.6261349999999979,
+            "cratio": 68.7704067048327,
+            "pair": 23,
+            "position": 0
+          },
+          {
+            "wall": 0.17959858290851116,
+            "cpu": 1.619813999999998,
+            "cratio": 68.7704067048327,
+            "pair": 24,
+            "position": 1
+          }
+        ]
+      ]
+    },
+    "warmups": 5,
+    "measured_pairs": 25,
+    "session": "12t-aa"
+  },
+  "summary": {
+    "12_threads": {
+      "pairs": 90,
+      "skip_zero_median_ms": 171.53156269341707,
+      "zero_median_ms": 178.4472707659006,
+      "paired_saved_median_ms": 6.885936018079519,
+      "paired_saved_median_percent": 3.869711768691939,
+      "paired_saved_ms_95pct_block_bootstrap": [
+        6.541791837662458,
+        7.259041536599398
+      ],
+      "paired_saved_percent_95pct_block_bootstrap": [
+        3.679251888559298,
+        4.080302063716234
+      ],
+      "skip_zero_median_cpu_s": 1.5551620000000002,
+      "zero_median_cpu_s": 1.6323025000000015,
+      "skip_zero_wall_p10_p90_ms": [
+        170.3685499727726,
+        173.83897891268134
+      ],
+      "zero_wall_p10_p90_ms": [
+        177.06396766006947,
+        181.53040846809745
+      ],
+      "paired_saved_ms_95pct_hierarchical_block_bootstrap": [
+        6.088541820645332,
+        7.757582701742649
+      ],
+      "paired_saved_percent_95pct_hierarchical_block_bootstrap": [
+        3.4212999377882696,
+        4.331303177556944
+      ]
+    },
+    "8_threads": {
+      "pairs": 20,
+      "skip_zero_median_ms": 184.29979169741273,
+      "zero_median_ms": 192.20968754962087,
+      "paired_saved_median_ms": 7.548499386757612,
+      "paired_saved_median_percent": 3.9425380447195115,
+      "paired_saved_ms_95pct_block_bootstrap": [
+        6.926791742444038,
+        8.212374523282051
+      ],
+      "paired_saved_percent_95pct_block_bootstrap": [
+        3.620407661512781,
+        4.269616622517528
+      ],
+      "skip_zero_median_cpu_s": 1.2847545,
+      "zero_median_cpu_s": 1.348889999999999,
+      "skip_zero_wall_p10_p90_ms": [
+        183.28368365764618,
+        190.58252088725567
+      ],
+      "zero_wall_p10_p90_ms": [
+        191.11774498596787,
+        199.29301245138052
+      ]
+    },
+    "1_thread": {
+      "pairs": 15,
+      "skip_zero_median_ms": 1158.1764593720436,
+      "zero_median_ms": 1215.6694997102022,
+      "paired_saved_median_ms": 58.46999865025282,
+      "paired_saved_median_percent": 4.805833137861425,
+      "paired_saved_ms_95pct_block_bootstrap": [
+        56.65108282119036,
+        59.10175014287233
+      ],
+      "paired_saved_percent_95pct_block_bootstrap": [
+        4.66057846632366,
+        4.859304962722822
+      ],
+      "skip_zero_median_cpu_s": 1.1575340000000018,
+      "zero_median_cpu_s": 1.215446,
+      "skip_zero_wall_p10_p90_ms": [
+        1155.494000017643,
+        1161.8451172485948
+      ],
+      "zero_wall_p10_p90_ms": [
+        1214.4023252651095,
+        1220.9032338112593
+      ]
+    },
+    "aa_control": {
+      "pairs": 25,
+      "process_0_median_ms": 179.22099959105253,
+      "process_1_median_ms": 180.44524919241667,
+      "paired_difference_ms": 1.0442910715937614,
+      "paired_difference_percent": 0.5804305589378376,
+      "paired_difference_ms_95pct_block_bootstrap": [
+        0.1303739845752716,
+        2.1684998646378517
+      ]
+    }
+  },
+  "analysis": {
+    "estimator": "Median paired (zero_ms - skip_zero_ms), and percent relative to zeroing enabled",
+    "confidence_interval": "10000 circular moving-block bootstrap resamples, block length 4, stratified by session; seed 20261113",
+    "scope": "Warm constructor latency on this M4 Pro, not a general codec/CPU guarantee",
+    "primary_sessions": [
+      "12t-a",
+      "12t-b",
+      "12t-c"
+    ],
+    "discarded_thread_override_attempts": [
+      "12t-extra-8t",
+      "12t-extra-1t"
+    ],
+    "hierarchical_confidence_interval": "10000 resamples of process-pair sessions with replacement, then circular four-pair blocks within each selected session; seed 20261113"
+  }
+}

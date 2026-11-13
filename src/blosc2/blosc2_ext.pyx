@@ -1438,8 +1438,9 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         # diagonal contain only zeros and need no artifact evaluation.
         if state.diagonal_enabled and (state.diagonal < origins[1] - origins[0] - extents[0] + 1
                 or state.diagonal > origins[1] + extents[1] - 1 - origins[0]):
-            if params.output_is_disposable:
+            if params.output_is_disposable and not edge:
                 memset(params.output, 0, params.output_size)
+                worker.output_zero_fill_bytes += params.output_size
             return 0
         destination = params.output
         if edge:

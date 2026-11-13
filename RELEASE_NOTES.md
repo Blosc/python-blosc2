@@ -2,7 +2,14 @@
 
 ## Changes from 4.15.0 to 4.15.1
 
-XXX version-specific blurb XXX
+### Native generation and compression
+
+- Reduce native block-scheduling lock acquisitions and reuse worker-local LZ4
+  compression state when using bundled LZ4. External LZ4 keeps its existing
+  compressor entry point.
+- Import constructor ramp artifacts only once and avoid runtime loop-limit
+  environment lookups for loop-free native kernels. Default chunk/block selection
+  and floating-point semantics are unchanged.
 
 ## Changes from 4.14.2 to 4.15.0
 

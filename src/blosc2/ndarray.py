@@ -6761,6 +6761,8 @@ def ones(
 
 def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endpoint_stop=None):
     """Build an input-free Menudet ramp and bind it to a logical shape."""
+    from .menudet_kernel import prepare_menudet_kernel
+
     # Complex kernels have no JIT backend; use portable interpretation even
     # when the caller requests JIT, as for the existing WASM ramp path.
     if blosc2.IS_WASM or dtype.kind == "c":
@@ -6780,14 +6782,12 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
         start = float(start)
         step = float(step)
 
-    @SourceKernel
-    def ramp(start, step):
-        return start + _flat_idx * step  # noqa: F821
-
     if dtype.kind == "f":
         ramp = SourceKernel.from_source(
             "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
         )
+    else:
+        ramp = SourceKernel.from_source("def ramp(start, step):\n    return start + _flat_idx * step\n")
 
     constants = {"start": start, "step": step}
     if endpoint_stop is not None:
@@ -6804,10 +6804,11 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
         ramp.dsl_source = f"# me:compiler={backend}\n" + ramp.dsl_source
-    artifact = ramp.export({}, dtype, constants=constants, ndim=len(shape))
     jit_option = execution.get("jit")
     jit_mode = math.prod(shape) >= 4_000_000 if jit_option is None else bool(jit_option)
-    kernel = blosc2.MenudetKernel.from_json(artifact, jit=jit_mode)
+    # Export validates by importing an artifact too. Retain that validated kernel
+    # rather than exporting JSON and compiling the same ramp a second time.
+    kernel = prepare_menudet_kernel(ramp, {}, dtype, constants=constants, ndim=len(shape), jit=jit_mode)
     return kernel.lazy({}, shape=shape, partitions=partitions)
 
 

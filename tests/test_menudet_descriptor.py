@@ -1,6 +1,7 @@
 """Opt-in installed-native descriptor fixtures; never search a sibling checkout."""
 
 import json
+from itertools import product
 
 import numpy as np
 import pytest
@@ -173,11 +174,49 @@ def test_constructor_ramp_explicit_interpreter():
     np.testing.assert_array_equal(lazy[:], np.arange(19))
 
 
+def test_constructor_ramp_imports_once_and_keeps_default_partitions(monkeypatch):
+    imports = []
+    original = blosc2.MenudetKernel.from_json
+
+    def from_json(*args, **kwargs):
+        imports.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", from_json)
+    shape = (9, 11, 13)
+    partitions = blosc2.compute_chunks_blocks(shape, dtype=np.float64)
+    result = blosc2.linspace(0, 1, shape=shape, jit=False)
+    assert len(imports) == 1
+    assert imports[0]["jit"] is False
+    assert (result.chunks, result.blocks) == partitions
+    np.testing.assert_array_equal(result[:], np.linspace(0, 1, np.prod(shape)).reshape(shape))
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
+def test_diagonal_zero_blocks_are_initialized_and_reported():
+    artifact = blosc2_ext.MenudetArtifactHandle(
+        manifest(
+            "def k():\n    return _i0 == _i1\n",
+            [],
+            {"dtype": "int64", "contract": "elementwise"},
+            requires=["numeric", "nd-context"],
+            ndim=2,
+        ),
+        0,
+    )
+    output = blosc2.empty((8, 8), dtype="int64", chunks=(4, 4), blocks=(2, 2))
+    _, report = artifact.evaluate_prefilter({}, out=output, _diagonal=0)
+    np.testing.assert_array_equal(output[:], np.eye(8, dtype="int64"))
+    assert "prefilter_full_write" not in report
+    assert report["output_zero_fill_bytes"] == output.schunk.nchunks * output.schunk.chunksize
+
+
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),
     [
         ((11, 13), (6, 8), (4, 3)),
         ((9, 11, 13), (5, 6, 8), (3, 4, 3)),
+        ((8, 12), (4, 6), (2, 3)),
     ],
 )
 @pytest.mark.parametrize("clevel", [0, 5])
@@ -197,6 +236,32 @@ def test_input_free_prefilter_nd_edges(shape, chunks, blocks, clevel, jit):
     output = blosc2.empty(
         shape, dtype="int64", chunks=chunks, blocks=blocks, cparams={"clevel": clevel, "nthreads": 2}
     )
+    expected = np.arange(np.prod(shape)).reshape(shape)
     for _ in range(2):
-        artifact.evaluate_prefilter({}, out=output)
-        np.testing.assert_array_equal(output[:], np.arange(np.prod(shape)).reshape(shape))
+        _, report = artifact.evaluate_prefilter({}, out=output)
+        np.testing.assert_array_equal(output[:], expected)
+        # Inspect physical storage too: callbacks must not leak dirty
+        # scratch into padded rows/columns that logical indexing would hide.
+        extended = tuple(((c + b - 1) // b) * b for c, b in zip(chunks, blocks, strict=True))
+        interleaved = tuple(v for e, b in zip(extended, blocks, strict=True) for v in (e // b, b))
+        axes = tuple(range(0, 2 * len(shape), 2)) + tuple(range(1, 2 * len(shape), 2))
+        for index, origin in enumerate(
+            product(*(range(0, n, c) for n, c in zip(shape, chunks, strict=True)))
+        ):
+            extent = tuple(min(c, n - o) for c, n, o in zip(chunks, shape, origin, strict=True))
+            padded = np.zeros(extended, dtype="int64")
+            local = tuple(slice(0, e) for e in extent)
+            logical = tuple(slice(o, o + e) for o, e in zip(origin, extent, strict=True))
+            padded[local] = expected[logical]
+            physical = padded.reshape(interleaved).transpose(axes).ravel()
+            raw = np.frombuffer(output.schunk.decompress_chunk(index), dtype="int64")
+            np.testing.assert_array_equal(raw, physical)
+        physical_bytes = output.schunk.nchunks * output.schunk.chunksize
+        if clevel:
+            assert report["output_zero_fill_bytes"] == physical_bytes
+        elif physical_bytes == output.nbytes:
+            # Level zero uses the existing disposable-output path, not a new
+            # full-write contract. Only padded edge blocks need clearing.
+            assert report["output_zero_fill_bytes"] == 0
+        else:
+            assert physical_bytes - output.nbytes <= report["output_zero_fill_bytes"] <= physical_bytes
