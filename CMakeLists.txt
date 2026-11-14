@@ -16,8 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.6.0)
-# Fused SHUFFLE+BYTEDELTA for 2/4/8-byte groups, enabled by default (after v3.6.2).
-set(BLOSC2_BUNDLED_VERSION 9aa35b474c59a04415c375f8250f2160953a7a0d)
+# Minimal SIMD shuffle/unshuffle improvements for 2/4/8/16-byte types on NEON, SSE2, and AVX2 (after v3.6.2).
+set(BLOSC2_BUNDLED_VERSION 6307c47f7b09d80e1f9359191f7acf91271bca68)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
