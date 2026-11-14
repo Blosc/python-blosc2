@@ -44,8 +44,9 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
        :doc:`../guides/parquet_to_blosc2`.
    * - ``zarr``
-     - Lazy Zarr sources and the ``b2nd-to-zarr`` (or ``blosc2-to-zarr``)
-       converter (``zarr``).
+     - Lazy Zarr sources and the ``b2nd-to-zarr`` (or ``blosc2-to-zarr``) and
+       ``zarr-to-b2nd`` (or ``zarr-to-blosc2``) converters (``zarr``); see
+       :doc:`../guides/b2nd_to_zarr`.
    * - ``hdf5``
      - Reading HDF5 datasets lazily as virtual arrays, locally or through
        fsspec (``h5py``, ``hdf5plugin``).
