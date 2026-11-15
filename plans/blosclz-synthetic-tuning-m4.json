@@ -1,0 +1,1004 @@
+{
+  "platform": "Apple M4 Pro, macOS arm64, 12 threads",
+  "python_revision": "6425ccd2ba6ee8b5b4bf99e067e8439deb382b3b",
+  "native_revision": "ccca6ad45c086aa23d1207bbc13de0b8e14e9af1",
+  "fused_shuffle_bytedelta": true,
+  "native_source_sha256": "53346a003263967441953108ae07bb757da77823591b512688b10621e7eb7c8d",
+  "baseline": {
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/blosclz-tuning/baseline",
+    "extension_sha256": "8ff2db32bc900a562c367c0c8687ddc9c4200e3879ecae33cb79e2c1aabf7345",
+    "size": 1000000000,
+    "threads": 12,
+    "rows": [
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 0,
+        "seconds": 0.19820658303797245,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 0,
+        "seconds": 0.14224725030362606,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 0,
+        "seconds": 0.10860258433967829,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 0,
+        "seconds": 0.10238420777022839,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 1,
+        "seconds": 0.19678112491965294,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 1,
+        "seconds": 0.10276791732758284,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 1,
+        "seconds": 0.1097337082028389,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 1,
+        "seconds": 0.14350379165261984,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 2,
+        "seconds": 0.1091526672244072,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 2,
+        "seconds": 0.102936957962811,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 2,
+        "seconds": 0.19664116576313972,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 2,
+        "seconds": 0.1419160831719637,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 3,
+        "seconds": 0.10896499920636415,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 3,
+        "seconds": 0.14111116714775562,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 3,
+        "seconds": 0.19584816601127386,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 3,
+        "seconds": 0.10322704166173935,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 4,
+        "seconds": 0.19546812493354082,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 4,
+        "seconds": 0.14111291524022818,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 4,
+        "seconds": 0.1083703339099884,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 4,
+        "seconds": 0.10246637463569641,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 5,
+        "seconds": 0.195613207295537,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 5,
+        "seconds": 0.10347733274102211,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 5,
+        "seconds": 0.10845012497156858,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 5,
+        "seconds": 0.1421334994956851,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 6,
+        "seconds": 0.10888633411377668,
+        "cbytes": 21714257,
+        "cratio": 368.42153982058886,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 6,
+        "seconds": 0.10222737491130829,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 6,
+        "seconds": 0.1958978334441781,
+        "cbytes": 275530493,
+        "cratio": 29.034898870521747,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 6,
+        "seconds": 0.14135479182004929,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      }
+    ],
+    "summary": [
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "median_seconds": 0.10888633411377668
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "median_seconds": 0.10276791732758284
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "median_seconds": 0.1958978334441781
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "median_seconds": 0.1419160831719637
+      }
+    ]
+  },
+  "candidate": {
+    "package": "/private/var/folders/tb/7hwq2y354bb_68xwxjwjwwlr0000gn/T/opencode/blosclz-tuning/final",
+    "extension_sha256": "f464e0741bfd5eaddb2381dd0dd2132d7917ad88611ed889801e6c4b9cd0c4a3",
+    "size": 1000000000,
+    "threads": 12,
+    "rows": [
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 0,
+        "seconds": 0.14399470761418343,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 0,
+        "seconds": 0.14261450059711933,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 0,
+        "seconds": 0.09283970855176449,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 0,
+        "seconds": 0.10284100007265806,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 1,
+        "seconds": 0.14338970836251974,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 1,
+        "seconds": 0.10289537534117699,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 1,
+        "seconds": 0.09313104208558798,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 1,
+        "seconds": 0.14154470805078745,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 2,
+        "seconds": 0.09276954177767038,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 2,
+        "seconds": 0.10260979179292917,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 2,
+        "seconds": 0.1426889579743147,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 2,
+        "seconds": 0.1413187077268958,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 3,
+        "seconds": 0.093513791449368,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 3,
+        "seconds": 0.14068358298391104,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 3,
+        "seconds": 0.1433658329769969,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 3,
+        "seconds": 0.10357004217803478,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 4,
+        "seconds": 0.14332937449216843,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 4,
+        "seconds": 0.14091179054230452,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 4,
+        "seconds": 0.09319516737014055,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 4,
+        "seconds": 0.10270437505096197,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 5,
+        "seconds": 0.14295462518930435,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 5,
+        "seconds": 0.10338091757148504,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 5,
+        "seconds": 0.09293604083359241,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 5,
+        "seconds": 0.14170395769178867,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "trial": 6,
+        "seconds": 0.09309216681867838,
+        "cbytes": 21387857,
+        "cratio": 374.0440194639416,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "trial": 6,
+        "seconds": 0.10252487566322088,
+        "cbytes": 21377817,
+        "cratio": 374.2196876322779,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "int64"
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "trial": 6,
+        "seconds": 0.14238787442445755,
+        "cbytes": 189158478,
+        "cratio": 42.29257966433838,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "trial": 6,
+        "seconds": 0.14133041724562645,
+        "cbytes": 105006916,
+        "cratio": 76.18545810830213,
+        "chunks": [
+          2000000
+        ],
+        "blocks": [
+          16000
+        ],
+        "dtype": "float64"
+      }
+    ],
+    "summary": [
+      {
+        "task": "arange",
+        "codec": "BLOSCLZ",
+        "median_seconds": 0.09309216681867838
+      },
+      {
+        "task": "arange",
+        "codec": "LZ4",
+        "median_seconds": 0.10284100007265806
+      },
+      {
+        "task": "linspace",
+        "codec": "BLOSCLZ",
+        "median_seconds": 0.14332937449216843
+      },
+      {
+        "task": "linspace",
+        "codec": "LZ4",
+        "median_seconds": 0.14133041724562645
+      }
+    ]
+  },
+  "baseline_reads": [
+    {
+      "task": "arange",
+      "codec": "BLOSCLZ",
+      "read_seconds": 0.2500696247443557,
+      "samples": [
+        0.25010737497359514,
+        0.24957237485796213,
+        0.2500696247443557
+      ],
+      "fully_validated": true
+    },
+    {
+      "task": "arange",
+      "codec": "LZ4",
+      "read_seconds": 0.24938437435775995,
+      "samples": [
+        0.24889537505805492,
+        0.24961383268237114,
+        0.24938437435775995
+      ],
+      "fully_validated": true
+    },
+    {
+      "task": "linspace",
+      "codec": "BLOSCLZ",
+      "read_seconds": 0.27175545785576105,
+      "samples": [
+        0.27150883339345455,
+        0.27175545785576105,
+        0.27195337507873774
+      ],
+      "fully_validated": true
+    },
+    {
+      "task": "linspace",
+      "codec": "LZ4",
+      "read_seconds": 0.2553557911887765,
+      "samples": [
+        0.2553557911887765,
+        0.2558071669191122,
+        0.25512870866805315
+      ],
+      "fully_validated": true
+    }
+  ],
+  "candidate_reads": [
+    {
+      "task": "arange",
+      "codec": "BLOSCLZ",
+      "read_seconds": 0.24650612473487854,
+      "samples": [
+        0.24650612473487854,
+        0.24638004135340452,
+        0.2467724997550249
+      ],
+      "fully_validated": true
+    },
+    {
+      "task": "arange",
+      "codec": "LZ4",
+      "read_seconds": 0.24621429108083248,
+      "samples": [
+        0.24550462514162064,
+        0.24621429108083248,
+        0.2463979171589017
+      ],
+      "fully_validated": true
+    },
+    {
+      "task": "linspace",
+      "codec": "BLOSCLZ",
+      "read_seconds": 0.2621283335611224,
+      "samples": [
+        0.2621283335611224,
+        0.26206829212605953,
+        0.26340758334845304
+      ],
+      "fully_validated": true
+    },
+    {
+      "task": "linspace",
+      "codec": "LZ4",
+      "read_seconds": 0.25108941551297903,
+      "samples": [
+        0.25199312530457973,
+        0.25108941551297903,
+        0.2506079999729991
+      ],
+      "fully_validated": true
+    }
+  ],
+  "crosscheck": {
+    "cases": 1512,
+    "higher_levels_byte_identical": true,
+    "cross_decode": true
+  }
+}

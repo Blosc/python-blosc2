@@ -16,8 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.6.0)
-# Accelerate SIMD bitshuffle/unbitshuffle and enable NEON bitshuffle on AArch64 (after v3.6.2).
-set(BLOSC2_BUNDLED_VERSION f1256e391fc1649a6d77e337370c9583c603a670)
+# Accelerate BloscLZ compression and ARM64 decoding (after v3.6.2).
+set(BLOSC2_BUNDLED_VERSION a68fa2aad2bd51714da7f8974c8def5ad1f391ff)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
