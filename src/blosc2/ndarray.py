@@ -6857,6 +6857,12 @@ def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs, *, endpo
     return output
 
 
+# Remember both identity and values: replacing the list (even with the same
+# values) or editing it in place is an explicit global filter configuration.
+_INITIAL_DEFAULT_FILTERS = blosc2.cparams_dflts["filters"]
+_INITIAL_DEFAULT_FILTER_VALUES = tuple(_INITIAL_DEFAULT_FILTERS)
+
+
 def _ramp_storage_defaults(kwargs):
     """Supply ramp filters without mutating or replacing explicit user settings."""
     cparams = kwargs.get("cparams")
@@ -6867,7 +6873,12 @@ def _ramp_storage_defaults(kwargs):
         return
     else:
         cparams = cparams.copy()
-    if "filters" not in cparams:
+    global_filters = blosc2.cparams_dflts["filters"]
+    if (
+        "filters" not in cparams
+        and global_filters is _INITIAL_DEFAULT_FILTERS
+        and tuple(global_filters) == _INITIAL_DEFAULT_FILTER_VALUES
+    ):
         cparams["filters"] = [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
     kwargs["cparams"] = cparams
 
@@ -6930,8 +6941,9 @@ def arange(  # noqa: C901
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         Eager arrays default to ZSTD with SHUFFLE followed by BYTEDELTA.
-        Explicit filters or a complete :class:`CParams` configuration override
-        these constructor-specific filters; other compression settings are preserved.
+        Customized ``blosc2.cparams_dflts['filters']``, explicit filters, or a complete
+        :class:`CParams` configuration override these constructor-specific filters;
+        other compression settings are preserved.
 
     Returns
     -------
@@ -7091,8 +7103,9 @@ def linspace(  # noqa: C901
     **kwargs: Any
         Storage arguments accepted by :func:`empty`, plus the execution options below.
         Eager arrays default to ZSTD with SHUFFLE followed by BYTEDELTA.
-        Explicit filters or a complete :class:`CParams` configuration override
-        these constructor-specific filters; other compression settings are preserved.
+        Customized ``blosc2.cparams_dflts['filters']``, explicit filters, or a complete
+        :class:`CParams` configuration override these constructor-specific filters;
+        other compression settings are preserved.
 
     Other Parameters
     ----------------

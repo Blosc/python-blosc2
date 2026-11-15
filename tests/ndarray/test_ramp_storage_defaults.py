@@ -52,6 +52,61 @@ def test_ramp_complete_cparams(constructor):
 
 
 @pytest.mark.parametrize("constructor", ["arange", "linspace"])
+@pytest.mark.parametrize("cparams", [None, {}, {"codec": blosc2.Codec.LZ4}])
+@pytest.mark.parametrize("filters", [[], [blosc2.Filter.SHUFFLE], [blosc2.Filter.BITSHUFFLE]])
+def test_ramp_custom_global_filters(constructor, cparams, filters, monkeypatch):
+    monkeypatch.setitem(blosc2.cparams_dflts, "filters", filters.copy())
+    array = make_ramp(constructor, cparams=cparams)
+    assert [f for f in array.cparams.filters if f != blosc2.Filter.NOFILTER] == filters
+    assert blosc2.cparams_dflts["filters"] == filters
+    np.testing.assert_array_equal(array[:], np.arange(24))
+    if cparams is not None:
+        assert "filters" not in cparams
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+def test_ramp_global_filters_updated_between_calls(constructor, monkeypatch):
+    filters = [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
+    monkeypatch.setitem(blosc2.cparams_dflts, "filters", filters)
+    array = make_ramp(constructor, size=1000, shape=(10, 10, 10))
+    assert array.cparams.filters[:2] == filters
+    monkeypatch.setitem(blosc2.cparams_dflts, "filters", [blosc2.Filter.SHUFFLE])
+    array = make_ramp(constructor, size=1000, shape=(10, 10, 10))
+    assert [f for f in array.cparams.filters if f != blosc2.Filter.NOFILTER] == [blosc2.Filter.SHUFFLE]
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+def test_ramp_global_filters_inplace(constructor):
+    filters = blosc2.cparams_dflts["filters"]
+    original = filters.copy()
+    try:
+        filters[:] = [blosc2.Filter.SHUFFLE]
+        array = make_ramp(constructor)
+        assert [f for f in array.cparams.filters if f != blosc2.Filter.NOFILTER] == filters
+    finally:
+        filters[:] = original
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+def test_ramp_global_filters_replaced_with_original_values(constructor, monkeypatch):
+    filters = blosc2.cparams_dflts["filters"].copy()
+    monkeypatch.setitem(blosc2.cparams_dflts, "filters", filters)
+    array = make_ramp(constructor)
+    assert array.cparams.filters == filters
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+@pytest.mark.parametrize("complete", [False, True])
+def test_ramp_explicit_filters_override_global(constructor, complete, monkeypatch):
+    monkeypatch.setitem(blosc2.cparams_dflts, "filters", [blosc2.Filter.SHUFFLE])
+    cparams = {"filters": [blosc2.Filter.BITSHUFFLE]}
+    if complete:
+        cparams = blosc2.CParams(**cparams)
+    array = make_ramp(constructor, cparams=cparams)
+    assert [f for f in array.cparams.filters if f != blosc2.Filter.NOFILTER] == [blosc2.Filter.BITSHUFFLE]
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
 def test_ramp_complex_reshape_defaults(constructor):
     array = make_ramp(constructor, dtype=np.complex128, shape=(4, 6))
     assert array.cparams.filters[:2] == [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
