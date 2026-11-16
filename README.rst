@@ -50,6 +50,10 @@ Conda users can install from conda-forge:
 
     conda install -c conda-forge python-blosc2
 
+Python-Blosc2 4.16 requires C-Blosc2 3.7.0 or newer. Wheels bundle the native
+library; source builds using ``USE_SYSTEM_BLOSC2`` must provide compatible
+headers and libraries.
+
 Command line tools
 ==================
 

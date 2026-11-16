@@ -505,7 +505,9 @@ def test_compute_prefilter_preserves_storage_options(prefilter_runtime, tmp_path
     assert cparams.nthreads == 2  # The caller's options are not mutated.
     assert result.cparams.clevel == 5
     assert result.schunk.meta["test"] == "direct"
-    assert lazy._source_execution_report["output_zero_fill_bytes"] == x.schunk.nchunks * x.schunk.chunksize
+    report = lazy._source_execution_report
+    physical_bytes = result.schunk.nchunks * result.schunk.chunksize
+    assert report["output_zero_fill_bytes"] == physical_bytes - result.nbytes
     np.testing.assert_array_equal(result[:], values * 2 - 1)
     np.testing.assert_array_equal(blosc2.open(path)[:], values * 2 - 1)
 

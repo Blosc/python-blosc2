@@ -395,6 +395,7 @@ cdef extern from "blosc2.h":
     void blosc2_free_ctx(blosc2_context * context) nogil
 
     int blosc2_set_maskout(blosc2_context *ctx, c_bool *maskout, int nblocks)
+    int blosc2_set_prefilter_full_write(blosc2_context *ctx, c_bool enabled) noexcept nogil
 
 
     int blosc2_compress(int clevel, int doshuffle, int32_t typesize,
@@ -1427,9 +1428,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
                                     state.chunkshape[d] - relative))
             count *= extents[d]
             edge |= extents[d] != state.blockshape[d]
-        if not params.output_is_disposable:
-            worker.output_zero_fill_bytes += params.output_size
-        elif edge:
+        if edge:
             memset(params.output, 0, params.output_size)
             worker.output_zero_fill_bytes += params.output_size
         if not count:
@@ -1438,7 +1437,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         # diagonal contain only zeros and need no artifact evaluation.
         if state.diagonal_enabled and (state.diagonal < origins[1] - origins[0] - extents[0] + 1
                 or state.diagonal > origins[1] + extents[1] - 1 - origins[0]):
-            if params.output_is_disposable and not edge:
+            if not edge:
                 memset(params.output, 0, params.output_size)
                 worker.output_zero_fill_bytes += params.output_size
             return 0
@@ -1504,9 +1503,6 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         destination = state.numpy_output + origin * params.output_typesize
     elif state.reduction_output != NULL:
         destination = params.output
-    elif not params.output_is_disposable:
-        # C-Blosc2 itself clears non-disposable prefilter outputs.
-        worker.output_zero_fill_bytes += params.output_size
     elif written_bytes < <size_t>params.output_size:
         memset(params.output + written_bytes, 0, params.output_size - written_bytes)
         worker.output_zero_fill_bytes += params.output_size - written_bytes
@@ -1518,9 +1514,9 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             memset(destination, 0, written_bytes)
             worker.output_zero_fill_bytes += written_bytes
             return 1
-        if params.output_is_disposable:
-            memset(params.output, 0, params.output_size)
-            worker.output_zero_fill_bytes += params.output_size
+        # The padding tail was already cleared above; only live lanes remain.
+        memset(params.output, 0, written_bytes)
+        worker.output_zero_fill_bytes += written_bytes
         return 0
     if feholdexcept(&environment):
         if params.output_size:
@@ -8005,11 +8001,9 @@ cdef class NDArray:
         if state.workers == NULL:
             raise MemoryError()
         parameters.user_data = &state
-        # With clevel=0 keep the memcpy payload without a prefilter memset.
-        # External NumPy output instead uses clevel=1 and disposable zero-run
-        # placeholders: the callback skips filters and writes the real sink.
-        # Never discard the payload of a caller's Blosc2 output.
-        parameters.output_is_disposable = disposable_sink or cparams.clevel == 0
+        # Only external sinks discard the compressed placeholder. Retained
+        # Blosc2 output, including clevel=0, uses the full-write contract below.
+        parameters.output_is_disposable = disposable_sink
         cparams.prefilter = menudet_menudet_prefilter
         cparams.preparams = &parameters
         try:
@@ -8027,6 +8021,8 @@ cdef class NDArray:
             self.array.sc.cctx = blosc2_create_cctx(cparams[0])
             if self.array.sc.cctx == NULL:
                 raise MemoryError("Cannot create Menudet prefilter compression context")
+            if blosc2_set_prefilter_full_write(self.array.sc.cctx, True) < 0:
+                raise RuntimeError("Cannot enable Menudet prefilter full-write output")
             try:
                 # Reuse the native context and scratch over a full range,
                 # selected compressed chunks, or a NumPy worker's chunk queue.
@@ -8072,8 +8068,8 @@ cdef class NDArray:
                     else:
                         self.schunk.update_data(chunk, data, copy=False)
                     processed_chunks += 1
-                    # In the uncompressed/disposable route callback failures
-                    # are captured locally rather than propagated by Blosc2.
+                    # Disposable sinks capture callback failures locally
+                    # rather than propagating them through Blosc2.
                     for tid in range(state.nworkers):
                         if state.workers[tid].status:
                             menudet_prefilter_merge(&state)

@@ -13,6 +13,28 @@ import pytest
 import blosc2
 
 
+@pytest.mark.parametrize("clevel", [0, 5])
+def test_partial_prefilter_keeps_default_zero_initialization(clevel):
+    values = np.arange(64, dtype=np.int64)
+    schunk = blosc2.SChunk(
+        chunksize=values.nbytes,
+        cparams={"typesize": values.dtype.itemsize, "blocksize": 128, "nthreads": 1, "clevel": clevel},
+    )
+
+    @schunk.prefilter(np.int64)
+    def partial(input, output, offset):
+        # Both accumulation and leaving alternate lanes untouched rely on the
+        # legacy default. Ordinary Python callbacks must not inherit the opt-in.
+        output[::2] += input[::2] + 1
+
+    expected = np.zeros_like(values)
+    expected[::2] = values[::2] + 1
+    schunk.append_data(values)
+    for _ in range(2):
+        np.testing.assert_array_equal(np.frombuffer(schunk.decompress_chunk(0), dtype=np.int64), expected)
+        schunk.update_data(0, values, copy=True)
+
+
 @pytest.mark.parametrize(
     ("func", "op_dtype", "op2_dtype", "schunk_dtype", "offset"),
     [

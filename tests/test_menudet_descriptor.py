@@ -207,8 +207,9 @@ def test_diagonal_zero_blocks_are_initialized_and_reported():
     output = blosc2.empty((8, 8), dtype="int64", chunks=(4, 4), blocks=(2, 2))
     _, report = artifact.evaluate_prefilter({}, out=output, _diagonal=0)
     np.testing.assert_array_equal(output[:], np.eye(8, dtype="int64"))
-    assert "prefilter_full_write" not in report
-    assert report["output_zero_fill_bytes"] == output.schunk.nchunks * output.schunk.chunksize
+    physical_bytes = output.schunk.nchunks * output.schunk.chunksize
+    diagonal_block_bytes = (8 // 2) * np.prod(output.blocks) * output.dtype.itemsize
+    assert report["output_zero_fill_bytes"] == physical_bytes - diagonal_block_bytes
 
 
 @pytest.mark.parametrize(
@@ -245,6 +246,7 @@ def test_input_free_prefilter_nd_edges(shape, chunks, blocks, clevel, jit):
         extended = tuple(((c + b - 1) // b) * b for c, b in zip(chunks, blocks, strict=True))
         interleaved = tuple(v for e, b in zip(extended, blocks, strict=True) for v in (e // b, b))
         axes = tuple(range(0, 2 * len(shape), 2)) + tuple(range(1, 2 * len(shape), 2))
+        edge_bytes = 0
         for index, origin in enumerate(
             product(*(range(0, n, c) for n, c in zip(shape, chunks, strict=True)))
         ):
@@ -256,12 +258,51 @@ def test_input_free_prefilter_nd_edges(shape, chunks, blocks, clevel, jit):
             physical = padded.reshape(interleaved).transpose(axes).ravel()
             raw = np.frombuffer(output.schunk.decompress_chunk(index), dtype="int64")
             np.testing.assert_array_equal(raw, physical)
+            for block_origin in product(*(range(0, e, b) for e, b in zip(extended, blocks, strict=True))):
+                if any(o + b > e for o, b, e in zip(block_origin, blocks, extent, strict=True)):
+                    edge_bytes += np.prod(blocks) * output.dtype.itemsize
+        assert report["output_zero_fill_bytes"] == edge_bytes
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")
+def test_prefilter_flat_tail_and_pruned_blocks_are_initialized():
+    artifact = blosc2_ext.MenudetArtifactHandle(
+        manifest(
+            "def k(x):\n    return x + 1\n",
+            [{"name": "x", "dtype": "int64"}],
+            {"dtype": "int64", "contract": "elementwise"},
+            requires=["numeric"],
+        ),
+        0,
+    )
+    for size in (16, 19):
+        values = np.arange(size, dtype="int64")
+        source = blosc2.asarray(values, chunks=(8,), blocks=(4,))
+        output = blosc2.full((size,), 123, dtype="int64", chunks=(8,), blocks=(4,))
+        # Without a bitmap, complete blocks need no clearing; only the final
+        # physical chunk's unwritten tail needs initialization.
+        _, report = artifact.evaluate_prefilter({"x": source}, out=output)
+        np.testing.assert_array_equal(output[:], values + 1)
         physical_bytes = output.schunk.nchunks * output.schunk.chunksize
-        if clevel:
-            assert report["output_zero_fill_bytes"] == physical_bytes
-        elif physical_bytes == output.nbytes:
-            # Level zero uses the existing disposable-output path, not a new
-            # full-write contract. Only padded edge blocks need clearing.
-            assert report["output_zero_fill_bytes"] == 0
-        else:
-            assert physical_bytes - output.nbytes <= report["output_zero_fill_bytes"] <= physical_bytes
+        assert report["output_zero_fill_bytes"] == physical_bytes - output.nbytes
+        bitmap = np.array([1, 0] * source.schunk.nchunks, dtype="uint8")
+        # Repeat with alternating dirty live and skipped blocks in every chunk,
+        # including the wholly padded final block when size=19.
+        for _ in range(2):
+            _, report = artifact.evaluate_prefilter(
+                {"x": source}, out=output, _candidate_blocks=bitmap, _prune_chunks=False
+            )
+            expected_values = values + 1
+            expected_values[(np.arange(size) // 4) % 2 == 1] = 0
+            np.testing.assert_array_equal(output[:], expected_values)
+            expected_physical = np.zeros(physical_bytes // output.dtype.itemsize, dtype="int64")
+            expected_physical[:size] = expected_values
+            physical = np.concatenate(
+                [
+                    np.frombuffer(output.schunk.decompress_chunk(i), dtype="int64")
+                    for i in range(output.schunk.nchunks)
+                ]
+            )
+            np.testing.assert_array_equal(physical, expected_physical)
+            live_items = np.count_nonzero((np.arange(size) // 4) % 2 == 0)
+            assert report["output_zero_fill_bytes"] == physical_bytes - live_items * output.dtype.itemsize

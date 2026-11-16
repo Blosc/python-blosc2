@@ -15,9 +15,9 @@ endif()
 project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
-set(BLOSC2_MIN_VERSION 3.6.0)
-# Improve BloscLZ match coverage with codec version 2.6.0 (after v3.6.2).
-set(BLOSC2_BUNDLED_VERSION 6baa69c7360d7fbd7bd0f9fbf604c1e8b50bc999)
+set(BLOSC2_MIN_VERSION 3.7.0)
+# C-Blosc2 3.7 development snapshot with the full-write prefilter API.
+set(BLOSC2_BUNDLED_VERSION be06f086511bcc1ff101b8cba1809b575f811bad)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -232,6 +232,8 @@ if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(Blosc2 REQUIRED IMPORTED_TARGET blosc2>=${BLOSC2_MIN_VERSION})
+    # Selected pkg-config headers must precede unrelated /usr/local headers.
+    set_property(TARGET blosc2_ext PROPERTY NO_SYSTEM_FROM_IMPORTED TRUE)
     target_link_libraries(blosc2_ext PRIVATE PkgConfig::Blosc2)
 else()
     set(STATIC_LIB ON CACHE BOOL "Build a static version of the blosc library.")
@@ -258,6 +260,14 @@ else()
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
     FetchContent_MakeAvailable(blosc2)
+    file(STRINGS "${blosc2_SOURCE_DIR}/include/blosc2.h" _blosc2_version_line
+         REGEX "^#define[ \t]+BLOSC2_VERSION_STRING")
+    string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" BLOSC2_PC_VERSION "${_blosc2_version_line}")
+    if(BLOSC2_PC_VERSION VERSION_LESS BLOSC2_MIN_VERSION)
+        message(FATAL_ERROR
+            "Python-Blosc2 requires C-Blosc2 >= ${BLOSC2_MIN_VERSION}; "
+            "the selected source reports ${BLOSC2_PC_VERSION}.")
+    endif()
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 
@@ -286,9 +296,6 @@ else()
     #    within the same second, so the upstream one would silently survive.
     # The version is read from the bundled header rather than from
     # BLOSC2_BUNDLED_VERSION, which may be pinned to a bare commit hash.
-    file(STRINGS "${blosc2_SOURCE_DIR}/include/blosc2.h" _blosc2_version_line
-         REGEX "^#define[ \t]+BLOSC2_VERSION_STRING")
-    string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" BLOSC2_PC_VERSION "${_blosc2_version_line}")
     install(CODE "
         set(BLOSC2_PC_VERSION \"${BLOSC2_PC_VERSION}\")
         configure_file(
