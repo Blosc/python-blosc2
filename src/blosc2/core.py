@@ -2071,8 +2071,9 @@ def compute_chunks_blocks(  # noqa: C901
         The shape of the chunk.  If None, a guess is computed based on cache sizes
         and heuristics.
     blocks: tuple or list
-        The shape of the block.  If None, a guess is computed based on cache sizes
-        and heuristics.
+        The shape of the block. Explicit values are preserved, and automatic
+        chunks are chosen as multiples of these blocks. If None, a guess is
+        computed based on cache sizes and heuristics.
     dtype: np.dtype
         The dtype of the array. Default is np.uint8.
     kwargs: dict
@@ -2123,6 +2124,7 @@ def compute_chunks_blocks(  # noqa: C901
         return chunks, blocks
 
     automatic_chunks = chunks is None
+    explicit_blocks = blocks is not None
     cparams = kwargs.get("cparams") or blosc2.CParams()  # just get defaults
     if isinstance(cparams, blosc2.CParams):
         # Shallow is enough (only keys are set below, filters only on a deep copy), and asdict()
@@ -2208,7 +2210,12 @@ def compute_chunks_blocks(  # noqa: C901
         maxshape = shape
     else:
         maxshape = chunks
-    blocks = compute_partition(blocksize // itemsize, maxshape)
+    if blocks is None:
+        blocks = compute_partition(blocksize // itemsize, maxshape)
+    else:
+        # Keep explicit blocks, even when they do not divide the array shape.
+        # The partition helper would snap them to divisors of maxshape.
+        blocks = tuple(blocks)
 
     # Finally, the chunks
     if chunks is None:
@@ -2220,16 +2227,26 @@ def compute_chunks_blocks(  # noqa: C901
         # 2. Avoid exceeding the maximum buffer size (see #392)
         if chunksize % blocksize != 0:
             chunksize = chunksize // blocksize * blocksize
-        chunks = compute_partition(chunksize // itemsize, shape, blocks)
-        # compute_partition snaps to a divisor of shape, which can break the
-        # "chunks is a multiple of blocks" invariant established above.  Restore
-        # it by rounding each chunks dimension up to the next multiple of the
-        # corresponding blocks dimension, capped at the shape dimension so that
-        # chunks never exceed the array size.
-        chunks = [
-            min(s, c if c % b == 0 else (c // b + 1) * b)
-            for s, c, b in zip(shape, chunks, blocks, strict=False)
-        ]
+        if explicit_blocks:
+            # Distribute the cache budget over whole blocks, without snapping
+            # chunk dimensions to divisors of the array shape.
+            remaining = chunksize // blocksize
+            chunks = list(blocks)
+            for axis in reversed(range(len(shape))):
+                count = min(max(1, shape[axis] // blocks[axis]), remaining)
+                chunks[axis] *= count
+                remaining //= count
+        else:
+            chunks = compute_partition(chunksize // itemsize, shape, blocks)
+            # compute_partition snaps to a divisor of shape, which can break the
+            # "chunks is a multiple of blocks" invariant established above.  Restore
+            # it by rounding each chunks dimension up to the next multiple of the
+            # corresponding blocks dimension, capped at the shape dimension so that
+            # chunks never exceed the array size.
+            chunks = [
+                min(s, c if c % b == 0 else (c // b + 1) * b)
+                for s, c, b in zip(shape, chunks, blocks, strict=False)
+            ]
 
     chunks = _frame_safe_chunks(shape, chunks, blocks, dtype, automatic_chunks, **kwargs)
     return tuple(chunks), tuple(blocks)

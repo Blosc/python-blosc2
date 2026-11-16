@@ -62,11 +62,45 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     ],
 )
 def test_compute_chunks(shape: tuple, blocks: tuple):
-    chunks, blocks = blosc2.compute_chunks_blocks(shape, blocks=blocks)
+    chunks, computed_blocks = blosc2.compute_chunks_blocks(shape, blocks=blocks)
+    assert computed_blocks == blocks
     # print(chunks, blocks)
     for dim, chunk, block in zip(shape, chunks, blocks, strict=True):
-        assert dim >= chunk
+        assert max(dim, block) >= chunk
         assert chunk >= block
+        assert chunk % block == 0
+
+
+@pytest.mark.parametrize("blocks", [8192, (8192,), [8192]])
+def test_explicit_blocks_with_automatic_chunks(monkeypatch, blocks):
+    monkeypatch.setattr(blosc2.core, "get_chunksize", lambda *args, **kwargs: 16 * 2**20)
+    chunks, computed_blocks = blosc2.compute_chunks_blocks((10**9,), blocks=blocks, dtype=np.int64)
+    assert chunks == (2_097_152,)
+    assert computed_blocks == (8192,)
+
+
+def test_explicit_nd_blocks_with_automatic_chunks(monkeypatch):
+    monkeypatch.setattr(blosc2.core, "get_chunksize", lambda *args, **kwargs: 2**18)
+    chunks, blocks = blosc2.compute_chunks_blocks((1003, 2001), blocks=(7, 11), dtype=np.int64)
+    assert chunks == (14, 1991)
+    assert blocks == (7, 11)
+    assert np.prod(chunks) * 8 <= 2**18
+
+
+def test_arange_preserves_explicit_blocks(monkeypatch):
+    monkeypatch.setattr(blosc2.core, "get_chunksize", lambda *args, **kwargs: 16 * 2**20)
+    result = blosc2.arange(
+        100_003,
+        blocks=8192,
+        cparams={
+            "codec": blosc2.Codec.BLOSCLZ,
+            "clevel": 1,
+            "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
+        },
+    )
+    assert result.blocks == (8192,)
+    assert result.chunks == (98_304,)
+    np.testing.assert_array_equal(result[:], np.arange(100_003))
 
 
 # Invalid blocks
