@@ -27,5 +27,6 @@ Command line tools
 .. toctree::
     :maxdepth: 1
 
+    b2info
     b2view
     parquet_to_blosc2
