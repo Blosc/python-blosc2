@@ -91,8 +91,12 @@ def fingerprint():
         "blosc2": blosc2.__version__,
         "import_paths": paths,
         "extension_sha256": digest(paths[1]),
+        # Stale/partial dist-info directories can lack required metadata.
+        # Use get(): missing-key indexing warns on Python 3.14.
         "dependencies": sorted(
-            f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions()
+            f"{name}=={version}"
+            for d in importlib.metadata.distributions()
+            if (name := d.metadata.get("Name")) and (version := d.metadata.get("Version"))
         ),
         "environment": {
             k: v

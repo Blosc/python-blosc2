@@ -43,6 +43,27 @@ def test_profiles(qualification):
         assert profile["threads"] in (1, 2)
 
 
+def test_fingerprint_incomplete_distribution_metadata(qualification, monkeypatch):
+    from email.message import Message
+    from types import SimpleNamespace
+
+    distributions = []
+    for fields in (
+        {},
+        {"Version": "1.0"},
+        {"Name": "missing-version"},
+        {"Name": "z-package", "Version": "2.0"},
+        {"Name": "a-package", "Version": "1.0"},
+    ):
+        metadata = Message()
+        for key, value in fields.items():
+            metadata[key] = value
+        distributions.append(SimpleNamespace(metadata=metadata))
+    monkeypatch.setattr(qualification.importlib.metadata, "distributions", lambda: distributions)
+
+    assert qualification.fingerprint()["dependencies"] == ["a-package==1.0", "z-package==2.0"]
+
+
 @pytest.mark.parametrize(
     "change",
     [
