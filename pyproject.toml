@@ -74,6 +74,7 @@ blosc2-to-zarr = "blosc2.cli.b2nd_to_zarr:main"
 zarr-to-b2nd = "blosc2.cli.zarr_to_b2nd:main"
 zarr-to-blosc2 = "blosc2.cli.zarr_to_b2nd:main"
 b2view = "blosc2.b2view.cli:main"
+b2info = "blosc2.cli.b2info:main"
 
 [dependency-groups]
 dev = [
