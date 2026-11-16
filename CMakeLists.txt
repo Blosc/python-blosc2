@@ -16,8 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.6.0)
-# Accelerate BloscLZ compression and ARM64 decoding (after v3.6.2).
-set(BLOSC2_BUNDLED_VERSION a68fa2aad2bd51714da7f8974c8def5ad1f391ff)
+# Improve BloscLZ match coverage with codec version 2.6.0 (after v3.6.2).
+set(BLOSC2_BUNDLED_VERSION 6baa69c7360d7fbd7bd0f9fbf604c1e8b50bc999)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
