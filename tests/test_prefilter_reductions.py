@@ -55,3 +55,12 @@ def test_partial_storage_cap_retains_streaming_route(monkeypatch):
         assert report["route"] == "parallel-graph-bounded-readers"
     finally:
         blosc2.set_nthreads(previous)
+
+
+def test_shared_extrema_rules_are_active():
+    pairwise = getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)()
+    if not pairwise:
+        pytest.skip("Requires the pinned miniexpr revision")
+    # One miniexpr revision supplies both, so extrema must not fall back to
+    # Python-Blosc2's local copy in a qualified build.
+    assert blosc2.blosc2_ext.menudet_shared_reduction_rules_available()

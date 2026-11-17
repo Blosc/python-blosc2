@@ -13,8 +13,9 @@
  * propagate NaN. The accumulator is chosen by the caller (see
  * expression_evaluator.py); unsupported combinations return -1.
  * NATIVE_MIN/MAX are separate from these legacy operations: they preserve
- * the mapped dtype, select the first NaN, and prefer -0 for min / +0 for max,
- * matching native graph partial combination.
+ * the mapped dtype, prefer -0 for min / +0 for max, select the first NaN, and
+ * delegate NaN-free blocks to miniexpr's shared reducer so extrema rules keep a
+ * single owner. The local first-NaN path remains for blocks miniexpr declines.
  */
 
 #ifndef B2_BLOCK_REDUCTIONS_H
@@ -23,6 +24,20 @@
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
+
+/* Prefer miniexpr's shared direct-input reducers so extrema rules (first-NaN
+ * selection, signed-zero preference, scan order) have a single owner. The
+ * header is internal to the pinned miniexpr sources; the guard keeps builds
+ * against other layouts compiling with the local rules below. */
+#if defined(__has_include)
+#if __has_include("dsl_menudet_reduce.h")
+#include "dsl_menudet_reduce.h"
+#define B2_HAVE_SHARED_MENUDET_REDUCE 1
+#endif
+#endif
+#ifndef B2_HAVE_SHARED_MENUDET_REDUCE
+#define B2_HAVE_SHARED_MENUDET_REDUCE 0
+#endif
 
 enum {
   B2_REDUCE_NONE = 0,
@@ -171,8 +186,44 @@ B2_DEFINE_REDUCER(u64, uint64_t, 0, B2_RT_U64, uint64_t)
 B2_DEFINE_REDUCER(f32, float, 1, B2_RT_F64, double)
 B2_DEFINE_REDUCER(f64, double, 1, B2_RT_F64, double)
 
+#if B2_HAVE_SHARED_MENUDET_REDUCE
+/* Map a floating source code onto miniexpr's dtype enum, or ME_AUTO. */
+static inline me_dtype b2_shared_dtype(int src) {
+  if (src == B2_RT_F32) return ME_FLOAT32;
+  if (src == B2_RT_F64) return ME_FLOAT64;
+  return ME_AUTO;
+}
+#endif
+
+/* Report which extrema rules this build uses, so callers can qualify a wheel. */
+static inline int b2_shared_reduction_rules_available(void) {
+  return B2_HAVE_SHARED_MENUDET_REDUCE;
+}
+
+/* Let miniexpr reduce NaN-free floating blocks; return -1 so the caller keeps
+ * its own first-NaN propagation for the cases miniexpr declines. */
+static inline int b2_shared_extrema(int op, int src, int acc, const void *data, int64_t n, void *slot) {
+#if B2_HAVE_SHARED_MENUDET_REDUCE
+  me_dtype dtype = b2_shared_dtype(src);
+  if (dtype == ME_AUTO || acc != src || n <= 0) return -1;
+  uint64_t bits = 0;
+  /* Declines NaN blocks; this is also its NaN scan, so do not pre-scan. */
+  if (!dsl_menudet_extrema(dtype, data, (size_t)n, 0, false,
+                           op == B2_REDUCE_NATIVE_MIN, &bits)) return -1;
+  memcpy(slot, &bits, dtype == ME_FLOAT32 ? sizeof(float) : sizeof(double));
+  return 0;
+#else
+  (void)op; (void)src; (void)acc; (void)data; (void)n; (void)slot;
+  return -1;
+#endif
+}
+
 /* Reduce n > 0 items of type `src` at `data` into the accumulator `slot`. */
 static inline int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) {
+  if ((op == B2_REDUCE_NATIVE_MIN || op == B2_REDUCE_NATIVE_MAX) &&
+      b2_shared_extrema(op, src, acc, data, n, slot) == 0) {
+    return 0;
+  }
   switch (src) {
     case B2_RT_BOOL: return b2_reduce_bool(op, acc, (const uint8_t *)data, n, slot);
     case B2_RT_I8: return b2_reduce_i8(op, acc, (const int8_t *)data, n, slot);

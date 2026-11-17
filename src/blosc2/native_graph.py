@@ -24,6 +24,8 @@ from .expression_graph import _NUMPY_VALUE_PROMOTION, expression_syntax, parse_e
 REDUCERS = {"sum", "prod", "min", "max", "any", "all"}
 PARALLEL_GRAPH_REDUCERS = {"sum", "min", "max", "any", "all"}
 TRUTH_GRAPH_REDUCERS = {"any", "all"}
+# Non-sum operators that reduce straight from decoded block buffers.
+PREFILTER_GRAPH_REDUCERS = {"min", "max", "any", "all"}
 MINIMUM_COMPRESSED_GRAPH_ITEMS = 16_000_000
 MINIMUM_COMPRESSED_MAP_ITEMS = 2_000_000
 # The compression prefilter pays fixed worker and decoder-context setup. Below
@@ -1187,6 +1189,57 @@ def _pairwise_prefilter_kernel(plan, inputs, shape):
     return artifact, info["shape"]
 
 
+def _prefilter_graph_reduction(plan, inputs, shape, op, first):
+    """Reduce min/max/any/all from block buffers, or None to keep streaming.
+
+    Partials stay bounded independently of input size, and the native combiner
+    preserves NaN payload and signed-zero selection. Anything outside these
+    metadata-only checks must return None rather than replay a failed run.
+    """
+    import blosc2
+
+    if first.chunks[0] % first.blocks[0]:
+        return None
+    artifact = plan._handle.reduction_artifact()
+    if artifact is None:
+        return None
+    signature = artifact.descriptor_info()
+    mapped_dtype = signature["output_dtype"]
+    if op not in TRUTH_GRAPH_REDUCERS and mapped_dtype not in (np.dtype("float32"), np.dtype("float64")):
+        return None
+    accumulator = np.dtype("bool") if op in TRUTH_GRAPH_REDUCERS else mapped_dtype
+    blocks = (shape[0] + first.blocks[0] - 1) // first.blocks[0]
+    if blocks * accumulator.itemsize > 1024 * 1024:
+        return None
+    if set(signature["inputs"]) != set(inputs):
+        return None
+    if not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(
+        inputs, allow_numpy=True, output_dtype=mapped_dtype
+    ):
+        return None
+    partials, report = artifact.evaluate_prefilter(
+        inputs,
+        _reduction_op=f"native_{op}" if op in {"min", "max"} else op,
+        _reduction_out=np.empty(blocks, dtype=accumulator),
+    )
+    result, combined = _combine_graph_reductions(op, partials, [report])
+    report["fp_flags"] |= combined["fp_flags"]
+    report["fp_supported"] &= combined["fp_supported"]
+    result_shape = plan.specialize(
+        {name: (value.dtype, value.shape) for name, value in inputs.items()}
+    ).info()["shape"]
+    jit = plan.info()["has_jit"]
+    report.update(
+        route="parallel-prefilter-reduction",
+        stages=1,
+        jit_stages=int(jit),
+        interpreter_stages=int(not jit),
+        reduction_buffer_bytes=partials.nbytes,
+        input_materialization_bytes=0,
+    )
+    return result.reshape(result_shape), report
+
+
 def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     """Stream independent 1-D chunk regions with bounded, invocation-local readers."""
     from concurrent.futures import wait
@@ -1216,47 +1269,10 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
             input_materialization_bytes=0,
         )
         return result.reshape(result_shape), report
-    if op in {"min", "max", "any", "all"} and first.chunks[0] % first.blocks[0] == 0:
-        artifact = plan._handle.reduction_artifact()
-        if artifact is not None:
-            signature = artifact.descriptor_info()
-            mapped_dtype = signature["output_dtype"]
-            accumulator = np.dtype("bool") if op in TRUTH_GRAPH_REDUCERS else mapped_dtype
-            blocks = (shape[0] + first.blocks[0] - 1) // first.blocks[0]
-            # Bound partial-result storage independently of input size. Larger
-            # domains retain the streaming bounded-reader route.
-            if (
-                blocks * accumulator.itemsize <= 1024 * 1024
-                and (
-                    op in TRUTH_GRAPH_REDUCERS or mapped_dtype in (np.dtype("float32"), np.dtype("float64"))
-                )
-                and set(signature["inputs"]) == set(inputs)
-                and blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(
-                    inputs, allow_numpy=True, output_dtype=mapped_dtype
-                )
-            ):
-                partials, report = artifact.evaluate_prefilter(
-                    inputs,
-                    _reduction_op=f"native_{op}" if op in {"min", "max"} else op,
-                    _reduction_out=np.empty(blocks, dtype=accumulator),
-                )
-                # Use the native combiner, not NumPy: its NaN payload and
-                # signed-zero selection must match the original reducer.
-                result, combined = _combine_graph_reductions(op, partials, [report])
-                report["fp_flags"] |= combined["fp_flags"]
-                report["fp_supported"] &= combined["fp_supported"]
-                result_shape = plan.specialize(
-                    {name: (value.dtype, value.shape) for name, value in inputs.items()}
-                ).info()["shape"]
-                report.update(
-                    route="parallel-prefilter-reduction",
-                    stages=1,
-                    jit_stages=int(plan.info()["has_jit"]),
-                    interpreter_stages=int(not plan.info()["has_jit"]),
-                    reduction_buffer_bytes=partials.nbytes,
-                    input_materialization_bytes=0,
-                )
-                return result.reshape(result_shape), report
+    if op in PREFILTER_GRAPH_REDUCERS:
+        reduced = _prefilter_graph_reduction(plan, inputs, shape, op, first)
+        if reduced is not None:
+            return reduced
     output_kind = "b" if op in TRUTH_GRAPH_REDUCERS else "f"
 
     class SpanReader(StorageReader):

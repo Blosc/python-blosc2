@@ -1242,6 +1242,7 @@ cdef extern from "block_reductions.h":
         B2_RT_F64
     int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) noexcept nogil
     int b2_block_reduce_supported(int op, int src, int acc) noexcept nogil
+    int b2_shared_reduction_rules_available() noexcept nogil
 
 
 cdef int _menudet_reduce_type_code(dtype_obj) noexcept:
@@ -1343,7 +1344,7 @@ cdef struct menudet_prefilter_state:
     int reduction_acc_type
     int reduction_acc_itemsize
     bint pairwise_sum
-    bint sum_identity
+    bint identity_map
     uint8_t *sum_leaves
     uint8_t *sum_fragments
     int64_t sum_leaf_origin
@@ -1625,7 +1626,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         # Decoder/postfilter work must not contribute to numerical FP flags.
         if state.pairwise_sum:
             b2_pairwise_clear_flags()
-        if state.sum_identity:
+        if state.identity_map:
             destination = <void *>worker.bindings[0].data
             fp.supported = 1
         else:
@@ -1679,6 +1680,11 @@ def menudet_prefilter_flat_chunks_available():
 def menudet_prefilter_reductions_available():
     """Per-block scalar reductions and candidate-block pruning in Menudet prefilters."""
     return bool(b2_artifact_descriptor_available())
+
+
+def menudet_shared_reduction_rules_available():
+    """Extrema rules come from miniexpr's shared direct-input reducer."""
+    return bool(b2_shared_reduction_rules_available())
 
 
 def menudet_resident_available():
@@ -2742,7 +2748,7 @@ cdef class MenudetArtifactHandle:
                     or _reduction_out.dtype != self.signature_dtype(-1)
                     or _reduction_out.dtype not in (np.dtype("float32"), np.dtype("float64"))):
                 raise ValueError("Pairwise prefilters require a matching floating, 1-D full sum")
-        sum_identity = (
+        identity_map = (
             bool(_skip_identity) and _reduction_out is not None and len(inputs) == 1
             and self._identity_input in inputs and first.dtype == self.signature_dtype(-1)
         )
@@ -2825,7 +2831,7 @@ cdef class MenudetArtifactHandle:
             reduction_out=_reduction_out, reduction_op=reduction_op,
             reduction_src_type=reduction_src_type, reduction_acc_type=reduction_acc_type,
             candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks),
-            pairwise_sum=bool(_pairwise_sum), sum_identity=sum_identity)
+            pairwise_sum=bool(_pairwise_sum), identity_map=identity_map)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -8007,7 +8013,7 @@ cdef class NDArray:
                                     np.ndarray reduction_out=None, int reduction_op=0,
                                     int reduction_src_type=-1, int reduction_acc_type=-1,
                                     np.ndarray candidate_blocks=None, bint prune_chunks=False,
-                                    bint pairwise_sum=False, bint sum_identity=False):
+                                    bint pairwise_sum=False, bint identity_map=False):
         cdef menudet_prefilter_state state
         cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -8072,7 +8078,7 @@ cdef class NDArray:
             state.reduction_acc_type = reduction_acc_type
             state.reduction_acc_itemsize = reduction_out.dtype.itemsize
         state.pairwise_sum = pairwise_sum
-        state.sum_identity = sum_identity
+        state.identity_map = identity_map
         if pairwise_sum:
             rc = b2_pairwise_init(&sum_state, b2_artifact_output(kernel._handle))
             if rc:
@@ -8277,7 +8283,7 @@ cdef class NDArray:
                     free(state.chunks[i])
         result = reduction_out if reduction_out is not None else (numpy_out if numpy_out is not None else self)
         return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
-                          "identity_map_skipped": bool(sum_identity),
+                          "identity_map_skipped": bool(identity_map),
                           "summation": "fixed-pairwise" if pairwise_sum else None,
                           "logical_leaf_items": B2_PAIRWISE_LEAF_ITEMS if pairwise_sum else None,
                           "reduction_buffer_bytes": (sum_leaves.nbytes + sum_fragments.nbytes
