@@ -22,6 +22,7 @@ capabilities of Python-Blosc2 through Jupyter notebooks.
    11.containers
    11.objectarray
    12.batcharray
+   12b.listarray
    13.ctable-basics
    14.indexing-arrays
    15.indexing-ctables
