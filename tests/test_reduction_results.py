@@ -24,7 +24,10 @@ def test_reduction_array_result(op, frontend, axis, keepdims):
     expected = getattr(np, op)(values, axis=axis, keepdims=keepdims)
     assert not np.isscalar(result)
     assert result.shape == np.shape(expected)
-    assert result.dtype == np.asarray(expected).dtype
+    # Index reductions document DEFAULT_INDEX rather than np.intp, which is
+    # narrower on 32-bit WASM targets.
+    expected_dtype = blosc2.DEFAULT_INDEX if op in ("argmin", "argmax") else np.asarray(expected).dtype
+    assert result.dtype == np.dtype(expected_dtype)
     np.testing.assert_allclose(np.asarray(result), expected)
 
 
