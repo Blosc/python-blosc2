@@ -16,6 +16,10 @@ def argextrema_runtime(automatic_native_runtime, monkeypatch):
     import blosc2.native_graph as native
 
     monkeypatch.setattr(native, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
+    previous = blosc2.nthreads
+    blosc2.set_nthreads(2)
+    yield
+    blosc2.set_nthreads(previous)
 
 
 @pytest.mark.parametrize("op", ["argmin", "argmax"])
