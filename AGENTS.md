@@ -7,6 +7,15 @@ Tests are under `tests/`, with additional doctests enabled for select modules pe
 `pytest.ini`. Documentation sources are in `doc/` and build output lands in `html/`.
 Examples are in `examples/`, and performance/benchmark scripts live in `bench/`.
 
+## Generated Artifacts and Benchmark Results
+- Keep raw benchmark results, qualification dumps, profiler traces, build logs,
+  and other generated investigation artifacts outside the repository. Use
+  temporary storage or CI artifacts.
+- Retain reproducible scripts and concise, actionable summaries, not per-run
+  output or machine-specific investigation reports in permanent documentation.
+- Add historical benchmark datasets or baselines only when explicitly requested
+  by the user.
+
 ## Build, Test, and Development Commands
 **IMPORTANT — Environment**: Always use the `blosc2` conda environment for
 running Python, tests, and any build/install commands
