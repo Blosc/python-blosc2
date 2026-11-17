@@ -1314,6 +1314,13 @@ def test_invalid_axes_raises(shape_chunks_blocks_3d, axes):
         blosc2.permute_dims(a, axes=axes)
 
 
+def test_permute_dims_zero_size():
+    na = np.zeros((2, 0, 3), dtype=np.float32)
+    result = blosc2.permute_dims(blosc2.asarray(na), axes=(2, 0, 1))
+    assert result.shape == (3, 2, 0)
+    assert result.dtype == na.dtype
+
+
 @pytest.mark.parametrize(
     "shape",
     [(2, 3), (4, 5, 6), (2, 4, 8, 5), (7, 3, 9, 9, 5)],

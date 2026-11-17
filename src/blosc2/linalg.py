@@ -604,6 +604,9 @@ def permute_dims(
             raise ValueError(f"axes {axes} is not a valid permutation of {ndim} dimensions")
 
     new_shape = tuple(arr.shape[axis] for axis in axes)
+    if 0 in new_shape:
+        # Nothing to copy, and chunks with 0 are rejected
+        return blosc2.empty(shape=new_shape, dtype=arr.dtype, **kwargs)
     if "chunks" not in kwargs or kwargs["chunks"] is None:
         kwargs["chunks"] = tuple(arr.chunks[axis] for axis in axes)
 
