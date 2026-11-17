@@ -1040,7 +1040,7 @@ def _combine_graph_reductions(op, results, reports):
     # Combine in logical region order through the same native reducer. Extrema
     # retain first-NaN payload selection and their deterministic signed-zero rule;
     # NumPy's minimum/maximum reductions have a different zero-selection policy.
-    partials = np.stack(results)
+    partials = results if isinstance(results, np.ndarray) else np.stack(results)
     document = {
         "format": "menudet-graph-1",
         "semantics": "menudet-numpy-0.1",
@@ -1071,7 +1071,7 @@ def _combine_graph_reductions(op, results, reports):
         "temporary_bytes",
         "normalization_bytes",
     ):
-        report[key] = sum(part[key] for part in reports)
+        report[key] = sum(part.get(key, 0) for part in reports)
     report["fp_flags"] = combined_report["fp_flags"]
     for part in reports:
         report["fp_flags"] |= part["fp_flags"]
@@ -1216,6 +1216,47 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
             input_materialization_bytes=0,
         )
         return result.reshape(result_shape), report
+    if op in {"min", "max", "any", "all"} and first.chunks[0] % first.blocks[0] == 0:
+        artifact = plan._handle.reduction_artifact()
+        if artifact is not None:
+            signature = artifact.descriptor_info()
+            mapped_dtype = signature["output_dtype"]
+            accumulator = np.dtype("bool") if op in TRUTH_GRAPH_REDUCERS else mapped_dtype
+            blocks = (shape[0] + first.blocks[0] - 1) // first.blocks[0]
+            # Bound partial-result storage independently of input size. Larger
+            # domains retain the streaming bounded-reader route.
+            if (
+                blocks * accumulator.itemsize <= 1024 * 1024
+                and (
+                    op in TRUTH_GRAPH_REDUCERS or mapped_dtype in (np.dtype("float32"), np.dtype("float64"))
+                )
+                and set(signature["inputs"]) == set(inputs)
+                and blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(
+                    inputs, allow_numpy=True, output_dtype=mapped_dtype
+                )
+            ):
+                partials, report = artifact.evaluate_prefilter(
+                    inputs,
+                    _reduction_op=f"native_{op}" if op in {"min", "max"} else op,
+                    _reduction_out=np.empty(blocks, dtype=accumulator),
+                )
+                # Use the native combiner, not NumPy: its NaN payload and
+                # signed-zero selection must match the original reducer.
+                result, combined = _combine_graph_reductions(op, partials, [report])
+                report["fp_flags"] |= combined["fp_flags"]
+                report["fp_supported"] &= combined["fp_supported"]
+                result_shape = plan.specialize(
+                    {name: (value.dtype, value.shape) for name, value in inputs.items()}
+                ).info()["shape"]
+                report.update(
+                    route="parallel-prefilter-reduction",
+                    stages=1,
+                    jit_stages=int(plan.info()["has_jit"]),
+                    interpreter_stages=int(not plan.info()["has_jit"]),
+                    reduction_buffer_bytes=partials.nbytes,
+                    input_materialization_bytes=0,
+                )
+                return result.reshape(result_shape), report
     output_kind = "b" if op in TRUTH_GRAPH_REDUCERS else "f"
 
     class SpanReader(StorageReader):

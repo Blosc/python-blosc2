@@ -149,11 +149,10 @@ def test_parallel_compressed_extrema(op, dtype, backend, root_expression, case, 
         result = expr.compute() if root_expression else getattr(expr, op)()
         assert result.tobytes() == serial.tobytes()
         report = expr._native_execution_report
-        assert report["route"] == "parallel-graph-bounded-readers"
+        assert report["route"] == "parallel-prefilter-reduction"
         assert report["fp_flags"] == serial_flags
         assert report["threads"] == 2
         assert report["input_materialization_bytes"] == 0
-        assert report["maximum_reader_items"] <= report["tile_items"]
-        assert report["reader_bytes"] == values.nbytes
+        assert report["reduction_buffer_bytes"] <= 1024 * 1024
     finally:
         blosc2.set_nthreads(previous)

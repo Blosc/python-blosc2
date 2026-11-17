@@ -1227,6 +1227,8 @@ cdef extern from "block_reductions.h":
         B2_REDUCE_MAX
         B2_REDUCE_ANY
         B2_REDUCE_ALL
+        B2_REDUCE_NATIVE_MIN
+        B2_REDUCE_NATIVE_MAX
         B2_RT_BOOL
         B2_RT_I8
         B2_RT_I16
@@ -1272,6 +1274,10 @@ cdef int _menudet_reduce_type_code(dtype_obj) noexcept:
 
 
 cdef int _menudet_reduce_op_code(op) noexcept:
+    if op == "native_min":
+        return B2_REDUCE_NATIVE_MIN
+    if op == "native_max":
+        return B2_REDUCE_NATIVE_MAX
     if op == "sum":
         return B2_REDUCE_SUM
     if op == "prod":
@@ -2067,7 +2073,7 @@ cdef class NativeGraphHandle:
         document = json.loads(self.to_json())
         nodes = {node["id"]: node for node in document["nodes"]}
         root = nodes[document["root"]]
-        if root["op"] == "sum":
+        if root["op"] in ("sum", "min", "max", "any", "all"):
             source = nodes[root["args"][0]]
             if source["op"] == "input":
                 result._identity_input = source["name"]
@@ -2737,7 +2743,7 @@ cdef class MenudetArtifactHandle:
                     or _reduction_out.dtype not in (np.dtype("float32"), np.dtype("float64"))):
                 raise ValueError("Pairwise prefilters require a matching floating, 1-D full sum")
         sum_identity = (
-            bool(_skip_identity) and _pairwise_sum and len(inputs) == 1
+            bool(_skip_identity) and _reduction_out is not None and len(inputs) == 1
             and self._identity_input in inputs and first.dtype == self.signature_dtype(-1)
         )
         if _candidate_blocks is not None or _prune_chunks:

@@ -12,12 +12,17 @@
  * use NumPy's pairwise summation in the accumulator dtype, and min/max
  * propagate NaN. The accumulator is chosen by the caller (see
  * expression_evaluator.py); unsupported combinations return -1.
+ * NATIVE_MIN/MAX are separate from these legacy operations: they preserve
+ * the mapped dtype, select the first NaN, and prefer -0 for min / +0 for max,
+ * matching native graph partial combination.
  */
 
 #ifndef B2_BLOCK_REDUCTIONS_H
 #define B2_BLOCK_REDUCTIONS_H
 
 #include <stdint.h>
+#include <math.h>
+#include <string.h>
 
 enum {
   B2_REDUCE_NONE = 0,
@@ -27,6 +32,8 @@ enum {
   B2_REDUCE_MAX,
   B2_REDUCE_ANY,
   B2_REDUCE_ALL,
+  B2_REDUCE_NATIVE_MIN,
+  B2_REDUCE_NATIVE_MAX,
 };
 
 /* Element type codes, shared by sources and accumulators. */
@@ -80,6 +87,21 @@ enum {
   static int b2_reduce_##SUFFIX(int op, int acc, const ST *x, int64_t n, void *slot) {   \
     int64_t i;                                                                            \
     switch (op) {                                                                         \
+      case B2_REDUCE_NATIVE_MIN:                                                          \
+      case B2_REDUCE_NATIVE_MAX: {                                                        \
+        if (!(IS_FLOAT) || n <= 0) return -1;                                             \
+        ST m = x[0];                                                                      \
+        for (i = 1; i < n; i++) {                                                         \
+          ST v = x[i];                                                                    \
+          if (isnan((double)m)) continue;                                                 \
+          if (isnan((double)v) || (op == B2_REDUCE_NATIVE_MIN ? v < m : v > m) ||          \
+              (v == 0 && m == 0 &&                                                        \
+               (op == B2_REDUCE_NATIVE_MIN ? signbit((double)v) : !signbit((double)v)))) m = v; \
+        }                                                                                 \
+        if (isnan((double)m)) m = m + m;                                                  \
+        memcpy(slot, &m, sizeof(ST));                                                      \
+        return 0;                                                                         \
+      }                                                                                   \
       case B2_REDUCE_SUM:                                                                 \
         if (acc == B2_RT_F32) { *(float *)slot = b2_pairwise_f32_##SUFFIX(x, n); return 0; } \
         if (acc == B2_RT_F64) { *(double *)slot = b2_pairwise_f64_##SUFFIX(x, n); return 0; } \
@@ -172,6 +194,9 @@ static inline int b2_block_reduce_supported(int op, int src, int acc) {
   int is_float = src == B2_RT_F32 || src == B2_RT_F64;
   int is_signed = src >= B2_RT_I8 && src <= B2_RT_I64;
   switch (op) {
+    case B2_REDUCE_NATIVE_MIN:
+    case B2_REDUCE_NATIVE_MAX:
+      return is_float && acc == src;
     case B2_REDUCE_SUM:
     case B2_REDUCE_PROD:
       return acc == B2_RT_F32 || acc == B2_RT_F64 || (acc == B2_RT_U64 && !is_float);

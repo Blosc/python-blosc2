@@ -107,10 +107,9 @@ def test_parallel_compressed_truth(op, dtype, backend, root_expression, monkeypa
         assert result.dtype == np.dtype("bool")
         assert bool(result) == bool(getattr(np, op)(values))
         report = expr._native_execution_report
-        assert report["route"] == "parallel-graph-bounded-readers"
+        assert report["route"] == "parallel-prefilter-reduction"
         assert report["threads"] == 2
-        assert report["reader_bytes"] == values.nbytes
-        assert report["maximum_reader_items"] <= report["tile_items"]
+        assert report["reduction_buffer_bytes"] <= 1024 * 1024
         assert report["input_materialization_bytes"] == 0
     finally:
         blosc2.set_nthreads(previous)
@@ -208,8 +207,8 @@ def test_parallel_compressed_truth_preserves_late_status(op, monkeypatch):
         report = expr._native_execution_report
         assert report["fp_flags"] == flags
         assert flags & 1
-        assert report["reader_bytes"] == 2 * values.nbytes
+        assert report["reduction_buffer_bytes"] <= 1024 * 1024
         assert report["input_materialization_bytes"] == 0
-        assert report["route"] == "parallel-graph-bounded-readers"
+        assert report["route"] == "parallel-prefilter-reduction"
     finally:
         blosc2.set_nthreads(previous)

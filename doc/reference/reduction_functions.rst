@@ -30,6 +30,12 @@ This improves accumulation accuracy without guaranteeing correctly rounded sums.
 Explicit strict native execution retains its serial-order contract;
 ``fp_accuracy`` continues to control transcendental accuracy, not summation order.
 
+Eligible aligned one-dimensional compressed ``min``, ``max``, ``any`` and
+``all`` reductions also use parallel prefilters, bypassing proven input-only
+maps. Block results are combined with the native reducer to preserve its NaN
+and signed-zero rules. Partial-result storage is capped at 1 MiB; larger
+domains retain the streaming bounded-reader route.
+
 .. currentmodule:: blosc2
 
 .. autosummary::
