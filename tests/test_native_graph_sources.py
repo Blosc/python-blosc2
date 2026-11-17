@@ -116,11 +116,19 @@ def test_automatic_compressed_graph_parallel_sum(
         result = expr.sum(keepdims=keepdims)
         np.testing.assert_allclose(result, np.sum(values + 1, keepdims=keepdims), rtol=1e-12)
         report = expr._native_execution_report
-        assert report["route"] == "parallel-graph-bounded-readers"
+        pairwise = getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)()
+        assert report["route"] == (
+            "parallel-prefilter-pairwise-sum" if pairwise else "parallel-graph-bounded-readers"
+        )
         assert report["threads"] == 2
         assert report["input_materialization_bytes"] == 0
-        assert report["maximum_reader_items"] <= report["tile_items"]
-        assert report["reader_bytes"] == values.nbytes * (1 if mixed else 2)
+        if pairwise:
+            assert report["summation"] == "fixed-pairwise"
+            assert report["processed_chunks"] == x.schunk.nchunks
+            assert report["reduction_buffer_bytes"] < x.chunks[0] * values.dtype.itemsize
+        else:
+            assert report["maximum_reader_items"] <= report["tile_items"]
+            assert report["reader_bytes"] == values.nbytes * (1 if mixed else 2)
     finally:
         blosc2.set_nthreads(previous)
 
@@ -253,6 +261,9 @@ def test_graph_sources_empty_domain_does_not_read(monkeypatch):
 def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch, parallel_sources_runtime):
     import blosc2.native_graph as native
     import blosc2.resident_execution as resident
+    # Exercise the bounded-reader worker route; prefilter failures have their
+    # own callback/merge propagation test.
+    monkeypatch.setattr(native, "_pairwise_prefilter_kernel", lambda *args: None)
 
     class FailedPool:
         def submit(self, *args, **kwargs):

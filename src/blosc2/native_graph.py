@@ -1125,7 +1125,7 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     first = compressed[0]
     units = first.schunk.nchunks if reduction else _compressed_map_blocks(first, shape[0])
     workers = min(blosc2.nthreads, MAXIMUM_WORKERS, shape[0] // MINIMUM_WORKER_ITEMS, units)
-    if workers < 2:
+    if workers < 1:
         return None
     if reduction:
         info = plan.reduction_info()
@@ -1155,7 +1155,36 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
         return None
     if first.blocks[0] > 65536:
         return None
+    if workers < 2 and not (
+        reduction and op == "sum" and _pairwise_prefilter_kernel(plan, inputs, shape) is not None
+    ):
+        return None
     return first, workers, op
+
+
+def _pairwise_prefilter_kernel(plan, inputs, shape):
+    """Metadata-only admission; execution failures must never replay another route."""
+    import blosc2
+
+    if not getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)():
+        return None
+    first = next(value for value in inputs.values() if type(value) is blosc2.NDArray)
+    if len(shape) != 1 or first.chunks[0] % first.blocks[0]:
+        return None
+    artifact = plan._handle.reduction_artifact()
+    if artifact is None:
+        return None
+    signature = artifact.descriptor_info()
+    dtype = signature["output_dtype"]
+    if dtype not in (np.dtype("float32"), np.dtype("float64")) or set(signature["inputs"]) != set(inputs):
+        return None
+    if not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(inputs, allow_numpy=True, output_dtype=dtype):
+        return None
+    schedule = plan.specialize({name: (value.dtype, value.shape) for name, value in inputs.items()})
+    info = schedule.info()
+    if info["dtype"] != dtype:
+        return None
+    return artifact, info["shape"]
 
 
 def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
@@ -1171,6 +1200,22 @@ def _parallel_compressed_reduction(plan, inputs, shape, tile_items):
     if layout is None:
         return None
     first, workers, op = layout
+    pairwise = _pairwise_prefilter_kernel(plan, inputs, shape) if op == "sum" else None
+    if pairwise is not None:
+        artifact, result_shape = pairwise
+        result = np.empty((), dtype=artifact.descriptor_info()["output_dtype"])
+        result, report = artifact.evaluate_prefilter(
+            inputs, _reduction_op="sum", _reduction_out=result, _pairwise_sum=True
+        )
+        jit = plan.info()["has_jit"]
+        report.update(
+            route="parallel-prefilter-pairwise-sum",
+            stages=1,
+            jit_stages=int(jit),
+            interpreter_stages=int(not jit),
+            input_materialization_bytes=0,
+        )
+        return result.reshape(result_shape), report
     output_kind = "b" if op in TRUTH_GRAPH_REDUCERS else "f"
 
     class SpanReader(StorageReader):

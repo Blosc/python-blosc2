@@ -1140,7 +1140,7 @@ cdef extern from "dsl_artifact_bridge.h":
     int b2_artifact_ninputs(const void *)
     const char *b2_artifact_name(const void *, int)
     me_dtype b2_artifact_dtype(const void *, int)
-    me_dtype b2_artifact_output(const void *)
+    me_dtype b2_artifact_output(const void *) noexcept nogil
     me_dtype b2_artifact_inferred(const void *)
     ctypedef struct b2_artifact_fp_status:
         unsigned flags
@@ -1300,6 +1300,25 @@ cdef struct menudet_prefilter_worker:
     size_t output_zero_fill_bytes
 
 
+cdef extern from "pairwise_sum_bridge.h":
+    enum:
+        B2_PAIRWISE_LEAF_ITEMS
+    ctypedef struct b2_pairwise_state:
+        pass
+    int b2_pairwise_available() noexcept nogil
+    int b2_pairwise_init(b2_pairwise_state *, me_dtype) noexcept nogil
+    int b2_pairwise_update(b2_pairwise_state *, const void *, size_t) noexcept nogil
+    int b2_pairwise_append(b2_pairwise_state *, const void *, size_t) noexcept nogil
+    int b2_pairwise_leaves(me_dtype, const void *, size_t, void *, size_t) noexcept nogil
+    int b2_pairwise_finish(b2_pairwise_state *, void *) noexcept nogil
+    unsigned b2_pairwise_flags() noexcept nogil
+    void b2_pairwise_clear_flags() noexcept nogil
+
+
+def menudet_pairwise_sum_available():
+    return bool(b2_pairwise_available())
+
+
 cdef struct menudet_prefilter_state:
     const void *artifact
     int ndim
@@ -1317,6 +1336,11 @@ cdef struct menudet_prefilter_state:
     int reduction_src_type
     int reduction_acc_type
     int reduction_acc_itemsize
+    bint pairwise_sum
+    uint8_t *sum_leaves
+    uint8_t *sum_fragments
+    int64_t sum_leaf_origin
+    int64_t sum_fragment_items
     const uint8_t *candidate_blocks
     int64_t candidate_blocks_len
     const uint8_t *numpy_inputs[128]
@@ -1395,6 +1419,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     cdef int64_t origins[16]
     cdef int64_t extents[16]
     cdef bint edge = False
+    cdef int64_t prefix, full, suffix, leaf_offset
     if state.resident:
         # Disposable chunks carry no numerical payload, so physical scheduling
         # blocks may visit logical spans in striped order. Spread first-touch
@@ -1570,14 +1595,39 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             descriptor.block_origin = &block_origin
             descriptor.block_extent = &block_extent
         # Decoder/postfilter work must not contribute to numerical FP flags.
+        if state.pairwise_sum:
+            b2_pairwise_clear_flags()
         rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
                                     destination, &descriptor, 0, &fp, &error)
         if not rc and state.reduction_output != NULL:
-            if b2_block_reduce(state.reduction_op, state.reduction_src_type, state.reduction_acc_type,
-                               destination, count,
-                               state.reduction_output + block_id * state.reduction_acc_itemsize):
+            if state.pairwise_sum:
+                prefix = min(count, (B2_PAIRWISE_LEAF_ITEMS - origin % B2_PAIRWISE_LEAF_ITEMS)
+                             % B2_PAIRWISE_LEAF_ITEMS)
+                full = (count - prefix) // B2_PAIRWISE_LEAF_ITEMS * B2_PAIRWISE_LEAF_ITEMS
+                suffix = count - prefix - full
+                leaf_offset = (origin + prefix) // B2_PAIRWISE_LEAF_ITEMS - state.sum_leaf_origin
+                if prefix:
+                    memcpy(state.sum_fragments + (
+                               params.nblock * 2 * state.sum_fragment_items * params.output_typesize),
+                           destination, prefix * params.output_typesize)
+                if suffix:
+                    memcpy(state.sum_fragments + (
+                               (params.nblock * 2 + 1) * state.sum_fragment_items * params.output_typesize),
+                           <uint8_t *>destination + (prefix + full) * params.output_typesize,
+                           suffix * params.output_typesize)
+                if full:
+                    rc = b2_pairwise_leaves(
+                        b2_artifact_output(state.artifact),
+                        <uint8_t *>destination + prefix * params.output_typesize, full,
+                        state.sum_leaves + leaf_offset * params.output_typesize,
+                        full // B2_PAIRWISE_LEAF_ITEMS * params.output_typesize)
+            elif b2_block_reduce(state.reduction_op, state.reduction_src_type, state.reduction_acc_type,
+                                destination, count,
+                                state.reduction_output + block_id * state.reduction_acc_itemsize):
                 rc = -4
                 strcpy(error.message, "Menudet prefilter block reduction failed")
+    if state.pairwise_sum:
+        fp.flags |= b2_pairwise_flags()
     if fesetenv(&environment):
         rc = -5
         strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
@@ -1990,6 +2040,19 @@ cdef class NativeGraphHandle:
         result._handle = <void *>artifact
         result._owner = self
         result._artifact_document = <bytes>b2_graph_map_json(self._handle)
+        return result
+
+    def reduction_artifact(self):
+        """Borrow a single-region reduction's elementwise map for block scheduling."""
+        if self._handle == NULL or b2_graph_stages(self._handle) != 1:
+            return None
+        cdef const void *artifact = b2_graph_map_artifact(self._handle)
+        if artifact == NULL:
+            return None
+        cdef MenudetArtifactHandle result = MenudetArtifactHandle()
+        result._borrowed = True
+        result._handle = <void *>artifact
+        result._owner = self
         return result
 
     @staticmethod
@@ -2602,7 +2665,7 @@ cdef class MenudetArtifactHandle:
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
                            _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
                            _chunk_indices=None, _reduction_op=None, _reduction_out=None,
-                           _candidate_blocks=None, _prune_chunks=False):
+                           _candidate_blocks=None, _prune_chunks=False, _pairwise_sum=False):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not menudet_prefilter_inputs_eligible(
                 inputs, allow_numpy=numpy_out is not None or out is not None or _reduction_out is not None,
@@ -2635,8 +2698,10 @@ cdef class MenudetArtifactHandle:
                 raise ValueError("Prefilter reductions require direct full-domain compressed inputs")
             reduction_op = _menudet_reduce_op_code(_reduction_op)
             reduction_src_type = _menudet_reduce_type_code(self.signature_dtype(-1))
-            if (type(_reduction_out) is not np.ndarray or _reduction_out.ndim != 1
-                    or _reduction_out.size != (first.size + block_items - 1) // block_items
+            if (type(_reduction_out) is not np.ndarray
+                    or (_reduction_out.shape != () if _pairwise_sum else (
+                        _reduction_out.ndim != 1
+                        or _reduction_out.size != (first.size + block_items - 1) // block_items))
                     or not _reduction_out.flags.c_contiguous or not _reduction_out.flags.aligned
                     or not _reduction_out.flags.writeable):
                 raise ValueError("Prefilter reduction output must be a 1-D writable aligned C-contiguous array")
@@ -2644,6 +2709,13 @@ cdef class MenudetArtifactHandle:
             if (reduction_op == B2_REDUCE_NONE or reduction_src_type < 0 or reduction_acc_type < 0
                     or not b2_block_reduce_supported(reduction_op, reduction_src_type, reduction_acc_type)):
                 raise ValueError("Unsupported Menudet prefilter reduction signature")
+        if _pairwise_sum:
+            if (not b2_pairwise_available() or _reduction_op != "sum" or _reduction_out is None
+                    or first.ndim != 1
+                    or first.chunks[0] % first.blocks[0]
+                    or _reduction_out.dtype != self.signature_dtype(-1)
+                    or _reduction_out.dtype not in (np.dtype("float32"), np.dtype("float64"))):
+                raise ValueError("Pairwise prefilters require a matching floating, 1-D full sum")
         if _candidate_blocks is not None or _prune_chunks:
             if (_candidate_blocks is None or not inputs or first.ndim != 1 or _reduction_out is not None
                     or _chunk_range is not None or _chunk_indices is not None or _block_items is not None):
@@ -2722,7 +2794,8 @@ cdef class MenudetArtifactHandle:
             driver_input=_driver_input, diagonal=_diagonal, chunk_indices=_chunk_indices,
             reduction_out=_reduction_out, reduction_op=reduction_op,
             reduction_src_type=reduction_src_type, reduction_acc_type=reduction_acc_type,
-            candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks))
+            candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks),
+            pairwise_sum=bool(_pairwise_sum))
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -7903,7 +7976,8 @@ cdef class NDArray:
                                     diagonal=None, chunk_indices=None,
                                     np.ndarray reduction_out=None, int reduction_op=0,
                                     int reduction_src_type=-1, int reduction_acc_type=-1,
-                                    np.ndarray candidate_blocks=None, bint prune_chunks=False):
+                                    np.ndarray candidate_blocks=None, bint prune_chunks=False,
+                                    bint pairwise_sum=False):
         cdef menudet_prefilter_state state
         cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -7918,6 +7992,10 @@ cdef class NDArray:
         cdef int64_t begin = 0, end = self.array.sc.nchunks
         cdef bint disposable_sink = numpy_out is not None or reduction_out is not None
         cdef bint has_candidate
+        cdef b2_pairwise_state sum_state
+        cdef np.ndarray sum_leaves, sum_fragments
+        cdef int64_t sum_origin, sum_count, sum_prefix, sum_full, sum_suffix, sum_block
+        cdef fenv_t sum_environment
         if chunk_range is not None:
             begin, end = chunk_range
         memset(&state, 0, sizeof(state))
@@ -7963,6 +8041,20 @@ cdef class NDArray:
             state.reduction_src_type = reduction_src_type
             state.reduction_acc_type = reduction_acc_type
             state.reduction_acc_itemsize = reduction_out.dtype.itemsize
+        state.pairwise_sum = pairwise_sum
+        if pairwise_sum:
+            rc = b2_pairwise_init(&sum_state, b2_artifact_output(kernel._handle))
+            if rc:
+                raise ValueError("Cannot initialize native pairwise summation")
+            sum_leaves = np.empty(
+                (state.chunk_items + B2_PAIRWISE_LEAF_ITEMS - 1) // B2_PAIRWISE_LEAF_ITEMS + 1,
+                dtype=reduction_out.dtype)
+            state.sum_fragment_items = min(state.block_items, B2_PAIRWISE_LEAF_ITEMS)
+            sum_fragments = np.empty(
+                (state.chunk_items // state.block_items) * 2 * state.sum_fragment_items,
+                dtype=reduction_out.dtype)
+            state.sum_leaves = <uint8_t *>sum_leaves.data
+            state.sum_fragments = <uint8_t *>sum_fragments.data
         if candidate_blocks is not None:
             state.candidate_blocks = <const uint8_t *>candidate_blocks.data
             state.candidate_blocks_len = candidate_blocks.size
@@ -8027,6 +8119,8 @@ cdef class NDArray:
                 # Reuse the native context and scratch over a full range,
                 # selected compressed chunks, or a NumPy worker's chunk queue.
                 for chunk in (range(begin, end) if chunk_indices is None else chunk_indices):
+                    if pairwise_sum:
+                        state.sum_leaf_origin = chunk * state.chunk_items // B2_PAIRWISE_LEAF_ITEMS
                     if chunk < begin or chunk >= end:
                         raise ValueError("Dynamic prefilter chunk is outside the output domain")
                     if prune_chunks and state.candidate_blocks != NULL:
@@ -8074,6 +8168,43 @@ cdef class NDArray:
                         if state.workers[tid].status:
                             menudet_prefilter_merge(&state)
                             raise_artifact_error(state.status, &state.error)
+                    if pairwise_sum:
+                        if feholdexcept(&sum_environment):
+                            raise RuntimeError("Cannot isolate pairwise merge floating environment")
+                        with nogil:
+                            for sum_block in range(state.chunk_items // state.block_items):
+                                sum_origin = chunk * state.chunk_items + sum_block * state.block_items
+                                sum_count = min(state.block_items, state.size - sum_origin)
+                                if sum_count <= 0:
+                                    break
+                                sum_prefix = min(sum_count, (
+                                    B2_PAIRWISE_LEAF_ITEMS - sum_origin % B2_PAIRWISE_LEAF_ITEMS
+                                ) % B2_PAIRWISE_LEAF_ITEMS)
+                                sum_full = (sum_count - sum_prefix) // B2_PAIRWISE_LEAF_ITEMS
+                                sum_suffix = sum_count - sum_prefix - sum_full * B2_PAIRWISE_LEAF_ITEMS
+                                if sum_prefix:
+                                    rc = b2_pairwise_update(&sum_state,
+                                        state.sum_fragments + (
+                                            sum_block * 2 * state.sum_fragment_items *
+                                            state.reduction_acc_itemsize),
+                                        sum_prefix)
+                                if not rc and sum_full:
+                                    rc = b2_pairwise_append(&sum_state, state.sum_leaves + (
+                                        (sum_origin + sum_prefix) // B2_PAIRWISE_LEAF_ITEMS - state.sum_leaf_origin
+                                    ) * state.reduction_acc_itemsize, sum_full)
+                                if not rc and sum_suffix:
+                                    rc = b2_pairwise_update(&sum_state,
+                                        state.sum_fragments + (
+                                            (sum_block * 2 + 1) * state.sum_fragment_items *
+                                            state.reduction_acc_itemsize),
+                                        sum_suffix)
+                                if rc:
+                                    break
+                        state.workers[0].fp_flags |= b2_pairwise_flags()
+                        if fesetenv(&sum_environment):
+                            raise RuntimeError("Cannot restore pairwise merge floating environment")
+                        if rc:
+                            raise RuntimeError("Native pairwise merge failed")
             except Exception:
                 menudet_prefilter_merge(&state)
                 if state.status:
@@ -8082,6 +8213,15 @@ cdef class NDArray:
             menudet_prefilter_merge(&state)
             if state.status:
                 raise_artifact_error(state.status, &state.error)
+            if pairwise_sum:
+                if feholdexcept(&sum_environment):
+                    raise RuntimeError("Cannot isolate pairwise finalization floating environment")
+                rc = b2_pairwise_finish(&sum_state, state.reduction_output)
+                state.fp_flags |= b2_pairwise_flags()
+                if fesetenv(&sum_environment):
+                    raise RuntimeError("Cannot restore pairwise finalization floating environment")
+                if rc:
+                    raise RuntimeError("Native pairwise finalization failed")
         finally:
             if self.array.sc.cctx != NULL:
                 blosc2_free_ctx(self.array.sc.cctx)
@@ -8106,6 +8246,10 @@ cdef class NDArray:
                     free(state.chunks[i])
         result = reduction_out if reduction_out is not None else (numpy_out if numpy_out is not None else self)
         return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
+                          "summation": "fixed-pairwise" if pairwise_sum else None,
+                          "logical_leaf_items": B2_PAIRWISE_LEAF_ITEMS if pairwise_sum else None,
+                          "reduction_buffer_bytes": (sum_leaves.nbytes + sum_fragments.nbytes
+                                                     + sizeof(b2_pairwise_state) if pairwise_sum else 0),
                           "processed_chunks": processed_chunks,
                          "output_destination": ("reduction" if reduction_out is not None
                                                 else ("numpy" if numpy_out is not None else "blosc2")),
@@ -8116,7 +8260,7 @@ cdef class NDArray:
                          "input_buffer_allocations": input_buffer_allocations,
                          "input_chunk_fetches": input_chunk_fetches,
                          "output_zero_fill_bytes": state.output_zero_fill_bytes,
-                         "output_chunk_buffer_bytes": (chunk_buffer.nbytes if numpy_out is not None
+                          "output_chunk_buffer_bytes": (chunk_buffer.nbytes if disposable_sink
                                                        else self.array.sc.chunksize),
                          "input_buffer_bytes": cparams.nthreads * sum(
                              state.block_items * source.dtype.itemsize for source in inputs.values()

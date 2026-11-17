@@ -66,6 +66,7 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx" --output-file blosc2_ext.c
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/block_reductions.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/pairwise_sum_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_array_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
@@ -145,8 +146,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Avoid loop-limit lookups for loop-free kernels (after v0.3.1).
-    GIT_TAG b1c6676174d36463c94aa9cb0b267698575ae55d
+    # Fixed-leaf pairwise sums and streaming partials (after v0.3.1).
+    GIT_TAG efcaf3bf236cc04ee6dfd3644ef2a03f78dcad4f
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)

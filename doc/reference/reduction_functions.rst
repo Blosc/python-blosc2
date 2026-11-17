@@ -16,6 +16,18 @@ Eligible lazy-expression reductions accept ``jit`` and ``jit_backend`` through
 their evaluation options. See :ref:`JITOptions`; native JIT requests remain best
 effort and can use the interpreter when compilation or loading is unavailable.
 
+When supported by the native runtime, eligible automatic whole-domain floating
+``sum`` reductions over aligned one-dimensional compressed inputs, with matching
+mapped and accumulator dtypes, use parallel prefilters.
+Storage blocks drive decompression and expression evaluation, but
+arithmetic uses fixed 128-element logical leaves and a pairwise merge tree.
+Partial leaves crossing storage boundaries are completed in logical order.
+Results are independent of thread count and compression partitioning for the
+same mapped values, with scratch bounded by chunk size rather than array size.
+This improves accumulation accuracy without guaranteeing correctly rounded sums.
+Explicit strict native execution retains its serial-order contract;
+``fp_accuracy`` continues to control transcendental accuracy, not summation order.
+
 .. currentmodule:: blosc2
 
 .. autosummary::
